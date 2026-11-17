@@ -1,4 +1,5 @@
 #define PD_START_TEST
+#define PD_FIXED_RUNTIME_DIRECTORY
 #define PD_START_MAIN start_program_main
 #include "pd_start_session.c"
 #undef PD_START_MAIN
@@ -7,7 +8,9 @@
 #endif
 #include <assert.h>
 static int installation=-1,launches,installation_calls;
+static int hold_policy=1,hold_policy_calls;
 static struct pd_iq_selection launched;
+int pd_service_session_policy(void){++hold_policy_calls;return hold_policy;}
 int pd_start_test_installation(void){++installation_calls;return installation;}
 int pd_start_test_launch(const char* id,uint32_t gui,int control,int lease,struct pd_iq_selection selection)
 {
@@ -23,6 +26,9 @@ int main(void)
 {
     const char* uuid="0D3EA0E8-B052-4AC6-9D32-D96918634469";
     struct pd_iq_selection selection={1,0};
+    hold_policy=0;
+    assert(start_session_launch(uuid,1,selection)==6 && !installation_calls && !launches && hold_policy_calls==1);
+    hold_policy=1;
     assert(start_session_launch(uuid,1,selection)==6 && !launches);
     for(unsigned channel=1;channel<=4;++channel){
         selection=(struct pd_iq_selection){channel,0x40000002};
@@ -31,10 +37,10 @@ int main(void)
         assert(launched.channel==channel && launched.pan==0x40000002);
         assert(fcntl(installation,F_GETFD)<0 && errno==EBADF);installation=-1;
     }
-    int before=installation_calls;
+    int before=installation_calls,before_policy=hold_policy_calls;
     const struct pd_iq_selection bad_selection[]={{0,1},{5,1},{UINT32_MAX,1},{2,0}};
     for(unsigned i=0;i<sizeof(bad_selection)/sizeof(bad_selection[0]);++i){
-        assert(start_session_launch(uuid,1,bad_selection[i])==5 && installation_calls==before);
+        assert(start_session_launch(uuid,1,bad_selection[i])==5 && installation_calls==before && hold_policy_calls==before_policy);
     }
     unsigned char frame[56]={0};memcpy(frame,"PDSTART1",8);memcpy(frame+8,uuid,36);
     frame_u32(frame+44,0x0321b4de);

@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include "pd_management.h"
-#include "pd_units.h"
 #include "pd_store.h"
 #include "pd_upgrade_state.h"
 #include "monocypher.h"
@@ -152,16 +151,16 @@ static int apply(int store,int units,const struct pd_upgrade* approved,const str
         !candidate.managed_startup || !pd_release_record_validate(blob->boot,blob->boot_size,0,&candidate) ||
         !pd_release_record_validate(blob->licenses,blob->license_size,3,&candidate)){return 0;}
     if(origin && !candidate.origin_recovery){return 0;}
-    const char* const* definitions=arch==7?pd_units_armv7_managed:pd_units_arm64_managed;
     int cache=openat(store,"units",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
     if(!directory(cache)){if(cache>=0){close(cache);}return 0;}
     struct member members[10]={{store,"pd-boot",blob->boot,blob->boot_size,0755,0,0},
         {store,"BOOT-LICENSES.txt",blob->licenses,blob->license_size,0644,3,0}};
     int ok=1;
     for(unsigned i=0;ok && i<4;++i){
-        size_t size=strlen(definitions[i]);
-        ok=pd_release_record_validate((const unsigned char*)definitions[i],size,i+4,&candidate);
-        members[i+2]=(struct member){cache,pd_release_names[i+4],(const unsigned char*)definitions[i],size,0644,i+4,0};
+        const char* definition=pd_release_unit_text(&candidate,i);if(!definition){ok=0;break;}
+        size_t size=strlen(definition);
+        ok=pd_release_record_validate((const unsigned char*)definition,size,i+4,&candidate);
+        members[i+2]=(struct member){cache,pd_release_names[i+4],(const unsigned char*)definition,size,0644,i+4,0};
         members[i+6]=members[i+2];members[i+6].directory=units;members[i+6].system_unit=1;
         char dropin[96];struct stat st;snprintf(dropin,sizeof(dropin),"%s.d",pd_release_names[i+4]);
         ok=ok && fstatat(units,dropin,&st,AT_SYMLINK_NOFOLLOW)<0 && errno==ENOENT;

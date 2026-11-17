@@ -22,7 +22,7 @@ MAX_BYTES = 18 * 1024 * 1024
 LIMITS = (512*1024, 512*1024, bundle.MAX_PACKED, 512*1024, *(16*1024,)*4)
 
 
-def assemble(files, profile, firmware, source_sha256, seed, paired_boot=True, managed_startup=False, origin_recovery=False, generation_selection=False):
+def assemble(files, profile, firmware, source_sha256, seed, paired_boot=True, managed_startup=False, origin_recovery=False, generation_selection=False, hold_guardians=True):
     if (profile not in PROFILES or set(files) != set(NAMES) or len(source_sha256) != 32
             or len(seed) != 32 or not re.fullmatch(r'[0-9]+(?:\.[0-9]+){3}', firmware)
             or len(firmware) >= 28):
@@ -34,7 +34,7 @@ def assemble(files, profile, firmware, source_sha256, seed, paired_boot=True, ma
     if generation_selection and not origin_recovery:
         raise ValueError('generation selection requires origin recovery')
     arch, profile_id = PROFILES[profile]
-    expected_units = units.render(arch, managed_startup)
+    expected_units = units.render(arch, managed_startup, hold_guardians)
     for name, expected in expected_units.items():
         if files[name] != expected.encode():
             raise ValueError('service definition differs from the fixed implementation: ' + name)
@@ -63,7 +63,7 @@ def assemble(files, profile, firmware, source_sha256, seed, paired_boot=True, ma
     if len(release) > MAX_BYTES:
         raise ValueError('release exceeds maximum size')
     store = '/user/aetherpd' if arch == 'armv7' else '/var/lib/smartsdr/aetherpd'
-    return release, {'format': magic.decode(), 'paired_boot': paired_boot, 'managed_startup': managed_startup, 'origin_recovery': origin_recovery, 'generation_selection': generation_selection, 'profile': profile, 'architecture': arch,
+    return release, {'format': magic.decode(), 'paired_boot': paired_boot, 'managed_startup': managed_startup, 'origin_recovery': origin_recovery, 'generation_selection': generation_selection, 'guardian_hold': hold_guardians, 'profile': profile, 'architecture': arch,
         'firmware': firmware, 'source_sha256': source_sha256.hex(), 'bytes': len(release),
         'sha256': hashlib.sha256(release).hexdigest(), 'blake2b_256': bundle.blake(release).hex(),
         'public_key': key.public_key().public_bytes_raw().hex(), 'files': entries,

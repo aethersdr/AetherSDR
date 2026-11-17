@@ -36,12 +36,24 @@ static int release_hash(int fd,uint32_t offset,uint32_t count,unsigned char dige
     }
     crypto_blake2b_final(&hash,digest);return 1;
 }
+const char* pd_release_unit_text(const struct pd_release* release,unsigned index)
+{
+    if(!release || index>=4 || (release->arch!=7 && release->arch!=64) || release->guardian_hold>1){return NULL;}
+    const char* const* definitions;
+    if(release->arch==7){
+        definitions=release->guardian_hold?
+            (release->managed_startup?pd_units_armv7_managed:pd_units_armv7):
+            (release->managed_startup?pd_units_armv7_managed_legacy_stop:pd_units_armv7_legacy_stop);
+    }else{
+        definitions=release->guardian_hold?
+            (release->managed_startup?pd_units_arm64_managed:pd_units_arm64):
+            (release->managed_startup?pd_units_arm64_managed_legacy_stop:pd_units_arm64_legacy_stop);
+    }
+    return definitions[index];
+}
 static int release_unit(const unsigned char* data,uint32_t count,unsigned index,const struct pd_release* release)
 {
-    const char* const* definitions=release->arch==7?
-        (release->managed_startup?pd_units_armv7_managed:pd_units_armv7):
-        (release->managed_startup?pd_units_arm64_managed:pd_units_arm64);
-    const char* expected=definitions[index];
+    const char* expected=pd_release_unit_text(release,index);if(!expected){return 0;}
     size_t length=strlen(expected);
     return count==length && !memcmp(data,expected,length);
 }
@@ -86,7 +98,14 @@ int pd_release_header_parse(const unsigned char* bytes,size_t size,const unsigne
         if(!count || count>limit || offset+count>PD_RELEASE_MAX){return 0;}
         release->offset[i]=(uint32_t)offset;release->length[i]=count;offset+=count;
     }
-    return 1;
+    // Unit6 is authenticated by the manifest and distinguishes both fixed stop
+    // policies without accepting arbitrary service text or changing the format.
+    for(unsigned hold=0;hold<2;++hold){
+        release->guardian_hold=hold;const char* text=pd_release_unit_text(release,2);
+        size_t count=strlen(text);unsigned char digest[32];crypto_blake2b(digest,32,(const unsigned char*)text,count);
+        if(release->length[6]==count && !crypto_verify32(digest,release->manifest+PD_RELEASE_HEADER+6*PD_RELEASE_RECORD+4)){return 1;}
+    }
+    return 0;
 }
 int pd_release_record_validate(const unsigned char* bytes,size_t size,unsigned index,const struct pd_release* release)
 {

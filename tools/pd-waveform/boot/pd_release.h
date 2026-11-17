@@ -9,8 +9,10 @@ extern const char* const pd_release_names[PD_RELEASE_COUNT];
 struct pd_release {
     unsigned char manifest[PD_RELEASE_MANIFEST];
     unsigned char signature[64];
-    uint32_t arch,profile,boot_handoff,managed_startup,origin_recovery,generation_selection,length[PD_RELEASE_COUNT],offset[PD_RELEASE_COUNT];
+    uint32_t arch,profile,boot_handoff,managed_startup,origin_recovery,generation_selection,guardian_hold,length[PD_RELEASE_COUNT],offset[PD_RELEASE_COUNT];
 };
+/* Select only fixed definitions whose stop policy matches the signed manifest. */
+const char* pd_release_unit_text(const struct pd_release* release,unsigned index);
 /* Admission is supplied by the caller's independently checked radio identity;
  * a signed profile is not itself evidence of the connected hardware. */
 int pd_release_read(int fd,const unsigned char key[32],uint32_t arch,uint32_t profile,

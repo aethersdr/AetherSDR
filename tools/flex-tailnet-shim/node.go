@@ -70,13 +70,14 @@ func (c provisionConfig) shareDiscovered() bool {
 // swapped in-process: nothing is known to restart a container whose process
 // exits, so the shim never relies on exiting to reconfigure itself.
 type Node struct {
-	pdInstall        *pdInstallTask
-	pdInstallRun     pdInstallRun
-	pdProcess        *aetherPDProcess
-	pdSession        *pdSessionChannel
-	pdStarting       *pdSessionStart
-	pdSessionStopped bool
-	pdSessionDial    func(context.Context, pdStartIdentity) (*pdSessionChannel, error)
+	pdInstall                 *pdInstallTask
+	pdInstallRun              pdInstallRun
+	pdProcess                 *aetherPDProcess
+	pdSession                 *pdSessionChannel
+	pdStarting                *pdSessionStart
+	pdSessionStopped          bool
+	pdSessionCleanupConfirmed bool
+	pdSessionDial             func(context.Context, pdStartIdentity) (*pdSessionChannel, error)
 
 	StateDir string
 	// RunDir, when set, holds tsnet's logs and caches on volatile storage,

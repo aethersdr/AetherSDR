@@ -41,6 +41,26 @@ class ReleaseTest(unittest.TestCase):
         result=subprocess.run(args,capture_output=True,timeout=10)
         self.assertEqual(result.returncode,expected,result.stderr.decode(errors='replace'))
 
+    def test_signed_current_and_legacy_guardian_policies(self):
+        for managed in (False,True):
+            for hold in (False,True):
+                with self.subTest(managed=managed,hold=hold):
+                    files=dict(self.files)
+                    files.update({n:s.encode() for n,s in units.render('arm64',managed,hold).items()})
+                    data,plan=release.assemble(files,'flex8600','4.3.16.42034',bytes(32),self.seed,
+                                              managed_startup=managed,hold_guardians=hold)
+                    self.assertEqual(plan['guardian_hold'],hold)
+                    self.check(data)
+                    with self.assertRaises(ValueError):
+                        release.assemble(files,'flex8600','4.3.16.42034',bytes(32),self.seed,
+                                         managed_startup=managed,hold_guardians=not hold)
+
+    def test_authenticated_arbitrary_kill_policy_is_not_a_fixed_release(self):
+        name='aetherpd-start@.service'
+        for value in [b'yes',b'NO',b'false',b'0',b'',b'no\nSendSIGKILL=yes']:
+            with self.subTest(value=value):
+                self.check(self.replace(6,self.files[name].replace(b'SendSIGKILL=no',b'SendSIGKILL='+value)),1)
+
     def resign(self,data):
         data=bytearray(data);data[release.MANIFEST:release.PREFIX]=self.signer.sign(data[:release.MANIFEST]);return bytes(data)
 
@@ -170,9 +190,10 @@ class ReleaseTest(unittest.TestCase):
         files={**self.files,'pd-boot':bytes(raw),'pd-update':bytes(raw),'payload.bundle':payload,
                **{n:s.encode() for n,s in units.render('armv7').items()}}
         for managed in (False,True):
-            files.update({n:s.encode() for n,s in units.render('armv7',managed).items()})
-            data,_=release.assemble(files,'flex6300','4.2.18.41174',bytes(32),self.seed,managed_startup=managed)
-            self.check(data,arch=7,profile=2,firmware='4.2.18.41174')
+            for hold in (False,True):
+                files.update({n:s.encode() for n,s in units.render('armv7',managed,hold).items()})
+                data,_=release.assemble(files,'flex6300','4.2.18.41174',bytes(32),self.seed,managed_startup=managed,hold_guardians=hold)
+                self.check(data,arch=7,profile=2,firmware='4.2.18.41174')
 
 
 if __name__=='__main__':

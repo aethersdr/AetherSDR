@@ -2,6 +2,9 @@
 #include "pd_service_launch.c"
 #undef PD_SERVICE_MAIN
 #include "../boot/pd_transaction.h"
+#ifdef PD_FIXED_RUNTIME_DIRECTORY
+#include "../boot/pd_service.h"
+#endif
 
 /* Socket activation admits the fixed request before any network or scheduler
  * mutation. V2 adds only a bounded channel and explicit pan identity. */
@@ -64,6 +67,9 @@ extern int pd_start_test_launch(const char* id,uint32_t gui,int control,int inst
 static int start_session_launch(const char* id,uint32_t gui,struct pd_iq_selection selection)
 {
     if(!pd_iq_selection_valid(selection)){return 5;}
+#ifdef PD_FIXED_RUNTIME_DIRECTORY
+    if(!pd_service_session_policy()){return 6;}
+#endif
 #ifdef PD_START_TEST
     int installation=pd_start_test_installation();
 #else

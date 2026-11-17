@@ -745,6 +745,10 @@ the current connection.
   and temporary-installer cleanup are reported; recovery after application exit
   is not yet qualified.
 
+An update requires confirmed AetherPD cleanup. A **Stop AetherPD** acknowledgment
+alone is insufficient: wait until the service confirms it has stopped. An uncertain
+cleanup result keeps the session owned and prevents the update from starting.
+
 **Prepare first installation** is a separate development-build action for a
 radio without a managed AetherPD installation. It is dimmed unless the build
 contains a first-install package for the connected firmware, and while a saved

@@ -22,7 +22,7 @@
 enum { kServiceMax=PD_SERVICE_OUTPUT_MAX };
 static const char* const kNames[]={"aetherpd-boot.service","aetherpd-start.socket","aetherpd-shim.service"};
 static const char* const kUpgradeWorkers[]={"aetherpd-upgrade.service","aetherpd-upgrade-recover.service"};
-static const char kProperties[]="--property=Id,Names,LoadState,ActiveState,SubState,MainPID,ControlPID,ControlGroup,FragmentPath,SourcePath,DropInPaths,NeedDaemonReload,Transient,Type,ExecStart,ExecStartPre,ExecStartPost,ExecStop,ExecStopPost,ExecReload,User,Group,Environment,EnvironmentFiles,WorkingDirectory,RootDirectory,KillMode,RemainAfterExit,Listen,Accept,StandardInput";
+static const char kProperties[]="--property=Id,Names,LoadState,ActiveState,SubState,MainPID,ControlPID,ControlGroup,FragmentPath,SourcePath,DropInPaths,NeedDaemonReload,Transient,Type,ExecStart,ExecStartPre,ExecStartPost,ExecStop,ExecStopPost,ExecReload,User,Group,Environment,EnvironmentFiles,WorkingDirectory,RootDirectory,KillMode,RemainAfterExit,Listen,Accept,StandardInput,SendSIGKILL";
 #ifdef PD_SERVICE_TEST
 extern int pd_service_test_command(char* const*,unsigned char*,size_t*,int);
 extern int pd_service_test_root(void);
@@ -110,12 +110,12 @@ static int service_parse(unsigned kind,const char* name,const unsigned char* byt
 {
     memset(result,0,sizeof(*result));result->control_pid=-1;
     if(kind>7 || !size || size>=kServiceMax || bytes[size-1]!='\n' || memchr(bytes,0,size)){return 0;}
-    static const char* const keys[]={"Id","Names","LoadState","ActiveState","SubState","MainPID","ControlPID","ControlGroup","FragmentPath","SourcePath","DropInPaths","NeedDaemonReload","Transient","Type","ExecStart","ExecStartPre","ExecStartPost","ExecStop","ExecStopPost","ExecReload","User","Group","Environment","EnvironmentFiles","WorkingDirectory","RootDirectory","KillMode","RemainAfterExit","Listen","Accept","StandardInput"};
-    char text[kServiceMax];memcpy(text,bytes,size);text[size]=0;char* values[31]={0};char* cursor=text;
+    static const char* const keys[]={"Id","Names","LoadState","ActiveState","SubState","MainPID","ControlPID","ControlGroup","FragmentPath","SourcePath","DropInPaths","NeedDaemonReload","Transient","Type","ExecStart","ExecStartPre","ExecStartPost","ExecStop","ExecStopPost","ExecReload","User","Group","Environment","EnvironmentFiles","WorkingDirectory","RootDirectory","KillMode","RemainAfterExit","Listen","Accept","StandardInput","SendSIGKILL"};
+    char text[kServiceMax];memcpy(text,bytes,size);text[size]=0;char* values[32]={0};char* cursor=text;
     while(*cursor){
         char* end=strchr(cursor,'\n');if(!end || end==cursor){return 0;}*end=0;char* equal=strchr(cursor,'=');if(!equal){return 0;}*equal=0;
-        unsigned index=0;for(;index<31 && strcmp(cursor,keys[index]);++index){}
-        if(index==31 || values[index]){return 0;}values[index]=equal+1;cursor=end+1;
+        unsigned index=0;for(;index<32 && strcmp(cursor,keys[index]);++index){}
+        if(index==32 || values[index]){return 0;}values[index]=equal+1;cursor=end+1;
     }
     const unsigned required[]={0,1,2,3,4,8,9,10,11,12};
     for(unsigned i=0;i<sizeof(required)/sizeof(required[0]);++i){if(!values[required[i]]){return 0;}}
@@ -147,6 +147,11 @@ static int service_parse(unsigned kind,const char* name,const unsigned char* byt
             !service_exec(values[14],path,argument) ||
             (values[16] && *values[16]) || strcmp(values[26],"control-group") ||
             strcmp(values[27],kind==PD_SERVICE_BOOT?"yes":"no") || strcmp(values[30],kind==PD_SERVICE_SESSION?"socket":"null")){return 0;}
+        if(kind==PD_SERVICE_SESSION){
+            if(!values[31] || (strcmp(values[31],"no") && strcmp(values[31],"yes"))){return 0;}
+            result->guardian_hold=!strcmp(values[31],"no");
+        }
+        result->populated=*values[7]!=0;
         result->control_pid=0;
         char group[192];snprintf(group,sizeof(group),kind==PD_SERVICE_SESSION?"/system.slice/system-aetherpd\\x2dstart.slice/%s":"/system.slice/%s",name);
         if(*values[7] && strcmp(values[7],group)){return 0;}
@@ -194,7 +199,8 @@ int pd_service_sessions_parse(const unsigned char* bytes,size_t size,struct pd_s
         if(!service_instance(name)){return 0;}
         for(unsigned i=0;i<sessions->count;++i){if(!strcmp(name,sessions->names[i])){return 0;}}
         if(!service_parse(PD_SERVICE_SESSION,name,(const unsigned char*)block,length,&sessions->states[sessions->count])){return 0;}
-        if(sessions->count && sessions->states[sessions->count].managed_startup!=sessions->states[0].managed_startup){return 0;}
+        if(sessions->count && (sessions->states[sessions->count].managed_startup!=sessions->states[0].managed_startup ||
+            sessions->states[sessions->count].guardian_hold!=sessions->states[0].guardian_hold)){return 0;}
         ++sessions->count;if(!end){break;}block=end+2;
     }
     return 1;
@@ -203,8 +209,8 @@ static int service_directory(int fd)
 {
     struct stat st;return fd>=0 && !fstat(fd,&st) && S_ISDIR(st.st_mode) && st.st_uid==service_owner() && !(st.st_mode&022);
 }
-/* Both complete layouts are accepted for quiescing an older installation.
- * Startup during an upgrade requires the permanent management entries. */
+/* Only complete fixed entry/stop-policy layouts are recognized. Older stop
+ * policies may be quiesced only when their session groups are already empty. */
 static int service_file_layout(void)
 {
     int fd=service_root();if(!service_directory(fd)){if(fd>=0){close(fd);}return -1;}
@@ -212,23 +218,23 @@ static int service_file_layout(void)
     for(unsigned i=0;i<3;++i){int next=openat(fd,components[i],O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);close(fd);fd=next;if(!service_directory(fd)){if(fd>=0){close(fd);}return -1;}}
     const char* const names[]={"aetherpd-boot.service","aetherpd-start.socket","aetherpd-start@.service","aetherpd-shim.service"};
 #if defined(__arm__) && !defined(__aarch64__)
-    const char* const* definitions[]={pd_units_armv7,pd_units_armv7_managed};
+    const char* const* definitions[]={pd_units_armv7_legacy_stop,pd_units_armv7_managed_legacy_stop,pd_units_armv7,pd_units_armv7_managed};
 #else
-    const char* const* definitions[]={pd_units_arm64,pd_units_arm64_managed};
+    const char* const* definitions[]={pd_units_arm64_legacy_stop,pd_units_arm64_managed_legacy_stop,pd_units_arm64,pd_units_arm64_managed};
 #endif
-    int matches[2]={1,1};
-    for(unsigned i=0;(matches[0] || matches[1]) && i<4;++i){
+    int matches[4]={1,1,1,1};
+    for(unsigned i=0;(matches[0] || matches[1] || matches[2] || matches[3]) && i<4;++i){
         int file=openat(fd,names[i],O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC);struct stat st;char bytes[2048];
         int ok=file>=0 && !fstat(file,&st) && S_ISREG(st.st_mode) && st.st_uid==service_owner() && st.st_nlink==1 &&
             (st.st_mode&07777)==0644 && st.st_size>0 && st.st_size<=(off_t)sizeof(bytes) &&
             pread(file,bytes,(size_t)st.st_size,0)==st.st_size;
-        for(unsigned layout=0;layout<2;++layout){
+        for(unsigned layout=0;layout<4;++layout){
             size_t n=strlen(definitions[layout][i]);
             matches[layout]=matches[layout] && ok && st.st_size==(off_t)n && !memcmp(bytes,definitions[layout][i],n);
         }
         if(file>=0){close(file);}
     }
-    close(fd);return matches[1]?1:matches[0]?0:-1;
+    close(fd);return matches[3]?3:matches[2]?2:matches[1]?1:matches[0]?0:-1;
 }
 int pd_service_files(void)
 {
@@ -240,7 +246,7 @@ int pd_service_read(unsigned kind,struct pd_service_state* state)
     char* const args[]={"/usr/bin/systemctl","show","--all",(char*)kNames[kind],(char*)kProperties,NULL};
     int layout=service_file_layout();
     return layout>=0 && service_command(args,bytes,&size,8000) && pd_service_parse(kind,bytes,size,state) &&
-        (kind!=PD_SERVICE_PRIMARY || state->managed_startup==layout) && service_file_layout()==layout;
+        (kind!=PD_SERVICE_PRIMARY || state->managed_startup==(layout&1)) && service_file_layout()==layout;
 }
 static int service_loaded(void)
 {
@@ -252,7 +258,7 @@ static int service_loaded(void)
     unsigned char bytes[kServiceMax];size_t size=0;
     char* const args[]={"/usr/bin/systemctl","show","--all",(char*)inspection,(char*)kProperties,NULL};
     return service_command(args,bytes,&size,8000) &&
-        service_parse(PD_SERVICE_SESSION,inspection,bytes,size,&state) && state.quiet && !state.pid && state.managed_startup==layout && service_file_layout()==layout;
+        service_parse(PD_SERVICE_SESSION,inspection,bytes,size,&state) && state.quiet && !state.pid && state.managed_startup==(layout&1) && state.guardian_hold==(layout>>1) && service_file_layout()==layout;
 }
 int pd_service_reload(void)
 {
@@ -263,7 +269,8 @@ int pd_service_reload(void)
 static int service_activation_phase(int store,const unsigned char* approval,int upgrade)
 {
     if(!upgrade){return pd_transaction_at_phase(store,approval,PD_TRANSACTION_ACTIVATING);}
-    return service_file_layout()==1 && (pd_upgrade_at_phase(store,approval,PD_UPGRADE_ACTIVATING) ||
+    int layout=service_file_layout();
+    return layout>=0 && (layout&1)==1 && (pd_upgrade_at_phase(store,approval,PD_UPGRADE_ACTIVATING) ||
         pd_upgrade_at_phase(store,approval,PD_UPGRADE_RESTORING));
 }
 static int service_prepare_runtime(int store,const unsigned char* approval,int upgrade)
@@ -326,12 +333,22 @@ static int service_sessions(struct pd_service_sessions* sessions)
     char* const args[]={"/usr/bin/systemctl","show","--all","aetherpd-start@*.service",(char*)kProperties,NULL};
     int layout=service_file_layout();
     if(layout<0 || !service_command(args,bytes,&size,8000) || !pd_service_sessions_parse(bytes,size,sessions)){return 0;}
-    for(unsigned i=0;i<sessions->count;++i){if(sessions->states[i].managed_startup!=layout){return 0;}}
+    for(unsigned i=0;i<sessions->count;++i){if(sessions->states[i].managed_startup!=(layout&1) || sessions->states[i].guardian_hold!=(layout>>1)){return 0;}}
     return service_file_layout()==layout;
 }
-static int service_owned_path(const char* path)
+int pd_service_session_policy(void)
 {
-    for(unsigned i=0;i<3;++i){
+    int layout=service_file_layout();struct pd_service_sessions sessions;
+    if(layout<2 || !service_loaded() || !service_sessions(&sessions)){return 0;}
+    unsigned current=0;
+    for(unsigned i=0;i<sessions.count;++i){
+        if(sessions.states[i].pid==getpid() && sessions.states[i].active){++current;}
+    }
+    return current==1 && service_file_layout()==layout;
+}
+static int service_owned_path(const char* path,int sessions_only)
+{
+    for(unsigned i=0;!sessions_only && i<3;++i){
         char expected[128];snprintf(expected,sizeof(expected),"/system.slice/%s",kNames[i]);size_t n=strlen(expected);
         if(!strncmp(path,expected,n) && (!path[n] || path[n]=='/')){return 1;}
     }
@@ -340,7 +357,7 @@ static int service_owned_path(const char* path)
     const char* name=path+sizeof(prefix)-1;const char* end=strchr(name,'/');size_t n=end?(size_t)(end-name):strlen(name);
     if(n>=96){return 0;}char unit[96];memcpy(unit,name,n);unit[n]=0;return service_instance(unit);
 }
-int pd_service_owned_cgroup(const unsigned char* bytes,size_t size)
+static int service_cgroup(const unsigned char* bytes,size_t size,int sessions_only)
 {
     if(!size || size>=8192 || bytes[size-1]!='\n' || memchr(bytes,0,size)){return -1;}
     char text[8192];memcpy(text,bytes,size);text[size]=0;char* line=text;int owned=0;
@@ -350,10 +367,14 @@ int pd_service_owned_cgroup(const unsigned char* bytes,size_t size)
         if(!first || !second || first==line || second[1]!='/'){return -1;}
         *first=*second=0;
         for(const char* p=line;*p;++p){if(*p<'0' || *p>'9'){return -1;}}
-        if((!strcmp(line,"0") && !first[1]) || !strcmp(first+1,"name=systemd")){owned|=service_owned_path(second+1);}
+        if((!strcmp(line,"0") && !first[1]) || !strcmp(first+1,"name=systemd")){owned|=service_owned_path(second+1,sessions_only);}
         line=end+1;
     }
     return owned;
+}
+int pd_service_owned_cgroup(const unsigned char* bytes,size_t size)
+{
+    return service_cgroup(bytes,size,0);
 }
 static int service_proc_read(int directory,unsigned char bytes[8192],size_t* size)
 {
@@ -366,7 +387,7 @@ static int service_proc_read(int directory,unsigned char bytes[8192],size_t* siz
     }
     close(fd);return ok && *size<8192?1:-1;
 }
-int pd_service_runtime_quiet(void)
+static int service_processes_quiet(int sessions_only)
 {
 #ifndef PD_SERVICE_TEST
     if(getuid()!=0 || geteuid()!=0){return 0;}
@@ -394,18 +415,37 @@ int pd_service_runtime_quiet(void)
         int process=openat(proc,entry->d_name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
         if(process<0){if(errno==ENOENT){continue;}ok=0;break;}
         unsigned char bytes[8192];size_t size=0;int read_result=service_proc_read(process,bytes,&size);
-        if(read_result<0){ok=0;}else if(read_result>0 && pd_service_owned_cgroup(bytes,size)!=0){ok=0;}
+        if(read_result<0){ok=0;}else if(read_result>0 && service_cgroup(bytes,size,sessions_only)!=0){ok=0;}
         char executable[4096];ssize_t n=readlinkat(process,"exe",executable,sizeof(executable));
         if(n<0){if(errno!=ENOENT){ok=0;}}
-        else if(n==(ssize_t)sizeof(executable) || (n>=14 && !memcmp(executable,"/run/aetherpd/",14))){ok=0;}
+        else if(n==(ssize_t)sizeof(executable)){ok=0;}
+        else if(n>=14 && !memcmp(executable,"/run/aetherpd/",14)){
+            executable[n]=0;
+            int primary=sessions_only && read_result>0 && pd_service_owned_cgroup(bytes,size)==1 &&
+                (!strcmp(executable,"/run/aetherpd/bin/flex-tailnet-shim") || !strcmp(executable,"/run/aetherpd/bin/pd-primary-launch"));
+            if(!primary){ok=0;}
+        }
         close(process);
     }
     closedir(directory);return ok;
 }
+int pd_service_runtime_quiet(void)
+{
+    return service_processes_quiet(0);
+}
+static int service_legacy_sessions_quiet(const struct pd_service_sessions* sessions)
+{
+    int layout=service_file_layout();if(layout<0){return 0;}
+    if(layout>=2){return 1;}
+    for(unsigned i=0;i<sessions->count;++i){
+        if(!sessions->states[i].quiet || sessions->states[i].populated){return 0;}
+    }
+    return service_processes_quiet(1);
+}
 int pd_service_quiesce(void)
 {
     struct pd_service_sessions sessions;
-    if(!pd_service_files() || !service_loaded() || !service_sessions(&sessions)){return 0;}
+    if(!pd_service_files() || !service_loaded() || !service_sessions(&sessions) || !service_legacy_sessions_quiet(&sessions)){return 0;}
     unsigned char bytes[kServiceMax];size_t size=0;
     char* const intake[]={"/usr/bin/systemctl","stop","aetherpd-shim.service","aetherpd-start.socket",NULL};
     if(!service_command(intake,bytes,&size,30000)){return 0;}
@@ -414,7 +454,7 @@ int pd_service_quiesce(void)
     /* A final connection can be accepted while the intake units are stopping.
      * Inventory again after their stop jobs complete; never stop an unverified
      * instance through a wildcard command. */
-    if(!service_sessions(&sessions)){return 0;}
+    if(!service_sessions(&sessions) || !service_legacy_sessions_quiet(&sessions)){return 0;}
     if(sessions.count){
         char* args[PD_SERVICE_SESSIONS_MAX+3]={"/usr/bin/systemctl","stop"};
         for(unsigned i=0;i<sessions.count;++i){args[i+2]=sessions.names[i];}args[sessions.count+2]=NULL;

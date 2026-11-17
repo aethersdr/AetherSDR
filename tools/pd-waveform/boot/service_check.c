@@ -59,6 +59,7 @@ int main(int argc,char** argv)
         else if(!strcmp(argv[1],"files") && argc==3){ok=pd_service_files();}
         else if(!strcmp(argv[1],"upgrade-cleanup-idle") && argc==3){ok=pd_service_upgrade_cleanup_idle();}
         else if(!strcmp(argv[1],"reload") && argc==3){ok=pd_service_reload();}
+        else if(!strcmp(argv[1],"session-policy") && argc==3){ok=pd_service_session_policy();}
         else if(!strcmp(argv[1],"read") && argc==4){ok=pd_service_read((unsigned)strtoul(argv[3],NULL,10),&state);}
         else if(!strcmp(argv[1],"stop") && argc==3){ok=pd_service_stop_primary();}
         else if(!strcmp(argv[1],"quiet") && argc==3){ok=pd_service_runtime_quiet();}

@@ -5,7 +5,7 @@
 #include "pd_upgrade.h"
 enum pd_service_kind { PD_SERVICE_BOOT=0,PD_SERVICE_SOCKET=1,PD_SERVICE_PRIMARY=2,PD_SERVICE_SESSION=3 };
 enum { PD_SERVICE_OUTPUT_MAX=65536,PD_SERVICE_SESSIONS_MAX=32 };
-struct pd_service_state { pid_t pid,control_pid;int active,quiet,managed_startup; };
+struct pd_service_state { pid_t pid,control_pid;int active,quiet,managed_startup,guardian_hold,populated; };
 /* Internal fixed-unit adapter. The caller holds the installation lease and
  * authenticates the release, executable descriptor and current radio identity.
  * This is not a command interface: no client-supplied unit/path/arguments. */
@@ -27,6 +27,8 @@ int pd_service_read(unsigned kind,struct pd_service_state* state);
  * lease. Later boot/socket-owner invocations cannot acquire that held lease. */
 int pd_service_upgrade_cleanup_idle(void);
 int pd_service_reload(void);
+/* Fresh applied metadata must enforce the current session guardian hold. */
+int pd_service_session_policy(void);
 int pd_service_prepare_runtime(int store,const unsigned char plan[PD_MIGRATION_SIZE]);
 int pd_service_activate(int store,const unsigned char plan[PD_MIGRATION_SIZE],int executable,
                         const char* address,const struct pd_readiness* expected,struct pd_primary* primary);

@@ -51,6 +51,10 @@ func TestPDTerminalSessionExplicitRestart(t *testing.T) {
 			if r := call(t, h, "GET", "/v1/aetherpd/status", "192.168.50.20:4000", "owner", ""); r.Code != test.code {
 				t.Fatal(r.Code)
 			}
+			confirmed := test.ended && (test.name == "stopped" || test.name == "reordered")
+			if n.pdSessionCleanupConfirmed != confirmed {
+				t.Fatalf("cleanup confirmed=%v want=%v", n.pdSessionCleanupConfirmed, confirmed)
+			}
 			if n.pdSessionStopped != test.ended || !channel.alive() || dials != 0 {
 				t.Fatalf("terminal observation: stopped=%v alive=%v dials=%d", n.pdSessionStopped, channel.alive(), dials)
 			}
@@ -87,7 +91,7 @@ func TestPDTerminalReplyCannotRetireSuccessor(t *testing.T) {
 	n.pdSession = next
 	n.mu.Unlock()
 	close(release)
-	if code := <-result; code != 503 || n.pdSessionStopped || !next.alive() {
+	if code := <-result; code != 503 || n.pdSessionStopped || n.pdSessionCleanupConfirmed || !next.alive() {
 		t.Fatalf("late terminal reply reached successor: code=%d stopped=%v alive=%v", code, n.pdSessionStopped, next.alive())
 	}
 }
@@ -146,7 +150,7 @@ func TestPDTerminalReplyAfterRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(release)
-	if code := <-result; code != 401 || n.pdSessionStopped || channel.alive() {
+	if code := <-result; code != 401 || n.pdSessionStopped || n.pdSessionCleanupConfirmed || channel.alive() {
 		t.Fatalf("revoked terminal reply accepted: code=%d stopped=%v alive=%v", code, n.pdSessionStopped, channel.alive())
 	}
 }

@@ -24,9 +24,10 @@ def build(output, arch, entry, public_key=None, sanitize=False, worker_test=Fals
     crypto = ROOT / 'third_party/monocypher'
     shutil.copyfile(zlib / 'zconf.h.included', output / 'zconf.h')
     (output / 'pd_units.h').write_text(''.join(
-        'static const char* const pd_units_' + name + ('_managed' if managed else '') + '[4]={'
-        + ','.join(json.dumps(value) for value in units.render(name, managed).values()) + '};\n'
-        for name in ['armv7', 'arm64'] for managed in (False, True)))
+        'static const char* const pd_units_' + name + ('_managed' if managed else '')
+        + ('' if hold else '_legacy_stop') + '[4]={'
+        + ','.join(json.dumps(value) for value in units.render(name, managed, hold).values()) + '};\n'
+        for name in ['armv7', 'arm64'] for managed in (False, True) for hold in (False, True)))
     worker_definitions = worker_units.render()
     (output / 'pd_worker_unit_text.h').write_text(
         'static const char* const pd_worker_unit_names[2]={' + ','.join(map(json.dumps, worker_definitions)) + '};\n'

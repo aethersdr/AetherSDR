@@ -24,6 +24,7 @@ class ManagementTest(unittest.TestCase):
     origin_recovery=True
     generation_selection=False
     candidate_index=1
+    hold_previous=True
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='pd-management-');self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.store=self.root/'store';self.units=self.root/'units'
@@ -34,9 +35,10 @@ class ManagementTest(unittest.TestCase):
             keys.append(Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes_raw())
             elf=bytearray(4096);elf[:7]=b'\x7fELF\x02\x01\x01';struct.pack_into('<HH',elf,16,2,183);elf[64]=i
             payload,_=bundle.assemble({n:bytes(elf) if n!='LICENSES' else b'fixture' for n in bundle.NAMES},64,bytes([i])*32,seed)
+            hold=self.hold_previous if not i else True
             files={'pd-boot':bytes(elf),'pd-update':bytes(elf),'payload.bundle':payload,'BOOT-LICENSES.txt':('fixture licenses '+str(i)).encode(),
-                   **{n:s.encode() for n,s in units.render('arm64',bool(i)).items()}}
-            artifact,_=release.assemble(files,'flex8600','4.3.16.42034',bytes([i])*32,seed,paired_boot=bool(i),managed_startup=bool(i),origin_recovery=bool(i) and self.origin_recovery,generation_selection=bool(i) and self.generation_selection)
+                   **{n:s.encode() for n,s in units.render('arm64',bool(i),hold).items()}}
+            artifact,_=release.assemble(files,'flex8600','4.3.16.42034',bytes([i])*32,seed,paired_boot=bool(i),managed_startup=bool(i),origin_recovery=bool(i) and self.origin_recovery,generation_selection=bool(i) and self.generation_selection,hold_guardians=hold)
             self.files.append(files);artifacts.append(artifact)
         self.artifacts=artifacts;self.keys=keys
         self.approved=upgrade.encode(1,'4.3.16.42034','fixture-8600',*map(bundle.blake,artifacts),*keys)
@@ -67,6 +69,16 @@ class ManagementTest(unittest.TestCase):
     def test_complete_and_idempotent_transition(self):
         self.invoke();self.check();inodes=[p.stat().st_ino for p,_ in self.targets]
         self.invoke();self.check();self.assertEqual(inodes,[p.stat().st_ino for p,_ in self.targets])
+    def test_explicit_legacy_management_candidate_remains_verifiable(self):
+        self.files[1].update({n:s.encode() for n,s in units.render('arm64',True,False).items()})
+        seed=hashlib.sha256(('management fixture '+str(self.candidate_index)).encode()).digest()
+        data,_=release.assemble(self.files[1],'flex8600','4.3.16.42034',bytes([self.candidate_index])*32,seed,
+                                managed_startup=True,origin_recovery=self.origin_recovery,
+                                generation_selection=self.generation_selection,hold_guardians=False)
+        self.approved=upgrade.encode(1,'4.3.16.42034','fixture-8600',bundle.blake(self.artifacts[0]),bundle.blake(data),*self.keys)
+        self.put(self.root/'approved',self.approved);self.phase(1)
+        self.put(self.root/'candidate.header',data[:release.PREFIX]);self.put(self.root/'candidate.digest',bundle.blake(data))
+        self.invoke();self.check()
     def retained_management(self):
         seed=hashlib.sha256(b'rolled back management fixture').digest()
         key=Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes_raw()
@@ -186,6 +198,10 @@ class ManagementTest(unittest.TestCase):
         for p in [self.store,self.store/'units',self.units]:
             p.chmod(0o777);self.invoke(expected=1);p.chmod(0o700)
         p=self.store/'units';p.rename(self.store/'elsewhere');p.symlink_to(self.store/'elsewhere');self.invoke(expected=1)
+
+class LegacyStopPredecessorTest(ManagementTest):
+    hold_previous=False
+
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--checker',type=Path,required=True);p.add_argument('--verifier',type=Path,required=True);a,rest=p.parse_known_args();CHECKER=a.checker.resolve();VERIFIER=a.verifier.resolve();unittest.main(argv=[__file__,*rest])

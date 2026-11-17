@@ -95,7 +95,7 @@ func aetherPDInstallRequestHandler(n *Node) http.HandlerFunc {
 			writeJSON(w, 401, apiError{errUnauthorized.Error()})
 			return
 		}
-		if n.pdInstallActiveLocked() || n.pdProcess != nil || n.pdStarting != nil || (n.pdSession != nil && n.pdSession.alive() && (!n.pdSessionStopped || n.pdSession.busy())) {
+		if n.pdInstallActiveLocked() || n.pdProcess != nil || n.pdStarting != nil || (n.pdSession != nil && n.pdSession.alive() && (!n.pdSessionStopped || !n.pdSessionCleanupConfirmed || n.pdSession.busy())) {
 			n.mu.Unlock()
 			cancel()
 			writeJSON(w, 409, apiError{"AetherPD operation already active"})
@@ -106,6 +106,11 @@ func aetherPDInstallRequestHandler(n *Node) http.HandlerFunc {
 			cancel()
 			writeJSON(w, 409, apiError{"installer request already used"})
 			return
+		}
+		if n.pdSession != nil {
+			n.pdSession.Close()
+			n.pdSession = nil
+			n.pdSessionCleanupConfirmed = false
 		}
 		n.pdInstall = task
 		run := n.pdInstallRun

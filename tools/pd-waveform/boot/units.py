@@ -4,12 +4,13 @@ import argparse
 from pathlib import Path
 
 
-def render(arch, managed_startup=False):
+def render(arch, managed_startup=False, hold_guardians=True):
     if arch not in ('armv7', 'arm64'):
         raise ValueError('unknown radio architecture')
     store = '/user/aetherpd' if arch == 'armv7' else '/var/lib/smartsdr/aetherpd'
     session = store + '/pd-boot --session' if managed_startup else '/run/aetherpd/bin/pd-start-session'
     primary = store + '/pd-boot --primary' if managed_startup else '/run/aetherpd/bin/pd-primary-launch'
+    guardian_policy = 'SendSIGKILL=no\n' if hold_guardians else ''
     return {
         'aetherpd-boot.service': f'''[Unit]
 Description=AetherPD authenticated RAM payload
@@ -48,7 +49,7 @@ StandardOutput=journal
 StandardError=journal
 TimeoutStopSec=12
 KillMode=control-group
-LimitNOFILE=1024
+{guardian_policy}LimitNOFILE=1024
 UMask=0077
 ''',
         'aetherpd-shim.service': f'''[Unit]

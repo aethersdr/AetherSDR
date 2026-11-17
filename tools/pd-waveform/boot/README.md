@@ -2349,3 +2349,33 @@ keeps `transaction-failed`, consumes a protected `transaction-retry` before
 advancing, and retains the existing identity. Migration and committed redelivery
 remain cleanup-only. See [the first-install contract](../request/FIRST-INSTALL.md#failed-fresh-install-retry-component)
 for the authority boundary, crash semantics and qualification limits.
+
+### Session guardian lifetime during service stop
+
+The fixed session template uses `KillMode=control-group` and `SendSIGKILL=no`.
+A stop still reaches the complete session group, but its timeout cannot force
+an API lease guardian to exit while receive recovery remains unconfirmed. This
+policy applies only to `aetherpd-start@.service`; it grants no capability and
+changes no primary, bootstrap or installer stop policy. Session admission checks
+both exact installed definitions and fresh applied manager metadata for its own
+live session instance before the
+installation lease, network helpers or scheduler are acquired. Missing or
+unsupported applied metadata refuses startup.
+
+The release verifier recognizes both authenticated fixed session definitions.
+A legacy definition is accepted for approved predecessor management/rollback,
+not as authorization for a new managed session. Before quiescing such a
+predecessor, the upgrade worker requires every inventoried session to be quiet
+and without a populated cgroup, and scans host kernel process metadata for
+remaining session groups or orphan runtime helpers. It checks again after
+stopping intake. A confirmed stopped private channel is closed before the shim
+accepts an installer request; a Stop acknowledgment or uncertain cleanup cannot
+authorize that handoff. Existing capsule/transaction leases continue to gate
+constructors while installation proceeds.
+
+The 8600 temporary stop-policy probe exercises the installed lease guardian in
+an isolated unregistered receive-only fixture under UID 65534, without changing
+installed units. It proves manager timeout behavior and voluntary guardian
+release, not installed-session reconnect recovery. The integrated package,
+actual reconnect case and actual FLEX-6300 service-manager support remain
+unqualified until separately recorded.

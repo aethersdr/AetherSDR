@@ -38,12 +38,13 @@ class ServiceTest(unittest.TestCase):
   d=properties(2);name='aetherpd-recover.service' if recovery else 'aetherpd-install.service'
   d.update(Id=name,Names=name,FragmentPath='/etc/systemd/system/'+name,Type='oneshot',ExecStart=executable(BOOT,'--recover-installation' if recovery else '--install-approved'))
   return d
- def layout(self,managed):
-  for name,value in units.render('arm64',managed).items():(self.units/name).write_text(value)
+ def layout(self,managed,hold=True):
+  for name,value in units.render('arm64',managed,hold).items():(self.units/name).write_text(value)
   d=properties(2)
   if managed:d['ExecStart']=executable(BOOT,'--primary')
   (self.root/NAMES[2]).write_text(text(d))
   d=self.session('aetherpd-start@0-2-78666.service')
+  d['SendSIGKILL']='no' if hold else 'yes'
   if managed:d['ExecStart']=executable(BOOT,'--session')
   (self.root/d['Id']).write_text(text(d))
  def test_both_complete_layouts_reload_stop_and_quiesce(self):
@@ -238,8 +239,77 @@ class ServiceTest(unittest.TestCase):
   d=properties(2);d['ExecStop']='foreign';(self.root/NAMES[2]).write_text(text(d));(self.root/'commands').unlink();self.invoke('stop',expected=1)
   self.assertNotIn('systemctl stop',(self.root/'commands').read_text())
  def session(self,name='aetherpd-start@0-1193-78666.service',active=False):
-  d=properties(2,active);d.update(Id=name,Names=name,FragmentPath='/etc/systemd/system/aetherpd-start@.service',ExecStart=executable('/run/aetherpd/bin/pd-start-session'),StandardInput='socket',ControlGroup=('/system.slice/system-aetherpd\\x2dstart.slice/'+name) if active else '')
+  d=properties(2,active);d.update(Id=name,Names=name,FragmentPath='/etc/systemd/system/aetherpd-start@.service',ExecStart=executable('/run/aetherpd/bin/pd-start-session'),StandardInput='socket',SendSIGKILL='no',ControlGroup=('/system.slice/system-aetherpd\\x2dstart.slice/'+name) if active else '')
   return d
+ def test_applied_session_hold_is_required_for_startup(self):
+  for managed in (False,True):
+   self.layout(managed)
+   current=self.session(active=True);current['MainPID']='@self'
+   if managed:current['ExecStart']=executable(BOOT,'--session')
+   (self.root/'sessions').write_text(text(current));self.invoke('session-policy')
+   name='aetherpd-start@0-2-78666.service'
+   for value in [None,'yes','','NO','0','no no']:
+    d=self.session(name)
+    if managed:d['ExecStart']=executable(BOOT,'--session')
+    if value is None:d.pop('SendSIGKILL')
+    else:d['SendSIGKILL']=value
+    (self.root/name).write_text(text(d));(self.root/'commands').unlink(missing_ok=True)
+    self.invoke('session-policy',expected=1)
+    self.assertNotIn('systemctl start',(self.root/'commands').read_text())
+ def test_startup_requires_own_live_applied_session_policy(self):
+  self.layout(True)
+  self.invoke('session-policy',expected=1)
+  current=self.session(active=True);current.update(MainPID='@self',ExecStart=executable(BOOT,'--session'))
+  (self.root/'sessions').write_text(text(current));self.invoke('session-policy')
+  for changes in [{'MainPID':'42'},{'SendSIGKILL':'yes'},{'MainPID':'0','ControlGroup':'','ActiveState':'inactive','SubState':'dead'}]:
+   changed=dict(current);changed.update(changes)
+   (self.root/'sessions').write_text(text(changed));self.invoke('session-policy',expected=1)
+ def test_legacy_stop_policy_is_quiesce_only(self):
+  for managed in (False,True):
+   self.layout(managed,False);self.invoke('files');self.invoke('reload')
+   self.invoke('session-policy',expected=1);self.invoke('quiesce')
+   for active,populated in [(True,True),(False,True)]:
+    d=self.session(active=active);d['SendSIGKILL']='yes'
+    if managed:d['ExecStart']=executable(BOOT,'--session')
+    if populated:d['ControlGroup']='/system.slice/system-aetherpd\\x2dstart.slice/'+d['Id']
+    (self.root/'sessions').write_text(text(d));(self.root/'commands').unlink(missing_ok=True)
+    self.invoke('quiesce',expected=1)
+    self.assertNotIn('systemctl stop',(self.root/'commands').read_text())
+   (self.root/'sessions').write_text('')
+ def test_legacy_hidden_kernel_session_refuses_before_stop(self):
+  self.layout(True,False)
+  self.process(42,'0::/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@0-1193-78666.service\n','/run/aetherpd/bin/pd-lease-guard')
+  self.invoke('quiesce',expected=1)
+  self.assertNotIn('systemctl stop',(self.root/'commands').read_text())
+ def test_legacy_orphan_runtime_helper_refuses_before_stop(self):
+  self.layout(True,False)
+  self.process(42,'0::/system.slice/foreign.service\n','/run/aetherpd/bin/pd-lease-guard')
+  self.invoke('quiesce',expected=1)
+  self.assertNotIn('systemctl stop',(self.root/'commands').read_text())
+ def test_legacy_primary_control_may_retire_normally(self):
+  self.layout(True,False)
+  self.process(42,'0::/system.slice/aetherpd-shim.service\n','/run/aetherpd/bin/flex-tailnet-shim')
+  self.invoke('quiesce',expected=1)
+  self.assertIn('systemctl stop aetherpd-shim.service aetherpd-start.socket',(self.root/'commands').read_text())
+ def test_applied_policy_must_match_fixed_template_and_all_instances(self):
+  for managed in (False,True):
+   self.layout(managed)
+   d=self.session();d['SendSIGKILL']='yes'
+   if managed:d['ExecStart']=executable(BOOT,'--session')
+   (self.root/'sessions').write_text(text(d));(self.root/'commands').unlink(missing_ok=True)
+   self.invoke('quiesce',expected=1)
+   self.assertNotIn('systemctl stop',(self.root/'commands').read_text())
+   (self.root/'sessions').write_text('')
+ def test_session_policy_missing_duplicate_or_invalid_refused(self):
+  d=self.session()
+  for value in [None,'','NO','false','0']:
+   changed=dict(d)
+   if value is None:changed.pop('SendSIGKILL')
+   else:changed['SendSIGKILL']=value
+   self.raw('sessions',text(changed),1)
+  self.raw('sessions',text(d)+'SendSIGKILL=no\n',1)
+  legacy=dict(d);legacy['Id']=legacy['Names']='aetherpd-start@1-1193-78666.service';legacy['SendSIGKILL']='yes'
+  self.raw('sessions',text(d)+'\n'+text(legacy),1)
  def raw(self,mode,data,expected=0,extra=''):
   path=self.root/'input';path.write_bytes(data.encode() if isinstance(data,str) else data)
   p=subprocess.run([str(CHECKER),mode,str(path)],capture_output=True,timeout=5)

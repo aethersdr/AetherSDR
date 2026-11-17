@@ -37,6 +37,7 @@ func decodePDStartVersion(r io.Reader, selected bool) (pdStartIdentity, error) {
 
 // Caller holds n.mu. Revocation closes pending and established sessions.
 func (n *Node) retirePDSessionLocked() {
+	n.pdSessionCleanupConfirmed = false
 	if n.pdInstall != nil {
 		n.pdInstall.cancel()
 	}
@@ -101,6 +102,7 @@ func aetherPDStartVersionHandler(n *Node, selected bool) http.HandlerFunc {
 		if valid {
 			n.pdSession = channel
 			n.pdSessionStopped = false
+			n.pdSessionCleanupConfirmed = false
 		} else if channel != nil {
 			channel.Close()
 		}
@@ -120,15 +122,15 @@ func aetherPDStartVersionHandler(n *Node, selected bool) http.HandlerFunc {
 	}
 }
 
-// A terminal supervisor observation permits an explicit successor request.
-// It does not confirm cleanup, close the channel or start another session.
-func pdSessionTerminalStatus(reply pdSessionReply) bool {
+// A strict terminal observation permits an explicit successor request. Only
+// "stopped" also confirms cleanup; parsing never closes or starts a session.
+func pdSessionTerminalState(reply pdSessionReply) string {
 	if reply.err != nil || reply.code != http.StatusOK || len(reply.body) > pdSessionMaxBody {
-		return false
+		return ""
 	}
 	dec := json.NewDecoder(bytes.NewReader(reply.body))
 	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
-		return false
+		return ""
 	}
 	seen := map[string]bool{}
 	var state string
@@ -136,30 +138,33 @@ func pdSessionTerminalStatus(reply pdSessionReply) bool {
 		token, err := dec.Token()
 		key, ok := token.(string)
 		if err != nil || !ok || seen[key] {
-			return false
+			return ""
 		}
 		seen[key] = true
 		switch key {
 		case "available":
 			value, err := dec.Token()
 			if err != nil || value != false {
-				return false
+				return ""
 			}
 		case "state":
 			if err := dec.Decode(&state); err != nil {
-				return false
+				return ""
 			}
 		default:
-			return false
+			return ""
 		}
 	}
 	if token, err := dec.Token(); err != nil || token != json.Delim('}') || len(seen) != 2 {
-		return false
+		return ""
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return false
+		return ""
 	}
-	return state == "stopped" || state == "cleanup_unconfirmed" || state == "stopped_receive_unconfirmed"
+	if state == "stopped" || state == "cleanup_unconfirmed" || state == "stopped_receive_unconfirmed" {
+		return state
+	}
+	return ""
 }
 
 func aetherPDSessionHandler(n *Node, opcode byte, local http.HandlerFunc) http.HandlerFunc {
@@ -196,12 +201,20 @@ func aetherPDSessionHandler(n *Node, opcode byte, local http.HandlerFunc) http.H
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
 		reply := channel.Call(ctx, opcode)
-		ended := opcode == 'S' && pdSessionTerminalStatus(reply)
+		var terminal string
+		if opcode == 'S' {
+			terminal = pdSessionTerminalState(reply)
+		}
 		n.mu.Lock()
 		authorized = n.checkTokenLocked(token)
 		current := n.pdSession == channel
-		if authorized && current && ((opcode == 'T' && reply.err == nil && reply.code == 202) || ended) {
+		if authorized && current && ((opcode == 'T' && reply.err == nil && reply.code == 202) || terminal != "") {
 			n.pdSessionStopped = true
+		}
+		if authorized && current && (opcode == 'S' || opcode == 'T') {
+			// A Stop acknowledgment and an uncertain terminal state retain the
+			// lifetime channel. Only observed complete cleanup permits upgrade.
+			n.pdSessionCleanupConfirmed = opcode == 'S' && terminal == "stopped"
 		}
 		n.mu.Unlock()
 		if !authorized {
