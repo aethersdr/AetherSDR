@@ -1,0 +1,141 @@
+{
+  "updated_utc": "2026-11-17T06:31:39.656912+00:00",
+  "status": "exact_installed_c732_release_software_reboot_identity_autostart_and_postboot_GUI_IQ_qualified_on_8600",
+  "production_ready": false,
+  "radio_runtime_source": "e7b3068a4eaa810ae67166cf678f9172d2f16a43",
+  "release_blake2b_256": "c732d9afcb0da6b7d1317c7e523c5cbd78800ff8e9a4993097ecd41318bf2614",
+  "desktop_source": "47709a7be5d4b78901cfdde4ce4359693ad4a145",
+  "software_reboot": {
+    "commands_sent": 1,
+    "boot_id_before": "da955e3f-c404-4337-97fd-1d42ddb693e8",
+    "boot_id_after": "a0bc3e5f-0a2f-433b-aa25-08d5cc0d6cf4",
+    "exact_installation_receipt_before": {
+      "firmware": "4.3.16.42034",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "c732d9afcb0da6b7d1317c7e523c5cbd78800ff8e9a4993097ecd41318bf2614",
+      "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed",
+      "upgrade_plan_blake2b_256": "e6026f786c1bc3895022ef91dd73baff281eb00b7694b155b64197bd8b2159f2"
+    },
+    "exact_installation_receipt_after": {
+      "firmware": "4.3.16.42034",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "c732d9afcb0da6b7d1317c7e523c5cbd78800ff8e9a4993097ecd41318bf2614",
+      "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed",
+      "upgrade_plan_blake2b_256": "e6026f786c1bc3895022ef91dd73baff281eb00b7694b155b64197bd8b2159f2"
+    },
+    "authenticated_primary_available_s": 63.836,
+    "installation_id_preserved": true,
+    "identity_mode": "local_only; actual tailnet identity is not present or qualified",
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "service_started_before_post_reboot_diagnostics": true,
+    "boot_service": "MainPID=0\nId=aetherpd-boot.service\nActiveState=active\nSubState=exited\nUnitFileState=static\n\nMainPID=1308\nId=aetherpd-shim.service\nActiveState=active\nSubState=running\nUnitFileState=enabled\n",
+    "startup_journal": "[    9.479802] 2125-1213-8600-8895 systemd[1]: Starting aetherpd-boot.service - AetherPD authenticated RAM payload...\n[   39.724399] 2125-1213-8600-8895 systemd[1]: Finished aetherpd-boot.service - AetherPD authenticated RAM payload.\n[   40.471895] 2125-1213-8600-8895 systemd[1]: Started aetherpd-shim.service - AetherPD ordinary-user control service.\n[   40.510286] 2125-1213-8600-8895 pd-boot[1308]: 2026/11/17 06:17:24 flex-tailnet-shim 0.5.2 starting; state in /var/lib/smartsdr/aetherpd/state\n[   84.194898] 2125-1213-8600-8895 pd-boot[1308]: 2026/11/17 06:18:08 expose: AetherGPS published TCP 2947 (192.168.50.100)\n",
+    "physical_power_loss_tested": false
+  },
+  "postboot_ordinary_GUI_receive_IQ": {
+    "bytes": 131072,
+    "sha256": "14c8d86fe647632cdf5800a9748c6b2234ba60f19814254c778aa1b35b72199f",
+    "sample_rate_Hz": 48000,
+    "DAX_IQ_channel": 4,
+    "FDX": false,
+    "new_GUI_handle": 330944360,
+    "diagnostic_schema": 2,
+    "Stop_state": "stopped",
+    "finite_nonzero_samples_checked": true
+  },
+  "final_audit": {
+    "processes": [
+      {
+        "pid": 1308,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414"
+      },
+      {
+        "pid": 1345,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 1352,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414"
+      }
+    ],
+    "runtime_hashes": {
+      "flex-tailnet-shim": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "boot_sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444",
+    "fixed_ARP_absent": true,
+    "accept_local": "0",
+    "temporary_installer_paths_absent": true,
+    "failed_session_records": 0,
+    "all_idle_UIDs": 78666,
+    "all_idle_capability_sets_zero": true,
+    "NoNewPrivs": 1,
+    "temporary_audit_container_and_scratch_removed": true
+  },
+  "RF_commands": [],
+  "limitations": [
+    "One controlled software reboot; no new physical power-cut test or interrupted-update/rollback test.",
+    "Autostart refers to the installed control service. DSP, IQ capture and fixed ARP setup still require explicit ordinary GUI Start; no automatic RF or calibration is introduced.",
+    "Identity proof is the local installation identity and credential hash, not an enrolled Tailscale identity or key rotation.",
+    "FLEX8600 firmware4.3.16.42034 only; actual6300 Linux2.6/CortexA8/one-core qualification remains external.",
+    "This receive-only reboot result does not close native SWR disagreement, repeated RF/speech/stock comparison or other P1-P10 release gates."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/reboot-check.py.gz": "06840d4db30f9e3b252743578314df74c8e69b0bbb8afbed375ddda3534bf0f0",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/reboot-check.json.gz": "c43367eddc9f716771ba3b787d16ac6a79bae8f545fe9b183d18cf862438909d",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/reboot-intent.json.gz": "36c77307a8f2dbe273811a95c53d76d192e05ea046b67e811054b8121ca37b3d",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/open-fresh-panel.py.gz": "287ff8bdfc04ee124b49ddf05339daf1e5226082205a5b1812af456fa4b48524",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/connected.json.gz": "49d5faba55511971b99a580be066598c3759c4cf7d507800350f702ed7a8c08b",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/instance.json.gz": "b52e2bf3a3931fda63e0e1a3f70dfaa8c9f2896c83ee8db95fa08641049394a5",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/receive-iq-check.py.gz": "34f0a3bfe3d9726b4a87460e9c6609e0948e6ec49322eefabbc03853c6ecf24e",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/usb-receive-iq-check.json.gz": "929dbfa619f4880e8242329b98f690e33d0cee52e8c74ac80b79d9d4ac6df84d",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/usb-receive-iq.f32le.gz": "6071c70e54b11c4387540076720bc64e04ed2fa4d56b37c30b785bd921f1e877",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/post-reboot-audit-job.py.gz": "0b0d5237f4e9bbc5582bbff4f92027d6c7e1f25c91da5d880df8a95987267f35",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/post-reboot-audit-result.json.gz": "d0c794b6b6f605953c853ab40500e8dba3ba79947f3f73072b733a635cd8476a",
+    "tools/pd-waveform/evidence/20261116-current-release-reboot/save-evidence.py.gz": "0b61b5ad176a1b8c107c6cbb7481bf36cd249be219176d90dfd4d9b69eebdcae"
+  }
+}

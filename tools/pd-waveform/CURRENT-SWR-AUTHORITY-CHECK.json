@@ -1,0 +1,32 @@
+{
+  "updated_utc": "2026-11-17T06:31:39.706805+00:00",
+  "status": "no_client_scaling_error_found_native_SWR_disagreement_remains_unresolved",
+  "production_guards_changed": false,
+  "SDK_Meter_cs_sha256": "91a5338269e6e573044c0089811196a53e499922487b680fab103d679b4f1f5f",
+  "native_SWR_encoding": "Signed16 raw divided by128, per FlexLib Meter.UpdateValue and declared SWR units.",
+  "production_decoder": "MeterModel.convertRaw divides SWR by128; stored m_swr is used directly by TxLinearityTelemetry, without another conversion.",
+  "actual_aborted_run_ATU_status": {
+    "atuEnabled": true,
+    "atuMemories": false,
+    "atuStatus": "manual_bypass"
+  },
+  "current_passive_status": {
+    "simulated_PA_SWR_fault": false,
+    "simulated_PA_overtemp": false,
+    "interlock": "READY"
+  },
+  "vendor_guidance": {
+    "URL": "https://helpdesk.flexradio.com/hc/en-us/articles/41457432050971-Why-Does-the-Radio-s-VSWR-Not-Match-other-SWR-meters",
+    "updated_on_page": "2026-04-23",
+    "scope": "Vendor distinguishes small expected meter differences from a substantial discrepancy with the first external meter, which warrants investigation. Does not establish the cause of our captured same-packet disagreement."
+  },
+  "limitations": [
+    "Status and decoders do not prove physical relay/coupler integrity or identify a firmware cause.",
+    "False-fault flags were checked at idle after the tests; no assertion they were continuously observed during every prior RF run.",
+    "No new RF, threshold changes, state restoration, LP product integration or vendor issue was performed."
+  ],
+  "related_report": "CURRENT-CANDIDATE-5W-AND-ARM-QUALIFICATION.json",
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-current-SWR-authority/current-idle-radio-20261116.json.gz": "101fb911211250dd9bc7ef9dd088b7a014db5d5fcde3c54b67be962156cd8fa5"
+  }
+}
