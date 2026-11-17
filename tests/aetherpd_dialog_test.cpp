@@ -13,6 +13,7 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QSignalSpy>
 #include <QAccessible>
 #include <QImage>
 #include <limits>
@@ -42,6 +43,49 @@ int main(int argc, char** argv)
     using namespace AetherSDR::aetherpd;
     using Access = SessionControlTestAccess;
     AppSettings::instance().load();
+    {
+        Network network;
+        RadioModel radio;
+        Access::install(radio, network);
+        Access::begin(radio);
+        AetherPDDialog dialog(&radio, [](const QString&, QObject*, auto loaded) {
+            loaded(QString(64, QLatin1Char('a')));
+        });
+        auto* remote = dialog.findChild<QPushButton*>(QStringLiteral("pdRemoteAccess"));
+        auto* refresh = dialog.findChild<QPushButton*>(QStringLiteral("pdRefresh"));
+        if (!check(remote && refresh, "managed Remote Access entry exists")) { return 1; }
+        QSignalSpy opened(&dialog, SIGNAL(remoteAccessRequested()));
+        if (!check(opened.isValid() && !remote->isEnabled() && !remote->isHidden()
+                && !remote->accessibleDescription().isEmpty(),
+                "Remote Access needs the owner credential and states its reason")) { return 1; }
+        QCoreApplication::processEvents();
+        network.last->complete(200, R"({"available":false,"state":"stopped"})");
+        const size_t requests = network.sent.size();
+        if (!check(remote->isEnabled(), "authenticated stopped service enables Remote Access")) { return 1; }
+        remote->click();
+        if (!check(opened.count() == 1 && network.sent.size() == requests,
+                "opening Remote Access emits intent without starting PD or transmitting")) { return 1; }
+        radio.transmitModel().setTransmitting(true);
+        if (!check(!remote->isEnabled(), "observed transmission blocks remote-access setup")) { return 1; }
+        radio.transmitModel().setTransmitting(false);
+        refresh->click();
+        network.last->complete(503, "{}");
+        if (!check(remote->isEnabled(), "private-channel loss cannot strand pending remote sign-in recovery")) { return 1; }
+        remote->click();
+        if (!check(opened.count() == 2, "owner can reopen remote access while IQ status is unavailable")) { return 1; }
+        refresh->click();
+        QFile fixture(QStringLiteral(AETHERPD_TESTDATA_DIR "/idle.json"));
+        if (!fixture.open(QIODevice::ReadOnly)) { return 1; }
+        network.last->complete(200, fixture.readAll());
+        if (!check(!remote->isEnabled(), "running DSP must stop before remote-access changes")) { return 1; }
+        refresh->click();
+        network.last->complete(200, R"({"available":false,"state":"stopped"})");
+        Access::retire(radio);
+        // Exercise the callback fence even if an already queued click outlives rendering.
+        remote->setEnabled(true);
+        remote->click();
+        if (!check(opened.count() == 2, "retired radio session cannot open successor remote access")) { return 1; }
+    }
     {
         AetherPDMeasurementSpectrum spectrum;
         spectrum.resize(900, 360);

@@ -1,0 +1,55 @@
+{
+  "updated_utc": "2026-11-17T09:42:18.089550+00:00",
+  "status": "managed_remote_access_entry_and_original_session_fences_implemented_component_verified_live_proof_pending",
+  "source_base_commit": "6f54e4d173761eb4aad99fd60291eab2ad0f501b",
+  "source_sha256": {
+    "src/gui/AetherPDDialog.cpp": "5ae84adde0ae19c1d2b2e1e9341d945d7f6ded9a2fef5edecb323e3673a880b6",
+    "src/gui/AetherPDDialog.h": "ab0d0050f6a50e89f10e855941578deeffa27810db260d7d4505d1c96719c480",
+    "src/gui/TailnetShimDialog.cpp": "106fe07d3739c47a39dca90658de5419041e1e56cdbd012bd85b2e7fc2473d8c",
+    "src/gui/TailnetShimDialog.h": "b9c8ddffd43bbb160a081f1cc6b16bcbd129d8fa3e175d664951dcaf4202e3b1",
+    "src/gui/WaveformsDialog.cpp": "75f319e0b603f9c58653091aea4347b9655ae1cbddaae234d93c87fa1018349c",
+    "tests/aetherpd_dialog_test.cpp": "7ededc1b193a2b79f093f831835be4389309578e18640bd68750f9c8af411e4c",
+    "docs/user/docs/tailscale-remote-access.md": "04df4af7e2fb980b2dea3ec60f7d2e8989bf2c39810abe3fd096864d6c525e40"
+  },
+  "production_ready": false,
+  "native_runtime_changed": false,
+  "implementation": [
+    "AetherPD panel opens the existing Remote Access window through the original RadioModel/control session, without requiring a legacy waveform row.",
+    "A known owner can reopen remote sign-in while its previous IQ control channel is unavailable. Known running DSP, TX and active installation remain blocked at admission.",
+    "Entry rechecks original session on click; Remote Access actions and modal confirmations recheck the original connection. Callbacks from a retired original connection are ignored before changing sign-in or saved credentials.",
+    "Pending managed sign-in offers Cancel sign-in and retains local owner credentials; legacy reset/update is not connected from this managed entry."
+  ],
+  "verification": {
+    "original_entry_regression": "red before implementation",
+    "final_Qt_tests": "aetherpd_dialog_test and tailnet_shim_client_test passed",
+    "checks": [
+      "owner credential admission",
+      "opening emits intent without sending PD or TX requests",
+      "observed TX blocks entry",
+      "known running DSP blocks entry",
+      "unavailable IQ channel permits owner recovery",
+      "retired original session rejects queued click"
+    ],
+    "full_Linux_desktop": "built",
+    "docs_install_and_build": "passed"
+  },
+  "limitations": [
+    "No live window, actual pending-tailnet cancellation or modal/late-reply radio proof in this component report.",
+    "Tailnet window callback/effect fences are compiled; a full network-reply fault matrix and independent GUI/session sanitizer/platform builds remain open.",
+    "Real tailnet account enrollment and independent lost-owner-credential recovery/rotation remain open.",
+    "No RF, release/actual6300 qualification or production-ready claim is made.",
+    "A same-connection legacy token rotation still needs response-to-credential correlation before delayed Login401 handling may delete a keychain entry; connection fences alone do not qualify that distinct case."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/before-build.log.gz": "07b024791af279adb01a7691d2d6d69a60f1215185e81567c731717ae1ef0672",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/before.log.gz": "5f2036eb62b499dde5bcc90d38fa1294a9de56ab565cd0767d6755c4207013dc",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/after-build.log.gz": "cef9f3b730db652c562eb5588a93355b42a722d9df89559084edc24db406f60f",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/after.log.gz": "218cefa08c0e67e48a4db1fd9ebc787c6216d5f5c19b8eb22bd26b723e486ae4",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/after-recovery-build.log.gz": "6d0a0d262d5665bc55c9512f020c4917a796b79687b7ede07c646a0ae23224f5",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/after-recovery.log.gz": "4728d4d723c8599934f26a4fc51358355a6b9a357847f454f325302b7a7d9142",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/final-build.log.gz": "9ff4e7820d7490d0e5e946f3c79110319fe22913a07ca2e7ceae1b37d4e15c6c",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/final-tests.log.gz": "218cefa08c0e67e48a4db1fd9ebc787c6216d5f5c19b8eb22bd26b723e486ae4",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/docs-install.log.gz": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561",
+    "tools/pd-waveform/evidence/20261117-managed-remote-access-ui/docs-build.log.gz": "1e6451b2a7fc2861a47f72430d4690ab46ae4e3ef35d7d8a8258381225867f1f"
+  }
+}

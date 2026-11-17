@@ -1,0 +1,200 @@
+{
+  "updated_utc": "2026-11-17T09:42:18.089550+00:00",
+  "status": "owner_preserving_runtime_ordinary_upgrade_receive_only_IQ_and_cleanup_qualified_on_8600",
+  "runtime_source_commit": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+  "release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+  "predecessor_release_blake2b_256": "938fc001e83ac5bfd1a998264c77b4aeff18d1409360c9212771cbbc2c70af93",
+  "production_ready": false,
+  "desktop": {
+    "pid": 3622371,
+    "socket": "/tmp/aetherpd-managed-owner",
+    "binary_sha256": "819a16216f654581e88b45b2eed295aab4ab2baa5bdcf5fb7db271ed45a2dc3b",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "7b7f6a15126f6fecbef55aeed3a746b1aa7b2ecd",
+    "desktop_source": "6f54e4d173761eb4aad99fd60291eab2ad0f501b",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.027614581005764
+  },
+  "ordinary_upgrade": {
+    "elapsed_s": 48.62,
+    "committed": true,
+    "temporary_installer_removed": true,
+    "existing_credential_used": true,
+    "diagnostics_used_for_delivery": false
+  },
+  "receive_IQ": {
+    "iq_bytes": 131072,
+    "iq_sha256": "6504caee4b47064242001937df3d93e4cdca8a52e4d2020d6702d403c4edb767",
+    "nonzero_values": 30947,
+    "rms": 33.3984000365287
+  },
+  "capture_binding": {
+    "channel": 4,
+    "failed": false,
+    "gui_handle": 1009084343,
+    "pan": 1073741824,
+    "transport": "local_dax_iq",
+    "valid": true
+  },
+  "FDX": false,
+  "Stop_state": "stopped",
+  "managed_owner_public_status": {
+    "body": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [
+        {
+          "expires_in_s": 527,
+          "listening": false,
+          "name": "AetherGPS",
+          "port": 2947,
+          "target": "192.168.50.100"
+        }
+      ],
+      "hostname": "flx8600",
+      "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+      "key_expiry": "",
+      "last_error": "",
+      "managed_owner_version": 1,
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": false,
+      "state": "local",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "http_status": 200
+  },
+  "audit": {
+    "rf_commands": [],
+    "processes": [
+      {
+        "pid": 2482,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      },
+      {
+        "pid": 2810,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 2817,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "migration_plan_blake2b_256": "cc0929ab2bd881ac33b45a812be2d0f37230c779815150c1608fb41d007fd30d",
+    "transaction_sha256": "a924ed3a5183ec0052bae498cb2d2e70cdae0bdd1a6f0f6a47c76a1e576e2f16",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    },
+    "private_sockets": [],
+    "containers": [
+      "nereus-net-probe",
+      "AetherGPS",
+      "nereus-inprocess-job-f92583d0c4"
+    ],
+    "arp": [],
+    "accept_local": "0",
+    "legacy_container_absent": true,
+    "cached_first_artifacts": [],
+    "runtime_hashes": {
+      "flex-tailnet-shim": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "upgrade_generation_present": true,
+    "upgrade_generation_hex": "504447454e303031ca1b8f835ed90fa96e641e2e5c3a9223015e3c16f709b51f5965329e504dbc30",
+    "prior_backup_identity_sha256": "7e315aee252647fbbaf713d7633ec4b72fbd9c73406bedc54b107bedc5476931",
+    "owned_upgrade_carrier_artifacts": [],
+    "systemd_version": "systemd 252 (252.39-1~deb12u2)\n+PAM +AUDIT +SELINUX +APPARMOR +IMA +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBFDISK +PCRE2 -PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD -BPF_FRAMEWORK -XKBCOMMON +UTMP +SYSVINIT default-hierarchy=unified\n",
+    "applied_sessions": "MainPID=2810\nKillMode=control-group\nSendSIGKILL=no\nId=aetherpd-start@1-2482-78666.service\nActiveState=active\n",
+    "permanent_boot_sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444",
+    "latest_session_journals": {
+      "aetherpd-start@1-2482-78666.service": "[ 2168.089350] 2125-1213-8600-8895 systemd[1]: Started aetherpd-start@1-2482-78666.service - AetherPD owned local session (PID 2482/UID 78666).\n[ 2169.111739] 2125-1213-8600-8895 pd-boot[2810]: {\"event\":\"native_resources_prepared\",\"source_pid\":2820,\"capture_pid\":2823,\"arp_pid\":2818,\"stream\":\"0x20000000\",\"port\":55860,\"rf_commands\":[]}\n[ 2169.113803] 2125-1213-8600-8895 pd-boot[2810]: {\"event\":\"supervisor_ready\",\"uid\":65534,\"worker_pid\":2825,\"status\":0,\"rf_commands\":[]}\n[ 2169.486661] 2125-1213-8600-8895 pd-boot[2810]: {\"event\":\"ready\",\"uid\":65534,\"clock_pid\":2826,\"raw_fd_closed\":true,\"strict_seccomp\":true}\n[ 2169.720615] 2125-1213-8600-8895 pd-boot[2810]: 2026/11/17 03:24:28 AetherPD: captured owned receive baseline before DSP startup\n[ 2169.752455] 2125-1213-8600-8895 pd-boot[2810]: 2026/11/17 03:24:28 AetherPD: owned API lease guardian armed before DSP startup\n[ 2169.752455] 2125-1213-8600-8895 pd-boot[2810]: 2026/11/17 03:24:28 AetherPD: owned receive guardian armed before DSP startup\n[ 2169.753438] 2125-1213-8600-8895 pd-boot[2810]: 1794907468.348 discarded 74 pre-activation IQ datagrams\n[ 2169.753696] 2125-1213-8600-8895 pd-boot[2810]: 1794907468.348 AetherPD 0.1.0 starting, radio 127.0.0.1, udp 38626, feedback DAX IQ 4 at 48000 Hz, peak 0.70, correction on\n[ 2169.801241] 2125-1213-8600-8895 pd-boot[2810]: 1794907468.395 command 1: 10000002 unknown client program AetherPD\n[ 2169.824492] 2125-1213-8600-8895 pd-boot[2810]: 1794907468.419 registered AetherPD: tx_in 0x81000001 rx_in 0x81000000\n[ 2171.303750] 2125-1213-8600-8895 pd-boot[2810]: 1794907469.898 shim session ended\n[ 2171.303750] 2125-1213-8600-8895 pd-boot[2810]: 1794907469.898 stopping\n[ 2171.304852] 2125-1213-8600-8895 pd-boot[2810]: {\"event\":\"complete\",\"reason\":\"output\",\"received\":496,\"forwarded\":495,\"stale\":0,\"invalid\":0,\"foreign\":0,\"backpressure\":0,\"output_errors\":1,\"loss_seen\":1,\"clock_faults\":0,\"future_wait\":225,\"clock_pid\":2826,\"startup_discarded\":64,\"strict_seccomp\":true,\"raw_fd_closed\":true,\"rf_commands\":[]}\n[ 2171.344336] 2125-1213-8600-8895 pd-boot[2810]: {\"event\":\"session_stopped\",\"uid\":65534,\"worker_pid\":2825,\"status\":0,\"rf_commands\":[]}\n"
+    },
+    "upgrade_journal": "[ 2129.625134] 2125-1213-8600-8895 systemd[1]: Starting aetherpd-upgrade.service - AetherPD approved upgrade worker...\n[ 2129.627687] 2125-1213-8600-8895 systemd[1]: aetherpd-upgrade.service: Main process exited, code=exited, status=4/NOPERMISSION\n[ 2129.629213] 2125-1213-8600-8895 systemd[1]: aetherpd-upgrade.service: Failed with result 'exit-code'.\n[ 2129.630203] 2125-1213-8600-8895 systemd[1]: Failed to start aetherpd-upgrade.service - AetherPD approved upgrade worker.\n[ 2134.642569] 2125-1213-8600-8895 systemd[1]: aetherpd-upgrade.service: Scheduled restart job, restart counter is at 1.\n[ 2134.643534] 2125-1213-8600-8895 systemd[1]: Stopped aetherpd-upgrade.service - AetherPD approved upgrade worker.\n[ 2134.665745] 2125-1213-8600-8895 systemd[1]: Starting aetherpd-upgrade.service - AetherPD approved upgrade worker...\n[ 2151.887631] 2125-1213-8600-8895 systemd[1]: aetherpd-upgrade.service: Deactivated successfully.\n[ 2151.887888] 2125-1213-8600-8895 systemd[1]: Finished aetherpd-upgrade.service - AetherPD approved upgrade worker.\n[ 2151.888333] 2125-1213-8600-8895 systemd[1]: aetherpd-upgrade.service: Consumed 10.122s CPU time.\n",
+    "all_failed_sessions": [],
+    "boot_id": "d62c52ec-39f1-441b-848c-4976ee350de3",
+    "passed": true
+  },
+  "RF_commands": [],
+  "radio_credential_mutations": [],
+  "limitations": [
+    "One ordinary upgrade and finite receive-only DAX IQ Start/capture/Stop on currentFLEX8600 firmware4.3.16.42034; no new software reboot, physical power cut, RF or actual6300 test.",
+    "Identity/protocol preservation covers existing local-only owner. Actual pending enrollment, lost TCP reply, account approval, disconnect and lost-owner-token recovery remain unqualified here.",
+    "Fixed helpers/DSP unchanged; full final graph fault matrix, native SWR/alignment and repeated final RF/analyzer/stockAPD comparison remain open.",
+    "Broad diagnostics used only for read-only independent audit, not installation or Start/Stop. Temporary audit container/scratch deletion verified.",
+    "No shipping catalogue, production publisher or independent release review is claimed. All ten phases remain active."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/build-desktop.py.gz": "5a46907eaa8b5ced6b67c3cbc6ae115bc8fa908d2a4652b9f2451afa550be59a",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/desktop-provenance.json.gz": "32223d32c4923be972d30f3c33d087bff5e19541351740650708634acb4135a7",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/relaunch.py.gz": "0a81b5d9bd013214be1a9441cb15e34f13a9c2fffe56fc44da2a5f4adb60ee9e",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/instance.json.gz": "d719d0e001fc3284c5a395674b2a5104429f14adb7a8141bbd375132b6de5a07",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/prepare.py.gz": "f3f4de30ca1bebf6068b43432fb0558ca48e0d0af10d5dd3bf1e024bac113af9",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/prepared.json.gz": "16ad7e7de86df4aff914b8a1191a7a720497ae07070f76d3f9d38cd318604da2",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/install.py.gz": "6de579258452ecf8ffdd980f2048fb2006ee50b6c0dd50e670adb53d15a72c2f",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/install-result.json.gz": "928a1da397b89dc591c89f6a2089f5dfa4bb1e8d0ba7e4228a77046027529536",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/receive-iq-check.py.gz": "c5e7f97ae5c50e2a0624d1c003e808cd0eabe8555fdf89bfdaa786ae078f65dc",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/usb-receive-iq-check.json.gz": "b2fa4f7439498a6843f124315e029f791fd84a6539b7af8aba5a6bd526270295",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/usb-receive-iq.f32le.gz": "dec59d0d5093ac1f68e0e0c3a8701c4a1bd88b793876c438d483f3ec16c938e0",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/owner-status-before.json.gz": "a074711a00316f0adc97f0c954ebd2c86d4c206595867e918fd42074957623c1",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/audit-pins.json.gz": "474650b30b807c0e56a9664b81bf3a8e200bbd1a464c44b1632a86b9a9a35a9e",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/final-audit-job.py.gz": "933b3e32c90cd44ec602138ae066afdd251d55763db955c046cc15ee12930457",
+    "tools/pd-waveform/evidence/20261117-managed-owner-installed/final-audit-result.json.gz": "f9dc11ca393f29079b321b6b6638e14c8779e97a76ad8e96e8557b7ee7806761"
+  }
+}

@@ -4,6 +4,8 @@
 
 #include <QCoreApplication>
 #include <QHostAddress>
+#include <QPointer>
+#include <functional>
 #include "core/TailnetShimClient.h"
 
 class QCheckBox;
@@ -49,6 +51,7 @@ signals:
     void resetRequested(bool update);
 
 private:
+    bool current() const;
     void refresh();
     void showStatus(const TailnetShimStatus& status);
     void showError(const QString& message);
@@ -77,7 +80,8 @@ private:
     void onProvisioned(const TailnetShimProvisionReply& reply);
     void onRequestFailed(const QString& operation, const QString& message, bool unauthorized);
 
-    RadioModel* m_model{nullptr};
+    QPointer<RadioModel> m_model;
+    std::function<bool()> m_originalSessionCurrent;
     TailnetShimClient m_client;
     QTimer* m_pollTimer{nullptr};
 

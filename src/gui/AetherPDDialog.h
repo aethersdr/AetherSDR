@@ -28,6 +28,9 @@ public:
 public slots:
     void done(int result) override;
 
+signals:
+    void remoteAccessRequested();
+
 private:
     void refresh();
     void render();
@@ -45,6 +48,7 @@ private:
     void cancelInstallation();
     void request(aetherpd::Operation operation);
     bool current() const;
+    bool remoteAccessAvailable() const;
 
     QPointer<AetherPDMeasurementDialog> m_measurement;
     QPointer<RadioModel> m_radio;
@@ -73,6 +77,7 @@ private:
     QLabel* m_receipt{nullptr};
     QLabel* m_message{nullptr};
     QPushButton* m_measurementOpen{nullptr};
+    QPushButton* m_remoteAccessOpen{nullptr};
     QPushButton* m_refresh{nullptr};
     QPushButton* m_start{nullptr};
     QPushButton* m_enableCorrection{nullptr};

@@ -152,6 +152,12 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     , m_model(model)
     , m_native(native)
 {
+    setObjectName(QStringLiteral("TailnetShimDialog"));
+    const QPointer<RadioModel> original(model);
+    const RadioControlSession session = model ? model->controlSession() : RadioControlSession{};
+    m_originalSessionCurrent = [original, session] {
+        return original && original->controlSessionCurrent(session);
+    };
     constexpr int kWidth = 600;
     constexpr int kSide = 28;          // body side margins, as About's 24 plus room for cards
     constexpr int kCardPad = 16;       // makeCard() side padding
@@ -412,8 +418,10 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
 
     auto* footer = new QHBoxLayout;
     m_refreshButton = new QPushButton(tr("Refresh"), body);
+    m_refreshButton->setObjectName(QStringLiteral("tsRefresh"));
     m_refreshButton->setAccessibleName(tr("Refresh remote access status"));
     m_signOutButton = new QPushButton(tr("Disconnect"), body);
+    m_signOutButton->setObjectName(QStringLiteral("tsDisconnect"));
     m_signOutButton->setAccessibleName(tr("Disconnect the radio from your tailnet"));
     m_resetButton = new QPushButton(tr("Reset"), body);
     m_resetButton->setAccessibleName(tr("Reset remote access on this radio"));
@@ -480,7 +488,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     // that isn't a private LAN address) can't be configured from here.
     const QHostAddress address = m_model ? m_model->radioAddress() : QHostAddress();
     const RadioInfo info = m_model ? m_model->lastRadioInfo() : RadioInfo{};
-    m_lanReachable = m_model && m_model->isConnected() && !address.isNull()
+    m_lanReachable = m_model && m_model->isConnected() && m_originalSessionCurrent() && !address.isNull()
         && address.protocol() == QAbstractSocket::IPv4Protocol
         && (address.isPrivateUse() || address.isLinkLocal());
     // Key the admin token by the radio's own serial (from its `info` reply):
@@ -512,16 +520,20 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     // (or is replaced by another radio, which disconnects first), stop
     // offering changes rather than send them to whatever is there now. A
     // join already under way still finishes and saves its token.
-    connect(m_model, &RadioModel::connectionStateChanged, this, [this](bool connected) {
-        if (connected || !m_lanReachable) {
+    const auto retireSession = [this] {
+        if (m_originalSessionCurrent() || !m_lanReachable) {
             return;
         }
         m_lanReachable = false;
         m_pollTimer->stop();
+        hideSignIn();
         setStatusLine(tr("Unavailable"), QStringLiteral("idle"));
         showError(tr("The radio disconnected. Reopen this window once it is connected again."));
         updateControls();
-    });
+    };
+    connect(m_model, &RadioModel::connectionStateChanged, this, retireSession);
+    connect(m_model, &RadioModel::otherClientsChanged, this, retireSession);
+    connect(m_model, &QObject::destroyed, this, retireSession);
     TailnetShimTokenStore::load(m_radioSerial, this, [this](const QString& token) {
         m_adminToken = tailnetshim::tokenAfterKeychainRead(m_adminToken, token);
         m_tokenLoaded = true;
@@ -540,7 +552,7 @@ void TailnetShimDialog::maybeSignInUnasked()
     // opens: there is nothing to choose first. Once per window (Refresh
     // tries again), and only once the keychain has answered.
     if (tailnetshim::shouldSignInUnasked(*m_status, m_tokenLoaded, !m_adminToken.isEmpty(),
-                                         m_busy, m_lanReachable, m_autoSignInTried)) {
+                                         m_busy, current(), m_autoSignInTried)) {
         m_autoSignInTried = true;
         signInWithQr();
     }
@@ -603,11 +615,16 @@ void TailnetShimDialog::showMessage(const QString& message, const QString& tone)
 
 void TailnetShimDialog::refresh()
 {
-    if (!m_lanReachable) {
+    if (!current()) {
         return;
     }
     setBusy(true, tr("Checking…"));
     m_client.fetchStatus();
+}
+
+bool TailnetShimDialog::current() const
+{
+    return m_lanReachable && m_originalSessionCurrent && m_originalSessionCurrent();
 }
 
 void TailnetShimDialog::setBusy(bool busy, const QString& what)
@@ -626,6 +643,7 @@ void TailnetShimDialog::showError(const QString& message)
 
 void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
 {
+    if (!current()) { return; }
     m_status = st;
     // Joined: on the tailnet now, or holding an address from before (an
     // expired sign-in keeps its address and its shared devices).
@@ -755,7 +773,7 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
 
 void TailnetShimDialog::updateControls()
 {
-    const bool known = m_lanReachable && m_status.has_value() && !m_busy;
+    const bool known = current() && m_status.has_value() && !m_busy;
     const bool provisioned = known && m_status->provisioned;
     const bool haveToken = !m_adminToken.isEmpty();
     // A provisioned container accepts changes only with its admin token,
@@ -771,7 +789,7 @@ void TailnetShimDialog::updateControls()
         ? tr("Update the managed AetherPD service before signing in. This runtime does not "
              "confirm that tailnet enrollment preserves local ownership.") : QString();
 
-    m_refreshButton->setEnabled(m_lanReachable && !m_busy);
+    m_refreshButton->setEnabled(current() && !m_busy);
     m_keyEdit->setEnabled(mayChange && enrollmentSupported);
     m_hostnameEdit->setEnabled(mayChange && enrollmentSupported);
     m_joinButton->setText(provisioned ? tr("Change Key") : tr("Join with Key"));
@@ -812,6 +830,7 @@ void TailnetShimDialog::updateControls()
     // token holder would have no way back.
     const bool joined = known
         && (m_status->state == QLatin1String("running") || !m_status->tailnetIp.isEmpty()
+            || (!m_status->installationId.isEmpty() && waiting)
             || (provisioned && !m_status->claimable
                 && m_status->state == QLatin1String("error")));
     // Without the admin token nothing here can change a radio a tailnet
@@ -820,6 +839,10 @@ void TailnetShimDialog::updateControls()
     const bool managed = known && !m_status->installationId.isEmpty();
     m_signOutButton->setVisible(joined && !lockedOut);
     m_signOutButton->setEnabled(joined && haveToken);
+    const bool pendingManaged = managed && waiting && m_status->tailnetIp.isEmpty();
+    m_signOutButton->setText(pendingManaged ? tr("Cancel sign-in") : tr("Disconnect"));
+    m_signOutButton->setAccessibleName(pendingManaged
+        ? tr("Cancel pending remote access sign-in") : tr("Disconnect the radio from your tailnet"));
     m_resetButton->setVisible(lockedOut);
     m_resetButton->setEnabled(lockedOut && !m_busy && !managed);
     const QString resetWhy = managed
@@ -872,7 +895,7 @@ void TailnetShimDialog::signInWithQr()
 // still open.
 void TailnetShimDialog::provision(const QString& authKey)
 {
-    if (!m_status || !tailnetshim::supportsManagedEnrollment(*m_status)) {
+    if (!current() || !m_status || !tailnetshim::supportsManagedEnrollment(*m_status)) {
         m_signingIn = false;
         setBusy(false);
         showError(tr("Update the managed AetherPD service before signing in."));
@@ -920,6 +943,7 @@ void TailnetShimDialog::provision(const QString& authKey)
 
 void TailnetShimDialog::onProvisioned(const TailnetShimProvisionReply& reply)
 {
+    if (!current()) { return; }
     m_adminToken = reply.adminToken;
     setBusy(false);
     showStatus(reply.status);
@@ -941,6 +965,7 @@ void TailnetShimDialog::onProvisioned(const TailnetShimProvisionReply& reply)
 
 void TailnetShimDialog::onLogin(const TailnetShimLogin& login)
 {
+    if (!current()) { return; }
     if (login.state == QLatin1String("needs_login") && !login.authUrl.isEmpty()) {
         showSignIn(login.authUrl);
     } else if (login.state == QLatin1String("needs_approval")) {
@@ -1027,6 +1052,7 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
                                         bool unauthorized)
 {
     setBusy(false);
+    if (!current()) { return; }
     if (unauthorized) {
         // Mid sign-in, a refused token means another computer started the
         // sign-in over, which replaced this window's code and token.
@@ -1069,6 +1095,7 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
 
 void TailnetShimDialog::saveSharing()
 {
+    if (!current()) { return; }
     m_messageLabel->hide();
     setBusy(true, tr("Saving…"));
     m_client.setSharing(tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
@@ -1077,6 +1104,7 @@ void TailnetShimDialog::saveSharing()
 
 void TailnetShimDialog::reset()
 {
+    if (!current()) { return; }
     if (m_status && !m_status->installationId.isEmpty()) {
         showError(tr("Owner-credential recovery is unavailable for this managed installation."));
         return;
@@ -1097,7 +1125,7 @@ void TailnetShimDialog::reset()
     ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
     QPushButton* go = ask.get()->addButton(tr("Reset"), CanonMessageBox::Role::Destructive);
     ask.get()->exec();
-    if (!self || !ask || ask.get()->clickedButton() != go) {
+    if (!self || !ask || !current() || ask.get()->clickedButton() != go) {
         return;
     }
     emit resetRequested(false);
@@ -1106,7 +1134,7 @@ void TailnetShimDialog::reset()
 
 void TailnetShimDialog::updateRadioShim()
 {
-    if (!m_status) {
+    if (!current() || !m_status) {
         return;
     }
     if (!m_status->installationId.isEmpty()) {
@@ -1130,7 +1158,7 @@ void TailnetShimDialog::updateRadioShim()
     ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
     QPushButton* go = ask.get()->addButton(tr("Update"), CanonMessageBox::Role::Destructive);
     ask.get()->exec();
-    if (!self || !ask || ask.get()->clickedButton() != go) {
+    if (!self || !ask || !current() || ask.get()->clickedButton() != go) {
         return;
     }
     emit resetRequested(true);
@@ -1139,17 +1167,23 @@ void TailnetShimDialog::updateRadioShim()
 
 void TailnetShimDialog::signOut()
 {
+    if (!current()) { return; }
     const QPointer<TailnetShimDialog> self(this);
+    const bool managed = m_status && !m_status->installationId.isEmpty();
+    const bool pendingManaged = managed && waitingOnPerson(m_status->state) && m_status->tailnetIp.isEmpty();
     ScopedChildWidget<CanonMessageBox> ask(
-        tr("Disconnect from Your Tailnet?"),
-        tr("Remote sessions end now, and the radio leaves your tailnet."), this);
+        pendingManaged ? tr("Cancel Pending Sign-in?") : tr("Disconnect from Your Tailnet?"),
+        managed ? tr("Remote sessions end now, and any pending sign-in is canceled. Managed local access is retained.")
+                : tr("Remote sessions end now, and the radio leaves your tailnet."), this);
+    ask.get()->setObjectName(QStringLiteral("tsDisconnectConfirmation"));
     ask.get()->setInformativeText(
         tr("To connect it again, open this window on the radio's local network and scan the "
            "new code.\n\n%1").arg(offTailnetWarning()));
     ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
-    QPushButton* go = ask.get()->addButton(tr("Disconnect"), CanonMessageBox::Role::Destructive);
+    QPushButton* go = ask.get()->addButton(pendingManaged ? tr("Cancel sign-in") : tr("Disconnect"), CanonMessageBox::Role::Destructive);
+    go->setObjectName(QStringLiteral("tsConfirmDisconnect"));
     ask.get()->exec();
-    if (!self || !ask || ask.get()->clickedButton() != go) {
+    if (!self || !ask || !current() || ask.get()->clickedButton() != go) {
         return;
     }
     m_messageLabel->hide();

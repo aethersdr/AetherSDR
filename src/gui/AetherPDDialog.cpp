@@ -4,6 +4,7 @@
 #include "CanonIndicators.h"
 #include "models/AetherPDInstallationModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 #include "core/TailnetShimTokenStore.h"
 
 #include <QAccessible>
@@ -137,6 +138,10 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     m_restore = button(tr("Restore receive"), "pdRestore", 2, 0);
     m_refresh = button(tr("Refresh"), "pdRefresh", 2, 1);
     m_measurementOpen = button(tr("Measure linearity…"), "pdMeasurement", 3, 0);
+    m_remoteAccessOpen = button(tr("Remote Access…"), "pdRemoteAccess", 3, 1);
+    connect(m_remoteAccessOpen, &QPushButton::clicked, this, [this] {
+        if (remoteAccessAvailable()) { emit remoteAccessRequested(); }
+    });
     m_enableCorrection = button(tr("Enable correction"), "pdEnableCorrection", 4, 0);
     m_bypassCorrection = button(tr("Bypass correction"), "pdBypassCorrection", 4, 1);
     connect(m_measurementOpen, &QPushButton::clicked, this, [this] {
@@ -271,6 +276,7 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
         connect(radio, &RadioModel::panadapterAdded, this, &AetherPDDialog::watchPan);
         connect(radio, &RadioModel::panadapterRemoved, this, &AetherPDDialog::render);
         connect(&radio->aetherPDModel(), &AetherPDModel::changed, this, &AetherPDDialog::render);
+        connect(&radio->transmitModel(), &TransmitModel::transmittingChanged, this, &AetherPDDialog::render);
         connect(radio, &RadioModel::connectionStateChanged, this, &AetherPDDialog::render);
         connect(radio, &QObject::destroyed, this, &AetherPDDialog::render);
     }
@@ -282,6 +288,19 @@ bool AetherPDDialog::current() const
 {
     return !m_closed && m_radio && !m_serial.isEmpty()
         && m_radio->controlSessionCurrent(m_session) && m_radio->serial() == m_serial;
+}
+
+bool AetherPDDialog::remoteAccessAvailable() const
+{
+    if (!current() || m_radio->aetherPDInstallationModel().active()
+        || m_radio->transmitModel().isTransmitting()) { return false; }
+    const AetherPDModel& model = m_radio->aetherPDModel();
+    const std::optional<aetherpd::Status> status = model.status();
+    const std::optional<aetherpd::Operation> pending = model.pendingOperation();
+    // Credential changes retire the private IQ channel. Its unavailability
+    // must not prevent the same owner from resuming pending remote sign-in.
+    return model.active() && (!status || !status->available)
+        && (!pending || pending == aetherpd::Operation::Status);
 }
 
 void AetherPDDialog::watchPan(PanadapterModel* pan)
@@ -452,6 +471,9 @@ void AetherPDDialog::render()
     }
     const QPointer<AetherPDDialog> alive(this);
     enable(m_measurementOpen, valid && !installing, tr("A current radio session without an active service update is required."));
+    if (!alive) { return; }
+    enable(m_remoteAccessOpen, remoteAccessAvailable(),
+        tr("Load this radio's owner credential, stop a running AetherPD session and transmission, and finish any service update before changing remote access."));
     if (!alive) { return; }
     enable(m_refresh, valid && !m_loading && !pending, tr("Wait for the pending request, or reopen this window for the current connection."));
     if (!alive) { return; }

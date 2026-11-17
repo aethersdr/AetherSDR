@@ -747,6 +747,13 @@ Losing that saved owner credential is a separate recovery case; token-free
 takeover and reinstalling the legacy remote-access waveform are not recovery
 procedures for this managed installation.
 
+Open **Tools → Waveforms... → AetherPD… → Remote Access…** to configure that
+managed service. Stop AetherPD and finish any service update first. The entry
+also lets the known owner resume sign-in when the old IQ control channel is
+unavailable. **Cancel sign-in** ends a pending managed sign-in and retains local
+access. A Remote Access window belongs to the connection it opened on; after
+that connection ends, reopen it from the current radio's AetherPD panel.
+
 The **AetherPD service installation** section shows a prepared update's target radio,
 firmware, planned changes and authenticated package identifiers. Qualified package
 selection is not yet available. Builds explicitly configured with a development

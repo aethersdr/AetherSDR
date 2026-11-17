@@ -1407,6 +1407,20 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
         if (!m_aetherPDDialog) {
             m_aetherPDDialog = new AetherPDDialog(m_radioModel, this);
             m_aetherPDDialog->setAttribute(Qt::WA_DeleteOnClose);
+            const QPointer<RadioModel> radio(m_radioModel);
+            const RadioControlSession session = radio->controlSession();
+            const QPointer<AetherPDDialog> controls(m_aetherPDDialog);
+            connect(controls, &AetherPDDialog::remoteAccessRequested, controls,
+                [radio, session, controls, remote = QPointer<TailnetShimDialog>{}]() mutable {
+                    if (!radio || !controls || !radio->controlSessionCurrent(session)) { return; }
+                    if (!remote) {
+                        remote = new TailnetShimDialog(radio, true, controls);
+                        remote->setAttribute(Qt::WA_DeleteOnClose);
+                        // Managed service updates/recovery stay in AetherPD;
+                        // legacy waveform Reset/Update has no handler here.
+                    }
+                    remote->showAndActivate();
+                });
         }
         m_aetherPDDialog->showAndActivate();
     });
