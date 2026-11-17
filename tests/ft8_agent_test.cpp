@@ -8,6 +8,7 @@
 // not invented ones -- including the first live decode, which is also the
 // spot that exposed the RR73 bug (see tools/ft8-agent/agent.c).
 
+#include "core/DxSpot.h"
 #include "core/Ft8Agent.h"
 
 #include <QCoreApplication>
@@ -193,6 +194,45 @@ void testBands()
     check(!ft8::bands().contains(QStringLiteral("11m")), "11 m is not a band");
 }
 
+void testPanadapterSpot()
+{
+    Ft8Spot s;
+    s.cycleStart = 1794194655;   // 2026-11-09 03:24:15 UTC
+    s.score = 25;
+    s.frequencyHz = 14075503;
+    s.call = QStringLiteral("9Z4BM");
+    s.grid = QStringLiteral("FK90ab");
+    s.message = QStringLiteral("W0SJE 9Z4BM RR73");
+    const DxSpot d = ft8::toDxSpot(s, QStringLiteral("G0JKN"));
+    check(d.dxCall == QStringLiteral("9Z4BM"), "the spot is the transmitting station");
+    check(d.spotterCall == QStringLiteral("G0JKN"), "the spotter is the receiver's callsign");
+    check(qAbs(d.freqMhz - 14.075503) < 1e-9, "the frequency is the transmitter's, in MHz");
+    check(d.source == QStringLiteral("FT8"), "the source is FT8");
+    // ⚠ The score is a correlation strength, not dB. If this ever flips, a
+    // number that is not an SNR is drawn as one beside real WSPR dB figures.
+    check(!d.hasSnr && d.snr == 0, "the score is NOT published as an SNR");
+    check(d.comment.contains(QStringLiteral("score 25")), "the score is in the comment, named as a score");
+    check(d.comment.contains(QStringLiteral("W0SJE 9Z4BM RR73")), "the message is in the comment");
+    check(d.dxGrid == QStringLiteral("FK90"), "the grid is cut to four characters");
+    check(d.utcTime == QTime(3, 24, 15), "the time is the cycle's start, in UTC");
+}
+
+void testSpotsSince()
+{
+    QList<Ft8Spot> all;
+    for (qint64 t : {100, 115, 115, 130}) {
+        Ft8Spot s;
+        s.cycleStart = t;
+        all.append(s);
+    }
+    qint64 next = 0;
+    check(ft8::spotsSince(all, 115, &next).size() == 3, "a cycle at the mark is included");
+    check(next == 131, "the mark moves past the newest cycle, so it is not sent twice");
+    check(ft8::spotsSince(all, next, &next).isEmpty(), "polling again sends nothing");
+    check(next == 131, "and the mark stays where it was");
+    check(ft8::spotsSince(all, 0, nullptr).size() == 4, "no mark to write is allowed");
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -207,6 +247,8 @@ int main(int argc, char** argv)
     testAdminToken();
     testReachable();
     testBands();
+    testPanadapterSpot();
+    testSpotsSince();
     std::printf("\n%s (%d failure%s)\n", g_failed ? "FAILED" : "ALL PASSED", g_failed,
                 g_failed == 1 ? "" : "s");
     return g_failed ? 1 : 0;
