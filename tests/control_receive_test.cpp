@@ -6,6 +6,7 @@
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/HostTransmitPolicy.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2ModeVocabulary.h"
 #include "core/backends/icom/IcomCivBackend.h"
@@ -533,13 +534,13 @@ void productionCapabilityContracts()
     check(hl2Caps.receiveModeControl && hl2Caps.receiveFilterControl && hl2Caps.receiveAudioControl
         && hl2Caps.receivePanCenterControl && !hl2Caps.receivePanBandwidthControl,
         "HL2 exposes receive controls but not topology-changing bandwidth");
-    hl2::Hl2Backend::setHostOffersTransmit(false);
+    AetherSDR::setHostOffersTransmit(false);
     {
         hl2::Hl2Backend headless;
         check(!headless.capabilities().canTransmit,
             "an HL2 in a host without an HL2 transmit path (aetherd) declares itself receive only");
     }
-    hl2::Hl2Backend::setHostOffersTransmit(true);
+    AetherSDR::setHostOffersTransmit(true);
     // The HL2's adjustable filters: every mode whose cuts reach the NBP stage
     // and are read back. WBFM/WFM/DRM never appear (not receive-controllable).
     QStringList hl2FilterModes;
