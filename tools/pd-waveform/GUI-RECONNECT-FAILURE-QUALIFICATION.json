@@ -1,0 +1,339 @@
+{
+  "updated_utc": "2026-11-17T00:22:55.911077+00:00",
+  "status": "reconnect_cleanup_failed_service_manager_overrides_lease_hold",
+  "production_ready": false,
+  "fixed": false,
+  "native_source_commit": "ecbb9742bb48e5072b37c3cf2b369f6e6ff96f52",
+  "release_blake2b_256": "541e6f7318e737342039a00094a5d57fa479cd0aeaced7001df8ab8c911cefd7",
+  "desktop": {
+    "pid": 2296936,
+    "socket": "/tmp/aetherpd-prepared-child-exit",
+    "binary_sha256": "6af0923ed865cff9d8f6935b25f5b9ce90bfd652d5f490b1d61cbdda10019d74",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "a87c915908e73588142e1148303d2c3c83d57a45",
+    "desktop_source": "ecbb9742bb48e5072b37c3cf2b369f6e6ff96f52",
+    "keying_requires_explicit_bridge_action": true
+  },
+  "boot_id": "839d29c7-c56e-4c61-a87e-05fdf1c6b6b6",
+  "failed_case": {
+    "operator_path": "One explicit receive-only GUI Start, then normal intentional GUI disconnect; no HTTP PD status polls during the passive observer window.",
+    "original_worker_count": 9,
+    "workers": [
+      {
+        "pid": 3151,
+        "ppid": 3150,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347331,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 3152,
+        "ppid": 3151,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347331,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 3154,
+        "ppid": 3150,
+        "exe": "/run/aetherpd/bin/pd-iq-source",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347332,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 3158,
+        "ppid": 3150,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347411,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 3160,
+        "ppid": 3158,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347412,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 3161,
+        "ppid": 3160,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347412,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 3162,
+        "ppid": 3150,
+        "exe": "/run/aetherpd/bin/aether-pd",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347434,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 3171,
+        "ppid": 3150,
+        "exe": "/run/aetherpd/bin/pd-unkey-guard",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347458,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 3173,
+        "ppid": 3150,
+        "exe": "/run/aetherpd/bin/pd-lease-guard",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@8-2580-78666.service"
+        ],
+        "start_ticks": 347481,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      }
+    ],
+    "observation_s": 25,
+    "result": "AssertionError: ('Original workers remain', [{'pid': 3173, 'ppid': 3150, 'exe': '/run/aetherpd/bin/pd-lease-guard', 'uid': '78666\\t78666\\t78666\\t78666', 'state': 'S (sleeping)', 'cgroup': ['0::/../../../system.slice/system-aetherpd\\\\x2dstart.slice/aetherpd-start@8-2580-78666.service'], 'start_ticks': 347481, 'caps': {'CapInh': '0000000000000000', 'CapPrm': '0000000000000000', 'CapEff': '0000000000000000', 'CapBnd': '0000000000000000', 'CapAmb': '0000000000000000'}, 'nnp': '1'}])",
+    "RF_commands": [],
+    "signals_sent_by_probe": [],
+    "ARP_cleanup": "Subsequent passive inspection confirms no ARP entry and zero-byte journal.",
+    "raw_observer_result": "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/observe-result.json"
+  },
+  "service_manager_evidence": {
+    "unit": "aetherpd-start@8-2580-78666.service",
+    "journal": "Started aetherpd-start@8-2580-78666.service - AetherPD owned local session (PID 2580/UID 78666).\n{\"event\":\"native_resources_prepared\",\"source_pid\":3154,\"capture_pid\":3158,\"arp_pid\":3151,\"stream\":\"0x20000000\",\"port\":42627,\"rf_commands\":[]}\n{\"event\":\"supervisor_ready\",\"uid\":65534,\"worker_pid\":3160,\"status\":0,\"rf_commands\":[]}\n{\"event\":\"ready\",\"uid\":65534,\"clock_pid\":3161,\"raw_fd_closed\":true,\"strict_seccomp\":true}\n2026/11/16 18:07:17 AetherPD: captured owned receive baseline before DSP startup\n2026/11/16 18:07:17 AetherPD: owned API lease guardian armed before DSP startup\n2026/11/16 18:07:17 AetherPD: owned receive guardian armed before DSP startup\n1794874037.931 discarded 81 pre-activation IQ datagrams\n1794874037.931 AetherPD 0.1.0 starting, radio 127.0.0.1, udp 58275, feedback DAX IQ 4 at 48000 Hz, peak 0.70, correction on\n1794874037.975 command 1: 10000002 unknown client program AetherPD\n1794874038.003 registered AetherPD: tx_in 0x81000001 rx_in 0x81000000\n1794874041.486 shim session ended\n1794874041.486 stopping\n{\"event\":\"session_stopped\",\"uid\":65534,\"worker_pid\":3160,\"status\":9,\"rf_commands\":[]}\n2026/11/16 18:07:26 AetherPD: setup children exited: setup children not reaped: context deadline exceeded\n2026/11/16 18:07:26 AetherPD: owned receive guardian exited: context deadline exceeded\n2026/11/16 18:07:35 AetherPD cleanup: exit status 4\ncontext deadline exceeded\nsetup children not reaped: context deadline exceeded\ncontext deadline exceeded\n2026/11/16 18:07:35 AetherPD private session ended: read unix /run/aetherpd/start.sock->@: i/o timeout\naetherpd-start@8-2580-78666.service: State 'stop-sigterm' timed out. Killing.\naetherpd-start@8-2580-78666.service: Killing process 3173 (pd-lease-guard) with signal SIGKILL.\naetherpd-start@8-2580-78666.service: Failed with result 'timeout'.\n",
+    "properties": "TimeoutStopUSec=12s\nMainPID=0\nResult=timeout\nKillMode=control-group\nSendSIGKILL=yes\nActiveState=failed\n",
+    "systemd_version": "systemd 252 (252.39-1~deb12u2)\n+PAM +AUDIT +SELINUX +APPARMOR +IMA +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBFDISK +PCRE2 -PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD -BPF_FRAMEWORK -XKBCOMMON +UTMP +SYSVINIT default-hierarchy=unified\n",
+    "known_fact": "The installed unit uses KillMode=control-group and a12second stop timeout with SendSIGKILL=yes. PID1 force-killed the outstanding capability-free lease guardian.",
+    "not_established": "The exact live predicate preventing voluntary lease retirement during the disconnected interval is not recorded. No RF consequence of forced API release was tested."
+  },
+  "UI_scope": {
+    "stale_Start_while_disconnected": {
+      "class": "QPushButton",
+      "disabled": true,
+      "error": "refused: 'pdStart' is disabled \u2014 the radio won't accept the change",
+      "ok": false
+    },
+    "same_address_reconnected": true,
+    "new_GUI_handle": "0x4a4568c4",
+    "after_reconnect_stale_window_test_reached": false,
+    "initial_fallback_panel_opened_too_early": true,
+    "reopened_after_populated_radio_context": true,
+    "scope_note": "Full same-address reconnect qualification failed. First fallback constructed the new panel before its receiver state was populated; it refused attachment as designed. Reopening after readiness restored ordinary controls. Raw bridge tree snapshots are unscoped; semantic control extraction and actual invoke refusals are retained, not a claim that dumpTree supports a target filter."
+  },
+  "ordinary_recovery_after_forced_cleanup": {
+    "passed": true,
+    "privileged_repair_by_agent": false,
+    "condition": "PID1 had already forcibly closed the held guardian before this ordinary recovery; this is not proof of safe voluntary retirement.",
+    "transport": "local_dax_iq",
+    "FDX": false,
+    "sample_rate_hz": 48000,
+    "IQ_bytes": 131072,
+    "IQ_sha256": "3c81f61ad408eb099ff494d4baf7f2f1b77bcf3cf9715d8a1e52f78d5658670a",
+    "all_scalar_values_finite": true,
+    "after_stop": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    }
+  },
+  "final_state": {
+    "processes": [
+      {
+        "pid": 2580,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "4b0025a6569a283fe116560f63f6db47934fb98b47f46b6abe2295cd0d5a63cf"
+      },
+      {
+        "pid": 3352,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "5cfb04a15c2ca9436b5ce802231ebcd6588435dd6e9f1b47476fea5d245af11e"
+      },
+      {
+        "pid": 3353,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "4b0025a6569a283fe116560f63f6db47934fb98b47f46b6abe2295cd0d5a63cf"
+      }
+    ],
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "ARP": [],
+    "accept_local": "0",
+    "upgrade_generation_hex": "504447454e3030313478cb7a95ed460e67d0ce4e06c7962fe0b78e592f608ac598958bad7ecffc29",
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    },
+    "RF_idle": true
+  },
+  "required_remediation": [
+    "Prevent service-manager escalation from overriding a native guardian that is intentionally holding an unconfirmed API lease; verify applied policy rather than merely writing an unsupported directive.",
+    "Establish and test the exact safe retirement condition for an ended GUI, missing/reassigned receive slot and no-PD readback. Keep ownership checks for any receive-setting write; do not restore settings into a replacement GUI.",
+    "Verify compatibility against the6000series service manager. Its version and termination-property support are unqualified; a Linux2.6 kernel version alone proves neither.",
+    "Repeat the failed receive-only disconnect/reconnect case after the fix, preserve held-unknown cases, and verify no forced API closure or old-window control before resuming RF qualification."
+  ],
+  "reference": {
+    "systemd_kill_manual": "https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html",
+    "SendSIGKILL_documented_since": "systemd187",
+    "scope": "Potential remediation compatibility reference only; no directive or unit change installed."
+  },
+  "limitations": [
+    "No transmission, calibration, token rotation/signout, or persistent installation change in this test.",
+    "The primary safety finding is uncorrected. Full reconnect retirement, missing/reassigned receiver recovery and actual6300 supervision are not qualified.",
+    "The temporary diagnostics bridge was passive: metadata/status/journal inspection only; normal desktop controls performed Start/disconnect/reconnect/Stop. Its jobs and scratch were removed."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/after-failure-desktop.json": "5ae250855c1c4c5b00cd7da4835b8b8048d58fcd4c733d978eb96d8010c7633c",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/events.json.gz": "a127dc4af9f4f3a54bdcc3b67355e2d4b8a0bc71e733085eb6cd22f486eeb804",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/inspect-lease-job.py": "38286a5d9272455675ee9604efcaee11e3ea84e8cab3e97cac39a7661bdad4de",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/inspect-lease-result.json": "fe803a6608a3336a99085e4dbb91ca8da0f98dd18280e62ed1a7385f285604b3",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/observe-job.py": "5f519da60aa95f84b4c2e170b223010beda9c8930cbbf652d7239f77490c71e4",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/observe-result.json": "c5fcae375a57e4acfb23efd4c9f138a237736fb8be1957eba3431234c5e1c024",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/observer-template.py": "474aca6727250d76006ca7a265e18292654e8ab623471479cffc7680e218075c",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/outcome.json": "ccdc5df521830d66dbfdb3d19735a12c80ccb49709a73cec61bb571cb5f7aeb9",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/reopen-after-ready.json": "9523e93fbab6ca58808a1191c77e29458349fdf2fe0feafb8e43cdbd29c0b8c0",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect/run.py": "caf68728fe88ac5d65c45003474917e63de9a5f3df0caeeb735a6e46997201ba",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect-recovery/final-audit-job.py": "c28d176c82c843e6a15288ab389910aa82367d1c590092ad4cd0a755475e5dfa",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect-recovery/final-audit-result.json": "67d34b211aa75b6700c8de068d628fb8958f73bfebb58ffd02b394be455d16e7",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect-recovery/instance.json": "a8a07a1a8a96d63aeb5af0c1f45e46f34f42b418b3bd56ed68585f508029d6d2",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect-recovery/receive-iq-check.py": "ded989bd1b7741e482d56a21fe36e7a9e4a45e20a53470647230f5931a2be6cc",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect-recovery/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect-recovery/save-finding.py": "9603002dc3fe735154d7c7ad5fbc8f42a41dd98945eebdfcf4b3f52a6c1ef5f9",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect-recovery/usb-receive-iq-check.json": "e5e167678561344bd78223f552d9f9d7deee5ef89f398940602c9cdf0f7b5348",
+    "tools/pd-waveform/evidence/20261116-gui-reconnect-finding/installed-gui-reconnect-recovery/usb-receive-iq.f32le.gz": "22db20eaba0c0aa90e5bddbed07117d3c95323b0b85cfa74bfb038788d7f7010"
+  }
+}

@@ -1,0 +1,45 @@
+[
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "pdDone",
+      "action": "click"
+    },
+    "response": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdDone"
+    }
+  },
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "Waveforms...",
+      "action": "trigger"
+    },
+    "response": {
+      "action": "trigger",
+      "class": "QAction",
+      "deferred": true,
+      "ok": true,
+      "target": "Waveforms...",
+      "text": "Waveforms..."
+    }
+  },
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "openAetherPD",
+      "action": "click"
+    },
+    "response": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "openAetherPD"
+    }
+  }
+]

@@ -1,0 +1,291 @@
+{
+  "radio": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "pans": {
+    "ok": true,
+    "pans": [
+      {
+        "antennas": [
+          "ANT1",
+          "ANT2",
+          "RX_A",
+          "RX_B",
+          "XVTA",
+          "XVTB"
+        ],
+        "average": 50,
+        "averageIsRequest": false,
+        "bandwidthMhz": 0.2,
+        "centerKnown": true,
+        "centerMhz": 7.15,
+        "clientHandle": "0x4a4568c4",
+        "fps": 25,
+        "fpsIsRequest": false,
+        "maxDbm": 0,
+        "minDbm": -180,
+        "ownedByUs": true,
+        "panId": "0x40000000",
+        "radioReportedAverage": 50,
+        "radioReportedFps": 25,
+        "rfGain": 0,
+        "rxAntenna": "RX_A",
+        "transmitInhibitReason": "",
+        "transmitInhibited": false,
+        "waterfallLineDuration": 80,
+        "weightedAverage": false,
+        "weightedAverageKnown": true,
+        "wide": false,
+        "wnb": false,
+        "wnbLevel": 90
+      }
+    ]
+  },
+  "slices": {
+    "ok": true,
+    "slices": [
+      {
+        "active": true,
+        "adaptiveActive": false,
+        "adaptiveFilterEnabled": false,
+        "adaptiveHetReject": false,
+        "adaptiveMaxHighCut": 4000,
+        "adaptiveMinLowCut": 0,
+        "adaptiveMinSnr": 1,
+        "adaptiveResponse": 1,
+        "adaptiveSplatter": 1,
+        "agcMode": "med",
+        "agcThreshold": 60,
+        "agcThresholdMode": "manual",
+        "anf": false,
+        "apf": false,
+        "apfLevel": 30,
+        "audioGain": 50,
+        "audioMute": false,
+        "audioPan": 50,
+        "automaticAgcThresholdActiveOrPending": false,
+        "automaticSquelch": false,
+        "automaticSquelchMarginDb": 10,
+        "chainMode": "USB",
+        "daxChannel": 0,
+        "diversity": false,
+        "diversityChild": false,
+        "diversityIndex": 1342177293,
+        "diversityParent": false,
+        "externalReceiveReplacement": false,
+        "filterHigh": 2800,
+        "filterLow": 100,
+        "filterPreset": "",
+        "filterPresetId": 0,
+        "flexAgcMode": "med",
+        "flexAgcOffLevel": 10,
+        "flexAgcThreshold": 60,
+        "flexAudioGain": 50,
+        "flexAudioMute": false,
+        "flexAudioPan": 50,
+        "flexSquelch": true,
+        "flexSquelchLevel": 20,
+        "fmRepeaterOffsetFreq": 0,
+        "fmToneMode": "off",
+        "fmToneValue": "67.0",
+        "frequency": 7.15,
+        "inCapture": true,
+        "letter": "A",
+        "linkedTo": -1,
+        "locked": false,
+        "manualSquelchLevel": 20,
+        "mode": "USB",
+        "nb": false,
+        "nbFill": 0,
+        "nbKind": 0,
+        "nbLevel": 50,
+        "nr": false,
+        "nrLevel": 50,
+        "panId": "0x40000000",
+        "receiveAgcMode": "med",
+        "receiveAgcOffLevel": 10,
+        "receiveAgcThreshold": 60,
+        "receiveSquelch": true,
+        "receiveSquelchLevel": 20,
+        "repeaterOffsetDir": "simplex",
+        "rfGain": 0,
+        "ritFreq": 0,
+        "ritOn": false,
+        "rxAntenna": "RX_A",
+        "sliceId": 0,
+        "squelch": true,
+        "squelchLevel": 20,
+        "stepHz": 100,
+        "txAntenna": "ANT1",
+        "txOffsetFreq": 0,
+        "txSlice": true,
+        "xitFreq": 0,
+        "xitOn": false
+      }
+    ]
+  },
+  "controls": {
+    "pdState": {
+      "value": "Status unknown",
+      "enabled": true
+    },
+    "pdDetail": {
+      "enabled": true
+    },
+    "pdReceipt": {
+      "enabled": true
+    },
+    "pdMessage": {
+      "value": "AetherPD could not attach to this radio session. Reopen this window after the connection is ready.",
+      "enabled": true
+    },
+    "pdIqSelection": {
+      "value": "Select a feedback pan with IQ assigned\u2026",
+      "enabled": false,
+      "toolTip": "Stop the running session and finish pending work before choosing feedback. Only this GUI's assigned IQ pans are listed.",
+      "accessibleDescription": "Stop the running session and finish pending work before choosing feedback. Only this GUI's assigned IQ pans are listed."
+    },
+    "pdIqObserved": {
+      "value": "No confirmed native IQ binding. Choose a pan, then start AetherPD.",
+      "enabled": true
+    },
+    "pdStart": {
+      "value": "Start AetherPD",
+      "enabled": false,
+      "toolTip": "Select an active receiver owned by this connection before starting AetherPD.",
+      "accessibleDescription": "Select an active receiver owned by this connection before starting AetherPD."
+    },
+    "pdStop": {
+      "value": "Stop AetherPD",
+      "enabled": false,
+      "toolTip": "A current authenticated radio session is required.",
+      "accessibleDescription": "A current authenticated radio session is required."
+    },
+    "pdArm": {
+      "value": "Arm calibration",
+      "enabled": false,
+      "toolTip": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+      "accessibleDescription": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off."
+    },
+    "pdCancel": {
+      "value": "Cancel calibration",
+      "enabled": false,
+      "toolTip": "A current authenticated radio session is required.",
+      "accessibleDescription": "A current authenticated radio session is required."
+    },
+    "pdRestore": {
+      "value": "Restore receive",
+      "enabled": false,
+      "toolTip": "Wait for the current request. The service verifies that receive restoration is safe.",
+      "accessibleDescription": "Wait for the current request. The service verifies that receive restoration is safe."
+    },
+    "pdRefresh": {
+      "value": "Refresh",
+      "enabled": true
+    },
+    "pdMeasurement": {
+      "value": "Measure linearity\u2026",
+      "enabled": true
+    },
+    "pdEnableCorrection": {
+      "value": "Enable correction",
+      "enabled": false,
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    "pdBypassCorrection": {
+      "value": "Bypass correction",
+      "enabled": false,
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    "pdInstallState": {
+      "value": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "Development build \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nChanges on approval:\n\u2022 Verify and replace the AetherPD payload and service.\n\u2022 Install fixed boot and local-session helpers for reboot and IQ setup.\n\u2022 Restart the shim while retaining its Remote Access identity.\n\u2022 Retire temporary delivery and upgrade workers. Fixed boot/session helpers remain installed.\nThe update does not transmit or arm calibration.\n\nTemporary executables: pd-accept, pd-carrier, pd-send, pd-deliver, signed upgrade worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nPrevious release (BLAKE2b-256): bf6df6a8a9f1d70ca26218e105bb949166b22d3ed911686e72877789ab040dab\nNew release (BLAKE2b-256): 541e6f7318e737342039a00094a5d57fa479cd0aeaced7001df8ab8c911cefd7\nPublisher key (Ed25519): 9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce\nAttempt (BLAKE2b-256): 3478cb7a95ed460e67d0ce4e06c7962fe0b78e592f608ac598958bad7ecffc29\nTemporary carrier: aetherpd-carrier-13a72a3d52168b308da8389db6c9e1d3\nCarrier archive (SHA-256): e9464d9df5d05519018174b6b94946dcd8fb26d141dbba57a22e4e43a12b3748",
+      "enabled": true,
+      "accessibleDescription": "Read-only target, changes and authenticated package identifiers to review before approving."
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": false,
+      "toolTip": "No pending update can be canceled in this connection.",
+      "accessibleDescription": "No pending update can be canceled in this connection."
+    },
+    "pdInstallApprove": {
+      "value": "Approve update",
+      "enabled": false,
+      "toolTip": "A verified plan for this connection and an idle transmitter are required.",
+      "accessibleDescription": "A verified plan for this connection and an idle transmitter are required."
+    },
+    "pdDone": {
+      "value": "Done",
+      "enabled": true
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": true
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": false,
+      "toolTip": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first.",
+      "accessibleDescription": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first."
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": true
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false,
+      "toolTip": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first.",
+      "accessibleDescription": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first."
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false,
+      "toolTip": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required.",
+      "accessibleDescription": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required."
+    }
+  }
+}

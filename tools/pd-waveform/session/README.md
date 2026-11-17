@@ -588,6 +588,15 @@ for exact artifacts and ownership checks. This does not qualify successful
 credential revocation, two real competing GUIs, other API roles or keyed RF
 failure behavior.
 
+The receive-only GUI disconnect/reconnect case remains a failed qualification.
+An original API-lease guardian survived a 25-second observation after the DSP
+and capture retired; the installed session unit subsequently force-killed it
+under its control-group stop policy. This is not confirmed voluntary lease
+retirement. Ordinary IQ recovery after that forced cleanup passed. The session
+manager policy and the guardian's missing/reassigned-owner retirement conditions
+must be qualified together, including the actual FLEX-6000 service manager.
+See [`GUI-RECONNECT-FAILURE-QUALIFICATION.json`](../GUI-RECONNECT-FAILURE-QUALIFICATION.json).
+
 ## Feedback pan binding
 
 The installed constructor's IQ owner subscribes to pan status without changing
