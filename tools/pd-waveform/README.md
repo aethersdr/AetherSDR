@@ -37,6 +37,16 @@ tests inject transport and credentials; they do not qualify live hosted delivery
 Qualified shipping entries and public hosting remain incomplete;
 the existing local development selectors are not production distribution.
 
+The Linux desktop credential store passed a separate-process lifecycle probe
+against QtKeychain and GNOME Keyring: two first-install attempts, the active
+owner, WSPR and another radio retained separate entries. A caller destroyed
+before write completion did not prevent persistence or receive a late callback;
+a writer killed after its persistence acknowledgment left a readable entry.
+All five disposable entries were removed and independent backend reads returned
+`EntryNotFound`. See `KEYCHAIN-LIFECYCLE-QUALIFICATION.json`. This does not
+qualify Windows/macOS keychains, simultaneous writers, keyring failure or loss
+of power; it changes no installed radio credential.
+
 Build from the repository root with Zig installed:
 
 ```sh

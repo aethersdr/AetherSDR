@@ -1,0 +1,139 @@
+{
+  "updated_utc": "2026-11-17T22:57:34.468630+00:00",
+  "source_commit": "239931ebfc212396cb7a28460274dd320b93ec43",
+  "production_ready": false,
+  "platform_builds_qualified": false,
+  "scope": "Existing feature-branch unsigned application packaging workflows; no signing, release/Store publication, workflow edits, issues or retry. Not the required PR check suite or feature tests.",
+  "dispatch": {
+    "created_utc": "2026-11-17T22:44:26.589122+00:00",
+    "commit": "239931ebfc212396cb7a28460274dd320b93ec43",
+    "branch": "feat/aetherpd-shim-integration",
+    "mode": "existing unsigned branch-build workflows; no signing, release/Store publication, issues or workflow edits",
+    "workflow_sha256": {
+      "windows-installer.yml": "d5661f16d06d35b3df2b7e5fb9706655197bab67d76e2cd221d93ceeabc5f33f",
+      "macos-dmg.yml": "0fef70dbc28e0331fb3129936690243d0032997d8b21c7025bc52eb96fad5505"
+    },
+    "dispatches": [
+      {
+        "workflow": "windows-installer.yml",
+        "inputs": {
+          "publish_store_flight": "false",
+          "dev_overrides": "false"
+        },
+        "mutation_attempted": true,
+        "reused_existing": false,
+        "requested_utc": "2026-11-17T22:44:27.592645+00:00",
+        "dispatch_exit": 0,
+        "dispatch_stdout": "https://github.com/aethersdr/AetherSDR/actions/runs/44192966528\n",
+        "run": {
+          "id": 44192966528,
+          "head_sha": "239931ebfc212396cb7a28460274dd320b93ec43",
+          "head_branch": "feat/aetherpd-shim-integration",
+          "status": "queued",
+          "conclusion": null,
+          "html_url": "https://github.com/aethersdr/AetherSDR/actions/runs/44192966528",
+          "event": "workflow_dispatch",
+          "created_at": "2026-11-17T22:44:29Z"
+        }
+      },
+      {
+        "workflow": "macos-dmg.yml",
+        "inputs": {},
+        "mutation_attempted": true,
+        "reused_existing": false,
+        "requested_utc": "2026-11-17T22:44:33.657171+00:00",
+        "dispatch_exit": 0,
+        "dispatch_stdout": "https://github.com/aethersdr/AetherSDR/actions/runs/44192984291\n",
+        "run": {
+          "id": 44192984291,
+          "head_sha": "239931ebfc212396cb7a28460274dd320b93ec43",
+          "head_branch": "feat/aetherpd-shim-integration",
+          "status": "queued",
+          "conclusion": null,
+          "html_url": "https://github.com/aethersdr/AetherSDR/actions/runs/44192984291",
+          "event": "workflow_dispatch",
+          "created_at": "2026-11-17T22:44:35Z"
+        }
+      }
+    ],
+    "RF_commands": [],
+    "radio_mutations": []
+  },
+  "windows": {
+    "run_id": 44192966528,
+    "job_id": 134426909409,
+    "status": "completed",
+    "conclusion": "failure",
+    "failure_step": "Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)",
+    "cause_observed": "Invoke-WebRequest returned Not Found downloading the pinned official ONNX Runtime1.27.0 Windows x64 archive; configure, compile and packaging were skipped.",
+    "failure_excerpt": "2026-11-17T22:47:18.3947669Z Downloading ONNX Runtime 1.27.0 prebuilt package...\n2026-11-17T22:47:18.7010398Z \u001b[31;1mInvoke-WebRequest: \u001b[0mD:\\a\\AetherSDR\\AetherSDR\\scripts\\setup\\setup-onnxruntime.ps1:45\u001b[0m\n2026-11-17T22:47:18.7010761Z \u001b[31;1m\u001b[0m\u001b[36;1mLine |\u001b[0m\n2026-11-17T22:47:18.7011038Z \u001b[31;1m\u001b[0m\u001b[36;1m\u001b[36;1m  45 | \u001b[0m     \u001b[36;1mInvoke-WebRequest -Uri $OrtUrl -OutFile $ZipFile\u001b[0m\n2026-11-17T22:47:18.7011386Z \u001b[31;1m\u001b[0m\u001b[36;1m\u001b[36;1m\u001b[0m\u001b[36;1m\u001b[0m\u001b[36;1m     | \u001b[31;1m     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[0m\n2026-11-17T22:47:18.7011691Z \u001b[31;1m\u001b[0m\u001b[36;1m\u001b[36;1m\u001b[0m\u001b[36;1m\u001b[0m\u001b[36;1m\u001b[31;1m\u001b[31;1m\u001b[36;1m     | \u001b[31;1mNot Found\u001b[0m\n2026-11-17T22:47:18.8194771Z ##[error]Process completed with exit code 1.\n2026-11-17T22:47:18.8440708Z Post job cleanup.\n2026-11-17T22:47:18.8443502Z ##[start-action display=Setup Python;id=__60db6484-b031-4629-b2b6-cfe3557f32a7.__actions_setup-python]\n2026-11-17T22:47:18.8445091Z ##[end-action id=__60db6484-b031-4629-b2b6-cfe3557f32a7.__actions_setup-python;outcome=skipped;conclusion=skipped;duration_ms=0]\n2026-11-17T22:47:18.8568780Z Post job cleanup.\n2026-11-17T22:47:18.9812072Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" version\n",
+    "direct_download": {
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-win-x64-1.27.0.zip",
+      "started_utc": "2026-11-17T22:49:48.514803+00:00",
+      "error": "HTTP Error 404: Not Found",
+      "error_type": "HTTPError",
+      "elapsed_s": 0.33170942901051603
+    },
+    "artifacts": [],
+    "signing_Store_release_jobs": "not executed; package, release and both Store jobs reported skipped",
+    "source_fix_claimed": false,
+    "retry_dispatched": false,
+    "upstream_listing": {
+      "url": "https://github.com/microsoft/onnxruntime/releases/expanded_assets/v1.27.0",
+      "lists_expected_asset": true,
+      "expected_sha256": "c5c81710938e68079ff1a192b04897faabe4b43830d48f39f27ecd4e16138bfc",
+      "limit": "Web-tool listing and direct endpoint/API responses disagree. A listed checksum is not verification of downloaded bytes. No conclusion that the project pin/version is invalid and no unreviewed dependency substitution."
+    }
+  },
+  "macos": {
+    "run_id": 44192984291,
+    "status": "in_progress",
+    "conclusion": null,
+    "jobs": [
+      {
+        "id": 134426966144,
+        "name": "build-dmg (macos-15-intel, intel, x86_64, 14.4)",
+        "status": "in_progress",
+        "conclusion": null,
+        "active_steps": [
+          "Build macOS deps at the deployment target"
+        ]
+      },
+      {
+        "id": 134426966670,
+        "name": "build-dmg (macos-15, apple-silicon, arm64, 14.4)",
+        "status": "in_progress",
+        "conclusion": null,
+        "active_steps": [
+          "Build macOS deps at the deployment target"
+        ]
+      }
+    ],
+    "next_action": "Poll this exact run/job handle; do not redispatch on observation timeout. Record final build conclusions and verify publishing/signing guards before claiming artifacts."
+  },
+  "limits": [
+    "No Windows application source compiled in this run; no Windows build success is claimed.",
+    "Both macOS architecture jobs were authoritatively live when observed. They have not yet produced a successful build result.",
+    "An unsigned app build does not qualify platform keychains, complete UI/installer lifecycle, signed distribution, all feature tests or required merge checks.",
+    "Manual full-suite and sanitizer workflows were not dispatched because their failure paths automatically write GitHub issues, contrary to local-only tracking.",
+    "No radio operation, RF, reboot or installer mutation occurred in this qualification."
+  ],
+  "radio_mutations": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-platform-builds/dispatch.py.gz": "18666e0ade2865d8993d6500bcb802840c7b8bacecded53ff626d336ea72108f",
+    "tools/pd-waveform/evidence/20261117-platform-builds/dispatch-receipt.json.gz": "16a5aa454ffe06c9e5244d0e605a5e2142a8223519ad0a4425bab43359fef796",
+    "tools/pd-waveform/evidence/20261117-platform-builds/dispatch-console.log.gz": "fb174474186a6886537f262424ac85093a020d32caf3af999af7eb7ce129097b",
+    "tools/pd-waveform/evidence/20261117-platform-builds/run-status-observation.json.gz": "d7756344d73623a388a84c973a4ae11d975724b8a66de2981b831680d0f886cc",
+    "tools/pd-waveform/evidence/20261117-platform-builds/run-44192966528.json.gz": "065720fcdd54b9dbf26b77ff3066d6a64cd362005b1831eccc1ebefd99c3b8d1",
+    "tools/pd-waveform/evidence/20261117-platform-builds/run-44192984291.json.gz": "e332bcdd1c030fc6cd1299cb35f53b9c6e1d6c0eae1e4898bc7c3b1d8cf2d803",
+    "tools/pd-waveform/evidence/20261117-platform-builds/windows-jobs.json.gz": "7806740c305225e09c9d0c73b130c096e24e5114f2572304ad318511f33c6215",
+    "tools/pd-waveform/evidence/20261117-platform-builds/windows-download-failure.log.gz": "a5062f5dd511271207ee1508809f80e8ab063ffd4306555390ebb807b6efe0f7",
+    "tools/pd-waveform/evidence/20261117-platform-builds/macos-jobs-2258.json.gz": "2ac65a6810997b567dbe72990d67091a22c1a1566f6965e6ae2e8eb173f22477",
+    "tools/pd-waveform/evidence/20261117-platform-builds/ort-direct-download.json.gz": "bee29f956bdfa59be97a563146e43e04c87acdd0f4cf9a38a2166da08dbdee8a",
+    "tools/pd-waveform/evidence/20261117-platform-builds/ort127.json.gz": "ea40779916fa8b5e1ad8b3beedf3ac1b7dab9c075605eebc5132eddc117a416e",
+    "tools/pd-waveform/evidence/20261117-platform-builds/ort-latest.json.gz": "b07f5fd72c64242f97c19a3e60396aa768e5ffe436e8589cd450194248632e38",
+    "tools/pd-waveform/evidence/20261117-platform-builds/save-observation.py.gz": "193e4e280f5feb80bdda7d5bc5078c2597f94ccc965e3dd540317f2053bcefd3"
+  }
+}

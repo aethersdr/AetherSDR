@@ -1,0 +1,85 @@
+{
+  "updated_utc": "2026-11-17T22:56:22.444020+00:00",
+  "source_commit": "239931ebfc212396cb7a28460274dd320b93ec43",
+  "production_ready": false,
+  "component_qualified": true,
+  "scope": "Current production TailnetShimTokenStore.cpp compiled unchanged with HAVE_KEYCHAIN; standalone native Linux processes and real Secret Service. No simulated backend, radio connection, credential rotation or application UI.",
+  "environment": {
+    "platform": "Linux-7.3.4-arch1-2-x86_64-with-glibc2.44",
+    "architecture": "x86_64",
+    "shipping_source_sha256": {
+      "src/core/TailnetShimTokenStore.h": "c88a1ce53b6a3c197c0767a9669813b8a9035088b494fc29f31275b218eb26f3",
+      "src/core/TailnetShimTokenStore.cpp": "ee985798edd6f8da863cdff3e3ccbb3a479d4f5f149a30c9aa129e6d60e93cd9",
+      "src/core/SettingsCredentialPolicy.h": "5edca572ab6b6093f8ca2f4809153920c156a0174eec058b872a21e5e9a59fac"
+    },
+    "qt": {
+      "exit": 0,
+      "output": "6.12.0",
+      "error": ""
+    },
+    "packages": {
+      "exit": 0,
+      "output": "qtkeychain-qt6 0.18.0-1\ngnome-keyring 1:51.1-1",
+      "error": ""
+    },
+    "secret_service": {
+      "exit": 0,
+      "rows": [
+        "org.freedesktop.secrets                                                                                     1798 gnome-keyring-d jeremy :1.2          user@1000.service - -"
+      ],
+      "error": ""
+    }
+  },
+  "fixture_policy": "Five unique disposable entries; fixture strings have no radio authority. No real radio credential was read, overwritten or deleted.",
+  "slots": [
+    "active owner",
+    "WSPR on the same fixture radio",
+    "first-install attempt A",
+    "first-install attempt B",
+    "another fixture radio active owner"
+  ],
+  "results": {
+    "operations": 27,
+    "cleanup_operations": 20,
+    "all_passed": true,
+    "entry_not_found_backend_reads": 5,
+    "backend_absence_passed": true,
+    "first_attempt_removal_preserved_other_four_slots": true,
+    "caller_destroyed_before_event_loop_write_persisted": true,
+    "destroyed_caller_received_no_callback": true,
+    "SIGKILL_after_write_persistence_ack_survived_in_fresh_reader": true,
+    "repeat_deletion_of_missing_entry_succeeded": true,
+    "initial_absence_before_fixture_writes": true,
+    "process_count": 52
+  },
+  "shipping_source_changes": [],
+  "radio_changes": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "limits": [
+    "One host/session/backend. Does not qualify Windows Credential Manager, macOS Keychain, every Linux keyring, or actual radio-side identity persistence.",
+    "No simultaneous writers, inter-process stale-cache reconciliation, owner recovery/rotation, keyring lock/outage or real Tailscale enrollment was exercised.",
+    "SIGKILL follows a successful library persistence acknowledgment. No pre-ack crash, keyring daemon crash, filesystem/power-loss durability guarantee or machine reboot is claimed.",
+    "Slot lifecycle uses the real credential store; it is not proof of the complete installer or UI workflow.",
+    "No new default CTest is registered: this probe deliberately accesses the real operator-session keychain and belongs to manual platform qualification.",
+    "Full P1-P10 objective, original radio reboot hang, actual6300, natural alignment, final RF and stockAPD comparison and independent release gates remain incomplete."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/keychain-slot-lifecycle-components.tar.gz",
+    "bytes": 104169,
+    "sha256": "6c1437e4ff6de1b5237dd024365e0947d2e6bbcef5ec484620335927dd0be6a1",
+    "members": 14,
+    "all_members_verified": true,
+    "scope": "Diagnostic probe/source/receipts only; not a signed AetherPD distribution or byte-reproducibility claim."
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-keychain-lifecycle/CMakeLists.txt.gz": "e15e8c391aeabadf44be43f77ec7352502898e2fcbfce7d0eca7fa029ac5ff7b",
+    "tools/pd-waveform/evidence/20261117-keychain-lifecycle/probe-v1.cpp.gz": "586db536c104c9d633be9b07b74c2b6696e67e10315a4e073d2867e49d5bbbd2",
+    "tools/pd-waveform/evidence/20261117-keychain-lifecycle/probe.cpp.gz": "53589618321fe7e552a05a0c012614efe1eb49056c552749a941ef24e01542c4",
+    "tools/pd-waveform/evidence/20261117-keychain-lifecycle/run.py.gz": "7eea3ca74991a5c8f522911c8db83796a19c81d3cc17b4e3407ca7cda8e2fe00",
+    "tools/pd-waveform/evidence/20261117-keychain-lifecycle/result.json.gz": "cda9f17736b413131b58f375212ba4f76540419dc81d52b6c8a62267708aa9a9",
+    "tools/pd-waveform/evidence/20261117-keychain-lifecycle/backend-absence.json.gz": "038486ec104b9e09eedf3691ba8ed832d1e1d9910cc6979034742410ab8d5708",
+    "tools/pd-waveform/evidence/20261117-keychain-lifecycle/environment.json.gz": "628c720ca07e07c2236fd29501b5f176a712c0eb750e2675d8b5912bb1e01c7c",
+    "tools/pd-waveform/evidence/20261117-keychain-lifecycle/save-qualification.py.gz": "5d67983b2c6087363d0698bf387468665cf4efaffb0003039dce8b2d2ffbd5b4"
+  }
+}
