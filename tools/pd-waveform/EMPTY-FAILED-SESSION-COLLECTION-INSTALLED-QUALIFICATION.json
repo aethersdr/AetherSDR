@@ -1,0 +1,243 @@
+{
+  "updated_utc": "2026-11-17T03:45:53.095166+00:00",
+  "status": "installed_empty_failure_collection_upgrade_new_session_and_software_reboot_qualified_on_8600",
+  "production_ready": false,
+  "runtime_source_commit": "a6a4904f70c7fb4ed1eef35aa3c48a09c8f11580",
+  "release_blake2b_256": "177d932be6b7d2e22ee7715a0687add82fed299343ab56b0d331ac2f3ea8a686",
+  "desktop": {
+    "pid": 2699295,
+    "socket": "/tmp/aetherpd-empty-session-retirement",
+    "binary_sha256": "3b9321b9532f0e2e61bbe8b8fe9a93f2da59481c9de28c5b4329f458bafe1acb",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "9ba6154837f187c5b7b73fb4632d8b4b9e407a4c",
+    "desktop_source": "a6a4904f70c7fb4ed1eef35aa3c48a09c8f11580",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.166382379000424
+  },
+  "component_report": "tools/pd-waveform/EMPTY-FAILED-SESSION-COLLECTION-QUALIFICATION.json",
+  "reproducibility": {
+    "architectures": [
+      "armv7",
+      "arm64"
+    ],
+    "separate_source_output_and_compiler_caches": true,
+    "same_host_toolchains": true,
+    "runtime_releases_identical": true,
+    "eight_file_upgrade_distribution_identical": true,
+    "release_bytes": {
+      "armv7": 9390201,
+      "arm64": 9060769
+    }
+  },
+  "disk_budget": {
+    "scope": "Native production upgrade-space functions, real authenticated release files; synthetic filesystem capacity and block sizes.",
+    "armv7_max_modeled_upgrade_peak_bytes": 39649280,
+    "headroom_from_41_decimal_MB": 1350720,
+    "boundaries": "Exact byte/inode admitted; one byte/inode short refused for both architectures and block/volume layouts.",
+    "state_and_metadata_allowances_are_enforced": false,
+    "actual_6300_measured": false
+  },
+  "ordinary_desktop_upgrade": {
+    "committed": true,
+    "elapsed_s": 49.253,
+    "displayed_plan_includes_empty_record_collection": true,
+    "diagnostics_used_for_delivery": false,
+    "predecessor_credential_used_for_delivery": true,
+    "temporary_installer_cleanup_confirmed": true,
+    "verified_empty_failure_names_before": [
+      "aetherpd-start@5-1304-78666.service",
+      "aetherpd-start@11-4827-78666.service",
+      "aetherpd-start@6-2580-78666.service",
+      "aetherpd-start@2-1304-78666.service",
+      "aetherpd-start@14-6711-78666.service",
+      "aetherpd-start@8-2580-78666.service"
+    ],
+    "collector_journal_events": [
+      {
+        "event": "empty_failed_sessions_retired",
+        "count": 6,
+        "rf_commands": []
+      }
+    ],
+    "initial_worker_attempt": "Journal records exit4 followed by the configured restart and successful completion; the precise first-attempt branch was not isolated."
+  },
+  "receive_only_disconnect_and_reconnect": {
+    "passed": true,
+    "original_workers": 9,
+    "survivors_at_30s_disconnected": 1,
+    "first_original_workers_gone_after_disconnect_ack_ms": 30651.219923,
+    "manager_forced_SIGKILL": false,
+    "empty_failed_record_created": "aetherpd-start@17-8660-78666.service",
+    "stale_panel_Start_refused_disconnected_and_reconnected": true,
+    "fresh_ordinary_session_collector_events": [
+      {
+        "event": "empty_failed_sessions_retired",
+        "count": 1,
+        "rf_commands": []
+      }
+    ],
+    "populated_guardian_survives_while_another_record_is_collected": "Component tested; the live test observes guardian hold/retirement before the fresh collector, not simultaneous collection during that hold."
+  },
+  "receive_IQ": {
+    "complete_131072_byte_captures": 3,
+    "channel": 4,
+    "transport": "local_dax_iq",
+    "sample_rate_hz": 48000,
+    "FDX": false,
+    "phases": [
+      "after_upgrade",
+      "after_disconnect_reconnect",
+      "after_software_reboot"
+    ],
+    "fresh_GUI_binding_and_finite_nonzero_samples_checked": true,
+    "all_Stop_states": "stopped"
+  },
+  "software_reboot": {
+    "commands_sent": 1,
+    "boot_id_before": "839d29c7-c56e-4c61-a87e-05fdf1c6b6b6",
+    "boot_id_after": "da955e3f-c404-4337-97fd-1d42ddb693e8",
+    "exact_commit_ready_s": 63.811,
+    "exact_installation_receipt_preserved": true,
+    "ordinary_authenticated_primary_available_before_post_reboot_diagnostic_job": true,
+    "physical_power_loss_tested": false
+  },
+  "final_audit": {
+    "boot_id": "da955e3f-c404-4337-97fd-1d42ddb693e8",
+    "processes": [
+      {
+        "pid": 1303,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+      },
+      {
+        "pid": 1336,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 1343,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+      }
+    ],
+    "runtime_hashes": {
+      "flex-tailnet-shim": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5",
+      "aether-pd": "bed41f7b3f3308acdacf783e327a16d713a0b7466ac100c812b8b909d0716be8",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "boot_sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444",
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "identity_mode": "local_only; no tsnet state present",
+    "upgrade_generation_hex": "504447454e303031bd80453923ae0a6ad8de70e015d5120481d94c0d57f888ce93c962edbb82147e",
+    "temporary_installer_paths_absent": true,
+    "fixed_ARP_absent": true,
+    "accept_local": "0",
+    "failed_session_records": 0,
+    "baseline_only": true,
+    "all_baseline_UIDs": 78666,
+    "all_capability_sets": 0,
+    "NoNewPrivs": 1,
+    "diagnostic_jobs_removed_their_temporary_containers_and_scratch": true
+  },
+  "RF_commands": [],
+  "limitations": [
+    "No RF correction, sustained duty, stock APD comparison or native keyed deadline test was run in this qualification.",
+    "Same DSP binary as preceding work; earlier finite RF improvement is preserved, not requalified by receive-only tests.",
+    "One protected disconnect and one software reboot; physical power loss and all interrupted installation boundaries remain separate gates.",
+    "Actual FLEX6300/Linux2.6/CortexA8/single-core/legacy service-manager operation is unqualified; ARMv7 reproducibility is not hardware proof.",
+    "Capacity is modeled from authentic files and explicit allowances, not measured 6300 state usage or enforced state/log limits.",
+    "Development publisher and local-only identity; shipping catalogue, cross-platform credentials and credential rotation/signout remain open.",
+    "The existing diagnostics bridge was used only for independent read-only audits/observation, not update delivery or manual record reset; it is not a shipping dependency.",
+    "Full P1-P10 remains active. LP100A integration remains deferred."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--report.json.gz": "d5377d277c4b86f9f5e32efa98619c6836b86a337163125e7fde396778bff7a5",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--run.py.gz": "20b527fa9286f8959d372de32a03756633a17d5bbf7bf4858ec19d7621bb401b",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--budget-report.json.gz": "12553fb7b156fca1d4d4edcea2a04bd3e5fcbceadc857ff2619881107b739aa4",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--build-budget.py.gz": "2e9c2c8ed77c66c4870c0ae924c9cfc4fa7459477dbbe300ca685b15b7d80410",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--budget_probe.c.gz": "0d024c724e4853b223d7cc2642615f13d721ff082024325eba8564329dd6b980",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--measure-budget.py.gz": "17c98051ea0c5c0a74c6f0eebfcf6ab401454a6b6ecb471f40f5179c27e2f8c9",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--build-budget.py.log.gz": "159ef135106e7cf03afe795b47a2fe60e267300ce6f8ae60f2d261d8d3433fca",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--measure-budget.py.log.gz": "8afc6132ccfb756b807745918dae1f8eb87e1295fcf503e7c743d415385d087e",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/runtime-empty-session-retirement--build-console.log.gz": "486eef045e46439b04a29139cf200fc2c5ed0b247b19ac7b3c4d2a1437854d7a",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/upgrade-empty-session-retirement--report.json.gz": "9a7bbed696bbe0387c742420bad844d0a539f26469dc5d8330a2b66b59dcfd67",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/upgrade-empty-session-retirement--build.py.gz": "0df40763ca5470adff65474ed53280ac61951298f46d451ca8bb625e9d0342ba",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/upgrade-empty-session-retirement--build-console.log.gz": "1ddd021ec17cf46bb093b55d70c364144da07986a31d584f0053cb83d651e6d0",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/upgrade-empty-session-retirement--short--selection.json.gz": "2e22e054e392ba4a559f15b5a2223e139ed519c26cfd5fa39e9fe9796a6d6238",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/upgrade-empty-session-retirement--short--manifest.json.gz": "680215ec906792688ec09bef7d23fbcb20fe44ad3927e7498cac704aa43a727f",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--relaunch.py.gz": "0f1f080ae71cca70b984079a51b25b1218ed295d7d858198832a6833879e04f5",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--prepare.py.gz": "daae2bb36d93372d70c8c2a967153226b0a126d7a87891745d4886e4d4047939",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--install.py.gz": "1f4aa6ab31855ef2ad6d408eb1c2ed097c7c825211694362b642c2ec72fc41e9",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--instance.json.gz": "996c11e8d65907ba62d507e9f8c749467f87f8b73f6791a5a2c611d3e364beff",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--desktop-provenance.json.gz": "1140a492303fcfbd1ba3dbc1d3644aa03e5b0e5eeb2673a62e191f073f3363eb",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--prepared.json.gz": "41bfffd82496e4e35d0c5ad4bfb8da06852c073802b385d515e64f2ec885f40f",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--install-result.json.gz": "3c010e05b03d2f0d65bdfc94ae4d9fc4c1b0bd2bed707f4ab74cf117251cb351",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--before-job.py.gz": "02fa89f2987f307945ab86f2f00f23c3f273ab1c76faf87dbbb87b3c0fc05074",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--before-result.json.gz": "f5b69f494c41e18f94d449ab319b2d9f0224acd60a038138744093ba9a8e5821",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--after-update-job.py.gz": "ff0ec78dafac55ecb231477620ecaf7c85bbed87ff12ca5d8b1b2237dfaf0d1d",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--after-update-result.json.gz": "35da7cb01a7b8a51a75d1872a5e38ccf4d7132f5b57ef9ee7411746ce79a2303",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--receive-iq-check.py.gz": "d4adc45ccfafb9149fc6063e032e3b577ab3a55d87a67c5d9f4c0352eea268d8",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--usb-receive-iq-check.json.gz": "048200851b7fdc62ea45abd895c7c1791496fd8ca3068d85939330359f38d016",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--usb-receive-iq.f32le.gz": "d78dca7da65f9628b37b484edf3b13717a5399a60c6f6128fd82f31aa380cdf6",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--artifact-receipt.json.gz": "0aad57665b9124ea17b7ebf98578577be7c3bd9a2c1b1ef77915200e8717738b",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-live--save-evidence.py.gz": "3915b646be80bfde350bb51ec8885184f9cf18b48e43265d3333abb23c91e142",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reconnect--run.py.gz": "25f83898d3433a6bfb9832d06c71a41e2a2954f06889fc217c7086a359d91878",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reconnect--run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reconnect--observer-functions.py.gz": "21513ecb8ad14ee27eea000de3f6c961674eb55048a331866b78558b4efe32b9",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reconnect--observer-tail.py.gz": "8b0aa484254a1223d2edcb09c04d599d85fbc419bdc876b1b13401aa7d9dc29c",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reconnect--observe-job.py.gz": "a2a4328d32796676dfb30ea7aaf8054ab551f08a67be96c76e7b44b3a5d651bb",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reconnect--observe-result.json.gz": "ca8089b96096266f0e0cc874b14eb59227d0eda9197cb82a2610186938092cac",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reconnect--events.json.gz": "3404db0966cf7899215a582b1a39ebf3f45f70bc5763d25f616fb6130b6c6c9e",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reconnect--outcome.json.gz": "f1bee6e00a7e71782047d34af21263b672022c08d174d144b50188db53a66b30",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-recovery--receive-iq-check.py.gz": "d4adc45ccfafb9149fc6063e032e3b577ab3a55d87a67c5d9f4c0352eea268d8",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-recovery--usb-receive-iq-check.json.gz": "0387584fe6372dac211ea01001e71e774badc14d40ed38eb388915adc87b1b6c",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-recovery--usb-receive-iq.f32le.gz": "e61cd7f98c040294a69e0222d7a775ccd1ab5aad850c8529aeb3ebd326c3449f",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-recovery--final-audit-job.py.gz": "3af1afa4b5a58e14b953a21461c38b46a832461eaeaf4d52ba8501ce992fa999",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-recovery--final-audit-result.json.gz": "b13bf79787fa35d8039df944223a63fc0a1ed1859ed8fdd1c0ea34d09ec27735",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--reboot-check.py.gz": "8a4f64f0566297df3c926fdb2548b12107878e9515981b68ca102a6bc0888c92",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--reboot-check.json.gz": "20f644178ce53c54a39a158330da1bd9437f7ec129ac288c246ffcc7a92cf162",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--reboot-intent.json.gz": "6cf4d93aa51f5dca7c23ec6f71777d588d61f85fb18db189a93e9df3220c7fe2",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--open-fresh-panel.py.gz": "f94e9fa1b848a4be02be4270b8a02041ccd6e90000fb7b2499e2674340865539",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--connected.json.gz": "d7b5dc59858581939813469ebde4f4e78771ebdd3bd2db92ca1b968d1e343d4e",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--receive-iq-check.py.gz": "d4adc45ccfafb9149fc6063e032e3b577ab3a55d87a67c5d9f4c0352eea268d8",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--usb-receive-iq-check.json.gz": "a8accd61b6bf4874aac522a659e60e7ce5f4b18e12e4401d27effd68c2804156",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--usb-receive-iq.f32le.gz": "948ba2bb303bfb7cc2b5b643cb981060d710e81df1adc49a10f2573009726e19",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--post-reboot-audit-job.py.gz": "0c06328ae2f0e0596a31fbcab3edf62fd4a7d2373e0e15a0feb05cb2c063cce8",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement-installed/empty-session-retirement-reboot--post-reboot-audit-result.json.gz": "b946ab70125e15fb794ccf8933b7fd758e1e4802c707cdd3681001a6ed5988c1"
+  }
+}
