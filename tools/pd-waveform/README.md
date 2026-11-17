@@ -244,11 +244,17 @@ failure. They do not prove which FPGA behavior caused a delay change, nor
 attribute a historical event whose packet trace was not captured.
 
 Consumed delay estimates also produce `alignment evidence: reason=acquisition` records in the
-same bounded retained diagnostic slot. Source/generation and radio monotonic
+latest-event diagnostic slot. Source/generation and radio monotonic
 timestamps distinguish collection before submission, worker queueing,
 estimation, and consumption by the packet thread. Rejected estimates remain
 visible. These observations do not change alignment acceptance or RF duration;
-the latest event can overwrite a reset record, and the count covers both kinds.
+the latest-event count covers both kinds. Diagnostic schema version 2 also
+retains `alignment_reset`, a separate latest-reset record and saturating reset
+counter. Acquisition results do not overwrite that slot. The two records cost
+one additional fixed 1,032-byte record on the tested ABIs, with no file, thread
+or allocation in the packet path. They survive model resets until the DSP exits;
+they are observations, never permission to reuse a correction model. New shim
+and desktop readers also accept version 1 without a separate reset record.
 
 ### Native batch capture candidate
 

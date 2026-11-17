@@ -172,11 +172,20 @@ std::optional<Diagnostics> diagnostics(const QJsonValue& value)
     if (!value.isObject()) { return std::nullopt; }
     const QJsonObject o = value.toObject();
     quint64 version = 0;
-    if (o.size() != 3 || !counter(o, "version", version) || version != 1) { return std::nullopt; }
+    if (!counter(o, "version", version) || (version != 1 && version != 2)
+        || o.size() != (version == 1 ? 3 : 4)) { return std::nullopt; }
     const auto alignment = diagnosticRecord(o.value(QStringLiteral("alignment")), "alignment evidence: reason=");
     const auto sourceEnd = diagnosticRecord(o.value(QStringLiteral("source_end")), "bounded source ended: reason=");
     if (!alignment || !sourceEnd) { return std::nullopt; }
-    return Diagnostics{*alignment, *sourceEnd};
+    Diagnostics result{*alignment, *sourceEnd, std::nullopt};
+    if (version == 2) {
+        result.alignmentReset = diagnosticRecord(o.value(QStringLiteral("alignment_reset")), "alignment evidence: reason=");
+        if (!result.alignmentReset || result.alignmentReset->count > result.alignment.count
+            || result.alignmentReset->text.startsWith(QLatin1String("alignment evidence: reason=acquisition "))) {
+            return std::nullopt;
+        }
+    }
+    return result;
 }
 
 std::optional<State> state(const QJsonValue& value)

@@ -277,6 +277,7 @@ static void check_acquisition_evidence(void)
     struct pd_acquire_result rejected={.generation=18,.delay=-1,.envelope_correlation=0.2};
     w.aligned=0;log_alignment_acquisition(&w,&rejected);
     assert(w.alignment_event.count==2 && strstr(w.alignment_event.text,"delay=-1.000"));
+    assert(w.alignment_reset_event.count==0 && !w.alignment_reset_event.text[0]);
     w.alignment_event.count=UINT32_MAX;
     log_alignment_acquisition(&w,&rejected);assert(w.alignment_event.count==UINT32_MAX);
     pd_acquire_destroy(w.acquire);pd_core_destroy(w.core);

@@ -15,9 +15,10 @@ type pdDiagnosticRecord struct {
 }
 
 type pdDiagnostics struct {
-	Version   uint32             `json:"version"`
-	Alignment pdDiagnosticRecord `json:"alignment"`
-	SourceEnd pdDiagnosticRecord `json:"source_end"`
+	Version        uint32              `json:"version"`
+	Alignment      pdDiagnosticRecord  `json:"alignment"`
+	AlignmentReset *pdDiagnosticRecord `json:"alignment_reset,omitempty"`
+	SourceEnd      pdDiagnosticRecord  `json:"source_end"`
 }
 
 func parsePDDiagnosticRecord(raw []byte, prefix string) (pdDiagnosticRecord, error) {
@@ -37,9 +38,16 @@ func parsePDDiagnosticRecord(raw []byte, prefix string) (pdDiagnosticRecord, err
 
 func parsePDDiagnostics(raw []byte) (*pdDiagnostics, error) {
 	var d pdDiagnostics
-	var alignment, source json.RawMessage
-	err := decodePDExactObject(raw, map[string]any{"version": &d.Version, "alignment": &alignment, "source_end": &source})
-	if err != nil || d.Version != 1 {
+	fields, err := decodePDFields(raw)
+	if err != nil || json.Unmarshal(fields["version"], &d.Version) != nil || (d.Version != 1 && d.Version != 2) {
+		return nil, errors.New("invalid diagnostic schema")
+	}
+	var alignment, reset, source json.RawMessage
+	expected := map[string]any{"version": &d.Version, "alignment": &alignment, "source_end": &source}
+	if d.Version == 2 {
+		expected["alignment_reset"] = &reset
+	}
+	if err = decodePDExactObject(raw, expected); err != nil {
 		return nil, errors.New("invalid diagnostic schema")
 	}
 	if d.Alignment, err = parsePDDiagnosticRecord(alignment, "alignment evidence: reason="); err != nil {
@@ -47,6 +55,13 @@ func parsePDDiagnostics(raw []byte) (*pdDiagnostics, error) {
 	}
 	if d.SourceEnd, err = parsePDDiagnosticRecord(source, "bounded source ended: reason="); err != nil {
 		return nil, err
+	}
+	if d.Version == 2 {
+		r, resetErr := parsePDDiagnosticRecord(reset, "alignment evidence: reason=")
+		if resetErr != nil || r.Count > d.Alignment.Count || strings.HasPrefix(r.Text, "alignment evidence: reason=acquisition ") {
+			return nil, errors.New("invalid alignment reset record")
+		}
+		d.AlignmentReset = &r
 	}
 	return &d, nil
 }

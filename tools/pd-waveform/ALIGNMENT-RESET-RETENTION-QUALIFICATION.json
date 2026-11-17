@@ -1,0 +1,110 @@
+{
+  "updated_utc": "2026-11-17T05:14:01.259510+00:00",
+  "status": "separate_alignment_reset_retention_component_verified_not_installed",
+  "production_ready": false,
+  "qualification_parent_commit": "783acc62b6bd53ec2999b750c2b3d0d7b93c13ea",
+  "finding": "A subsequent acquisition estimate overwrote the only retained alignment-reset record, losing the failure context before a status reader observed it.",
+  "change": "Native diagnostics v2 retain the latest reset and reset-only saturating counter separately from the latest event and all-event counter. New Go and Qt readers accept v1 and v2, validate exact schemas and project the separate reset without changing RF policy.",
+  "resource_scope": {
+    "additional_fixed_native_records": 1,
+    "per_record_max_text_bytes": 1023,
+    "additional_native_heap_allocations": 0,
+    "additional_threads": 0,
+    "new_diagnostic_disk_writes": 0,
+    "new_privileges": 0,
+    "status_diagnostic_stack_buffer_bytes": 3456,
+    "native_status_body_bound_bytes": 8192,
+    "shim_status_bound_bytes": 16384
+  },
+  "checks": {
+    "socket_free_CTest_passed": [
+      "pd_dispatch_deadline_test",
+      "pd_calibration_dispatch_test",
+      "pd_calibration_control_test",
+      "pd_capture_test",
+      "aetherpd_protocol_test"
+    ],
+    "native_AddressSanitizer_UndefinedBehaviorSanitizer_LeakSanitizer": {
+      "pd_dispatch_deadline_test": 0,
+      "pd_calibration_dispatch_test": 0
+    },
+    "Go_diagnostics_race_tests_passed": true,
+    "native_Go_Qt_composition_cases": 4,
+    "Qt_reset_text_and_count_preservation_cases": 4,
+    "reset_retention_and_acquisition_overwrite_mutants_rejected": {
+      "reset_retention": {
+        "exit": -6,
+        "assertion": "reset_retention-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/retained-reset-diagnostics/reset_retention-test.c:180: main: Assertion `!memcmp(&retained,&f.w.alignment_reset_event,sizeof(retained))' failed."
+      },
+      "reset_overwrite": {
+        "exit": -6,
+        "assertion": "reset_overwrite-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/retained-reset-diagnostics/reset_overwrite-test.c:186: main: Assertion `!memcmp(&retained,&f.w.alignment_reset_event,sizeof(retained))' failed."
+      }
+    },
+    "cross_builds": {
+      "armv7": {
+        "bytes": 272156,
+        "sha256": "baf7f7c3b86d52958ef734b64b5d34531f7acb8a459efc28a6ad635a5cf14aea"
+      },
+      "arm64": {
+        "bytes": 283152,
+        "sha256": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+      }
+    },
+    "user_documentation_build_passed": true,
+    "generated_references_current": true,
+    "log_rule_checks_passed": 767,
+    "git_diff_check_passed": true
+  },
+  "limitations": [
+    "Not installed: the radio still runs a6a4904f70c7fb4ed1eef35aa3c48a09c8f11580 and release177d932be6b7d2e22ee7715a0687add82fed299343ab56b0d331ac2f3ea8a686.",
+    "No RF, new physical-latency claim or new correction measurement in this component qualification.",
+    "The historical natural128sample event and unexplained all-bypass cold start remain unresolved; this closes an observation-loss gap, not their root cause.",
+    "Latest reset may be replaced by a later reset and all records are lost when the DSP exits. Collect beforeStop; this is not a durable per-event journal.",
+    "Both ARM variants compile; actual6300 kernel/hardware and final complete-package reproduction still require qualification.",
+    "Initial sandboxed sanitizer run could not perform LeakSanitizer thread inspection; the same instrumentation passed outside the sandbox. Initial sandboxed npm dependency install failed DNS; locked dependencies were then installed with network access.",
+    "Log rule check reports12 pre-existing line-number moves outside this change; all767 checks passed."
+  ],
+  "source_sha256": {
+    "tools/pd-waveform/pd_waveform.c": "a2208c8db78035fbce2d40c3b3915657c4b1107272b92d54de63bab6e757c637",
+    "tools/flex-tailnet-shim/aetherpd_diagnostics.go": "bb70818093dc3b538d788000e0d56c45bc331b75dba4be1b8fe44a4ccc5c00e6",
+    "src/core/AetherPDProtocol.cpp": "7e6fcaebf0467ae718ac273861d21d2cd3ec95804e52ef52f99378ea8bc4d833",
+    "src/core/AetherPDProtocol.h": "791c58be5982ab1e12bc27d129a120513c16fb1a25aab61da1c18615b0435fd7"
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/check-native.py.gz": "50c8b21ba1128b3c3bb26e48c041312f9145da8e68be6ea91707e7c8dc375966",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/compose.py.gz": "99d11cdc62a26e218263d8c1067c26c1027b1b02807a7f1cac5d6cfcf32ffdee",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition-go-0.log.gz": "22c3a342c7b0dbaae3e3d81f8fce5cda40d7ce422be69065cecad28b99f07802",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition-go-1.log.gz": "80dd89ba474d0319e811db0828f490912a7df29f6c5af449fd8842a6f13e2901",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition-go-2.log.gz": "08a2f3de5aec51e27e2953253b189852c7734fe8a976cf46ae1fe4f25aacaddd",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition-go-3.log.gz": "8c8a4da28d6550d3827bf74df24be45f31cf588c172d6b6247b07bea6a1cb7b4",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition-qt-0.log.gz": "cd444f7ac528d16021f10fbb758cbac1707389c7e3aed8cddc754c9738ccb252",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition-qt-1.log.gz": "cd444f7ac528d16021f10fbb758cbac1707389c7e3aed8cddc754c9738ccb252",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition-qt-2.log.gz": "cd444f7ac528d16021f10fbb758cbac1707389c7e3aed8cddc754c9738ccb252",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition-qt-3.log.gz": "cd444f7ac528d16021f10fbb758cbac1707389c7e3aed8cddc754c9738ccb252",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/composition.json.gz": "a99d40206089147c80b27cc054471f124dd2e1d503e330bddf988c5651555dac",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/cross-build.py.gz": "be2cb1ae1f0fd188c5da40b614b531ab56858b6a77f98d6c2d6ebccc8f4aa2b7",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/cross-builds.json.gz": "72abf1bfef8020248f07a6158474bb8d06b2119f7ddddb1c40c2b18ef3c33e5b",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/mutation-check.py.gz": "3048ad9c46b4daea2f4564ada0fbba2eb663fc843b4db1964ece2f2730cbcc65",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/mutations.json.gz": "f828d11e042babff66de261fed9caa8ba0053bfcb94b78d147c8641f855cee9b",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/native-fixture-0.json.gz": "8c7534865ca5b6893084b132c0abcbbb50cd432e342b2fd8197365296d36f474",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/native-fixture-1.json.gz": "f2be693f7b0662aac94aa117feaea5404922a507cc16df9295651846368b0b3e",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/native-fixture-2.json.gz": "74329fc06173d662f24fa63d696c990c26c8643fc5bef8845afe363eddfada85",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/native-fixture-3.json.gz": "5f8849dce7e1ef3871cbfcef79990857271870fe802618cd94c66c63665661de",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/native-sanitizers.json.gz": "c97dc8331715d5a93fc7de16f8e7f7398add0136851b5b2ff588df515b46713d",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/pd_calibration_dispatch_test-asan.log.gz": "3ab7818e26b209a0c47246f7237e0a9374a0f1f6b2c3d8cca0983aaaf6af4f70",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/pd_dispatch_deadline_test-asan.log.gz": "0a4f111a81488f69fbf74b55bcf759f3162800a3032d9b19553634c235525bf2",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/public-fixture-0-qt.log.gz": "cd444f7ac528d16021f10fbb758cbac1707389c7e3aed8cddc754c9738ccb252",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/public-fixture-0.json.gz": "5ced300a6c56d403ae5d85f65e5f37bb1a3380a700428b6aee874996256b7d02",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/public-fixture-1-qt.log.gz": "cd444f7ac528d16021f10fbb758cbac1707389c7e3aed8cddc754c9738ccb252",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/public-fixture-1.json.gz": "56aede47faa9518f78d753917765c89f5e0619d55aaab522ffda15ee42a88cd0",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/public-fixture-2-qt.log.gz": "cd444f7ac528d16021f10fbb758cbac1707389c7e3aed8cddc754c9738ccb252",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/public-fixture-2.json.gz": "86609facdd6e7edbf4f4a97e22b6612870b466028595ea2c2893300415647857",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/public-fixture-3-qt.log.gz": "cd444f7ac528d16021f10fbb758cbac1707389c7e3aed8cddc754c9738ccb252",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/public-fixture-3.json.gz": "26bd856ccacd84177a37f87b117555f8d6b045eed5524ed8fb2e3438528b4c25",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/qt-retention-composition.json.gz": "20e1976ef3644779b2cc01a854c2ecdc6dac6047438c4001c8a87259902a4cb5",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/reset_overwrite-mutation.log.gz": "76e52b2fbd921abb81938bf9654ee3da242720ac519ec7906af60b043596da30",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/reset_retention-mutation.log.gz": "0004c04d7e9d4d2d9e5cc4796465c8073463d8d45305d11bfbde5a9e2a2b51cc",
+    "tools/pd-waveform/evidence/20261116-retained-alignment-reset/user-docs-build.log.gz": "5e25e1d24541073506a92c7f5a1ca11ee931c4c064035d35aa0bd214a11a5ef5"
+  }
+}

@@ -480,6 +480,11 @@ transport fault and is waiting for a validated model. `unavailable` means the
 shim could not obtain a valid current report. Installing the released
 Tailscale service does not install the experimental AetherPD waveform.
 
+Diagnostics retain the latest alignment reset separately from the latest
+alignment estimate, so reacquisition does not erase the reset evidence.
+These records belong to the current AetherPD process; collect them before
+stopping the session. They do not indicate that correction is active.
+
 Development diagnostics can also retrieve a short raw DAX IQ snapshot from
 the session already running on the radio. This does not transmit or change
 the IQ stream. Snapshots expire and cannot be retrieved after the session is

@@ -466,7 +466,7 @@ struct pd_diagnostic_record {
 
 typedef struct {
     int api, udp, seq;
-    struct pd_diagnostic_record alignment_event, source_end_event;
+    struct pd_diagnostic_record alignment_event, alignment_reset_event, source_end_event;
     int api_leased, api_inherited_used, api_lease_failed;
     char rbuf[16384];
     size_t rlen;
@@ -613,14 +613,27 @@ static struct alignment_evidence capture_alignment_evidence(const wf_t* w, const
     evidence.truncated = size < 0 || (size_t)size >= sizeof(evidence.line);
     return evidence;
 }
-static void log_alignment_evidence(wf_t* w, const struct alignment_evidence* evidence)
+static void retain_alignment_evidence(struct pd_diagnostic_record* record, const struct alignment_evidence* evidence)
+{
+    if (record->count < UINT32_MAX) { ++record->count; }
+    memcpy(record->text, evidence->line, sizeof(record->text));
+    record->truncated = evidence->truncated;
+}
+
+static void log_alignment_event(wf_t* w, const struct alignment_evidence* evidence, int reset)
 {
     if (evidence->line[0]) {
-        if (w->alignment_event.count < UINT32_MAX) { ++w->alignment_event.count; }
-        memcpy(w->alignment_event.text, evidence->line, sizeof(evidence->line));
-        w->alignment_event.truncated = evidence->truncated;
+        retain_alignment_evidence(&w->alignment_event, evidence);
+        // A successful or rejected estimate must not erase the reset that
+        // triggered reacquisition. Both slots are bounded to this process.
+        if (reset) { retain_alignment_evidence(&w->alignment_reset_event, evidence); }
         logf_("%s", evidence->line);
     }
+}
+
+static void log_alignment_evidence(wf_t* w, const struct alignment_evidence* evidence)
+{
+    log_alignment_event(w, evidence, 1);
 }
 
 static void log_alignment_acquisition(wf_t* w, const struct pd_acquire_result* result)
@@ -640,7 +653,7 @@ static void log_alignment_acquisition(wf_t* w, const struct pd_acquire_result* r
         result->phase_correlation,result->offset_hz,w->test_noise_left,w->test_left,
         (long long)w->measurement_tone_sent_ns,(long long)w->measurement_guard_ns);
     evidence.truncated=size<0 || (size_t)size>=sizeof(evidence.line);
-    log_alignment_evidence(w,&evidence);
+    log_alignment_event(w,&evidence,0);
 }
 
 static void log_measurement_window(const wf_t* w, const char* event);
@@ -2099,8 +2112,8 @@ static int status_feedback_binding(const wf_t* w,char* out,size_t cap)
 
 static int status_diagnostics(const wf_t* w, char* out, size_t cap)
 {
-    const struct pd_diagnostic_record* records[] = { &w->alignment_event, &w->source_end_event };
-    for (unsigned i = 0; i < 2; ++i) {
+    const struct pd_diagnostic_record* records[] = { &w->alignment_event, &w->alignment_reset_event, &w->source_end_event };
+    for (unsigned i = 0; i < 3; ++i) {
         // Records contain only fixed labels, literal reasons and numbers.
         // Refuse unsafe text rather than inserting unescaped JSON.
         for (size_t j = 0; j < sizeof(records[i]->text); ++j) {
@@ -2110,9 +2123,11 @@ static int status_diagnostics(const wf_t* w, char* out, size_t cap)
         }
     }
     return snprintf(out, cap,
-        "\"diagnostics\":{\"version\":1,\"alignment\":{\"count\":%llu,\"truncated\":%s,\"text\":\"%s\"},"
+        "\"diagnostics\":{\"version\":2,\"alignment\":{\"count\":%llu,\"truncated\":%s,\"text\":\"%s\"},"
+        "\"alignment_reset\":{\"count\":%llu,\"truncated\":%s,\"text\":\"%s\"},"
         "\"source_end\":{\"count\":%llu,\"truncated\":%s,\"text\":\"%s\"}},",
         (unsigned long long)w->alignment_event.count, w->alignment_event.truncated ? "true" : "false", w->alignment_event.text,
+        (unsigned long long)w->alignment_reset_event.count, w->alignment_reset_event.truncated ? "true" : "false", w->alignment_reset_event.text,
         (unsigned long long)w->source_end_event.count, w->source_end_event.truncated ? "true" : "false", w->source_end_event.text);
 }
 
@@ -2136,7 +2151,7 @@ static int status_json(const wf_t* w, char* out, size_t cap)
     }
     char binding[192];int binding_size=status_feedback_binding(w,binding,sizeof(binding));
     if(binding_size<0 || binding_size>=(int)sizeof(binding)){return -1;}
-    char diagnostics[2304];int diagnostic_size=status_diagnostics(w,diagnostics,sizeof(diagnostics));
+    char diagnostics[3456];int diagnostic_size=status_diagnostics(w,diagnostics,sizeof(diagnostics));
     if(diagnostic_size<0 || diagnostic_size>=(int)sizeof(diagnostics)){return -1;}
     return snprintf(out, cap,
         "{%s%s\"name\":\"%s\",\"version\":\"%s\",\"registered\":%s,\"active_slice\":%d,"

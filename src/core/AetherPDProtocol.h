@@ -76,6 +76,7 @@ struct DiagnosticRecord {
 struct Diagnostics {
     DiagnosticRecord alignment;
     DiagnosticRecord sourceEnd;
+    std::optional<DiagnosticRecord> alignmentReset;
 };
 
 struct Status {

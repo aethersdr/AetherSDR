@@ -67,7 +67,7 @@ void diagnosticProtocol()
         rejects(status, "invalid diagnostic accepted");
     }
     QJsonObject changed = diagnostics;
-    changed["version"] = 2;
+    changed["version"] = 3;
     status["diagnostics"] = changed;
     rejects(status, "unknown diagnostic version accepted");
     QJsonObject maximum = alignment;
@@ -83,14 +83,56 @@ void diagnosticProtocol()
     changed["alignment"] = maximum;
     status["diagnostics"] = changed;
     rejects(status, "oversized diagnostic accepted");
+    changed = diagnostics;
+    changed["version"] = 2;
+    status["diagnostics"] = changed;
+    rejects(status, "version two without reset record accepted");
+    const QJsonObject reset{{"count", 1}, {"truncated", false},
+        {"text", "alignment evidence: reason=tx_dispatch mono_ns=123"}};
+    QJsonObject acquired = alignment;
+    acquired["text"] = "alignment evidence: reason=acquisition mono_ns=456";
+    changed["alignment"] = acquired;
+    changed["alignment_reset"] = reset;
+    status["diagnostics"] = changed;
+    const auto retained = parseStatus(encode(status));
+    check(retained && retained->diagnostics && retained->diagnostics->alignmentReset
+        && retained->diagnostics->alignmentReset->text == reset.value("text").toString()
+        && retained->diagnostics->alignment.text == acquired.value("text").toString()
+        && !retained->correcting && !retained->keyed, "reset and acquisition not both preserved");
+    for (const auto& [key, value] : std::array<std::pair<const char*, QJsonValue>, 8>{{
+        {"count", 3}, {"count", 0}, {"count", -1}, {"text", "alignment evidence: reason=acquisition mono_ns=1"},
+        {"text", "alignment evidence: reason=tx_dispatch\n"}, {"text", "alignment evidence: reason=\"x\""},
+        {"truncated", true}, {"command", "xmit 1"}}}) {
+        QJsonObject bad = reset;
+        bad[key] = value;
+        QJsonObject invalid = changed;
+        invalid["alignment_reset"] = bad;
+        status["diagnostics"] = invalid;
+        rejects(status, "invalid reset accepted");
+    }
+    changed["alignment_reset"] = QJsonObject{{"count", 0}, {"truncated", false}, {"text", ""}};
+    status["diagnostics"] = changed;
+    check(parseStatus(encode(status)).has_value(), "new process empty reset rejected");
+    changed["version"] = 1;
+    status["diagnostics"] = changed;
+    rejects(status, "version one accepted reset extension");
     const QString fixturePath = qEnvironmentVariable("AETHER_PD_DIAGNOSTIC_PUBLIC");
     if (!fixturePath.isEmpty()) {
         QFile fixture(fixturePath);
         check(fixture.open(QIODevice::ReadOnly), "native/Go diagnostic fixture missing");
-        const auto composed = parseStatus(fixture.readAll());
+        const QByteArray bytes = fixture.readAll();
+        const auto composed = parseStatus(bytes);
         check(composed && composed->diagnostics
             && (composed->diagnostics->sourceEnd.count > 0 || composed->diagnostics->alignment.count > 0)
             && !composed->correcting, "native/Go/Qt composition rejected");
+        const QJsonObject expected = QJsonDocument::fromJson(bytes).object().value("diagnostics").toObject();
+        if (expected.value("version").toInt() == 2) {
+            const QJsonObject resetRecord = expected.value("alignment_reset").toObject();
+            check(composed->diagnostics->alignmentReset
+                && composed->diagnostics->alignmentReset->count == resetRecord.value("count").toDouble()
+                && composed->diagnostics->alignmentReset->text == resetRecord.value("text").toString(),
+                "native/Go/Qt reset record changed");
+        }
     }
 }
 
