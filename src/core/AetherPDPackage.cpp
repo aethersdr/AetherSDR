@@ -212,6 +212,10 @@ std::optional<AetherPDFirstPackage> AetherPDFirstPackage::verify(const Files& fi
     result.m_files = files; result.m_key = trust.publisherKey; result.m_firmware = candidate->firmware;
     return result;
 }
+QByteArray AetherPDFirstPackage::candidateDigest() const
+{
+    return blake(m_files[1]);
+}
 std::optional<AetherPDFirstPackage::Uploads> AetherPDFirstPackage::prepare(const QString& serial,
     const QByteArray& tokenHash, const QString& hostname, const QByteArray& installationId) const
 {

@@ -2,6 +2,7 @@
 #include "core/AetherPDInstallationCoordinator.h"
 #include "core/AetherPDPackageDownload.h"
 #include "core/AetherPDInstallationJournal.h"
+#include "core/AetherPDReleaseCatalogue.h"
 #include <QFutureWatcher>
 #include <QHostAddress>
 #include <QObject>
@@ -38,7 +39,7 @@ public:
     enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected, CredentialSaveFailed, JournalFailed };
     Q_ENUM(Failure)
     explicit AetherPDInstallationModel(RadioModel& radio, QObject* parent = nullptr);
-    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {}, RecoveryServices recovery = {});
+    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {}, RecoveryServices recovery = {}, AetherPDReleaseCatalogue catalogue = AetherPDReleaseCatalogue::shipping());
     bool prepareRelease(const AetherPDRelease& release, const RadioControlSession& session);
     bool prepareFirstRelease(const AetherPDFirstRelease& release, const QString& hostname, const RadioControlSession& session);
     bool prepareFirstPackage(const AetherPDFirstPackage& package, const QString& hostname, const RadioControlSession& session);
@@ -48,6 +49,10 @@ public:
     bool prepareSelectedDevelopment(const RadioControlSession& session);
     QString selectedFirstDevelopmentVersion() const;
     bool prepareSelectedFirstDevelopment(const RadioControlSession& session);
+    QString selectedFirstVersion() const;
+    bool selectedFirstIsDevelopment() const;
+    bool firstInstallationAvailable() const;
+    bool prepareSelectedFirstInstallation(const RadioControlSession& session);
     bool savedFirstInstallationAvailable() const;
     bool recoverSelectedFirstInstallation(const RadioControlSession& session);
     bool savedFirstPreparationAvailable() const;
@@ -92,12 +97,22 @@ private:
     void retirePreparation();
     void downloaded(quint64 generation);
     bool prepareDownload(const QString& firmware, const RadioControlSession& session, const QString& hostname = {});
+    bool prepareFirstDownload(const AetherPDFirstRelease& release, const QString& hostname, const RadioControlSession& session,
+                              const QByteArray& candidateDigest, const QByteArray& savedPlan = {});
     void preparePackage(std::function<std::optional<AetherPDPackage>()> load, quint64 generation);
     void prepareSnapshot(std::function<std::optional<Coordinator::Prepared>()> prepare, quint64 generation);
     bool prepareFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QString& hostname, const RadioControlSession& session);
     void prepareFirstSnapshot(std::function<std::optional<AetherPDFirstPackage>()> load, const QString& hostname, quint64 generation);
     bool prepareSavedFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QByteArray& publisherKey,
-                           const RadioControlSession& session);
+                           const RadioControlSession& session, const QByteArray& expectedPlan = {});
+    struct SavedFirst {
+        QByteArray key;
+        AetherPDInstallationJournal::Read saved;
+        std::optional<AetherPDReleaseCatalogue::First> entry;
+    };
+    std::optional<SavedFirst> savedFirstSelection() const;
+    bool firstJournalAbsent() const;
+    bool recoverFirstSnapshot(const QByteArray& publisherKey, const RadioControlSession& session, const QByteArray& expectedPlan);
     void credential(const QString& token, quint64 generation);
     void completed(Coordinator::Outcome result, bool cleanup);
     void promoted(bool persisted, quint64 generation);
@@ -105,12 +120,13 @@ private:
     QPointer<RadioModel> m_radio;
     RadioControlSession m_session{};
     QHostAddress m_address;
-    QString m_serial, m_firmware, m_carrier, m_archiveSha256;
+    QString m_serial, m_firmware, m_hardwareModel, m_carrier, m_archiveSha256;
     QByteArray m_plan, m_publisherKey;
     QString m_nativeName;
     TokenLoader m_load;
     TokenWriter m_write;
     RecoveryServices m_recovery;
+    AetherPDReleaseCatalogue m_catalogue;
     std::unique_ptr<AetherPDInstallationMonitor> m_recoveryMonitor;
     bool m_recovering{false};
     bool m_recoveryCleanup{false};
@@ -121,6 +137,7 @@ private:
     DownloadFactory m_downloadFactory;
     std::unique_ptr<AetherPDPackageDownload> m_download;
     QString m_downloadHostname;
+    QByteArray m_downloadCandidate, m_downloadSavedPlan, m_downloadSavedKey;
     QPointer<QFutureWatcher<std::optional<Coordinator::Prepared>>> m_preparation;
     qint64 m_received{0}, m_total{0};
     QTimer m_timeout;

@@ -1153,6 +1153,7 @@ set(CORE_SOURCES
     src/core/AetherPDInstallationMonitor.cpp
     src/core/AetherPDInstallationJournal.cpp
     src/core/AetherPDPackageDownload.cpp
+    src/core/AetherPDReleaseCatalogue.cpp
     src/core/AetherPDPackage.cpp
     src/core/AetherPDInstallationCoordinator.cpp
     src/core/backends/AetherPDCarrierUpload.h

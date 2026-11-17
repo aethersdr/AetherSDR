@@ -45,8 +45,8 @@ AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, QObject*
                 [done = std::move(done)](bool persisted, const QString&) { done(persisted); },
                 attempt.isEmpty() ? TailnetShimTokenStore::Entry::TailnetShim : TailnetShimTokenStore::Entry::AetherPDFirst);
         }, recoveryServices(radio)) {}
-AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent, DownloadFactory downloader, TokenWriter writer, RecoveryServices recovery)
-    : QObject(parent), m_radio(&radio), m_load(std::move(loader)), m_write(std::move(writer)), m_recovery(std::move(recovery)), m_factory(std::move(factory)),
+AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent, DownloadFactory downloader, TokenWriter writer, RecoveryServices recovery, AetherPDReleaseCatalogue catalogue)
+    : QObject(parent), m_radio(&radio), m_load(std::move(loader)), m_write(std::move(writer)), m_recovery(std::move(recovery)), m_catalogue(std::move(catalogue)), m_factory(std::move(factory)),
       m_downloadFactory(downloader ? std::move(downloader) : [] { return std::make_unique<AetherPDPackageDownload>(); })
 {
     m_timeout.setParent(this);
@@ -60,6 +60,7 @@ AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, TokenLoa
     });
     connect(&radio, &RadioModel::connectionStateChanged, this, &AetherPDInstallationModel::reconcile);
     connect(&radio, &RadioModel::infoChanged, this, &AetherPDInstallationModel::reconcile);
+    connect(&radio, &RadioModel::capabilitiesChanged, this, &AetherPDInstallationModel::reconcile);
     connect(&radio, &QObject::destroyed, this, [this] { m_radio = nullptr; reconcile(); });
 }
 AetherPDInstallationModel::~AetherPDInstallationModel()
@@ -79,7 +80,8 @@ bool AetherPDInstallationModel::active() const
 bool AetherPDInstallationModel::current() const
 {
     return m_radio && m_radio->controlSessionCurrent(m_session) && m_radio->serial() == m_serial
-        && m_radio->version() == m_firmware && m_radio->radioAddress() == m_address;
+        && m_radio->version() == m_firmware && m_radio->radioAddress() == m_address
+        && m_radio->backendCapabilities().model == m_hardwareModel;
 }
 bool AetherPDInstallationModel::prepareRelease(const AetherPDRelease& release, const RadioControlSession& session)
 {
@@ -90,8 +92,15 @@ bool AetherPDInstallationModel::prepareRelease(const AetherPDRelease& release, c
 bool AetherPDInstallationModel::prepareFirstRelease(const AetherPDFirstRelease& release, const QString& hostname,
                                                   const RadioControlSession& session)
 {
-    if (!release.valid() || !m_write || !m_recovery.journal || hostname.isEmpty() || hostname.size() >= 64
-        || hostname != QString::fromLatin1(hostname.toLatin1()) || !prepareDownload(release.firmware, session, hostname)) { return false; }
+    return prepareFirstDownload(release, hostname, session, {});
+}
+bool AetherPDInstallationModel::prepareFirstDownload(const AetherPDFirstRelease& release, const QString& hostname,
+    const RadioControlSession& session, const QByteArray& candidateDigest, const QByteArray& savedPlan)
+{
+    if (!release.valid() || !m_write || !m_recovery.journal
+        || (savedPlan.isEmpty() && (hostname.isEmpty() || hostname.size() >= 64 || hostname != QString::fromLatin1(hostname.toLatin1())))
+        || !prepareDownload(release.firmware, session, hostname)) { return false; }
+    m_downloadCandidate = candidateDigest; m_downloadSavedPlan = savedPlan; m_downloadSavedKey = release.trust.publisherKey;
     if (!m_download->start(release)) { unavailable(Failure::DownloadFailed); return false; }
     return true;
 }
@@ -104,7 +113,7 @@ bool AetherPDInstallationModel::prepareDownload(const QString& firmware, const R
     m_job.reset(); m_package.reset(); m_plan.clear(); m_carrier.clear(); m_archiveSha256.clear();
     m_firstToken.clear(); m_publisherKey.clear(); m_nativeName.clear();
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
-    m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
+    m_session = session; m_hardwareModel = m_radio->backendCapabilities().model; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
     const quint64 generation = ++m_generation;
     m_downloadHostname = hostname;
     m_download = m_downloadFactory();
@@ -141,7 +150,7 @@ bool AetherPDInstallationModel::prepareSelectedDevelopment(const RadioControlSes
     m_job.reset(); m_package.reset(); m_plan.clear(); m_carrier.clear(); m_archiveSha256.clear();
     m_firstToken.clear(); m_publisherKey.clear(); m_nativeName.clear();
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
-    m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
+    m_session = session; m_hardwareModel = m_radio->backendCapabilities().model; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
     const quint64 generation = ++m_generation;
     preparePackage([] { return aetherpd::development::load(); }, generation);
     return true;
@@ -156,6 +165,39 @@ QString AetherPDInstallationModel::selectedFirstDevelopmentVersion() const
     return m_radio && m_radio->version() == aetherpd::firstDevelopment::firmware()
         ? aetherpd::firstDevelopment::version() : QString{};
 }
+QString AetherPDInstallationModel::selectedFirstVersion() const
+{
+    if (!m_radio || !m_catalogue.valid()) { return {}; }
+    const auto entry = m_catalogue.first(m_radio->backendCapabilities().model, m_radio->version());
+    return entry ? entry->release.version : m_catalogue.empty() ? selectedFirstDevelopmentVersion() : QString{};
+}
+bool AetherPDInstallationModel::selectedFirstIsDevelopment() const
+{
+    return m_radio && m_catalogue.valid() && m_catalogue.empty()
+        && !selectedFirstDevelopmentVersion().isEmpty();
+}
+bool AetherPDInstallationModel::firstJournalAbsent() const
+{
+    if (!m_radio || !m_catalogue.valid() || !m_recovery.read) { return false; }
+    for (const auto& entry : m_catalogue.retainedFirst(m_radio->backendCapabilities().model, m_radio->version())) {
+        if (m_recovery.read(entry.release.trust.publisherKey).state != AetherPDInstallationJournal::State::Missing) { return false; }
+    }
+    if (selectedFirstIsDevelopment()) {
+        return m_recovery.read(aetherpd::firstDevelopment::publisherKey()).state == AetherPDInstallationJournal::State::Missing;
+    }
+    return true;
+}
+bool AetherPDInstallationModel::firstInstallationAvailable() const
+{
+    return !selectedFirstVersion().isEmpty() && !active() && m_state != State::AwaitingApproval && firstJournalAbsent();
+}
+bool AetherPDInstallationModel::prepareSelectedFirstInstallation(const RadioControlSession& session)
+{
+    if (!firstInstallationAvailable()) { return false; }
+    const auto entry = m_catalogue.first(m_radio->backendCapabilities().model, m_radio->version());
+    return entry ? prepareFirstDownload(entry->release, tailnetshim::suggestedHostname(m_radio->nickname()), session, entry->candidateDigest)
+                 : prepareSelectedFirstDevelopment(session);
+}
 bool AetherPDInstallationModel::prepareSelectedFirstDevelopment(const RadioControlSession& session)
 {
     if (selectedFirstDevelopmentVersion().isEmpty()) { return false; }
@@ -164,17 +206,32 @@ bool AetherPDInstallationModel::prepareSelectedFirstDevelopment(const RadioContr
 }
 bool AetherPDInstallationModel::savedFirstInstallationAvailable() const
 {
-    if (!m_radio || selectedFirstDevelopmentVersion().isEmpty() || !m_recovery.read) { return false; }
-    const QByteArray key = aetherpd::firstDevelopment::publisherKey();
-    const auto saved = m_recovery.read(key);
-    if (saved.state != AetherPDInstallationJournal::State::Pending && saved.state != AetherPDInstallationJournal::State::CredentialSaved) { return false; }
-    const auto plan = aetherpd::parseFirstInstallationPlan(saved.plan, key);
-    return plan && plan->serial == m_radio->serial() && plan->firmware == m_radio->version();
+    return savedFirstSelection().has_value();
+}
+std::optional<AetherPDInstallationModel::SavedFirst> AetherPDInstallationModel::savedFirstSelection() const
+{
+    if (!m_radio || !m_catalogue.valid() || !m_recovery.read) { return std::nullopt; }
+    std::optional<SavedFirst> result;
+    const auto consider = [&](const QByteArray& key, const std::optional<AetherPDReleaseCatalogue::First>& entry) {
+        const auto saved = m_recovery.read(key);
+        if (saved.state != AetherPDInstallationJournal::State::Pending && saved.state != AetherPDInstallationJournal::State::CredentialSaved) { return true; }
+        const auto plan = aetherpd::parseFirstInstallationPlan(saved.plan, key);
+        if (!plan || plan->serial != m_radio->serial() || plan->firmware != m_radio->version()
+            || (entry && plan->candidateDigest != QString::fromLatin1(entry->candidateDigest.toHex()))) { return true; }
+        if (result) { return result->key == key && result->saved.plan == saved.plan; }
+        result = SavedFirst{key, saved, entry};
+        return true;
+    };
+    for (const auto& entry : m_catalogue.retainedFirst(m_radio->backendCapabilities().model, m_radio->version())) {
+        if (!consider(entry.release.trust.publisherKey, entry)) { return std::nullopt; }
+    }
+    if (selectedFirstIsDevelopment() && !consider(aetherpd::firstDevelopment::publisherKey(), std::nullopt)) { return std::nullopt; }
+    return result;
 }
 bool AetherPDInstallationModel::recoverSelectedFirstInstallation(const RadioControlSession& session)
 {
-    return !selectedFirstDevelopmentVersion().isEmpty()
-        && recoverFirstInstallation(aetherpd::firstDevelopment::publisherKey(), session);
+    const auto selected = savedFirstSelection();
+    return selected && recoverFirstSnapshot(selected->key, session, selected->saved.plan);
 }
 bool AetherPDInstallationModel::prepareFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QString& hostname,
                                            const RadioControlSession& session)
@@ -186,7 +243,7 @@ bool AetherPDInstallationModel::prepareFirst(std::function<std::optional<AetherP
     m_job.reset(); m_package.reset(); m_plan.clear(); m_carrier.clear(); m_archiveSha256.clear();
     m_publisherKey.clear(); m_nativeName.clear();
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
-    m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
+    m_session = session; m_hardwareModel = m_radio->backendCapabilities().model; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
     prepareFirstSnapshot(std::move(load), hostname, ++m_generation);
     return true;
 }
@@ -206,17 +263,19 @@ void AetherPDInstallationModel::prepareFirstSnapshot(std::function<std::optional
 bool AetherPDInstallationModel::savedFirstPreparationAvailable() const
 {
     if (!m_radio || active() || m_state == State::AwaitingApproval || m_radio->isRadioTransmitting()
-        || selectedFirstDevelopmentVersion().isEmpty() || !m_recovery.read) { return false; }
-    const QByteArray key = aetherpd::firstDevelopment::publisherKey();
-    const auto saved = m_recovery.read(key);
-    const auto plan = aetherpd::parseFirstInstallationPlan(saved.plan, key);
-    return saved.state == AetherPDInstallationJournal::State::Pending && plan
-        && plan->serial == m_radio->serial() && plan->firmware == m_radio->version();
+        || !m_recovery.read) { return false; }
+    const auto selected = savedFirstSelection();
+    return selected && selected->saved.state == AetherPDInstallationJournal::State::Pending;
 }
 bool AetherPDInstallationModel::prepareSelectedSavedFirstInstallation(const RadioControlSession& session)
 {
-    return savedFirstPreparationAvailable() && prepareSavedFirst([] { return aetherpd::firstDevelopment::load(); },
-        aetherpd::firstDevelopment::publisherKey(), session);
+    if (!savedFirstPreparationAvailable()) { return false; }
+    const auto selected = savedFirstSelection();
+    if (!selected) { return false; }
+    if (selected->entry) {
+        return prepareFirstDownload(selected->entry->release, {}, session, selected->entry->candidateDigest, selected->saved.plan);
+    }
+    return prepareSavedFirst([] { return aetherpd::firstDevelopment::load(); }, selected->key, session, selected->saved.plan);
 }
 bool AetherPDInstallationModel::prepareSavedFirstPackage(const AetherPDFirstPackage& package, const QByteArray& publisherKey,
                                                         const RadioControlSession& session)
@@ -224,7 +283,7 @@ bool AetherPDInstallationModel::prepareSavedFirstPackage(const AetherPDFirstPack
     return prepareSavedFirst([package] { return std::optional<AetherPDFirstPackage>(package); }, publisherKey, session);
 }
 bool AetherPDInstallationModel::prepareSavedFirst(std::function<std::optional<AetherPDFirstPackage>()> load,
-    const QByteArray& publisherKey, const RadioControlSession& session)
+    const QByteArray& publisherKey, const RadioControlSession& session, const QByteArray& expectedPlan)
 {
     if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active()
         || m_state == State::AwaitingApproval || !m_radio->controlSessionCurrent(session) || m_radio->isRadioTransmitting()
@@ -232,6 +291,7 @@ bool AetherPDInstallationModel::prepareSavedFirst(std::function<std::optional<Ae
     const auto saved = m_recovery.read(publisherKey);
     const auto plan = aetherpd::parseFirstInstallationPlan(saved.plan, publisherKey);
     if (saved.state != AetherPDInstallationJournal::State::Pending || !plan
+        || (!expectedPlan.isEmpty() && saved.plan != expectedPlan)
         || plan->serial != m_radio->serial() || plan->firmware != m_radio->version()) { return false; }
     retirePreparation();
     if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); m_job.reset(); }
@@ -239,7 +299,7 @@ bool AetherPDInstallationModel::prepareSavedFirst(std::function<std::optional<Ae
     m_plan = saved.plan; m_publisherKey = publisherKey;
     const QString suffix = QString::fromLatin1(m_plan.mid(244, 8).toHex());
     m_nativeName = QStringLiteral("AetherPDFirst") + suffix; m_carrier = QStringLiteral("aetherpd-first-") + suffix;
-    m_session = session; m_serial = plan->serial; m_firmware = plan->firmware; m_address = m_radio->radioAddress();
+    m_session = session; m_hardwareModel = m_radio->backendCapabilities().model; m_serial = plan->serial; m_firmware = plan->firmware; m_address = m_radio->radioAddress();
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None;
     m_savedPreparation = true; m_savedPackageLoader = std::move(load);
     m_state = State::LoadingRecoveryCredential;
@@ -256,6 +316,7 @@ bool AetherPDInstallationModel::prepareSavedFirst(std::function<std::optional<Ae
 void AetherPDInstallationModel::retirePreparation()
 {
     m_downloadHostname.clear();
+    m_downloadCandidate.clear(); m_downloadSavedPlan.clear(); m_downloadSavedKey.clear();
     m_recovering = false;
     m_recoveryCleanup = false;
     m_savedPreparation = false; m_savedPackageLoader = {};
@@ -278,8 +339,18 @@ void AetherPDInstallationModel::downloaded(quint64 generation)
     const auto package = m_download->package();
     const auto firstPackage = m_download->firstPackage();
     const QString hostname = m_downloadHostname;
+    const QByteArray expected = m_downloadCandidate, savedPlan = m_downloadSavedPlan, key = m_downloadSavedKey;
+    const RadioControlSession session = m_session;
     retirePreparation();
     if (firstPackage) {
+        if (!expected.isEmpty() && firstPackage->candidateDigest() != expected) { unavailable(Failure::PackageRejected); return; }
+        if (!savedPlan.isEmpty()) {
+            m_state = State::Idle;
+            if (!prepareSavedFirst([package = *firstPackage] { return std::optional<AetherPDFirstPackage>(package); }, key, session, savedPlan)) {
+                unavailable(Failure::PackageRejected);
+            }
+            return;
+        }
         prepareFirstSnapshot([package = *firstPackage] { return std::optional<AetherPDFirstPackage>(package); }, hostname, generation);
         return;
     }
@@ -331,7 +402,7 @@ bool AetherPDInstallationModel::offer(const Coordinator::Prepared& package, cons
     m_plan = package.approvedPlan();
     m_publisherKey = package.publisherKey(); m_nativeName = package.nativeName();
     if (!first) { m_firstToken.clear(); }
-    m_session = session;
+    m_session = session; m_hardwareModel = m_radio->backendCapabilities().model;
     m_serial = plan->serial; m_firmware = plan->firmware; m_address = m_radio->radioAddress();
     m_carrier = package.carrierName(); m_archiveSha256 = package.carrierSha256();
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None;
@@ -513,17 +584,23 @@ bool AetherPDInstallationModel::cleanupRecoveredInstallation(const QByteArray& d
 }
 bool AetherPDInstallationModel::recoverFirstInstallation(const QByteArray& publisherKey, const RadioControlSession& session)
 {
+    return recoverFirstSnapshot(publisherKey, session, {});
+}
+bool AetherPDInstallationModel::recoverFirstSnapshot(const QByteArray& publisherKey, const RadioControlSession& session,
+                                                    const QByteArray& expectedPlan)
+{
     if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active()
         || !m_radio->controlSessionCurrent(session) || !m_recovery.read || !m_recovery.load || !m_recovery.monitor || !m_write) { return false; }
     const auto saved = m_recovery.read(publisherKey);
     if (saved.state != AetherPDInstallationJournal::State::Pending && saved.state != AetherPDInstallationJournal::State::CredentialSaved) { return false; }
+    if (!expectedPlan.isEmpty() && saved.plan != expectedPlan) { return false; }
     const auto plan = aetherpd::parseFirstInstallationPlan(saved.plan, publisherKey);
     if (!plan || plan->serial != m_radio->serial() || plan->firmware != m_radio->version()
         || !aetherpd::lanAddress(m_radio->radioAddress())) { return false; }
     retirePreparation();
     if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); m_job.reset(); }
     m_package.reset(); m_firstToken.clear(); m_recovering = true;
-    m_session = session; m_serial = plan->serial; m_firmware = plan->firmware; m_address = m_radio->radioAddress();
+    m_session = session; m_hardwareModel = m_radio->backendCapabilities().model; m_serial = plan->serial; m_firmware = plan->firmware; m_address = m_radio->radioAddress();
     m_plan = saved.plan; m_publisherKey = publisherKey;
     const QString suffix = QString::fromLatin1(m_plan.mid(244, 8).toHex());
     m_nativeName = QStringLiteral("AetherPDFirst") + suffix; m_carrier = QStringLiteral("aetherpd-first-") + suffix;

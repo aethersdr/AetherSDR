@@ -278,6 +278,8 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
         connect(&radio->aetherPDModel(), &AetherPDModel::changed, this, &AetherPDDialog::render);
         connect(&radio->transmitModel(), &TransmitModel::transmittingChanged, this, &AetherPDDialog::render);
         connect(radio, &RadioModel::connectionStateChanged, this, &AetherPDDialog::render);
+        connect(radio, &RadioModel::infoChanged, this, &AetherPDDialog::renderInstallation);
+        connect(radio, &RadioModel::capabilitiesChanged, this, &AetherPDDialog::renderInstallation);
         connect(radio, &QObject::destroyed, this, &AetherPDDialog::render);
     }
     render();
@@ -559,7 +561,7 @@ void AetherPDDialog::prepareInstallation()
 }
 void AetherPDDialog::prepareFirstInstallation()
 {
-    if (current()) { m_radio->aetherPDInstallationModel().prepareSelectedFirstDevelopment(m_session); }
+    if (current()) { m_radio->aetherPDInstallationModel().prepareSelectedFirstInstallation(m_session); }
 }
 void AetherPDDialog::checkInstallation()
 {
@@ -593,7 +595,7 @@ void AetherPDDialog::renderInstallation()
     const State state = model ? model->state() : State::Unavailable;
     const auto preview = model ? model->preview() : std::nullopt;
     const QString developmentVersion = model ? model->selectedDevelopmentVersion() : QString{};
-    const QString firstVersion = model ? model->selectedFirstDevelopmentVersion() : QString{};
+    const QString firstVersion = model ? model->selectedFirstVersion() : QString{};
     const bool savedFirst = model && model->savedFirstInstallationAvailable();
     QString detail;
     QByteArray displayed;
@@ -634,7 +636,7 @@ void AetherPDDialog::renderInstallation()
             detail += tr("\nNew local identity hostname: %1").arg(preview->hostname);
         }
     } else {
-        detail = tr("No verified update is prepared. Qualified package selection is not yet available in this development build. "
+        detail = tr("No verified installation plan is prepared. Use an available preparation action to review its plan. "
             "Installing the released Remote Access shim alone does not install AetherPD.");
     }
     if (!developmentVersion.isEmpty()) {
@@ -643,7 +645,9 @@ void AetherPDDialog::renderInstallation()
             : selection + tr("Choose Prepare update to verify the package and review its plan. Preparation does not change the radio.");
     }
     if (!firstVersion.isEmpty() && (!preview || preview->firstInstallation)) {
-        detail = tr("First-install development package %1 — not qualified for production.\n").arg(firstVersion) + detail;
+        detail = (model->selectedFirstIsDevelopment()
+            ? tr("First-install development package %1 — not qualified for production.\n")
+            : tr("First-install package %1 from this application's release catalogue.\n")).arg(firstVersion) + detail;
         if (!preview) {
             detail += tr("\nPrepare first installation is for a radio without a managed AetherPD installation. "
                 "Review and approve its plan before any upload. Check saved installation only reads the previous attempt's outcome.");
@@ -746,8 +750,8 @@ void AetherPDDialog::renderInstallation()
     enable(m_installPrepare, model && !developmentVersion.isEmpty() && !model->active() && state != State::AwaitingApproval,
         tr("A development package compiled for this radio firmware and no pending update are required."));
     if (!alive) { return; }
-    enable(m_installFirst, model && !firstVersion.isEmpty() && !model->active() && state != State::AwaitingApproval && !savedFirst,
-        tr("A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first."));
+    enable(m_installFirst, model && model->firstInstallationAvailable(),
+        tr("A trusted first-install package for this radio model and firmware, and no unresolved installation record are required. Check a saved installation first."));
     if (!alive) { return; }
     enable(m_installCheck, model && savedFirst && !model->active() && state != State::AwaitingApproval,
         tr("A saved installation for this radio and a matching trusted publisher are required."));

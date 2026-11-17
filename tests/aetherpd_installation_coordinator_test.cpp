@@ -567,6 +567,130 @@ private slots:
         }
         QCOMPARE(loads, 0); QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
     }
+    void catalogueFirstDownloadMatchesHardwareAndSignedRelease()
+    {
+        for (int mode = 0; mode < 4; ++mode) {
+            Fixture f; AetherPDTest::PackageFixture fixture;
+            const auto package = fixture.loadFirst(); QVERIFY(package);
+            AetherPDTest::Network downloads;
+            auto services = journalServices();
+            services.read = [](const QByteArray&) { return AetherPDInstallationJournal::Read{AetherPDInstallationJournal::State::Missing, {}}; };
+            const QByteArray digest = mode == 2 ? QByteArray(32, 'x') : package->candidateDigest();
+            AetherPDReleaseCatalogue catalogue({{"FLEX-8600", firstRelease(fixture), digest, true}});
+            int writes = 0;
+            AetherPDInstallationModel model(f.model, {}, {}, nullptr,
+                [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
+                [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services, catalogue);
+            QVERIFY(!model.selectedFirstIsDevelopment());
+            if (mode == 0) {
+                f.backend->setModelProvider([] { return QStringLiteral("FLEX-6300"); });
+                QVERIFY(model.selectedFirstVersion().isEmpty());
+                QVERIFY(!model.prepareSelectedFirstInstallation(f.model.controlSession())); QVERIFY(downloads.sent.empty());
+            } else {
+                QCOMPARE(model.selectedFirstVersion(), QStringLiteral("0.1.0-test"));
+                QVERIFY(model.prepareSelectedFirstInstallation(f.model.controlSession()));
+                if (mode == 3) { f.backend->setModelProvider([] { return QStringLiteral("FLEX-6300"); }); }
+                if (mode == 3) {
+                    downloads.last->complete(200, fixture.firstFiles()[0]);
+                    QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged);
+                } else {
+                    for (const auto& file : fixture.firstFiles()) { downloads.last->complete(200, file); }
+                    if (mode == 2) { QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::PackageRejected); }
+                    else {
+                        QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+                        const auto preview = model.preview(); QVERIFY(preview);
+                        QCOMPARE(preview->candidateDigest, QString::fromLatin1(package->candidateDigest().toHex()));
+                    }
+                }
+            }
+            QCOMPARE(writes, 0); QVERIFY(f.transfers.isEmpty()); QVERIFY(f.network.sent.empty());
+        }
+    }
+    void catalogueSavedDownloadReusesExactIdentityOrRejectsChangedJournal()
+    {
+        for (bool changed : {false, true}) {
+            Fixture f; AetherPDTest::PackageFixture fixture;
+            const auto package = fixture.loadFirst(); const auto prepared = prepareFirst(); QVERIFY(package); QVERIFY(prepared);
+            QByteArray journal = prepared->approvedPlan();
+            AetherPDTest::Network downloads;
+            int loads = 0, writes = 0;
+            std::function<void(const QString&)> loaded;
+            auto services = journalServices();
+            services.read = [&](const QByteArray& key) {
+                if (key != fixture.trust.candidateKey) { return AetherPDInstallationJournal::Read{}; }
+                return AetherPDInstallationJournal::Read{AetherPDInstallationJournal::State::Pending, journal};
+            };
+            services.load = [&](const QString&, const QString&, QObject*, auto done) { ++loads; loaded = std::move(done); };
+            services.retainPending = [](const QByteArray&, const QByteArray&) { return true; };
+            const AetherPDReleaseCatalogue catalogue({{"FLEX-8600", firstRelease(fixture), package->candidateDigest(), false}});
+            AetherPDInstallationModel model(f.model, {}, {}, nullptr,
+                [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
+                [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services, catalogue);
+            QVERIFY(model.selectedFirstVersion().isEmpty()); QVERIFY(!model.firstInstallationAvailable());
+            QVERIFY(model.savedFirstInstallationAvailable()); QVERIFY(model.savedFirstPreparationAvailable());
+            QVERIFY(model.prepareSelectedSavedFirstInstallation(f.model.controlSession()));
+            QCOMPARE(loads, 0); QCOMPARE(model.state(), AetherPDInstallationModel::State::Downloading);
+            if (changed) { const auto replacement = prepareFirst(); QVERIFY(replacement); journal = replacement->approvedPlan(); }
+            for (const auto& file : fixture.firstFiles()) { downloads.last->complete(200, file); }
+            if (changed) {
+                QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::PackageRejected); QCOMPARE(loads, 0);
+            } else {
+                QCOMPARE(loads, 1); loaded(QString(64, u'a'));
+                QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+                QVERIFY(model.preparingSavedInstallation()); QCOMPARE(model.approvedPlan(), prepared->approvedPlan());
+                const auto preview = model.preview(); QVERIFY(preview); QCOMPARE(preview->nativeName, prepared->nativeName());
+                QCOMPARE(preview->carrierName, prepared->carrierName());
+            }
+            QCOMPARE(writes, 0); QVERIFY(f.transfers.isEmpty()); QVERIFY(f.network.sent.empty());
+        }
+    }
+    void retainedPublisherRecoversSavedAttemptAfterNewPublisherIsOffered()
+    {
+        Fixture f; AetherPDTest::PackageFixture fixture;
+        const auto package = fixture.loadFirst(); const auto prepared = prepareFirst(); QVERIFY(package); QVERIFY(prepared);
+        const auto oldRelease = firstRelease(fixture);
+        auto newer = oldRelease; newer.version = "0.2.0"; newer.trust.publisherKey = QByteArray(32, 'n');
+        const AetherPDReleaseCatalogue catalogue({{"FLEX-8600", oldRelease, package->candidateDigest(), false},
+            {"FLEX-8600", newer, QByteArray(32, 'n'), true}});
+        int writes = 0; QString loadedAttempt;
+        std::function<void(const QString&)> loaded;
+        auto services = journalServices();
+        services.read = [&](const QByteArray& key) {
+            return key == fixture.trust.candidateKey
+                ? AetherPDInstallationJournal::Read{AetherPDInstallationJournal::State::Pending, prepared->approvedPlan()}
+                : AetherPDInstallationJournal::Read{AetherPDInstallationJournal::State::Invalid, {}};
+        };
+        services.load = [&](const QString&, const QString& attempt, QObject*, auto done) { loadedAttempt = attempt; loaded = std::move(done); };
+        services.monitor = [&] { return std::make_unique<AetherPDInstallationMonitor>(f.network, [&] { return f.clock; }); };
+        AetherPDInstallationModel model(f.model, {}, {}, nullptr, {},
+            [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services, catalogue);
+        QCOMPARE(model.selectedFirstVersion(), QStringLiteral("0.2.0")); QVERIFY(!model.firstInstallationAvailable());
+        QVERIFY(model.savedFirstInstallationAvailable()); QVERIFY(model.recoverSelectedFirstInstallation(f.model.controlSession()));
+        const auto preview = model.preview(); QVERIFY(preview);
+        QCOMPARE(preview->candidateKey, QString::fromLatin1(fixture.trust.candidateKey.toHex()));
+        QCOMPARE(preview->plan, prepared->approvedPlan()); QCOMPARE(loadedAttempt, preview->planDigest);
+        loaded(QString(64, u'a'));
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::CheckingInstallation);
+        QCOMPARE(f.network.sent.size(), std::size_t(1));
+        QCOMPARE(f.network.sent[0].method, QNetworkAccessManager::GetOperation);
+        QCOMPARE(f.network.sent[0].request.url().path(), QStringLiteral("/v1/aetherpd/installation"));
+        QCOMPARE(writes, 0); QVERIFY(f.transfers.isEmpty()); model.cancel();
+    }
+    void uncertainFirstJournalCannotStartAnotherIdentity()
+    {
+        Fixture f; AetherPDTest::PackageFixture fixture;
+        const auto package = fixture.loadFirst(); QVERIFY(package);
+        const AetherPDReleaseCatalogue catalogue({{"FLEX-8600", firstRelease(fixture), package->candidateDigest(), true}});
+        for (const auto state : {AetherPDInstallationJournal::State::Invalid, AetherPDInstallationJournal::State::Unavailable,
+                                AetherPDInstallationJournal::State::Pending, AetherPDInstallationJournal::State::CredentialSaved}) {
+            auto services = journalServices(); services.read = [state](const QByteArray&) { return AetherPDInstallationJournal::Read{state, {}}; };
+            AetherPDTest::Network downloads;
+            AetherPDInstallationModel model(f.model, {}, {}, nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
+                [](const QString&, const QString&, const QString&, QObject*, auto) {}, services, catalogue);
+            QVERIFY(!model.firstInstallationAvailable());
+            QVERIFY(!model.prepareSelectedFirstInstallation(f.model.controlSession())); QVERIFY(downloads.sent.empty());
+        }
+    }
     void firstDownloadNeedsExactPlanApprovalBeforeCredentialOrRadioEffects()
     {
         Fixture f; AetherPDTest::PackageFixture fixture;

@@ -1,6 +1,7 @@
 #include "AetherPDPackageFixture.h"
 #include "AetherPDTestTransport.h"
 #include "core/AetherPDPackageDownload.h"
+#include "core/AetherPDReleaseCatalogue.h"
 #include <QtTest>
 #include <memory>
 
@@ -32,6 +33,40 @@ AetherPDFirstRelease firstRelease(const AetherPDTest::PackageFixture& fixture)
 class DownloadTest : public QObject {
     Q_OBJECT
 private slots:
+    void catalogueBindsExactModelFirmwareAndRetainsRecoveryReleases()
+    {
+        AetherPDTest::PackageFixture fixture;
+        const auto package = fixture.loadFirst(); QVERIFY(package);
+        AetherPDReleaseCatalogue::First offered{"FLEX-8600", firstRelease(fixture), package->candidateDigest(), true};
+        auto retained = offered; retained.offer = false; retained.candidateDigest = QByteArray(32, 'r');
+        const AetherPDReleaseCatalogue catalogue({retained, offered}); QVERIFY(catalogue.valid());
+        QVERIFY(catalogue.first("FLEX-8600", "4.3.16.42034"));
+        QVERIFY(!catalogue.first("FLEX-6300", "4.3.16.42034"));
+        QVERIFY(!catalogue.first("FLEX-8600", "4.3.16.42035"));
+        QCOMPARE(catalogue.retainedFirst("FLEX-8600", "4.3.16.42034").size(), std::size_t(2));
+        const AetherPDReleaseCatalogue oldOnly({retained}); QVERIFY(oldOnly.valid());
+        QVERIFY(!oldOnly.first("FLEX-8600", "4.3.16.42034"));
+        QCOMPARE(oldOnly.retainedFirst("FLEX-8600", "4.3.16.42034").size(), std::size_t(1));
+        QVERIFY(AetherPDReleaseCatalogue::shipping().valid()); QVERIFY(AetherPDReleaseCatalogue::shipping().empty());
+    }
+    void invalidOrAmbiguousCatalogueSelectsNothing()
+    {
+        AetherPDTest::PackageFixture fixture;
+        const AetherPDReleaseCatalogue::First entry{"FLEX-8600", firstRelease(fixture), QByteArray(32, 'c'), true};
+        for (int mode = 0; mode < 7; ++mode) {
+            std::vector<AetherPDReleaseCatalogue::First> entries{entry};
+            if (mode == 0) { entries[0].model.clear(); }
+            if (mode == 1) { entries[0].candidateDigest = QByteArray(32, '\0'); }
+            if (mode == 2) { entries[0].release.profile = 2; }
+            if (mode == 3) { entries.push_back(entry); }
+            if (mode == 4) { entries.push_back(entry); entries[1].candidateDigest = QByteArray(32, 'd'); }
+            if (mode == 5) { entries[0].release.trust.publisherKey.clear(); }
+            if (mode == 6) { entries.resize(33, entry); }
+            const AetherPDReleaseCatalogue catalogue(entries); QVERIFY(!catalogue.valid());
+            QVERIFY(!catalogue.first("FLEX-8600", "4.3.16.42034"));
+            QVERIFY(catalogue.retainedFirst("FLEX-8600", "4.3.16.42034").empty());
+        }
+    }
     void completeFirstReleaseHasNoPredecessorAndClearsOtherResult()
     {
         AetherPDTest::PackageFixture fixture;

@@ -1,0 +1,448 @@
+{
+  "created_utc": "2026-11-17T20:00:35.026802+00:00",
+  "status": "first_install_catalogue_UI_and_retained_saved_identity_download_recovery_component_qualified_no_shipping_entries",
+  "source_base": "361acc6a0a90ed71bbd51a9cd102a70ed6de9640",
+  "changed_source_sha256": {
+    "CMakeLists.txt": "cf517779cd377f1d99ea3ec28b697fb94e21575dd912d59a7485a3b19650e908",
+    "docs/user/docs/tailscale-remote-access.md": "23d273fa139c19590d0d1374e4ebd0e9057267056f24b676d8a45628a1083e61",
+    "src/core/AetherPDPackage.cpp": "a2c6ade63c8424a19cafc1b783f5c89ec6a26640b95beb2aa7aac0a5d86d7e94",
+    "src/core/AetherPDPackage.h": "785994406fc6c00a8e992bfd3f5e803b48996b3637c60830e3626709dc4bcd07",
+    "src/gui/AetherPDDialog.cpp": "7490722b37f08d8bfd1d4320d72d48d9f70922ce7a32922475d37e7852caf168",
+    "src/models/AetherPDInstallationModel.cpp": "b0f4df6f975186d3d967082fae629b474e3cfa21f3a687b4b20c6201687b4c10",
+    "src/models/AetherPDInstallationModel.h": "895a1e6f8dec20c6d9aeb7c7ce186ce6eb56c40c8e81845fe992b52ae0298df1",
+    "tests/aetherpd_installation_coordinator_test.cpp": "d4d6c13c8b76095cccd0a6ac1ffbeb6eb8c82fab8928fa8b153f39c8ee740dff",
+    "tests/aetherpd_installation_dialog_test.cpp": "25accd6a54a9941c259e5bd133b8e47458d86c3f0311195b3b783a4f2b9e670d",
+    "tests/aetherpd_package_download_test.cpp": "59d199fc5c0ae22327ec5f44000d9bf84d7c0a180db3f694d292442835f069ca",
+    "tools/pd-waveform/README.md": "e1fe547a0bf1c9abd989c5ade0d8aacb51852aa6f5dae830f2c7fc8b2a6a12c7",
+    "src/core/AetherPDReleaseCatalogue.cpp": "d94e11854ba29aafb83af4f5acdd9103a47736994217d3852319b869720c7fc3",
+    "src/core/AetherPDReleaseCatalogue.h": "d4af4ea69e0838cdab886a5ceb21de8df1a5b67af374c16c1fb64e5850405180"
+  },
+  "production_ready": false,
+  "implementation": [
+    "Application-owned immutable bounded catalogue, compiled into the desktop; exact backend model/firmware identity, independent pins/publisher keys and signed-release BLAKE2b digest. No runtime trust import from files, environment or adjacent manifests.",
+    "At most one fresh-install offer per exact target; invalid or ambiguous catalogues select nothing. Shipping catalogue intentionally empty because complete RF/reboot/hardware/independent release gates remain open.",
+    "Ordinary first-install UI invokes pinned HTTPS download then signed-package and catalogue-digest binding before fresh identity/plan preparation. Exact-plan approval still precedes credential persistence and upload.",
+    "Retained non-offered entries support saved-attempt lookup across publisher changes; the existing token, exact plan, identity and package names are reused. The saved journal must stay unchanged while downloading and loading credentials.",
+    "Unreadable, invalid, pending or credential-saved local records refuse another fresh identity through the normal UI. Wrong model, firmware or release, changed control session or changed hardware identity refuse preparation.",
+    "Development first selection remains a separate compiled development fallback only when the catalogue is empty, with an explicit unqualified banner. It is not production distribution."
+  ],
+  "verification": {
+    "registered_CTest": [
+      "aetherpd_package_download_test",
+      "aetherpd_package_test",
+      "aetherpd_installation_coordinator_test",
+      "aetherpd_installation_dialog_test"
+    ],
+    "CTest_passed": true,
+    "desktop_build_passed": true,
+    "built_desktop_sha256": "9155567f73aeb84c6ae9b1cef7e112f7ccf60eaef6dcb91dbf1a25960d4d59b5",
+    "sanitizers": {
+      "address": true,
+      "undefined": true,
+      "leaks": true,
+      "QtTest_pass_counts_including_init_cleanup": {
+        "aetherpd_package_download_test": 34,
+        "aetherpd_installation_coordinator_test": 44,
+        "aetherpd_installation_dialog_test": 13
+      },
+      "scope": "Package/downloader/catalogue/installation-model/coordinator/dialog and their three test translation units instrumented; remaining engine/libraries uninstrumented."
+    },
+    "mutations": [
+      {
+        "name": "exact-model",
+        "source": "src/core/AetherPDReleaseCatalogue.cpp",
+        "test": "catalogueBindsExactModelFirmwareAndRetainsRecoveryReleases",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "ambiguous-offer",
+        "source": "src/core/AetherPDReleaseCatalogue.cpp",
+        "test": "invalidOrAmbiguousCatalogueSelectsNothing",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "release-identity",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "catalogueFirstDownloadMatchesHardwareAndSignedRelease",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "uncertain-journal",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "uncertainFirstJournalCannotStartAnotherIdentity",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "saved-snapshot",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "catalogueSavedDownloadReusesExactIdentityOrRejectsChangedJournal",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "original-hardware",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "catalogueFirstDownloadMatchesHardwareAndSignedRelease",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "retained-publisher",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "retainedPublisherRecoversSavedAttemptAfterNewPublisherIsOffered",
+        "exit": 1,
+        "detected": true
+      }
+    ],
+    "static_checks": [
+      {
+        "command": [
+          "python3",
+          "tools/check_test_registration.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_engine_boundary.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_qsettings.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_capability_records.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_command_plane.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/docs/gen_reference.py",
+          "--check"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "node",
+          "tools/docs/test_log_rules.mjs"
+        ],
+        "exit": 0
+      }
+    ],
+    "npm_ci_and_docs_build_passed": true,
+    "rendered_UI_preview_inspected": true
+  },
+  "preserved_failures": [
+    "Initial core compile used the legacy ModelCapabilities accessor for a backend identity field; compile failed. Corrected to backendCapabilities(), with successful complete rebuilds and tests preserved."
+  ],
+  "test_scope": "Injected catalogue entries, HTTP replies, settings and credential providers; no socket listener, real publisher-key rotation, live HTTPS exchange or radio installation. Screenshot is an injected-catalogue test in a development build, not a shipping-release offer.",
+  "installed_candidate_unchanged": {
+    "release_blake2b_256": "c3d2522512f66f32025747661335e82eb8a3f572fe9888acf7af8380f9a43404",
+    "runtime_source": "aa5a33fc5de78ad5a9d6e5d48ba2e9c697e03bf0"
+  },
+  "radio_changes": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "limitations": [
+    "No qualified shipping catalogue entries or public package hosting, and no live catalogue-download installation result.",
+    "Upgrade catalogue selection and authenticated predecessor inventory remain incomplete; existing update UI still uses the separately compiled development selector.",
+    "First-install verifier/protocol remains ARM64/profile1 only. Actual FLEX6300/Linux2.6 adapter and teammate hardware qualification remain open.",
+    "Whole-radio software-reboot hang remains failed/unresolved; no unattended retry. RF remains held pending operator steering on deferred SWR diagnosis; finite correction pair does not establish repeatability.",
+    "Remaining full P1-P10 natural alignment/cold-start, final process/credential/platform/power-loss, sustained RF/stockAPD and independent release gates remain open."
+  ],
+  "evidence": [
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/core-build.log.gz",
+      "bytes": 5094,
+      "sha256": "64385bf0fb4d2a3e98eb6f66f640bc982915164167b716bef3d2be252637cd85"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/build-retry.log.gz",
+      "bytes": 944,
+      "sha256": "12bbea2a2d91d88c488e5fbcbdb0615ed7b447fc0236c728f56302299d9ff146"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/build-final.log.gz",
+      "bytes": 1401,
+      "sha256": "23195c00176fed81856ae82e619a5d15e902db816cd3451312d00096bcf1438b"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/build-includes.log.gz",
+      "bytes": 1432,
+      "sha256": "4e1c3a4e5288cf7926adaf6f1929d5bc7aa454438cee435eb9b55dbeade00a2e"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/rotation-test-build.log.gz",
+      "bytes": 191,
+      "sha256": "6578271ff24e592ba1b827316ff66a21fcbfb98b10bdbdd59e01dd87e81f783e"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/ctest-initial.log.gz",
+      "bytes": 289,
+      "sha256": "017c96e9e4a629164a8523a1a359cb2b130462735ad3f7c81d837ec9b9150209"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/ctest-final.log.gz",
+      "bytes": 289,
+      "sha256": "493fb1211d925bc28411d6a58cbcb9add34e138e58332113b9f4295e06b9e419"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/ctest-includes.log.gz",
+      "bytes": 287,
+      "sha256": "bcd17b946b3ab7c352d0f2895bf5b0e351620889568863b3db437aaa560dca0b"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/build-sanitized.py.gz",
+      "bytes": 806,
+      "sha256": "483173e6dd47e5cf067a504c42d354b1c7515792972404f355d59b807104410f"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/sanitizer-build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/sanitizer-build-final.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/sanitizer-build-includes.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/mutations.py.gz",
+      "bytes": 1524,
+      "sha256": "7f9d9832b2904d898d4b76edba7e1237a2ba660317ecccaa1f76b0bf386b9c0f"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/mutations.json.gz",
+      "bytes": 406,
+      "sha256": "003516b0e8ba705220d6c4bd1fd9fecf331e40943799b10cebf7eee5668f5395"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/mutations.log.gz",
+      "bytes": 388,
+      "sha256": "df836e51bde0b6abd37f1783f4b160cbff109606a3af832b3d2914cd6e6ad9e1"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/static-checks.json.gz",
+      "bytes": 206,
+      "sha256": "a4132a01932a169bf110146d95faa72343542c6e43796d0654144fa180d16465"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/docs-ci.log.gz",
+      "bytes": 432,
+      "sha256": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/docs-build.log.gz",
+      "bytes": 502,
+      "sha256": "629d9031f549caf8708d2c93e3059b6c7862847277290c94bd785c586ed22d21"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/UI-preview.log.gz",
+      "bytes": 468,
+      "sha256": "01a818f506cef76b606a9fbbb1c971f74c7f805b94f02f0bf34d75611ef241fb"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/source.patch.gz",
+      "bytes": 10441,
+      "sha256": "a58dffdc9cc1e588d51496388ae87fdf82fe58e5da8562f4689a1766df99db61"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/save.py.gz",
+      "bytes": 3331,
+      "sha256": "be7175fd1e13f48da8a5363c6451c2b0c5c91031c633601f525908350d287cb5"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/checkpoint.py.gz",
+      "bytes": 1740,
+      "sha256": "c895821c2924b72b2e8cbcabd9e11ab08733fa852234e40b7ee81024cd52c4da"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/static-0.log.gz",
+      "bytes": 84,
+      "sha256": "959aabfbd3d45f87cb2ec81df039d1fbcef4475b1bcb95d47c0062da2dbdaca0"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/static-1.log.gz",
+      "bytes": 1833,
+      "sha256": "7aee4f008e6d649ef0c0b8c6b055ed453e09c5dfbcdae5cc1090597efdf2c8b3"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/static-2.log.gz",
+      "bytes": 61,
+      "sha256": "728dd27d76fe734e7d7a16cff56653c933c5ec7b012556d4be14ae8ebcef1097"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/static-3.log.gz",
+      "bytes": 91,
+      "sha256": "3dda96147739d2b9e41612b411aa76324f0fbba662fac6d3adc0c277b9bc9a8b"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/static-4.log.gz",
+      "bytes": 122,
+      "sha256": "0bdc84dd79a68fc0cc7307fc4bdf40a0723476cc84495da44951b2711bfc555f"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/static-5.log.gz",
+      "bytes": 65,
+      "sha256": "ef92287bd4b4371e61725f5f14d31857b596ee10d4c72b03f49375736759e4fb"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/static-6.log.gz",
+      "bytes": 404,
+      "sha256": "43f4c5c7fd6b846e8154366f1a038d47bf4af3b8a0763182f14aeb38d4dce887"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/aetherpd_package_download_test-asan-final.log.gz",
+      "bytes": 680,
+      "sha256": "c75e0e215ee5733a7e79ce993d43e9f8abeed26261522245e23470899abac955"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/aetherpd_installation_coordinator_test-asan-final.log.gz",
+      "bytes": 2378,
+      "sha256": "19beaafcfb5badedc4de0ef66f52ac70cb2c2109c8f7271b3bb0e06758f6f4c8"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/aetherpd_installation_dialog_test-asan-final.log.gz",
+      "bytes": 920,
+      "sha256": "c4e165550dbdbee26d99d95d839ec9daaf0ee97d1fe1b4d816436610592e8ed8"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/exact-model/build.log.gz",
+      "bytes": 281,
+      "sha256": "7e4cefdbf321fde7cc2b9fc643c6ded78493ad1972a447dd30d02d102cbf7b52"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/exact-model/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/exact-model/test.log.gz",
+      "bytes": 444,
+      "sha256": "3c02c80a5ed00fdd8d904954cf34821c1fade0bf03e3f673b5a94937ec8de18b"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/ambiguous-offer/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/ambiguous-offer/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/ambiguous-offer/test.log.gz",
+      "bytes": 405,
+      "sha256": "a82e7ccbb478b11912f76d6a2706fc0c70657e67d6d0a71e60be2d13143d4be4"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/release-identity/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/release-identity/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/release-identity/test.log.gz",
+      "bytes": 595,
+      "sha256": "7df49d1efe435a25493e5412a8e0a03fc9b1a781cc6876f44a7b3c605a99c1dd"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/uncertain-journal/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/uncertain-journal/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/uncertain-journal/test.log.gz",
+      "bytes": 520,
+      "sha256": "04caf5c2b2a1f3877ca00b8d64815ed02a88c58d04ad57552d44c18b2358e746"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/saved-snapshot/build.log.gz",
+      "bytes": 339,
+      "sha256": "fd6f34158c10d6fcf0f9059e6296efafc64a276505182ea8b8ec85a4c78b1544"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/saved-snapshot/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/saved-snapshot/test.log.gz",
+      "bytes": 596,
+      "sha256": "8e315b34886e43d3f3cb9af29da86e41045a42505756c683250a8a8aefa474e3"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/original-hardware/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/original-hardware/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/original-hardware/test.log.gz",
+      "bytes": 603,
+      "sha256": "cfbd7b11b4faa4e7c3c8e2434ed7bc3390e52e0d5ea333e01700798d67114148"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/retained-publisher/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/retained-publisher/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/retained-publisher/test.log.gz",
+      "bytes": 532,
+      "sha256": "08c56d8b9039c5189bd4605e0b0a57f6bee5db5886611c45ec1ddc827c87dedb"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-catalogue/catalogue-first-preview.png",
+      "bytes": 141690,
+      "sha256": "c65c671d52632f8e4ed2acd7dd6e7d7e36806cc50349773fcc64f1d38f38628c"
+    }
+  ]
+}

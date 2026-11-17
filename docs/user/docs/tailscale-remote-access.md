@@ -797,10 +797,14 @@ The fixed helpers clear obsolete failed AetherPD session records after checking
 that they are empty. Running sessions and uncertain cleanup remain protected.
 This housekeeping is included in the installation plan shown before approval.
 
-**Prepare first installation** is a separate development-build action for a
-radio without a managed AetherPD installation. It is dimmed unless the build
-contains a first-install package for the connected firmware, and while a saved
-installation needs checking. Preparation verifies that package and creates a
+**Prepare first installation** is for a radio without a managed AetherPD
+installation. It selects a package from the application's trusted catalogue for
+the exact radio model and firmware. The catalogue currently contains no qualified
+shipping releases, so ordinary builds keep this control dimmed. Development
+builds can carry a separate local package, explicitly marked as unqualified.
+The control also stays dimmed while a saved installation needs checking or its
+record cannot be read. Preparation downloads the catalogue's pinned HTTPS files,
+or verifies the development build's local package, and creates a
 plan without writing credentials or uploading. The plan identifies itself as
 **First installation** and lists the temporary host-root installation step, new
 local identity and fixed helpers that remain installed. **Approve first
@@ -818,8 +822,11 @@ control is dimmed unless the build trusts the saved attempt's publisher and the
 record matches the connected radio and firmware. It does not repeat the
 installation or establish that temporary helpers were removed.
 
-If an attempt is still pending, **Prepare saved attempt** loads its existing
-keychain credential and rebuilds the exact saved plan from the trusted package.
+If an attempt is still pending, **Prepare saved attempt** verifies its trusted
+package, then loads its existing keychain credential and rebuilds the exact
+saved plan. Catalogue packages are downloaded again; the public plan must remain
+unchanged during that download. An older catalogue entry can remain trusted for
+this recovery without being offered for a fresh installation.
 It preserves the installation identity and package names. **Approve saved
 attempt** explicitly authorizes another delivery of that plan. Preparation alone
 makes no radio changes, and a completed or changed local record cannot be used

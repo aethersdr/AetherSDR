@@ -23,8 +23,12 @@ for both upgrades and fresh installations. Fresh installation uses a separate
 publisher key and eight-file layout with no predecessor. Its model prepares a
 new identity and target plan only after package verification; exact-plan approval
 still precedes credential persistence and radio uploads. The download path is
-component-tested with injected HTTP and credential providers. Shipping catalogue
-entries, public package hosting and ordinary release selection remain incomplete;
+component-tested with injected HTTP and credential providers. The first-install
+UI selects exact model/firmware catalogue entries and can download retained
+entries to rebuild a saved attempt without changing its identity. The compiled
+shipping catalogue is empty until release qualification; invalid or ambiguous
+catalogues and unreadable installation records admit no fresh installation.
+Qualified shipping entries, public hosting and upgrade catalogue selection remain incomplete;
 the existing local development selectors are not production distribution.
 
 Build from the repository root with Zig installed:

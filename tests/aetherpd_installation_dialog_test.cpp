@@ -37,6 +37,7 @@ public:
 };
 struct Fixture {
     AetherPDTest::Network network;
+    AetherPDTest::Network downloads;
     Channel channel;
     Carrier carrier;
     RadioModel radio;
@@ -49,7 +50,7 @@ struct Fixture {
     std::function<void(const QString&)> credential;
     QPointer<Coordinator> job;
     std::unique_ptr<AetherPDDialog> dialog;
-    Fixture()
+    explicit Fixture(AetherPDReleaseCatalogue catalogue = AetherPDReleaseCatalogue{})
     {
         RadioSetupControlTestAccess::peer(radio, QHostAddress(QStringLiteral("192.168.50.100")));
         RadioSetupControlTestAccess::identity(radio, "fixture-8600", "4.3.16.42034");
@@ -60,11 +61,12 @@ struct Fixture {
             [this](RadioModel& model) {
                 auto result = std::make_unique<Coordinator>(model, network, channel, carrier, [] { return qint64(0); });
                 job = result.get(); return result;
-            }, nullptr, AetherPDInstallationModel::DownloadFactory{}, [this](const QString&, const QString&, const QString&, QObject*, auto done) {
+            }, nullptr, [this] { return std::make_unique<AetherPDPackageDownload>(downloads); }, [this](const QString&, const QString&, const QString&, QObject*, auto done) {
                 ++writes; saved = std::move(done);
             }, AetherPDInstallationModel::RecoveryServices{
                 [](const QByteArray&, const QByteArray&, bool) { return true; },
                 [this](const QByteArray& key) {
+                    if (journalPlan.isEmpty()) { return AetherPDInstallationJournal::Read{AetherPDInstallationJournal::State::Missing, {}}; }
                     if (key != files.trust.candidateKey) { return AetherPDInstallationJournal::Read{AetherPDInstallationJournal::State::Invalid, {}}; }
                     return AetherPDInstallationJournal::Read{journalPlan.isEmpty() ? AetherPDInstallationJournal::State::Missing
                         : AetherPDInstallationJournal::State::Pending, journalPlan};
@@ -72,7 +74,7 @@ struct Fixture {
                 [this](const QString&, const QString&, QObject*, auto done) { ++recoveryLoads; recoveryLoaded = std::move(done); },
                 [this] { return std::make_unique<AetherPDInstallationMonitor>(network, [] { return qint64(0); }); },
                 [this](const QByteArray& plan, const QByteArray& key) { return plan == journalPlan && key == files.trust.candidateKey; }
-            });
+            }, std::move(catalogue));
         RadioSetupControlTestAccess::installationModel(radio, std::move(model));
         open();
     }
@@ -96,6 +98,31 @@ struct Fixture {
 class InstallationDialogTest : public QObject {
     Q_OBJECT
 private slots:
+    void catalogueFirstButtonDownloadsThenShowsExactApproval()
+    {
+        AetherPDTest::PackageFixture files;
+        const auto package = files.loadFirst(); QVERIFY(package);
+        AetherPDFirstRelease release;
+        release.version = "0.1.0-catalogue"; release.firmware = "4.3.16.42034"; release.profile = 1; release.trust = files.firstTrust();
+        const auto names = AetherPDFirstPackage::fileNames();
+        for (std::size_t i = 0; i < names.size(); ++i) { release.urls[i] = QUrl(QStringLiteral("https://example.invalid/first/") + names[i]); }
+        Fixture f(AetherPDReleaseCatalogue({{"FLEX-8600", release, package->candidateDigest(), true}}));
+        QVERIFY(f.button("pdInstallFirst")->isEnabled());
+        QVERIFY(f.preview().contains("application's release catalogue"));
+        QTest::mouseClick(f.button("pdInstallFirst"), Qt::LeftButton);
+        QCOMPARE(f.model().state(), AetherPDInstallationModel::State::Downloading);
+        QVERIFY(!f.button("pdInstallApprove")->isEnabled()); QCOMPARE(f.writes, 0); QVERIFY(f.network.sent.empty());
+        for (const auto& file : files.firstFiles()) { f.downloads.last->complete(200, file); }
+        QTRY_COMPARE(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QVERIFY(f.preview().contains(QString::fromLatin1(package->candidateDigest().toHex())));
+        QCOMPARE(f.button("pdInstallApprove")->text(), QStringLiteral("Approve first installation"));
+        QCOMPARE(f.writes, 0); QCOMPARE(f.loads, 0); QVERIFY(!f.job); QVERIFY(f.network.sent.empty());
+        const QString screenshot = QString::fromLocal8Bit(qgetenv("AETHERPD_CATALOGUE_PANEL_SCREENSHOT"));
+        if (!screenshot.isEmpty()) { f.dialog->show(); QCoreApplication::processEvents(); QVERIFY(f.dialog->grab().save(screenshot)); }
+        QTest::mouseClick(f.button("pdInstallApprove"), Qt::LeftButton);
+        QCOMPARE(f.writes, 1); QVERIFY(!f.job); QVERIFY(f.network.sent.empty());
+        f.saved(false); QVERIFY(f.state().contains("no installation was started"));
+    }
     void savedAttemptReviewPreservesIdentityAndRequiresApproval()
     {
         Fixture f; const auto package = f.files.loadFirst(); QVERIFY(package);

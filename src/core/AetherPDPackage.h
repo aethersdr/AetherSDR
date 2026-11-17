@@ -62,6 +62,7 @@ public:
     // Secret generation/storage belongs to the caller; only its hash enters ZIP.
     std::optional<Uploads> prepare(const QString& serial, const QByteArray& tokenHash,
                                   const QString& hostname, const QByteArray& installationId) const;
+    QByteArray candidateDigest() const;
 private:
     AetherPDFirstPackage() = default;
     Files m_files;
