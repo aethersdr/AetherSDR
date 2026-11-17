@@ -213,6 +213,9 @@ public:
     [[nodiscard]] int lnaAutoOffsetDb() const noexcept { return m_lnaAutoOffsetDb; }
     [[nodiscard]] int lnaBaselineDb() const noexcept { return m_lnaGainDb; }
     [[nodiscard]] int lnaEffectiveDb() const noexcept;
+    // dBFS -> dBm offset for the pan and S-meter: m_dbRef's, plus the dB the
+    // receiver is held below lnaEffectiveDb() while transmitting.
+    [[nodiscard]] double displayOffsetDb() const noexcept;
     [[nodiscard]] bool autoRfGainEnabled() const noexcept { return m_autoRfGainEnabled; }
 
     // Max attenuation the loop may apply, in dB below the operator's baseline. The
@@ -366,6 +369,7 @@ private:
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
     friend struct Hl2TxRouteTestAccess;
+    friend struct Hl2RxGainDuringTxTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
     // A rising edge is offered to RadioModel as TransmitDelta::radioPtt only when

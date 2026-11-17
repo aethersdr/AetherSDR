@@ -241,6 +241,8 @@ public:
     [[nodiscard]] int pureSignalTxGainDb() const noexcept { return m_psTxGainDb; }
     // The 0x0a bank as the round robin sends it right now. Public for tests.
     [[nodiscard]] Cc currentGainBank() const noexcept;
+    // The 0x0e bank as the round robin sends it right now. Public for tests.
+    [[nodiscard]] Cc currentTxLnaGainBank() const noexcept { return m_ccTxLnaGain; }
     // Select the companion filter board's band filter (MetisProtocol kOc* bits).
     // Latched into the config register, which rides bank A of every EP2 frame, so the
     // relays follow within one frame (~2.6 ms at 48 kHz). Not also queued as a
@@ -811,6 +813,8 @@ private:
     // object's thread (event-driven), so no synchronization is needed today.
     Cc m_ccConfig{};
     Cc m_ccGain{};
+    // 0x0e: ccTxLnaGain() of the current receive gain and PureSignal state.
+    Cc m_ccTxLnaGain{};
     // One NCO bank per receiver, indexed by DDC. Sized to effectiveNumRx() at
     // start(); every entry is a distinct register (0x02..0x08), so this is an
     // array of banks rather than one bank with a varying payload.
@@ -821,6 +825,8 @@ private:
     int m_psTxGainDb = -12;
     // DDC2 and DDC3 onto the TX NCO when PureSignal is on. Idempotent.
     void applyPureSignalNcos();
+    // Rebuild m_ccTxLnaGain; queue it once when it changed. Idempotent.
+    void applyTxLnaGain();
     // setReceiverCount()'s body once the new count is in m_params.
     void relayoutReceivers(int before);
     // Queue (or re-queue) the twenty-four VersaClock banks, and remove any

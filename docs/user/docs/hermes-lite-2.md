@@ -88,6 +88,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 - Dragging the dBm scale or clicking its strip adjusts the display locally without an unsupported-command notice. The automatic noise-floor adjustment remains available.
 - **Auto RF gain** adjusts the LNA from the measured wideband headroom, in 6 dB steps, across the full range. If it cannot arm, the reason appears on the checkbox and in a notice.
 - CAT `L RF` / `l RF` (rigctl) drive the panadapter RF gain across the same range; 0.5 is +18 dB.
+- **While you transmit**, the HL2 holds its LNA at no more than **+8 dB**, so its own transmitter does not overdrive the receiver and draw a forest of false lines on the panadapter. The radio switches it at the transmit/receive edge and returns your RF gain on unkey. A gain already at or below +8 dB is not changed, and the dBm scale follows the gain in force. With PureSignal on, PureSignal sets the gain while you transmit instead. There is no setting for this.
 
 > **Upgrading from an older version:**
 > - A band you have not visited comes up at **+20 dB** LNA on every profile. A profile that carried a stuck lower value comes up hotter (26 dB in the reported case) on unvisited bands. Visited bands keep their gain.

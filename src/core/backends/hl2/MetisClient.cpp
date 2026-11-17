@@ -142,6 +142,7 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte,
                           m_params.ditherBit, m_params.randomBit);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
+    m_ccTxLnaGain = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
     m_ccRxFreq.assign(1, ccRxFreq(0, m_params.rxFrequencyHz));
     m_ccTxFreq = ccTxFreq(m_params.rxFrequencyHz);
     m_ccTxDrive = ccTxDrive(0, false);
@@ -318,6 +319,7 @@ bool MetisClient::start(const Params& params)
     // A new session's first config bank may move the radio's filter relays.
     m_lastConfigBus2Sent = kConfigBus2Unknown;
     m_ccGain = ccRxGain(m_params.lnaGainDb);
+    m_ccTxLnaGain = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
     // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
     // brings each slice up. The BANK COUNT is fixed here and never re-derived
     // per packet, so the round robin and the EP6 demux cannot disagree about how
@@ -855,6 +857,7 @@ void MetisClient::setPureSignal(bool enabled)
     else
         applyPureSignalNcos();
     queueOneShotIfRunning(currentGainBank());
+    applyTxLnaGain();
 }
 
 void MetisClient::setPureSignalTxGainDb(int db)
@@ -1094,6 +1097,17 @@ void MetisClient::setLnaGainDb(int db)
 {
     m_params.lnaGainDb = db;
     m_ccGain = ccRxGain(db);
+    applyTxLnaGain();
+}
+
+void MetisClient::applyTxLnaGain()
+{
+    const Cc bank = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
+    if (bank == m_ccTxLnaGain)
+        return;
+    m_ccTxLnaGain = bank;
+    // Ahead of the rotation, so a key straight after a gain change finds it.
+    queueOneShotIfRunning(bank);
 }
 
 void MetisClient::setBandFilter(int ocFilterByte)
@@ -1796,7 +1810,6 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
     if (!m_txIqContext.permitsDispatch(TxCoordinator::monotonicMs())) {
         abandonTxIq();
     }
-    static const Cc kCcAdc = ccAdcAssign();
     // Cleared here rather than only on confirmation: a packet built and then
     // thrown away (a test, or a caller that inspects the bytes) must not leave
     // a stale claim that some later packet carried the request.
@@ -1843,7 +1856,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         // next EP2 frame instead of timing out unseen.
         m_requestOnBuiltPacket = true;
     } else {
-        // The rotation is every receiver's NCO, then gain, then ADC assignment:
+        // The rotation is every receiver's NCO, then gain, then 0x0e (ADC
+        // assignment / TX LNA gain):
         // numRx + 2 slots. Each receiver's NCO is RE-ASSERTED rather than sent
         // once, for the same reason the config bank is — a radio that resets or
         // reconnects mid-session must not be left with a stale NCO on the
@@ -1862,7 +1876,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         else if (slot == nFreq)
             b = currentGainBank();
         else if (slot == nFreq + 1)
-            b = kCcAdc;
+            b = m_ccTxLnaGain;
         else
             b = txDriveBank();
         ++m_roundRobin;
