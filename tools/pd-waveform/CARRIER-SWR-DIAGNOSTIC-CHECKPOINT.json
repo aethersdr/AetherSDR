@@ -1,0 +1,229 @@
+{
+  "updated_utc": "2026-11-17T12:57:17.248294+00:00",
+  "status": "one_bounded_USB_carrier_captured_cleanup_receipt_failed_then_stop_confirmed_1W_preparation_blocked",
+  "production_ready": false,
+  "source_base_commit": "359cadd227df9c1ce56d80b9c72a2520323809fd",
+  "desktop_source": "5e401e00df955b5f406c28ce181dea9d81588f55",
+  "radio_runtime_source": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+  "release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+  "scope": "Bench diagnosis only; no product source changes, installation, reboot, guard threshold change or automatic RF retry.",
+  "RF_attempt": {
+    "positive_GUI_key_actions": 1,
+    "nominal_power_setting_W": 5,
+    "configured_maximum_W": 10,
+    "frequency_Hz": 7150000,
+    "transmit_antenna": "ANT1",
+    "feedback_port": "RX_A",
+    "mode": "USB software PTT, correction bypassed",
+    "FDX": false,
+    "source": {
+      "rate": 48000,
+      "channels": 2,
+      "duration_s": 4,
+      "tone_Hz": 710,
+      "peak_amplitude": 0.83,
+      "sha256": "171f3344f057cdc0fa6893aa8f10ba564a0ad1c81dea73e68e54e4e7524c9d1b"
+    },
+    "GUI_stop_after_intent_s": 2.052625513,
+    "normal_GUI_stop": {
+      "key": "ptt",
+      "ok": true,
+      "state": "off",
+      "stopped": true
+    },
+    "guard_begin": {
+      "cleanup_due_ms": "8357039",
+      "remaining_ms": 8999,
+      "state": "observing",
+      "test_id": "82954e36b9a5dc4adbbb9835cca8412f"
+    },
+    "guard_ended": {
+      "cleanup_due_ms": "8357039",
+      "remaining_ms": 0,
+      "state": "ended",
+      "test_id": "82954e36b9a5dc4adbbb9835cca8412f"
+    },
+    "capture_manifest": {
+      "capture_id": "469f808136fe1552c4cb27774e9e45f8",
+      "center_hz": 7150000,
+      "chunk_samples": 512,
+      "correcting": false,
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 975494996,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "first_receive_ns": "8348744298507",
+      "format": "f32le-iq-v1",
+      "keyed": true,
+      "last_receive_ns": "8349085280588",
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "sample_count": 16384,
+      "sample_rate_hz": 48000,
+      "source": {
+        "generation": "12",
+        "kind": "local_dax_iq",
+        "stream_id": 536870912
+      }
+    },
+    "IQ_bytes": 131072,
+    "IQ_sha256": "04def0a533e96209d88d1480e1b84c9c3e20fa846b028589d064ddc76e8ba623",
+    "audio_route_cleanup": {
+      "errors": [],
+      "module": 536870916,
+      "original_edges": [
+        {
+          "output_serial": 68,
+          "input_serial": 5981
+        },
+        {
+          "output_serial": 69,
+          "input_serial": 5982
+        }
+      ],
+      "original_links_restored": true,
+      "final_capture_edges": [
+        {
+          "output_serial": 68,
+          "input_serial": 5981
+        },
+        {
+          "output_serial": 69,
+          "input_serial": 5982
+        }
+      ],
+      "module_removed": true
+    }
+  },
+  "cleanup_result": {
+    "original_harness_passed": false,
+    "original_failure": "{'body': {'available': False, 'state': 'unavailable'}, 'complete': False, 'http_status': 503}",
+    "radio_idle_at_original_cleanup": true,
+    "later_service_HTTP_status": 200,
+    "later_service_state": "stopped",
+    "interpretation": "The harness treated an immediate transient HTTP503 unavailable response as terminal. Later HTTP200 stopped confirms cleanup separately; the original failed result is retained."
+  },
+  "one_W_preparation": {
+    "RF_key_actions": 0,
+    "preparation_completed": false,
+    "power_changed_to_1W": false,
+    "reason": "Ordinary Measurement power control remained disabled until preparation timed out. No guard bypass or retry performed.",
+    "last_observed_state": "PD mode, nominal5W/max10W, AetherPD running with correction disabled; measurement idle and no active source; radio not transmitting. This is the prior observation, not a fresh live check during checkpointing.",
+    "next_step": "Identify the ownership/recovery/installation condition holding the existing power guard before further RF."
+  },
+  "limits": [
+    "A single USB carrier does not establish why the PD calibration noise preamble produced elevated native SWR, or qualify corrected RF on this desktop.",
+    "The native fixed guard supports owner-matched software-PTT unkey, not TUNE. Its9s cleanup deadline is not an exact physical RF-off timing measurement.",
+    "LP-100A peak-held readings are bench references; forward/net configuration and impedance/phase coherence are unvalidated. Product integration remains deferred.",
+    "No calibrated RX ADC headroom or FPGA-to-process absolute latency established.",
+    "Natural scheduling-slip/cold-bypass causes, final graph fault tests, speech/endurance/stockAPD, actual6300 and release gates remain open."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/USB-idle-receive.f32le.gz": "d3afd09333e12733fa344888e7265331ce984603abd99eee60fe4a47cfff445b",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench-api.cpp.gz": "f4225a70a05f00cd4855f6b8d9c4aadd13ec501f283b3d150ceacf57acfcaad6",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench_audio_route.py.gz": "1fd4dae3343aeb96e7b50037cfd5aa03c475d68e9389ccf819202be6786849cc",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench_audio_route_native.py.gz": "9979f839cb27de42e294aff616d5b42a70df480aa0b1b3ba2834e0318c6de1fe",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench_meter_monitor.py.gz": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/capture.json.gz": "9505d33bbbded54e74dd88090f31afdbbfa10c7f45aaf20fc0bdafbe83329d44",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/carrier-IQ.f32le.gz": "247979e36728c381d715b6d3bd97cb1509d9340909930d9335dfc774c503db79",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/carrier-source.f32le.gz": "44bee250c5a6484ecf2cb8d488f748a17aca67b2201224db614eb4aaf305fa3b",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/driver.log.gz": "291dfbf0f5bb62a26481c3c3362b83b0ada60c7d6a2166b1fa08db60d1e744be",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/events.json.gz": "6268aa158926d7293012aa64a197e7a728e4dcfc098d58bed1cf5838fdf6bb4d",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/helper-provenance.json.gz": "0b2d063bfa9d7c85d2833168cab6e6369010f2afa8a5b7900d5f5f964ca46b63",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/independent-meters.json.gz": "f69b311b05ea388f828f64a65067d49ad2e2ba9cfe00e12a18cae92c5e6371a5",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/instance.json.gz": "481c9c86d822f4b5923e92694253302b101b4e30f53ce5c99f1d3af0d3967e14",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/lp100a-readings.jsonl.gz": "9fb400152a84782b842c29824ba483b4f62a6be09236cb558747fcf491a985fe",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/outcome.json.gz": "814c46b2afad6e2a021f6c1bf0075c91c8444cbf88be76748528c1da6a594f79",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/player.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/post-run-stop-confirmation.json.gz": "36c8abdb36d9d12934d15de6b73042bccdc92392495f7534e96c1c9d1bbb1321",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-lp100a-readings.jsonl.gz": "9f55531ea06e8e7a01b16e5591ccea6165eb78b58c351a503d43ee50aea20b50",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-result.json.gz": "6ad5a3cd43d458efe5eb2b76ff579c1626b40e620e1ee034a61e1e56ab43e3d4",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-route-cleanup.json.gz": "162f9195498fd2d669a99d11f5daf98480698f81644adf88a11b2b7e43f5f190",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-route-cleanup.state.json.gz": "cbdd802a80963c0a5a70b7de5d4eed7a77015992cf59b8fb909f1bae64a777dd",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-route-cleanup.watchdog.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight.log.gz": "4a7b27393703b9df3020723323756510c2993a7513780a2f0c35631058ba4284",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight.py.gz": "39c55054cbbcb098e0e051b8e90378ace127a19820515dfa2b12c9557fb25763",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/prepare.log.gz": "abd902d453bc113891c9e9cae1952f92c78a3f539dfcc4b5a650d918bce32b9e",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/prepare.py.gz": "bb386bdaee316e3ce8405500767cca4d8117c21e2db10350e618cb02c46328cc",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/prepared.json.gz": "fd75ec9515a657d611d85a214c008b7006c555fd65566092d7bcd8e75e1b80f8",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/route-cleanup.json.gz": "162f9195498fd2d669a99d11f5daf98480698f81644adf88a11b2b7e43f5f190",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/route-cleanup.state.json.gz": "d83fea844048a8881f1e1204e0a72f92f65ede2a87e6cf0d40a4b8ee6de35260",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/route-cleanup.watchdog.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/run-once.py.gz": "64d209a90410b4f1f2ba18d26d795d2dbeb2467efcc712a00b09e345c69a6104",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench-api.cpp.gz": "f4225a70a05f00cd4855f6b8d9c4aadd13ec501f283b3d150ceacf57acfcaad6",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench_audio_route.py.gz": "9d77b2b074815aaed5b4bf4c72995e5b8bf29f96cac2bc9759b4900fe1b37c43",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench_audio_route_native.py.gz": "9979f839cb27de42e294aff616d5b42a70df480aa0b1b3ba2834e0318c6de1fe",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench_meter_monitor.py.gz": "e4808591853ff6362386f499c822a4ff5927ed4c78d51d831845ac03746bd066",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/helper-provenance.json.gz": "0b2d063bfa9d7c85d2833168cab6e6369010f2afa8a5b7900d5f5f964ca46b63",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/instance.json.gz": "481c9c86d822f4b5923e92694253302b101b4e30f53ce5c99f1d3af0d3967e14",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/meter-watch.py.gz": "8d2633283c4bd0d2b7fb5ccf510a2c463edc2acbb26202a65910ebd05c737082",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/preflight.py.gz": "957ad96707aeebce97efdb4e3b29514a0f245157201e1251924e42d2d6555218",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/prepare.log.gz": "582162d5bfe563e1531ba211c395514893df06ae2dce31d9105ffc2587e2fb41",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/prepare.py.gz": "d6366ea38dfb6745ce88d43499c176205375e35c0976a8735bd6e5db9fa6c427",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/run-once.py.gz": "f9de6c08a1f486c7986fa2e3a26cd13144aef9d694de643c15c68b46e3b64618"
+  },
+  "uncompressed_evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/USB-idle-receive.f32le.gz": "6943e4de56e36c43191500dc54b799170d4df6bec5fda7006132dbf1c712ee4a",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench-api.cpp.gz": "ee7797cf289edd923affdd184848fda6861cba0a0494f0e908feec87f150d885",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench-observer.py.gz": "673389ba5983b01bc6e44920b8136a97c9091ca465da976236fc04372da3df47",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench_audio_route.py.gz": "291efeb88ab0a113222a7013e69427a0c0a9c0d9d7ac0f20279b267eefb25e20",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench_audio_route_native.py.gz": "38091b8089b8e383ff6c87a3e03c3f28f397da09e28acc5ccfd25a5db11d0dbd",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/bench_meter_monitor.py.gz": "109dde953f37c5e3657b86101afd4568ee7461b4b013d0129c065921086fba9d",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/capture.json.gz": "93b32e8b002ce11924171ad2c56042b4bf2cf49f4a5cc05f1c6c142bcb24cfcf",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/carrier-IQ.f32le.gz": "04def0a533e96209d88d1480e1b84c9c3e20fa846b028589d064ddc76e8ba623",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/carrier-source.f32le.gz": "171f3344f057cdc0fa6893aa8f10ba564a0ad1c81dea73e68e54e4e7524c9d1b",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/driver.log.gz": "ef9c2e67fc51c1868bbb10d2411eccc16f29faa734ce5818cedb52645f15dad1",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/events.json.gz": "5b5110ca354218025a3db90d21d542226ee3d3b701b64a886616c7cfb2b63a71",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/helper-provenance.json.gz": "22708d5dd29274d0ff13b3a810993f6772bfcd64b11f0f49a82457e16811b191",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/independent-meters.json.gz": "3a57df184936c7bdef9d486b0581da654e4c93e319c02f945487cdc3e9a99faa",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/instance.json.gz": "9c60010d1109914fb972d300c81418543c5023e48a1beec3220de35ce35d515f",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/lp100a-readings.jsonl.gz": "4c4a050f127be81984ad6070ba2292af494efad1b8d8fa212129d1fe18be0bbe",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/lp100a-stderr.log.gz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/lp100a_reader.py.gz": "d9ebfb5285bbf2666b6af61d0830486af5824e13b0d221a11fd38160a682036c",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/meter-watch.py.gz": "5a05c208715c67ce5f9a284419cd195c323f699381f0a48d79e0452cb8fc40d4",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/outcome.json.gz": "ce0af1e37a13a2da29ca8ea17da5e3c91274bfabe0ae3d67fe20f8f65a544431",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/player.log.gz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/post-run-stop-confirmation.json.gz": "2fd4bd62b87cd9f0e61c297161dd25af4dc0f7752dfd664956603ec5797e7f64",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-lp100a-readings.jsonl.gz": "674216e1c7295e073f7ab0bdae1356d9b257fedebffcda587904c8ed248131e6",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-lp100a-stderr.log.gz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-result.json.gz": "a50535400f201b539e36ea8072244a744d93fa4a3c648544c4f3ac5375779d3f",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-route-cleanup.json.gz": "464ddfafc21453f32e89b363a2037ec51f09a8f30c23d0a6d8a57d70de866fa0",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-route-cleanup.state.json.gz": "1c6c002552423b6d3af5499f53bdf5f9f777520e2252b84005952734a519e7f0",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight-route-cleanup.watchdog.log.gz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight.log.gz": "7126dbccf17ea918f9618b93b1b4efdc040edee456bdcb3927e3dfd8b42c28da",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/preflight.py.gz": "85d4ebe193dc5f8da07d7210dcffdb0540c2b61e91412100d4718751225ef8bc",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/prepare.log.gz": "8f40713af9a58ac703e2cfc904d8bbe74d5af40d7c8b67c937b83ffb3adbd1dc",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/prepare.py.gz": "e9baaa7a709afff0819cdde201e6445242aa9185051abb5180c9b29ad31a8313",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/prepared.json.gz": "64d72882da462296c33952cb04af0e57c29d1107c956d65c2aecc54054886b0e",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/route-cleanup.json.gz": "464ddfafc21453f32e89b363a2037ec51f09a8f30c23d0a6d8a57d70de866fa0",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/route-cleanup.state.json.gz": "c2392302e193e242ee5fe23aa752d007763bc01085abeb60c997c05ccb789731",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/route-cleanup.watchdog.log.gz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-5W-01/run-once.py.gz": "a7a0c880bcf6264e7da7ed74de86bf82bf6dbf79636e1d1da1c8ae7299fe7579",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench-api.cpp.gz": "ee7797cf289edd923affdd184848fda6861cba0a0494f0e908feec87f150d885",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench-observer.py.gz": "673389ba5983b01bc6e44920b8136a97c9091ca465da976236fc04372da3df47",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench_audio_route.py.gz": "f81c2cecd02d2d1b271564054bde1479c93cd62373e3fdea09726f8a97e0608e",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench_audio_route_native.py.gz": "38091b8089b8e383ff6c87a3e03c3f28f397da09e28acc5ccfd25a5db11d0dbd",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/bench_meter_monitor.py.gz": "5baf91029ab5a2b38812f87f662e062d9d9bca490a79eea82a762cc9731a0639",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/helper-provenance.json.gz": "22708d5dd29274d0ff13b3a810993f6772bfcd64b11f0f49a82457e16811b191",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/instance.json.gz": "9c60010d1109914fb972d300c81418543c5023e48a1beec3220de35ce35d515f",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/lp100a_reader.py.gz": "d9ebfb5285bbf2666b6af61d0830486af5824e13b0d221a11fd38160a682036c",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/meter-watch.py.gz": "8089c876296849251d53884873e020a8bee9891256cf879bfc119aac0571d073",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/preflight.py.gz": "dcc1b90f822c66a496da1c71bf9e77d06554a0c55e07655436fe4f5bc5e8b37a",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/prepare.log.gz": "7ca22dc2e93b6033f99a6bca34a41c1c6d2f9d2080f9b3f2629b647785f0903a",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/prepare.py.gz": "cebae5a0efa02cafa8ff561fd798e274c1cd4ddfa683a3db11f1ea8950b0c7b4",
+    "tools/pd-waveform/evidence/20261117-carrier-swr-diagnostic/carrier-swr-diagnostic-1W-01/run-once.py.gz": "4a1046b875d3ea069e572a3089b6cefea346b22d33944d711a6f4dda7f63a32e"
+  }
+}
