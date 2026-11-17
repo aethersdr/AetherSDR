@@ -1,0 +1,423 @@
+{
+  "updated_utc": "2026-11-17T09:16:43.318058+00:00",
+  "status": "complete_development_runtime_reproduced_in_two_paths_and_actual_signed_pair_disk_admission_offline_qualified_not_installed",
+  "source_commit": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+  "source_manifest_sha256": "05d40d4fb03311832e39bc301d52683f42a33476ad86904991ab3e0360067370",
+  "development_publisher_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+  "architectures": {
+    "armv7": {
+      "changed_payload_members": [
+        "flex-tailnet-shim"
+      ],
+      "unchanged_DSP_and_all_fixed_helpers": true,
+      "unchanged_boot_update_and_units": true,
+      "release_bytes": 9398712,
+      "release_blake2b_256": "343dfdd37713df58c79f97fafd827d8ac179e3317efd3acf5be5613aba42aa82",
+      "shim_sha256": "02c21c86471f873a5d341908a5f58d210f46f22245b39aa31f0d43e0ebe35e72",
+      "expanded_bytes": 22771134
+    },
+    "arm64": {
+      "changed_payload_members": [
+        "flex-tailnet-shim"
+      ],
+      "unchanged_DSP_and_all_fixed_helpers": true,
+      "unchanged_boot_update_and_units": true,
+      "release_bytes": 9069023,
+      "release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+      "shim_sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10",
+      "expanded_bytes": 22446042
+    }
+  },
+  "toolchains": {
+    "go": "go version go1.27.1 linux/amd64",
+    "go_binary_sha256": "30969f97169d7f43fe6a085873d75613adc21e30818a8c61d95bd27275df4624",
+    "zig": "0.17.1",
+    "zig_binary_sha256": "d0245d88934e8e0f377d955b395f8483db0f45d3efd8711d5709afc439989bc5",
+    "python": "3.14.10",
+    "zlib": "1.4"
+  },
+  "separate_source_output_and_compiler_caches": true,
+  "same_host_and_toolchains": true,
+  "native_signature_profile_and_digest_verifiers_passed": true,
+  "development_signing_seed_in_files": false,
+  "installed": false,
+  "production_ready": false,
+  "radio_actions": [
+    "Read-only existing desktop identity/radio state and authenticated installation/Stopped receipts"
+  ],
+  "RF_commands": [],
+  "radio_credential_mutations": [],
+  "disk_admission": {
+    "signed_previous_source": "7b7f6a15126f6fecbef55aeed3a746b1aa7b2ecd",
+    "signed_candidate_source": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "measurements": [
+      {
+        "arch": "armv7",
+        "block_bytes": 1024,
+        "units_on_separate_filesystem": false,
+        "native_admission": {
+          "volumes": [
+            {
+              "required_bytes": 28040192,
+              "required_inodes": 90
+            }
+          ],
+          "accepted": true
+        },
+        "boundary_checks_passed": [
+          "exact byte",
+          "one byte short refused",
+          "exact inode",
+          "one inode short refused"
+        ],
+        "worker_size_charged": 524288,
+        "permanent_management_files_allocated_bytes": 249856,
+        "compacted_generation_allocated_bytes": 9749504,
+        "private_state_allowance_bytes": 1048576,
+        "metadata_directory_allowance_bytes": 65536,
+        "fresh_install_steady_budget_bytes": 10421248,
+        "successor_steady_budget_bytes": 11113472,
+        "successor_peak_including_native_reserve_bytes": 39153664,
+        "remaining_from_41_decimal_MB": 1846336,
+        "remaining_from_41_MiB": 3837952,
+        "additional_one_release_upload_fits_41_decimal_MB": false
+      },
+      {
+        "arch": "armv7",
+        "block_bytes": 1024,
+        "units_on_separate_filesystem": true,
+        "native_admission": {
+          "volumes": [
+            {
+              "required_bytes": 28017664,
+              "required_inodes": 68
+            },
+            {
+              "required_bytes": 8411136,
+              "required_inodes": 22
+            }
+          ],
+          "accepted": true
+        },
+        "boundary_checks_passed": [
+          "exact byte",
+          "one byte short refused",
+          "exact inode",
+          "one inode short refused"
+        ],
+        "worker_size_charged": 524288,
+        "permanent_management_files_allocated_bytes": 249856,
+        "compacted_generation_allocated_bytes": 9749504,
+        "private_state_allowance_bytes": 1048576,
+        "metadata_directory_allowance_bytes": 65536,
+        "fresh_install_steady_budget_bytes": 10421248,
+        "successor_steady_budget_bytes": 11113472,
+        "successor_peak_including_native_reserve_bytes": 39131136,
+        "remaining_from_41_decimal_MB": 1868864,
+        "remaining_from_41_MiB": 3860480,
+        "additional_one_release_upload_fits_41_decimal_MB": false
+      },
+      {
+        "arch": "armv7",
+        "block_bytes": 4096,
+        "units_on_separate_filesystem": false,
+        "native_admission": {
+          "volumes": [
+            {
+              "required_bytes": 28307456,
+              "required_inodes": 90
+            }
+          ],
+          "accepted": true
+        },
+        "boundary_checks_passed": [
+          "exact byte",
+          "one byte short refused",
+          "exact inode",
+          "one inode short refused"
+        ],
+        "worker_size_charged": 524288,
+        "permanent_management_files_allocated_bytes": 266240,
+        "compacted_generation_allocated_bytes": 9797632,
+        "private_state_allowance_bytes": 1048576,
+        "metadata_directory_allowance_bytes": 262144,
+        "fresh_install_steady_budget_bytes": 10637312,
+        "successor_steady_budget_bytes": 11374592,
+        "successor_peak_including_native_reserve_bytes": 39682048,
+        "remaining_from_41_decimal_MB": 1317952,
+        "remaining_from_41_MiB": 3309568,
+        "additional_one_release_upload_fits_41_decimal_MB": false
+      },
+      {
+        "arch": "armv7",
+        "block_bytes": 4096,
+        "units_on_separate_filesystem": true,
+        "native_admission": {
+          "volumes": [
+            {
+              "required_bytes": 28217344,
+              "required_inodes": 68
+            },
+            {
+              "required_bytes": 8478720,
+              "required_inodes": 22
+            }
+          ],
+          "accepted": true
+        },
+        "boundary_checks_passed": [
+          "exact byte",
+          "one byte short refused",
+          "exact inode",
+          "one inode short refused"
+        ],
+        "worker_size_charged": 524288,
+        "permanent_management_files_allocated_bytes": 266240,
+        "compacted_generation_allocated_bytes": 9797632,
+        "private_state_allowance_bytes": 1048576,
+        "metadata_directory_allowance_bytes": 262144,
+        "fresh_install_steady_budget_bytes": 10637312,
+        "successor_steady_budget_bytes": 11374592,
+        "successor_peak_including_native_reserve_bytes": 39591936,
+        "remaining_from_41_decimal_MB": 1408064,
+        "remaining_from_41_MiB": 3399680,
+        "additional_one_release_upload_fits_41_decimal_MB": false
+      },
+      {
+        "arch": "arm64",
+        "block_bytes": 1024,
+        "units_on_separate_filesystem": false,
+        "native_admission": {
+          "volumes": [
+            {
+              "required_bytes": 27378688,
+              "required_inodes": 90
+            }
+          ],
+          "accepted": true
+        },
+        "boundary_checks_passed": [
+          "exact byte",
+          "one byte short refused",
+          "exact inode",
+          "one inode short refused"
+        ],
+        "worker_size_charged": 524288,
+        "permanent_management_files_allocated_bytes": 248832,
+        "compacted_generation_allocated_bytes": 9403392,
+        "private_state_allowance_bytes": 1048576,
+        "metadata_directory_allowance_bytes": 65536,
+        "fresh_install_steady_budget_bytes": 10106880,
+        "successor_steady_budget_bytes": 10766336,
+        "successor_peak_including_native_reserve_bytes": 38145024,
+        "remaining_from_41_decimal_MB": 2854976,
+        "remaining_from_41_MiB": 4846592,
+        "additional_one_release_upload_fits_41_decimal_MB": false
+      },
+      {
+        "arch": "arm64",
+        "block_bytes": 1024,
+        "units_on_separate_filesystem": true,
+        "native_admission": {
+          "volumes": [
+            {
+              "required_bytes": 27356160,
+              "required_inodes": 68
+            },
+            {
+              "required_bytes": 8411136,
+              "required_inodes": 22
+            }
+          ],
+          "accepted": true
+        },
+        "boundary_checks_passed": [
+          "exact byte",
+          "one byte short refused",
+          "exact inode",
+          "one inode short refused"
+        ],
+        "worker_size_charged": 524288,
+        "permanent_management_files_allocated_bytes": 248832,
+        "compacted_generation_allocated_bytes": 9403392,
+        "private_state_allowance_bytes": 1048576,
+        "metadata_directory_allowance_bytes": 65536,
+        "fresh_install_steady_budget_bytes": 10106880,
+        "successor_steady_budget_bytes": 10766336,
+        "successor_peak_including_native_reserve_bytes": 38122496,
+        "remaining_from_41_decimal_MB": 2877504,
+        "remaining_from_41_MiB": 4869120,
+        "additional_one_release_upload_fits_41_decimal_MB": false
+      },
+      {
+        "arch": "arm64",
+        "block_bytes": 4096,
+        "units_on_separate_filesystem": false,
+        "native_admission": {
+          "volumes": [
+            {
+              "required_bytes": 27643904,
+              "required_inodes": 90
+            }
+          ],
+          "accepted": true
+        },
+        "boundary_checks_passed": [
+          "exact byte",
+          "one byte short refused",
+          "exact inode",
+          "one inode short refused"
+        ],
+        "worker_size_charged": 524288,
+        "permanent_management_files_allocated_bytes": 266240,
+        "compacted_generation_allocated_bytes": 9449472,
+        "private_state_allowance_bytes": 1048576,
+        "metadata_directory_allowance_bytes": 262144,
+        "fresh_install_steady_budget_bytes": 10321920,
+        "successor_steady_budget_bytes": 11026432,
+        "successor_peak_including_native_reserve_bytes": 38670336,
+        "remaining_from_41_decimal_MB": 2329664,
+        "remaining_from_41_MiB": 4321280,
+        "additional_one_release_upload_fits_41_decimal_MB": false
+      },
+      {
+        "arch": "arm64",
+        "block_bytes": 4096,
+        "units_on_separate_filesystem": true,
+        "native_admission": {
+          "volumes": [
+            {
+              "required_bytes": 27553792,
+              "required_inodes": 68
+            },
+            {
+              "required_bytes": 8478720,
+              "required_inodes": 22
+            }
+          ],
+          "accepted": true
+        },
+        "boundary_checks_passed": [
+          "exact byte",
+          "one byte short refused",
+          "exact inode",
+          "one inode short refused"
+        ],
+        "worker_size_charged": 524288,
+        "permanent_management_files_allocated_bytes": 266240,
+        "compacted_generation_allocated_bytes": 9449472,
+        "private_state_allowance_bytes": 1048576,
+        "metadata_directory_allowance_bytes": 262144,
+        "fresh_install_steady_budget_bytes": 10321920,
+        "successor_steady_budget_bytes": 11026432,
+        "successor_peak_including_native_reserve_bytes": 38580224,
+        "remaining_from_41_decimal_MB": 2419776,
+        "remaining_from_41_MiB": 4411392,
+        "additional_one_release_upload_fits_41_decimal_MB": false
+      }
+    ],
+    "boundary_checks": 32,
+    "maximum_ARMv7_peak_modelled_bytes": 39682048,
+    "headroom_against_reported_41_decimal_MB": 1317952,
+    "extra_full_release_upload_archive_fits_reported_41_decimal_MB": false
+  },
+  "limitations": [
+    "Previous and candidate source IDs above are authenticated under the same retained development publisher. Capacity is simulated, not a live storage measurement.",
+    "Native admission is measured; steady-state storage is calculated from file inventory plus explicit allowances.",
+    "The two newly written active identity files and fixed temporary siblings are capped at256KiB of file data; the1MiB overall state allowance and directory/legacy/log storage assumptions are not whole-volume enforcement or measured6300 usage.",
+    "41 MB is a rounded user report: both decimal and binary interpretations are reported, not a current free-space measurement.",
+    "No FLEX-6000 first-install adapter/carrier archive size is qualified.",
+    "Full signed inputs must remain on tmpfs. Firmware-retained upload archives or other persistent copies are additional.",
+    "Fresh first-install transient capsule/native-waveform overhead needs the final 6000 adapter; these results qualify upgrade admission only.",
+    "Development publisher only; no production catalogue/key distribution or independent release review is claimed.",
+    "Both complete releases were reproduced on the same workstation/toolchains. No independent builder or actual6300 execution is claimed.",
+    "Managed owner continuity, pending sign-in and lost-enrollment-reply recovery are implemented and offline qualified. Live credential workflows and independent owner-token-loss recovery/rotation remain open.",
+    "Byte-identical DSP/fixed helpers do not qualify the new installed process graph, reboot behavior, RF repeatability, natural alignment cause, native SWR disagreement or final stock-APD comparison.",
+    "The final6300 legacy first-install adapter, actual single-SCU feedback path and Linux2.6 service integration remain unqualified."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/run.py.gz": "20b527fa9286f8959d372de32a03756633a17d5bbf7bf4858ec19d7621bb401b",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/report.json.gz": "dcff1e75effee34d4abbc2f664312c2589fc0ae07707a27c96dd403e309d0bf3",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/source-sha256.json.gz": "3db6095d12a1ce150eb9cf8c89297a38cfaf4b683d9610cd3327a1edbdaa0145",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/comparison.json.gz": "cb1ffdf132e10a1ab935c614fd5b5ba484e844e64fbfc5be33e0df5c895fa8e1",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/build-budget.py.gz": "2e9c2c8ed77c66c4870c0ae924c9cfc4fa7459477dbbe300ca685b15b7d80410",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/measure-budget.py.gz": "a8f7df0efaa5ea9de9d0799997ef233170413f5816e1593360f564b2689fedc8",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/budget_probe.c.gz": "0d024c724e4853b223d7cc2642615f13d721ff082024325eba8564329dd6b980",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/budget-command.json.gz": "adba2baf1a334d13de23eb29ceb8a15b8d866c7e130f357593227910d2281c83",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/budget-report.json.gz": "6e7b4e142f349029e7e10db18c6e8ab25e9166f4c21a841d16b63da464d6680d",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/installed-before.json.gz": "fe37c7f0162ea9b004cd0d19945d5995f36b4aa5dea045af336359cd71f95e9b",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/artifact-receipt.json.gz": "fcde5d8d9ecd1176490dd920b3e64bcc58fcad9138e294d3e49c1064ae64531f",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/save-evidence.py.gz": "a6392902b7512c8f8fd63fb8c435fca64c38a4bc382971efc18de2ae2d37f4a2",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/short-armv7.log.gz": "d5e7f3655320dc935e0774a8f194024c97e90411d862a019169cbb82b4ed723c",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/short/armv7/manifest.json.gz": "a7247c42bf180581b3d74bcde8369911fe6a5b16b007e5e6f4ccdfc58beeb99b",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/short-arm64.log.gz": "6d50a34bb9142f21f101100d45232457e6e6223a2dc8f742001572876bbb7529",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/short/arm64/manifest.json.gz": "f14fe87f952be2f251a53094092da5159a34915d9971e3d144a121c5a9f31ca2",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/second-distinct-long-source-path-armv7.log.gz": "bb21e26bc7ad396315eb3757edde60acd6201f53ed7d5423c334d4dda48f8a93",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/second-distinct-long-source-path/armv7/manifest.json.gz": "a7247c42bf180581b3d74bcde8369911fe6a5b16b007e5e6f4ccdfc58beeb99b",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/second-distinct-long-source-path-arm64.log.gz": "9e418786fdcf06f59c42f4d9efafd6ab5715edc18821925628d118d023da0ded",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/second-distinct-long-source-path/arm64/manifest.json.gz": "f14fe87f952be2f251a53094092da5159a34915d9971e3d144a121c5a9f31ca2",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/upgrade--build.py.gz": "0b0548e6f6e06fa9616cd8be6491a4d60a30135d212a0a691228cf6c66efc51b",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/upgrade--report.json.gz": "016a31ec1c7bb31b24b0343e918802e83527633ab77cfdcf8d9b3123cdc42ab2",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/upgrade--short.log.gz": "dffc3ae19a3974f4726159da7402f6ba7ba6fcff108d6f8b078273be6a8ef075",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/upgrade--second-distinct-long-source-path.log.gz": "5a8056b8f7db2dfea4dfd8a225c61e5b904548639c727244233483c6197595bc",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/upgrade--short--manifest.json.gz": "abf54cef5abc99d60603b2dea981e75a67a62219c040179c671566c707bd9129",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/upgrade--short--selection.json.gz": "ad5b85623f31ad2d49eabea83a5cc8d2ed855f2eeeec13de9a7983d1063f430c",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/upgrade--second-distinct-long-source-path--manifest.json.gz": "abf54cef5abc99d60603b2dea981e75a67a62219c040179c671566c707bd9129",
+    "tools/pd-waveform/evidence/20261117-runtime-managed-owner-policy/upgrade--second-distinct-long-source-path--selection.json.gz": "ad5b85623f31ad2d49eabea83a5cc8d2ed855f2eeeec13de9a7983d1063f430c"
+  },
+  "ordinary_upgrade_distribution": {
+    "eight_files_identical": true,
+    "native_release_and_worker_verified": true,
+    "same_host_and_toolchains": true,
+    "selection": {
+      "version": "0.0.0-managedowner.7080de965",
+      "firmware": "4.3.16.42034",
+      "profile": 1,
+      "candidate_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "previous_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "files": {
+        "LICENSES": {
+          "size": 215346,
+          "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+        },
+        "candidate.release": {
+          "size": 9069023,
+          "sha256": "da01a56d6301aebd85b7bc1abfd85d46d28eecc7cdac6a1d6eed4ba1984b0382"
+        },
+        "pd-accept": {
+          "size": 29984,
+          "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+        },
+        "pd-carrier": {
+          "size": 6291616,
+          "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+        },
+        "pd-deliver": {
+          "size": 110472,
+          "sha256": "7ff519413c52cd99daa17671d40a3049575c3c5607668283efbbfba9742fbb2b"
+        },
+        "pd-send": {
+          "size": 42344,
+          "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+        },
+        "previous.release": {
+          "size": 9067612,
+          "sha256": "e68c0338d725d2f3934b4118e0cbc6d9360625b81eab7bd495d869e1ae720a62"
+        },
+        "worker.envelope": {
+          "size": 488768,
+          "sha256": "01e4ddaecbb9fec55f8a8c4369c94bf51adb51ed6d6a2b07c87d97b51b13a683"
+        }
+      }
+    }
+  },
+  "authenticated_artifact_backup": {
+    "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/20261117-managed-owner-runtime-7080de965/managed-owner-authenticated-artifacts.tar.gz",
+    "bytes": 59835504,
+    "sha256": "7a0ee30ef5e12788d7d8b2cd78f05e4253eef4e6bd007603fbf50fca66928649",
+    "allowlisted_files": 38,
+    "all_members_verified": true,
+    "source_commit": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "private_signing_seed_in_files": false
+  }
+}

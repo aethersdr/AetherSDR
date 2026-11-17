@@ -20,19 +20,19 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The complete ARMv7 development runtime from signed source `7b7f6a151` is
-9,398,272 bytes; its expanded executables/licenses occupy 22,771,134 bytes in RAM. Both ARMv7 and
+The complete ARMv7 development runtime from signed source `7080de965` is
+9,398,712 bytes; its expanded executables/licenses occupy 22,771,134 bytes in RAM. Both ARMv7 and
 ARM64 runtime releases reproduced byte for byte with pinned compilers on the
 same host. This does not qualify the first-install adapter or radio operation.
-See [current runtime qualification](./CREDENTIAL-PERSISTENCE-RUNTIME-QUALIFICATION.json).
+See [current runtime qualification](./MANAGED-OWNER-RUNTIME-QUALIFICATION.json).
 Earlier [restart qualification](./RESTART-RUNTIME-QUALIFICATION.md) remains
 bound to its original source. Only the Go shim payload member changed from
-the previously installed `c732d9af…` runtime; DSP and fixed helpers are byte-identical.
+the currently installed `938fc001…` runtime; DSP and fixed helpers are byte-identical.
 
-The calculated ARMv7 successor-upgrade budget is up to 39,673,856 bytes,
+The calculated ARMv7 successor-upgrade budget is up to 39,682,048 bytes,
 including the existing compacted installation, stated state/metadata allowances,
 transient files and the native 8 MiB reserve. Against a conservative decimal
-interpretation of the reported 41 MB free, only 1,326,144 bytes remain.
+interpretation of the reported 41 MB free, only 1,317,952 bytes remain.
 One extra full release archive does not fit. The final 6000 adapter must account
 for firmware-retained upload/extraction copies as well as signed input staging;
 that adapter and first-install high-water measurement remain unqualified.
