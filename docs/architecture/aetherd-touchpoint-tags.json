@@ -779,6 +779,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/SmartLinkAccountModel.h": {
+  "tag": "vendor(flex)",
+  "note": "Engine-owned SmartLink account model: the UI consumes account and discovery snapshots and typed connection requests. Credential jobs, broker transport and certificate storage stay behind the model; SmartLink remains a Flex-specific service.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/flex/SmartLinkClient.h": {
   "tag": "vendor(flex)",
   "note": "SmartLink WAN client: FlexRadio Auth0 login + TLS to smartlink.flexradio.com, WAN radio list/hole-punch.",
@@ -1472,6 +1478,12 @@
  "core/MiniPanSettings.h": {
   "tag": "ui-support",
   "note": "Client-side persistence for the mini-pan applet span; UI configuration, not radio-owned state or a daemon protocol resource.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TxOffDelaySettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side persistence for the phone-mode TX off delay (one nested AppSettings object, Principle V). The radio interlock stores key-on delays only, so there is no radio-owned value to defer to; no wire commands or vendor coupling.",
   "split": "",
   "confidence": "high"
  },

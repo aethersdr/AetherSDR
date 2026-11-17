@@ -918,6 +918,7 @@ private:
     // connection when either endpoint dies, and the old backend is destroyed before
     // the new one is built, so no duplicates. Guarded anyway - see the body.
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
+    void wirePureSignalApplet(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
     // Display panel → "Clone to all Pans". Copies every Display setting from
@@ -1573,6 +1574,17 @@ private:
     // spot id, so an "add" for a callsign already on this band updates the
     // existing spot instead of minting a duplicate (#2906).
     QHash<QString, int> m_n1mmSpotIdByKey;
+
+    // WSJT-X Rx/Tx frequency overlay (#4526). One live entry per WSJT-X
+    // instance id — a second instance on another slice/band gets its own
+    // marker, same per-instance keying #3595 established for spot placement.
+    // Swept by the existing passiveSpotExpiryTimer (MainWindow_Spots.cpp):
+    // an instance that stops reporting Status (exited without a clean Close,
+    // network dropped) has its marker cleared rather than sitting on a stale
+    // frequency forever.
+    QHash<QString, WsjtxStatus> m_wsjtxInstances;
+    QHash<QString, qint64> m_wsjtxInstanceLastSeenMs;
+    void rebuildWsjtxMarkers();
     // External controllers run on a dedicated worker thread (#502)
     QThread*             m_extCtrlThread{nullptr};
 #ifdef HAVE_SERIALPORT
