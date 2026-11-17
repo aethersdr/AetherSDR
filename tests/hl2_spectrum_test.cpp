@@ -348,7 +348,8 @@ void centreBinTests()
                 edge(true);
                 const Seen second = stream(spec, noise, n, keyedSig, 1.0, true, capFps, true);
                 edge(false);
-                const Seen rx = stream(spec, noise, n, tail, 1.0, true, capFps, true);
+                // 6 s: a wrong estimate left selected after a release would persist.
+                const Seen rx = stream(spec, noise, n, tail, 6.0, true, capFps, true);
                 std::fprintf(stderr, "  key-on latency %.4f s, cap %.0f fps%s: second key worst %.1f dB "
                              "(first %.1f, mean %.1f), after unkey worst %.1f dB; ramp frames left out %d + %d\n",
                              latencyS, capFps, dropOnEdges ? ", dropAverage on edges" : "",
@@ -362,9 +363,9 @@ void centreBinTests()
                       dropOnEdges ? "dropAverage() on T/R edges: the second key's frames stay at the floor"
                                   : "latency: every frame of the second key, from its edge on, stays at the floor");
                 check(centreOverFloorDb(second) < 3.0, "latency: the second key's mean centre is at the floor");
-                check(maxOf(rx.centreOverFloorDb) < 12.0,
+                check(maxOf(rx.centreOverFloorDb) < 12.0 && centreOverFloorDb(rx) < 3.0,
                       dropOnEdges ? "dropAverage() on T/R edges: receive after the unkey stays at the floor"
-                                  : "latency: receive after the second unkey stays at the floor");
+                                  : "latency: receive after the second unkey stays at the floor for 6 s");
             }
         }
     }
