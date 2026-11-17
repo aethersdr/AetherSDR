@@ -253,6 +253,15 @@ public:
         emit radio.radioTransmittingChanged(on);
     }
     static void txTimeoutTick(RadioModel& radio) { radio.onTxTimeoutTick(); }
+#ifdef HAVE_WEBSOCKETS
+    // What abortTciPtt()'s 1250 ms fail-closed barrier does when it ends with
+    // the radio idle: lift it and drain the deferred PTT input.
+    static void endTciUnkeyBarrier(TciServer& server)
+    {
+        server.m_tciPttCancelPending = false;
+        server.drainDeferredRoutingAndPtt();
+    }
+#endif
     static void stopEvidence(RadioModel& radio, const TxStopEvidence& evidence)
     {
         radio.acknowledgeIndependentTxStop(evidence);
@@ -2972,6 +2981,8 @@ void txTimeoutLatchThroughProducers()
             f.commands.clear();
             TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
             drain();
+            TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+            drain();
             allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
         }
         check(allRefused, "TOT/TCI: every re-sent trx true after the expiry is refused (d274)");
@@ -2979,7 +2990,10 @@ void txTimeoutLatchThroughProducers()
         drain();
         check(!f.radio.txTimeoutLatched(), "TOT/TCI: the client's trx false releases the latch");
         f.commands.clear();
+        TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
         TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
         drain();
         check(f.commands.contains("mox:on"), "TOT/TCI: a new trx true after the release keys again");
         TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
