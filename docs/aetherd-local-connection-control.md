@@ -132,3 +132,9 @@ or token can be supplied by a control client. Startup does not alter catalogue
 IDs or add a remote `radio.connect` route. Existing resource/control clients can
 use the connected receiver. Failure requires fresh local startup intent, and
 certificate mismatches fail closed. WAN does not acquire headless TX eligibility.
+
+The host must run as the account's operating-system user with access to the
+existing OS vault. On Windows, launch from that user's signed-in desktop
+session; an SSH or service logon can lack credential decryption access even for
+the same username. An unavailable vault is a startup failure, not permission
+to copy tokens into settings or use an insecure storage fallback.

@@ -59,6 +59,8 @@ On a slow or metered connection, tick **Use low bandwidth mode** under *Connecti
 
 The experimental `aetherd` engine can make one explicitly selected SmartLink connection using an account already saved in this computer's operating-system keychain. Sign in through the desktop application first, then close its radio connection.
 
+Run the daemon as the same operating-system user, with access to that user's unlocked keychain. On Windows, launch it from your signed-in desktop session. An SSH or service session may be unable to decrypt the saved credential even when it uses the same username; SmartLink startup then fails without connecting.
+
 List the saved account identifiers without reading their credentials:
 
 ```sh
