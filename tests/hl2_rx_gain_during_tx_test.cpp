@@ -9,7 +9,9 @@
 //     0x0a and 0x0e payloads;
 //   - the backend applies it to the effective gain (auto RF gain respected),
 //     never writes the operator's baseline, band memory or session pin, and
-//     the dBm reference follows the gain in force while transmitting.
+//     the dBm reference follows the gain in force while transmitting;
+//   - a T/R edge with a non-zero shortfall drops the averaged pan, and one
+//     with no shortfall does not.
 // Socket-free: constructed objects, packets from the transport's own builder.
 
 #include "TestSettingsProfile.h"
@@ -18,6 +20,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Bands.h"
 #include "core/backends/hl2/Hl2RxGainDuringTx.h"
+#include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
@@ -68,6 +71,23 @@ struct Hl2RxGainDuringTxTestAccess {
     static void moveTo(Hl2Backend& b, double hz) { b.applyPerBandStateFor(hz, "test"); }
     static QString band(const Hl2Backend& b) { return b.m_currentBandKey; }
     static double refOffset(const Hl2Backend& b) { return b.m_dbRef.offsetDb(); }
+    // One receiver whose chain is `dsp`, averaging at `average` (0..100).
+    static void oneReceiver(Hl2Backend& b, Hl2RxDsp* dsp, int average)
+    {
+        b.m_ids.reset(1);
+        b.m_rx.assign(1, Hl2Backend::Receiver{});
+        b.m_rx[0].dsp = dsp;
+        b.m_rx[0].panAverage = average;
+    }
+    static void releaseReceiver(Hl2Backend& b) { b.m_rx[0].dsp = nullptr; }
+    static quint64 drops(const Hl2Backend& b) { return b.m_panAverageDrops; }
+    // A key or radio-PTT edge as the backend publishes it.
+    static void edge(Hl2Backend& b, bool keyed, bool radioPtt)
+    {
+        b.m_keyed = keyed;
+        b.m_radioPtt = radioPtt;
+        b.publishTransmitState();
+    }
 };
 
 }  // namespace AetherSDR::hl2
@@ -386,6 +406,42 @@ void testBackend()
     Access::setPsEnabled(b, false);
 }
 
+void testEdgeDropsAverage()
+{
+    std::printf("\n  Hl2Backend: T/R edges drop the averaged pan when the gain moves\n");
+    Hl2Backend b;
+    Hl2RxDsp dsp;
+    Access::setBaseline(b, 48);
+    Access::oneReceiver(b, &dsp, 50);
+    quint64 n = Access::drops(b);
+    Access::edge(b, true, false);
+    check(Access::drops(b) == n + 1, "48 dB, key-down: the average is dropped");
+    Access::edge(b, false, false);
+    check(Access::drops(b) == n + 2, "48 dB, unkey: dropped again");
+    Access::edge(b, false, true);
+    Access::edge(b, false, false);
+    check(Access::drops(b) == n + 4, "48 dB, radio PTT press and release: both drop");
+    Access::edge(b, true, false);
+    Access::edge(b, true, true);
+    check(Access::drops(b) == n + 5, "PTT under a held key is no edge: no drop");
+    Access::edge(b, false, false);
+
+    Access::setBaseline(b, 5);
+    n = Access::drops(b);
+    Access::edge(b, true, false);
+    Access::edge(b, false, false);
+    check(Access::drops(b) == n, "5 dB (zero shortfall): key and unkey keep the average");
+
+    Access::setBaseline(b, 48);
+    Access::setPsEnabled(b, true);
+    n = Access::drops(b);
+    Access::edge(b, true, false);
+    Access::edge(b, false, false);
+    check(Access::drops(b) == n, "PureSignal on (zero shortfall): no drop");
+    Access::setPsEnabled(b, false);
+    Access::releaseReceiver(b);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -406,6 +462,7 @@ int main(int argc, char** argv)
     testTxPathUnchanged(authority);
     testPureSignal(authority);
     testBackend();
+    testEdgeDropsAverage();
 
     std::printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "PASSED", g_failures);
     return g_failures ? 1 : 0;

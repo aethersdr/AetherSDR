@@ -848,12 +848,14 @@ private:
     void pushSquelch(const Receiver& r);
     // Same, for the panadapter averaging (Receiver::panAverage / weighted).
     void pushPanAveraging(const Receiver& r);
-    // This receiver's NCO just moved: the averaged bins describe the old
-    // frequency axis. Called beside pushNotchTune() at the two retune sites.
+    // The averaged bins no longer describe this receiver: its NCO moved (the
+    // two retune sites) or the AD9866 gain changed at T/R (publishTransmitState).
     void dropPanAverage(const Receiver& r);
     // Same, for the APF (centred on the current CW pitch) and the AGC-off level.
     void pushApf(const Receiver& r);
     void pushAgcOffLevel(const Receiver& r);
+    // Drops dropPanAverage() has requested this session; read by tests.
+    quint64 m_panAverageDrops = 0;
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC. Never m_rx,
     // whose push_back/erase can move storage under the fan-out. Rebuilt by

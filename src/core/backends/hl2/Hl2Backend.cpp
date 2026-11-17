@@ -1010,9 +1010,9 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
             return;
         }
         // dBFS -> dBm through the shared reference (one AD9866 behind every
-        // DDC): derived full scale (+3 dB) minus the gain in force, so the trace
-        // holds still across gain changes and T/R. off == 0.0 fires only when
-        // that gain equals the full-scale figure.
+        // DDC): derived full scale (+3 dB) minus the gain in force. The key
+        // state is the host's, so a frame or two in flight at each T/R edge get
+        // the other side's offset. off == 0.0: that gain equals full scale.
         const double off = displayOffsetDb();
         if (off == 0.0) {
             emit spectrumFrameReady(ui, floatBytes(bins));
@@ -1625,6 +1625,13 @@ void Hl2Backend::publishTransmitState(std::optional<bool> radioPtt)
     if (transmitting != m_publishedTransmit) {
         m_publishedTransmit = transmitting;
         delta.mox = transmitting;
+        // The AD9866 gain changes under the averaged pan at T/R when the
+        // receive gain is above the cap (Hl2RxGainDuringTx.h).
+        if (hl2::rxGainDuringTxShortfallDb(lnaEffectiveDb(), m_psEnabled) != 0) {
+            for (const auto& r : m_rx) {
+                dropPanAverage(r);
+            }
+        }
     }
     delta.radioPtt = radioPtt;
     emit transmitChanged(delta);
@@ -5045,6 +5052,7 @@ void Hl2Backend::dropPanAverage(const Receiver& r)
 {
     if (!r.dsp || r.panAverage <= 0)
         return;
+    ++m_panAverageDrops;
     QMetaObject::invokeMethod(r.dsp, "dropSpectrumAverage", Qt::QueuedConnection);
 }
 
