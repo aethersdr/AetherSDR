@@ -4873,7 +4873,7 @@ void RadioModel::forceDisconnect()
     if (m_wanConn) {
         m_wanConn->disconnectFromRadio();
     } else if (m_backend) {
-        m_backend->disconnectRadio();
+        m_backend->disconnectRadio({0, RadioDisconnectRequest::Completion::Deferred});
     }
 }
 
@@ -8051,7 +8051,7 @@ void RadioModel::cancelMultiFlexConflict()
 {
     m_multiFlexContinuation = nullptr;
     m_intentionalDisconnect = true;
-    if (m_backend) { m_backend->disconnectRadio(); }
+    if (m_backend) { m_backend->disconnectRadio({0, RadioDisconnectRequest::Completion::Deferred}); }
 }
 
 void RadioModel::handleForcedClientDisconnect()
@@ -8089,7 +8089,9 @@ void RadioModel::closeConnectionForTerminalDisconnect()
         return;
     }
 
-    if (m_backend) { m_backend->disconnectRadio({m_rxAudio.streamId}); }
+    if (m_backend) {
+        m_backend->disconnectRadio({m_rxAudio.streamId, RadioDisconnectRequest::Completion::Deferred});
+    }
 }
 
 void RadioModel::handleDuplicateClientIdDisconnect()
