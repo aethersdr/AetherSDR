@@ -1,0 +1,166 @@
+{
+  "updated_utc": "2026-11-17T12:00:36.716950+00:00",
+  "status": "reply_epochs_and_operation_bound_signout_component_and_live_receive_workflow_qualified",
+  "production_ready": false,
+  "source_base_commit": "db9c7f2d74c21fc92315133b4a9be3966fb0c399",
+  "source_commit": "5e401e00df955b5f406c28ce181dea9d81588f55",
+  "desktop": {
+    "pid": 3744797,
+    "socket": "/tmp/aetherpd-operation-epochs",
+    "binary_sha256": "cb7c5550bbc60c5fe4b1d9ace94c19923442301852058b7b7be92b101b383ddd",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "desktop_source": "5e401e00df955b5f406c28ce181dea9d81588f55",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.01971472200239
+  },
+  "radio_runtime": {
+    "source": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+    "radio_boot_id": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "runtime_changed": false
+  },
+  "root_causes_and_fixes": [
+    "Successful login/status responses had no operation lifetime fence. Client generations now retire earlier observations and control responses even when the same owner token is retained; pending GETs are aborted without publishing cancellation failures.",
+    "The sign-out cleanup handler listened once to any future status, including an unrelated poll or a later status after a failed sign-out. Only the current sign-out response emits signedOut and may clear a legacy token. Managed local-owner state retains its credential.",
+    "Application-owned provisioning responses could outlive newer window operations. Generation checks gate window delivery while the credential save still survives window closure.",
+    "Successful public-status callbacks changed busy state before checking the original connection. They now require the original live connection first."
+  ],
+  "component_evidence": {
+    "red": "Ten expected GUI assertion failures reproduced obsoleteQR replacement, same-token managed cancel reversal, premature completion, missing/misdirected legacy-token cleanup and retired-window mutation.",
+    "final_tests": [
+      "tailnet_shim_client_test",
+      "tailnet_shim_dialog_test",
+      "aetherpd_dialog_test"
+    ],
+    "closed_window_provision_token_save_verified": true,
+    "application_owned_late_provision_success_and401_after_same_owner_cancel_verified": true,
+    "late_mutating_response_ignored_by_current_generation": true,
+    "mutants": [
+      {
+        "mutant": "reply-generation",
+        "build_exit": 0,
+        "ctest_exit": 8,
+        "expected_behavior_failure": "late mutating reply cannot publish"
+      },
+      {
+        "mutant": "provision-generation",
+        "build_exit": 0,
+        "ctest_exit": 8,
+        "expected_behavior_failure": "late application-owned provision reply cannot undo"
+      },
+      {
+        "mutant": "signout-response-kind",
+        "build_exit": 0,
+        "ctest_exit": 8,
+        "expected_behavior_failure": "confirmed sign-out has an operation-specific response"
+      }
+    ],
+    "full_Linux_AetherSDR_build": true,
+    "docs_npm_ci_and_build": true,
+    "static_reference_log_rules_and_frozen_CI_gate": true,
+    "intermediate_failures": [
+      "First combined run passed all newGUI regressions but an earlier client test expected a failure from a now-retired request. Updated it to assert retirement and fingerprinting of the current request.",
+      "One later test edit attached an old-reply assertion to the wrong case and failed compilation; corrected before final green, mutations and deployment."
+    ],
+    "sanitizer_or_Windows_macOS_build": false
+  },
+  "live_evidence": {
+    "ordinary_UI_without_AetherTX": true,
+    "account_joined": false,
+    "positive_RF_commands": 0,
+    "settings_or_processing_profiles_restored": false,
+    "owner_installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+    "unapproved_pending_signin_closed_and_reopened_without_replacement": true,
+    "pending_link_visibly_matched_backend": true,
+    "cancel_returned_local_with_same_owner": true,
+    "post_cancel_ordinary_poll_observations": 32,
+    "post_cancel_observation_ns": 9687233051,
+    "canceled_code_not_visible_during_observation": true,
+    "receive_only_IQ_bytes": 131072,
+    "receive_only_IQ_sha256": "b66186accec8e15dce2138dd205015d9a1af42b1bc8cb663ce6027959a0c07b7",
+    "receive_only_IQ_RMS": 33.5206326387197,
+    "receive_only_IQ_nonzero_float_values": 30879,
+    "IQ_rate_Hz": 48000,
+    "IQ_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 975494996,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "FDX": false,
+    "service_stopped_after_capture": true,
+    "radio_idle_after": true,
+    "nominal_power_setting_left_W": 10,
+    "configured_max_power_left_W": 10,
+    "boot_id_independently_read_over_SSH": true,
+    "fixed_installed_startup_helper_used_for_IQ": true,
+    "broad_host_root_diagnostic_bridge_used": false,
+    "radio_install_or_update_performed": false
+  },
+  "receiver_meter_observation": {
+    "definitions": 37,
+    "ADC_named_meter_exposed": false,
+    "scope": "Idle definitions only:37 meters, with dBFS definitions for TX/codec stages; no RX ADC headroom measurement established. This is not a full search of every radio API/status or an ADC calibration."
+  },
+  "limits": [
+    "Forcing delayed reply order is proven by injected real-client/widget tests, not by live network fault injection. Live proof covers ordinary pending/reopen/cancel/receive behavior.",
+    "Reply epochs are per client/window. Cross-application legacy token-rotation/keychain-write order, persistent credential stores on other platforms, sanitizer lifetimes and actual joined-account/expiry/routing behavior are not established here.",
+    "Lost-owner recovery/rotation remains unavailable. No claim that the entire P4 credential/operator workflow is production-qualified.",
+    "This desktop has receive-only live proof and noRF proof. Prior5W/10W finite tone data remain tied to desktop d1fc4b0a1 and installed radio43d1.",
+    "NativeSWR disagreement, natural128sample/cold-bypass causes, current graph faults, speech/endurance/final stockAPD, resource/update/storage/legacy6000/actual6300 and release gates remain open.",
+    "No fresh radio process capability/ARP audit or reboot test in this report; the radio runtime was unchanged. No absoluteFPGA latency or ADC headroom claim."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/red-build.log.gz": "79a504cb8b592568474f5f0c76395d88590657192459262091ebf7240bb05ff4",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/red-ctest.log.gz": "c734ca086332a9d9052cb9fdbe68e0f134381f3be801121e08264c4b57a48d7f",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/fixed-build.log.gz": "74755aa26545b7fbb61c23402f25472c857ce6416da66830086eb834f9de7aad",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/fixed-ctest.log.gz": "287b5f842771570e7c7c20990b2ddd4a73fba8dbf99911a6e5384db768af3c64",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/fixed-build-02.log.gz": "d9cd69573cefa1dc6b8f6eaf22235d16bc37a0454074ae693194fca3565dc0bf",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/fixed-ctest-02.log.gz": "2b34a6a481776a53d3a616842304d9c569024aadc6e46f37e08dc0888f12d425",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/final-build.log.gz": "72dd58576eefe758417df3214042d1080532eebfbedf6ba6cbf92317214a046b",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/final-build-02.log.gz": "73a4775599cd5bd86af1bf0543840f927d9fafec405d193e910f3e9219967449",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/final-ctest-02.log.gz": "b4afa7230cedbafba84fdb1424d1e14f95e6da9c4f76aac44963b3c60afc9ca8",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/reply-generation-build.log.gz": "eee166a66a016db5ef247f35b81454f1e3e18d609f986d34220df72246ea9b36",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/docs-ci.log.gz": "54c3bd6c8260a44bdaa6497b4046d0f0e0da4960f13853fceb27be527641cd13",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/docs-build.log.gz": "762675242c0cc7fa2d6a0ed47c9725dd810e328c3938f78d6174a11c58377bcf",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/reply-generation-ctest.log.gz": "559255da860b119417dc32f0e6748536ce37215349e7211652e36a2c2976b301",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/provision-generation-build.log.gz": "c23300455cba848e9be5fbc697d609daa1b1c011841e9046ace68994aff4b278",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/provision-generation-ctest.log.gz": "c418376201f3097f9f7a9285142bf964bdb05c25e7e67a8812ef621c3c2c7250",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/signout-response-kind-build.log.gz": "3473b4b50390f61dfc9f13ba8ab442218e147811c07c5b96dfcc130e8220eba9",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/signout-response-kind-ctest.log.gz": "6f7669e67ddab9a05c99da0705b809de17d55b96a426f60db64aaf5c8dd5444f",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/restored-build.log.gz": "c4abf310afb4138893789a4964745d93c7da27e5c3da032b8e574feb46f8fd43",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/restored-ctest.log.gz": "c76b054466fc78ad3e9c3f7a2dbe7e2a8e04a1b8c00215ad7d35e857639bbc92",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/static-checks.log.gz": "887718b37a0ce714fdb997b1fbc3845d1c8b908272b246314b07f688a78b9ffa",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/code-commit.log.gz": "ca56ccac3413425a3083d6ff875fec6835fbfa44881d6a499d29be8ec73dff46",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/committed-desktop-build.log.gz": "a6c2be02692bab234aec1738072d6fc55f1153affdfb8c23fa2e788c76765e21",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/relaunch.log.gz": "4dfa8f941b1d0e76e1051a4aa4494ab6b86173e00ec21a22bda10dd78ad56e85",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/open-pending.log.gz": "43789508330f3cd850ec89e3c5b12f300b999155c48cceaf997aeb6bd3fb2b41",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/cancel-pending.log.gz": "498ba0c0b94c4747d05d5556a1bc8e8052f53fe6552b9d4067a51fa638635f9a",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/receive-iq-check.log.gz": "cdef8ff91230200f6330e88d364333167886c2a79ad8529ca4217aab508872c8",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/final-state.log.gz": "1773cc1303f39c6136d558a68ae8e8e41293989adba5d28b23817e17bc7ab018",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/mutation-check.py.gz": "0b7836fff541f9ed26d58a051c8a0046aaf18aa90747943f60e37638c3468264",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/mutations.json.gz": "223131b671364760dcf002d7af0a95486d51b45ddd4076afea9d12fa7dbe97b1",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/desktop-provenance.json.gz": "55e7d25701c240dc90f509c9e8b59dc61dcfc4d578c2866a264cfe1ac0e68c3c",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/relaunch.py.gz": "4aa649b7a50e94a3654e62c653fd29b287109d51a1478597a88ac82d7addefbc",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/relaunch-intent.json.gz": "f5154c348b6437d22180801e9c35b4e0676ce1dfc5120f66d49a18508944a8f0",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/instance.json.gz": "481c9c86d822f4b5923e92694253302b101b4e30f53ce5c99f1d3af0d3967e14",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/open-pending.py.gz": "3115f674282f62a0d1a8a87f1fe5af69ace74278c31a6dd5135cb520b93d6525",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/open-pending-intent.json.gz": "12067802b6af0a04d9a1eb6cd0020078f47120e7185fac88a0d53929426e521f",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/open-pending-result.json.gz": "d6696d9b978b59d181019fdf03c1d8ea64b42e141a242359e958c561e7b0f35c",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/cancel-pending.py.gz": "bc19cc791da787e24ddb10565a1802ac4424f01431b1b4632795bbb128df2ab6",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/cancel-intent.json.gz": "b71cad14718d3b19869aab184e3b04231afa3764fc81784aea8803f56539b782",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/cancel-result.json.gz": "8ac8540f07532c50e5c8928ed038e054e2462accff22022ad7101d12e2864399",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/receive-iq-check.py.gz": "19cca9c2532dc466ebc7cc832048ededfb1af19a793509d5e3c5b88f68016416",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/usb-receive-iq-check.json.gz": "9ba92b0d68b53b462b96ce2a3ec5137a6cb07639ac37dabd664e8b21845cb316",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/usb-receive-iq.f32le.gz": "17371a8617f06c7edfd2cc57ed645549bb6b2b16a156d6deb062e81a5647b32a",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/final-state.py.gz": "5bb314453004fcac1a0081eb574256cc4eaaf7a3d8d3385cfd3b291d8415a436",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/final-state.json.gz": "368972f2211da081cedd35d4215c15c42c99f0c160a0b4f48a0d0ea11e923b73",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/idle-meter-definitions.json.gz": "f82930d0793c685703d108e9380f088f03244fdbe757ff8358522f8463cff29d",
+    "tools/pd-waveform/evidence/20261117-remote-access-operation-epochs/save-qualification.py.gz": "d18ec67e5adbb6fa07b1d303ba34067a708898b516667d2246b70eecbbbb1a8b"
+  }
+}
