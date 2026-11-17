@@ -210,7 +210,10 @@ void RadioModel::noteTxTimeoutHold(const TxCoordinator::Request& request)
 
 void RadioModel::noteTxTimeoutRelease(const TxCoordinator::Request& request)
 {
-    if (m_txKeyDownDepth > 0 || m_txTimeoutStopping) {
+    // A refused key-down's own teardown, on whichever release route its
+    // producer uses, is not that input letting go (d274: TciServer's refusal
+    // retires through requestProducerPttOff()).
+    if (m_txKeyDownDepth > 0 || m_txTimeoutStopping || txTimeoutRefused(request)) {
         return;
     }
     const bool before = m_txTimeout.latched();
@@ -220,11 +223,21 @@ void RadioModel::noteTxTimeoutRelease(const TxCoordinator::Request& request)
 
 void RadioModel::noteTxTimeoutRefused(const TxCoordinator::Request& request)
 {
-    // Bounded and cleared when the latch clears; the oldest entry goes first.
+    // Scoped to the refused input's own handling: the list is cleared when
+    // control returns to the event loop, so the input's later off message
+    // (CAT RX, rigctl T 0, a footswitch edge) is a release even when it
+    // carries the same request. Bounded; the oldest entry goes first.
     if (m_txTimeoutRefusedRequests.size() >= 32) {
         m_txTimeoutRefusedRequests.erase(m_txTimeoutRefusedRequests.begin());
     }
     m_txTimeoutRefusedRequests.push_back(request.weak());
+    if (!m_txTimeoutRefusedClearQueued) {
+        m_txTimeoutRefusedClearQueued = true;
+        QMetaObject::invokeMethod(this, [this] {
+            m_txTimeoutRefusedClearQueued = false;
+            m_txTimeoutRefusedRequests.clear();
+        }, Qt::QueuedConnection);
+    }
 }
 
 bool RadioModel::txTimeoutRefused(const TxCoordinator::Request& request) const

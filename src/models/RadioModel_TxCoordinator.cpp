@@ -224,11 +224,9 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
-    // A producer abandoning a key the latch refused is not a release; one
-    // abandoning a key it held is.
-    if (!txTimeoutRefused(request)) {
-        noteTxTimeoutRelease(request);
-    }
+    // Abandoning a key it held is a release; noteTxTimeoutRelease() skips
+    // the teardown of a key the latch just refused.
+    noteTxTimeoutRelease(request);
     const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
     if (!bound.isActivity(TxActivity::Mox)) {
         if (!bound.pending()) {

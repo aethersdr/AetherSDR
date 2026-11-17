@@ -2449,6 +2449,7 @@ private:
     bool m_txTimeoutStopping{false};
     bool m_radioPttObservedDown{false};
     std::vector<TxCoordinator::Request::Weak> m_txTimeoutRefusedRequests;
+    bool m_txTimeoutRefusedClearQueued{false};
     std::shared_ptr<std::atomic_bool> m_transmitServiceSession{std::make_shared<std::atomic_bool>(true)};
     quint64 m_dvkTxRequest{0};
     quint64 m_navtexTxRequest{0};

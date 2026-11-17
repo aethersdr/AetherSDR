@@ -244,6 +244,15 @@ public:
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
     static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
     static TxCoordinator& coordinator(RadioModel& radio) { return radio.m_txCoordinator; }
+    // Host transmit time-out (RFC #7021): injected clock, hand-emitted keyed edge.
+    static void txTimeoutClock(RadioModel& radio, qint64* now)
+    { radio.m_txTimeout.setClock([now] { return *now; }); }
+    static void radioKeyedEdge(RadioModel& radio, bool on)
+    {
+        radio.m_radioTransmitting = on;
+        emit radio.radioTransmittingChanged(on);
+    }
+    static void txTimeoutTick(RadioModel& radio) { radio.onTxTimeoutTick(); }
     static void stopEvidence(RadioModel& radio, const TxStopEvidence& evidence)
     {
         radio.acknowledgeIndependentTxStop(evidence);
@@ -2926,6 +2935,113 @@ void testInjectionReopensAdmission()
               "rebuildBackendForTest reopens admission like setBackendForTest");
     }
 }
+// RFC #7021 latch through the real producers (d274): a client that keeps
+// asking to transmit after the time-out is refused every time, and only its
+// own off followed by a new on keys again. The refused key's teardown, on
+// whichever route the producer uses, is never a release.
+void txTimeoutLatchThroughProducers()
+{
+    const auto drain = [] {
+        for (int i = 0; i != 6; ++i) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        }
+    };
+    const auto expire = [&drain](Fixture& f, qint64& now) {
+        TxOperationIntegrationTestAccess::radioKeyedEdge(f.radio, true);
+        now += 180000;
+        TxOperationIntegrationTestAccess::txTimeoutTick(f.radio);
+        drain();
+        TxOperationIntegrationTestAccess::radioKeyedEdge(f.radio, false);
+        drain();
+    };
+#ifdef HAVE_WEBSOCKETS
+    {
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/TCI: the client keys through TciServer");
+        expire(f, now);
+        check(f.radio.txTimeoutLatched(), "TOT/TCI: the expiry latches while the client holds trx true");
+        bool allRefused = true;
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/TCI: every re-sent trx true after the expiry is refused (d274)");
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/TCI: the client's trx false releases the latch");
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/TCI: a new trx true after the release keys again");
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+        drain();
+    }
+#endif
+    {
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        RigctlProtocol cat(&f.radio);
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: the client keys through its producer");
+        expire(f, now);
+        bool allRefused = f.radio.txTimeoutLatched();
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            (void)cat.handleLine("T 1");
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/rigctl: every re-sent T 1 after the expiry is refused");
+        (void)cat.handleLine("T 0");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/rigctl: T 0 releases the latch");
+        f.commands.clear();
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: a new T 1 after the release keys again");
+        (void)cat.handleLine("T 0");
+        drain();
+    }
+    {
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        SmartCatProtocol cat(&f.radio);
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: the client keys through its producer");
+        expire(f, now);
+        bool allRefused = f.radio.txTimeoutLatched();
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            (void)cat.processCommand("TX");
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/SmartCAT: every re-sent TX after the expiry is refused");
+        (void)cat.processCommand("RX");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/SmartCAT: RX releases the latch");
+        f.commands.clear();
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: a new TX after the release keys again");
+        (void)cat.processCommand("RX");
+        drain();
+    }
+}
+
 void protocolProducerLifetimes()
 {
     const auto drain = [] {
@@ -4084,6 +4200,7 @@ int main(int argc, char** argv)
     grantedModelPreflightAndCancellation();
     grantedModelSessionAndActivityBoundaries();
     protocolProducerLifetimes();
+    txTimeoutLatchThroughProducers();
     producerNormalTails();
     producerTuneAndAtu();
     producerCwxQueue();

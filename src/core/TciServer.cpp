@@ -2555,6 +2555,11 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         txRequest = state->pttRequest;
         daxPermit = state->pttDaxPermit;
         wantsAudio = state->pttWantsAudio;
+        if (!request.transmitting && !txRequest.producerKey()) {
+            // An off after a refusal retired the request still names this
+            // client's producer, so the model sees the input let go.
+            txRequest = client->ingressRequest ? *client->ingressRequest : state->txProducer.request();
+        }
         if (!request.transmitting) {
             state->pttRequest = {};
             state->pttDaxPermit = DaxTxAudioPermit::blocked();
