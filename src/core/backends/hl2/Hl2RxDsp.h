@@ -226,8 +226,9 @@ public:
     // The T/R edge, for the spectrum's DC removal (Hl2Spectrum::setTransmitting).
     // Held here and re-applied in installChannel(), like the averaging.
     Q_INVOKABLE void setSpectrumTransmitting(bool on, int releaseHoldMs);
-    // The NCO moved: the transmit DC learned at the old frequency no longer applies.
-    Q_INVOKABLE void forgetSpectrumTransmitDc();
+    // The NCO moved: restart the spectrum's DC estimates (Hl2Spectrum::restartDc).
+    // Separate from dropSpectrumAverage(), which a T/R edge may call too.
+    Q_INVOKABLE void restartSpectrumDc();
     [[nodiscard]] bool spectrumTransmitting() const noexcept { return m_spectrumTransmitting; }
     // What the installed spectrum is actually running, for tests. DSP thread.
     [[nodiscard]] double spectrumAverageMsApplied() const noexcept

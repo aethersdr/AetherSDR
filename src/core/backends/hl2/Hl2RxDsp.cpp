@@ -602,10 +602,10 @@ void Hl2RxDsp::dropSpectrumAverage()
     m_spectrum->dropAverage();
 }
 
-void Hl2RxDsp::forgetSpectrumTransmitDc()
+void Hl2RxDsp::restartSpectrumDc()
 {
     if (m_spectrum) {
-        m_spectrum->forgetTransmitDc();
+        m_spectrum->restartDc();
     }
 }
 

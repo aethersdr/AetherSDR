@@ -3635,7 +3635,7 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
         pushNotchTune(*r);
         // The averaged panadapter is on the old axis too.
         dropPanAverage(*r);
-        forgetPanTransmitDc(*r);
+        restartPanDc(*r);
     }
 
     // shift = slice - NCO: the wire places frequency F at -(F - NCO), so this
@@ -4510,7 +4510,7 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     // second, so while the operator drags, the display is effectively
     // unaveraged — which is right: an average of a moving axis is smear.
     dropPanAverage(*r);
-    forgetPanTransmitDc(*r);
+    restartPanDc(*r);
     // Panning one receiver can move it onto another band, which changes what the
     // SHARED filter board should be doing. Re-evaluate across every receiver.
     applyBandFilter("pan");
@@ -5057,13 +5057,13 @@ void Hl2Backend::dropPanAverage(const Receiver& r)
     QMetaObject::invokeMethod(r.dsp, "dropSpectrumAverage", Qt::QueuedConnection);
 }
 
-void Hl2Backend::forgetPanTransmitDc(const Receiver& r)
+void Hl2Backend::restartPanDc(const Receiver& r)
 {
-    // The pan's transmit DC estimate is a property of the TX frequency; the
-    // next key relearns it. Not part of dropPanAverage(), which a T/R edge may
-    // also call and which must leave the DC estimates alone.
+    // The NCO moved: the pan's DC estimates restart (old-axis signal and the
+    // transmit DC of the old frequency). Not part of dropPanAverage(), which a
+    // T/R edge may also call and which must leave the DC estimates alone.
     if (r.dsp) {
-        QMetaObject::invokeMethod(r.dsp, "forgetSpectrumTransmitDc", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(r.dsp, "restartSpectrumDc", Qt::QueuedConnection);
     }
 }
 

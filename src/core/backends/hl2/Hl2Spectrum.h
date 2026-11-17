@@ -54,10 +54,9 @@ public:
     static constexpr double kDcOnsetDb = 20.0;
     static constexpr int kDcOnsetRun = 64;
 
-    // Forget the transmit estimate (the TX leak moves with frequency): the next
-    // key seeds it from receive again. For an NCO move; the receive estimate,
-    // a converter property, is kept.
-    void forgetTransmitDc() noexcept;
+    // Restart both DC estimates, as reset() does: for an NCO move. Not part of
+    // dropAverage(), which a T/R edge may call too.
+    void restartDc() noexcept;
 
     // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
     // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting
@@ -128,7 +127,6 @@ public:
 private:
     void computeFrame(std::vector<float>& binsDbfs);
     void trackDc(std::complex<float> s) noexcept;
-    void restartDc() noexcept;
 
     int m_fftSize;
     std::vector<std::complex<float>> m_acc;   // accumulation buffer (< m_fftSize)
@@ -158,8 +156,8 @@ private:
     // time averaging is switched on or the geometry changes, so the first
     // frame after a drop is TAKEN rather than blended into silence.
     bool m_haveAverage = false;
-    // Running DC estimates (trackDc()), one per T/R state. Restarted only by
-    // reset() (a gap); dropAverage() and the T/R edges leave them alone.
+    // Running DC estimates (trackDc()), one per T/R state. Restarted by reset()
+    // (a gap) and restartDc() (a retune); dropAverage() and T/R edges leave them.
     struct Dc {
         double re = 0.0;
         double im = 0.0;

@@ -203,13 +203,6 @@ void Hl2Spectrum::setTransmitting(bool on, double releaseHoldMs) noexcept
     }
 }
 
-void Hl2Spectrum::forgetTransmitDc() noexcept
-{
-    if (!dcTransmitting()) {
-        m_txDcSeeded = false;
-    }
-}
-
 void Hl2Spectrum::restartDc() noexcept
 {
     m_rxDc = {};
