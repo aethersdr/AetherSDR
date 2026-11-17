@@ -1,0 +1,143 @@
+{
+  "updated_utc": "2026-11-17T14:31:37.679670+00:00",
+  "status": "offline_C_signal_and_native_alignment_EQ_component_checks_passed_full_waveform_and_RF_unqualified",
+  "production_ready": false,
+  "source_base_commit": "6131de89e732cb99483f07e6dbf8554cdbe4531b",
+  "provenance": {
+    "native_source": "tools/pd-waveform/pd_waveform.c",
+    "native_source_sha256": "a2208c8db78035fbce2d40c3b3915657c4b1107272b92d54de63bab6e757c637",
+    "extracted_unmodified_cbp_block_sha256": "84ce35cfd7ab47331aa88e3508d2a349952bca41a8f32db585866ae3f0d38d56",
+    "scope": "Actual native cbp implementation copied unchanged into a standalone host C experiment. Two filter histories implement H*(u+jv)/sqrt(2). No product/default changes or RF."
+  },
+  "validation": {
+    "passed": true,
+    "sources": [
+      {
+        "source": "native-real-input",
+        "sha256": "4a6d86d188f7b3edfe68efc79fa8883e8816ace418692ef36e104edc63a30ea4",
+        "C_vs_NumPy_max_abs_error": 5.566705740848049e-16,
+        "RMS": 0.16137442059515497,
+        "peak": 0.4709438154263929,
+        "circularity": 0.7635298661689451,
+        "outside_nominal_band_power_fraction": 0.003696233025255451,
+        "subband_powers": [
+          40840672.39823852,
+          40495454.527709834,
+          40841742.50064641,
+          40189858.56743644
+        ],
+        "estimated_known_delay": 1677.4699999999984,
+        "known_delay_error_samples": -1.5916157281026244e-12,
+        "alignment_phase_correlation": 0.9997123800383382,
+        "EQ_training_residual": 7.606872815260277e-09,
+        "EQ_heldout_shape_residual": 7.522526607635738e-09,
+        "EQ_heldout_samples": 47969
+      },
+      {
+        "source": "proper-complex-input",
+        "sha256": "cfeae3e246d1554d89f6a8b9ea3da87a74eb58d021926b40776c1e0b1a874ae4",
+        "C_vs_NumPy_max_abs_error": 4.449557262054371e-16,
+        "RMS": 0.1619250436956827,
+        "peak": 0.4397466798596446,
+        "circularity": 0.001586467636127554,
+        "outside_nominal_band_power_fraction": 0.0036369164573298585,
+        "subband_powers": [
+          40366031.78178845,
+          40644077.19184925,
+          41832093.65513571,
+          39995768.080927834
+        ],
+        "estimated_known_delay": 1677.4699999999984,
+        "known_delay_error_samples": -1.5916157281026244e-12,
+        "alignment_phase_correlation": 0.9999955285070243,
+        "EQ_training_residual": 7.572529446426777e-09,
+        "EQ_heldout_shape_residual": 7.730813145290421e-09,
+        "EQ_heldout_samples": 47969
+      }
+    ],
+    "proper_minus_native_RMS_dB": 0.029586539019827444,
+    "proper_minus_native_subband_power_dB": [
+      -0.05076825862349148,
+      0.01590989588916446,
+      0.10405338282712617,
+      -0.02102436444648297
+    ],
+    "validation_compile_command": [
+      "cc",
+      "-shared",
+      "-fPIC",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_align.c",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_eq.c",
+      "-lm",
+      "-o",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/proper-complex-preamble-prototype/libprototype-validation.so"
+    ],
+    "compiler": "cc (GCC) 16.2.1 20260810",
+    "actual_native_component_sha256": {
+      "pd_align.c": "8f1aba82bcad64622cb5c1d5b8ecb3cf2a5ba63083c2e78f74d04a8510a2faa0",
+      "pd_eq.c": "97e879be0756fc550be50ca451fcee566d4583eb9b5c654e561baa56a550fb53"
+    },
+    "scope": "Host-only C generator using unchanged native cbp functions, independently checked against NumPy; actual native alignment and EQ components tested with known synthetic channels.",
+    "limits": [
+      "No radio deployment or RF test of the proper-complex source.",
+      "No SWR-causality conclusion; no production/default/guard changes.",
+      "No actual6300 CPU/deadline or full WDSP/waveform-dispatch integration qualification."
+    ]
+  },
+  "mutations": [
+    {
+      "mutant": "missing-imaginary",
+      "validation_exit": 1,
+      "expected_failure": "AssertionError: ('proper-complex-input', 0.3312508831330353)",
+      "source_sha256": "6d10703741af8bca8f31797d8a67fc29b20566bbf4af76ee44d88db81fcec779"
+    },
+    {
+      "mutant": "missing-normalization",
+      "validation_exit": 1,
+      "expected_failure": "AssertionError: ('proper-complex-input', 0.1821490388064042)",
+      "source_sha256": "464b2cf0242378b0c324d0dad800d8c863bfb2b376c51b85c3fc4c0649081ae0"
+    }
+  ],
+  "RF_key_actions": 0,
+  "production_source_files_changed": false,
+  "radio_package_or_defaults_changed": false,
+  "meaning": "A same-band, matched-expected-RMS proper-complex noise candidate is feasible in the actual native bandpass implementation. It passes alignment and held-out linear-path fitting on known synthetic channels, while tests detect loss of the imaginary input or normalization. This supports a controlled future native experiment; it does not explain or fix the measured5W SWR stop.",
+  "remaining_before_native_AB": [
+    "Integrate the candidate only in an isolated experimental waveform build and run complete actual waveform dispatch/calibration/simulator tests.",
+    "Measure CPU/deadline costs, strict generated/output peaks and sample-budget behavior; actual6300 remains unqualified.",
+    "Produce authenticated reproducible candidate/rollback artifacts with unchanged fixed privileged-helper scope and review the concrete deployment changes.",
+    "If offline gates pass, perform a separately bounded native RF A/B at5W with existing SWR/LP/unkey guards and preserve all stops.",
+    "Promote no default or safety-policy change based solely on the mathematical replay or these component tests."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/mutate.py.gz": "2f807047cc03142976ead9d522599dc0cbf79a81a8a6248fe5e05b6191c6a0d2",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/mutations.json.gz": "585c72217975a00fa27e9d759eb3e3b62b75d60a045cd5e31856760b4f89d665",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/native-real-input.f64le.gz": "8259d149a1914dd7abaef05bc5737987ec7d29402330ba7b1fe56c2b448aa002",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/proper-complex-input.f64le.gz": "cf7cc584ba0f3023b89a46725de7526bfec11687736a29f94149a672db5afc00",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/prototype.c.gz": "6514276c775ee8a8db6570987c0d89fbb2362bedeca29213940d4bbf56cd4d01",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/provenance.json.gz": "58faefe23e9e8e2806da6e1f8b10d054fede9a2b969f8181d7365a1c030d5334",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/run.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/save-evidence.py.gz": "a89429b9feecd800db1cfba3bd4271e3cbff65ca4491f22e605ac761286f2b48",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/validate.py.gz": "2a456b5d522175be11d2ce25bb9f3e5830dc44cbbd034af0927ef0f8c76ee208",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/validation-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/validation-final.log.gz": "538dfa03735091152cb8d3c8887c20769ff2bc0592532ea5edeaf077cfb4ba6b",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/validation.json.gz": "538dfa03735091152cb8d3c8887c20769ff2bc0592532ea5edeaf077cfb4ba6b",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-preamble-prototype/validation.log.gz": "538dfa03735091152cb8d3c8887c20769ff2bc0592532ea5edeaf077cfb4ba6b",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-imaginary/build-run.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-imaginary/prototype.c.gz": "c040eebb49985a3216414301b4361ab8d689dfc66bea1ce10544c3d3a8f8217b",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-imaginary/validate.py.gz": "d2f1b3576784d57d89b91eb7271b891e8ddf5085d5faec7e4ace01db93cf0abf",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-imaginary/validation-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-imaginary/validation.log.gz": "0ac1b5008da638d07c8d8d030de7615acdcae6c557f0aa71f4fa82b712e14ace",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-normalization/build-run.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-normalization/prototype.c.gz": "1725ba7c464e49f388c7472ecc1ca056175cc656afdcaac9721dd2c81218925f",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-normalization/validate.py.gz": "d2f1b3576784d57d89b91eb7271b891e8ddf5085d5faec7e4ace01db93cf0abf",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-normalization/validation-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-prototype/proper-complex-mutant-missing-normalization/validation.log.gz": "c927ab7bbfcbe5236544038fc3bda81a08af38de854f1578ead2624032cd4b91"
+  }
+}
