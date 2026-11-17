@@ -1310,6 +1310,8 @@ set(MODEL_SOURCES
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_AudioControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
+    src/models/RadioModel_TxTimeout.cpp
+    src/models/TxTimeoutGuard.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp

@@ -146,6 +146,8 @@ bool RadioModel::requestProducerPttOn(const TxCoordinator::Request& request,
         return false;
     }
     bool engaged = false;
+    ++m_txKeyDownDepth;
+    const auto keyDown = qScopeGuard([this] { --m_txKeyDownDepth; });
     m_transmitModel.requestPttOn(source, [this, request]() -> TransmitModel::KeyingPermit {
         if (!beginTxActivity(TxActivity::Mox, &request)) {
             return {};
@@ -169,6 +171,7 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
+    noteTxTimeoutRelease(request);
     const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
     if (!bound.isActivity(TxActivity::Mox)) {
         if (!bound.pending()) {
@@ -221,6 +224,11 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
+    // A producer abandoning a key the latch refused is not a release; one
+    // abandoning a key it held is.
+    if (!txTimeoutRefused(request)) {
+        noteTxTimeoutRelease(request);
+    }
     const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
     if (!bound.isActivity(TxActivity::Mox)) {
         if (!bound.pending()) {
@@ -246,6 +254,19 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
 {
     if (m_txInputsStopping) {
         return false;
+    }
+    if (m_txTimeout.latched()) {
+        m_txTimeout.refreshLatch();
+        publishTxTimeoutLatch(true);
+        if (m_txTimeout.latched()) {
+            if (request) {
+                noteTxTimeoutRefused(*request);
+            }
+            emitInterlockNotification(
+                tr("Transmit is held after a time-out: release every PTT input, then key again."),
+                QStringLiteral("tx-timeout-latched"));
+            return false;
+        }
     }
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
         return false;
@@ -434,8 +455,12 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     }
     const QPointer<RadioModel> self(this);
     emit daxTxOwnershipChanged();
-    return self && !m_txSessionClosing && m_backend
+    const bool admitted = self && !m_txSessionClosing && m_backend
         && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
+    if (admitted && request) {
+        noteTxTimeoutHold(*request);
+    }
+    return admitted;
 }
 
 TransmitModel::KeyingRoute RadioModel::producerKeyingRoute(const TxCoordinator::Request& request,
@@ -482,6 +507,9 @@ bool RadioModel::requestProducerTune(const TxCoordinator::Request& request, bool
     if (QThread::currentThread() != thread()) {
         return false;
     }
+    if (!on) {
+        noteTxTimeoutRelease(request);
+    }
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Tune, dispatched);
     if (on) {
@@ -500,6 +528,9 @@ bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool 
 {
     if (QThread::currentThread() != thread()) {
         return false;
+    }
+    if (!start) {
+        noteTxTimeoutRelease(request);
     }
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Atu, dispatched);
@@ -1147,6 +1178,15 @@ void RadioModel::resetTxOperations()
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    {
+        const bool latched = m_txTimeout.latched();
+        m_txTimeout.reset();
+        m_txTimeoutRefusedRequests.clear();
+        if (m_txTimeoutTimer) {
+            m_txTimeoutTimer->stop();
+        }
+        publishTxTimeoutLatch(latched);
+    }
     m_transmitServiceSession->store(false, std::memory_order_release);
     m_transmitServiceSession = std::make_shared<std::atomic_bool>(true);
     m_dvkTxRequest = 0;

@@ -700,7 +700,9 @@ bool testSimBackendEndToEnd()
         panValue.value(QStringLiteral("displayCadence")).toObject();
     if (!check(hasExactlyKeys(radioValue,
                               {"id", "connected", "family", "identity", "capabilities", "meterDelivery",
-                               "receiveObservation"})
+                               "receiveObservation", "transmitTimeout"})
+                   && hasExactlyKeys(radioValue.value(QStringLiteral("transmitTimeout")).toObject(),
+                                     {"enabled", "timeoutS", "warningS", "latched"})
                    && hasExactlyKeys(identity,
                                      {"name", "model", "serial", "version", "manufacturer"})
                    && hasExactlyKeys(capabilities,

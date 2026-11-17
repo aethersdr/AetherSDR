@@ -51,6 +51,7 @@
 #include "SpotModel.h"
 #include "CwxModel.h"
 #include "core/TxCoordinator.h"
+#include "TxTimeoutGuard.h"
 #include "DvkModel.h"
 #include "UsbCableModel.h"
 #include "DaxIqModel.h"
@@ -1065,6 +1066,13 @@ public:
     // Explicit local operator override. Also discards pre-admission queued
     // inputs; never exposed as another client's ordinary release operation.
     void cancelLocalTransmit();
+    // Host transmit time-out (RFC #7021): this radio's stored setting, or the
+    // default for it (never shorter than the radio's own interlock timeout).
+    TxTimeoutSettings txTimeoutSettings() const;
+    // Persists to this radio's TxTimeout document; false when not stored.
+    bool setTxTimeoutSettings(const TxTimeoutSettings& settings);
+    // True after an expiry until every input has released and the radio is idle.
+    bool txTimeoutLatched() const { return m_txTimeout.latched(); }
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     // The network_mtu to send for this session: the NetworkMtu setting (or
@@ -1585,6 +1593,12 @@ signals:
     void interlockNotificationRequested(const QString& message,
                                         const QString& key,
                                         const QString& panId);
+    // Host transmit time-out (RFC #7021). Warning fires once per over, the
+    // configured seconds before expiry; Expired after the stop was requested.
+    void txTimeoutWarning(int secondsLeft);
+    void txTimeoutExpired(int afterSeconds, const QString& keyingSource);
+    void txTimeoutSettingsChanged();
+    void txTimeoutLatchChanged(bool latched);
     // Emitted at most once per transmission when the TX filter is measurably
     // removing the operator's transmit audio (#4649). Carries a ready-to-show
     // operator-facing message naming the offending passband.
@@ -2300,6 +2314,7 @@ private:
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
     friend class TransmitDaxHoldTestAccess;
+    friend class TxTimeoutTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained
@@ -2425,6 +2440,15 @@ private:
     // the desktop methods. Independent daemon clients use separate granted
     // actors on the same coordinator and cannot obtain this desktop actor.
     TxCoordinator m_txCoordinator;
+    TxTimeoutGuard m_txTimeout{[this] { return m_txCoordinator.currentTimeMs(); }};
+    QTimer* m_txTimeoutTimer{nullptr};
+    std::optional<TxTimeoutSettings> m_txTimeoutStored;
+    // Releases made inside a key-down call (a refusal rolling itself back) or
+    // by the time-out's own stop are not an input letting go.
+    int m_txKeyDownDepth{0};
+    bool m_txTimeoutStopping{false};
+    bool m_radioPttObservedDown{false};
+    std::vector<TxCoordinator::Request::Weak> m_txTimeoutRefusedRequests;
     std::shared_ptr<std::atomic_bool> m_transmitServiceSession{std::make_shared<std::atomic_bool>(true)};
     quint64 m_dvkTxRequest{0};
     quint64 m_navtexTxRequest{0};
@@ -2462,6 +2486,16 @@ private:
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
+    void onTxTimeoutTransmitting(bool transmitting);
+    void onTxTimeoutTick();
+    void expireTransmitTimeout();
+    void loadTxTimeoutSettings();
+    QString txTimeoutKeyingSource() const;
+    void noteTxTimeoutHold(const TxCoordinator::Request& request);
+    void noteTxTimeoutRelease(const TxCoordinator::Request& request);
+    void noteTxTimeoutRefused(const TxCoordinator::Request& request);
+    bool txTimeoutRefused(const TxCoordinator::Request& request) const;
+    void publishTxTimeoutLatch(bool before);
     bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request);
     TransmitModel::KeyingRoute producerKeyingRoute(const TxCoordinator::Request& request,
                                                   TxActivity activity, bool& dispatched);

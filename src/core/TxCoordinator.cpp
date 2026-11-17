@@ -320,6 +320,16 @@ TxCoordinator::Request TxCoordinator::Request::Weak::lock() const
     return request;
 }
 
+quintptr TxCoordinator::Request::producerKey() const
+{
+    return m_state ? reinterpret_cast<quintptr>(m_state->producer.m_state.get()) : 0;
+}
+
+bool TxCoordinator::Request::producerValid() const
+{
+    return m_state && m_state->producer.valid();
+}
+
 bool TxCoordinator::Request::valid() const
 {
     if (!m_state || m_state->closed.load(std::memory_order_acquire)

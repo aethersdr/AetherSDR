@@ -2393,6 +2393,12 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::reconcileAdministration);
     connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::reconcileAdministration);
     m_desktopTxActor = m_txCoordinator.registerActor({true, 0});
+    m_txTimeoutTimer = new QTimer(this);
+    m_txTimeoutTimer->setInterval(250);
+    connect(m_txTimeoutTimer, &QTimer::timeout, this, &RadioModel::onTxTimeoutTick);
+    connect(this, &RadioModel::radioTransmittingChanged, this, &RadioModel::onTxTimeoutTransmitting);
+    connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::loadTxTimeoutSettings);
+    connect(this, &RadioModel::infoChanged, this, &RadioModel::loadTxTimeoutSettings);
     // FlexLib APD.cs matches against the transmit slice, else the active one.
     m_transmitModel.setApdTxSliceResolver([this]() -> std::optional<TransmitModel::ApdTxSlice> {
         SliceModel* slice = txSlice();
@@ -5427,6 +5433,12 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
 // own release. CW keys itself.
 void RadioModel::followRadioPtt(bool down)
 {
+    m_radioPttObservedDown = down;
+    if (!down && m_radioPttProducer.valid()) {
+        // The jack's release is a release even when the host key was refused
+        // or already ended by a time-out.
+        noteTxTimeoutRelease(m_radioPttProducer.request());
+    }
     if (!down) {
         if (m_radioPttKeyed) {
             m_radioPttKeyed = false;
@@ -5468,6 +5480,9 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 bool RadioModel::setProducerTransmit(const TxCoordinator::Request& request, bool tx,
                                      TransmitModel::PttSource source)
 {
+    if (!tx) {
+        noteTxTimeoutRelease(request);
+    }
     const bool accepted = setTransmitImpl(tx, source, &request);
     if (tx && !accepted) {
         // Synchronous notifications may refuse after admission. Retire the
@@ -5934,6 +5949,9 @@ bool RadioModel::requestProducerCw(const TxCoordinator::Request& request, bool d
                                   std::chrono::steady_clock::time_point scheduledAt,
                                   const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs)
 {
+    if (!down) {
+        noteTxTimeoutRelease(request);
+    }
     return sendCwInput(down, ptt, notifySidetone, debugSource, debugTraceId, debugSourceMs, scheduledAt, &request);
 }
 

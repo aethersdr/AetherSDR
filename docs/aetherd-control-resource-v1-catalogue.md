@@ -226,6 +226,11 @@ commands. Create a new instance to restart discovery.
   `staleAfterMs` (2000), and `limited`. The latter stays true until meter clear
   or connection reset after an invalid/over-capacity definition is excluded.
 - `identity`: `name`, `model`, `serial`, `version`, `manufacturer`.
+- `transmitTimeout`: the host transmit time-out (RFC #7021), read-only:
+  `enabled`, `timeoutS` (15–1800), `warningS` (0 = no warning) and `latched`,
+  true after an expiry until every keying input has released and the radio is
+  idle. The radio's own interlock timeout, where it has one, may end an over
+  sooner. Observation only; it grants and keys nothing.
 - `capabilities`:
   - `maxSlices`, `maxPanadapters`, `sampleRatesHz`;
   - `tuningRangeHz` with `minimum` and `maximum`;

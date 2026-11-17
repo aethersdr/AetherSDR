@@ -212,6 +212,10 @@ public:
         // input, never from the current connection at timer/output time.
         // One derivation level only; all handles share the global bound.
         [[nodiscard]] Request derive() const;
+        // Identity of the producing lifetime, for bookkeeping only (zero when
+        // none). It grants nothing and cannot capture another request.
+        [[nodiscard]] quintptr producerKey() const;
+        [[nodiscard]] bool producerValid() const;
     private:
         friend class TxCoordinator;
         friend class Producer;
