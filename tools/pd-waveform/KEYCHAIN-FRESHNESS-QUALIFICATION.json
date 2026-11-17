@@ -1,0 +1,931 @@
+{
+  "updated_utc": "2026-11-17T23:42:40.512822+00:00",
+  "base_commit": "6ea0f1aa10a50992d4f31afee946beaeddbb45f3",
+  "exact_source_sha256": {
+    "src/core/TailnetShimTokenStore.cpp": "1d3ecceb95ac76a78090de3455b3678a6b2c711fcb9d38676820c1785e4a3458",
+    "src/core/TailnetShimTokenStore.h": "8fc34900da16b0d0025dcda911302819b467550625d98a7df95a90c871b1bfb8",
+    "docs/user/docs/tailscale-remote-access.md": "bd585236ca01ec44f0bf41a5cb22f52e89ebc8fc3091bf2398b0ce506dddb7a4"
+  },
+  "qualified_source_overlay_sha256": "d75af73ef09b73558f813351c1351b9dcafa31de649f164dccd0f4c179c50c7e",
+  "production_ready": false,
+  "read_component_qualified": true,
+  "atomic_retirement_qualified": false,
+  "running_desktop_contains_fix": false,
+  "original_defect": "A clean persisted session cache permanently suppressed backend reads. Another process could replace/delete its entry while loads returned the old token. Process-local retirement also deleted another process newer saved value, including identical token bytes.",
+  "before": {
+    "created_utc": "2026-11-17T23:24:49.968974+00:00",
+    "source_commit": "6ea0f1aa10a50992d4f31afee946beaeddbb45f3",
+    "binary_sha256": "5e36a9d7dfbf1925dd4ae51d855e6bb21565d9ea83b21d27c166102c4e9fcdb9",
+    "cases": [
+      {
+        "replacement": "different-token",
+        "identifier": "aetherpd-interprocess-probe-29f2c94f-e586-477a-91dc-dc36916a8f0e",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "read",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "actor_pid": 715304,
+        "actor_initial": "actor_loaded_original",
+        "actor_reload": "actor_reload_returned_original",
+        "actor_exit": 0,
+        "actor_output": "retirement_admitted\nbackend_entry_deleted",
+        "actor_error": "",
+        "newer_persisted_save_deleted_by_stale_actor": true
+      },
+      {
+        "replacement": "identical-token",
+        "identifier": "aetherpd-interprocess-probe-3d14fa4f-668d-48db-8022-f8c232e62460",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "read",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "actor_pid": 715349,
+        "actor_initial": "actor_loaded_original",
+        "actor_reload": "actor_reload_returned_original",
+        "actor_exit": 0,
+        "actor_output": "retirement_admitted\nbackend_entry_deleted",
+        "actor_error": "",
+        "newer_persisted_save_deleted_by_stale_actor": true
+      }
+    ],
+    "fixture_policy": "Unique disposable names and fixture values only. No radio authority or real radio credentials.",
+    "radio_mutations": [],
+    "defect_reproduced": true,
+    "production_qualified": false
+  },
+  "fix": "Only pending/failed local writes override the backend. Otherwise each load reads the keychain. Observed backend replacement/deletion advances a separate credential revision; save generations fence in-flight reads independently. An uncertain read returns no token and invalidates the adopted revision without making an older read erase a newer local save.",
+  "after": {
+    "created_utc": "2026-11-17T23:33:10.317679+00:00",
+    "binary_sha256": "12a63e47da1bc8d969abc88af4a6512fc6f4ed0ee406624db5109e9d23d0ecd3",
+    "cases": [
+      {
+        "kind": "changed-token",
+        "identifier": "aetherpd-interprocess-probe-f34aeb38-1a5f-46fe-a835-124b58edf7f3",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "read",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "read",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "actor_pid": 722815,
+        "reload": "actor_reload_changed",
+        "actor_exit": 4,
+        "actor_output": "retirement_refused",
+        "actor_error": "",
+        "expected_outcome_observed": true
+      },
+      {
+        "kind": "identical-token",
+        "identifier": "aetherpd-interprocess-probe-a50c7d03-482e-48f8-84f5-b4af9005083b",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "actor_pid": 722860,
+        "reload": "actor_reload_returned_original",
+        "actor_exit": 0,
+        "actor_output": "retirement_admitted\nbackend_entry_deleted",
+        "actor_error": "",
+        "remaining_defect_reproduced": true,
+        "expected_outcome_observed": true
+      },
+      {
+        "kind": "external-delete",
+        "identifier": "aetherpd-interprocess-probe-e592db34-8cae-4ec3-b954-0ec200b2c3c6",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "actor_pid": 722902,
+        "reload": "actor_reload_changed",
+        "actor_exit": 4,
+        "actor_output": "retirement_refused",
+        "actor_error": "",
+        "expected_outcome_observed": true
+      },
+      {
+        "kind": "pending-write",
+        "identifier": "aetherpd-interprocess-probe-353b6956-3bbc-46c2-b1f8-45121f39bac1",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "pending-write-session",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "read",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "expected_outcome_observed": true
+      },
+      {
+        "kind": "failed-write",
+        "identifier": "aetherpd-interprocess-probe-6cc691b7-aedc-4629-8288-3a1b9274d369",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "failed-write-session",
+            "isolated_invalid_session_bus": true,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "expected_outcome_observed": true
+      }
+    ],
+    "radio_mutations": [],
+    "production_qualified": false,
+    "read_fix_qualified": true,
+    "atomic_retirement_still_failed": true
+  },
+  "sanitized_after": {
+    "created_utc": "2026-11-17T23:36:43.078014+00:00",
+    "binary_sha256": "111e6f3eec8fe657a34689e53e3f12bc2fd3231ead951aaff58fa40872b4e074",
+    "cases": [
+      {
+        "kind": "changed-token",
+        "identifier": "aetherpd-interprocess-probe-1bf3324e-60d8-45eb-b895-11e048c882b3",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "read",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "read",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "actor_pid": 726264,
+        "reload": "actor_reload_changed",
+        "actor_exit": 4,
+        "actor_output": "retirement_refused",
+        "actor_error": "",
+        "expected_outcome_observed": true
+      },
+      {
+        "kind": "identical-token",
+        "identifier": "aetherpd-interprocess-probe-809134b8-1e38-4234-998f-88200e3d6d3b",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "actor_pid": 726327,
+        "reload": "actor_reload_returned_original",
+        "actor_exit": 0,
+        "actor_output": "retirement_admitted\nbackend_entry_deleted",
+        "actor_error": "",
+        "remaining_defect_reproduced": true,
+        "expected_outcome_observed": true
+      },
+      {
+        "kind": "external-delete",
+        "identifier": "aetherpd-interprocess-probe-8696248c-2589-45e2-be28-5ea26f186d42",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "write",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "actor_pid": 726383,
+        "reload": "actor_reload_changed",
+        "actor_exit": 4,
+        "actor_output": "retirement_refused",
+        "actor_error": "",
+        "expected_outcome_observed": true
+      },
+      {
+        "kind": "pending-write",
+        "identifier": "aetherpd-interprocess-probe-0d9c96ef-e5b5-436b-9234-9802340032ac",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "pending-write-session",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "read",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "expected_outcome_observed": true
+      },
+      {
+        "kind": "failed-write",
+        "identifier": "aetherpd-interprocess-probe-d8b545b7-1532-461f-9424-cc5f66713aaa",
+        "operations": [
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "failed-write-session",
+            "isolated_invalid_session_bus": true,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "cleanup": [
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "cleanup",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          },
+          {
+            "mode": "absent-direct",
+            "isolated_invalid_session_bus": false,
+            "exit": 0,
+            "output": "pass",
+            "error": ""
+          }
+        ],
+        "expected_outcome_observed": true
+      }
+    ],
+    "radio_mutations": [],
+    "production_qualified": false,
+    "read_fix_qualified": true,
+    "atomic_retirement_still_failed": true
+  },
+  "inflight_read_save": {
+    "normal_passed": true,
+    "sanitized_passed": true
+  },
+  "slot_lifecycle": {
+    "operations": 47,
+    "direct_EntryNotFound_reads": 5,
+    "all_passed": true,
+    "scope": "New disposable entries against changed store, including context destruction and acknowledged-writer SIGKILL."
+  },
+  "mutations": [
+    {
+      "mutation": "permanent_cache",
+      "compile_exit": 0,
+      "link_exit": 0,
+      "test_exit": 1,
+      "result": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/interprocess-credential-retirement/mutants/permanent_cache/result.json"
+    },
+    {
+      "mutation": "ignore_session_override",
+      "compile_exit": 0,
+      "link_exit": 0,
+      "test_exit": 1,
+      "result": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/interprocess-credential-retirement/mutants/ignore_session_override/result.json"
+    },
+    {
+      "mutation": "ignore_intervening_save",
+      "compile_exit": 0,
+      "link_exit": 0,
+      "test_exit": 1,
+      "result": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/interprocess-credential-retirement/mutants/ignore_intervening_save/result.json"
+    }
+  ],
+  "verification": {
+    "Linux_AetherSDR_build": "exec59841 exit0; not launched",
+    "focused_CTest": "exec59841 exit0, two tests passed",
+    "session_only_ASAN_UBSAN_LSAN": "exit0; session-sanitized-test.log empty",
+    "real_keychain_ASAN_UBSAN_LSAN": "All five fixture cases and separate in-flight read/save case observed expected outcomes; deliberate identical-token retirement defect remains. Only fixture/store/probe instrumented, not QtKeychain/OS libraries.",
+    "docs": "npm ci and npm run build exit0, exec44645",
+    "static": "git diff --check, generated references and 767 log-rule checks passed; 12 pre-existing unrelated cited-line offsets remain",
+    "exact_source_sha256": {
+      "src/core/TailnetShimTokenStore.cpp": "1d3ecceb95ac76a78090de3455b3678a6b2c711fcb9d38676820c1785e4a3458",
+      "src/core/TailnetShimTokenStore.h": "8fc34900da16b0d0025dcda911302819b467550625d98a7df95a90c871b1bfb8",
+      "docs/user/docs/tailscale-remote-access.md": "bd585236ca01ec44f0bf41a5cb22f52e89ebc8fc3091bf2398b0ce506dddb7a4"
+    },
+    "binary_sha256": {
+      "AetherSDR": "fe25329c4a4d6ccb6011373c0a104e6616739e651a2a90f0cf958309635d7aba",
+      "probe": "8adab2cae3451b49a290b9c910a43c49dacc0518811a43e6fc3da776f6b19b1e",
+      "sanitized_probe": "044b6f15fe25918124cf74b44285ef8548f5b7d8b771bd2bc77c84df684e304b"
+    }
+  },
+  "known_remaining_failure": "Even after a fresh read, identical-token external saves are indistinguishable from an unchanged entry. The stale process still admits retirement and deletes that fixture entry. Both normal and sanitized receipts retain this failure. There is also no atomic read/compare/delete interval protecting a new write after a read.",
+  "required_next_work": {
+    "implemented": false,
+    "contract": [
+      "Serialize cooperating processes mutations for each credential with a user-scoped authority independent of settings profile/TMP overrides. Bound lock admission without blocking the GUI.",
+      "Associate each adoption with an across-process version, including identical-value writes; compare it while holding authority through backend completion.",
+      "Preserve authority across closed windows and late backend completions; never treat timeout/cancellation as proof a write cannot still commit.",
+      "Exercise writer crash, pending/failed writes, metadata/backend disagreement, stale/foreign lock ownership, read/delete races and caller deletion. Keep secrets only in the OS keychain.",
+      "Qualify the actual OS backends on Windows/macOS/Linux, including crash/late-completion behavior. Do not promote component tests to a whole-store atomicity claim."
+    ]
+  },
+  "platform_observation": {
+    "earlier_build_source": "239931ebfc212396cb7a28460274dd320b93ec43",
+    "macOS_run": 44192984291,
+    "Intel_job": 134426966144,
+    "Intel_state": "verified live in Build step",
+    "ARM64_job": 134426966670,
+    "ARM64_state": "failed before compile at ONNX HTTP404",
+    "new_dispatch_or_retry": false,
+    "current_fix_compiled_on_other_platforms": false
+  },
+  "radio_mutations": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "real_radio_credential_mutations": [],
+  "limits": [
+    "This is a read-freshness fix, not complete inter-process credential coordination. Production and full P4 remain unqualified.",
+    "Failed-write fallback uses a nonexistent D-Bus address in one child only. No real keyring lock/outage or backend-error recovery of a previously cached persisted entry was injected.",
+    "No timing/power-loss durability or same-machine multi-user isolation claim. Only unique fixture entries were modified and all were cleaned up.",
+    "Initial baseline ELF hash is recorded, but that exact binary was not separately retained; its source is reconstructed from the clean6ea base and the unchanged initial actor path. Final/five-case binaries and corresponding source are archived.",
+    "The usual running desktop and radio package were not updated. Original whole-radio hang, actual6300 native privilege/hardware, natural alignment/cold bypass, final RF/stockAPD and independent release gates remain open."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/keychain-freshness-components.tar.gz",
+    "bytes": 1388245,
+    "sha256": "0a6e0134246b32048a559d502661c77acf16c716e39d83db83510a5b776ec392",
+    "members": 77,
+    "all_members_verified": true,
+    "scope": "Diagnostic source/probes/licenses/receipts only; not a signed radio package or byte-reproducibility claim."
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/CMakeLists.txt.gz": "eba550c9bfb2e33e66fa2613afda40bd32a94a6e6ca05d1ca61c6cc9c46e24bf",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/after-build-02.log.gz": "0fafbf34deaf82972fef060b4d063c96e65cb15a4dec8c2a62d09df6973f93cb",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/after-build-03.log.gz": "f764e67e887a56368b3185a7cdc63d5b697f5b35ac1eb1a009465224df6eb296",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/after-build-04.log.gz": "b7b2b4f89e7c68c09d2afd243538f1917a3f76c79c4b0db2c9d748bc418f38a1",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/after-build.log.gz": "b7b2b4f89e7c68c09d2afd243538f1917a3f76c79c4b0db2c9d748bc418f38a1",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/after-result.json.gz": "f32e07ac4f081570004737c1049e803eb5d11f7590f96f1e728f9d1fb159ae75",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/after.py.gz": "e9e9785ef743b130e35e6235e85fed3a2d9f4cf9065cad4645e3f67d957b84a1",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/baseline-source/SettingsCredentialPolicy.h.gz": "186252c0b359795b5281d97e28a091d7b833673bed4e944a7b8ac69c250908f2",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/baseline-source/TailnetShimTokenStore.cpp.gz": "8c8497fcd69b46c0e9671f494077f3e9f16dd69d568d828ef4b148f492b3f687",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/baseline-source/TailnetShimTokenStore.h.gz": "93d114325ec30fb8bdf094a904405375ef217c3f3cffa6128e7254f999b2ad44",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/baseline-source/probe.cpp.gz": "519c23a0c82870ad82f869abc3b809677ac605c644a6ce49bddcc8aaa0b75923",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/baseline-source/source-receipt.json.gz": "eccd600da6c45f434dd0301d5c0acad2b207d225588915abd62bc6411af75609",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/build-receipts.json.gz": "68c4d0f7060744e2819d977c78f0ff4539c2c9171f0983fcd5c0aef11a5cabc2",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/build.log.gz": "0fafbf34deaf82972fef060b4d063c96e65cb15a4dec8c2a62d09df6973f93cb",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/configure.log.gz": "7b43780590a54263f87ac27669174f4dfb2d32bb19ac92f55f6030f6cebd67fc",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/docs-build.log.gz": "7a893732beaf686df717a032a1045ca8b02463f11bcd520b9a8f03ec9af91a7d",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/docs-install.log.gz": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/five-case-history/after.py.gz": "e9e9785ef743b130e35e6235e85fed3a2d9f4cf9065cad4645e3f67d957b84a1",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/five-case-history/probe.cpp.gz": "039e37794dc42e0642b526326b5f27d38c1b920a1a1a6722a0affc671596a304",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/focused-test.log.gz": "095dedf0402e324b6e9a1c3e2fce92f4f361b70018dad01db47c563958feefed",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/full-build.log.gz": "dd65aba03c20ac143ae7e04815216d3d5f7d40b5a77697d94676555ecc0b154e",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/generated-reference.log.gz": "ef92287bd4b4371e61725f5f14d31857b596ee10d4c72b03f49375736759e4fb",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/inflight-build.log.gz": "f764e67e887a56368b3185a7cdc63d5b697f5b35ac1eb1a009465224df6eb296",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/inflight-result.json.gz": "10cacb6fa31309e354d4a32ea726b53111f758e7ca956c501edaba14a493af10",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/inflight-sanitized-build.log.gz": "f764e67e887a56368b3185a7cdc63d5b697f5b35ac1eb1a009465224df6eb296",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/inflight-sanitized-result.json.gz": "b228299adea5f0b8b3742b5763a6d61a85d2edea797ed67373ec577ff724e3fa",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/inflight.py.gz": "4320441063fbc56a03bbf9b28880f46ffb0039eb2b5eb69b3d2df992597dce25",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/live-platform-jobs.json.gz": "314c63401977b498afd2fa82682a7dc5d45a42a5b0c3734ff54a3c0af3b531ef",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/log-rules.log.gz": "43f4c5c7fd6b846e8154366f1a038d47bf4af3b8a0763182f14aeb38d4dce887",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_intervening_save/TailnetShimTokenStore.cpp.gz": "0954514559ae22730721cd40c3a1e4870d2a5fbe7f89cfa1d2d405ea44778f9c",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_intervening_save/compile.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_intervening_save/link.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_intervening_save/result.json.gz": "eb53ef9a7fc5f896530bc8ce86ee8e8d5b8dd8136b0d7383d7ff06b8e32c2d8a",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_intervening_save/run.log.gz": "875f3e1f909a287701686e012a741a6b1ade2ecbb1396ddfc7789eb984f945ed",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_session_override/TailnetShimTokenStore.cpp.gz": "9d9f09c5105b616c4b90a3ffc10b25992d0fdad733b9312d05b26bde90562837",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_session_override/compile.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_session_override/link.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_session_override/result.json.gz": "5486250b32cdc5659ddb08541c071e1ab80ba8728b4cf2fc7a61d869e6e319c8",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_session_override/run.log.gz": "8dc0ce5f03bc69a2d92e3b4ff88919b26cdbbdddc7736a7538d3f284662c55e3",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/ignore_session_override/run.py.gz": "3da3fd0b7e9cd4a15bdd0a3f4ab21941d1c72efc281f4b2e736587e29fd3ffbc",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/permanent_cache/TailnetShimTokenStore.cpp.gz": "67a2db6937470d789de83d19562ba8d59d57618fde8f59bd5311300a29fd7edb",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/permanent_cache/compile.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/permanent_cache/link.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/permanent_cache/result.json.gz": "bc2201e3e16d09426b3f6b87a8c4c5d43d24062dcfe0552ff03389ffd0e8961a",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/permanent_cache/run.log.gz": "8dc0ce5f03bc69a2d92e3b4ff88919b26cdbbdddc7736a7538d3f284662c55e3",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/permanent_cache/run.py.gz": "f80b01c4861543afc4cd03eb2d7fc233d777ce96c98a4dd4a60e7e53bd486e5b",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/results.json.gz": "2cbddd8ef213942e16fb55273e1517851d9ecb61924de92d86c3a605a5e07ee8",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutants/source-unchanged.json.gz": "8e2169004d04a3f903dce070dd4013093b70e3f3a908438127340f4705b9ced5",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/mutations.py.gz": "aafbc4da889b880e2aa38a33ccccfe33dd8e9d54c5cfa6116c66adea394c9722",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/probe.cpp.gz": "ceaea56c2eb11a6d0db9fd660de926af9a7bfa709ea50133f0dbcdbe646f7e11",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/qualified-source.diff.gz": "efbd4eb564d64a1d6221a4e6059e4879a86112ab75e7fbeead45e54b2fb3125c",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/result.json.gz": "a1ffd93e7cdb33df25358f49b49131ff227714cd7faebfc05bd511f126c53aa3",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/run.py.gz": "58fbb8e32fae5e37fe5c499fe0c20d13efdfa5ae70ad3b78860a56e5bd5940a4",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/sanitized-after-result.json.gz": "1a5a14daf237af031a5e76a63680fcda3b500a98c2e1e58f1240db894ea407e2",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/sanitized-after.py.gz": "4033b299bddd83c78b363ae2d88de132fedb46e723163e74548c62fccf64b72c",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/sanitized-build.log.gz": "bf6c87f0b535bf741b34bdd877c724bba042de37d29668af342c2c9ef4c51dba",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/sanitized-probe-build.log.gz": "0fafbf34deaf82972fef060b4d063c96e65cb15a4dec8c2a62d09df6973f93cb",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/sanitized-probe-configure.log.gz": "8e9f43e18a66aafa62999a087664b263fa2994d87f95bfbc0477a92cbb6617f7",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/save-qualification.py.gz": "5abf65a5315fb63d7269a6492778ab35ce606377db941b14cb864b62b34724de",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/session-sanitized-test.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/slot-backend-absence.json.gz": "a585c7efc7d508f142381883d4541947de74731766de5f38d789ca2fa3395a8e",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/slot-build.log.gz": "0bbce42f56eadf17e1415bcf8773b18b15d99af5830a1be8f04308c798762667",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/slot-configure.log.gz": "6e716b26e9197f7b7356a637fdc2bc1688ec69042499cb19b4d8690308c38b86",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/slot-lifecycle/CMakeLists.txt.gz": "e15e8c391aeabadf44be43f77ec7352502898e2fcbfce7d0eca7fa029ac5ff7b",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/slot-lifecycle/probe.cpp.gz": "53589618321fe7e552a05a0c012614efe1eb49056c552749a941ef24e01542c4",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/slot-lifecycle/result.json.gz": "41463e0ba948e3a9eb8da32b5ef3526f38ec3a78189839f32c61f6f2e1115389",
+    "tools/pd-waveform/evidence/20261117-keychain-freshness/slot-lifecycle/run.py.gz": "7eea3ca74991a5c8f522911c8db83796a19c81d3cc17b4e3407ca7cda8e2fe00"
+  }
+}

@@ -38,8 +38,9 @@ public:
                      QObject* context = nullptr,
                      std::function<void(bool persisted, const QString& error)> done = {},
                      Entry entry = Entry::TailnetShim);
-    // Capture when adopting a token; every save advances this process's revision,
-    // including a save of identical bytes. It does not coordinate other processes.
+    // Capture when adopting a token. Saves (including identical bytes), observed
+    // backend changes and uncertain reads advance this process's revision.
+    // It does not coordinate other processes' writes or deletions.
     [[nodiscard]] static quint64 revision(const QString& radioSerial, Entry entry = Entry::TailnetShim);
     // Retire only the token/revision pair still current in this process.
     // A reply cannot erase a credential saved by another window in the meantime.

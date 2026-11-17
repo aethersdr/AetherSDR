@@ -760,7 +760,11 @@ revoked legacy sign-in token.
 If multiple **Remote Access** windows are open in one AetherSDR process, an
 older window's legacy sign-in rejection or completed disconnect cannot delete
 a credential saved later by another window, including an identical token. This protection does not
-coordinate credential changes between separate AetherSDR processes.
+coordinate writes or deletions between separate AetherSDR processes. Close other
+AetherSDR instances before changing credentials. Loads of persistent credentials
+read the system keychain again to observe another process's replacement or
+deletion. A pending or failed keychain write retains its value for the current
+session; a matching token value alone cannot identify a newer save.
 Losing that saved owner credential is a separate recovery case; token-free
 takeover and reinstalling the legacy remote-access waveform are not recovery
 procedures for this managed installation.

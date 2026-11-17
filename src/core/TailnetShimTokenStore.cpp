@@ -46,7 +46,21 @@ QHash<QString, quint64>& saveGenerations()
     return generations;
 }
 
+QHash<QString, quint64>& credentialRevisions()
+{
+    static QHash<QString, quint64> revisions;
+    return revisions;
+}
+
 #ifdef HAVE_KEYCHAIN
+// A pending or failed write retains its session value. Once persistence is
+// confirmed, each load consults the backend so other processes' changes count.
+QHash<QString, bool>& sessionOverrides()
+{
+    static QHash<QString, bool> overrides;
+    return overrides;
+}
+
 constexpr const char* kKeychainService = "AetherSDR";
 #endif
 
@@ -79,12 +93,15 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
     }
     const QString key = keyFor(radioSerial, entry);
     ++saveGenerations()[key];
+    ++credentialRevisions()[key];
     if (token.isEmpty()) {
         sessionTokens().remove(key);
     } else {
         sessionTokens().insert(key, token);
     }
 #ifdef HAVE_KEYCHAIN
+    sessionOverrides().insert(key, true);
+    const quint64 generation = saveGenerations().value(key);
     QKeychain::Job* job = nullptr;
     if (token.isEmpty()) {
         job = new QKeychain::DeletePasswordJob(QString::fromLatin1(kKeychainService));
@@ -97,11 +114,14 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
     job->setAutoDelete(true);
     QPointer<QObject> guard(context);
     QObject::connect(job, &QKeychain::Job::finished, job,
-                     [guard, deleting = token.isEmpty(), hasContext = context != nullptr, done = std::move(done)](QKeychain::Job* finished) {
+                     [guard, key, generation, deleting = token.isEmpty(), hasContext = context != nullptr, done = std::move(done)](QKeychain::Job* finished) {
         const bool ok = finished->error() == QKeychain::NoError
             || (deleting && finished->error() == QKeychain::EntryNotFound);
         if (!ok) {
             qWarning() << "TailnetShimTokenStore: keychain write failed:" << finished->errorString();
+        }
+        if (saveGenerations().value(key) == generation) {
+            sessionOverrides().insert(key, !ok);
         }
         if (done && (!hasContext || guard)) {
             done(ok, ok ? QString() : finished->errorString());
@@ -119,7 +139,7 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
 
 quint64 TailnetShimTokenStore::revision(const QString& radioSerial, Entry entry)
 {
-    return saveGenerations().value(keyFor(radioSerial, entry));
+    return credentialRevisions().value(keyFor(radioSerial, entry));
 }
 
 bool TailnetShimTokenStore::clearIfCurrent(const QString& radioSerial, const QString& expectedToken,
@@ -149,7 +169,7 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
     const QString key = keyFor(radioSerial, entry);
     const QString session = sessionTokens().value(key);
 #ifdef HAVE_KEYCHAIN
-    if (session.isEmpty()) {
+    if (session.isEmpty() || !sessionOverrides().value(key)) {
         const quint64 startedAt = saveGenerations().value(key);
         auto* job = new QKeychain::ReadPasswordJob(QString::fromLatin1(kKeychainService));
         job->setKey(key);
@@ -163,8 +183,19 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
             }
             const bool savedSince = saveGenerations().value(key) != startedAt;
             const QString token = pickLoadedToken(savedSince, read, sessionTokens().value(key));
-            if (!savedSince && !token.isEmpty()) {
-                sessionTokens().insert(key, token);
+            if (!savedSince) {
+                if (finished->error() == QKeychain::NoError || finished->error() == QKeychain::EntryNotFound) {
+                    if (sessionTokens().value(key) != token) {
+                        ++credentialRevisions()[key];
+                    }
+                    if (token.isEmpty()) { sessionTokens().remove(key); }
+                    else { sessionTokens().insert(key, token); }
+                } else {
+                    // An uncertain backend read cannot authorize retirement
+                    // using a previously adopted process-local revision.
+                    ++credentialRevisions()[key];
+                }
+                sessionOverrides().insert(key, false);
             }
             if (guard) {
                 callback(token);
