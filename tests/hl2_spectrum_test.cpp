@@ -1,8 +1,8 @@
 // aetherd HL2 Phase 1a — Hl2Spectrum unit test. Feeds synthetic IQ through the
 // FFT panadapter path and checks: a complex tone peaks at the expected
 // fftshifted bin, DC lands at the centre bin, partial frames accumulate across
-// calls, and a large DC offset (the direct-sampling ADC bias) is removed so it
-// does not swamp a real tone — mirroring the tools/hl2/spectrum.py behavior.
+// calls, a large DC offset is removed so it does not swamp a real tone, and a
+// strong tone off a bin centre leaves no line at the centre bin.
 
 #include "core/backends/hl2/Hl2Spectrum.h"
 #include "core/dsp/WdspChannel.h"
@@ -12,8 +12,10 @@
 #include <memory>
 #include <thread>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <vector>
 
@@ -50,6 +52,215 @@ static int argmax(const std::vector<float>& v)
         if (v[static_cast<std::size_t>(i)] > v[static_cast<std::size_t>(m)]) m = i;
     return m;
 }
+
+// The centre bin under a strong off-bin tone.
+// A production-size stream: 1024-point frames at 192 kHz, fed in 126-sample
+// EP6 blocks, with seeded Gaussian noise so the floor is a real floor. The tone
+// sits ~90 dB over it, as the HL2's own TX does in RX1 while keyed.
+
+namespace {
+
+constexpr int kStreamN = 1024;
+constexpr double kStreamFs = 192000.0;
+constexpr int kEp6Block = 126;
+constexpr double kNoiseSigma = 3e-4;   // per component: ~-90 dBFS per bin
+
+// xorshift64* + Box-Muller: the same noise on every standard library.
+struct Noise {
+    std::uint64_t state = 0x9E3779B97F4A7C15ull;
+    double uniform()
+    {
+        state ^= state >> 12; state ^= state << 25; state ^= state >> 27;
+        return (static_cast<double>((state * 0x2545F4914F6CDD1Dull) >> 11) + 0.5) / 9007199254740992.0;
+    }
+    std::complex<double> gaussian(double sigma)
+    {
+        const double r = sigma * std::sqrt(-2.0 * std::log(uniform()));
+        const double th = 2.0 * kPi * uniform();
+        return {r * std::cos(th), r * std::sin(th)};
+    }
+};
+
+struct Signal {
+    double toneHz = 0.0;     // offset from centre; 0 with toneAmp 0 = none
+    double toneAmp = 0.0;
+    std::complex<double> dc{};
+};
+
+// What the stream showed: per-frame centre-bin prominence, and the power
+// average of every frame, for a floor and a peak that do not jitter.
+struct Seen {
+    std::vector<double> centreOverFloorDb;    // one per frame, against the averaged floor
+    std::vector<double> meanPower;            // per bin, averaged over the frames
+    int frames = 0;
+};
+
+double floorDbOf(const std::vector<double>& power)
+{
+    // Median of the bins 4..60 either side of centre: clear of DC and of the
+    // tones used below (which sit >= 66 bins out).
+    std::vector<double> ring;
+    const int half = kStreamN / 2;
+    for (int k = 4; k <= 60; ++k) {
+        ring.push_back(power[static_cast<std::size_t>(half + k)]);
+        ring.push_back(power[static_cast<std::size_t>(half - k)]);
+    }
+    std::nth_element(ring.begin(), ring.begin() + ring.size() / 2, ring.end());
+    return 10.0 * std::log10(ring[ring.size() / 2]);
+}
+
+double centreOverFloorDb(const Seen& seen)
+{
+    return 10.0 * std::log10(seen.meanPower[kStreamN / 2]) - floorDbOf(seen.meanPower);
+}
+
+// Streams `seconds` of `sig` through `spec`. capFps > 0 mirrors Hl2RxDsp's
+// display cap: accumulate() between due frames, process() once one is due.
+// Frames are collected only when `collect` is set, and only those that lie
+// wholly inside this call: a frame straddling a key-on carries the onset's
+// real splatter, which is not what is under test.
+Seen stream(Hl2Spectrum& spec, Noise& noise, std::uint64_t& n, const Signal& sig,
+            double seconds, bool collect, double capFps = 0.0)
+{
+    Seen seen;
+    seen.meanPower.assign(kStreamN, 0.0);
+    std::vector<std::vector<float>> frames;
+    std::vector<std::complex<float>> block(kEp6Block);
+    std::vector<float> bins;
+    const std::uint64_t begin = n;
+    const std::uint64_t end = n + static_cast<std::uint64_t>(seconds * kStreamFs);
+    const std::uint64_t dueEvery = capFps > 0.0 ? static_cast<std::uint64_t>(kStreamFs / capFps) : 0;
+    std::uint64_t lastFrame = n;
+    while (n < end) {
+        for (int i = 0; i < kEp6Block; ++i, ++n) {
+            const double ph = 2.0 * kPi * sig.toneHz * static_cast<double>(n) / kStreamFs;
+            const std::complex<double> x = sig.toneAmp * std::complex<double>(std::cos(ph), std::sin(ph))
+                                         + sig.dc + noise.gaussian(kNoiseSigma);
+            block[static_cast<std::size_t>(i)] = {static_cast<float>(x.real()), static_cast<float>(x.imag())};
+        }
+        if (dueEvery > 0 && n - lastFrame < dueEvery) {
+            spec.accumulate(block);
+            continue;
+        }
+        if (spec.process(block, bins) > 0) {
+            lastFrame = n;
+            if (collect && n - begin >= static_cast<std::uint64_t>(kStreamN + kEp6Block)) {
+                frames.push_back(bins);
+            }
+        }
+    }
+    seen.frames = static_cast<int>(frames.size());
+    for (const auto& f : frames) {
+        for (int k = 0; k < kStreamN; ++k) {
+            seen.meanPower[static_cast<std::size_t>(k)] +=
+                std::pow(10.0, f[static_cast<std::size_t>(k)] / 10.0) / static_cast<double>(frames.size());
+        }
+    }
+    if (!frames.empty()) {
+        const double floorDb = floorDbOf(seen.meanPower);
+        for (const auto& f : frames) {
+            seen.centreOverFloorDb.push_back(f[kStreamN / 2] - floorDb);
+        }
+    }
+    return seen;
+}
+
+double maxOf(const std::vector<double>& v)
+{
+    return v.empty() ? 1e9 : *std::max_element(v.begin(), v.end());
+}
+
+void centreBinTests()
+{
+    // 12544 Hz (66.901 bins) and -41000 Hz (-218.667 bins): neither completes
+    // a whole number of cycles in a frame, so each has a non-zero frame mean.
+    const double kOffBinHz[] = {12544.0, -41000.0};
+    for (const double hz : kOffBinHz) {
+        for (const double capFps : {0.0, 30.0}) {
+            // 1 · KEY-ON: the display has been running on noise, then the
+            // strong tone appears (the HL2's TX leaking into RX1).
+            {
+                Hl2Spectrum spec(kStreamN, kStreamFs);
+                Noise noise;
+                std::uint64_t n = 0;
+                stream(spec, noise, n, {}, 1.0, false, capFps);
+                const Seen keyed = stream(spec, noise, n, {hz, 0.5, {}}, 1.0, true, capFps);
+                const double peakDb = 10.0 * std::log10(*std::max_element(keyed.meanPower.begin(),
+                                                                           keyed.meanPower.end()));
+                std::fprintf(stderr, "  off-bin %+.0f Hz cap %.0f fps, keyed: tone %.1f dB over floor, "
+                             "centre %.1f dB (mean), %.1f dB (worst of %d frames)\n",
+                             hz, capFps, peakDb - floorDbOf(keyed.meanPower), centreOverFloorDb(keyed),
+                             maxOf(keyed.centreOverFloorDb), keyed.frames);
+                check(keyed.frames > 20, "key-on: frames were produced");
+                check(peakDb - floorDbOf(keyed.meanPower) > 80.0,
+                      "key-on control: the tone stands ~90 dB over the floor");
+                check(centreOverFloorDb(keyed) < 3.0,
+                      "key-on: a strong off-bin tone with no DC leaves the centre bin at the floor");
+                check(maxOf(keyed.centreOverFloorDb) < 12.0,
+                      "key-on: no single frame shows a line at the centre bin");
+            }
+            // 1b · COLD START with the tone already present: a line may show
+            // while the estimate's memory is short, and is gone after 1 s.
+            {
+                Hl2Spectrum spec(kStreamN, kStreamFs);
+                Noise noise;
+                std::uint64_t n = 0;
+                stream(spec, noise, n, {hz, 0.5, {}}, 1.0, false, capFps);
+                const Seen later = stream(spec, noise, n, {hz, 0.5, {}}, 1.0, true, capFps);
+                check(centreOverFloorDb(later) < 3.0,
+                      "cold start under a strong tone: the centre bin is at the floor after 1 s");
+            }
+        }
+    }
+
+    // 2 · A CONSTANT complex DC offset (a converter bias; hpsdrsim carries
+    // one on I) is removed: from the first frame on when alone, and under a
+    // strong tone once the estimate's memory has grown (1 s).
+    for (const double toneAmp : {0.0, 0.5}) {
+        Hl2Spectrum spec(kStreamN, kStreamFs);
+        Noise noise;
+        std::uint64_t n = 0;
+        const Signal sig{12544.0, toneAmp, {0.02, -0.01}};      // DC ~-32 dBFS
+        std::vector<float> firstBins;
+        std::vector<std::complex<float>> firstFrame(kStreamN);
+        for (auto& x : firstFrame) {
+            const double ph = 2.0 * kPi * sig.toneHz * static_cast<double>(n++) / kStreamFs;
+            const std::complex<double> v = sig.toneAmp * std::complex<double>(std::cos(ph), std::sin(ph))
+                                         + sig.dc + noise.gaussian(kNoiseSigma);
+            x = {static_cast<float>(v.real()), static_cast<float>(v.imag())};
+        }
+        check(spec.process(firstFrame, firstBins) == 1, "DC: one frame from the first 1024 samples");
+        stream(spec, noise, n, sig, 1.0, false);
+        const Seen rest = stream(spec, noise, n, sig, 1.0, true);
+        const double floorDb = floorDbOf(rest.meanPower);
+        std::fprintf(stderr, "  DC offset, tone amp %.1f: centre %.1f dB first frame, %.1f dB mean of %d after 1 s\n",
+                     toneAmp, firstBins[kStreamN / 2] - floorDb, centreOverFloorDb(rest), rest.frames);
+        if (toneAmp == 0.0) {
+            check(firstBins[kStreamN / 2] - floorDb < 12.0,
+                  "DC: a constant offset alone is removed from the first frame");
+        }
+        check(centreOverFloorDb(rest) < 3.0, "DC: and is removed in steady state");
+        // Control: this offset is ~58 dB over the floor when not removed.
+        check(20.0 * std::log10(std::abs(sig.dc)) + Hl2Spectrum::kToneGainDb - floorDb > 50.0,
+              "DC control: the offset would stand far over the floor if left in");
+    }
+
+    // 3 · An ON-BIN tone (bin 100 exactly) reads its textbook level and the
+    // centre bin stays at the floor.
+    {
+        Hl2Spectrum spec(kStreamN, kStreamFs);
+        Noise noise;
+        std::uint64_t n = 0;
+        const double hz = 100.0 * kStreamFs / kStreamN;
+        const Seen seen = stream(spec, noise, n, {hz, 0.5, {}}, 1.0, true);
+        const double peakDb = 10.0 * std::log10(seen.meanPower[static_cast<std::size_t>(kStreamN / 2 + 100)]);
+        check(std::fabs(peakDb - (20.0 * std::log10(0.5) + Hl2Spectrum::kToneGainDb)) < 0.05,
+              "on-bin tone: reads 20*log10(A) + kToneGainDb, unchanged");
+        check(centreOverFloorDb(seen) < 3.0, "on-bin tone: the centre bin is at the floor");
+    }
+}
+
+}  // namespace
 
 int main()
 {
@@ -350,6 +561,8 @@ int main()
                   "and completes as soon as the lock is released");
         }
     }
+
+    centreBinTests();
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_spectrum_test: all checks passed\n");
