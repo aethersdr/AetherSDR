@@ -1,0 +1,151 @@
+{
+  "updated_utc": "2026-11-17T14:55:56.666828+00:00",
+  "status": "offline_dispatch_and_existing_regressions_passed_full_bounded_closed_loop_incomplete_experiment_parked",
+  "production_ready": false,
+  "source_base_commit": "be7ed9e04fc6cc50961815a76d196cddaf1fb3a1",
+  "provenance": {
+    "production_source_unchanged": true,
+    "base_source_sha256": "a2208c8db78035fbce2d40c3b3915657c4b1107272b92d54de63bab6e757c637",
+    "experimental_source_sha256": "71484d87b619da180039736c606a7323d77f97740f77f124a2ea22e16aa1abbf",
+    "candidate_patch_sha256": "0f13cc5e6faa3eb04ec92d234266020f48a4916c8c9e587e95670ac5143f7fa8",
+    "scope": "Separate source copies only; no package/default/privilege changes."
+  },
+  "passed": {
+    "native_regressions": {
+      "control": 9,
+      "candidate": 9
+    },
+    "dispatch_samples": {
+      "passed": true,
+      "scope": "All actual dispatched preamble samples independently compared against the archived standalone C generator; no RF.",
+      "comparisons": [
+        {
+          "variant": "control",
+          "opcode": "A",
+          "noise_samples": 96000,
+          "max_abs_error_vs_independent_prototype_float32": 0.0,
+          "capture_sha256": "d365f4dc8412cbf03c9d26378ffc3c2a16dee337f7d828cc11ea1787f943425d"
+        },
+        {
+          "variant": "control",
+          "opcode": "M",
+          "noise_samples": 96000,
+          "max_abs_error_vs_independent_prototype_float32": 0.0,
+          "capture_sha256": "d365f4dc8412cbf03c9d26378ffc3c2a16dee337f7d828cc11ea1787f943425d"
+        },
+        {
+          "variant": "control",
+          "opcode": "Q",
+          "noise_samples": 96000,
+          "max_abs_error_vs_independent_prototype_float32": 0.0,
+          "capture_sha256": "9602ff254fb85baccdc14fe871aa9db83ef1bac2932a507fc73cdec49eb763d6"
+        },
+        {
+          "variant": "candidate",
+          "opcode": "A",
+          "noise_samples": 96000,
+          "max_abs_error_vs_independent_prototype_float32": 0.0,
+          "capture_sha256": "4c75ef2a58b873d0576abee55447f171bec4cc7930ce10b3e570dfee39a3b559"
+        },
+        {
+          "variant": "candidate",
+          "opcode": "M",
+          "noise_samples": 96000,
+          "max_abs_error_vs_independent_prototype_float32": 0.0,
+          "capture_sha256": "4c75ef2a58b873d0576abee55447f171bec4cc7930ce10b3e570dfee39a3b559"
+        },
+        {
+          "variant": "candidate",
+          "opcode": "Q",
+          "noise_samples": 96000,
+          "max_abs_error_vs_independent_prototype_float32": 0.0,
+          "capture_sha256": "4df4fd3ce4977066a88ae2af072c904f8c5c3897c287bbf1f12d0611bad4b4fc"
+        }
+      ]
+    },
+    "budget_samples": 192000,
+    "noise_samples": 96000,
+    "source_commands": [
+      "A",
+      "M",
+      "Q"
+    ],
+    "tone_transition": true,
+    "sample_exhaustion_retirement": true,
+    "explicit_cancel_retirement": true,
+    "explicit_rearm_filter_reset_exact": true,
+    "no_automatic_source_restart": true,
+    "measurement_retirement_holds_silence": true
+  },
+  "isolated_selftest_adjustment": {
+    "original_control_and_candidate_selftests": "Each failed only its status-buffer capacity assertion; correction/recovery loops completed. Original logs preserved.",
+    "adjustment": "In both isolated source copies only, enlarge selftest status JSON buffer from2048 to8192bytes.",
+    "adjusted_selftests": "Both passed, including four injected transport/path faults and six warm bursts.",
+    "production_source_changed": false
+  },
+  "candidate_added_filter_state_bytes": 3056,
+  "unqualified_closed_loop": {
+    "initial_fixture_failure": "Checked feedback_ok before keying, although native start_feedback computes it on key. Corrected in the fixture.",
+    "second_attempt": "Both builds aligned and fitted the linear path, then the fixture paused IQ delivery while waiting synchronously for a WDSP fit. Actual TX continuity/freshness guards canceled the bounded source; complete closed-loop test did not pass.",
+    "supporting_logs": [
+      "control-closed-loop-02.log",
+      "candidate-closed-loop-02.log"
+    ],
+    "next_fixture_action_if_resumed": "Keep source and feedback delivery paced while the asynchronous WDSP fit runs; do not suppress continuity/freshness guards.",
+    "causal_limits": "No radio failure, no candidate-specific regression and no diagnosis of the natural alignment slip are established by these host-fixture failures."
+  },
+  "operator_deferral": "User deferred the unexplained5W SWR stop investigation. Related preamble experiment parked without deployment or RF.",
+  "production_source_files_changed": false,
+  "radio_package_or_defaults_changed": false,
+  "RF_key_actions": 0,
+  "remaining_before_any_candidate_deployment": [
+    "Complete bounded actual-waveform WDSP loop qualification.",
+    "Measure target CPU/deadline/peak behavior.",
+    "Prepare authenticated reproducible candidate/rollback artifacts with unchanged privilege scope.",
+    "Any5W SWR-directed RF experiment remains deferred by operator."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate/build/dispatch-A.f32le.gz": "83646b886819d0507b813f373b1373537467bac6753268f944aa608471a28201",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate/build/dispatch-M.f32le.gz": "83646b886819d0507b813f373b1373537467bac6753268f944aa608471a28201",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate/build/dispatch-Q.f32le.gz": "0b6fbf5245c7e4686ed21e1cf7b9a2f51df4894e6cc730dc8df802fa9551bb33",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate/source/CMakeLists.txt.gz": "ac5a3dbb1a3ae1087d673326ba9155c2f8cd3bdfc010ec0abe5d5ce8ada2dbd1",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-build.log.gz": "7bb960abd299e27188de26a92d59c207817750d73e4ced3ec94831a5ff18f38b",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-closed-loop-02.log.gz": "ae5cf8198e9a56c7e8e96c5ee89c1a7b1f90785ab0ef4550e5f36c0967daf9ab",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-configure.log.gz": "8e0916da3ae5b384de3d71a944f6a5dba3fe3a485c5b32822c33f7ad24a21b9f",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-dispatch-build.log.gz": "cb620262473cc5cb0144edad7269479903b7cfbf0d6696686ece6e6eb038ff7c",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-dispatch-configure.log.gz": "6ff17898c5e06195d7a47b0532b4355f8fe6f5c005d95785c7a805821091c663",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-dispatch-test.log.gz": "24ffe6556276937254628b57e7cc540f4b57f458d259b2a07bbc24fbbeff1402",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-integration-build.log.gz": "70cd35a6b4531659f92b135c83ee1bf477736a92eb928355ae843d76cd94a5ed",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-integration-configure.log.gz": "6ff17898c5e06195d7a47b0532b4355f8fe6f5c005d95785c7a805821091c663",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-integration-test.log.gz": "95623a866d728f380ad35a785628b3b60a942bfbcd956e224c8be277c9a183d3",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-loop-build-02.log.gz": "3cc9d0645ca4f055a553459bbcd1f7b62f6dec80eff262da1eb5adcb0d4bd904",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-selftest-buffer.patch.gz": "306baf5055eef2d9c13d88632694f0aaebc2e6258e57e5caa9f61e88eb47fd81",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-selftest.log.gz": "07d04081239c6d461ccc362ec8fa2cd094d8b60cb1b8a827f7b73d7470cf917d",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate-tests.log.gz": "c820b84809b4c29e4a350d9d743c060cf68044dac3f9d34a3813c2c2b4018ef8",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/candidate.patch.gz": "c791483abd167e59d2c66eb9349afa0f85296786f8f72408d27bbebbc8dc4ad2",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/closed-loop-results-02.json.gz": "0cbbeacbdcbbf771d6db8c42cf72c5c7db617f2b1636f6f5c7526d828084539c",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/closed_loop_preamble_test.c.gz": "93bd37bd05c7cf31fad7bee8c8942d1c60a3718c753c4ec4b0cf59635ebc132d",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control/build/dispatch-A.f32le.gz": "168f8f31abd6d608950922118048ab4bd35d25519be55a7dacbcdcf1b23be807",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control/build/dispatch-M.f32le.gz": "168f8f31abd6d608950922118048ab4bd35d25519be55a7dacbcdcf1b23be807",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control/build/dispatch-Q.f32le.gz": "ac0d5495c094d3c79fe15f167653211fd898763c144557d1ed41a7a7c135f500",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control/source/CMakeLists.txt.gz": "ac5a3dbb1a3ae1087d673326ba9155c2f8cd3bdfc010ec0abe5d5ce8ada2dbd1",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-build.log.gz": "8cdb90a31c9c853d2f407b83b59e6d0aaf9a841bf13c36b85cdd2452719bb041",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-closed-loop-02.log.gz": "e24c04474faf6b8e597affc817242c7e9777dea98b2ee0e0f97ee60b9655c379",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-configure.log.gz": "2a1712cbcc0e52bc95208efe6e57567a286f355592984467a6467aa96bb9a737",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-dispatch-build.log.gz": "cb620262473cc5cb0144edad7269479903b7cfbf0d6696686ece6e6eb038ff7c",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-dispatch-configure.log.gz": "645f75dbe314fcf2d65775f127b71c22cc754fad5b8f570c103aed7d49c66d2f",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-dispatch-test.log.gz": "d9d26e29d3ba07bee8d92ca0aa6f00d13ed880e87fdae53468284dd43cc95e5f",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-integration-build.log.gz": "70cd35a6b4531659f92b135c83ee1bf477736a92eb928355ae843d76cd94a5ed",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-integration-configure.log.gz": "645f75dbe314fcf2d65775f127b71c22cc754fad5b8f570c103aed7d49c66d2f",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-integration-test.log.gz": "60fbc3361ba6e0f033ba5e3261df5271ca5ad8a49be7143b922031744d5ec98d",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-loop-build-02.log.gz": "3cc9d0645ca4f055a553459bbcd1f7b62f6dec80eff262da1eb5adcb0d4bd904",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-selftest-buffer.patch.gz": "79873f0d4b2a7030fca896dc87f7223aeb0727a6c01c0b7f61fde82872c6503b",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-selftest.log.gz": "3ac90b9d5a450aa0ef3e60855dc45d383b05296d797af301022ebf260c74adcf",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/control-tests.log.gz": "41c752f999d55f072a7c4212987fd9369ae0d0f752ab8e91b0bee862e1daf9ef",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/dispatch-sample-comparison.json.gz": "45ad63ad295d4656367453641ddfc093f6f6626dbcf32e046932c25579c067f3",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/dispatch_preamble_test.c.gz": "91bfc980c4b3548d6b0abbbcd5608e8588b2e7d18d9e26a00d0b6c9b89b8b11a",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/integration-test-results.json.gz": "e1173c389733c676da519c228ff43da6b875c12fbfd9ebde75c72c311f0d9fdc",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/provenance.json.gz": "1dba15c5cdb650b5487c1fbb7b0b1f8250f8205881c0c46ebeec61f7656174bc",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform/save-qualification.py.gz": "b6f376b1061604a18a8be236ee5d6900f5d669bcb024a07fde99f6fc7f0b43a2"
+  }
+}

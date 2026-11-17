@@ -1,0 +1,292 @@
+{
+  "updated_utc": "2026-11-17T15:02:46.420591+00:00",
+  "status": "current_installed_8600_receive_only_owned_unkey_API_loss_cleanup_explicit_restart_and_IQ_qualified",
+  "production_ready": false,
+  "runtime_source_commit": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+  "release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+  "desktop": {
+    "pid": 3832966,
+    "socket": "/tmp/aetherpd-post-ptt-power",
+    "binary_sha256": "5410069710987385818abc17783b61ed7f298ae07dd04185241172f90f3c4c6d",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "desktop_source": "1f14740671fb2fd355a4f6d8f79b8d7de6a5b91d",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.10460461699404
+  },
+  "radio": {
+    "model": "FLEX-8600",
+    "firmware": "4.3.16.42034",
+    "boot_id": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "FDX": false,
+    "RF_commands": []
+  },
+  "fault": {
+    "command": [
+      {
+        "text": "C91|client disconnect 0x345cf148",
+        "monotonic_ns": 17429366809607,
+        "target_pid": 2955,
+        "target_start_ticks": 1742476
+      }
+    ],
+    "target": {
+      "pid": 2955,
+      "ppid": 2937,
+      "exe": "/run/aetherpd/bin/pd-unkey-guard",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@18-1310-78666.service"
+      ],
+      "start_ticks": 1742476,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1",
+      "guard_argv": [
+        "/run/aetherpd/bin/pd-unkey-guard",
+        "3",
+        "4",
+        "0x345cf148",
+        "0x1a181f77"
+      ]
+    },
+    "target_socket": {
+      "inode": "95076",
+      "local": "0100007F:CA44",
+      "peer": "0100007F:1380",
+      "state": "01"
+    },
+    "admission": "SHA256/UID/capability/NNP/session-cgroup/current-GUI and exact socket pinning plus fresh complete idle interlock before disconnect.",
+    "ack_ms": 3.905097,
+    "guard_exit_ms": 3.940097,
+    "all_original_worker_pids_including_zombies_gone_ms": 500.617301,
+    "original_worker_count": 9,
+    "ARP_removed": true,
+    "ARP_journal_bytes": 0,
+    "accept_local": "0",
+    "post_fault_status": {
+      "body": {
+        "available": false,
+        "state": "cleanup_unconfirmed"
+      },
+      "http_status": 200
+    }
+  },
+  "ordinary_recovery": {
+    "explicit_GUI_Start": true,
+    "ready_s": 1.9447701280005276,
+    "capture_before": {
+      "metadata": {
+        "capture_id": "1990a0edf85a4ae18887fb692cba982a",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 437788535,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "17425114301623",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "17425455322559",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "ea8782e27c50a69c5b85f32dfe30bb2ed64f1600030e06c9441f42f4a79a21af"
+    },
+    "capture_after_restart": {
+      "metadata": {
+        "capture_id": "cc847174955e11e56035a89c2f5c8c4d",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 437788535,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "17578459411132",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "17578801356230",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "1d9a483821bbbda4ff4ecf91d7b2191d13bfcbd11cb1408b33c7f0e14f40c059"
+    },
+    "final_stop": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    },
+    "privileged_repair": false,
+    "credential_mutations": [],
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c"
+  },
+  "final_independent_audit": {
+    "passed": true,
+    "RF_commands": [],
+    "processes": [
+      {
+        "pid": 1310,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      },
+      {
+        "pid": 3048,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 3056,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "boot_id": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "owner_config_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "runtime_sha256": {
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+      "flex-tailnet-shim": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+    },
+    "arp": [],
+    "arp_journal_bytes": 0,
+    "accept_local": "0",
+    "private_sockets": [],
+    "temporary_installation_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    }
+  },
+  "preserved_failures": [
+    {
+      "attempt": "preparation-01",
+      "Start_actions": 0,
+      "fault_actions": 0,
+      "error": "AetherPD panel was closed; pdStart widget absent. No RF or session fault. Ordinary panel opening fixed the harness preparation."
+    },
+    {
+      "attempt": "api",
+      "error": "AssertionError: {'body': {'available': False, 'state': 'cleanup_unconfirmed'}, 'http_status': 200}",
+      "cleanup_error": "{'body': {'available': False, 'state': 'cleanup_unconfirmed'}, 'http_status': 200}",
+      "meaning": "Native fault and cleanup passed. The orchestration incorrectly required clean stopped before restart. cleanup_unconfirmed is an expected retained terminal warning after an abnormal guardian exit; existing code explicitly permits operator Start from that state. No production fix or relaxed cleanup claim was needed."
+    }
+  ],
+  "limitations": [
+    "Receive-only regression on this exact installed release; no keyed unkey timing or sustained correction qualification.",
+    "Disconnects only the owned unkey API role. It does not qualify every API, credential loss, simultaneous failures or all partial-start stages.",
+    "Three capability-free control processes remain after normal Stop; no claim that all installed service processes exit.",
+    "Temporary lab host-root observer supplies only fault injection and independent audit; normal startup/recovery and IQ use the installed service. It is not part of the shipping product.",
+    "No package installation, reboot, physical power-loss or actual FLEX6300 qualification in this test.",
+    "Operator-deferred5W SWR investigation remains unresolved. No related RF test or safety policy change.",
+    "All other unqualified P1\u2013P10 production and independent release gates remain open."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-before-IQ.f32le.gz": "ae923c6af446df5394bfc54e85cf29b63627fec6ba0e6ba2386fe1919f231cd1",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-events-preparation-01.json.gz": "9d483fee7e62ec5c4407fca8002e5ff602d1d891e19dd53f293acfab401015c6",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-events.json.gz": "1b2829b7a815b116f64cc2ac2e5b6dc91c1ac0e21a515c07c3f7a5e5707085e7",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-fault-template.py.gz": "284e6bcdf78d76902257e5641f31cb9cea90a926b51187699c1019e12cbf0c7f",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-job-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-job.py.gz": "2a7359fe03992fb67f69590a19eb72ab9f1d06c53e0a2581eee0ca756e93c164",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-orchestration-preparation-01.log.gz": "f7fd9f290d2627850e7f54b6eb76d65de0e3ff546e1d4062c165b9bf6b93bcec",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-orchestration.log.gz": "3f10066697b44b65057df1b42c1d15be2fe49b317ed389eb9dfc7d7763be80b2",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-outcome-preparation-01.json.gz": "5778933abfa76499f1393afe46c60b521514597a426ac2c099da9b9d7efe81a0",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-outcome.json.gz": "1c97d23ccfb8a9f28ec5015494d4b7004f5c2930cb83017f45d7d41e22a2baab",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-restarted-IQ.f32le.gz": "5a2a74be2175a71ce659c8484ebd46442a6b6f5e8f5054c420fb0920cf4a3f95",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api-result.json.gz": "c32c453bf14a1ee01d9af0d9f4a5dd0a0b264ddf269153b43ee6ff824abf4314",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/api.log.gz": "c32c453bf14a1ee01d9af0d9f4a5dd0a0b264ddf269153b43ee6ff824abf4314",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/audit-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/audit-job.py.gz": "f21279bb1c184b288a6848d9741390391ca701e25626c2c8c1ccb185c42f18db",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/audit-result.json.gz": "db3f64b9ad53271bca8caeffb8095bb4c135bfbb19b5c3cad5ec24361dd28500",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/audit.log.gz": "db3f64b9ad53271bca8caeffb8095bb4c135bfbb19b5c3cad5ec24361dd28500",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/instance.json.gz": "830fa0184e204fbe705ca61ccec830dd393a1e9354395962f92832aecd29b8b9",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/recover.py.gz": "0b2f06b39a93f102def8cc00417bdd4efd649cd4dedcf4041a7412c8ff95f8a8",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/recovery-events.json.gz": "51b586380a2aeadd3782c2ff2087136d7d2855ec4448482a44c40cd6af884e70",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/recovery-orchestration.log.gz": "32d0af17b38a6a464d9d4da47976c00f472635c58fcfc88f7fcd0779ade2e3ef",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/recovery-outcome.json.gz": "1bfe87f982ddf395fb95edbb36d5a60973192b5e3e9b6c1eb2892572e2ad095a",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/run-api.py.gz": "14eceb380c716d281e7c7d009726b0518e92e4dba65b600922f1cb039e94cd23",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-current-runtime-api-loss/save-qualification.py.gz": "27a14dfb048e7eb8f9d3d5d31dea8f47d7678780734d5eea0ab5525f5672b3ed"
+  }
+}
