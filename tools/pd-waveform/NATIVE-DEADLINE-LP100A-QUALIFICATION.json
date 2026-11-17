@@ -1,0 +1,735 @@
+{
+  "updated_utc": "2026-11-17T05:05:04.060440+00:00",
+  "status": "retained_live_evidence_confirms_API_unkey_with_desktop_paused_original_harness_failures_preserved",
+  "production_ready": false,
+  "qualification_parent_commit": "d13958926357c25a3a5558423451f76a79d513aa",
+  "runtime_source_commit": "a6a4904f70c7fb4ed1eef35aa3c48a09c8f11580",
+  "installed_release": "177d932be6b7d2e22ee7715a0687add82fed299343ab56b0d331ac2f3ea8a686",
+  "bench": {
+    "radio": "FLEX-8600",
+    "firmware": "4.3.16.42034",
+    "frequency_MHz": 7.15,
+    "antenna": "ANT1 dummy load/sampler to RXA",
+    "power_setting_W": 5,
+    "configured_maximum_W": 10,
+    "DAX_IQ_channel": 4,
+    "IQ_sample_rate_Hz": 48000,
+    "FDX": false,
+    "positive_GUI_key_requests": 3,
+    "LP_product_integration_deferred": true,
+    "LP_independent_bench_readings_authorized": true
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "original_automation_passed": false,
+      "failure": "One transient LP vector-coherence mismatch during native tones caused an early bench abort. A broad original root timing window accepted 7455.833ms; this is not native nine-second deadline proof.",
+      "scope": "Negative attempt retained. Owned watchdog fixtures cover deadline, explicit cancellation and controller EOF; EOF now resumes the desktop."
+    },
+    {
+      "attempt": 2,
+      "original_automation_passed": false,
+      "failure": "LP peak-held power with completed-source idle impedance was judged using stale cached tones=true. The observer also ended before the absolute native deadline.",
+      "scope": "Negative attempt retained. Replay covers transient/persistent coherence and source-phase refresh; direct LP power, SWR and freshness guards remain immediate."
+    },
+    {
+      "attempt": 3,
+      "original_automation_passed": false,
+      "failure": "Harness waited for complete client-reservation retirement after READY rather than API RF unkey.",
+      "scoped_reanalysis": {
+        "RF_unkey_reanalysis_passed": true,
+        "original_automation_verdict_unchanged": true,
+        "original_passed": false,
+        "original_failure": "Harness required tx_client_handle0 after READY; that tests complete reservation release, a stronger condition than RF unkey.",
+        "root_observed_key_to_RF_READY_ms": 9069.676904,
+        "root_observed_key_to_owner_zero_READY_ms": 9499.964368,
+        "host_observed_key_to_RF_READY_ms": 9042.58873,
+        "RF_READY_before_desktop_resume_ms": 266.569591,
+        "paused_process_samples_bracketing_READY": {
+          "before": {
+            "event": "desktop_still_stopped",
+            "elapsed_s": 17.003,
+            "monotonic_ns": 85981263065523,
+            "state": "T"
+          },
+          "after": {
+            "event": "desktop_still_stopped",
+            "elapsed_s": 17.049,
+            "monotonic_ns": 85981309342959,
+            "state": "T"
+          }
+        },
+        "RF_READY_fields": {
+          "tx_client_handle": "0x1132D367",
+          "state": "READY",
+          "reason": "",
+          "source": "",
+          "tx_allowed": "1",
+          "amplifier": ""
+        },
+        "same_DSP_alive": true,
+        "DSP_PID": 2758,
+        "bounded_guard_PID": 2829,
+        "native_guard_program_duration_ms": 9000,
+        "no_host_unkey_or_Stop_before_RF_READY": true,
+        "no_DSP_signals": true,
+        "LP_peak_held_W": 3.66,
+        "LP_max_reported_SWR_when_power_above_point2W": 1.06,
+        "FlexLib_Radio_cs_sha256": "5cc53b508645de15500f3b579c144f79b1ef4f7c00b637b45b4c3329002dbb36",
+        "authority": "Published FlexLib4.3.16 Radio.IsInterlockMox: only Transmitting/PTTRequested/UnkeyRequested setMOX; READY remains false regardless retained client handle.",
+        "predicate_refusals": [
+          [
+            "state",
+            "TRANSMITTING"
+          ],
+          [
+            "state",
+            "PTT_REQUESTED"
+          ],
+          [
+            "state",
+            "UNKEY_REQUESTED"
+          ],
+          [
+            "source",
+            "SW"
+          ],
+          [
+            "reason",
+            "FAULT"
+          ],
+          [
+            "tx_allowed",
+            "0"
+          ],
+          [
+            "tx_client_handle",
+            "0x00000001"
+          ],
+          [
+            "tx_client_handle",
+            "bad"
+          ]
+        ],
+        "missing_required_fields_refused": true,
+        "production_guards_changed": false,
+        "limitations": [
+          "Reanalysis of retained live evidence; original failed receipts remain untouched. Corrected harness live rerun not claimed.",
+          "API-reported RF unkey is distinct from retirement of the operation and release of the client reservation. Strict production cleanup/ownership gates are unchanged.",
+          "The fixed source completed at8seconds before API unkey. Do not call the9second API transition a calibrated physical RF cessation measurement.",
+          "Native helper stdout events are discarded by its supervisor; attribution uses fixed verified executable/9000ms argument, timing, paused host, no alternate host unkey and preserved DSP identity.",
+          "No FPGA/LP sample clock synchronization or new spectral improvement/stock comparison is claimed."
+        ]
+      }
+    }
+  ],
+  "native_source": {
+    "duration_s": 8,
+    "alignment_noise_s": 4,
+    "bounded_unkey_guard_duration_ms": 9000,
+    "DSP_signaled": false,
+    "shipping_product_guards_changed": false
+  },
+  "authority": {
+    "source": "Published FlexLib v4.3.16.42034 Radio.cs, IsInterlockMox",
+    "Radio_cs_sha256": "5cc53b508645de15500f3b579c144f79b1ef4f7c00b637b45b4c3329002dbb36",
+    "SDK_URL": "https://edge.flexradio.com/www/offload/20261012095725/FlexLib_API_v4.3.16.zip",
+    "SDK_sha256": "60978db51dac6ea781899dd80832ad4e7876ce96ed72532b57106376fc26463f",
+    "interpretation": "Only Transmitting, PTTRequested and UnkeyRequested set MOX. READY reports MOX false even while the original client handle remains reserved."
+  },
+  "final_audits": [
+    {
+      "attempt": 1,
+      "passed": true,
+      "radio_transmitting": false,
+      "public_state": "stopped",
+      "processes": [
+        {
+          "pid": 1303,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+        },
+        {
+          "pid": 2327,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+        },
+        {
+          "pid": 2335,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+        }
+      ],
+      "ARP_absent": true,
+      "accept_local": "0",
+      "failed_session_records": [],
+      "temporary_container_deleted": true,
+      "temporary_host_directory_deleted": true
+    },
+    {
+      "attempt": 2,
+      "passed": true,
+      "radio_transmitting": false,
+      "public_state": "stopped",
+      "processes": [
+        {
+          "pid": 1303,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+        },
+        {
+          "pid": 2537,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+        },
+        {
+          "pid": 2545,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+        }
+      ],
+      "ARP_absent": true,
+      "accept_local": "0",
+      "failed_session_records": [],
+      "temporary_container_deleted": true,
+      "temporary_host_directory_deleted": true
+    },
+    {
+      "attempt": 3,
+      "passed": true,
+      "radio_transmitting": false,
+      "public_state": "stopped",
+      "processes": [
+        {
+          "pid": 1303,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+        },
+        {
+          "pid": 2740,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+        },
+        {
+          "pid": 2748,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+        }
+      ],
+      "ARP_absent": true,
+      "accept_local": "0",
+      "failed_session_records": [],
+      "temporary_container_deleted": true,
+      "temporary_host_directory_deleted": true
+    }
+  ],
+  "limitations": [
+    "Reanalysis of retained live evidence; original failed receipts remain untouched. Corrected harness live rerun not claimed.",
+    "API-reported RF unkey is distinct from retirement of the operation and release of the client reservation. Strict production cleanup/ownership gates are unchanged.",
+    "The fixed source completed at8seconds before API unkey. Do not call the9second API transition a calibrated physical RF cessation measurement.",
+    "Native helper stdout events are discarded by its supervisor; attribution uses fixed verified executable/9000ms argument, timing, paused host, no alternate host unkey and preserved DSP identity.",
+    "No FPGA/LP sample clock synchronization or new spectral improvement/stock comparison is claimed.",
+    "The corrected predicate was checked against retained live traces and refusal fixtures, not a further live transmission.",
+    "Conflicting native Flex SWR is retained in evidence; the independent fault-test bench monitor used paired directional powers and LP direct power/SWR. Shipping product safety guards were not relaxed.",
+    "No new IMD improvement, sustained duty cycle, stock APD comparison, credential rotation, actual FLEX-6300 or shipping release qualification is claimed.",
+    "All P1-P10 production phases remain tracked; scoped API unkey evidence does not complete the overall goal."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/prepare.py.gz": {
+      "sha256": "110113b76137d8f62f9ddeca85c342238e45d66e4a6521653face74012a781d5",
+      "uncompressed_sha256": "2adfcc17bf79ebe65c300d68a6aec256fd230302ce975e922c8d66dd62210c2d",
+      "uncompressed_bytes": 2642
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/prepared.json.gz": {
+      "sha256": "0617b631bbd5207288ed965d2a5aa9797d36e0a4d7a9d2e79d24b9d79db850d4",
+      "uncompressed_sha256": "0403133de5f3422fff05216458830ea42d251a7b2f78307062572bedd826d50c",
+      "uncompressed_bytes": 28049
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/fault-template.py.gz": {
+      "sha256": "2496884e05564ffe14f889da8015e2b534e02edd4df06e54f63c4c15aa76e0d6",
+      "uncompressed_sha256": "aa22e5f308ecb406682756b5a6e35c408d565a42f284f891d0c3cf05eaf37f3b",
+      "uncompressed_bytes": 7491
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/keyed-job.py.gz": {
+      "sha256": "f9b4cb63ccac7e81e8e6b0fc407e0762f0aa13885ac11ef02306ed03ac39c036",
+      "uncompressed_sha256": "01c4d16082b61d9c3472651ad15042686a8514f3edfc0d4b460bd1aef43850e4",
+      "uncompressed_bytes": 7614
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/run-keyed-once.py.gz": {
+      "sha256": "9e005fe880f2d0a9f5a3b14b328139bb100fb38e87dfdc0b784cba0b468afc32",
+      "uncompressed_sha256": "c5943c245bfeeeefa1741db2beffdff9910158e2532561ac4b22641eb6caf15d",
+      "uncompressed_bytes": 12797
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/run-job.py.gz": {
+      "sha256": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+      "uncompressed_sha256": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+      "uncompressed_bytes": 864
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/bench-observer.py.gz": {
+      "sha256": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+      "uncompressed_sha256": "673389ba5983b01bc6e44920b8136a97c9091ca465da976236fc04372da3df47",
+      "uncompressed_bytes": 2992
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/resume-watchdog.py.gz": {
+      "sha256": "24bd7dac6fa19033ec3956a577ddb5aa38d3342a0dc5f6f3bf187538607fc2c1",
+      "uncompressed_sha256": "02af789aa40689a68c5b24f3562e6854be4a47953fb7395259714d45b61cc59a",
+      "uncompressed_bytes": 657
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog.json.gz": {
+      "sha256": "194e5953aa1b6c2442239ea7f16500380dd9c52478806837f68fd2e5d33177b1",
+      "uncompressed_sha256": "c935c35eb392e4499438357f7dd4adaf2b39f2361d6e1b6d1540e179579e560a",
+      "uncompressed_bytes": 55
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/meter-watch.py.gz": {
+      "sha256": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+      "uncompressed_sha256": "5a05c208715c67ce5f9a284419cd195c323f699381f0a48d79e0452cb8fc40d4",
+      "uncompressed_bytes": 4077
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/lp100a_reader.py.gz": {
+      "sha256": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+      "uncompressed_sha256": "d9ebfb5285bbf2666b6af61d0830486af5824e13b0d221a11fd38160a682036c",
+      "uncompressed_bytes": 4615
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/bench_meter_monitor.py.gz": {
+      "sha256": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+      "uncompressed_sha256": "109dde953f37c5e3657b86101afd4568ee7461b4b013d0129c065921086fba9d",
+      "uncompressed_bytes": 2782
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/bench-policy.json.gz": {
+      "sha256": "5504df84bb89a8ed34a1a0ab8a2391e52fadd51035370a4ad58fbf873fe527a4",
+      "uncompressed_sha256": "a8852d7bc0f9154c098f6a4ba73592fdbb0672895b985dea11ba0934106d6dcd",
+      "uncompressed_bytes": 1046
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/keyed-events.json.gz": {
+      "sha256": "03a39fd95f8a0278959888168fd561704c87436d52980fa6e47513a3e92c0bca",
+      "uncompressed_sha256": "fff29b3d7811e8ad34b6a3f45ba184d40121807ea7df632a77a4a3d20c90cff8",
+      "uncompressed_bytes": 414332
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/outcome.json.gz": {
+      "sha256": "26c9416538f5e07aa36c47d262e04727bc80ea20ba4fd8e4d7107a40477eaffd",
+      "uncompressed_sha256": "7df131e57cc611368730ec75c4d1df4c3eaa4ea23117231c5b42eb3522a6bf82",
+      "uncompressed_bytes": 7792
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/keyed-result.json.gz": {
+      "sha256": "c0d6c6d467febfcc3468ad5ea56d4c8d6aba11d62fc9833a6a9cd49408e426d5",
+      "uncompressed_sha256": "31b7755914ca9938cd939bf7f6debe5e17f12ec9c727b2d42aa4604760f9ffba",
+      "uncompressed_bytes": 32184
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/independent-meters.json.gz": {
+      "sha256": "92fe1130a80f99031ff5259fe47add50f53eced519fbbf19b8de2aca2657fd55",
+      "uncompressed_sha256": "e14eabf771901ac2d92dcc73b4e59bec0e4a396effee04195dae46fd5f744921",
+      "uncompressed_bytes": 53337
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/lp100a-readings.jsonl.gz": {
+      "sha256": "05ed736afb60f5e14fd6ad5921adb189c9184d2ce1ff837c7c803c0fda84118d",
+      "uncompressed_sha256": "c1d570668ea77580698f923c73be789a5015e01de78fa849a52e85fabb78a1c0",
+      "uncompressed_bytes": 145056
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/lp100a-stderr.log.gz": {
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "uncompressed_bytes": 0
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/final-stop.json.gz": {
+      "sha256": "7c878d6622d9537a441d90251653d3d6e477a2a5ca7681700f5512c2c8302736",
+      "uncompressed_sha256": "baa65e0bcbd3090b04f4ed666c2862773cfcddabe10a3822b368517425ebc927",
+      "uncompressed_bytes": 783
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/final-audit-job.py.gz": {
+      "sha256": "0c06328ae2f0e0596a31fbcab3edf62fd4a7d2373e0e15a0feb05cb2c063cce8",
+      "uncompressed_sha256": "8d81daf5bd348ada294cb0ad6e34ee4ca62b7332c695f8fb67abc5b359bf1ca7",
+      "uncompressed_bytes": 7886
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/final-audit-result.json.gz": {
+      "sha256": "6492aebff5a7f3399346bb7b9b00c1b028aa1b2ad373721a14f04305719b04d3",
+      "uncompressed_sha256": "41c0e58ddd82934d69bd342d197218793a054a6d9078c4049b0c6dfa57d44177",
+      "uncompressed_bytes": 12141
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/bench-guard-check.json.gz": {
+      "sha256": "7bd3f40669df19e1c702238930409675b492bdf018d2e2706c9b1bfc154a4339",
+      "uncompressed_sha256": "f867cac9535daa7d26781738632c865cd11f05eec90b376683960b05bca3000d",
+      "uncompressed_bytes": 645
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog-check.py.gz": {
+      "sha256": "d69cd3c98db60cd2e4e40d92192869cb678065d6a88a2ddc9ab7a1188e916f6b",
+      "uncompressed_sha256": "b4d384cfaae133a350fcf19d8e6ee611e115937b2049a7940d408044dfc6a0af",
+      "uncompressed_bytes": 1840
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog-check.json.gz": {
+      "sha256": "cf571a666c17ea81d82088680b081023992ed47f92a8c45cc0021d3990e0c79b",
+      "uncompressed_sha256": "60c9d152b62fafc9a6f935df9a5709ea45b3303c1cddd600f7c9aed7e5314f81",
+      "uncompressed_bytes": 415
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/passive-observer-check.json.gz": {
+      "sha256": "f91f8f5cbbd2d44fbf4c8001af1495c85cdc81bdff6d7241f8e22bf7ead00b9f",
+      "uncompressed_sha256": "fc79475a30366b236b6e0aa12d5cb9839df26d51ed0c64e35398b9c2f9673a63",
+      "uncompressed_bytes": 713
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog-original-controller_EOF.json.gz": {
+      "sha256": "fefff1cfd440f397d4ad0bfc4c814b3df7826a7ddce132dd997e46fc699efe3e",
+      "uncompressed_sha256": "e60f1c277303d33a979f13e602362d3532daf6c0255e75826fda431fbbcebf89",
+      "uncompressed_bytes": 55
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog-original-deadline.json.gz": {
+      "sha256": "ae1e7a67df18812f097cdf8edf9fd6d3c86caa891f936a69703c5e71be22a707",
+      "uncompressed_sha256": "ab561c1e0bbe35f552ae79584f8ae071006f2dd4fafb90943ce18894fa123be9",
+      "uncompressed_bytes": 66
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog-original-explicit_cancel.json.gz": {
+      "sha256": "038c6d6802d59fe4b1d2766eb859f9433ab29619fcbd031c542c61f534f0cef5",
+      "uncompressed_sha256": "113c75ad636c81baa81dae0ad0a4f7493e235eb11c507d5807b4ab93ee020c3f",
+      "uncompressed_bytes": 55
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog-fixture-controller_EOF.json.gz": {
+      "sha256": "25cf3bd883cf53443eb193a49e649cb280bc3ca291bff2d0e54d496944cc7003",
+      "uncompressed_sha256": "5a236eb9a48b7ed843c617aaee6a0fdc2ac31f0312d518b539331fb33e9c294f",
+      "uncompressed_bytes": 75
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog-fixture-deadline.json.gz": {
+      "sha256": "1dad0579861898ade81eb73d85f226afe7b5cc886476ad9f5954179bebb0638a",
+      "uncompressed_sha256": "9c59ee7537d5ffac8acc9963d3e939cedd3cd587394556eaf2a0eed2244ab0ea",
+      "uncompressed_bytes": 66
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-01/watchdog-fixture-explicit_cancel.json.gz": {
+      "sha256": "6afcde92b5e85b801642b415d249b5a815f42be2c192c637f35743cb63708358",
+      "uncompressed_sha256": "32244a8ff44205fa9a993d2f69ee3fc970879784960b199efb507223922d2877",
+      "uncompressed_bytes": 55
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/prepare.py.gz": {
+      "sha256": "110113b76137d8f62f9ddeca85c342238e45d66e4a6521653face74012a781d5",
+      "uncompressed_sha256": "2adfcc17bf79ebe65c300d68a6aec256fd230302ce975e922c8d66dd62210c2d",
+      "uncompressed_bytes": 2642
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/prepared.json.gz": {
+      "sha256": "33799b2021fd70ab1df09caeb02e0a9086a1b575648fb7ad7721343e2422fb47",
+      "uncompressed_sha256": "4e2765a423ab446adcb32aee1f2419b579eb370b37d3fad5660e3139115b3b41",
+      "uncompressed_bytes": 28093
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/fault-template.py.gz": {
+      "sha256": "8739f6003cb8e30450be254f6ee715fb72e9652475ca8b55373b9793c3d7687f",
+      "uncompressed_sha256": "e98a3abd6044cfbc46cf267477945a16a46d16bbc31554db860e7dd920d4780a",
+      "uncompressed_bytes": 7491
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/keyed-job.py.gz": {
+      "sha256": "e65e6a502e0611d75b326a3cdee56f2065e05112ab6f11be30af73544c589f67",
+      "uncompressed_sha256": "56132b4930dca08cc4f70e5c6f5251950d3b7ad42c4a13c308beb1b7bf6ec04c",
+      "uncompressed_bytes": 7614
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/run-keyed-once.py.gz": {
+      "sha256": "112d5d34219914f0d846373a9de34f7c01b67c150ec371fde4611beedcee052b",
+      "uncompressed_sha256": "5d144d62a6a6a3a3e94292e876c2cbf8de448f347fa39a88a136512a367f6396",
+      "uncompressed_bytes": 13117
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/run-job.py.gz": {
+      "sha256": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+      "uncompressed_sha256": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+      "uncompressed_bytes": 864
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/bench-observer.py.gz": {
+      "sha256": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+      "uncompressed_sha256": "673389ba5983b01bc6e44920b8136a97c9091ca465da976236fc04372da3df47",
+      "uncompressed_bytes": 2992
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/resume-watchdog.py.gz": {
+      "sha256": "24bd7dac6fa19033ec3956a577ddb5aa38d3342a0dc5f6f3bf187538607fc2c1",
+      "uncompressed_sha256": "02af789aa40689a68c5b24f3562e6854be4a47953fb7395259714d45b61cc59a",
+      "uncompressed_bytes": 657
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/watchdog.json.gz": {
+      "sha256": "18863fc8cda0d495086a3b317ef64b8061b3b58ce7e6f849df71de8e1cfd55a8",
+      "uncompressed_sha256": "a728d80f0f0f9426ab84994ea95224813ad3a117aeff5c4446aeea78708df1d1",
+      "uncompressed_bytes": 55
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/meter-watch.py.gz": {
+      "sha256": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+      "uncompressed_sha256": "5a05c208715c67ce5f9a284419cd195c323f699381f0a48d79e0452cb8fc40d4",
+      "uncompressed_bytes": 4077
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/lp100a_reader.py.gz": {
+      "sha256": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+      "uncompressed_sha256": "d9ebfb5285bbf2666b6af61d0830486af5824e13b0d221a11fd38160a682036c",
+      "uncompressed_bytes": 4615
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/bench_meter_monitor.py.gz": {
+      "sha256": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+      "uncompressed_sha256": "109dde953f37c5e3657b86101afd4568ee7461b4b013d0129c065921086fba9d",
+      "uncompressed_bytes": 2782
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/bench-policy.json.gz": {
+      "sha256": "ca8cfa1484553451fcba1ce78b79be872437f29c62433056006d76bcabe14146",
+      "uncompressed_sha256": "1825ac26c7e2d1e1cbf0bfb274baf74f2b0ae459786e0dc3a563eaa1655dc7a2",
+      "uncompressed_bytes": 1452
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/keyed-events.json.gz": {
+      "sha256": "f31ac35bab594da4c3918f5960c25c27a19e0b0203a688a591de06d2c4e13f66",
+      "uncompressed_sha256": "a9472f141b9ffb5f89d290ecc69595a3bbc7d525bf3c3efc9b1ebc3fb0ad4eb0",
+      "uncompressed_bytes": 514793
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/outcome.json.gz": {
+      "sha256": "142830bfcbefbae21a31c7030d15945fe450accd349de352ef689a34a4860aaf",
+      "uncompressed_sha256": "090e24c3cd2ef6a15723cb8f73ae3ec64455d41c55d7daef0349d49208cd4828",
+      "uncompressed_bytes": 7808
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/keyed-result.json.gz": {
+      "sha256": "469fe88f7147c58a046f954bb09de5a5dfd3f8d9f88df9234bc0519d5bb54f97",
+      "uncompressed_sha256": "602ffcbb5ae59486ef4c65bd3e47cc7034bc2caae7c3a271f56142f1b1b712d0",
+      "uncompressed_bytes": 17587
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/independent-meters.json.gz": {
+      "sha256": "5e59b47ce38da0135a56283d163c64f9992a64d21b347fb091b4c7975ee02653",
+      "uncompressed_sha256": "8d3b4a3ece70401dea6f9b4902e30fe7f2807adfa415b8eb5c92ab7aa0daf46a",
+      "uncompressed_bytes": 57714
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/lp100a-readings.jsonl.gz": {
+      "sha256": "acd6739c7e356cd3a2fb808c5d79e3fc7d32f3824a04f8928b65ec2db4c2f75f",
+      "uncompressed_sha256": "4d591815b5de6b0a6842dd6ed0dcabd25e6e44a9c3f3de0e24174fe42f2c6e94",
+      "uncompressed_bytes": 148610
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/lp100a-stderr.log.gz": {
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "uncompressed_bytes": 0
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/final-stop.json.gz": {
+      "sha256": "7fe2c55dec7a549456a270360f3b1bde942dd9b2d5f4c3682866be1fcd7d1233",
+      "uncompressed_sha256": "26eae7b3e92869b9817e9badaeab5364b437d243d3683380e75d1d6a9fb6709e",
+      "uncompressed_bytes": 780
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/final-audit-job.py.gz": {
+      "sha256": "0c06328ae2f0e0596a31fbcab3edf62fd4a7d2373e0e15a0feb05cb2c063cce8",
+      "uncompressed_sha256": "8d81daf5bd348ada294cb0ad6e34ee4ca62b7332c695f8fb67abc5b359bf1ca7",
+      "uncompressed_bytes": 7886
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/final-audit-result.json.gz": {
+      "sha256": "17979a381195c63a32af0516d1d533faf107fbdf1c6bfdc6c81b31d85022341b",
+      "uncompressed_sha256": "7c3749dc75905246a6e2d9fd5cdccca4d92a5e249e81d46393c861e9c7154144",
+      "uncompressed_bytes": 12160
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/quality-check.json.gz": {
+      "sha256": "fcb52da4372e4713820a542ed3470769d21f80b4a5d68f294dc05ed95aae111b",
+      "uncompressed_sha256": "ada030ca674a161e9054a6c61160c5d88614d4616767bdb3480f3917791c30fc",
+      "uncompressed_bytes": 319
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-02/bench_quality.py.gz": {
+      "sha256": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+      "uncompressed_sha256": "7e32503b9b81237222d14a63d13deb7d9a0ba047ffd331cc08c0b345d0555a99",
+      "uncompressed_bytes": 554
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/prepare.py.gz": {
+      "sha256": "110113b76137d8f62f9ddeca85c342238e45d66e4a6521653face74012a781d5",
+      "uncompressed_sha256": "2adfcc17bf79ebe65c300d68a6aec256fd230302ce975e922c8d66dd62210c2d",
+      "uncompressed_bytes": 2642
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/prepared.json.gz": {
+      "sha256": "54b3decdb339e9f686c1b1edba7e05f1e53f0a268d73cd2b5f20d09735c90e6b",
+      "uncompressed_sha256": "84603798900b6ac9d01d8c187af100740cd77cf8678521ee957e41095ca00f71",
+      "uncompressed_bytes": 28092
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/fault-template.py.gz": {
+      "sha256": "d4243e152406e3b69bf524861bee112de182b000941bc11888e639d7e58bbad6",
+      "uncompressed_sha256": "f68e33e8d8444e9a4c50c9e7f9a23924fe13011de87d4a05dda99ef6a3a76f2e",
+      "uncompressed_bytes": 7499
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/keyed-job.py.gz": {
+      "sha256": "466e28a0e146809a46f414265c5f46b9c52e2bb3862b9f3e8928b4bf379fac3a",
+      "uncompressed_sha256": "bae8b8dec15e8ee44d1750dbcd044833521ad690c4afb006e24edf8350befd36",
+      "uncompressed_bytes": 7622
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/run-keyed-once.py.gz": {
+      "sha256": "a57dfb29e4bed27dfa0ca4392eac642b835ad96501ad0b647928ab3bb3d9dedb",
+      "uncompressed_sha256": "1d1ba241e6bc6bad8261e884631f6775fab66f57349589d9782bc81c317f78ee",
+      "uncompressed_bytes": 13675
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/run-job.py.gz": {
+      "sha256": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+      "uncompressed_sha256": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+      "uncompressed_bytes": 864
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/bench-observer.py.gz": {
+      "sha256": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+      "uncompressed_sha256": "673389ba5983b01bc6e44920b8136a97c9091ca465da976236fc04372da3df47",
+      "uncompressed_bytes": 2992
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/resume-watchdog.py.gz": {
+      "sha256": "24bd7dac6fa19033ec3956a577ddb5aa38d3342a0dc5f6f3bf187538607fc2c1",
+      "uncompressed_sha256": "02af789aa40689a68c5b24f3562e6854be4a47953fb7395259714d45b61cc59a",
+      "uncompressed_bytes": 657
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/watchdog.json.gz": {
+      "sha256": "1ad96cd1dda1993a3cc1f511f10a410501346fff10be2d619304d384453d35f2",
+      "uncompressed_sha256": "a60301ee51ced00ad6d22dbf1037657adca9d723857d94e93f020b4d6efdae56",
+      "uncompressed_bytes": 55
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/meter-watch.py.gz": {
+      "sha256": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+      "uncompressed_sha256": "5a05c208715c67ce5f9a284419cd195c323f699381f0a48d79e0452cb8fc40d4",
+      "uncompressed_bytes": 4077
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/lp100a_reader.py.gz": {
+      "sha256": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+      "uncompressed_sha256": "d9ebfb5285bbf2666b6af61d0830486af5824e13b0d221a11fd38160a682036c",
+      "uncompressed_bytes": 4615
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/bench_meter_monitor.py.gz": {
+      "sha256": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+      "uncompressed_sha256": "109dde953f37c5e3657b86101afd4568ee7461b4b013d0129c065921086fba9d",
+      "uncompressed_bytes": 2782
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/bench-policy.json.gz": {
+      "sha256": "c5b9581bd2def2aaab78447a82ae3834947514b21dd726175218424b7edef3ef",
+      "uncompressed_sha256": "d6d9cdf6704947cbb6fe2db36fc73b3992aaee16d27a5bc332f67f3eb66c4506",
+      "uncompressed_bytes": 2005
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/keyed-events.json.gz": {
+      "sha256": "61f901f8372149c5ba07a85cdb6ad4f9587c59cc35a84de20ddb1cf7d4d760df",
+      "uncompressed_sha256": "1300fb83f6683069c360364b408471d436e5e7f8dafe2583aa0a221892e7e4a7",
+      "uncompressed_bytes": 546038
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/outcome.json.gz": {
+      "sha256": "4f2b926af3d8891d784d8dbc7233b7da97252c9d4f3f5142b210462b0460ee53",
+      "uncompressed_sha256": "faaa0520f08983ded38c74fd8952414ec62f4a0d818e2d8b10ccbac563d72ba7",
+      "uncompressed_bytes": 10096
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/keyed-result.json.gz": {
+      "sha256": "57d35724f1274f1f1645be1c8a834da9394c94de15af7335ed9b8a615873678f",
+      "uncompressed_sha256": "d953f98ebc91da5d7eb73e4db60b42f6c0244fbd604c72631648877e272b0786",
+      "uncompressed_bytes": 31740
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/independent-meters.json.gz": {
+      "sha256": "62eff4343249bcf6025247f942e5141161eae6b347f225158a4d62329987a6ae",
+      "uncompressed_sha256": "d16f3489e27070106357a4ef5172f5aad3a7df0aceecc3433ca217c3d42ccac4",
+      "uncompressed_bytes": 65669
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/lp100a-readings.jsonl.gz": {
+      "sha256": "cee2002eafdbf961954739e60c68bd743ec4f3a0babf226797f09a1c54a6fc5c",
+      "uncompressed_sha256": "bb4c0010e309fe5074a0ee3203eb39baab9f48fce684f6dbb48486ff1fa9bd88",
+      "uncompressed_bytes": 150413
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/lp100a-stderr.log.gz": {
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "uncompressed_bytes": 0
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/final-stop.json.gz": {
+      "sha256": "7fe2c55dec7a549456a270360f3b1bde942dd9b2d5f4c3682866be1fcd7d1233",
+      "uncompressed_sha256": "26eae7b3e92869b9817e9badaeab5364b437d243d3683380e75d1d6a9fb6709e",
+      "uncompressed_bytes": 780
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/final-audit-job.py.gz": {
+      "sha256": "0c06328ae2f0e0596a31fbcab3edf62fd4a7d2373e0e15a0feb05cb2c063cce8",
+      "uncompressed_sha256": "8d81daf5bd348ada294cb0ad6e34ee4ca62b7332c695f8fb67abc5b359bf1ca7",
+      "uncompressed_bytes": 7886
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/final-audit-result.json.gz": {
+      "sha256": "3d3dd6df316c4028e1eec433958dd0a22be30ab34745bbc5d0125e5120c565de",
+      "uncompressed_sha256": "47fc80ddff54cfc401e1ad707dab339bf39d9a28e7ff9462f4bb85306235dbb4",
+      "uncompressed_bytes": 11884
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/bench_quality.py.gz": {
+      "sha256": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+      "uncompressed_sha256": "7e32503b9b81237222d14a63d13deb7d9a0ba047ffd331cc08c0b345d0555a99",
+      "uncompressed_bytes": 554
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/source-phase-replay.json.gz": {
+      "sha256": "7ab8536b87f6fa854521195fa5bef0b73b68aff8e0b491e1e73c2bd67aebf013",
+      "uncompressed_sha256": "68797387ed1b8db8d11cb05ab1fba8cfd5b573e921cbd59439b015e78b9add98",
+      "uncompressed_bytes": 372
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/reanalyse.py.gz": {
+      "sha256": "f80ef7ee961f700d8c838e722b2708b50256596625c8004a0c0011050a667686",
+      "uncompressed_sha256": "d2e0a738573d90e5773837960a87eba332573fee9524dde629820677f2e5d2b9",
+      "uncompressed_bytes": 7133
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/attempt-03/RF-unkey-reanalysis.json.gz": {
+      "sha256": "a92ea89c7df04131588f96911ce866532d22694de4129771b9ddddc4da8dbe0a",
+      "uncompressed_sha256": "fd4ec6a633e9e9ab66ba24f12b1c8e8bf22f57d280abfd84f5212d7cee2ce6f0",
+      "uncompressed_bytes": 2809
+    },
+    "tools/pd-waveform/evidence/20261116-native-deadline-lp100a/production-completion-plan.json.gz": {
+      "sha256": "f206ee754d6b305f530ff5e75cfd5fa72c35cb197ced4c4b67bec8803f37b4b5",
+      "uncompressed_sha256": "b8571e5cb83847f2a299b43da7cd43ee1a5b1dc1a000ee8364c96cb565f74438",
+      "uncompressed_bytes": 110434
+    }
+  }
+}
