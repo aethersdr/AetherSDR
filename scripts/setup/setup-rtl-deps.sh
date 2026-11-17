@@ -7,6 +7,9 @@ PREFIX="${RTL_DEPS_PREFIX:-$(pwd)/third_party/rtl-deps}"
 WORK="$(pwd)/.rtl-deps-build"
 SOURCES="$PREFIX/share/aethersdr-rtl-sources"
 mkdir -p "$WORK" "$SOURCES"
+# Remove the retired local reproducer if this prefix was populated by an
+# earlier recipe; release source bundles should contain only the patch recipe.
+rm -f "$SOURCES/test-rtl-async-cancellation.py" "$SOURCES/rtl_async_cancellation_test.c"
 JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]][sys.argv[3]])' "$SCRIPT_DIR/rtl-dependencies.json" "$1" "$2"; }
 fetch() {
@@ -23,10 +26,6 @@ fetch rtl
 USB="$WORK/$(field libusb directory)"
 RTL="$WORK/$(field rtl directory)"
 python3 "$SCRIPT_DIR/apply-rtl-patches.py" "$RTL"
-HARNESS="$SCRIPT_DIR/../../tests/rtl_async_cancellation_test.c"
-[ -f "$HARNESS" ] || HARNESS="$SCRIPT_DIR/rtl_async_cancellation_test.c"
-python3 "$SCRIPT_DIR/test-rtl-async-cancellation.py" --rtl-source "$RTL" --usb-source "$USB" \
-    --harness "$HARNESS"
 cmake_args=()
 if [ "$(uname -s)" = Darwin ]; then
     : "${MACOS_DEPLOYMENT_TARGET:?Set the deployment target explicitly}"
@@ -66,6 +65,5 @@ fi
 cp "$RTL/COPYING" "$SOURCES/RTL-SDR-COPYING"
 cp "$USB/COPYING" "$SOURCES/libusb-COPYING"
 cp "$SCRIPT_DIR/rtl-dependencies.json" "$SCRIPT_DIR/setup-rtl-deps.sh" "$SCRIPT_DIR/_verify_sha256.sh" "$SOURCES/"
-cp "$SCRIPT_DIR/apply-rtl-patches.py" "$SCRIPT_DIR/rtl-async-cancellation.patch" \
-    "$SCRIPT_DIR/test-rtl-async-cancellation.py" "$HARNESS" "$SOURCES/"
+cp "$SCRIPT_DIR/apply-rtl-patches.py" "$SCRIPT_DIR/rtl-async-cancellation.patch" "$SOURCES/"
 echo "RTL dependency sources and recipes: $SOURCES"

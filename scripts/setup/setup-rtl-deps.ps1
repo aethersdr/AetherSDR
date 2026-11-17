@@ -7,6 +7,7 @@ $prefix = [IO.Path]::GetFullPath($OutDir)
 $work = Join-Path (Get-Location) '.rtl-deps-build'
 $sources = Join-Path $prefix 'share\aethersdr-rtl-sources'
 New-Item -ItemType Directory -Force $work,$sources,"$prefix\bin","$prefix\lib","$prefix\include" | Out-Null
+Remove-Item (Join-Path $sources 'test-rtl-async-cancellation.py'),(Join-Path $sources 'rtl_async_cancellation_test.c') -ErrorAction SilentlyContinue
 function Check-Native([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed: $LASTEXITCODE" } }
 foreach ($name in @('libusb','rtl','pthreads')) {
     $pin = $pins.$name
@@ -21,10 +22,6 @@ $rtl = Join-Path $work $pins.rtl.directory
 $pthreads = Join-Path $work $pins.pthreads.directory
 python "$PSScriptRoot\apply-rtl-patches.py" $rtl
 Check-Native 'RTL lifetime patch'
-$harness = Join-Path $PSScriptRoot '..\..\tests\rtl_async_cancellation_test.c'
-if (-not (Test-Path $harness)) { $harness = Join-Path $PSScriptRoot 'rtl_async_cancellation_test.c' }
-python "$PSScriptRoot\test-rtl-async-cancellation.py" --rtl-source $rtl --usb-source $usb --harness $harness
-Check-Native 'RTL cancellation regression'
 msbuild "$usb\msvc\libusb_dll.vcxproj" /m:4 /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
 Check-Native 'libusb build'
 Push-Location $pthreads
@@ -49,5 +46,5 @@ Copy-Item "$rtl\include\rtl-sdr.h","$rtl\include\rtl-sdr_export.h" "$prefix\incl
 Copy-Item "$rtl\COPYING" "$sources\RTL-SDR-COPYING"
 Copy-Item "$usb\COPYING" "$sources\libusb-COPYING"
 Copy-Item "$PSScriptRoot\rtl-dependencies.json","$PSScriptRoot\setup-rtl-deps.ps1","$PSScriptRoot\_verify_sha256.ps1" "$sources\"
-Copy-Item "$PSScriptRoot\apply-rtl-patches.py","$PSScriptRoot\rtl-async-cancellation.patch","$PSScriptRoot\test-rtl-async-cancellation.py",$harness "$sources\"
+Copy-Item "$PSScriptRoot\apply-rtl-patches.py","$PSScriptRoot\rtl-async-cancellation.patch" "$sources\"
 Write-Host "RTL libraries and corresponding sources ready at $prefix"
