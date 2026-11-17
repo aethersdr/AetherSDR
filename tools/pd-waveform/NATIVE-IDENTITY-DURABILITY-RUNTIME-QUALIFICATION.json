@@ -1,0 +1,114 @@
+{
+  "updated_utc": "2026-11-17T18:26:38.778123+00:00",
+  "status": "signed_ARMv7_ARM64_runtime_and_ARM64_upgrade_reproduced_and_disk_admission_component_qualified_not_installed",
+  "production_ready": false,
+  "installed": false,
+  "source_commit": "aa5a33fc5de78ad5a9d6e5d48ba2e9c697e03bf0",
+  "component_report": "tools/pd-waveform/NATIVE-IDENTITY-DURABILITY-QUALIFICATION.json",
+  "two_distinct_source_output_compiler_cache_paths": true,
+  "toolchains": {
+    "Go": "go version go1.27.1 linux/amd64",
+    "zig": "0.17.1",
+    "same_host_and_toolchains": true
+  },
+  "architectures": {
+    "armv7": {
+      "changed_expanded_payload_members": [
+        "flex-tailnet-shim"
+      ],
+      "other_ten_payload_records_identical": true,
+      "changed_release_members": [
+        "payload.bundle"
+      ],
+      "boot_helper_identical": true,
+      "shim_sha256": "6aa167a58110768e6206e99fa2eed66214ba538242e217b108f238cebe6a7044",
+      "release_bytes": 9404028,
+      "release_blake2b_256": "fed47a42cf2b49e90118cf5bce8ab5d6225cfe4734357ddd86bdd9dc607ca74d",
+      "expanded_bytes": 22836670
+    },
+    "arm64": {
+      "changed_expanded_payload_members": [
+        "flex-tailnet-shim"
+      ],
+      "other_ten_payload_records_identical": true,
+      "changed_release_members": [
+        "payload.bundle"
+      ],
+      "boot_helper_identical": true,
+      "shim_sha256": "70783de051fd785a00c12646dd0e862824156b8cb6d57fb73f105298d67e6995",
+      "release_bytes": 9075944,
+      "release_blake2b_256": "c3d2522512f66f32025747661335e82eb8a3f572fe9888acf7af8380f9a43404",
+      "expanded_bytes": 22446186
+    }
+  },
+  "native_runtime_and_worker_signatures_verified": true,
+  "full_upgrade_distribution_eight_files_identical": true,
+  "previous_release_blake2b_256": "a8920b11a650ce36118589f818712636bae56f35b3b1570c8a8c8f6d404f0a3f",
+  "native_disk_admission": {
+    "real_authenticated_predecessor_candidate_pair": true,
+    "exact_byte_one_byte_short_exact_inode_one_inode_short_checks_passed": true,
+    "ARMv7_max_modeled_peak_bytes": 39690240,
+    "ARMv7_min_model_headroom_decimal_41_MB": 1309760
+  },
+  "preserved_failed_distribution_attempt": {
+    "directory": "upgrade-native-directory-durability",
+    "failure": "Development version0.0.0-dir-sync.<commit> rejected by existing version grammar before distribution completion; corrected to0.0.0-dirsync.<commit> in a new directory. No upload."
+  },
+  "artifact_archive": {
+    "archive": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-directory-durability-authenticated-artifacts.tar.gz",
+    "bytes": 39329087,
+    "sha256": "140a126703c010adb0b471c479109f4bc9248a502791d643dff5e93f65b37334",
+    "members": 24,
+    "source_commit": "aa5a33fc5de78ad5a9d6e5d48ba2e9c697e03bf0",
+    "private_seed_included": false,
+    "installed": false
+  },
+  "RF_commands": [],
+  "reboot_commands": [],
+  "limitations": [
+    "Offline complete package reproduction and native synthetic capacity proof only; installed radio remainsa892/e50. Ordinary desktop update/startup/cleanup remain separate gates.",
+    "Same-host/pinned-toolchain reproduction is not independent-builder or shipping catalogue qualification. Publisher9a is the existing development key; no new deployed-key rotation is claimed.",
+    "Only the Go shim expanded record changed; DSP, all fixed helpers includingpd-boot, service definitions and correction defaults are byte-identical to the installed predecessor.",
+    "Disk admission uses real signed inputs but modeled state/metadata allowances and synthetic capacities. It does not measure actual6300 firmware upload copies, storage high-water or first-install adapter overhead.",
+    "Actual6300 directory-sync/kernel/network/one-core qualification, delivery adapter, physical power-loss, joined-account/platform and fullP1-P10 remain open.",
+    "Unresolved software reboot hang is not repaired or qualified by this package. Bench recovery coordination remains pending; no reboot/RF retry. Deferred5W SWR/preamble work remains deferred."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/native-directory-durability-artifact-archive.json.gz": "e2dfa30c5378bd8f3aaeb209753a1cb6f489474c7a8f0ffb61fd5e062056e924",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/budget-build.log.gz": "237ed0206159e7863173851e4c9a9fb241ac2dbe0ec8c711f752b2e878cc0cb2",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/budget-command.json.gz": "3b4d2dba4c3eb9f6f9cf96e3ffe97c5cc7cfc9768c5fb5496227fefe361dfc5b",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/budget-report.json.gz": "bad6bc32103cdef748558cf928ef95503e87ac2c10745ee9fcd0dccb237de224",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/budget.log.gz": "f45773ccacf917911aa95e2ee13154c983b8e6e45606d85e8b6697542e076a81",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/budget_probe.c.gz": "0d024c724e4853b223d7cc2642615f13d721ff082024325eba8564329dd6b980",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/build-budget.py.gz": "2e9c2c8ed77c66c4870c0ae924c9cfc4fa7459477dbbe300ca685b15b7d80410",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/console.log.gz": "486eef045e46439b04a29139cf200fc2c5ed0b247b19ac7b3c4d2a1437854d7a",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/measure-budget.py.gz": "3a0fa1ca9c3289aea89e4b3e07a910f168feff9219af29390b2442206b219747",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/payload-comparison.json.gz": "7bc86cc60a38d2d3c104683cdea6e891e7fa5394695e31716b3bb2e945dcb092",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/report.json.gz": "4da47000e2da46c572d7a5963636d99aac9b21efbac5eaed4fa33c2c054be98f",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/run.py.gz": "075ae4cb68cc3fcaf804c65c296c8d0464d28d6cf164cf5e925affdf91b9a35e",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/save-runtime.py.gz": "627b4fac1d9b0ea46b3fee3488cdc83959e8d96bc3c7f45f83fe7379132cc53b",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/second-distinct-long-source-path/arm64/manifest.json.gz": "caa4bd17620804cc437bcce4e98f05b10defa74d8323896db0fdcc463989e4a3",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/second-distinct-long-source-path/armv7/manifest.json.gz": "3660df3aa845a7192c004892ac2e8a6671f3d826b6d79c8dfd2b05e551937df1",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/second-distinct-long-source-path-arm64.log.gz": "5eff8464823a6d5dd64aed4d028aebd8584c88c23dbf866c221c2becee149123",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/second-distinct-long-source-path-armv7.log.gz": "566f66a983dac8ce368999c21a672634c264c0e0af222b36443afc2502161acf",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/short/arm64/manifest.json.gz": "caa4bd17620804cc437bcce4e98f05b10defa74d8323896db0fdcc463989e4a3",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/short/armv7/manifest.json.gz": "3660df3aa845a7192c004892ac2e8a6671f3d826b6d79c8dfd2b05e551937df1",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/short-arm64.log.gz": "5cd1bfe9fb5e1aa774b6234e371506ff847a938b4cc2a0749967957f86745f5c",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/short-armv7.log.gz": "d19c4a04e157e632591c9d3b1d6e14b3f14ede1773d6d29efbf987bca24ee31f",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/runtime-native-directory-durability/source-sha256.json.gz": "3594ae76207e9633634a003ee63ed64d58a4adf68a327f86ad61081880d12e51",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability/build.py.gz": "8d38c714c691cd1ae4eef7faba444abf4fabe1daff96fd231f4f8f5b46547de0",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability/console.log.gz": "2a9caf6ea876bfe60f5a87533690dead976c10882de25af428075150d846fc6d",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability/short/selection.json.gz": "3dc80f0ea55c99d30a74e250c371273be02ad4ba45112f14e400d6f074877927",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability/short.log.gz": "f05178d811b1690f9ac6198bcc00358426b62af7e361b2cac85c16783bfae285",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/build.py.gz": "501eb79128e1cc3b3472df74a3168f5507aa459edf0bc37a2e88c716092c0708",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/console.log.gz": "1ddd021ec17cf46bb093b55d70c364144da07986a31d584f0053cb83d651e6d0",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/report.json.gz": "896feb0b10fce7b497390f23a80c4b80430ce0fd5477b7254b12b9e1d5e9bb60",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/second-distinct-long-source-path/manifest.json.gz": "e0efea960915376f09309363dd6881f489bcf131539ec75a671bbdb6f20e73fe",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/second-distinct-long-source-path/selection.json.gz": "a34956161a7d0e1d6cbb2534d9320c26577b4492205712b9f2023bfa33c8b46b",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/second-distinct-long-source-path.log.gz": "adc5366f2b363f8503a48d66f487a212f50a16020e1fcfa8a6a0fcb1b15c79ce",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/short/manifest.json.gz": "e0efea960915376f09309363dd6881f489bcf131539ec75a671bbdb6f20e73fe",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/short/selection.json.gz": "a34956161a7d0e1d6cbb2534d9320c26577b4492205712b9f2023bfa33c8b46b",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/upgrade-native-directory-durability-02/short.log.gz": "72459acab5293098aca540c8b647c19dca1cae62a3cb2305960e53873a3d9c03",
+    "tools/pd-waveform/evidence/20261117-native-durability-runtime/production-completion-plan.json.gz": "a0d29129e8447e01cf3d24c323881a28f57b44ac238de7780ce11752a960729a"
+  }
+}
