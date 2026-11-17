@@ -192,6 +192,36 @@ int main(int argc, char** argv)
         joined.state = QStringLiteral("running");
         ok &= expect(!tailnetshim::shouldSignInUnasked(joined, true, false, false, true, false),
                      "never for a radio a tailnet owns");
+        TailnetShimStatus local = joined;
+        local.state = QStringLiteral("local");
+        local.installationId = QString(64, QLatin1Char('a'));
+        ok &= expect(!tailnetshim::supportsManagedEnrollment(local)
+                     && !tailnetshim::shouldSignInUnasked(local, true, true, false, true, false),
+                     "an older managed runtime cannot enroll before preserving local ownership");
+        local.managedOwnerVersion = 1;
+        ok &= expect(tailnetshim::shouldSignInUnasked(local, true, true, false, true, false),
+                     "opening Remote Access starts managed local enrollment for its known owner");
+        ok &= expect(!tailnetshim::shouldSignInUnasked(local, true, false, false, true, false)
+                     && !tailnetshim::shouldSignInUnasked(local, false, true, false, true, false)
+                     && !tailnetshim::shouldSignInUnasked(local, true, true, true, true, false)
+                     && !tailnetshim::shouldSignInUnasked(local, true, true, false, false, false)
+                     && !tailnetshim::shouldSignInUnasked(local, true, true, false, true, true),
+                     "managed enrollment requires loaded owner token, idle LAN window and fresh intent");
+        local.state = QStringLiteral("needs_login");
+        ok &= expect(!tailnetshim::shouldSignInUnasked(local, true, true, false, true, false),
+                     "a pending managed sign-in is resumed by reading its URL, not replaced");
+        const QByteArray managed = R"({"version":"0.5.2","state":"local","provisioned":true,
+            "claimable":false,"managed_owner_version":1,"installation_id":")"
+            + QByteArray(64, 'a') + R"("})";
+        const auto managedStatus = tailnetshim::parseStatus(managed);
+        ok &= expect(managedStatus && managedStatus->installationId == local.installationId
+                     && tailnetshim::supportsManagedEnrollment(*managedStatus),
+                     "managed ownership contract parses");
+        ok &= expect(!tailnetshim::parseStatus(QByteArray(managed).replace(QByteArray(64, 'a'), "bad")),
+                     "malformed managed installation identity is rejected");
+        local.managedOwnerVersion = 2;
+        ok &= expect(!tailnetshim::supportsManagedEnrollment(local),
+                     "unknown managed owner contract does not permit enrollment");
         TailnetShimStatus old = fresh;
         old.version = QStringLiteral("0.4.1");
         ok &= expect(!tailnetshim::shouldSignInUnasked(old, true, false, false, true, false),

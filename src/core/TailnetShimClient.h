@@ -45,9 +45,11 @@ struct TailnetShimDevice {
 struct TailnetShimStatus {
     QString version;
     bool provisioned{false};
-    // unprovisioned | starting | needs_login | needs_approval | running | error
+    // unprovisioned | local | starting | needs_login | needs_approval | running | error
     QString state;
     QString hostname;
+    QString installationId;
+    int managedOwnerVersion{0};
     QString tailnetIp;
     QString dnsName;
     QStringList allow;
@@ -102,6 +104,9 @@ QString pinnedVersion(bool native);
 // major.minor.patch and ignoring a suffix such as "-native". False when
 // either can't be read, so an unknown version never offers an update.
 bool updateAvailable(const QString& installed, const QString& pinned);
+// Legacy containers need no managed contract. Installed local control must
+// explicitly support owner-preserving enrollment before any sign-in request.
+bool supportsManagedEnrollment(const TailnetShimStatus& status);
 // Whether the Remote Access window should start the QR sign-in without being
 // asked: the radio belongs to no tailnet (never provisioned, or a QR sign-in
 // abandoned with its token or failed here), the container can, nothing is in

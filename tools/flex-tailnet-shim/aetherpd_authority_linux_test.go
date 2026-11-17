@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,6 +125,53 @@ func TestPDNonAuthorityConfigUpdatePreservesSession(t *testing.T) {
 	n, p, ctx := pdAuthorityFixture(t)
 	if err := n.SetAllow("current-admin", nil); err != nil {
 		t.Fatal(err)
+	}
+	assertPDAuthorityUnchanged(t, p, ctx)
+}
+
+func TestPDManagedRejoinRetiresSessionWithoutRotatingOwner(t *testing.T) {
+	n, p, ctx := pdAuthorityFixture(t)
+	n.cfg.InstallationID = strings.Repeat("ab", 32)
+	if err := n.save(n.cfg); err != nil {
+		t.Fatal(err)
+	}
+	token, err := n.Provision("current-admin", "tskey-auth-fixture", "managed-radio", nil, nil, nil)
+	if err != nil || token != "current-admin" {
+		t.Fatal("managed rejoin changed its local owner", err)
+	}
+	assertPDAuthorityRevoked(t, p, ctx)
+}
+
+func TestPDManagedDisconnectRetiresBeforeSlowLogout(t *testing.T) {
+	n, p, ctx := pdAuthorityFixture(t)
+	n.cfg.InstallationID = strings.Repeat("ab", 32)
+	if err := n.save(n.cfg); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	n.closers = []func() error{func() error { close(entered); <-release; return nil }}
+	done := make(chan error, 1)
+	go func() { done <- n.SignOut("current-admin") }()
+	defer func() {
+		close(release)
+		waitCredentialResult(t, done)
+	}()
+	waitCredentialSignal(t, entered)
+	assertPDAuthorityRevoked(t, p, ctx)
+	if !n.checkToken("current-admin") || n.Status().State != stateLocal {
+		t.Fatal("disconnect stranded local control during slow logout")
+	}
+}
+
+func TestPDManagedFailedDisconnectWriteKeepsSession(t *testing.T) {
+	n, p, ctx := pdAuthorityFixture(t)
+	n.cfg.InstallationID = strings.Repeat("ab", 32)
+	if err := n.save(n.cfg); err != nil {
+		t.Fatal(err)
+	}
+	n.configWrite = func([]byte) error { return errors.New("fixture full disk") }
+	if err := n.SignOut("current-admin"); err == nil {
+		t.Fatal("failed write reported successful disconnect")
 	}
 	assertPDAuthorityUnchanged(t, p, ctx)
 }

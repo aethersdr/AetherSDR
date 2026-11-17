@@ -255,21 +255,18 @@ func (n *Node) Login(presented string) (LoginReply, error) {
 // control plane's URL, inside AetherSDR's request timeout.
 const loginURLWait = 30 * time.Second
 
-// ProvisionInteractive joins the tailnet without an auth key (allow is
-// ignored, as in Provision): it saves the
-// settings and a new admin token, starts the join in the background, and
-// returns the token with the sign-in URL once the control plane sends it.
-// The token comes back even without a URL (a slow control plane), so the
-// caller can fetch the URL from /v1/login; a token-less provisioned node
-// could never be changed again.
+// ProvisionInteractive saves settings and starts a background join without
+// an auth key. Managed installations retain their local owner credential;
+// legacy containers issue a new token. The reply includes the token even
+// before a URL arrives, so the owner can poll /v1/login.
 func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []string, shareDiscovered *bool) (token, authURL string, err error) {
 	end, err := n.beginOp(presented, true)
 	if err != nil {
 		return "", "", err
 	}
-	token, hash := newToken()
+	token, hash, installationID := n.provisionCredentials(presented)
 	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Routes: routes,
-		ShareDiscovered: shareDiscovered, PendingSignIn: true}
+		ShareDiscovered: shareDiscovered, PendingSignIn: true, InstallationID: installationID}
 	if err := n.replaceNode(cfg); err != nil {
 		end()
 		return "", "", err
@@ -392,10 +389,10 @@ func (n *Node) replaceNode(cfg provisionConfig) error {
 		return fmt.Errorf("could not save settings: %w", err)
 	}
 	n.mu.Lock()
-	if n.cfg.TokenSHA256 != cfg.TokenSHA256 {
-		n.retirePDSessionLocked()
-	}
-	if n.cfg.TokenSHA256 != cfg.TokenSHA256 && n.pdProcess != nil {
+	// A deliberate rejoin retires the owned PD session even when the
+	// managed local owner credential remains the same.
+	n.retirePDSessionLocked()
+	if n.pdProcess != nil {
 		n.pdProcess.Stop()
 	}
 	n.cfg = cfg

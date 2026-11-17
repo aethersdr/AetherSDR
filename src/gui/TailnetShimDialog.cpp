@@ -109,6 +109,9 @@ QString stateText(const TailnetShimStatus& st)
     if (state == QLatin1String("unprovisioned")) {
         return QObject::tr("Not set up");
     }
+    if (state == QLatin1String("local")) {
+        return QObject::tr("Local access ready");
+    }
     if (state == QLatin1String("error")) {
         return QObject::tr("Problem");
     }
@@ -763,16 +766,28 @@ void TailnetShimDialog::updateControls()
     // QR code being scanned: not while one is waited on.
     const bool waiting = known && waitingOnPerson(m_status->state);
     const bool qrSupported = known && tailnetshim::supportsQrSignIn(m_status->version);
+    const bool enrollmentSupported = known && tailnetshim::supportsManagedEnrollment(*m_status);
+    const QString enrollmentWhy = known && !enrollmentSupported
+        ? tr("Update the managed AetherPD service before signing in. This runtime does not "
+             "confirm that tailnet enrollment preserves local ownership.") : QString();
 
     m_refreshButton->setEnabled(m_lanReachable && !m_busy);
-    m_keyEdit->setEnabled(mayChange);
-    m_hostnameEdit->setEnabled(mayChange);
+    m_keyEdit->setEnabled(mayChange && enrollmentSupported);
+    m_hostnameEdit->setEnabled(mayChange && enrollmentSupported);
     m_joinButton->setText(provisioned ? tr("Change Key") : tr("Join with Key"));
     m_joinButton->setAccessibleName(provisioned
         ? tr("Rejoin the tailnet with a new auth key")
         : tr("Join the tailnet with this auth key"));
-    m_joinButton->setEnabled(mayChange && !m_keyEdit->text().trimmed().isEmpty());
-    if (known && !qrSupported) {
+    m_joinButton->setEnabled(mayChange && enrollmentSupported && !m_keyEdit->text().trimmed().isEmpty());
+    m_joinButton->setToolTip(enrollmentWhy);
+    m_joinButton->setAccessibleDescription(enrollmentWhy);
+    m_keyEdit->setAccessibleDescription(enrollmentWhy.isEmpty()
+        ? tr("A single-use key from the Tailscale admin console. It is sent to the radio once "
+             "and is not stored.") : enrollmentWhy);
+    m_hostnameEdit->setAccessibleDescription(enrollmentWhy);
+    if (known && !enrollmentSupported) {
+        setWrapped(m_qrHint, enrollmentWhy, m_cardTextWidth);
+    } else if (known && !qrSupported) {
         // An older container may still enforce a Who may connect list this
         // window no longer edits; name it, since updating is what drops it.
         QString hint = tr("This remote-access container (version %1) can only join with an auth "
@@ -789,7 +804,7 @@ void TailnetShimDialog::updateControls()
             m_advancedToggle->setChecked(true);
         }
     }
-    m_qrHint->setVisible(known && !qrSupported);
+    m_qrHint->setVisible(known && (!qrSupported || !enrollmentSupported));
     m_saveSharingButton->setEnabled(provisioned && haveToken && !waiting);
     // Disconnect belongs to a radio on the tailnet; until then there is
     // only the sign-in to finish.
@@ -802,17 +817,24 @@ void TailnetShimDialog::updateControls()
     // Without the admin token nothing here can change a radio a tailnet
     // owns: Reset (reinstall the container) takes Disconnect's place.
     const bool lockedOut = provisioned && m_tokenLoaded && !haveToken && !m_status->claimable;
+    const bool managed = known && !m_status->installationId.isEmpty();
     m_signOutButton->setVisible(joined && !lockedOut);
     m_signOutButton->setEnabled(joined && haveToken);
     m_resetButton->setVisible(lockedOut);
-    m_resetButton->setEnabled(lockedOut && !m_busy);
+    m_resetButton->setEnabled(lockedOut && !m_busy && !managed);
+    const QString resetWhy = managed
+        ? tr("This managed installation requires its existing owner credential. "
+             "Owner-credential recovery is unavailable in this build.") : QString();
+    m_resetButton->setToolTip(resetWhy);
+    m_resetButton->setAccessibleDescription(resetWhy);
     // An older release on the radio: Update reinstalls it at the pin. Reset,
     // when shown, does the same, so it isn't offered twice.
     const bool outdated = known
         && tailnetshim::updateAvailable(m_status->version, tailnetshim::pinnedVersion(m_native));
     m_updateButton->setVisible(outdated && !lockedOut);
-    m_updateButton->setEnabled(outdated && !m_busy);
-    const QString updateWhy = outdated
+    m_updateButton->setEnabled(outdated && !m_busy && !managed);
+    const QString updateWhy = managed
+        ? tr("Use AetherPD service installation to update this managed runtime.") : outdated
         ? tr("Install version %1 on the radio.").arg(tailnetshim::pinnedVersion(m_native))
         : QString();
     m_updateButton->setToolTip(updateWhy);
@@ -842,7 +864,7 @@ void TailnetShimDialog::signInWithQr()
 }
 
 // Provisions with an auth key, or by QR code when it is empty. The join can
-// take a minute and rotates the admin token, so it must not depend on this
+// take a minute and may rotate a legacy container's token, so it must not depend on this
 // window: closing it (or the Waveforms window that owns it) mid-join would
 // otherwise drop the only copy of the new token and leave the container
 // unchangeable until it is reinstalled. The request and the keychain save
@@ -850,6 +872,12 @@ void TailnetShimDialog::signInWithQr()
 // still open.
 void TailnetShimDialog::provision(const QString& authKey)
 {
+    if (!m_status || !tailnetshim::supportsManagedEnrollment(*m_status)) {
+        m_signingIn = false;
+        setBusy(false);
+        showError(tr("Update the managed AetherPD service before signing in."));
+        return;
+    }
     m_messageLabel->hide();
     hideSignIn();
     auto* transaction = new TailnetShimClient(qApp);
@@ -1016,6 +1044,12 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
             updateControls();
             return;
         }
+        if (m_status && !m_status->installationId.isEmpty()) {
+            showError(tr("The managed service rejected this computer's owner credential. "
+                         "Owner-credential recovery is unavailable in this build; "
+                         "reinstalling the legacy remote-access waveform does not recover it."));
+            return;
+        }
         showError(m_native
             ? tr("The waveform rejected this computer's admin token. To start over, uninstall "
                  "and reinstall the remote-access waveform from the Waveforms list.")
@@ -1043,6 +1077,10 @@ void TailnetShimDialog::saveSharing()
 
 void TailnetShimDialog::reset()
 {
+    if (m_status && !m_status->installationId.isEmpty()) {
+        showError(tr("Owner-credential recovery is unavailable for this managed installation."));
+        return;
+    }
     const QPointer<TailnetShimDialog> self(this);
     ScopedChildWidget<CanonMessageBox> ask(
         tr("Reset Remote Access?"),
@@ -1069,6 +1107,10 @@ void TailnetShimDialog::reset()
 void TailnetShimDialog::updateRadioShim()
 {
     if (!m_status) {
+        return;
+    }
+    if (!m_status->installationId.isEmpty()) {
+        showError(tr("Use AetherPD service installation to update this managed runtime."));
         return;
     }
     const QPointer<TailnetShimDialog> self(this);

@@ -55,9 +55,8 @@ type provisionConfig struct {
 	// (nil means the default: on).
 	ShareDiscovered *bool `json:"share_discovered,omitempty"`
 	// PendingSignIn: provisioned for a sign-in by URL that hasn't completed.
-	// The node belongs to no tailnet yet, so, like first use, a LAN caller
-	// may start it over without the token (whoever began it may have lost
-	// it with their window). Cleared once the node is first on the tailnet.
+	// A legacy container may be claimed again until sign-in completes.
+	// A managed installation keeps its local owner throughout enrollment.
 	PendingSignIn bool `json:"pending_sign_in,omitempty"`
 }
 
@@ -196,6 +195,11 @@ func (n *Node) newTsnetServer(hostname, authKey string) (*tsnet.Server, error) {
 }
 func (n *Node) provisioned() bool { return n.cfg.TokenSHA256 != "" }
 
+// Caller holds mu. A managed installation's owner predates tailnet sign-in.
+func (n *Node) claimableLocked() bool {
+	return !n.nativeStateLoadFailed && n.cfg.InstallationID == "" && (!n.provisioned() || n.cfg.PendingSignIn)
+}
+
 func (n *Node) load() (err error) {
 	defer func() {
 		if n.RunDir != "" {
@@ -225,19 +229,21 @@ func (n *Node) load() (err error) {
 	if err := json.Unmarshal(b, &n.cfg); err != nil {
 		return fmt.Errorf("corrupt %s: %w", n.cfgPath(), err)
 	}
-	if n.cfg.LocalOnly {
+	if n.cfg.LocalOnly || n.cfg.InstallationID != "" {
 		id, idErr := hex.DecodeString(n.cfg.InstallationID)
 		token, tokenErr := hex.DecodeString(n.cfg.TokenSHA256)
 		if idErr != nil || tokenErr != nil || len(id) != 32 || len(token) != 32 ||
 			n.cfg.InstallationID != strings.ToLower(n.cfg.InstallationID) ||
 			n.cfg.TokenSHA256 != strings.ToLower(n.cfg.TokenSHA256) ||
-			n.cfg.PendingSignIn || n.cfg.Hostname == "" ||
+			(n.cfg.LocalOnly && n.cfg.PendingSignIn) || n.cfg.Hostname == "" ||
 			!slices.ContainsFunc(id, func(b byte) bool { return b != 0 }) ||
 			!slices.ContainsFunc(token, func(b byte) bool { return b != 0 }) {
-			return errors.New("invalid local first-install identity")
+			return errors.New("invalid managed installation identity")
 		}
-		n.state = stateLocal
-		return nil
+		if n.cfg.LocalOnly {
+			n.state = stateLocal
+			return nil
+		}
 	}
 	// Access is the tailnet's own rules from 0.5.0: a list an older version
 	// kept is dropped, and said so.
@@ -316,15 +322,30 @@ func (n *Node) changeConfig(change func(*provisionConfig)) error {
 func (n *Node) forgetConfig(state string) error {
 	n.configMu.Lock()
 	defer n.configMu.Unlock()
-	if err := os.Remove(n.cfgPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	n.mu.Lock()
+	cfg := n.cfg
+	n.mu.Unlock()
+	if cfg.InstallationID != "" {
+		// Remote-access disconnect does not surrender the installed local
+		// service. Keep the known owner even when the HTTP reply is lost.
+		cfg = provisionConfig{TokenSHA256: cfg.TokenSHA256, Hostname: cfg.Hostname,
+			InstallationID: cfg.InstallationID, LocalOnly: true}
+		if err := n.saveConfigLocked(cfg); err != nil {
+			return err
+		}
+		state = stateLocal
+	} else {
+		if err := os.Remove(n.cfgPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		cfg = provisionConfig{}
 	}
 	n.mu.Lock()
 	if n.pdProcess != nil {
 		n.pdProcess.Stop()
 	}
 	n.retirePDSessionLocked()
-	n.cfg = provisionConfig{}
+	n.cfg = cfg
 	n.state, n.lastError = state, ""
 	n.joinGen++
 	n.mu.Unlock()
@@ -760,7 +781,7 @@ func (n *Node) beginOp(presented string, firstUse bool) (end func(), err error) 
 	refused := func() bool {
 		n.mu.Lock()
 		failed := n.nativeStateLoadFailed
-		needsToken := !firstUse || (n.provisioned() && !n.cfg.PendingSignIn)
+		needsToken := !firstUse || !n.claimableLocked()
 		n.mu.Unlock()
 		return failed || needsToken && !n.checkToken(presented)
 	}
@@ -907,7 +928,8 @@ func newToken() (token, hash string) {
 // Provision joins (or re-joins) the tailnet with a fresh auth key. The first
 // call needs no token (trust on first use, matching the radio API's own LAN
 // trust); later calls must present the admin token returned by the first.
-// It returns a new admin token on success. allow is accepted from older
+// Legacy containers return a new admin token; managed installations retain
+// their existing local owner token. allow is accepted from older
 // clients and ignored: the tailnet's access rules decide who may connect.
 //
 // The token is checked here, under opMu, not by the caller: checked before
@@ -921,9 +943,9 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 	}
 	defer end()
 
-	token, hash := newToken()
+	token, hash, installationID := n.provisionCredentials(presented)
 	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Routes: routes,
-		ShareDiscovered: shareDiscovered}
+		ShareDiscovered: shareDiscovered, InstallationID: installationID}
 	if err := n.replaceNode(cfg); err != nil {
 		return "", err
 	}
@@ -933,16 +955,30 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 		start = n.start
 	}
 	if err := start(context.Background(), authKey, 90*time.Second); err != nil {
-		// A rejected key leaves the node unprovisioned rather than half-joined.
+		// A rejected key leaves no tailnet membership. Managed local ownership
+		// remains available to recover without the failed provision reply.
 		if serr := n.stop(true); serr != nil {
 			log.Printf("provision: cleaning up after a failed join: %v", serr)
 		}
 		if rerr := n.forgetConfig(stateError); rerr != nil {
-			return "", errors.Join(err, fmt.Errorf("could not delete the saved settings, so they return after a restart: %w", rerr))
+			return "", errors.Join(err, fmt.Errorf("could not save the disconnected settings: %w", rerr))
 		}
 		return "", err
 	}
 	return token, nil
+}
+
+// Caller holds opMu after beginOp validated the owner. Keeping the managed
+// credential avoids a commit/HTTP-reply gap that could strand local control.
+func (n *Node) provisionCredentials(presented string) (token, hash, installationID string) {
+	n.mu.Lock()
+	installationID, hash = n.cfg.InstallationID, n.cfg.TokenSHA256
+	n.mu.Unlock()
+	if installationID != "" {
+		return presented, hash, installationID
+	}
+	token, hash = newToken()
+	return token, hash, ""
 }
 
 // SetAllow clears an access list (older clients set one; 0.5.0 keeps none and
@@ -1005,23 +1041,22 @@ func (n *Node) revokeDisallowed() {
 }
 
 // SignOut leaves the tailnet, deregisters the node and forgets the admin
-// token, returning the shim to its unprovisioned state.
+// token on legacy containers. A managed installation returns to local
+// control with its existing owner credential.
 //
-// The saved settings are deleted first: if that fails nothing has changed,
-// the node stays provisioned and the caller's token stays valid, so the
-// client keeps it. Once they are gone a restart can't revive the old token,
-// and any later failure (logout, tailnet state) is returned but leaves the
-// node signed out.
+// Commit the disconnected configuration (or delete the legacy one) before
+// retiring PD authority and waiting for logout. A failed file transaction
+// leaves the existing owner and session intact.
 func (n *Node) SignOut(presented string) error {
 	end, err := n.beginOp(presented, false)
 	if err != nil {
 		return err
 	}
 	defer end()
-	// Deletion, authority revocation and the callback generation share the
+	// Persistence, session revocation and the callback generation share the
 	// configuration transaction; an older joined-status save cannot recreate it.
 	if err := n.forgetConfig(stateUnprovisioned); err != nil {
-		return fmt.Errorf("could not delete the saved settings, so nothing was changed: %w", err)
+		return fmt.Errorf("could not save the disconnected settings, so nothing was changed: %w", err)
 	}
 	err = n.stop(true)
 	if err != nil {
@@ -1040,16 +1075,18 @@ var errAccessListRetired = errors.New("the remote-access container no longer kee
 
 // Status is what GET /v1/status returns. It never contains a secret.
 type Status struct {
-	Version        string   `json:"version"`
-	Provisioned    bool     `json:"provisioned"`
-	State          string   `json:"state"`
-	Hostname       string   `json:"hostname"`
-	InstallationID string   `json:"installation_id,omitempty"`
-	TailnetIP      string   `json:"tailnet_ip"`
-	DNSName        string   `json:"dns_name"`
-	Allow          []string `json:"allow"`
-	Sessions       int      `json:"sessions"`
-	Routes         []string `json:"routes"` // extra LAN devices the operator listed
+	Version        string `json:"version"`
+	Provisioned    bool   `json:"provisioned"`
+	State          string `json:"state"`
+	Hostname       string `json:"hostname"`
+	InstallationID string `json:"installation_id,omitempty"`
+	// ManagedOwnerVersion 1 preserves local ownership across tailnet changes.
+	ManagedOwnerVersion int      `json:"managed_owner_version,omitempty"`
+	TailnetIP           string   `json:"tailnet_ip"`
+	DNSName             string   `json:"dns_name"`
+	Allow               []string `json:"allow"`
+	Sessions            int      `json:"sessions"`
+	Routes              []string `json:"routes"` // extra LAN devices the operator listed
 	// ShareDiscovered: share every discovered station device automatically.
 	ShareDiscovered bool     `json:"share_discovered"`
 	Discovered      []Device `json:"discovered_devices"`
@@ -1146,7 +1183,10 @@ func (n *Node) statusLocked() Status {
 		Hostname: n.cfg.Hostname, DNSName: n.dnsName, Allow: n.cfg.Allow,
 		InstallationID: n.cfg.InstallationID,
 		LastError:      n.lastError,
-		Claimable:      !n.nativeStateLoadFailed && (!n.provisioned() || n.cfg.PendingSignIn),
+		Claimable:      n.claimableLocked(),
+	}
+	if n.cfg.InstallationID != "" {
+		st.ManagedOwnerVersion = 1
 	}
 	if n.keyExpiry != nil {
 		st.KeyExpiry = n.keyExpiry.UTC().Format(time.RFC3339)

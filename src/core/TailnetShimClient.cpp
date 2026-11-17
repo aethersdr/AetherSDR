@@ -62,6 +62,15 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
     st.provisioned = o.value(QStringLiteral("provisioned")).toBool();
     st.state = field(o, QStringLiteral("state"));
     st.hostname = field(o, QStringLiteral("hostname"));
+    st.installationId = field(o, QStringLiteral("installation_id"));
+    if (!st.installationId.isEmpty()) {
+        static const QRegularExpression identity(QStringLiteral("\\A[0-9a-f]{64}\\z"));
+        if (!identity.match(st.installationId).hasMatch()
+            || st.installationId == QString(64, QLatin1Char('0'))) {
+            return std::nullopt;
+        }
+    }
+    st.managedOwnerVersion = o.value(QStringLiteral("managed_owner_version")).toInt();
     st.tailnetIp = field(o, QStringLiteral("tailnet_ip"));
     st.dnsName = field(o, QStringLiteral("dns_name"));
     st.allow = fieldList(o, QStringLiteral("allow"));
@@ -190,10 +199,16 @@ bool updateAvailable(const QString& installed, const QString& pinned)
     return false;
 }
 
+bool supportsManagedEnrollment(const TailnetShimStatus& st)
+{
+    return st.installationId.isEmpty() || st.managedOwnerVersion == 1;
+}
+
 bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,
                          bool busy, bool lanReachable, bool alreadyTried)
 {
-    if (alreadyTried || busy || !lanReachable || !tokenLoaded || !supportsQrSignIn(st.version)) {
+    if (alreadyTried || busy || !lanReachable || !tokenLoaded || !supportsQrSignIn(st.version)
+        || !supportsManagedEnrollment(st)) {
         return false;
     }
     const bool fresh = !st.provisioned && st.state == QLatin1String("unprovisioned");
@@ -201,7 +216,11 @@ bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool hav
     // this computer's attempt failed (error) before anyone signed in.
     const bool abandoned = st.claimable && st.provisioned
         && (!haveToken || st.state == QLatin1String("error"));
-    return fresh || abandoned;
+    // The installed local service already has an owner. Opening Remote
+    // Access may enroll it only after that owner's keychain token is loaded.
+    const bool localOwner = !st.installationId.isEmpty() && st.provisioned && !st.claimable
+        && st.state == QLatin1String("local") && haveToken;
+    return fresh || abandoned || localOwner;
 }
 
 QString tokenAfterKeychainRead(const QString& held, const QString& read)

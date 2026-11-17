@@ -733,6 +733,20 @@ retry Start, calibration or Stop automatically after a lost reply. The released
 Remote Access package alone does not supply the AetherPD installation required
 by these controls.
 
+With a managed AetherPD installation, **Remote Access** keeps the installation's
+local owner credential while joining or rejoining a tailnet. A pending QR
+sign-in remains owned; another computer cannot restart it without that
+credential. If a sign-in reply is lost, reopen **Remote Access** on the same
+computer to retrieve the current sign-in state and code using its saved token.
+Enrollment stays disabled when a managed runtime does not confirm support for
+preserving local ownership; update the managed service before signing in.
+**Disconnect** removes the tailnet identity and stops the owned AetherPD
+session, then returns to **Local access ready** with the same installation ID
+and owner credential. A failed auth-key join also retains local control.
+Losing that saved owner credential is a separate recovery case; token-free
+takeover and reinstalling the legacy remote-access waveform are not recovery
+procedures for this managed installation.
+
 The **AetherPD service installation** section shows a prepared update's target radio,
 firmware, planned changes and authenticated package identifiers. Qualified package
 selection is not yet available. Builds explicitly configured with a development

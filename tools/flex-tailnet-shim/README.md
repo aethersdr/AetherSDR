@@ -122,7 +122,21 @@ are refused.
 | POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}`. Without `auth_key` it signs in by URL and also returns `auth_url` once the control plane sends it (within 30 s); the join goes on in the background |
 | GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
 | PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
-| POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
+| POST | `/v1/signout` | yes | Logs out and deletes tailnet state; legacy containers forget the token, managed installations retain local ownership |
+
+A managed installation has an `installation_id` and an owner credential before
+tailnet enrollment. Both persist across keyed/interactive joins and disconnect.
+Managed pending sign-in is never claimable without that owner token. Rejoining
+is available to the desktop only when status advertises `managed_owner_version:1`;
+older or unknown managed contracts do not permit enrollment. Rejoining
+returns the already-held token, so losing the HTTP reply cannot strand the
+known owner; `GET /v1/login` resumes observation with the same token after a
+restart. Failed keyed enrollment and sign-out atomically return to local-only
+control. Successful rejoin/disconnect retires the owned PD session and its arm
+gate; no session or RF is restarted. A failed configuration write preserves the
+existing owner/session. Legacy container token rotation and pending first-use
+behavior remain unchanged. Loss of the managed owner's saved token still needs
+a separately qualified recovery procedure; it does not reopen first use.
 
 ### AetherPD status (development)
 
@@ -443,11 +457,12 @@ Use a subsequent authenticated status read to observe supervisor completion.
 The retained unprivileged relay keeps the receive journal for an explicit
 restore request; reporting completion does not apply receive settings.
 
-Successful sign-out or an admin-token rotation also stops the owned session
+Successful sign-out, rejoin or an admin-token rotation also stops the owned session
 and permanently closes that session's calibration gate. The old token cannot
 arm or restore it, and acquiring a new token does not restart it. Rejected
 requests and failed configuration writes leave the existing session intact.
-Sign-out revokes local authority before waiting for tailnet logout.
+Sign-out retires the owned session before waiting for tailnet logout; a managed
+installation retains its credential for subsequent explicit local control.
 Configuration replacement/deletion and live publication share a transaction
 lock, including automatic sign-in-completion saves and sharing changes. This
 prevents a delayed save from recreating an old credential after sign-out.

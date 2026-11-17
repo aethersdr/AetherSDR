@@ -1,0 +1,182 @@
+{
+  "updated_utc": "2026-11-17T09:10:38.028445+00:00",
+  "status": "managed_owner_continuity_pending_sign_in_and_lost_provision_reply_recovery_implemented_offline_qualified_not_installed",
+  "source_base_commit": "e5b56c0c6fa7df9e8a2cdd1f82d4b86d53ae6e7b",
+  "source_sha256": {
+    "tools/flex-tailnet-shim/node.go": "1297bb23294339d7ba1356a698ca5bafb9233a20a34a211ae135b46f7e17a38f",
+    "tools/flex-tailnet-shim/login.go": "5e3a0327d3175f895b6badab012c51abe789a5a5cd68bc7f11c94ea654cf3fe6",
+    "tools/flex-tailnet-shim/managed_identity_test.go": "f18d5bfd2c1593b089f4ba58c81428e71acf2f818fcedcd343eb072752e018bc",
+    "tools/flex-tailnet-shim/aetherpd_authority_linux_test.go": "f20467632f7e677cddf8b47f868ef8538ed138e93713103f0f19f63bf5339339",
+    "src/core/TailnetShimClient.h": "94b0d5903212a8558b566ab03b11a2fa061ed658c8008dc2886b938b573f9f03",
+    "src/core/TailnetShimClient.cpp": "be08e5f043e3d6cd86dba86e95c86460bacd3b8ed5bacd8b88b4b7472a1574e6",
+    "src/gui/TailnetShimDialog.cpp": "dc55324ebbcbadf0b509c198446557bcea488c02bd45d2517406113205adb89d",
+    "tests/tailnet_shim_client_test.cpp": "87980b7156080a7f4ed45d884d8735ffd40ef6e99df90ea7c4bba77772622035",
+    "tools/flex-tailnet-shim/README.md": "ae48c8e8db44e355a1964d5199afec806491fb5a9e8154182e7baa69dee49c1b",
+    "docs/user/docs/tailscale-remote-access.md": "c61c6e80f96d23244ffad8d7d9ba1857f61064b58889ab15278daa74a568293e"
+  },
+  "production_ready": false,
+  "installed": false,
+  "radio_credential_mutations": [],
+  "RF_commands": [],
+  "original_reproductions": [
+    "Keyed and QR enrollment dropped the installation ID; QR enrollment became claimable.",
+    "Rejected key deleted the managed owner and returned to token-free first use.",
+    "Disconnect deleted managed ownership; the local-save-failure regression exposed that deletion bypassed the save contract.",
+    "Nonlocal managed identities bypassed installation-ID validation.",
+    "Opening Remote Access with a known managed local owner never began its QR sign-in."
+  ],
+  "implementation": [
+    "Managed installation ID and existing owner credential persist across keyed/interactive enrollment and disconnect. Tailnet changes do not rotate this local ownership credential.",
+    "Pending managed sign-in requires the existing owner; token-free legacy pending first use remains unchanged.",
+    "Lost provision/disconnect replies are recoverable using the already-held owner token, including after reload. Rejected auth-key joins return to local-only control.",
+    "Managed signout atomically saves local-only configuration before retiring the owned PD session/arm gate and waiting for logout. Failed persistence preserves the session and owner.",
+    "Managed rejoin retires the owned PD session even when its local token is unchanged. No automatic DSP restart, calibration rearm or RF.",
+    "Login generation fencing discards pre-disconnect URLs while keeping the valid local owner credential.",
+    "Status managed_owner_version1 advertises the new contract. The desktop refuses enrollment for older/unknown managed contracts and malformed installation IDs, with an available-reason hint.",
+    "Opening Remote Access can enroll a supported managed local installation only after loading its owner token, on the LAN, once per window/Refresh. Pending sign-in is read, not replaced.",
+    "Legacy Reset/Update actions refuse managed installations; unavailable owner recovery is stated instead of proposing the legacy waveform reinstall."
+  ],
+  "verification": {
+    "new_Go_test_functions": 9,
+    "new_Go_semantic_cases": 12,
+    "full_pinned_Go_1_27_1_race_suite": "passed: complete ./... module, 25.572s main package",
+    "guard_mutations": [
+      {
+        "mutation": "installation-id",
+        "test": "^TestManagedEnrollment",
+        "exit": 1,
+        "expected_failure": "managed installation lost its owner boundary",
+        "rejected": true
+      },
+      {
+        "mutation": "pending-owner",
+        "test": "^TestManagedEnrollment",
+        "exit": 1,
+        "expected_failure": "managed installation lost its owner boundary",
+        "rejected": true
+      },
+      {
+        "mutation": "owner-token",
+        "test": "^TestManagedEnrollment",
+        "exit": 1,
+        "expected_failure": "managed owner credential changed",
+        "rejected": true
+      },
+      {
+        "mutation": "disconnect-owner",
+        "test": "^TestManagedDisconnectKeepsLocalControl",
+        "exit": 1,
+        "expected_failure": "managed installation lost its owner boundary",
+        "rejected": true
+      },
+      {
+        "mutation": "failed-local-save",
+        "test": "^TestManagedDisconnectWriteFailure",
+        "exit": 1,
+        "expected_failure": "failed local-control save reported a successful disconnect",
+        "rejected": true
+      },
+      {
+        "mutation": "nonlocal-validation",
+        "test": "^TestManagedTailnetIdentityValidation",
+        "exit": 1,
+        "expected_failure": "invalid managed tailnet identity became usable or claimable",
+        "rejected": true
+      },
+      {
+        "mutation": "rejoin-session",
+        "test": "^TestPDManagedRejoin",
+        "exit": 1,
+        "expected_failure": "authority change retained a pending calibration arm",
+        "rejected": true
+      },
+      {
+        "mutation": "disconnect-session",
+        "test": "^TestPDManagedDisconnectRetires",
+        "exit": 1,
+        "expected_failure": "authority change retained a pending calibration arm",
+        "rejected": true
+      }
+    ],
+    "Qt_client_regression": "original red, final CTest passed",
+    "desktop_build": "full Linux AetherSDR target passed; final GUI gating code compiled",
+    "ARM_cross_compile": {
+      "armv7": {
+        "bytes": 21889184,
+        "sha256": "02c21c86471f873a5d341908a5f58d210f46f22245b39aa31f0d43e0ebe35e72",
+        "command": [
+          "/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/bin/go",
+          "build",
+          "-mod=vendor",
+          "-trimpath",
+          "-buildvcs=false",
+          "-ldflags=-s -w",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/managed-identity-policy/flex-tailnet-shim-armv7",
+          "."
+        ]
+      },
+      "arm64": {
+        "bytes": 21495968,
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10",
+        "command": [
+          "/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/bin/go",
+          "build",
+          "-mod=vendor",
+          "-trimpath",
+          "-buildvcs=false",
+          "-ldflags=-s -w",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/managed-identity-policy/flex-tailnet-shim-arm64",
+          "."
+        ]
+      }
+    },
+    "docs_install_and_build": "passed",
+    "reference_check": "8 pages current",
+    "log_analyzer": "767 checks/49 rules passed;12 existing moved-line notes"
+  },
+  "limitations": [
+    "Socket-free/API-recorder tests use inert and pending backend seams; discarded replies are deliberately not consumed by the modeled client. They do not simulate every TCP failure or real control-plane transition.",
+    "Actual tailnet account enrollment, key expiry, native StateStore failure behavior and the new UI over the installed service are not qualified. No live radio credentials were changed.",
+    "Losing the existing managed owner credential is distinct from losing an enrollment reply. Independent authenticated owner recovery/rotation still needs implementation and qualification; token-free takeover remains refused.",
+    "The owner-preserving managed policy changes remain subject to maintainer design/release review. Legacy container token rotation and first-use semantics remain covered by the full race suite.",
+    "No new authenticated full runtime package, two-path reproduction, new native installation/reboot, whole-volume disk budget or power-cut durability is claimed. Previously qualified938fc0/7b remains installed.",
+    "Linux desktop compiled and the pure client policy regression passed; no live UI automation, Windows/macOS build or full GUI/session sanitizer pass is claimed here.",
+    "Native SWR disagreement, natural128sample alignment/cold bypass, final failure matrix, repeated matched5W/10W RF, integrated analyzer/stockAPD, actual6300 and independent release gates remain open.",
+    "Initial Go import setup and ccache read-only failures are preserved separately from corrected behavioral red receipts; they are not treated as evidence of the original product defects."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/cross-arm64.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/cross-armv7.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/desktop-build-final.log.gz": "f4ad96797bee488908b7434bb591a35eeab21e6c91f3099436ce7d013eca01e9",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/desktop-build.log.gz": "6dfeb8a59a752ec2e384df0aaa8c30fdc41ca80fb2f2dede490e826e380f104c",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/desktop-test-final.log.gz": "8318f9be2d4914fc14dc43949aa7cfa65bedac321c67bd264318869b2ec0ac7e",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/desktop-test.log.gz": "8318f9be2d4914fc14dc43949aa7cfa65bedac321c67bd264318869b2ec0ac7e",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/disconnect-owner-mutant.log.gz": "4e1ec3b7caba76f92b9d3487810497d0ee101cb513f3768c7271930f70737db7",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/disconnect-session-mutant.log.gz": "ed537ae09ccea96cbc30c83792b7b64671693666bd5acdfa18f9c05e211cee29",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/docs-build.log.gz": "4dff1e928555fc936daad858aea7e87287f3309e70a6b358a57dbf1c3bc49780",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/docs-install.log.gz": "0f760bad1f76adf4104d0edd4c1072f6c4067a5620c8cf515b3f40e330f54f39",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/failed-local-save-mutant.log.gz": "96953be22ce3e94f49f5e344d4871d2976043430bb3b12c0dd01e4a39378f496",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/full-race-reviewed.log.gz": "0aa6788eaad7a181c5961385618e52cd7e3a2acd22768e5783fe9ac05be5e056",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/installation-id-mutant.log.gz": "208c8e67243d7af8e55ac42f51aa62c050170d6113c2b4cb5b3cf4fd9c62f586",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-after.log.gz": "b2896d0a1c83c1e070d1586f369b47da444616594d70ae05535bd6499d4b6504",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-before-behavior.log.gz": "d7a1be3b4e49910875cc11f5dbc352ff7af5bbb353c48f43da89c03621ad94c9",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-before.log.gz": "8faecc9926358e6d0696b1e044a33592ac81a603aeaada7ddd0dd6b346ba8081",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-full-race-final.log.gz": "d5101a03135826086f61b67b348954c364bd9514f6fac8e3b737b7907592124a",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-full-race.log.gz": "4ca090e32c626ed25fc135a4a2235f0a6538612300004c8c9ffc063e9a334f28",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-qt-before-build-corrected.log.gz": "79ac96a6c1a93ce785fcadf2bef9750245b1e7f7d5dc52ee975fe4fd5bc7db55",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-qt-before-build.log.gz": "35f5316bf5d80cdd918a954f449f17c338dbe24f6b0a6b3d2bc8b476299ab0a5",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-qt-before.log.gz": "5c207daa197d3c28d5e7267a8a8634931317bc32b4f33f9c1604146e6dd45274",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-qt-build.log.gz": "9f6f61bfab66ac04331d766070a81157ea286f61d7dddf5375b865eff7c97bb5",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/managed-identity-qt-test.log.gz": "6f874959cacf3355b9b324f1d7edc178c5fae29a2a4ad6f00bcc294935089c65",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/nonlocal-validation-mutant.log.gz": "0f68625dfebe3d0501c82120d3eca68c813ed07414e364744d30b052b2253eff",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/owner-token-mutant.log.gz": "ca240fb99ecac37f98b9ddd2a01e9dd33a25030673f0d360d728a0d7ab468d57",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/pending-owner-mutant.log.gz": "e6ec37196ff791edda5dbf8bd3dc0f920d26c4ae1b42f2181ab9f017e565b522",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/rejoin-session-mutant.log.gz": "534e2e0b0bf78f889ca5ce7067981fb614913872b041e63a1dc4d1376230b180",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/mutate.py.gz": "8e222e16ba00251b52233326c12054472072e264f9ed78474a2852e6092da5e1",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/mutation-results.json.gz": "28097863242da932b31b74a6d617d1e62c012b8502e233739c66c07ec45e0fef",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/cross-build.json.gz": "1c189a53570ad4f9162f08cb3e9d6076570258cac7d9715577e65f43fcc025e7",
+    "tools/pd-waveform/evidence/20261117-managed-owner-policy/save-evidence.py.gz": "3145a31ad9b0ae19564ae277660f7047f72c5d0c99afa4f0f1f5a4fcad96cfbe"
+  }
+}
