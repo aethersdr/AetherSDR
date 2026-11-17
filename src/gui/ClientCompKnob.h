@@ -2,13 +2,16 @@
 
 #include <QWidget>
 #include <QString>
+#include <QTimer>
 #include <functional>
 
 class QLineEdit;
+class QKeyEvent;
+class QFocusEvent;
 
 namespace AetherSDR {
 
-// Rotary knob for the compressor editor: vertical drag, wheel for fine steps,
+// Rotary knob for client DSP: vertical drag, wheel or arrow-key adjustment,
 // double-click resets to default. State is normalized [0, 1];
 // setValueFunc/toValueFunc map to the physical unit (linear, exponential,
 // ...), valueLabelFunc formats it, and valueChanged(float) emits the physical
@@ -71,9 +74,15 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     void wheelEvent(QWheelEvent* ev) override;
     bool eventFilter(QObject* obj, QEvent* ev) override;
+    void keyPressEvent(QKeyEvent* ev) override;
+    void focusInEvent(QFocusEvent* ev) override;
+    void focusOutEvent(QFocusEvent* ev) override;
 
 private:
+    friend class ClientCompKnobAccessible;
     void applyNorm(float norm);
+    void setValueFromUser(float physical);
+    void scheduleAccessibleAnnouncement();
     QString formatValue() const;
     QRect valueRect() const;          // bottom-area rect for the value text
     void layoutValueEditor();          // position m_valueEdit over valueRect
@@ -100,6 +109,8 @@ private:
     // value text.  Click to focus, type a number, Enter (or focus-out)
     // commits.  Closes #2655.
     QLineEdit*  m_valueEdit{nullptr};
+    QTimer      m_accessibilityTimer;
+    QString     m_lastAccessibleText;
 };
 
 } // namespace AetherSDR
