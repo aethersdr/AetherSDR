@@ -20,24 +20,24 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The complete ARMv7 development runtime from signed source `e50bfbd3a` is
-9,401,900 bytes; its expanded executables/licenses occupy 22,836,670 bytes in RAM. Both ARMv7 and
+The complete ARMv7 development runtime from signed source `aa5a33fc5` is
+9,404,028 bytes; its expanded executables/licenses occupy 22,836,670 bytes in RAM. Both ARMv7 and
 ARM64 runtime releases reproduced byte for byte with pinned compilers on the
 same host. This does not qualify the first-install adapter or radio operation.
-See [reproducible runtime qualification](./BOOT-TMPFS-RUNTIME-QUALIFICATION.json)
-and [installed ARM64 qualification](./BOOT-TMPFS-INSTALLED-QUALIFICATION.json).
+See [reproducible runtime qualification](./NATIVE-IDENTITY-DURABILITY-RUNTIME-QUALIFICATION.json)
+and [installed ARM64 qualification](./NATIVE-IDENTITY-DURABILITY-INSTALLED-QUALIFICATION.json).
 Earlier [restart qualification](./RESTART-RUNTIME-QUALIFICATION.md) remains
-bound to its original source. This runtime adds the boot helper's tmpfs admission
-guard to its predecessor; all eleven expanded payload records, including the
-Go shim, DSP, other fixed helpers and service definitions, are byte-identical.
+bound to its original source. This runtime adds native identity directory sync
+and uncertain-commit refusal to the Go shim. The other ten expanded payload
+records, boot helper and service definitions are byte-identical to its predecessor.
 The installed report includes receive-only whole-service stop/start and fresh
 local IQ on the 8600. The earlier [lifecycle report](./WHOLE-RUNTIME-STOP-QUALIFICATION.json)
 preserves the predecessor's results and failed observer attempt.
 
-The calculated ARMv7 successor-upgrade budget is up to 39,682,048 bytes,
+The calculated ARMv7 successor-upgrade budget is up to 39,690,240 bytes,
 including the existing compacted installation, stated state/metadata allowances,
 transient files and the native 8 MiB reserve. Against a conservative decimal
-interpretation of the reported 41 MB free, only 1,317,952 bytes remain.
+interpretation of the reported 41 MB free, only 1,309,760 bytes remain.
 One extra full release archive does not fit. The final 6000 adapter must account
 for firmware-retained upload/extraction copies as well as signed input staging;
 that adapter and first-install high-water measurement remain unqualified.
@@ -47,6 +47,13 @@ encoding overhead, and reuse fixed temporary siblings. That bounds these new
 file data writes to 256 KiB including temporaries; it does not enforce the full
 state/metadata allowance or remove legacy leftovers. Persistent identity and
 atomic update/rollback still need an actually qualified 6000 installer.
+Native writes now sync the containing directory before mutation and after the
+file sync and rename. An uncertain configuration commit preserves the file but
+blocks control/enrollment and retires the owned PD lifetime. The [component report](./NATIVE-IDENTITY-DURABILITY-QUALIFICATION.json)
+includes injected failures and retry/owner-refusal checks; the 8600 installed
+report includes an ordinary save with the same effective routes and owner.
+Neither establishes actual 6300 directory-sync behavior or physical power-loss
+durability of the complete installation and its ancestor directories.
 
 The 8600 first-install carrier/acceptor still requires `no_new_privs` in
 `boot/pd_carrier.c`, `boot/pd_accept.c` and `boot/pd_first_request.c`.

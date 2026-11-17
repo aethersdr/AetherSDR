@@ -1,0 +1,297 @@
+{
+  "updated_utc": "2026-11-17T18:38:40.067110+00:00",
+  "status": "ordinary_desktop_update_receive_only_whole_service_restart_fresh_IQ_and_native_config_save_qualified_software_reboot_unqualified",
+  "production_ready": false,
+  "runtime_source_commit": "aa5a33fc5de78ad5a9d6e5d48ba2e9c697e03bf0",
+  "release_blake2b_256": "c3d2522512f66f32025747661335e82eb8a3f572fe9888acf7af8380f9a43404",
+  "previous_release_blake2b_256": "a8920b11a650ce36118589f818712636bae56f35b3b1570c8a8c8f6d404f0a3f",
+  "runtime_report": "tools/pd-waveform/NATIVE-IDENTITY-DURABILITY-RUNTIME-QUALIFICATION.json",
+  "desktop_source_commit": "5d8d6070f28d478a65c853f3ca5d2a9224016342",
+  "desktop_sha256": "a2e6f53b1ade27624ddf46a30a4a1c162259015727def69bea1234834a77e973",
+  "ordinary_update": {
+    "committed": true,
+    "elapsed_s": 78.533,
+    "exact_operator_plan_reviewed": true,
+    "diagnostics_used_for_delivery": false,
+    "predecessor_credential_used_for_delivery": true,
+    "terminal": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c"
+  },
+  "receive_only_lifecycle": {
+    "FDX": false,
+    "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "unkeyed_PD_mode_used": true,
+    "original_graph_processes_including_zombies": 13,
+    "all_original_processes_gone_ms": 1648.713539,
+    "primary_service_ready_ms": 2124.96504,
+    "firmware_PID_before": "1143",
+    "firmware_PID_after": "1143",
+    "firmware_stop_or_restart_requested": false,
+    "explicit_Start_required_for_new_IQ_session": true,
+    "ordinary_Start_before_s": 2.23533395602135,
+    "ordinary_Start_after_s": 2.2293311480025295,
+    "capture_before": {
+      "metadata": {
+        "capture_id": "c385d74bbf648316e54ab24c81b173d1",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 1519789313,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "10790843410665",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "10791184297363",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "456d428aaf777106a0ca827d009d03844bc2d85fa639adaf85909d2a1b13ac3d"
+    },
+    "capture_after_restart": {
+      "metadata": {
+        "capture_id": "53d00c29db20cceeed737d87f68a1adc",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 1519789313,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "10816709266304",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "10817050276944",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "a937022e4e825d295e8c8f2146a80e5589f42d13dfbfec79d69ed8f82308d57b"
+    },
+    "capture_after_configuration_save": {
+      "metadata": {
+        "capture_id": "33c460a215c1881f80afca580501e9f8",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 1519789313,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "10818047270399",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "10818389281419",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "ad8b5f6adcfdf95587382c4ace2b00520d4804b03ed087fb56b256860af0633d"
+    },
+    "final_status": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    },
+    "journal_dropped": 0,
+    "owner_configuration_unchanged_through_service_fault": true
+  },
+  "ordinary_native_configuration_write": {
+    "client_receipt": {
+      "PUT_routes_requests": 1,
+      "effective_routes_and_sharing_unchanged": true,
+      "http_status": 200,
+      "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "passed": true,
+      "state": "local",
+      "elapsed_s": 0.03550591701059602
+    },
+    "positive_write_path": "Authenticated PUT /v1/routes on the installed primary, with the currently observed effective routes and no discovered-sharing replacement.",
+    "after_write_complete_finite_local_IQ": true,
+    "final_owner_verifier_preserved": true,
+    "configuration_sha256_before_write": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "configuration_sha256_after_write": "7d4785dbb7087355992d037ded02bd381d2ca828d6383ac97d03681103cc6d89",
+    "note": "The public save serializes the configuration and an explicit empty routes array. File bytes changed; effective routes/sharing and the owner verifier were independently preserved. Client elapsed_s includes keychain and GET/PUT/GET; it is not fsync duration or FPGA/IQ latency."
+  },
+  "final_independent_native_audit": {
+    "passed": true,
+    "RF_commands": [],
+    "processes": [
+      {
+        "pid": 8695,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "70783de051fd785a00c12646dd0e862824156b8cb6d57fb73f105298d67e6995"
+      },
+      {
+        "pid": 8736,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "0e9dc30619820bd06304b92c144f63858336dea21aeab00be92932d81ce6691f"
+      },
+      {
+        "pid": 8746,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "70783de051fd785a00c12646dd0e862824156b8cb6d57fb73f105298d67e6995"
+      }
+    ],
+    "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "owner_config_sha256": "7d4785dbb7087355992d037ded02bd381d2ca828d6383ac97d03681103cc6d89",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+    "configuration_temp_absent": true,
+    "owner_config_file_bytes": 257,
+    "owner_config_allocated_bytes": 4096,
+    "runtime_sha256": {
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "1663086c576cd08332a97c7c20771b3ee7653824c73c93e100c1583e4c88888f",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+      "flex-tailnet-shim": "70783de051fd785a00c12646dd0e862824156b8cb6d57fb73f105298d67e6995",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+    },
+    "arp": [],
+    "arp_journal_bytes": 0,
+    "accept_local": "0",
+    "private_sockets": [],
+    "temporary_installation_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    }
+  },
+  "RF_commands": [],
+  "reboot_commands": [],
+  "credential_mutations": [],
+  "limitations": [
+    "Receive-only FLEX-8600 proof. No keyed teardown, new-package RF/stockAPD comparison, firmware stop or whole-system shutdown.",
+    "Operator-confirmed prior green-LED reboot lockup requiring rear DC removal remains failed and unexplained. No reboot retry; bench recovery coordination remains pending.",
+    "The ordinary successful native configuration save exercises this candidate on the radio filesystem. No storage error or physical power loss was induced; directory/ancestor/controller and complete transaction durability remain unqualified.",
+    "Privileged laboratory observer stopped/restarted the fixed installed service group and read metadata. It did not deliver the update. Its temporary job and scratch were removed; the existing diagnostics transport is not part of the shipped product.",
+    "Only a local managed identity was exercised; joined-account log growth, owner-loss/rotation and cross-platform credential store qualification remain open.",
+    "Actual FLEX6300 adapter, /run layout, Linux2.6/Cortex-A8/one-core execution, storage high-water and RF remain unqualified.",
+    "Full original P1-P10 remains active. The operator-deferred5W SWR/preamble investigation remains deferred."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/build-console.log.gz": "77a8b2ac9d6ea70992a7fdc9cb2f20da2eb2dd0394e3a163cce579f64a9cd214",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/build-desktop.py.gz": "d599135750a04aad3e77905fbce46709390f4b31f829ba5f3099a870a99b9a0e",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/desktop-build-0.log.gz": "97942bc580b842511be83ea1e4120de26a72d6ac7304994b71c759f8aad31ba2",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/desktop-build-1.log.gz": "9a282f810ff6ff17b1358620054b8cb99c56b0048c6e69c16cb8ea9f8b6ede10",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/desktop-provenance.json.gz": "738d03ebe118a2ac0c3c78ff199e11807de0bdecb8540dccada3ad5f6c3fe927",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/install-console.log.gz": "561f122d61075638d0e68c76d73fdc04272762d55d2d74e2d5ae668328dd56a6",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/install-result.json.gz": "e9aff3e86efb6a1fea1c694c39fe1b9d195545605bdaa797cd47c72207ee2cf9",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/install.py.gz": "3fef1df89cdd3a29beabaecbe578eedc3b764cf5cca3eac78c40d975a38439b0",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/instance.json.gz": "caa0be94b263de5664813c6aa8cd4789b17973b3fd65ddd32d29c6073ab28f45",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/prepare.log.gz": "70b0c55ec350c30bd90f4c4105b15b30994cd9d401029ee214731f4894df0b80",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/prepare.py.gz": "4d12ece31e8136f6f72335b7ba4150768d7c797ad593efeaf6b2816ae3d572b8",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/prepared.json.gz": "7762553049601941bdd398f1bc7090c8106162230b195fcb074544fbe233de23",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/relaunch.log.gz": "1b3b00330aad4aea9d7090964e81c982397f52ccaa11d2a11f749f6bc0bb65dc",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/relaunch.py.gz": "ea1d52297d7c3baa45ad4152e7e16484240466ec64eed4923d4dc90457dbe971",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/save-existing-routes-build-command.json.gz": "71afee22825539510437d13ab0cd4e71c9ed653de8b6d3b49e64c3999dd55867",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/save-existing-routes-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/save-existing-routes.cpp.gz": "accc3a72ad32a8171d72580bbd16393fa36a18767784cd81164e3c5e7e3921bc",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-installed/save-qualification.py.gz": "ebb628afc631201517f5d62df15f7afd1c80b7f831bddadead22bb8723acc4c1",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-after-config-save-IQ.f32le.gz": "e00507b3d8acd76a42c3a543a9970d4ee9cfb05a38ed0aeac21b02005225998a",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-before-IQ.f32le.gz": "8cca0e123491d18de1cc4023dff1f8e929a58c13cb2aff269d9f3f1d746a23bf",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-events.json.gz": "518becd8f8c8e6d4fa111346a6e1f30bf7779aaaada32561290568e78edebb30",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-fault-template.py.gz": "dbdfc868be9b8a31ac8113e37d06b804bb0a6e6edee39d4ed429794a4aca33f9",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-job-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-job.py.gz": "0d98906ec527a8f83dae229a12311129a8b1f6848ae43e4057e6f02d966e7df7",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-outcome.json.gz": "b0a060a23b24b7de2dd36d5846adc5c892d31b28eaa3a990aa91b9564d45cda9",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-restarted-IQ.f32le.gz": "242095603eeb3c85366187e4988cc9827be4712b9f56d988075cfb707a1f5fd4",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api-result.json.gz": "e74247565b0d8f4849b3a8fbf7ee5f118510fb9c76b0aeb110f7f8fec7ce45b6",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/api.log.gz": "e74247565b0d8f4849b3a8fbf7ee5f118510fb9c76b0aeb110f7f8fec7ce45b6",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/audit-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/audit-job.py.gz": "59746a272b3fb97612d1f929aa922d60d0d4f3b7b6c94418230c15a340f1675e",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/audit-result.json.gz": "2cbb6bdce1d27a22510e9a0b63c3d1dc41125996b6ae8ea2e34860eee10d5a05",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/audit.log.gz": "2cbb6bdce1d27a22510e9a0b63c3d1dc41125996b6ae8ea2e34860eee10d5a05",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/console.log.gz": "b2c08f9b3095bd7701b7e29aab80017a8dbe6d346c970ae11ffd5c9a138a8f97",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/instance.json.gz": "caa0be94b263de5664813c6aa8cd4789b17973b3fd65ddd32d29c6073ab28f45",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/run.py.gz": "cb4bef7b47dc22bbb9b1167b2cfa8276bac4ec3874c296186a38f6ca57ebc93d",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/native-durability-lifecycle-01/save-existing-routes.log.gz": "df354eeb0ef5b66872bf33775bccc9d10a49d930f756e366b3274341fd3536fe",
+    "tools/pd-waveform/evidence/20261117-native-durability-installed/production-completion-plan.json.gz": "0bc72d3d0906229acb2a3850c42bb56bec8aca05cc022114383d8ada1a3b7a3e"
+  }
+}
