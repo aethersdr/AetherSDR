@@ -1,0 +1,166 @@
+{
+  "updated_utc": "2026-11-17T02:39:37.462257+00:00",
+  "status": "installed_reply_routing_and_receive_reconnect_regression_passed",
+  "production_ready": false,
+  "native_source_commit": "9ba6154837f187c5b7b73fb4632d8b4b9e407a4c",
+  "release_blake2b_256": "c52fcd67cef3841c8a8ddbac19358b1b3e6a17ef1467d33fa8c2cfb2f4f8fa01",
+  "desktop": {
+    "pid": 2542723,
+    "socket": "/tmp/aetherpd-receive-reply-routing",
+    "binary_sha256": "5821b6a5c53ed03cc2a197c8faca897a00925d9924237870604b4086ede0658d",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "b9a05238499cfbb4f67088b5efee6d32870ff707",
+    "desktop_source": "9ba6154837f187c5b7b73fb4632d8b4b9e407a4c",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.06175400399661
+  },
+  "boot_id": "839d29c7-c56e-4c61-a87e-05fdf1c6b6b6",
+  "ordinary_installation": {
+    "committed": true,
+    "elapsed_seconds": 49.247,
+    "diagnostics_used_for_delivery": false,
+    "temporary_installer_cleanup_confirmed": true,
+    "independent_authenticated_receipt_matches_exact_release": true
+  },
+  "reproducibility": {
+    "ARM64_and_ARMv7_two_path_rebuilds_byte_identical": true,
+    "eight_file_upgrade_distribution_identical": true,
+    "changed_runtime_payloads": [
+      "flex-tailnet-shim"
+    ],
+    "boot_and_native_DSP_helpers_unchanged_from_b9a052384": true
+  },
+  "isolated_fresh_IQ_and_Stop": {
+    "full_frame_bytes": 131072,
+    "passed": true
+  },
+  "exact_reconnect_regression": {
+    "passed": true,
+    "GUI_disconnected_seconds": 30,
+    "post_reconnect_observation_seconds": 15,
+    "guardian_retained_at_disconnected_window_end": true,
+    "service_manager_SIGKILL_observed": false,
+    "original_workers": 9,
+    "workers_retired_after_disconnect_ack_ms": 30593.4951,
+    "stale_Start_refused_disconnected": true,
+    "stale_Start_refused_reconnected": true,
+    "new_GUI_handle": "0x711b5e03",
+    "fresh_IQ_bytes": 131072,
+    "finite_nonzero": true,
+    "sample_rate_hz": 48000,
+    "transport": "local_dax_iq",
+    "channel": 4,
+    "FDX_disabled": true,
+    "terminal_state_after_fresh_Stop": "stopped"
+  },
+  "final_audit": {
+    "control_processes": 3,
+    "all_UID78666_caps0_NNP1": true,
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "runtime_hashes": {
+      "flex-tailnet-shim": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5",
+      "aether-pd": "bed41f7b3f3308acdacf783e327a16d713a0b7466ac100c812b8b909d0716be8",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "1957d5682d9fbde0fe49590b7028b4e200a55363b3e9abeaac3982ac495ed64d",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "permanent_boot_sha256": "f47eec37ccc223e9f4d4b0a79568079486032b9d2eeeb2c07afa075376b6bba5",
+    "ARP_empty": true,
+    "accept_local": "0",
+    "temporary_installers_and_carrier_absent": true,
+    "observer_container_deleted": true,
+    "observer_scratch_deleted": true,
+    "audit_container_deleted": true,
+    "audit_scratch_deleted": true
+  },
+  "disk_budget": {
+    "ARMv7_modeled_peak_bytes": 39632896,
+    "actual_6300_qualification": false,
+    "allowances_enforced": false
+  },
+  "next_lifecycle_finding": {
+    "status": "bounded_component_refusal_reproduced_not_fixed",
+    "retained_failed_units_observed_on_radio": [
+      "aetherpd-start@5-1304-78666.service",
+      "aetherpd-start@11-4827-78666.service",
+      "aetherpd-start@6-2580-78666.service",
+      "aetherpd-start@2-1304-78666.service",
+      "aetherpd-start@14-6711-78666.service",
+      "aetherpd-start@8-2580-78666.service"
+    ],
+    "native_inventory_cap": 32,
+    "boundary_result": [
+      {
+        "empty_failed_units": 0,
+        "one_live_current_unit": true,
+        "exit": 0,
+        "stdout": "ok 0 0 0\n",
+        "stderr": ""
+      },
+      {
+        "empty_failed_units": 31,
+        "one_live_current_unit": true,
+        "exit": 0,
+        "stdout": "ok 0 0 0\n",
+        "stderr": ""
+      },
+      {
+        "empty_failed_units": 32,
+        "one_live_current_unit": true,
+        "exit": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    ],
+    "scope": "Actual failed unit retention plus bounded host fixture. This is not 32 live radio disconnects. A narrow collector must attest empty native-owned records and preserve every populated/ambiguous unit; do not remove the inventory bound or hide this by rebooting first."
+  },
+  "RF_commands": [],
+  "limitations": [
+    "Original unexpected reply frame was not captured. Correct routing is established from FlexLib, unit/mutation tests and this passing installed regression; the precise predecessor failure frame remains unknown.",
+    "One complete receive-only regression plus isolated Start/IQ/Stop; no keyed failure, sustained RF, duty, final stock APD comparison or actual6300 qualification is claimed.",
+    "Guardian final exit code/reason during disconnected cleanup was not captured; no service-manager SIGKILL was observed.",
+    "Retained failed-unit inventory can block a future constructor at32 obsolete records; bounded component reproduction is preserved and retirement needs implementation/qualification before production.",
+    "Final stable-candidate reboot/physical power-loss/interrupted-update gates remain pending; do not use a reboot to mask the retained-record finding.",
+    "Full P1-P10 active. LP100A remains deferred."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/failed-session-retention-finding.json.gz": "4ae77050c9d2bf1f011709d4142e3a9a77e7013cdc93a02fc7ceb15212ab4190",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-events.json.gz": "bb6525dec4bfe585da28df27f0f93e2fdfaa993bf2c2a50fdbe26223f124947b",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-observe-job.py.gz": "46f48c9876c0514707d775ebef85269717bf17c91aa168129816cf849f40f447",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-observe-result.json.gz": "f79b2bd19f7a4a2fd4ee53425affb233b5ae1babdfd6bface6af0761df05507e",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-observer-functions.py.gz": "21513ecb8ad14ee27eea000de3f6c961674eb55048a331866b78558b4efe32b9",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-observer-tail.py.gz": "8b0aa484254a1223d2edcb09c04d599d85fbc419bdc876b1b13401aa7d9dc29c",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-outcome.json.gz": "9c197036038157e26fa935f854c08089a8975102162229e2b3b3fbb4a2aac07d",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-recovery-final-audit-job.py.gz": "52e7152bcb69f376455cef9a2b5a1b4ad7f4cb409e3d94143ca054a8d22ac691",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-recovery-final-audit-result.json.gz": "73cfe5dc61f5065db92808dacfd782c6a092894ce732d6116c7322707bbb3c83",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-recovery-receive-iq-check.py.gz": "c6f8a4d175f95a768545091b650377a194aae3dada4fa4a157ef03d87164eef6",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-recovery-usb-receive-iq-check.json.gz": "8fc0b3e6be7527f0886d54d1bce904690e4dde0993d3b82a2a118d0247204c61",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-recovery-usb-receive-iq.f32le.gz": "46434e7ad32e122e3c745cc36aa7c67bafb22d982788a36de84b8555dcd9bf16",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/installed-reply-routing-reconnect-run.py.gz": "5db9d35618856449e6b8e3692d95ab17a307feac8456a07b94696a9ecb84c3da",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-build-desktop.py.gz": "de9e5f00cfb15f363af140655e1b6a9d5af28f14af1fb6c0d8a63ce4dd53ea23",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-desktop-provenance.json.gz": "76e80683d470be922feebdbf8bce3b27d8fa31b7a9d9c79e247f06df1a569c5d",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-install-result.json.gz": "49802586013b7a56665b4290c9d7e137ee4e1801ca24913492b2cf7db0ae92a9",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-install.py.gz": "d32cd4b71ad12ffa669904a53e08f0bf41ad95367a057458708224f8c9a9c8f8",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-instance.json.gz": "428425191d94cd5d0000e71ab12de1e914b42fb7e92de84ccae3e19fe7d69c02",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-post-upgrade-installation.json.gz": "9c240aab59f5a5614e5599c7e38e37c58fe9013ec9e514bb0e012bf32679fb8e",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-prepare.py.gz": "40fbf45ad04b0bb42249f8fa8063256d2e81ef60a27e707af83d033e3a4931c3",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-prepared.json.gz": "0d62f5a5696f1c444c36eeddb3a65e463cea1916f1cf4aee43883dc13b457db6",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-live-relaunch.py.gz": "5a0ed75b5d0b7c42cc07b64c65850092c06b033aeb32476f19af908b8b9f0aed",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-recovery-receive-iq-check.py.gz": "c6f8a4d175f95a768545091b650377a194aae3dada4fa4a157ef03d87164eef6",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/receive-reply-routing-recovery-usb-receive-iq-check.json.gz": "44e62cb6baa5cbf5d93c6ec4e44fb7674437efe9a1decf639e99de863f50dfa6",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/runtime-receive-reply-routing-budget-report.json.gz": "0d22b7db12bd23cd61f564994cad9c1a591cfd1dbf154de0d8f7cbd4ac79de49",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/runtime-receive-reply-routing-budget_probe.c.gz": "0d024c724e4853b223d7cc2642615f13d721ff082024325eba8564329dd6b980",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/runtime-receive-reply-routing-build-budget.py.gz": "2e9c2c8ed77c66c4870c0ae924c9cfc4fa7459477dbbe300ca685b15b7d80410",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/runtime-receive-reply-routing-measure-budget.py.gz": "2bd2a6b76c6e24e22c3cbedff7467aa42bfc898da05dc43cd805fa173592d361",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/runtime-receive-reply-routing-report.json.gz": "50bf5496aaefb481ec3432f251d887721f59995f7fae1898ab7dfa2fef56d697",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/runtime-receive-reply-routing-run.py.gz": "20b527fa9286f8959d372de32a03756633a17d5bbf7bf4858ec19d7621bb401b",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/upgrade-receive-reply-routing-build.py.gz": "3e6f9417408e731643d7ed7e442ab7f9f38413b92496167e64998f6fb56ff6fc",
+    "tools/pd-waveform/evidence/20261116-reply-routing-installed/upgrade-receive-reply-routing-report.json.gz": "4c131351c1b39bf711b8a0448cf961a5cd1a12eddca552d5dcbf0031d0e0cf9c"
+  }
+}
