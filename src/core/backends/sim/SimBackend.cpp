@@ -472,10 +472,9 @@ void SimBackend::disconnectRadio()
 void SimBackend::disconnectRadio(const RadioDisconnectRequest& request)
 {
     retirePcmStreams();
-    if (m_lanSession->active()) {
-        m_lanSession->disconnectRadio(request);
-        return;
-    }
+    const bool lanActive = m_lanSession->active();
+    m_lanSession->disconnectRadio(request);
+    if (lanActive) { return; }
     if (!m_connected) { return; }
     QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::stop, Qt::QueuedConnection);
     m_connected = false;

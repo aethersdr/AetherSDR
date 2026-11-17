@@ -17,8 +17,12 @@ struct ConnectionSession {
 };
 
 struct RadioDisconnectRequest {
+    enum class Completion { Wait, Deferred };
     // Only the receive stream owned by this session may be removed on exit.
     quint32 receiveStreamId{0};
+    // Deferred retires the session now; bounded transport cleanup runs on its
+    // worker. Intentional disconnect and destruction still wait for completion.
+    Completion completion{Completion::Wait};
 };
 
 struct ReceiveTransportResult {

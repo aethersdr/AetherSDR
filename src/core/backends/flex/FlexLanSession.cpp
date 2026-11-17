@@ -55,6 +55,7 @@ FlexLanSession::~FlexLanSession()
 {
     m_epoch->store(0);
     QObject::disconnect(m_connection, nullptr, this, nullptr);
+    waitForCleanup();
     // Drain producers before destroying the receiver of their direct capture
     // callbacks. The backend owns worker shutdown and object destruction.
     QMetaObject::invokeMethod(m_connection, [] {}, Qt::BlockingQueuedConnection);
@@ -77,6 +78,15 @@ void FlexLanSession::connectRadio(const RadioConnectRequest& request)
     const QPointer<FlexLanSession> alive(this);
     emit starting(epoch);
     if (!alive || !current(epoch)) { return; }
+    startTransport(epoch);
+}
+
+void FlexLanSession::startTransport(quint64 epoch)
+{
+    // Cleanup pumps nested Qt events. A queued dial alone could therefore run
+    // inside the old close and then be closed by it when that close resumes.
+    if (!current(epoch) || m_cleanup) { return; }
+    const RadioConnectRequest& request = m_request;
     RadioInfo info;
     info.address = QHostAddress(request.host);
     info.port = request.port;
@@ -102,26 +112,52 @@ void FlexLanSession::stopReceiveTransport()
 
 void FlexLanSession::disconnectRadio(const RadioDisconnectRequest& request, quint32 sequence)
 {
-    if (!m_active) { return; }
+    const bool wait = request.completion == RadioDisconnectRequest::Completion::Wait;
+    if (!m_active) {
+        if (wait) { waitForCleanup(); }
+        return;
+    }
     const quint64 epoch = m_epoch->exchange(0);
     const quint32 handle = m_snapshot ? m_snapshot->clientHandle : 0;
     m_ingress->retire(epoch);
-    // Revoke queued starts immediately, while retaining the old transport's
-    // immutable cleanup arguments until its bounded command drain completes.
-    QMetaObject::invokeMethod(m_connection, [connection = m_connection, handle, request, sequence] {
-        if (connection->isConnected()) {
-            const QString streamId = request.receiveStreamId && sequence
-                ? QString::number(request.receiveStreamId, 16) : QString();
-            connection->gracefulDisconnect(handle, streamId, sequence);
-        } else {
-            connection->disconnectFromRadio();
-        }
-    }, Qt::BlockingQueuedConnection);
     stopReceiveTransport();
     m_active = false;
     m_connected = false;
     m_snapshot.reset();
+    // A pending close owns the old socket. Canceling an intent waiting behind
+    // it must not enqueue another close against a later replacement session.
+    if (!m_cleanup) {
+        const auto cleanup = std::make_shared<QSemaphore>();
+        m_cleanup = cleanup;
+        QMetaObject::invokeMethod(m_connection, [this, connection = m_connection, cleanup, handle, request, sequence] {
+            if (connection->isConnected()) {
+                const QString streamId = request.receiveStreamId && sequence
+                    ? QString::number(request.receiveStreamId, 16) : QString();
+                connection->gracefulDisconnect(handle, streamId, sequence);
+            } else {
+                connection->disconnectFromRadio();
+            }
+            QMetaObject::invokeMethod(this, [this, cleanup] {
+                if (m_cleanup != cleanup) { return; }
+                m_cleanup.reset();
+                startTransport(m_epoch->load());
+            }, Qt::QueuedConnection);
+            // The destructor waits on this gate, keeping the receiver alive
+            // through the completion post. No receiver access follows release.
+            cleanup->release();
+        }, Qt::QueuedConnection);
+    }
+    if (wait) { waitForCleanup(); }
     emit disconnected();
+}
+
+void FlexLanSession::waitForCleanup()
+{
+    if (!m_cleanup) { return; }
+    // A worker queue barrier can run inside gracefulDisconnect's nested event
+    // loop. Only the completion gate proves the entire close has returned.
+    m_cleanup->acquire();
+    m_cleanup.reset();
 }
 
 void FlexLanSession::finish(quint64 epoch)
