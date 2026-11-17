@@ -20,22 +20,35 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The independently rebuilt ARMv7 runtime release is 9,333,427 bytes; its
-expanded executables/licenses occupy 22,689,242 bytes in RAM. Both ARMv7 and
+The complete ARMv7 development runtime from signed source `7b7f6a151` is
+9,398,272 bytes; its expanded executables/licenses occupy 22,771,134 bytes in RAM. Both ARMv7 and
 ARM64 runtime releases reproduced byte for byte with pinned compilers on the
 same host. This does not qualify the first-install adapter or radio operation.
-See [current runtime qualification](./RESTART-RUNTIME-QUALIFICATION.md).
+See [current runtime qualification](./CREDENTIAL-PERSISTENCE-RUNTIME-QUALIFICATION.json).
+Earlier [restart qualification](./RESTART-RUNTIME-QUALIFICATION.md) remains
+bound to its original source. Only the Go shim payload member changed from
+the previously installed `c732d9af…` runtime; DSP and fixed helpers are byte-identical.
 
-The calculated ARMv7 successor-upgrade budget is up to 39,424,000 bytes,
+The calculated ARMv7 successor-upgrade budget is up to 39,673,856 bytes,
 including the existing compacted installation, stated state/metadata allowances,
 transient files and the native 8 MiB reserve. Against a conservative decimal
-interpretation of the reported 41 MB free, only 1,576,000 bytes remain.
+interpretation of the reported 41 MB free, only 1,326,144 bytes remain.
 One extra full release archive does not fit. The final 6000 adapter must account
 for firmware-retained upload/extraction copies as well as signed input staging;
 that adapter and first-install high-water measurement remain unqualified.
 Other 6000 models may have much smaller partitions.
-Keep expanded executables, logs, packet captures and caches in RAM. Persistent
-identity and atomic update/rollback still need a qualified installer.
+Keep expanded executables, logs, packet captures and caches in RAM. New native writes cap each configuration/identity file at 64 KiB, including
+encoding overhead, and reuse fixed temporary siblings. That bounds these new
+file data writes to 256 KiB including temporaries; it does not enforce the full
+state/metadata allowance or remove legacy leftovers. Persistent identity and
+atomic update/rollback still need an actually qualified 6000 installer.
+
+The 8600 first-install carrier/acceptor still requires `no_new_privs` in
+`boot/pd_carrier.c`, `boot/pd_accept.c` and `boot/pd_first_request.c`.
+[Linux introduced that flag in 3.5](https://www.kernel.org/doc/html/latest/userspace-api/no_new_privs.html),
+so those entry points must not be treated as the Linux 2.6 legacy adapter.
+The existing capture worker's strict-seccomp design below is a separate mechanism;
+do not replace it with an assumption that SO_LOCK_FILTER is required.
 
 ## Receive-only qualification first
 
@@ -94,7 +107,7 @@ CPU-only tests or treat it as the managed shipping package.
 ## RF qualification requires the hardware operator
 
 Do not copy the 8600 RXA wiring recipe to the floor model. FlexRadio's
-[SmartSDR guide](https://www.flexradio.com/wp-content/uploads/assets/SmartSDR-Software-User-Guide-v2.pdf)
+[SmartSDR guide](https://edge.flexradio.com/www/offload/20260423063240/SmartSDR-Software-User-Guide.pdf)
 describes the 6300's FDX receive-only path through XVTR; RXA is an alternative
 on the 6500. Qualify the actual feedback input, one-SCU antenna switching and
 normal receive recovery on the target model before any RF trial.
