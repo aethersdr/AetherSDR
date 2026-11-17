@@ -237,12 +237,11 @@ int main(int argc, char** argv)
             && rec.keys.contains(QStringLiteral("tx-timeout-latched"));
         report("held_input_latches_after_unkey", latched && refusedByLatch && otherRefused);
 
-        // The refused key-down's own rollback is not a release.
-        rec.keys.clear();
-        Access::clearNoticeDedup(radio);
+        // A key-down that is not engaged rolls itself back with
+        // setProducerTransmit(false) inside requestProducerPttOn(); that
+        // rollback is not a release.
         (void)radio.requestProducerPttOn(tci.request(), TransmitModel::PttSource::TciHardware);
-        report("refused_key_down_rollback_is_not_a_release",
-               rec.keys.contains(QStringLiteral("tx-timeout-latched")) && radio.txTimeoutLatched());
+        report("refused_key_down_rollback_is_not_a_release", radio.txTimeoutLatched());
 
         // A producer abandoning the refused key (TciServer::abortTciPtt) is not either.
         const TxCoordinator::Request refused = tci.request();

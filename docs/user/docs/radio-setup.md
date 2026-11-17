@@ -175,9 +175,9 @@ it can be edited while disconnected. See
 2. Enter a whole number. Negative delays are treated as zero; invalid or
    excessively large entries are not sent and restore the radio's reported value.
 
-On a radio with no timeout of its own, **Timeout (sec):** is not shown: the
-**Transmit time-out (this computer)** group below it takes its place. See
-[Transmit time-out](./tx-controls.md#transmit-time-out).
+On a radio with no timeout of its own, **Timeout (sec):** stays dimmed and the
+**Transmit time-out (this computer)** group below it is the time-out that
+applies. See [Transmit time-out](./tx-controls.md#transmit-time-out).
 
 ### Calibration is interrupted by a disconnect
 

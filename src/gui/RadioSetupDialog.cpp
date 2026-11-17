@@ -3012,26 +3012,13 @@ QWidget* RadioSetupDialog::buildTxTab()
         connect(m_model, &RadioModel::connectionStateChanged, group,
                 applyTimingAvailability);
 
-        // A radio without its own timeout gets the host time-out below in
-        // place of this field (RFC #7021); a radio with one keeps both.
-        QWidget* timeoutLbl = grid->itemAtPosition(1, 2) ? grid->itemAtPosition(1, 2)->widget() : nullptr;
-        const auto applyRadioTimeoutPresence = [this, timeoutEdit, timeoutLbl] {
-            const auto control = m_model->backendCapabilities().radioSetupControl;
-            const bool radioHasTimeout = !m_model->isConnected()
-                || (control && control->supports(SetupField::TimeoutMs));
-            timeoutEdit->setVisible(radioHasTimeout);
-            if (timeoutLbl) {
-                timeoutLbl->setVisible(radioHasTimeout);
-            }
-        };
-        applyRadioTimeoutPresence();
-        connect(m_model, &RadioModel::connectionStateChanged, group, applyRadioTimeoutPresence);
 
         vbox->addWidget(group);
     }
 
-    // Host transmit time-out (RFC #7021): runs on every radio, beside the
-    // radio's own interlock timeout where it has one.
+    // Host transmit time-out (RFC #7021): runs on every radio. Where the radio
+    // has no timeout of its own, this is the timeout that applies; the radio's
+    // Timeout field above stays dimmed with its reason.
     {
         auto* group = new QGroupBox(tr("Transmit time-out (this computer)"));
         auto* grid = new QGridLayout(group);

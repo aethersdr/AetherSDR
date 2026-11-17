@@ -310,8 +310,8 @@ computer)** on the **Transmit** page of Radio Setup:
 
 It is stored on this computer, for each radio. On a FlexRadio the radio's own
 **Timeout (sec):** applies as well, and the default here is never shorter than
-the radio's. On a radio without a timeout of its own, this group replaces
-**Timeout (sec):**.
+the radio's. On a radio without a timeout of its own, **Timeout (sec):** stays
+dimmed and this group is the time-out that applies.
 
 When it stops a transmission, a notification says **Transmit time-out:
 transmission stopped after N s**. Nothing transmits again until every PTT input
