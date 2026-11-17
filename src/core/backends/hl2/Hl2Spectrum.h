@@ -54,8 +54,8 @@ public:
     static constexpr double kDcOnsetDb = 20.0;
     static constexpr int kDcOnsetRun = 64;
 
-    // Restart both DC estimates, as reset() does: for an NCO move. Not part of
-    // dropAverage(), which a T/R edge may call too.
+    // Restart both DC estimates: for an NCO move. reset() (a gap) restarts the
+    // receive one only. Not part of dropAverage(), which a T/R edge may call too.
     void restartDc() noexcept;
 
     // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
@@ -107,13 +107,13 @@ public:
 
     // Drop the partial frame on a transport sequence gap, returning samples
     // discarded (0 = none): discard, not zero-fill, which renders as a transient.
-    // Averaging state is kept (same spectrum); the DC estimates restart, so the
-    // next frame is built from post-gap samples only. buildChannel() rebuilds
-    // this object on FFT size/rate change.
+    // Averaging state is kept (same spectrum); the receive DC estimate restarts,
+    // while the transmit estimate and the T/R state carry through a gap mid-key.
+    // buildChannel() rebuilds this object on FFT size/rate change.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = discardPartialFrame();
-        restartDc();
+        restartRxDc();
         return discarded;
     }
     // The partial frame alone, for a retune: the DC estimates are kept.
@@ -126,6 +126,7 @@ public:
 
 private:
     void computeFrame(std::vector<float>& binsDbfs);
+    void restartRxDc() noexcept;              // receive DC estimate only (a gap)
     void trackDc(std::complex<float> s) noexcept;
 
     int m_fftSize;
@@ -156,8 +157,9 @@ private:
     // time averaging is switched on or the geometry changes, so the first
     // frame after a drop is TAKEN rather than blended into silence.
     bool m_haveAverage = false;
-    // Running DC estimates (trackDc()), one per T/R state. Restarted by reset()
-    // (a gap) and restartDc() (a retune); dropAverage() and T/R edges leave them.
+    // Running DC estimates (trackDc()), one per T/R state. reset() (a gap)
+    // restarts the receive one, restartDc() (a retune) both; dropAverage() and
+    // T/R edges leave them.
     struct Dc {
         double re = 0.0;
         double im = 0.0;

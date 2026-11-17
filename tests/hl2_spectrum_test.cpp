@@ -370,6 +370,29 @@ void centreBinTests()
         }
     }
 
+    // 7 · A SEQUENCE GAP mid-key (reset(), as Hl2RxDsp::onSequenceGap()
+    // calls it) restarts the receive estimate only: the keyed frames after it
+    // keep the transmit DC the key learned, with no centre line.
+    for (const double capFps : {0.0, 30.0}) {
+        const Signal keyedSig{12544.0, 0.5, {5e-4, -2e-4}};   // DC ~30 dB over the floor
+        Hl2Spectrum spec(kStreamN, kStreamFs);
+        Noise noise;
+        std::uint64_t n = 0;
+        stream(spec, noise, n, {}, 1.0, false, capFps);
+        spec.setTransmitting(true);
+        stream(spec, noise, n, keyedSig, 4.0, false, capFps);
+        spec.reset();
+        check(spec.dcTransmitting(), "gap mid-key: the transmit estimate stays in use");
+        const Seen after = stream(spec, noise, n, keyedSig, 1.0, true, capFps);
+        std::fprintf(stderr, "  gap mid-key cap %.0f fps: centre %.1f dB (mean), %.1f dB (first), "
+                     "%.1f dB (worst of %d frames)\n", capFps, centreOverFloorDb(after),
+                     after.centreOverFloorDb.empty() ? 1e9 : after.centreOverFloorDb.front(),
+                     maxOf(after.centreOverFloorDb), after.frames);
+        check(after.frames > 20, "gap mid-key: frames were produced");
+        check(maxOf(after.centreOverFloorDb) < 12.0 && centreOverFloorDb(after) < 3.0,
+              "gap mid-key: the keyed frames after the gap keep the transmit DC (no centre line)");
+    }
+
     // 3 · An ON-BIN tone (bin 100 exactly) reads its textbook level and the
     // centre bin stays at the floor.
     {

@@ -203,11 +203,16 @@ void Hl2Spectrum::setTransmitting(bool on, double releaseHoldMs) noexcept
     }
 }
 
-void Hl2Spectrum::restartDc() noexcept
+void Hl2Spectrum::restartRxDc() noexcept
 {
     m_rxDc = {};
     m_rxPower = 0.0;
     m_dcSamples = 0;
+}
+
+void Hl2Spectrum::restartDc() noexcept
+{
+    restartRxDc();
     m_txDc = {};
     m_txDcSeeded = dcTransmitting();   // mid-key: the transmit estimate starts from zero
 }
