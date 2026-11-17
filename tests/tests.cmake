@@ -8398,6 +8398,16 @@ target_include_directories(wideband_converter_view_test PRIVATE src)
 target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
 
+# Termination signals release the radio for any family (#7163): forked children
+# report over a pipe; the HL2 is armed on a pipe fd, never fired. No sockets.
+if(NOT WIN32)
+    add_executable(fatal_signal_release_test tests/fatal_signal_release_test.cpp)
+    target_include_directories(fatal_signal_release_test PRIVATE src)
+    target_link_libraries(fatal_signal_release_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME fatal_signal_release_test COMMAND fatal_signal_release_test)
+    set_tests_properties(fatal_signal_release_test PROPERTIES TIMEOUT 60)
+endif()
+
 # HL2 emergency stop (#4581): arm/disarm/fire, and a re-arm racing a fire.
 # SOCKETS: three UDP sockets on 127.0.0.1 (kernel-chosen ports): two sinks for
 # our own sendto() and the armed sender. No fake radio. No bind/descriptor: 77.

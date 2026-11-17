@@ -251,7 +251,6 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/VfoWidget.cpp": ["KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/VfoWidget.h": ["KiwiSdrProtocol"],
     "src/gui/WaveformsDialog.cpp": ["FlexWaveformModel", "WaveformInstaller"],
-    "src/main.cpp": ["Hl2EmergencyStop"],
     "src/models/RadioModel.cpp": ["CommandParser", "Hl2Backend", "ProfileLoadCommand", "RadioStatusOwnership", "SimBackend", "StreamStatus"],
     "src/models/RadioModel.h": ["CommandParser", "DaxIqModel", "DaxTxPolicy", "FlexWaveformModel", "PanadapterStream", "RadioConnection", "RadioStatusOwnership", "WanConnection"],
     "src/models/SliceModel.cpp": ["KiwiSdrProtocol"],
