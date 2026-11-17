@@ -225,13 +225,19 @@ void WanConnection::disconnectFromRadio()
 
 void WanConnection::abortConnection()
 {
-    const QSignalBlocker blocker(&m_socket);
-    m_heartbeat.stop();
-    m_socket.abort();
+    {
+        const QSignalBlocker blocker(&m_socket);
+        m_heartbeat.stop();
+        m_socket.abort();
+    }
     m_awaitingCertDecision = false;
     m_presentedFingerprintHex.clear();
+    const QPointer<WanConnection> alive(this);
+    const quint64 generation = m_sessionGeneration + 1;
     resetSessionState();
-    m_commands.retire(QStringLiteral("Connection closed."));
+    if (alive && m_sessionGeneration == generation) {
+        m_commands.retire(QStringLiteral("Connection closed."));
+    }
 }
 
 // ─── Command dispatch ────────────────────────────────────────────────────────

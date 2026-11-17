@@ -6,6 +6,7 @@
 #include "models/RadioModel.h"
 
 #include <QHostAddress>
+#include <QPointer>
 #include <QThread>
 #include <QTimer>
 #include <QRegularExpression>
@@ -63,6 +64,8 @@ public:
 
     ~ModelRadioConnectionTarget() override
     {
+        m_timeout.stop();
+        QObject::disconnect(&m_radio->smartLinkAccounts(), nullptr, this, nullptr);
         QObject::disconnect(m_radio, nullptr, this, nullptr);
         if (m_state != State::Idle) {
             m_radio->disconnectFromRadio();
@@ -120,12 +123,16 @@ public:
         m_error.clear();
         m_remoteSerial = serial;
         m_remoteAccount = account;
+        const QPointer<ModelRadioConnectionTarget> alive(this);
         setState(State::Connecting);
+        if (!alive || m_state != State::Connecting || m_remoteAccount != account
+            || m_remoteSerial != serial) { return true; }
         m_timeout.start(45000);
         accounts.setAccountId(account);
-        if (m_state != State::Connecting) { return true; }
+        if (!alive || m_state != State::Connecting || m_remoteAccount != account
+            || m_remoteSerial != serial) { return true; }
         accounts.tryAutoLogin();
-        startRemoteIfDiscovered();
+        if (alive) { startRemoteIfDiscovered(); }
         return true;
     }
 

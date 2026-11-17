@@ -139,6 +139,7 @@ quint32 FlexCommandSession::submit(const QString& command, const Options& option
     Q_ASSERT(QThread::currentThread() == thread());
     const qsizetype capacity = kMaximumPending + (options.cleanup ? kCleanupReserve : 0);
     if (!m_active || !m_writer || command.isEmpty() || options.timeoutMs <= 0
+        || (!options.cleanup && !m_session.current())
         || m_pending.size() >= capacity || (options.guarded && !options.guard.current())) { return 0; }
     const quint32 sequence = allocateSequence();
     if (!sequence) { return 0; }

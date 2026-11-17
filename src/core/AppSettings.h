@@ -103,6 +103,8 @@ public:
     // this to disable its edit affordances instead of letting writes fail
     // one save() at a time.
     bool storeWritable() const;
+    // Includes newer-schema read-only sessions; failed/unattempted loads are false.
+    bool storeReadable() const;
 
     // Evidence-over-assertion verification reads: fetch the row from the
     // database FILE, not the cache. A failed save() deliberately keeps the

@@ -43,6 +43,7 @@ private:
     void finish(quint64 epoch);
     void fail(quint64 epoch, const QString& message);
     void closeSocket(quint64 epoch);
+    void waitForClose(quint64 epoch);
     void stopReceive();
     std::function<ReceiveTransportResult(const WanRadioInfo&)> m_prepareReceive;
     std::function<void()> m_stopReceive;
@@ -53,6 +54,7 @@ private:
     quint64 m_epoch{0};
     quint64 m_lease{0};
     bool m_closing{false};
+    bool m_finishing{false};
     quint16 m_udpPort{0};
     quint64 m_certificateAttempt{0};
     std::optional<ConnectionSession> m_snapshot;

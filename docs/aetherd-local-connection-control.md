@@ -1,7 +1,7 @@
 # AetherD v1 — local connection control
 
-This Stage 3 sub-slice of RFC #3849 adds only non-TX connection intents.
-Transmit, remote transport, credentials and desktop migration remain excluded.
+This RFC #3849 connection interface carries non-TX connection intents.
+Transmit grants and remote-client authentication have separate control boundaries.
 The subsequent [slice frequency slice](aetherd-local-slice-frequency-control.md)
 adds frequency tuning, and the [receive-control milestone](aetherd-local-receive-control.md)
 adds qualified mode/filter/audio/geometry controls under the same explicit opt-in. The default daemon
@@ -12,18 +12,18 @@ remains observe-only.
 `--allow-local-control` explicitly grants **every client admitted by the
 current-user local endpoint** both `observe` and `control`. It is not
 per-application consent or a remote credential verifier. Without it, clients
-retain only `observe`. `hello` rejects supplied authentication and grant
-fields. Trusted in-process contexts can independently carry observe, control,
-both, or neither; none can carry transmit.
+retain only `observe`. Credential verification and transmit-grant administration
+are separate from this connection interface; receive control never implies TX authority.
 
 This flag does not discover or connect radios. The existing `--discover-local`
 and `--discover-sim` flags retain their independent meanings. Native discovery
-loads settings before model construction; passive and simulator-only startup
-do not load the store. Model construction can still initialize settings paths.
+and explicit SmartLink startup load settings before model construction; passive
+and simulator-only startup do not load the store. Model construction can still initialize settings paths.
 The daemon binds its endpoint before either step, then binds the connection
 target once before request dispatch. A failed listen never constructs models
-or touches settings. Icom manual setup, SmartLink and external directories
-remain excluded.
+or touches settings. Icom manual setup and external directories remain excluded.
+SmartLink is selected only by the local startup options described below, not by
+`radio.connect` or the public catalogue.
 
 Endpoint reservation is not protocol readiness. During initialization, early
 connections are closed without admitting a session; clients may reconnect and

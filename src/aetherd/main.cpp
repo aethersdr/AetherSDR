@@ -112,6 +112,10 @@ int main(int argc, char* argv[])
     AetherSDR::aetherd::addGrantAdminOptions(parser);
     parser.process(app);
     if (parser.isSet(listSmartLinkOption)) {
+        if (!AetherSDR::aetherd::loadSmartLinkSettings()) {
+            QTextStream(stderr) << "aetherd: cannot load saved SmartLink settings\n";
+            return 1;
+        }
         QJsonArray accounts;
         for (const QJsonValue& value : AetherSDR::ConnectionWorkspace::load().value("accounts").toArray()) {
             const QJsonObject account = value.toObject();
@@ -312,7 +316,11 @@ int main(int argc, char* argv[])
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
             {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption),
-             hl2Addresses});
+             hl2Addresses}, smartLink);
+    if (!discoverySource) {
+        QTextStream(stderr) << "aetherd: cannot load saved SmartLink settings\n";
+        return 1;
+    }
     AetherSDR::RadioSession radioSession;
     radioSession.setSessionId(1);
     std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;

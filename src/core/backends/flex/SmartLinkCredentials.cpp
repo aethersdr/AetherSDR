@@ -50,7 +50,18 @@ void executeCredential(SmartLinkCredentials::Kind kind, const QString& account,
 }
 
 SmartLinkCredentials::SmartLinkCredentials(QObject* parent)
-    : SmartLinkCredentials(executeCredential, parent) {}
+    : QObject(parent)
+{
+    // All engine owners in this process use the same OS-vault keys. Keep
+    // pending saves and forgets ordered even across owner replacement.
+    static std::weak_ptr<State> shared;
+    m_state = shared.lock();
+    if (!m_state) {
+        m_state = std::make_shared<State>();
+        m_state->execute = executeCredential;
+        shared = m_state;
+    }
+}
 SmartLinkCredentials::SmartLinkCredentials(Execute execute, QObject* parent)
     : QObject(parent), m_state(std::make_shared<State>()) { m_state->execute = std::move(execute); }
 

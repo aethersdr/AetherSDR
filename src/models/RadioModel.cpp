@@ -2775,10 +2775,7 @@ RadioModel::RadioModel(QObject* parent)
             // reads as "nothing is happening".
             m_connectAttemptActive = true;
             resetGpsState();
-            // Restore the limits this radio declared: onDisconnected() cleared them, and this
-            // path reconnects to m_lastInfo.address, the same radio. Not in onConnected():
-            // connectViaWan() never sets m_lastInfo, so re-seeding there would hand a WAN
-            // session the previous radio's limits.
+            // LAN reconnect reuses this radio identity after disconnect clears its limits.
             m_declaredMaxSlices = m_lastInfo.maxSlices > 0 ? m_lastInfo.maxSlices : 0;
             m_maxPanadapters = m_lastInfo.maxPanadapters > 0 ? m_lastInfo.maxPanadapters : 0;
             m_version = m_lastInfo.version;
@@ -6750,21 +6747,11 @@ void RadioModel::onConnected()
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_connectAttemptActive = false;  // the attempt landed (#4912)
     m_reconnectTimer.stop();
-    // Tell the backend a session is up, on the edge EVERY transport reaches.
-    // A Flex LAN session runs through the RadioConnection the backend owns, but
-    // connectViaWan() drives a WanConnection it never sees and skips
-    // connectRadio() for that family — so a backend with per-session work had no
-    // edge covering both. Default is a no-op; see IRadioBackend.
+    // Every transport publishes its established session through this edge.
     if (m_backend) {
         m_backend->onRadioSessionEstablished();
     }
-    // Republish the declared capacity on the edge EVERY connect path reaches
-    // (#5603 review). connectToRadio() seeds it, but connectViaWan() and the
-    // LAN auto-reconnect timer never call that, and clearExtensionHandles() has
-    // already zeroed the backend's copy on the way down — so without this the
-    // control-protocol descriptor silently reverts to the model-table guess
-    // after any drop-and-reconnect while the GUI and bridge keep enforcing the
-    // declared number. That divergence is the thing this field exists to close.
+    // Disconnect clears the backend snapshot; republish its authoritative capacity.
     publishRadioReportedCapacity();
     ++m_rebootRevision;
     m_rebootRadioSerial.clear();
@@ -8228,21 +8215,9 @@ void RadioModel::onDisconnected()
     m_connectedSessionSerial.clear();
     m_chassisSerial.clear();
     m_callsign.clear();
-    // Clear the nickname here too, not just on the connectToRadio() seeding
-    // path: connectViaWan() takes no RadioInfo and the LAN auto-reconnect timer
-    // calls the backend directly, both bypassing
-    // RadioModel::connectToRadio(). Clearing on the disconnect side closes all
-    // three paths at once, so a reconnect can never show the previous radio's
-    // station label while the async info reply is in flight. (#4260 review)
+    // Pending reconnects must not expose the previous radio identity.
     m_nickname.clear();
-    // Same three-path reasoning as the nickname above, and for the same class of
-    // bug: connectToRadio() is the ONLY place the declared capacity is seeded,
-    // so on the two paths that bypass it a second radio would inherit the first
-    // one's limits. Worse than stale — the precedence guards added for #5594
-    // item 3 then REFUSE the model-table correction that used to repair this
-    // when the new radio's model= status landed, so a leftover 8 would offer
-    // pan and slice creates a FLEX-6400 must refuse. Clearing here closes all
-    // three connect paths at once. (#5603 review)
+    // Radio-declared limits are reacquired for each connection.
     m_declaredMaxSlices = 0;
     m_maxPanadapters = 0;
     m_region.clear();

@@ -98,7 +98,7 @@ Forget a pin only when you have deliberately changed a radio's certificate.
 
 ### Security
 
-- Sign-in uses FlexRadio's identity provider, and all SmartLink connections use TLS with certificate pinning (above).
+- Sign-in and broker discovery use certificate-validated HTTPS/TLS. The radio's command connection uses TLS with certificate pinning (above); audio, spectrum and other streaming data use a separate UDP connection.
 - Your password is not stored. The SmartLink **refresh token** is saved in the operating system's keychain, so AetherSDR signs you in automatically on the next launch. Builds without keychain support keep it for the current session only. See [Settings and Backups](./settings-and-backups.md).
 - Logs redact email addresses, tokens, IP addresses and serial numbers — see [Support and Logging](./support-and-logging.md).
 

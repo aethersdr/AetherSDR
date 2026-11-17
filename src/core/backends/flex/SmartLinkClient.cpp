@@ -566,6 +566,8 @@ void SmartLinkClient::parseMessage(const QString& msg)
     if (isUserSettings) {
         qCDebug(lcSmartLink)
             << "SmartLink RX: application user_settings (personal fields omitted)";
+    } else if (msg.startsWith("radio connect_ready")) {
+        qCDebug(lcSmartLink) << "SmartLink RX: radio connect_ready (authorization handle omitted)";
     } else if (msg.contains("token=")) {
         qCDebug(lcSmartLink) << "SmartLink RX:" << msg.left(msg.indexOf("token=") + 6) + "***REDACTED***";
     } else {
@@ -682,7 +684,7 @@ void SmartLinkClient::parseConnectReady(const QString& msg)
 
     qCDebug(lcSmartLink) << "SmartLinkClient: connect ready, serial:" << serial;
     if (!m_lease || !m_connectSent || serial != m_connectSerial || !m_ready) { return; }
-    static const QRegularExpression token(QStringLiteral("^[A-Za-z0-9_.:-]{1,512}$"));
+    static const QRegularExpression token(QStringLiteral("\\A[A-Za-z0-9_.:|=-]{1,512}\\z"));
     if (!token.match(handle).hasMatch()) {
         failPendingConnection(tr("SmartLink returned an invalid connection handle."));
         return;

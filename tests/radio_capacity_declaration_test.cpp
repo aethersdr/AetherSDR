@@ -192,6 +192,7 @@ int main(int argc, char** argv)
         // A smaller radio arrives on a path that never calls connectToRadio():
         // its model lands on the status plane instead. The model table must be
         // allowed to answer again.
+        FlexRadioStatusTestPeer::beginConnect(m);
         observeRadioStatus(m, QStringLiteral("radio"),
                               {{QStringLiteral("model"), QStringLiteral("FLEX-6400")}});
         check(m.maxPanadapters() == capabilitiesFor(QStringLiteral("FLEX-6400")).maxSlices,

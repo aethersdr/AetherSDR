@@ -2,6 +2,7 @@
 #include "FlexStatusIngress.h"
 #include "PanadapterStream.h"
 #include <QPointer>
+#include <QEventLoop>
 #include <utility>
 
 namespace AetherSDR {
@@ -67,6 +68,8 @@ FlexWanSession::FlexWanSession(PanadapterStream* stream, FlexStatusIngress* ingr
 
 FlexWanSession::~FlexWanSession()
 {
+    QObject::disconnect(this, nullptr, nullptr, nullptr);
+    if (!m_finishing) { disconnectRadio(); }
     QObject::disconnect(&m_connection, nullptr, this, nullptr);
     m_deadline.stop();
     if (m_epoch) { m_ingress->retire(m_epoch); stopReceive(); }
@@ -123,18 +126,27 @@ void FlexWanSession::stopReceive()
 
 void FlexWanSession::disconnectRadio(const RadioDisconnectRequest& request)
 {
-    if (!active() || m_closing) { return; }
+    if (!active()) { return; }
     const quint64 epoch = m_epoch;
+    const QPointer<FlexWanSession> alive(this);
+    if (m_closing) {
+        if (request.completion == RadioDisconnectRequest::Completion::Wait) { waitForClose(epoch); }
+        return;
+    }
     m_closing = true;
+    commands().beginCleanup();
     m_certificateAttempt = 0;
     m_ingress->retire(epoch);
     stopReceive();
     m_deadline.start(1000);
-    if (!m_connection.isConnected()) { closeSocket(epoch); return; }
+    if (!m_connection.isConnected()) {
+        closeSocket(epoch);
+        if (alive && request.completion == RadioDisconnectRequest::Completion::Wait) { waitForClose(epoch); }
+        return;
+    }
     FlexCommandSession::Options options;
     options.cleanup = true;
     options.timeoutMs = 350;
-    const QPointer<FlexWanSession> alive(this);
     const auto removeStream = [alive, epoch, request, options](const FlexCommandSession::Reply&) {
         if (!alive || alive->m_epoch != epoch || !alive->m_closing) { return; }
         if (request.receiveStreamId) {
@@ -147,6 +159,24 @@ void FlexWanSession::disconnectRadio(const RadioDisconnectRequest& request)
     if (!commands().submit(QStringLiteral("keepalive disable"), options, removeStream)) {
         closeSocket(epoch);
     }
+    if (alive && request.completion == RadioDisconnectRequest::Completion::Wait) { waitForClose(epoch); }
+}
+
+void FlexWanSession::waitForClose(quint64 epoch)
+{
+    if (m_epoch != epoch || !m_closing) { return; }
+    // TLS belongs to this loop: keep its reply/timer delivery running while
+    // normal shutdown drains. The closing epoch refuses replacement writes.
+    QEventLoop loop;
+    QTimer deadline;
+    deadline.setSingleShot(true);
+    connect(this, &FlexWanSession::disconnected, &loop, &QEventLoop::quit);
+    connect(this, &QObject::destroyed, &loop, &QEventLoop::quit);
+    connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+    const QPointer<FlexWanSession> alive(this);
+    deadline.start(1100);
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    if (alive && m_epoch == epoch && m_closing) { finish(epoch); }
 }
 
 void FlexWanSession::closeSocket(quint64 epoch)
@@ -158,18 +188,24 @@ void FlexWanSession::closeSocket(quint64 epoch)
 
 void FlexWanSession::finish(quint64 epoch)
 {
-    if (!epoch || m_epoch != epoch) { return; }
-    m_epoch = 0;
-    m_closing = false;
+    if (!epoch || m_epoch != epoch || m_finishing) { return; }
+    m_finishing = true;
+    m_closing = true;
+    const QPointer<FlexWanSession> alive(this);
+    const auto account = std::exchange(m_request.account, {});
+    const quint64 lease = std::exchange(m_lease, 0);
     m_deadline.stop();
     m_snapshot.reset();
     m_certificateAttempt = 0;
     m_ingress->retire(epoch);
     stopReceive();
-    m_connection.abortConnection();
-    const auto account = std::exchange(m_request.account, {});
-    const quint64 lease = std::exchange(m_lease, 0);
     if (account) { account->cancelConnection(lease); }
+    if (!alive) { return; }
+    m_connection.abortConnection();
+    if (!alive) { return; }
+    m_epoch = 0;
+    m_closing = false;
+    m_finishing = false;
     emit disconnected();
 }
 

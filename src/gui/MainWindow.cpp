@@ -7316,6 +7316,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             layout->addWidget(body);
 
             auto* dismissBtn = new QPushButton(tr("Disconnect"), content);
+            dismissBtn->setObjectName(QStringLiteral("wanReconnectDisconnect"));
             dismissBtn->setFixedWidth(120);
             dismissBtn->setCursor(Qt::PointingHandCursor);
             layout->addWidget(dismissBtn, 0, Qt::AlignCenter);
@@ -7328,18 +7329,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 reconnectDialog->deleteLater();
             });
             connect(dismissBtn, &QPushButton::clicked, this, [this]() {
-                m_pendingWanRadio = {};
-                m_userDisconnected = true;
-                m_wanReconnectTimer.stop();
-                m_wanReconnectAttemptInProgress = false;
-                setPanadapterConnectionAnimation(false);
+                disconnectFromRadioByUser();
                 if (m_reconnectDlg) {
                     m_reconnectDlg->close();
                 }
-                auto& s = AppSettings::instance();
-                s.remove("LastConnectedRadioSerial");
-                s.remove("LastRoutedRadioIp");
-                s.save();
                 showConnectionDialog();
             });
             m_reconnectDlg->show();
