@@ -16,6 +16,7 @@ import zipfile
 NAME = 'AetherPDKernelProbe'
 PORT = 48998
 LIMIT = 512 * 1024
+MAX_REPORT_BYTES = 4096
 
 
 class Control:
@@ -105,11 +106,11 @@ def status(host):
             if remaining <= 0:
                 raise TimeoutError('probe report deadline exceeded')
             channel.settimeout(remaining)
-            chunk = channel.recv(2049 - len(data))
+            chunk = channel.recv(MAX_REPORT_BYTES + 1 - len(data))
             if not chunk:
                 break
             data.extend(chunk)
-            if len(data) > 2048:
+            if len(data) > MAX_REPORT_BYTES:
                 raise ValueError('probe report exceeds bound')
     report = json.loads(data)
     if (not isinstance(report, dict) or report.get('application') != NAME

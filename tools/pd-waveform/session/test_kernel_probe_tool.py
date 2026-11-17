@@ -57,7 +57,10 @@ class ProbeToolTest(unittest.TestCase):
         valid = {'application': tool.NAME, 'version': 1, 'rf_commands': []}
         with patch.object(tool.socket, 'create_connection', return_value=Channel([json.dumps(valid).encode()])):
             self.assertEqual(tool.status('unused'), valid)
-        bad = [b'A' * 2049, b'{}', json.dumps({**valid, 'version': True}).encode(),
+        large = json.dumps({**valid, 'padding': 'x' * 3000}).encode()
+        with patch.object(tool.socket, 'create_connection', return_value=Channel([large])):
+            self.assertEqual(tool.status('unused')['padding'], 'x' * 3000)
+        bad = [b'A' * (tool.MAX_REPORT_BYTES + 1), b'{}', json.dumps({**valid, 'version': True}).encode(),
                json.dumps({**valid, 'application': 'Other'}).encode()]
         for payload in bad:
             with patch.object(tool.socket, 'create_connection', return_value=Channel([payload])):
@@ -69,6 +72,16 @@ class ProbeToolTest(unittest.TestCase):
             with patch.object(tool.time, 'monotonic', side_effect=[0, 1, 4]):
                 with self.assertRaises(TimeoutError):
                     tool.status('unused')
+
+    def test_report_exact_byte_bound(self):
+        valid = {'application': tool.NAME, 'version': 1, 'rf_commands': []}
+        raw = json.dumps(valid, separators=(',', ':')).encode()
+        exact = raw + b' ' * (tool.MAX_REPORT_BYTES - len(raw))
+        with patch.object(tool.socket, 'create_connection', return_value=Channel([exact])):
+            self.assertEqual(tool.status('unused'), valid)
+        with patch.object(tool.socket, 'create_connection', return_value=Channel([exact + b' '])):
+            with self.assertRaises(ValueError):
+                tool.status('unused')
 
     def make_package(self, folder, modify=None):
         files = {tool.NAME + '.cfg': (builder.CFG.encode(), 0o100644),

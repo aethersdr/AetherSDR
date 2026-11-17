@@ -1,0 +1,238 @@
+{
+  "updated_utc": "2026-11-17T17:55:24.742453+00:00",
+  "status": "ordinary_desktop_update_and_receive_only_whole_service_lifecycle_passed_software_reboot_unqualified",
+  "production_ready": false,
+  "runtime_source_commit": "e50bfbd3a2b998eac6ae69ac5d790b58c7349c28",
+  "release_blake2b_256": "a8920b11a650ce36118589f818712636bae56f35b3b1570c8a8c8f6d404f0a3f",
+  "previous_release_blake2b_256": "b30bb5074b4c962183662c82026655ad0d94646de333c0ec8119507b5bea5115",
+  "package_report": "tools/pd-waveform/BOOT-TMPFS-RUNTIME-QUALIFICATION.json",
+  "desktop_source_commit": "9f75395a4c7a6d48c7705c73dae7f53ff9097337",
+  "desktop_sha256": "481311206d2862bc3e9f8d6a24d09d40556521d60a32da2d12b7dddfbd3b8e03",
+  "ordinary_update": {
+    "committed": true,
+    "elapsed_s": 77.927,
+    "operator_plan_reviewed": true,
+    "diagnostics_used_for_delivery": false,
+    "predecessor_credential_used_for_delivery": true,
+    "terminal": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "owner_config_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+    "local_only_identity": true
+  },
+  "receive_only_lifecycle": {
+    "FDX": false,
+    "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "unkeyed_PD_mode_used": true,
+    "original_graph_processes_including_zombies": 13,
+    "all_original_processes_gone_ms": 1832.333933,
+    "primary_service_ready_ms": 2104.593956,
+    "firmware_PID_before": "1143",
+    "firmware_PID_after": "1143",
+    "firmware_stop_or_restart_requested": false,
+    "explicit_Start_required_for_new_IQ_session": true,
+    "ordinary_Start_before_s": 2.242093445995124,
+    "ordinary_Start_after_s": 2.2488378069829196,
+    "capture_before": {
+      "metadata": {
+        "capture_id": "f02974f1be194a25516a85ac18691a8a",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 59545412,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "7318307295211",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "7318647258055",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "ecd061b10355cbeddf60ec02c24cb12171034ff2602497c005f9607d73b0bcac"
+    },
+    "capture_after_restart": {
+      "metadata": {
+        "capture_id": "2473fc9bf8f8917a830e8690ef7af3d9",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 59545412,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "7344203291419",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "7344543284676",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "7a3e592ca302eea6585cb27c5a70753d0e0a48646a6ca508bead859cfdbf238d"
+    },
+    "final_status": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    },
+    "journal_dropped": 0,
+    "kernel_start_socket_listener_gone_while_stopped": true,
+    "owner_config_unchanged": true
+  },
+  "final_independent_native_audit": {
+    "passed": true,
+    "RF_commands": [],
+    "processes": [
+      {
+        "pid": 6909,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "d864f65f74ad0def40126abb83ca848c469ebdfc4cb887026defde9b5e47a861"
+      },
+      {
+        "pid": 6948,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "0e9dc30619820bd06304b92c144f63858336dea21aeab00be92932d81ce6691f"
+      },
+      {
+        "pid": 6958,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "d864f65f74ad0def40126abb83ca848c469ebdfc4cb887026defde9b5e47a861"
+      }
+    ],
+    "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "owner_config_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "runtime_sha256": {
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "1663086c576cd08332a97c7c20771b3ee7653824c73c93e100c1583e4c88888f",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+      "flex-tailnet-shim": "d864f65f74ad0def40126abb83ca848c469ebdfc4cb887026defde9b5e47a861",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+    },
+    "arp": [],
+    "arp_journal_bytes": 0,
+    "accept_local": "0",
+    "private_sockets": [],
+    "temporary_installation_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    }
+  },
+  "RF_commands": [],
+  "reboot_commands": [],
+  "credential_mutations": [],
+  "limitations": [
+    "Receive-only FLEX-8600 service-stop/start proof on the exact installed candidate. Not keyed teardown, firmware stop or whole-system shutdown.",
+    "Earlier software reboot caused the operator-confirmed green-LED whole-radio hang requiring rear DC removal. Cause unresolved; that failed test remains failed. No reboot retry here. Bench recovery coordination remains pending.",
+    "Local-only saved identity was preserved; this does not qualify joined Tailscale account state, persistent log growth or other desktop credential stores.",
+    "Privileged laboratory observer stopped/restarted only the fixed installed service group and audited metadata. Broad diagnostics were not the update delivery mechanism. Its temporary job and scratch were removed.",
+    "Actual FLEX-6300 installation adapter, filesystem layout, Linux2.6/Cortex-A8/one-core behavior, storage high-water and RF remain unqualified.",
+    "Full original P1-P10 production gates remain. The operator-deferred 5W SWR and preamble investigation stays deferred. No RF result is inferred from unchanged DSP bytes."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/build-console.log.gz": "92f7c44307e4a8f0742a998cfd035d33ecb3226647aeea69815e26267d0d8877",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/build-desktop.py.gz": "f23a4a4a3cedef1bb823b2c9bc71db70b0d0a56301552e87a89227686e21f2db",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/desktop-build-0.log.gz": "010873028eb8ff716d0377a4ccfbfd4072d3d782ffbc0b3b2471d6f0e57db28a",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/desktop-build-1.log.gz": "cade9a2aedae9250a1380ce8c9316e135fd3050da799b4c1b81b08d1ffae4cbc",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/desktop-provenance.json.gz": "c956071ff0cd86630fe5fd2cae136dca973d53157cbd2bec51671bee2388de6b",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/install-console.log.gz": "63592a8b7729a6640afd1f4cd72aebf5c0d6e0e08aaf74d2d2a9399ff28ac593",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/install-result.json.gz": "f43d2e4fc8618ef06975329ca8b6de33986b4c0c2733b0568e410d2750bdd92e",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/install.py.gz": "349d17d472d086e6d2c69173a8bc281ab10e60229de9bc290d268e629efe800c",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/instance.json.gz": "7f0a3de64b9de6a2898a0a09cd5b491e982ccce641ac1981c4963af58e246765",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/prepare.log.gz": "57a4a6981f906e8cb3397f2a82c03a718a341e6bf2c579613b0e3d3076f20102",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/prepare.py.gz": "b06a04f82316dc23e66512da563c1b51810363716a41f73cd1a65c49218b0d57",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/prepared.json.gz": "79e5131ac1fa2a82e6f6de8c33843a8e610164f1bc63f662dd93dff3f2578450",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/relaunch.log.gz": "4c724bdd86d73771a27e25aa6d46498104755623960c0a45b6abce7ee7d8ab7e",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-installed/relaunch.py.gz": "b93f9541e2317a95c715d6b5fef2e64dc3387fa19c8dd0411a33d36ad6212c87",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api-before-IQ.f32le.gz": "f36d0a2d8bc31cb1a21e81a28ef18cf6241c968a2557c5effbd58baf7face105",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api-events.json.gz": "5ebad4dbb038d0c3f4c5146990e5a0254a5a10ad46441f6969fef54e3d3595e2",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api-fault-template.py.gz": "69100037e2a441910bee306b0d50c46072367a1d99e17303ff7e35cd7f6e28e5",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api-job-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api-job.py.gz": "487d230d5c26d63899ffd0631c3b27d573e25501c3cb8e4a57d5aa051967995a",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api-outcome.json.gz": "89e85bcb0b9e217c9bd0806dc2363a15a5b2fdf0c3ef9b514b8afcaa43c8b269",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api-restarted-IQ.f32le.gz": "fa3981c81cf603f527e549614e56002fef41f6c21db725a2a4afee11b21e4904",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api-result.json.gz": "47891b94c6ef5db2fb6c93f73942e7fd08104e7019c7ba30f83b1c630428dcde",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/api.log.gz": "47891b94c6ef5db2fb6c93f73942e7fd08104e7019c7ba30f83b1c630428dcde",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/audit-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/audit-job.py.gz": "cc0a7b03c0673327c61ec2eff3febaa9f38dddd69ea295245ccc19dab12dd356",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/audit-result.json.gz": "5ed56fc86743d71909fc35a271e491addf5bea9972d3a87b552602935f5d7354",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/audit.log.gz": "5ed56fc86743d71909fc35a271e491addf5bea9972d3a87b552602935f5d7354",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/console.log.gz": "b2c08f9b3095bd7701b7e29aab80017a8dbe6d346c970ae11ffd5c9a138a8f97",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/instance.json.gz": "7f0a3de64b9de6a2898a0a09cd5b491e982ccce641ac1981c4963af58e246765",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/boot-tmpfs-lifecycle-01/run.py.gz": "c63199a99fe86d03841918e754c785f3d6c10193b5b3fb734f41c49f2b1f43c6",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs-installed/production-completion-plan.json.gz": "3d6de365b837ca4a41f6bfee921693b1f0a395126ce8553d0a2afd28076a14ae"
+  }
+}

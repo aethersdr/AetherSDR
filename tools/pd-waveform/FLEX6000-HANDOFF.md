@@ -20,16 +20,19 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The complete ARMv7 development runtime from signed source `e63608a74` is
-9,401,612 bytes; its expanded executables/licenses occupy 22,836,670 bytes in RAM. Both ARMv7 and
+The complete ARMv7 development runtime from signed source `e50bfbd3a` is
+9,401,900 bytes; its expanded executables/licenses occupy 22,836,670 bytes in RAM. Both ARMv7 and
 ARM64 runtime releases reproduced byte for byte with pinned compilers on the
 same host. This does not qualify the first-install adapter or radio operation.
-See [current runtime and installed ARM64 qualification](./GUARDIAN-SERVICE-SIGNALS-INSTALLED-QUALIFICATION.json).
+See [reproducible runtime qualification](./BOOT-TMPFS-RUNTIME-QUALIFICATION.json)
+and [installed ARM64 qualification](./BOOT-TMPFS-INSTALLED-QUALIFICATION.json).
 Earlier [restart qualification](./RESTART-RUNTIME-QUALIFICATION.md) remains
-bound to its original source. This runtime changed the Go shim and unkey guardian
-from its predecessor; the DSP, boot helper, other fixed helpers and units are
-byte-identical. Whole-service stop/start qualification is separately recorded in
-[the current lifecycle report](./WHOLE-RUNTIME-STOP-QUALIFICATION.json).
+bound to its original source. This runtime adds the boot helper's tmpfs admission
+guard to its predecessor; all eleven expanded payload records, including the
+Go shim, DSP, other fixed helpers and service definitions, are byte-identical.
+The installed report includes receive-only whole-service stop/start and fresh
+local IQ on the 8600. The earlier [lifecycle report](./WHOLE-RUNTIME-STOP-QUALIFICATION.json)
+preserves the predecessor's results and failed observer attempt.
 
 The calculated ARMv7 successor-upgrade budget is up to 39,682,048 bytes,
 including the existing compacted installation, stated state/metadata allowances,
@@ -56,8 +59,8 @@ The existing capture worker's strict-seccomp design below is a separate mechanis
 do not replace it with an assumption that SO_LOCK_FILTER is required.
 
 The boot helper's tmpfs admission guard is component-qualified separately in
-[the boot storage report](./BOOT-TMPFS-QUALIFICATION.json); it is not yet in the
-`e63608a74` package above. Before installing a final candidate, verify that both
+[the boot storage report](./BOOT-TMPFS-QUALIFICATION.json) and installed on the
+8600 in the package above. Before installing a final candidate, verify that both
 `/run` and the runtime directory use tmpfs. The supplied 6300 report established
 tmpfs for `/tmp` and `/dev/shm`, but did not report `/run`. If its layout differs,
 the fixed ARMv7 runtime path/adapter needs qualification; do not silently place
@@ -69,7 +72,13 @@ the expanded payload on persistent storage. ARMv7 execution of a fixture on an
 1. Record firmware, kernel, CPU features, available memory, mount options,
    free space, waveform UID/GID and capability masks. On Linux before 3.14,
    absent `MemAvailable` is not zero available RAM; retain `MemFree`, `Cached`
-   and `Buffers` separately. Never include credentials, environment dumps,
+   and `Buffers` separately. The [read-only kernel probe](./session/README.md#read-only-kernel-probe)
+   package 0.1.3 reports type and available capacity for six fixed filesystem
+   paths without root access. Its report distinguishes query failure (`null`
+   and errno) from successfully measured zero capacity. Before installation,
+   an absent `/run/aetherpd` is expected; `/run` must be assessed independently.
+   The probe's [8600 qualification](./KERNEL-FILESYSTEM-PROBE-QUALIFICATION.json)
+   does not establish the 6300's layout. Never include credentials, environment dumps,
    Tailscale state or private keys in a report.
 2. Establish an authorized provisioning mechanism. The ordinary waveform
    UID78666 and autostart/persistence evidence do not establish setup privileges.

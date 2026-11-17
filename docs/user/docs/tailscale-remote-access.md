@@ -862,6 +862,9 @@ filesystems before expanding the runtime. If boot reports **not verified tmpfs;
 runtime refused**, preserve the saved identity and ask the package provider to
 verify the radio's filesystem layout. The helper refuses startup rather than
 expanding the payload onto persistent storage.
+The read-only kernel diagnostic can report filesystem type and available
+capacity without privileged access. A query failure is reported as `null` with
+an error number; it does not mean the radio has zero free space.
 Its saved configuration and Tailscale identity each have a 64 KiB limit, matching what
 the installer can preserve during an update. If a file exceeds that limit,
 the service refuses the load or write and preserves the saved file for

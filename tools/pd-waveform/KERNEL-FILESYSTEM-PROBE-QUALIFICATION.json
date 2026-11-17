@@ -1,0 +1,313 @@
+{
+  "updated_utc": "2026-11-17T17:55:24.742453+00:00",
+  "status": "read_only_filesystem_metadata_probe_reproduced_and_ordinary_waveform_launch_qualified_on_8600",
+  "production_ready": false,
+  "probe_package_version": "0.1.3",
+  "JSON_schema_version": 1,
+  "source_base_commit": "9f75395a4c7a6d48c7705c73dae7f53ff9097337",
+  "source_sha256": {
+    "tools/pd-waveform/session/kernel_probe.c": "d44a2939b1c954250c7561de4250a484b8f8151a960163102655d3a6c74c7b2a",
+    "tools/pd-waveform/session/kernel_probe_package.py": "dd9f4a0c2bc58ac9e79a3fb28a998575292ae06d33dc0ae04aaf61de96faf318",
+    "tools/pd-waveform/session/kernel_probe_test.c": "e7c4f3aefecb15c0e1b3ef113dbacc3fb1480355b85e9cc552c8a47727a3852d",
+    "tools/pd-waveform/session/kernel_probe_tool.py": "e7fb97cb029fa475149f8f67927b06a1835a7eaeeb0625aea56d862f279d45b1",
+    "tools/pd-waveform/session/pd_pi_probe.h": "0de380acd7c1ddb2366e5f30946d725a24aac55849af0016753875a78d55c2f6",
+    "tools/pd-waveform/session/test_kernel_probe_tool.py": "56a90b284de6cf3360ac259ba334c0c0b0dc5d7020b6216edb938486576499df"
+  },
+  "package_sha256": "a0eee63db1e4af071ef3302a2f07380e36e4142148ce50f3c99e9e538985c718",
+  "package_bytes": 68910,
+  "reproduction": {
+    "first-source-path": {
+      "bytes": 68910,
+      "sha256": "a0eee63db1e4af071ef3302a2f07380e36e4142148ce50f3c99e9e538985c718"
+    },
+    "second-longer-source-path": {
+      "bytes": 68910,
+      "sha256": "a0eee63db1e4af071ef3302a2f07380e36e4142148ce50f3c99e9e538985c718"
+    },
+    "distinct_source_output_and_compiler_caches": true,
+    "installed": false
+  },
+  "socket_free_CTest_passed": true,
+  "socket_free_Python_tests_passed": 6,
+  "ASan_UBSan_LSan_passed": true,
+  "mutations": [
+    {
+      "mutant": "null_type",
+      "rejected": true,
+      "exit": -6
+    },
+    {
+      "mutant": "overflow",
+      "rejected": true,
+      "exit": -6
+    },
+    {
+      "mutant": "missing_tool_byte_cap",
+      "rejected": true
+    }
+  ],
+  "ordinary_live_launch": {
+    "passed": true,
+    "RF_commands": [],
+    "reboot_commands": [],
+    "root_used_for_probe_delivery": false,
+    "radio_before": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.8125,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "desktop_sha256": "481311206d2862bc3e9f8d6a24d09d40556521d60a32da2d12b7dddfbd3b8e03",
+    "probe_port_before": "refused",
+    "package_sha256": "a0eee63db1e4af071ef3302a2f07380e36e4142148ce50f3c99e9e538985c718",
+    "package_bytes": 68910,
+    "probe": {
+      "application": "AetherPDKernelProbe",
+      "version": 1,
+      "kernel": "5.15.92-v8+",
+      "machine": "aarch64",
+      "uid": 78666,
+      "euid": 78666,
+      "gid": 20,
+      "egid": 20,
+      "capget_errno": 0,
+      "cap_effective": "0000000000000000",
+      "cap_permitted": "0000000000000000",
+      "cap_inheritable": "0000000000000000",
+      "managed_uid_caps_eligible": true,
+      "inherited_seccomp_mode": 0,
+      "inherited_seccomp_errno": 0,
+      "strict_seccomp": {
+        "entered": true,
+        "errno": 0,
+        "child_exited_cleanly": true
+      },
+      "no_new_privs": {
+        "set": true,
+        "errno": 0,
+        "child_exited_cleanly": true
+      },
+      "contended_recursive_pi_mutex": {
+        "ok": true,
+        "errno": 0,
+        "child_exited_cleanly": true
+      },
+      "monotonic_clock": {
+        "ok": true,
+        "errno": 0
+      },
+      "timerfd_tick": {
+        "ok": true,
+        "errno": 0
+      },
+      "scheduling": {
+        "policy": 0,
+        "policy_errno": 0,
+        "priority": 0,
+        "priority_errno": 0,
+        "nice": 0,
+        "nice_errno": 0
+      },
+      "rtprio_limit": {
+        "soft": 0,
+        "hard": 0,
+        "soft_unlimited": false,
+        "hard_unlimited": false,
+        "errno": 0
+      },
+      "rttime_limit_us": {
+        "soft": 0,
+        "hard": 0,
+        "soft_unlimited": true,
+        "hard_unlimited": true,
+        "errno": 0
+      },
+      "nice_limit": {
+        "soft": 0,
+        "hard": 0,
+        "soft_unlimited": false,
+        "hard_unlimited": false,
+        "errno": 0
+      },
+      "filesystems": [
+        {
+          "path": "/run",
+          "type": "0x01021994",
+          "type_errno": 0,
+          "tmpfs": true,
+          "space_errno": 0,
+          "available_bytes": 374738944,
+          "available_inodes": 818380,
+          "block_bytes": 4096
+        },
+        {
+          "path": "/run/aetherpd",
+          "type": "0x01021994",
+          "type_errno": 0,
+          "tmpfs": true,
+          "space_errno": 0,
+          "available_bytes": 374738944,
+          "available_inodes": 818380,
+          "block_bytes": 4096
+        },
+        {
+          "path": "/tmp",
+          "type": "0x01021994",
+          "type_errno": 0,
+          "tmpfs": true,
+          "space_errno": 0,
+          "available_bytes": 1045778432,
+          "available_inodes": 243056,
+          "block_bytes": 4096
+        },
+        {
+          "path": "/dev/shm",
+          "type": "0x01021994",
+          "type_errno": 0,
+          "tmpfs": true,
+          "space_errno": 0,
+          "available_bytes": 995287040,
+          "available_inodes": 243063,
+          "block_bytes": 4096
+        },
+        {
+          "path": "/user",
+          "type": "0x0000ef53",
+          "type_errno": 0,
+          "tmpfs": false,
+          "space_errno": 0,
+          "available_bytes": 710914048,
+          "available_inodes": 62292,
+          "block_bytes": 4096
+        },
+        {
+          "path": "/var/tmp",
+          "type": "0x01021994",
+          "type_errno": 0,
+          "tmpfs": true,
+          "space_errno": 0,
+          "available_bytes": 1048576000,
+          "available_inodes": 243063,
+          "block_bytes": 4096
+        }
+      ],
+      "packet_ring_runtime_tested": false,
+      "setup_privileges_provisioned": false,
+      "rf_commands": []
+    },
+    "ready_s": 0.5937431629863568,
+    "uninstall_acknowledged": true,
+    "probe_port_closed": true,
+    "radio_after": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.8125,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "wait_events": [
+      {
+        "elapsed_s": 0.03254933998687193,
+        "exception": "ConnectionRefusedError"
+      }
+    ]
+  },
+  "response_limit_bytes": 4096,
+  "immutable_startup_snapshot": true,
+  "RF_commands": [],
+  "reboot_commands": [],
+  "privileged_setup_commands": [],
+  "limitations": [
+    "The report describes six fixed paths as the actual waveform user. Failed queries produce null plus errno; successful zero availability remains numeric zero. No file contents or write test.",
+    "FLEX-8600 /run and /run/aetherpd were tmpfs. The supplied6300 probe did not establish /run; actual6300 metadata remains required.",
+    "Reproducibility uses two distinct source, output and compiler-cache paths on the same host and pinned Zig toolchain; not an independent builder.",
+    "Uninstall acknowledged and TCP48998 closed. Those observations do not establish deletion of every cached firmware upload or extracted file.",
+    "No setup authority, packet-ring runtime, sustained real-time priority donation, reboot, RF, persistent storage high-water or AetherPD runtime qualification follows from this read-only probe.",
+    "The report is unauthenticated metadata served on the LAN until the diagnostic is removed; it has no request/control verbs."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/build.log.gz": "fcb5ac453bd13e026e0489234aa8d5b8d55556eaca636dc310564f51f14beaa4",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/check.py.gz": "22e54d296d7f6d5cfecb825c380825c0b54be702b7ee6fbb1a0608476334f6f8",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/ctest.log.gz": "98f1e0bcee12fd95eb3a6821b64331e5ac65d5c98a6b9f24ad8bc6a3a95e057e",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/docs-build.log.gz": "11661a3bebb048ddb2c2570f272264646c82f8a9186b2c30c3fd6b85ba6bdbb6",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/docs-install.log.gz": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/first-source-path/package/AetherPDKernelProbe.ssdr_waveform.gz": "850652acb04473f59c27e91f3aa2d90de46778eaa0d91cf52cb52f762d368161",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/first-source-path.log.gz": "467f598a3409c3dd8abbb944a72f40ef6439c65c2c199a875152fc8ee6eea834",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/live-console.log.gz": "b23594617657335936c6cfa7b2725378fe93e41e2278ac78e57944dab0eed99f",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/live-outcome.json.gz": "40980f6325dd4efeccd7423ed7f5a1ed077219f48f3e838ed1a456696f02c329",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/live-uninstall.log.gz": "e06bf31363dda7132ae1815721d8a3b604500836ce317f89418e0b392f251c43",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/live-upload.log.gz": "1a833288f84f3736e16c932471555311398813ecc2a644c02f7c4848bd0ef5ff",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/live.py.gz": "3287bafc9ba80ee3ad288534bf7ce315c4c8a030267f2263226d200e1d6d339c",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/mutations.json.gz": "10af270cc273df34a8fe90e9ac2de61071fa3051af5e46a2c94d42d9fe04c05b",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/package-first.log.gz": "5c9daf9c583c52150f9b533d30e192591e4109280c23cc596519704024b79fdf",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/package-second.log.gz": "7a28d7917f623cb0a1853a0d160fbb023289478be8071321f3639a20a09a5b4f",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/python-tests-final.log.gz": "1326f68ed4b2461ca51fd8afea2ee8f88b791702482d21d6ba9c3cb100c49210",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/python-tests.log.gz": "e26b42455b889502842a863cfd78d60953534d6dda47facb2dca23ae4300da15",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/reproduction.json.gz": "16c0585610c6fe121ce6797dbb82653590d371719c83fc7cfdd3209203dbe18b",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/sanitizer-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/sanitizer.log.gz": "5d6673e8bcb8b22744e23a5f3e645ee8f1b04e8e506a5481be6f2c7d621c302c",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/save-results.py.gz": "20d072426f70116a49da591b8e650ff9a9fbb4b74a3932429e199a8c052c6ef9",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/second-longer-source-path.log.gz": "23ab2acbe24949da8ffc657fb902cedff9ce56126765e572322973a4ce75b851",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/tool-bound-mutant.log.gz": "b2d80ba785aab4fbd557df95aabf81a25664a51ce1412db66803aa1fc67e71f8",
+    "tools/pd-waveform/evidence/20261117-kernel-filesystems/kernel-probe-filesystems/unbounded-tool.py.gz": "ad06477d7897b81f145388e993fd1f125c6e57982977a55ce93e0109235765bf"
+  }
+}

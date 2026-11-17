@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parent
 NAME = 'AetherPDKernelProbe'
 CFG = '''[header]
 Name: AetherPDKernelProbe
-Version: "0.1.2"
+Version: "0.1.3"
 Minimum-SmartSDR-Version: 4.2.18.0
 Author: AetherSDR
 License: GPL-3.0

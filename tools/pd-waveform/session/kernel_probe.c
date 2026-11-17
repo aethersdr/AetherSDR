@@ -15,6 +15,8 @@
 #include <sys/syscall.h>
 #include <sys/timerfd.h>
 #include <sys/utsname.h>
+#include <sys/statvfs.h>
+#include <sys/vfs.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -23,6 +25,7 @@
 /* Only self/child restrictions, clocks and ordinary sockets. No radio API,
  * raw socket, network configuration, filesystem mutation or RF commands. */
 struct probe_result { int result,error,child_ok; };
+enum { kReportCapacity=4096,kFilesystemCapacity=320 };
 static volatile sig_atomic_t stopping;
 static void stop_probe(int number){(void)number;stopping=1;}
 #include "pd_pi_probe.h"
@@ -96,6 +99,33 @@ static int limit_json(char* out,size_t capacity,const struct rlimit* value,int e
     return n>0 && (size_t)n<capacity?n:0;
 }
 
+static int filesystem_json(char* out,size_t capacity,const char* path,
+    const struct statfs* kind,int kind_error,const struct statvfs* space,int space_error)
+{
+    char name[128],type[32],bytes[32],inodes[32],block[32];
+    if(!escaped(name,sizeof(name),path)){return 0;}
+    if(kind_error){strcpy(type,"null");}
+    else{snprintf(type,sizeof(type),"\"0x%08lx\"",(unsigned long)kind->f_type);}
+    if(!space_error && (!space->f_frsize || (uint64_t)space->f_bavail>UINT64_MAX/(uint64_t)space->f_frsize)){space_error=EOVERFLOW;}
+    if(space_error){strcpy(bytes,"null");strcpy(inodes,"null");strcpy(block,"null");}
+    else{
+        snprintf(bytes,sizeof(bytes),"%" PRIu64,(uint64_t)space->f_bavail*(uint64_t)space->f_frsize);
+        snprintf(inodes,sizeof(inodes),"%" PRIu64,(uint64_t)space->f_favail);
+        snprintf(block,sizeof(block),"%" PRIu64,(uint64_t)space->f_frsize);
+    }
+    const char* tmpfs=kind_error?"null":(unsigned long)kind->f_type==0x01021994UL?"true":"false";
+    int n=snprintf(out,capacity,"{\"path\":\"%s\",\"type\":%s,\"type_errno\":%d,\"tmpfs\":%s,\"space_errno\":%d,\"available_bytes\":%s,\"available_inodes\":%s,\"block_bytes\":%s}",
+        name,type,kind_error,tmpfs,space_error,bytes,inodes,block);
+    return n>0 && (size_t)n<capacity?n:0;
+}
+static int filesystem_probe(char* out,size_t capacity,const char* path)
+{
+    struct statfs kind={0};struct statvfs space={0};
+    int kind_error=statfs(path,&kind)?errno:0;
+    int space_error=statvfs(path,&space)?errno:0;
+    return filesystem_json(out,capacity,path,&kind,kind_error,&space,space_error);
+}
+
 static int report(char* out,size_t capacity)
 {
     struct utsname system;char release[160],machine[160];
@@ -123,6 +153,9 @@ static int report(char* out,size_t capacity)
     errno=0;int policy=(int)syscall(SYS_sched_getscheduler,0),policy_error=policy<0?errno:0;
     struct sched_param priority={0};errno=0;int priority_error=syscall(SYS_sched_getparam,0,&priority)?errno:0;
     errno=0;int nice_value=getpriority(PRIO_PROCESS,0),nice_error=errno;
+    const char* paths[]={"/run","/run/aetherpd","/tmp","/dev/shm","/user","/var/tmp"};
+    char filesystems[6][kFilesystemCapacity];
+    for(unsigned i=0;i<6;++i){if(!filesystem_probe(filesystems[i],sizeof(filesystems[i]),paths[i])){return 0;}}
     int n=snprintf(out,capacity,
         "{\"application\":\"AetherPDKernelProbe\",\"version\":1,\"kernel\":\"%s\",\"machine\":\"%s\",\"uid\":%lu,\"euid\":%lu,"
         "\"gid\":%lu,\"egid\":%lu,\"capget_errno\":%d,\"cap_effective\":\"%016" PRIx64 "\","
@@ -134,6 +167,7 @@ static int report(char* out,size_t capacity)
         "\"monotonic_clock\":{\"ok\":%s,\"errno\":%d},\"timerfd_tick\":{\"ok\":%s,\"errno\":%d},"
         "\"scheduling\":{\"policy\":%d,\"policy_errno\":%d,\"priority\":%d,\"priority_errno\":%d,\"nice\":%d,\"nice_errno\":%d},"
         "\"rtprio_limit\":%s,\"rttime_limit_us\":%s,\"nice_limit\":%s,"
+        "\"filesystems\":[%s,%s,%s,%s,%s,%s],"
         "\"packet_ring_runtime_tested\":false,\"setup_privileges_provisioned\":false,\"rf_commands\":[]}\n",
         release,machine,(unsigned long)getuid(),(unsigned long)geteuid(),(unsigned long)getgid(),(unsigned long)getegid(),
         cap_error,effective,permitted,inheritable,
@@ -142,7 +176,8 @@ static int report(char* out,size_t capacity)
         nnp.result==0 && nnp.child_ok?"true":"false",nnp.error,nnp.child_ok?"true":"false",
         pi.ok?"true":"false",pi.error,pi.child_ok?"true":"false",
         clock_ok?"true":"false",clock_error,timer_ok?"true":"false",timer_error,
-        policy,policy_error,priority.sched_priority,priority_error,nice_value,nice_error,rtprio_json,rttime_json,nice_json);
+        policy,policy_error,priority.sched_priority,priority_error,nice_value,nice_error,rtprio_json,rttime_json,nice_json,
+        filesystems[0],filesystems[1],filesystems[2],filesystems[3],filesystems[4],filesystems[5]);
     return n>0 && (size_t)n<capacity?n:0;
 }
 
@@ -172,7 +207,7 @@ static int serve(const char* output,size_t length)
 int main(int argc,char** argv)
 {
     if(argc>2 || (argc==2 && strcmp(argv[1],"--serve"))){return 2;}
-    char output[2048];int length=report(output,sizeof(output));if(!length){return 2;}
+    char output[kReportCapacity];int length=report(output,sizeof(output));if(!length){return 2;}
     if(fwrite(output,1,(size_t)length,stdout)!=(size_t)length || fflush(stdout)){return 2;}
     return argc==2?serve(output,(size_t)length):0;
 }

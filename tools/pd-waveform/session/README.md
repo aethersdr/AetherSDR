@@ -178,7 +178,18 @@ no radio commands. It does not qualify packet-ring setup or grant privileges.
 The optional `--serve` mode serves one immutable startup JSON report and closes
 each connection on TCP48998. It reads no requests and exposes no control verbs.
 That report is unauthenticated and contains only kernel/self-process feature
-information, so run the diagnostic briefly and uninstall it afterwards.
+and filesystem metadata, so run the diagnostic briefly and uninstall it afterwards.
+
+Package 0.1.3 adds filesystem type, available bytes and available inodes for
+the fixed paths `/run`, `/run/aetherpd`, `/tmp`, `/dev/shm`, `/user` and
+`/var/tmp`. These are read-only queries as the waveform user. A failed query
+reports `null` and its errno; numeric zero means a successful query found no
+available capacity. The report is limited to 4096 bytes and remains a startup
+snapshot, including capacity. Uninstall and reinstall the probe to refresh it.
+On an uninstalled radio, `/run/aetherpd` may be absent; preserve that result
+and inspect `/run` independently. Do not create the directory to make the
+probe pass. Neither a tmpfs result nor available space qualifies the installer,
+packet-ring access, reboot behavior or actual runtime high-water use.
 
 Build a tiny native waveform containing both ARM architectures:
 
