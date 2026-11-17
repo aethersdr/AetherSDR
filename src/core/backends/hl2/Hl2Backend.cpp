@@ -1624,6 +1624,14 @@ void Hl2Backend::publishTransmitState(std::optional<bool> radioPtt)
     if (transmitting != m_publishedTransmit) {
         m_publishedTransmit = transmitting;
         delta.mox = transmitting;
+        // The pan's DC removal keeps a separate estimate while keyed, and goes
+        // back to receive after the same T/R hold as the audio.
+        for (Receiver& r : m_rx) {
+            if (r.dsp) {
+                QMetaObject::invokeMethod(r.dsp, "setSpectrumTransmitting", Qt::QueuedConnection,
+                    Q_ARG(bool, transmitting), Q_ARG(int, m_unkeyUnmuteHoldMs));
+            }
+        }
     }
     delta.radioPtt = radioPtt;
     emit transmitChanged(delta);

@@ -258,6 +258,7 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     if (m_spectrum) {
         m_spectrum->setAverageTimeMs(static_cast<double>(m_spectrumAverageMs));
         m_spectrum->setLogAverage(m_spectrumLogAverage);
+        m_spectrum->setTransmitting(m_spectrumTransmitting);
     }
 
     m_iqBuffer.clear();
@@ -598,6 +599,14 @@ void Hl2RxDsp::dropSpectrumAverage()
     // keeping it would seed the fresh average with the old spectrum.
     m_spectrum->reset();
     m_spectrum->dropAverage();
+}
+
+void Hl2RxDsp::setSpectrumTransmitting(bool on, int releaseHoldMs)
+{
+    m_spectrumTransmitting = on;
+    if (m_spectrum) {
+        m_spectrum->setTransmitting(on, static_cast<double>(releaseHoldMs));
+    }
 }
 
 void Hl2RxDsp::setShift(double shiftHz)
