@@ -1,9 +1,10 @@
 # Authenticated AetherPD boot payload (development)
 
-Independent ARM64 first installation is implemented for local qualification.
+Independent ARM64 first installation has receive-only FLEX-8600 qualification.
 It uses an explicit fresh plan and creates a new local identity without copying
-predecessor state. Hardware installation/reboot/IQ qualification is still on
-operator hold. See [the first-install contract](../request/FIRST-INSTALL.md).
+predecessor state. Production and FLEX-6000 installation remain unqualified;
+coverage belongs to each exact candidate's report. See
+[the first-install contract](../request/FIRST-INSTALL.md).
 
 
 This component verifies and expands a fixed compressed payload into radio RAM.
@@ -42,6 +43,12 @@ ARM64 uses `/var/lib/smartsdr/aetherpd` because `/user` is a symlink on the benc
 8600. ARMv7 uses `/user/aetherpd`; every parent must be protected. Expanded
 executables and volatile state live under `/run/aetherpd`. Persistent identity
 and configuration belong in the small ordinary-user `state` directory.
+Before creating that runtime directory, the boot helper requires a successful
+`fstatfs` identifying `/run` as tmpfs. It also checks the opened runtime directory,
+including an existing directory, before changing its permissions or extracting
+the payload. A failed query or another filesystem refuses startup. This guard
+does not establish that `/run` exists on tmpfs on a particular FLEX-6000; that
+layout and the matching installation adapter still require hardware qualification.
 
 The 8600 development reboot proof installed only the boot service, session
 socket and matching session template, then removed them after inspection.

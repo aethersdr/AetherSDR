@@ -356,6 +356,21 @@ add_test(NAME shared_capture_policy_test COMMAND shared_capture_policy_test)
 # AetherPD fixed session policies: Linux-only, socket-free parser/profile
 # checks. These test entry points perform no privileged setup or radio I/O.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Inject directory/statfs calls into the fixed boot entry. No filesystem,
+    # sockets, privilege changes, firmware peer or radio is accessed.
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pd-boot-runtime-policy")
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pd-boot-runtime-policy/pd_release_key.h"
+        CONTENT "/* Test-only public key; this target never authenticates a release. */\nstatic const unsigned char pd_release_key[32]={0};\n")
+    add_executable(pd_boot_runtime_policy_test tools/pd-waveform/boot/boot_runtime_test.c)
+    target_include_directories(pd_boot_runtime_policy_test PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/pd-boot-runtime-policy" third_party/monocypher)
+    target_compile_options(pd_boot_runtime_policy_test PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(pd_boot_runtime_policy_test PRIVATE -Wl,--gc-sections)
+    set_target_properties(pd_boot_runtime_policy_test PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    add_test(NAME pd_boot_runtime_policy_test COMMAND pd_boot_runtime_policy_test)
+    set_tests_properties(pd_boot_runtime_policy_test PROPERTIES TIMEOUT 10)
+
     # The real helper parser and run loop with injected syscalls; no sockets,
     # radio peer, keying, privileged setup or wall-clock sleeps.
     add_executable(pd_unkey_guard_parser_test tools/pd-waveform/guardian/unkey_guard_test.c)

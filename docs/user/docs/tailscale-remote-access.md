@@ -857,6 +857,11 @@ a plan for the replacement connection. Fixed boot/session helpers remain install
 for reboot and local IQ setup; temporary delivery and upgrade workers are retired.
 
 The native development service keeps Tailscale's log and cache files in RAM.
+Its boot helper requires `/run` and `/run/aetherpd` to be verified tmpfs
+filesystems before expanding the runtime. If boot reports **not verified tmpfs;
+runtime refused**, preserve the saved identity and ask the package provider to
+verify the radio's filesystem layout. The helper refuses startup rather than
+expanding the payload onto persistent storage.
 Its saved configuration and Tailscale identity each have a 64 KiB limit, matching what
 the installer can preserve during an update. If a file exceeds that limit,
 the service refuses the load or write and preserves the saved file for

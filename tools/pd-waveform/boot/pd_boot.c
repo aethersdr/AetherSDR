@@ -13,6 +13,7 @@
 #include "pd_release_key.h"
 #include "monocypher.h"
 #include <sys/file.h>
+#include <sys/vfs.h>
 
 int pd_boot_primary(int argc,char** argv);
 int pd_boot_session(int argc,char** argv);
@@ -45,9 +46,18 @@ static int boot_store(int root)
 static int boot_runtime(int root)
 {
     int run=boot_directory(root,"run");if(run<0){return -1;}
+    struct statfs filesystem;
+    if(fstatfs(run,&filesystem) || (unsigned long)filesystem.f_type!=0x01021994UL){
+        fputs("AetherPD boot: /run is not verified tmpfs; runtime refused\n",stderr);
+        close(run);return -1;
+    }
     int created=!mkdirat(run,"aetherpd",0755);
     if(!created && errno!=EEXIST){close(run);return -1;}
     int fd=boot_directory(run,"aetherpd");close(run);
+    if(fd>=0 && (fstatfs(fd,&filesystem) || (unsigned long)filesystem.f_type!=0x01021994UL)){
+        fputs("AetherPD boot: runtime is not verified tmpfs; runtime refused\n",stderr);
+        close(fd);return -1;
+    }
     if(fd>=0 && created && fchmod(fd,0755)){close(fd);return -1;}
     return fd;
 }

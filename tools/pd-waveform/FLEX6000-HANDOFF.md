@@ -20,14 +20,16 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The complete ARMv7 development runtime from signed source `7080de965` is
-9,398,712 bytes; its expanded executables/licenses occupy 22,771,134 bytes in RAM. Both ARMv7 and
+The complete ARMv7 development runtime from signed source `e63608a74` is
+9,401,612 bytes; its expanded executables/licenses occupy 22,836,670 bytes in RAM. Both ARMv7 and
 ARM64 runtime releases reproduced byte for byte with pinned compilers on the
 same host. This does not qualify the first-install adapter or radio operation.
-See [current runtime qualification](./MANAGED-OWNER-RUNTIME-QUALIFICATION.json).
+See [current runtime and installed ARM64 qualification](./GUARDIAN-SERVICE-SIGNALS-INSTALLED-QUALIFICATION.json).
 Earlier [restart qualification](./RESTART-RUNTIME-QUALIFICATION.md) remains
-bound to its original source. Only the Go shim payload member changed from
-the currently installed `938fc001…` runtime; DSP and fixed helpers are byte-identical.
+bound to its original source. This runtime changed the Go shim and unkey guardian
+from its predecessor; the DSP, boot helper, other fixed helpers and units are
+byte-identical. Whole-service stop/start qualification is separately recorded in
+[the current lifecycle report](./WHOLE-RUNTIME-STOP-QUALIFICATION.json).
 
 The calculated ARMv7 successor-upgrade budget is up to 39,682,048 bytes,
 including the existing compacted installation, stated state/metadata allowances,
@@ -47,8 +49,20 @@ The 8600 first-install carrier/acceptor still requires `no_new_privs` in
 `boot/pd_carrier.c`, `boot/pd_accept.c` and `boot/pd_first_request.c`.
 [Linux introduced that flag in 3.5](https://www.kernel.org/doc/html/latest/userspace-api/no_new_privs.html),
 so those entry points must not be treated as the Linux 2.6 legacy adapter.
+The first-request packager accepts ELF64, its native acceptor refuses non-ARM64,
+and the boot helper's first-install transaction also refuses ARMv7. Building an
+ARMv7 runtime does not supply those missing delivery/installation paths.
 The existing capture worker's strict-seccomp design below is a separate mechanism;
 do not replace it with an assumption that SO_LOCK_FILTER is required.
+
+The boot helper's tmpfs admission guard is component-qualified separately in
+[the boot storage report](./BOOT-TMPFS-QUALIFICATION.json); it is not yet in the
+`e63608a74` package above. Before installing a final candidate, verify that both
+`/run` and the runtime directory use tmpfs. The supplied 6300 report established
+tmpfs for `/tmp` and `/dev/shm`, but did not report `/run`. If its layout differs,
+the fixed ARMv7 runtime path/adapter needs qualification; do not silently place
+the expanded payload on persistent storage. ARMv7 execution of a fixture on an
+8600 is not evidence about that layout on a 6300.
 
 ## Receive-only qualification first
 
@@ -59,8 +73,9 @@ do not replace it with an assumption that SO_LOCK_FILTER is required.
    Tailscale state or private keys in a report.
 2. Establish an authorized provisioning mechanism. The ordinary waveform
    UID78666 and autostart/persistence evidence do not establish setup privileges.
-   No privilege bypass, generic root command bridge or SUID installation is
-   part of this handoff.
+   Qualify the operator-approved fixed bootstrap and retain its exact plan and
+   signed artifacts. No generic root command bridge or permanent SUID setup is
+   part of this handoff. The ARM64 carrier is not a FLEX-6000 delivery adapter.
 3. Measure the internal interface, local destination, FPGA source IP/port,
    VITA stream/class and IQ byte order through documented APIs and packet
    observations. Do not access proprietary process memory or registers.

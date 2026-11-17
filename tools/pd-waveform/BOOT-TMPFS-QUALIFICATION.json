@@ -1,0 +1,214 @@
+{
+  "updated_utc": "2026-11-17T17:14:25.159694+00:00",
+  "status": "boot_tmpfs_admission_component_fixed_regression_mutation_sanitizer_crossbuild_and_native_filesystem_fixtures_qualified_not_installed",
+  "production_ready": false,
+  "source_parent_commit": "790bfc619c3e48d27fd725e9701c025d85dd7ba6",
+  "changed_source_sha256": {
+    "tools/pd-waveform/boot/pd_boot.c": "08eb302b106796dd08e4ba35efa65da836e0810d6e59d4ae8966ac3ca4b8a44f",
+    "tools/pd-waveform/boot/boot_runtime_test.c": "d569fd7290831b7e1d09b3acc100756ad036537de533ef7aae7a3d4811660ae7",
+    "tests/tests.cmake": "2eeebcdb423dd66d2cf4997dbf0c82b73ad677e58d00fb99da7288c5e1daf766",
+    "tools/pd-waveform/boot/README.md": "3e2ada17446ccb397db258d2058bcaab6f6077616a99592b6008bc8bd58e907c",
+    "tools/pd-waveform/FLEX6000-HANDOFF.md": "f1285d612559d9a7586647e9d204c8513f38e90525c21af0a484c2e2fd14aeb1",
+    "docs/user/docs/tailscale-remote-access.md": "15d0db4f7e2b6d1cbd0ed8fe2c1412043ff28283c45bfcaa7d210d5d5f30ba6e"
+  },
+  "installed_runtime_source": "e63608a748c8f5a18c58f4eab9ba579af5347547",
+  "installed_release_blake2b_256": "b30bb5074b4c962183662c82026655ad0d94646de333c0ec8119507b5bea5115",
+  "defect": {
+    "cause": "boot_runtime checked protected directory metadata but not filesystem type before creating/run/aetherpd and admitting payload expansion. A differently laid-out/run could consume persistent space. Later public-status tmpfs validation was nonfatal and occurred after preparation.",
+    "fix": "Require successful fstatfs and TMPFS_MAGIC on the pinned/run descriptor before mkdir. Recheck the opened runtime directory before permission changes or returning it to the preparation path. Query failure, persistent and unknown filesystems refuse; no mount, relocation or capability fallback is introduced.",
+    "new_privileges": [],
+    "network_or_service_or_DSP_changes": [],
+    "automatic_fallback_to_persistent_storage": false
+  },
+  "component_evidence": {
+    "registered_CTest": "pd_boot_runtime_policy_test",
+    "CTest_passed": true,
+    "test_transport": "Injected open/stat/statfs/mkdir/chmod/close only; no filesystem/socket/firmware peer or privileged action. Test-only unused all-zero public key generated in its private build include path.",
+    "cases": [
+      "ext filesystem parent refused before mkdir/openchild/chmod",
+      "overlay parent refused before mkdir/openchild/chmod",
+      "unknown parent refused before mkdir/openchild/chmod",
+      "failed parent query refused even with TMPFS in supplied output",
+      "fresh TMPFS runtime creation accepted",
+      "existing TMPFS runtime accepted without chmod",
+      "non-TMPFS existing runtime refused before chmod and descriptor closed",
+      "failed child query refused even with TMPFS in supplied output"
+    ],
+    "mutations": [
+      {
+        "variant": "baseline",
+        "rejected": true,
+        "exit": -6
+      },
+      {
+        "variant": "missing_parent",
+        "rejected": true,
+        "exit": -6
+      },
+      {
+        "variant": "missing_child",
+        "rejected": true,
+        "exit": -6
+      }
+    ],
+    "ASan_UBSan_LSan_passed": true,
+    "full_production_boot_helper_crossbuilds": {
+      "armv7": {
+        "bytes": 207812,
+        "sha256": "31364cf2e10d4a9693fa32b4f4b79599b9e951f8155fef206e5e50127ba7bf78"
+      },
+      "arm64": {
+        "bytes": 206768,
+        "sha256": "0e9dc30619820bd06304b92c144f63858336dea21aeab00be92932d81ce6691f"
+      }
+    },
+    "test_fixture_crossbuilds": {
+      "armv7": {
+        "bytes": 9020,
+        "sha256": "da4f1db848c93ccaae8aaff08c49e8f9bf41325e8e108f8cfecb6d46ce3b9d93",
+        "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/boot-tmpfs-guard/native-check-armv7: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, stripped"
+      },
+      "arm64": {
+        "bytes": 10312,
+        "sha256": "46bb71059dbda64f282b3570439d158375790b619a90f2f6785cdaa2afc9c3be",
+        "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/boot-tmpfs-guard/native-check-arm64: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped"
+      }
+    },
+    "test_registration_passed": true,
+    "user_docs_build_passed": true,
+    "initial_compile_failure": "New CTest initially omitted the explicit Monocypher header include path. Failed build log is retained; explicit target include corrected and rebuilt before CTest/sanitizer/cross checks."
+  },
+  "native_fixture_evidence": {
+    "platform": "FLEX8600, existing kernelboot65be86a7; ARMv7 and ARM64 fixture execution, not actual6300",
+    "first_preparation_failed": {
+      "case": "real_tmpfs_vs_persistent_boot_directory",
+      "passed": false,
+      "RF_commands": [],
+      "service_changes": [],
+      "cases": [],
+      "fixtures_removed": true,
+      "error": "KeyError: 'WORKDIR'"
+    },
+    "second_preparation_failed": {
+      "case": "real_tmpfs_vs_persistent_boot_directory",
+      "passed": false,
+      "RF_commands": [],
+      "service_changes": [],
+      "cases": [],
+      "fixtures_removed": true,
+      "error": "AssertionError: "
+    },
+    "third_preparation_passed": {
+      "case": "real_tmpfs_vs_persistent_boot_directory",
+      "passed": true,
+      "RF_commands": [],
+      "service_changes": [],
+      "cases": [
+        {
+          "arch": "armv7",
+          "fixture_kind": "persistent",
+          "filesystem_type": "0xef53",
+          "exit": 1,
+          "runtime_created": false,
+          "stderr": "AetherPD boot: /run is not verified tmpfs; runtime refused\n",
+          "child_requires_empty_effective_permitted_inheritable_caps": true
+        },
+        {
+          "arch": "armv7",
+          "fixture_kind": "RAM",
+          "filesystem_type": "0x1021994",
+          "exit": 0,
+          "runtime_created": true,
+          "stderr": "",
+          "child_requires_empty_effective_permitted_inheritable_caps": true
+        },
+        {
+          "arch": "arm64",
+          "fixture_kind": "persistent",
+          "filesystem_type": "0xef53",
+          "exit": 1,
+          "runtime_created": false,
+          "stderr": "AetherPD boot: /run is not verified tmpfs; runtime refused\n",
+          "child_requires_empty_effective_permitted_inheritable_caps": true
+        },
+        {
+          "arch": "arm64",
+          "fixture_kind": "RAM",
+          "filesystem_type": "0x1021994",
+          "exit": 0,
+          "runtime_created": true,
+          "stderr": "",
+          "child_requires_empty_effective_permitted_inheritable_caps": true
+        }
+      ],
+      "fixtures_removed": true,
+      "tools_and_filesystems": {
+        "setpriv_exists": true,
+        "work": "0x1021994",
+        "persistent_parent": "0xef53",
+        "RAM_parent": "0x1021994"
+      }
+    },
+    "interpretation": "01 used WORKDIR as environment instead of native bridge global and created no fixture.02 correctly found that/var/tmp workdir was tmpfs and refused before executing cases because it was not a persistent fixture.03 records actual ext4 data parent and tmpfs RAM parent, then executes both architecture fixtures.",
+    "privilege_boundary": "Test-only entry refuses nonzero effective/permitted/inheritable capabilities. setpriv drops bounding/inheritable/ambient sets and enables no_new_privs before exec. UID0 remains solely to exercise root-owned private directories; the test does not replace or invoke the installed boot entry.",
+    "scope": "Four real-directory checks: both architectures refuse an ext4/run fixture before creating aetherpd, and accept a tmpfs/run fixture. All private directories, uploaded files, scratch and job containers removed. No actual payload expansion or installation/boot transition performed."
+  },
+  "RF_commands": [],
+  "reboot_commands": [],
+  "installation_actions": [],
+  "limitations": [
+    "Fix is not in installed b30 package. Full combined signed runtime/distribution reproduction, size admission, ordinary installation and startup/reboot qualification remain required.",
+    "These fixtures cover boot-directory filesystem admission only. They do not prove whole-volume storage enforcement, hostile root mutation, nested mounts inside the payload tree, every update/rollback or power-loss boundary.",
+    "Observed8600/var/tmp is tmpfs, unlike supplied6300/var/tmp ext3. Do not generalize either layout. The6300 probe established/tmp and/dev/shm tmpfs but did not establish/run; verify/adapt the fixed ARMv7 layout before support.",
+    "Existing ARM64 first-request/acceptor/carrier/transaction paths are not a6000 installer. ELF64 packaging, explicit architecture refusals and mandatory no_new_privs on those entries remain separate adapter work. pd_primary metadata already handles absent kernel NoNewPrivs/CapAmb conditionally; do not mistake that for completion of the delivery adapter.",
+    "The user-deferred5WSWR/preamble investigation remains deferred. Software reboot hang, keyed/fullRF/naturalalignment/stockAPD, actual6300, complete account/platform/storage and independent release gates remain open."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/baseline/build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/baseline/pd_boot.c.gz": "0808718533b4dda84d0deb78edaea69dddbf63186973b75ff3283d47cbe23480",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/baseline/result.log.gz": "2356e7838bfc05ed1f2c884386c47d4382a88e85c4938d620c1fe272ec34f2ca",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/baseline/test.c.gz": "de593c6edabb2f0d11001df03da4d4265edd5c40cb6f1682bd49a2fc5ab4d307",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/build-cross.py.gz": "b7065f67314430f81beed4fd69a4afa4cb95863764d770c4196bf026dd498344",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/build-final.log.gz": "35417ef144983934ff002d9ce195af4696c0b9cf6c18b2ac005b8059bac008d2",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/build-with-crypto-header.log.gz": "35417ef144983934ff002d9ce195af4696c0b9cf6c18b2ac005b8059bac008d2",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/build.log.gz": "8b53df0693f3478338d9a6cd78430d6b5327027ff1f336cc7c8679e03a2ec5e2",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/check.py.gz": "bdcde003a8f5b4b39ea90e1d4cb2dc2c0f84247fb5234f569181899bb0cfdae4",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/cross-arm64.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/cross-armv7.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/cross-builds.json.gz": "0b3620225b78b7d5a7b0371b98893e8dca97592a1dabbb91128bb2c3d0a33084",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/ctest-final.log.gz": "2d7a3db9d14b22b3ecd65722962ec857684fd7159cfb2cddc38442618c58c52c",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/ctest.log.gz": "2d7a3db9d14b22b3ecd65722962ec857684fd7159cfb2cddc38442618c58c52c",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/full-boot-builds.json.gz": "deaaf69bf793a0d140b8a045e75e5de81863e31569fa1bf93fa128a61d34a5b1",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/missing_child/build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/missing_child/pd_boot.c.gz": "569ad1c58d6c5c0583b69405e12dac9acd88dc167fa1e0c972841acf889b828e",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/missing_child/result.log.gz": "07e01b459b9384ddf83ae296e9bf7a5597bb2fb1831590a31bafff50b6dc0c71",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/missing_child/test.c.gz": "de593c6edabb2f0d11001df03da4d4265edd5c40cb6f1682bd49a2fc5ab4d307",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/missing_parent/build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/missing_parent/pd_boot.c.gz": "0e783d6383f0e8b66712d61cf47cef5e481933d17a86693e982c16af2f7bfd24",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/missing_parent/result.log.gz": "1efb971071ff320b26c058ff42e2242b0b3c9d4c84b508c89d37749d6e10ea22",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/missing_parent/test.c.gz": "de593c6edabb2f0d11001df03da4d4265edd5c40cb6f1682bd49a2fc5ab4d307",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/mutations.json.gz": "30c0c8d995879a5b3c8358d9ee6ed6e524a8eb4524c8cf51a43a88f57e44a5f8",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/native-check.c.gz": "693ba82646338a3c93d8a8c2cb2bea7eeb7b9c4f20c1331216c9bafc5eb50bb3",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/sanitize-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/sanitize.log.gz": "c6296bf021ffb78c0b080781df51c58a5fa628ce4b2f82196a6111ab849adc4f",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/save-qualification.py.gz": "c8e0f83e0cf289666bd532752bf9ac9a5076dc5e729cd86adfc7df5577f91dcb",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/test-registration.log.gz": "959aabfbd3d45f87cb2ec81df039d1fbcef4475b1bcb95d47c0062da2dbdaca0",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-guard/user-docs-build.log.gz": "1af72410c5754bde0fa4c42329e8f2a51c36206b9bc6a82e1fa0216cd981e38b",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-01/console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-01/filesystem-job.py.gz": "9c2eaddfd32bc049385886a00dcdd620bc28544f3cfeb86878ba02a7562326f5",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-01/filesystem-result.json.gz": "8557cac2ca4c85e68a92fdb6f6eea681183c1d5c33c08710533f1ff76bc34ebb",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-01/filesystem.log.gz": "8557cac2ca4c85e68a92fdb6f6eea681183c1d5c33c08710533f1ff76bc34ebb",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-01/run-job.py.gz": "00640d7692f7f52f37a3510e01e386dd8f569fa72d7adee9b0627ebae342918a",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-02/console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-02/filesystem-job.py.gz": "7f9b9cfa2a441999d81087ee48f57fde04fda60ecba74f6fb22e5f307e18a08a",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-02/filesystem-result.json.gz": "316c2c1d836618cdc2404a3fa0ccf8e2aa0401fb674add3f54d94fbf299ec67f",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-02/filesystem.log.gz": "316c2c1d836618cdc2404a3fa0ccf8e2aa0401fb674add3f54d94fbf299ec67f",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-02/run-job.py.gz": "00640d7692f7f52f37a3510e01e386dd8f569fa72d7adee9b0627ebae342918a",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-03/console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-03/filesystem-job.py.gz": "3ec33049e566d8068c50d795697175955e88cef2d4a76bd7347e1c7abb779eb5",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-03/filesystem-result.json.gz": "f2f109df338bf3d701369d695993495618089f11ed1b605c9a15e3d8e9d824eb",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-03/filesystem.log.gz": "f2f109df338bf3d701369d695993495618089f11ed1b605c9a15e3d8e9d824eb",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/boot-tmpfs-native-03/run-job.py.gz": "00640d7692f7f52f37a3510e01e386dd8f569fa72d7adee9b0627ebae342918a",
+    "tools/pd-waveform/evidence/20261117-boot-tmpfs/production-completion-plan.json.gz": "1e6c8afbb1b351fbbe1aafe1fa9af5487cbb56ffcf10f7becb965952769bb975"
+  }
+}
