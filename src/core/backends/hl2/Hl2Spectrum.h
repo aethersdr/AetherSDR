@@ -39,6 +39,14 @@ public:
     static constexpr double kDcTimeConstantS = 1.0;
     static constexpr int kDcFramesWithoutRate = 200;
 
+    // The T/R state. While transmitting, a separate DC estimate is tracked and
+    // subtracted, because our own TX can put a DC term on the IQ; the receive
+    // estimate is frozen. On release, receive resumes after releaseHoldMs (the
+    // T/R turnaround, tracked by neither) with its pre-key estimate. The transmit
+    // estimate carries to the next key, seeded from receive on the first.
+    void setTransmitting(bool on, double releaseHoldMs = 0.0) noexcept;
+    [[nodiscard]] bool dcTransmitting() const noexcept { return m_dcTx; }
+
     // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
     // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting
     // this clears it. Drops the state. Call on the hl2-io thread (unsynchronised).
@@ -102,7 +110,7 @@ public:
 private:
     void computeFrame(std::vector<float>& binsDbfs);
     void trackDc(std::complex<float> s) noexcept;
-    void restartDc() noexcept { m_dcRe = 0.0; m_dcIm = 0.0; m_dcSamples = 0; }
+    void restartDc() noexcept;
 
     int m_fftSize;
     std::vector<std::complex<float>> m_acc;   // accumulation buffer (< m_fftSize)
@@ -132,12 +140,20 @@ private:
     // time averaging is switched on or the geometry changes, so the first
     // frame after a drop is TAKEN rather than blended into silence.
     bool m_haveAverage = false;
-    // Running DC estimate (trackDc()). Restarted by reset() and dropAverage(),
-    // so the frame after a gap or a retune depends on post-gap samples only.
+    // Running DC estimates (trackDc()), one per T/R state. Restarted by reset()
+    // and dropAverage(), so the frame after a gap or a retune depends on
+    // post-gap samples only.
+    struct Dc {
+        double re = 0.0;
+        double im = 0.0;
+    };
     double m_dcAlpha = 0.0;                   // per-sample weight, from the time constant
-    double m_dcRe = 0.0;
-    double m_dcIm = 0.0;
-    std::uint64_t m_dcSamples = 0;            // counted until the time constant is reached
+    Dc m_rxDc;
+    Dc m_txDc;
+    bool m_txDcSeeded = false;
+    bool m_dcTx = false;                      // the transmit estimate is the one in use
+    std::uint64_t m_dcReleaseIn = 0;          // samples until receive resumes; 0 = none pending
+    std::uint64_t m_dcSamples = 0;            // receive samples, counted until the time constant
     // Opaque FFTW handles (kept as void* so fftw3.h stays out of the header).
     void* m_in = nullptr;                     // fftw_complex[m_fftSize]
     void* m_out = nullptr;                     // fftw_complex[m_fftSize]

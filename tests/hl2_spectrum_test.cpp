@@ -178,18 +178,20 @@ void centreBinTests()
     for (const double hz : kOffBinHz) {
         for (const double capFps : {0.0, 30.0}) {
             // 1 · KEY-ON: the display has been running on noise, then the
-            // strong tone appears (the HL2's TX leaking into RX1).
-            {
+            // strong tone appears: the HL2's TX leaking into RX1 (with the T/R
+            // edge), or a strong received carrier (without it).
+            for (const bool viaTransmit : {true, false}) {
                 Hl2Spectrum spec(kStreamN, kStreamFs);
                 Noise noise;
                 std::uint64_t n = 0;
                 stream(spec, noise, n, {}, 1.0, false, capFps);
+                spec.setTransmitting(viaTransmit);
                 const Seen keyed = stream(spec, noise, n, {hz, 0.5, {}}, 1.0, true, capFps);
                 const double peakDb = 10.0 * std::log10(*std::max_element(keyed.meanPower.begin(),
                                                                            keyed.meanPower.end()));
-                std::fprintf(stderr, "  off-bin %+.0f Hz cap %.0f fps, keyed: tone %.1f dB over floor, "
+                std::fprintf(stderr, "  off-bin %+.0f Hz cap %.0f fps, %s: tone %.1f dB over floor, "
                              "centre %.1f dB (mean), %.1f dB (worst of %d frames)\n",
-                             hz, capFps, peakDb - floorDbOf(keyed.meanPower), centreOverFloorDb(keyed),
+                             hz, capFps, viaTransmit ? "keyed" : "received", peakDb - floorDbOf(keyed.meanPower), centreOverFloorDb(keyed),
                              maxOf(keyed.centreOverFloorDb), keyed.frames);
                 check(keyed.frames > 20, "key-on: frames were produced");
                 check(peakDb - floorDbOf(keyed.meanPower) > 80.0,
@@ -243,6 +245,46 @@ void centreBinTests()
         // Control: this offset is ~58 dB over the floor when not removed.
         check(20.0 * std::log10(std::abs(sig.dc)) + Hl2Spectrum::kToneGainDb - floorDb > 50.0,
               "DC control: the offset would stand far over the floor if left in");
+    }
+
+    // 4 · T/R: a key whose IQ carries a strong DC term (seen at LNA 48 dB)
+    // as well as the tone, then receive with neither. Receive must be at the
+    // floor from the first full frame after the release hold, and a second
+    // key must start from the DC the first one learned.
+    for (const double capFps : {0.0, 30.0}) {
+        constexpr double kHoldMs = 70.0;
+        const Signal keyedSig{12544.0, 0.5, {5e-4, -2e-4}};   // DC ~30 dB over the floor
+        Hl2Spectrum spec(kStreamN, kStreamFs);
+        Noise noise;
+        std::uint64_t n = 0;
+        stream(spec, noise, n, {}, 1.0, false, capFps);
+        spec.setTransmitting(true);
+        stream(spec, noise, n, keyedSig, 4.0, false, capFps);
+        spec.setTransmitting(false, kHoldMs);
+        check(spec.dcTransmitting(), "T/R: the transmit estimate stays in use through the hold");
+        stream(spec, noise, n, {}, kHoldMs / 1000.0, false, capFps);
+        check(!spec.dcTransmitting(), "T/R: receive resumes when the hold has run");
+        const Seen rx = stream(spec, noise, n, {}, 2.0, true, capFps);
+        std::fprintf(stderr, "  T/R cap %.0f fps, after unkey: centre %.1f dB (mean), %.1f dB (first), "
+                     "%.1f dB (worst of %d frames)\n", capFps, centreOverFloorDb(rx),
+                     rx.centreOverFloorDb.empty() ? 1e9 : rx.centreOverFloorDb.front(),
+                     maxOf(rx.centreOverFloorDb), rx.frames);
+        check(!rx.centreOverFloorDb.empty() && rx.centreOverFloorDb.front() < 12.0,
+              "T/R: the first full receive frame after the unkey has no centre line");
+        check(maxOf(rx.centreOverFloorDb) < 12.0 && centreOverFloorDb(rx) < 3.0,
+              "T/R: receive after the unkey stays at the floor");
+
+        spec.setTransmitting(true);
+        const Seen second = stream(spec, noise, n, keyedSig, 1.0, true, capFps);
+        std::fprintf(stderr, "  T/R cap %.0f fps, second key: centre %.1f dB (mean), %.1f dB (worst)\n",
+                     capFps, centreOverFloorDb(second), maxOf(second.centreOverFloorDb));
+        check(maxOf(second.centreOverFloorDb) < 12.0 && centreOverFloorDb(second) < 3.0,
+              "T/R: a second key starts from the transmit DC the first one learned");
+
+        // Control: the keyed DC is real and would show if not removed.
+        check(20.0 * std::log10(std::abs(keyedSig.dc)) + Hl2Spectrum::kToneGainDb
+                  - floorDbOf(rx.meanPower) > 25.0,
+              "T/R control: the keyed DC stands far over the receive floor");
     }
 
     // 3 · An ON-BIN tone (bin 100 exactly) reads its textbook level and the

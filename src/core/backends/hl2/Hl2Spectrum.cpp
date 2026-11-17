@@ -173,18 +173,63 @@ void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
     }
 }
 
+void Hl2Spectrum::setTransmitting(bool on, double releaseHoldMs) noexcept
+{
+    if (on) {
+        m_dcReleaseIn = 0;   // a re-key inside the hold cancels the release
+        if (!m_dcTx && !m_txDcSeeded) {
+            m_txDc = m_rxDc;
+            m_txDcSeeded = true;
+        }
+        m_dcTx = true;
+        return;
+    }
+    if (!m_dcTx || m_dcReleaseIn > 0) {
+        return;
+    }
+    const double hold = m_sampleRateHz > 0.0 && releaseHoldMs > 0.0
+        ? std::round(releaseHoldMs * m_sampleRateHz / 1000.0) : 0.0;
+    if (hold < 1.0) {
+        m_dcTx = false;
+    } else {
+        m_dcReleaseIn = static_cast<std::uint64_t>(hold);
+    }
+}
+
+void Hl2Spectrum::restartDc() noexcept
+{
+    m_rxDc = {};
+    m_dcSamples = 0;
+    m_txDc = {};
+    m_txDcSeeded = m_dcTx;   // mid-key: the transmit estimate starts from zero
+}
+
 void Hl2Spectrum::trackDc(std::complex<float> s) noexcept
 {
     // A one-pole low-pass over every sample: a tone f Hz off centre leaks in at
-    // about 1/(2*pi*f*tau) of its amplitude. Growing memory (weight >= 1/n)
-    // until the time constant is reached removes a constant offset at once.
+    // about 1/(2*pi*f*tau) of its amplitude. The receive estimate starts with
+    // growing memory (weight >= 1/n), which removes a constant offset at once.
+    if (m_dcReleaseIn > 0) {
+        // The T/R turnaround is neither state: track nothing through it.
+        if (--m_dcReleaseIn == 0) {
+            m_dcTx = false;
+        }
+        return;
+    }
+    const double re = static_cast<double>(s.real());
+    const double im = static_cast<double>(s.imag());
+    if (m_dcTx) {
+        m_txDc.re += m_dcAlpha * (re - m_txDc.re);
+        m_txDc.im += m_dcAlpha * (im - m_txDc.im);
+        return;
+    }
     double alpha = m_dcAlpha;
     if (static_cast<double>(m_dcSamples) * alpha < 1.0) {
         ++m_dcSamples;
         alpha = std::max(alpha, 1.0 / static_cast<double>(m_dcSamples));
     }
-    m_dcRe += alpha * (static_cast<double>(s.real()) - m_dcRe);
-    m_dcIm += alpha * (static_cast<double>(s.imag()) - m_dcIm);
+    m_rxDc.re += alpha * (re - m_rxDc.re);
+    m_rxDc.im += alpha * (im - m_rxDc.im);
 }
 
 void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
@@ -192,11 +237,12 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
     // Subtract the running DC estimate, not this frame's own mean: a strong
     // tone that is not on a bin has a non-zero frame mean, and subtracting
     // that mean draws a line at the centre bin.
+    const Dc& dc = m_dcTx ? m_txDc : m_rxDc;
     auto* in = static_cast<fftw_complex*>(m_in);
     for (int n = 0; n < m_fftSize; ++n) {
         const double w = m_window[static_cast<std::size_t>(n)];
-        in[n][0] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].real()) - m_dcRe) * w;
-        in[n][1] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].imag()) - m_dcIm) * w;
+        in[n][0] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].real()) - dc.re) * w;
+        in[n][1] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].imag()) - dc.im) * w;
     }
 
     fftw_execute(static_cast<fftw_plan>(m_plan));
