@@ -448,6 +448,15 @@ and permanently closes that session's calibration gate. The old token cannot
 arm or restore it, and acquiring a new token does not restart it. Rejected
 requests and failed configuration writes leave the existing session intact.
 Sign-out revokes local authority before waiting for tailnet logout.
+Configuration replacement/deletion and live publication share a transaction
+lock, including automatic sign-in-completion saves and sharing changes. This
+prevents a delayed save from recreating an old credential after sign-out.
+Sign-in completion closes token-free admission before waiting for a pending
+file write, then saves the latest sharing fields after acquiring the lock.
+Sign-in watchers carry the join generation through state changes and saves;
+old callbacks cannot complete a replacement identity's pending login. Login URL
+reads recheck the token and generation after the backend responds. These
+operations do not hold the live-state mutex during configuration file I/O.
 
 For a FLEX-6000 development package, `native/build.py --with-aetherpd` includes
 the compressed ARMv7 runtime, unkey helper, lease guardian and licenses; the launcher unpacks

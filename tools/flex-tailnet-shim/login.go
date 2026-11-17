@@ -83,10 +83,12 @@ func pendingState(li loginInfo) string {
 
 // setLoginState moves between the joining states without overriding a
 // sign-out or an error that happened meanwhile.
-func (n *Node) setLoginState(state string) {
+func (n *Node) setLoginState(gen uint64, state string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.setLoginStateLocked(state)
+	if n.joinGen == gen {
+		n.setLoginStateLocked(state)
+	}
 }
 
 func (n *Node) setLoginStateLocked(state string) {
@@ -105,7 +107,7 @@ var loginPoll = time.Second
 // interactive join calls disarm: the attempt then waits for them instead of
 // timing out, which would mint a new URL under the QR code being scanned. A
 // join with an auth key keeps its timeout, so a refused key still fails.
-func (n *Node) watchJoin(ctx context.Context, read loginReader, interactive bool, disarm func()) {
+func (n *Node) watchJoin(ctx context.Context, gen uint64, read loginReader, interactive bool, disarm func()) {
 	t := time.NewTicker(loginPoll)
 	defer t.Stop()
 	for {
@@ -125,10 +127,10 @@ func (n *Node) watchJoin(ctx context.Context, read loginReader, interactive bool
 		// Waiting for an admin's approval means someone has signed in: the
 		// node belongs to their tailnet, so it is no longer claimable.
 		if pendingState(li) == stateNeedsApproval {
-			n.markJoined()
+			n.markJoined(gen)
 		}
 		if s := pendingState(li); s != "" && interactive {
-			n.setLoginState(s)
+			n.setLoginState(gen, s)
 			disarm()
 		}
 	}
@@ -185,7 +187,7 @@ func (n *Node) keepSignedIn(ctx context.Context, gen uint64, read loginReader, s
 				current(func() { n.setLoginStateLocked(s) })
 			}
 		case li.Backend == "NeedsMachineAuth":
-			n.markJoined()
+			n.markJoined(gen)
 			current(func() { n.setLoginStateLocked(stateNeedsApproval) })
 		}
 	}
@@ -213,11 +215,12 @@ type LoginReply struct {
 // checks the token without beginOp: an operator request interrupts the boot
 // attempt, and that attempt is the tailnet instance holding the URL.
 func (n *Node) Login(presented string) (LoginReply, error) {
-	if !n.checkToken(presented) {
+	n.mu.Lock()
+	if !n.checkTokenLocked(presented) {
+		n.mu.Unlock()
 		return LoginReply{}, errUnauthorized
 	}
-	n.mu.Lock()
-	read, state := n.loginRead, n.state
+	read, state, gen := n.loginRead, n.state, n.joinGen
 	n.mu.Unlock()
 	reply := LoginReply{State: state}
 	if read == nil {
@@ -226,6 +229,16 @@ func (n *Node) Login(presented string) (LoginReply, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	li, err := read(ctx)
+	n.mu.Lock()
+	authorized := n.checkTokenLocked(presented)
+	current, stateNow := n.joinGen == gen, n.state
+	n.mu.Unlock()
+	if !authorized {
+		return LoginReply{}, errUnauthorized
+	}
+	if !current {
+		return LoginReply{State: stateNow}, nil
+	}
 	if err != nil {
 		return reply, nil
 	}
@@ -261,6 +274,9 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 		end()
 		return "", "", err
 	}
+	n.mu.Lock()
+	gen := n.joinGen
+	n.mu.Unlock()
 	n.setState(stateStarting, "")
 	end()
 	n.Boot()
@@ -276,7 +292,7 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 		if r.AuthURL != "" {
 			// The backend has the URL before watchJoin's next tick says so;
 			// say it now, so the reply's status agrees with its URL.
-			n.setLoginState(stateNeedsLogin)
+			n.setLoginState(gen, stateNeedsLogin)
 			return token, r.AuthURL, nil
 		}
 		if r.State == stateRunning || r.State == stateNeedsApproval {
@@ -297,19 +313,27 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 // tailnet, or awaits an admin's approval there), ending the token-free
 // window a pending sign-in by URL leaves open. Called while a join holds
 // opMu (start, watchJoin) or from the running node's watcher.
-func (n *Node) markJoined() {
+func (n *Node) markJoined(gen uint64) {
+	// Close first-use admission before a pending configuration write can stall.
 	n.mu.Lock()
-	if !n.cfg.PendingSignIn {
+	if n.joinGen != gen || !n.cfg.PendingSignIn {
 		n.mu.Unlock()
 		return
 	}
-	// Closed in memory first, whatever the save does: a node on the tailnet
-	// is never claimable. A save that fails leaves the flag on disk, and
-	// load then checks the tailnet state instead (joinedBefore).
 	n.cfg.PendingSignIn = false
+	n.mu.Unlock()
+	n.configMu.Lock()
+	defer n.configMu.Unlock()
+	n.mu.Lock()
+	if n.joinGen != gen || !n.provisioned() {
+		n.mu.Unlock()
+		return
+	}
+	// A sharing update may have completed while this callback waited. Save
+	// its current fields, never the earlier pre-wait snapshot.
 	cfg := n.cfg
 	n.mu.Unlock()
-	if err := n.save(cfg); err != nil {
+	if err := n.saveConfigLocked(cfg); err != nil {
 		log.Printf("could not record the completed sign-in: %v", err)
 	}
 }
@@ -359,9 +383,11 @@ func (n *Node) replaceNode(cfg provisionConfig) error {
 		}
 		return fmt.Errorf("could not delete the previous tailnet state, so the key was not used: %w", err)
 	}
+	n.configMu.Lock()
+	defer n.configMu.Unlock()
 	// Then save, so a full or read-only state directory fails with the old
 	// settings and token intact.
-	if err := n.save(cfg); err != nil {
+	if err := n.saveConfigLocked(cfg); err != nil {
 		n.setState(stateError, "could not save settings")
 		return fmt.Errorf("could not save settings: %w", err)
 	}

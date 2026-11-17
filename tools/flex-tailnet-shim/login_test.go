@@ -87,7 +87,7 @@ func TestInteractiveJoinWaitsForTheSignIn(t *testing.T) {
 	var disarmed atomic.Bool
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go n.watchJoin(ctx, fb.read, true, func() { disarmed.Store(true) })
+	go n.watchJoin(ctx, n.joinGen, fb.read, true, func() { disarmed.Store(true) })
 
 	time.Sleep(30 * time.Millisecond)
 	if disarmed.Load() || n.currentState() != stateStarting {
@@ -110,7 +110,7 @@ func TestKeyedJoinKeepsItsTimeout(t *testing.T) {
 	fb.set(loginInfo{Backend: "NeedsLogin", AuthURL: testAuthURL})
 	var disarmed atomic.Bool
 	ctx, cancel := context.WithCancel(context.Background())
-	go n.watchJoin(ctx, fb.read, false, func() { disarmed.Store(true) })
+	go n.watchJoin(ctx, n.joinGen, fb.read, false, func() { disarmed.Store(true) })
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	if disarmed.Load() || n.currentState() != stateStarting {
@@ -151,7 +151,7 @@ func TestExpiredSignInAsksOnceAndRecovers(t *testing.T) {
 // A sign-out that happened meanwhile is never overwritten by the watcher.
 func TestLoginStateNeverRevivesASignedOutNode(t *testing.T) {
 	n := newTestNode(t, "")
-	n.setLoginState(stateNeedsLogin)
+	n.setLoginState(n.joinGen, stateNeedsLogin)
 	if s := n.currentState(); s != stateUnprovisioned {
 		t.Fatalf("state %q", s)
 	}
@@ -263,7 +263,7 @@ func TestANeverCompletedSignInCanBeStartedOverWithoutTheToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The node joins: the window closes, and survives a restart of the shim.
-	n.markJoined()
+	n.markJoined(n.joinGen)
 	if n.Status().Claimable {
 		t.Fatal("a joined node is still claimable")
 	}
@@ -359,7 +359,7 @@ func TestAJoinedNodeIsNeverClaimableEvenIfItsCompletionIsntSaved(t *testing.T) {
 	if err := os.Mkdir(blocker, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	n.markJoined()
+	n.markJoined(n.joinGen)
 	if n.Status().Claimable {
 		t.Fatal("a joined node is claimable after a failed save")
 	}
@@ -471,7 +471,7 @@ func TestANodeAwaitingApprovalIsNotClaimable(t *testing.T) {
 	fb.set(loginInfo{Backend: "NeedsMachineAuth"})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go n.watchJoin(ctx, fb.read, true, func() {})
+	go n.watchJoin(ctx, n.joinGen, fb.read, true, func() {})
 	waitFor(t, "the approval wait to close the window", func() bool { return !n.Status().Claimable })
 	if _, _, err := n.ProvisionInteractive("", "attacker", nil, nil, nil); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("token-less takeover while awaiting approval: %v", err)

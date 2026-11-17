@@ -81,7 +81,8 @@ type Node struct {
 	// A native identity that exists but cannot be loaded is not first use.
 	// Retain its file and refuse control/enrollment until explicit recovery.
 	nativeStateLoadFailed bool
-	nativeConfigMu        sync.Mutex // serializes the fixed native configuration temporary file
+	// Lock order is opMu, configMu, mu. Configuration file I/O never holds mu.
+	configMu sync.Mutex
 
 	StateDir string
 	// RunDir, when set, holds tsnet's logs and caches on volatile storage,
@@ -112,6 +113,7 @@ type Node struct {
 	// replaces start; applyRoutes replaces advertising through tsnet.
 	startFn     func(ctx context.Context, authKey string, timeout time.Duration) error
 	applyRoutes func([]netip.Prefix) error
+	configWrite func([]byte) error // nil uses the real configuration file (socket-free persistence tests)
 
 	mu         sync.Mutex
 	cfg        provisionConfig
@@ -133,8 +135,8 @@ type Node struct {
 	// moment a start attempt has a tsnet instance (login.go).
 	loginRead loginReader
 	keyExpiry *time.Time // the node key's expiry; nil when it doesn't expire
-	// joinGen counts stops: a sign-in watcher writes only while the join it
-	// was started for is still the node's (keepSignedIn).
+	// joinGen invalidates callbacks on stop or credential revocation. A
+	// watcher may update only the identity it observed.
 	joinGen uint64
 
 	telemetry linkTelemetry // per-peer path, RTT and throughput (telemetry.go)
@@ -264,22 +266,69 @@ func (n *Node) load() (err error) {
 }
 
 func (n *Node) save(cfg provisionConfig) error {
-	if n.RunDir != "" {
-		n.nativeConfigMu.Lock()
-		defer n.nativeConfigMu.Unlock()
-	}
+	n.configMu.Lock()
+	defer n.configMu.Unlock()
+	return n.saveConfigLocked(cfg)
+}
+
+// Caller holds configMu through file replacement and live publication.
+func (n *Node) saveConfigLocked(cfg provisionConfig) error {
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
+	if n.configWrite != nil {
+		return n.configWrite(b)
+	}
+	return n.writeConfigFile(b)
+}
+
+func (n *Node) writeConfigFile(b []byte) error {
 	if n.RunDir != "" {
 		return writeNativeStateFile(n.cfgPath(), b)
 	}
 	tmp := n.cfgPath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, n.cfgPath())
+}
+
+// Mutators assign operator fields only; they run on the saved snapshot and
+// again on publication so a sign-in completed during I/O stays owned.
+func (n *Node) changeConfig(change func(*provisionConfig)) error {
+	n.configMu.Lock()
+	defer n.configMu.Unlock()
+	n.mu.Lock()
+	cfg := n.cfg
+	n.mu.Unlock()
+	change(&cfg)
+	if err := n.saveConfigLocked(cfg); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	// Preserve a completed sign-in observed while the file write was pending.
+	change(&n.cfg)
+	n.mu.Unlock()
+	return nil
+}
+
+func (n *Node) forgetConfig(state string) error {
+	n.configMu.Lock()
+	defer n.configMu.Unlock()
+	if err := os.Remove(n.cfgPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	n.mu.Lock()
+	if n.pdProcess != nil {
+		n.pdProcess.Stop()
+	}
+	n.retirePDSessionLocked()
+	n.cfg = provisionConfig{}
+	n.state, n.lastError = state, ""
+	n.joinGen++
+	n.mu.Unlock()
+	return nil
 }
 
 func (n *Node) setState(state, lastErr string) {
@@ -417,6 +466,7 @@ func (n *Node) interruptBoot() (bool, error) {
 func (n *Node) start(parent context.Context, authKey string, timeout time.Duration) error {
 	n.mu.Lock()
 	cfg := n.cfg
+	gen := n.joinGen
 	n.mu.Unlock()
 	n.setState(stateStarting, "")
 
@@ -441,7 +491,7 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	ctx, cancel := context.WithCancel(parent)
 	deadline := time.AfterFunc(timeout, cancel)
 	wctx, wcancel := context.WithCancel(ctx)
-	go n.watchJoin(wctx, read, authKey == "", func() { deadline.Stop() })
+	go n.watchJoin(wctx, gen, read, authKey == "", func() { deadline.Stop() })
 	st, err := srv.Up(ctx)
 	wcancel()
 	deadline.Stop()
@@ -589,15 +639,12 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	n.authorize = admitOnly(n.check)
 	n.advertised = nil
 	n.mu.Unlock()
-	n.markJoined()
+	n.markJoined(gen)
 	n.RefreshRoutes()
 	go reportHealth(lc)
 	kctx, kcancel := context.WithCancel(context.Background())
 	n.mu.Lock()
 	n.closers = append(n.closers, func() error { kcancel(); return nil })
-	n.mu.Unlock()
-	n.mu.Lock()
-	gen := n.joinGen
 	n.mu.Unlock()
 	go n.keepSignedIn(kctx, gen, read, lc.StartLoginInteractive)
 	return nil
@@ -686,20 +733,15 @@ func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bo
 	if err != nil {
 		return err
 	}
-	n.mu.Lock()
-	cfg := n.cfg
-	n.mu.Unlock()
-	cfg.Routes = routes
-	if shareDiscovered != nil {
-		cfg.ShareDiscovered = shareDiscovered
-	}
-	if err := n.save(cfg); err != nil {
+	if err := n.changeConfig(func(cfg *provisionConfig) {
+		cfg.Routes = routes
+		if shareDiscovered != nil {
+			cfg.ShareDiscovered = shareDiscovered
+		}
+	}); err != nil {
 		end()
 		return err
 	}
-	n.mu.Lock()
-	n.cfg = cfg
-	n.mu.Unlock()
 	end()
 	n.RefreshRoutes()
 	return nil
@@ -895,11 +937,7 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 		if serr := n.stop(true); serr != nil {
 			log.Printf("provision: cleaning up after a failed join: %v", serr)
 		}
-		n.mu.Lock()
-		n.cfg = provisionConfig{}
-		n.state = stateError
-		n.mu.Unlock()
-		if rerr := os.Remove(n.cfgPath()); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		if rerr := n.forgetConfig(stateError); rerr != nil {
 			return "", errors.Join(err, fmt.Errorf("could not delete the saved settings, so they return after a restart: %w", rerr))
 		}
 		return "", err
@@ -919,17 +957,10 @@ func (n *Node) SetAllow(presented string, allow []string) error {
 		end()
 		return errAccessListRetired
 	}
-	n.mu.Lock()
-	cfg := n.cfg
-	cfg.Allow = allow
-	n.mu.Unlock()
-	if err := n.save(cfg); err != nil {
+	if err := n.changeConfig(func(cfg *provisionConfig) { cfg.Allow = allow }); err != nil {
 		end()
 		return err
 	}
-	n.mu.Lock()
-	n.cfg = cfg
-	n.mu.Unlock()
 	end()
 	n.revokeDisallowed()
 	return nil
@@ -987,19 +1018,11 @@ func (n *Node) SignOut(presented string) error {
 		return err
 	}
 	defer end()
-	if err := os.Remove(n.cfgPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// Deletion, authority revocation and the callback generation share the
+	// configuration transaction; an older joined-status save cannot recreate it.
+	if err := n.forgetConfig(stateUnprovisioned); err != nil {
 		return fmt.Errorf("could not delete the saved settings, so nothing was changed: %w", err)
 	}
-	// Revoke the token and its owned PD lifetime together, before network
-	// logout can block. A failed settings deletion above changes neither.
-	n.mu.Lock()
-	if n.pdProcess != nil {
-		n.pdProcess.Stop()
-	}
-	n.retirePDSessionLocked()
-	n.cfg = provisionConfig{}
-	n.state, n.lastError = stateUnprovisioned, ""
-	n.mu.Unlock()
 	err = n.stop(true)
 	if err != nil {
 		return fmt.Errorf("signed out, but %w", err)

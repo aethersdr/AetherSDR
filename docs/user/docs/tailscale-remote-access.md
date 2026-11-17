@@ -833,8 +833,12 @@ power-loss qualification remain required.
 
 Signing out or replacing the admin token also stops the shim's owned AetherPD
 session and cancels calibration. Signing in again does not restart correction
-or rearm calibration. A rejected sign-out or failed token update leaves the
-existing session intact.
+or rearm calibration. A rejected sign-out keeps the existing session. A credential
+change stops AetherPD once the new credential is saved; a later sign-in failure
+does not restart the old session. Delayed sign-in callbacks cannot recreate a signed-out
+credential or change a replacement identity. Sharing updates preserve the
+current sign-in ownership, and a login URL still being read when its credential
+is revoked is refused.
 
 When the receive slice survives a stopped, journaled session, the development
 interface's authenticated `POST /v1/aetherpd/receive/restore` can reapply the
