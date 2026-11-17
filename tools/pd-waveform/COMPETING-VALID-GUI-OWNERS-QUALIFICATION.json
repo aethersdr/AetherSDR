@@ -1,0 +1,662 @@
+{
+  "updated_utc": "2026-11-17T06:49:10.623802+00:00",
+  "status": "two_distinct_valid_GUI_owners_receive_only_Start_exclusion_and_cleanup_qualified_on_current_8600_release",
+  "production_ready": false,
+  "radio_runtime_source": "e7b3068a4eaa810ae67166cf678f9172d2f16a43",
+  "radio_release_blake2b_256": "c732d9afcb0da6b7d1317c7e523c5cbd78800ff8e9a4993097ecd41318bf2614",
+  "desktop_source": "47709a7be5d4b78901cfdde4ce4359693ad4a145",
+  "radio_boot_id": "a0bc3e5f-0a2f-433b-aa25-08d5cc0d6cf4",
+  "identities": [
+    {
+      "gui_client_id": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "gui_handle": 330944360,
+      "iq_channel": 4,
+      "feedback_pan": 1073741824
+    },
+    {
+      "gui_client_id": "C98D90C7-83A3-4DB1-9DF9-E078986504DA",
+      "gui_handle": 840293180,
+      "iq_channel": 3,
+      "feedback_pan": 1073741825
+    }
+  ],
+  "standalone_temporary_GUI": {
+    "Start_HTTP_status": 202,
+    "registered": true,
+    "capture": {
+      "metadata": {
+        "capture_id": "9be09617723850461126b8bbb9c19862",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 3,
+          "failed": false,
+          "gui_handle": 840293180,
+          "pan": 1073741825,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "1757732975937",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "1758074272434",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "62c2a545dd3b68fb0f7aa572f83c0870fff5bc04378ecd460962cc26058405fb",
+      "finite_nonzero": true
+    },
+    "Stop_observed": {
+      "available": false,
+      "state": "stopped"
+    }
+  },
+  "competing_Start": {
+    "requests": [
+      {
+        "body": {
+          "state": "start_requested"
+        },
+        "completed_ns": 1899375336,
+        "dispatched_ns": 29596,
+        "http_status": 202,
+        "identity": {
+          "feedback_pan": 1073741824,
+          "gui_client_id": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+          "gui_handle": 330944360,
+          "iq_channel": 4
+        },
+        "network_error": 0,
+        "response_bounded": true
+      },
+      {
+        "body": {
+          "error": "AetherPD session already owned or starting"
+        },
+        "completed_ns": 5138835,
+        "dispatched_ns": 65670,
+        "http_status": 409,
+        "identity": {
+          "feedback_pan": 1073741825,
+          "gui_client_id": "C98D90C7-83A3-4DB1-9DF9-E078986504DA",
+          "gui_handle": 840293180,
+          "iq_channel": 3
+        },
+        "network_error": 206,
+        "response_bounded": true
+      }
+    ],
+    "both_dispatched_before_either_completed": true,
+    "dispatch_separation_us": 36.074,
+    "winning_identity": {
+      "feedback_pan": 1073741824,
+      "gui_client_id": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "gui_handle": 330944360,
+      "iq_channel": 4
+    },
+    "exactly_one_DSP_observed": true,
+    "worker_counts": {
+      "pd-fixed-arp": 2,
+      "pd-iq-source": 1,
+      "pd-capture-bootstrap": 3,
+      "aether-pd": 1,
+      "pd-unkey-guard": 1,
+      "pd-lease-guard": 1
+    },
+    "active_graph_processes": [
+      {
+        "pid": 1308,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "cgroup": [
+          "0::/../../../system.slice/aetherpd-shim.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 1578,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 1587,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 1588,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "uid": "65534\t65534\t65534\t65534",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1589,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "uid": "65534\t65534\t65534\t65534",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1590,
+        "exe": "/run/aetherpd/bin/pd-iq-source",
+        "uid": "78666\t78666\t78666\t78666",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 1593,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1595,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1596,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1597,
+        "exe": "/run/aetherpd/bin/aether-pd",
+        "uid": "78666\t78666\t78666\t78666",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 1606,
+        "exe": "/run/aetherpd/bin/pd-unkey-guard",
+        "uid": "78666\t78666\t78666\t78666",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 1607,
+        "exe": "/run/aetherpd/bin/pd-lease-guard",
+        "uid": "78666\t78666\t78666\t78666",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 1610,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-1308-78666.service"
+        ],
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      }
+    ],
+    "winning_capture": {
+      "metadata": {
+        "capture_id": "c4b2fa136c731018afaaf3ff7757aafe",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 330944360,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "1783222401375",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "1783563292079",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "c145e83063145603ca245fefe4c322a314a1f6ae2d82eed0860ab65fef75efb8",
+      "finite_nonzero": true
+    },
+    "Stop_observed": {
+      "available": false,
+      "state": "stopped"
+    }
+  },
+  "final_inventory": {
+    "GUI_clients": {
+      "0x13B9CF68": {
+        "local_ptt": "1",
+        "client_id": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+        "program": "AetherSDR",
+        "station": "Codex-AetherPD"
+      }
+    },
+    "pan_ids": [
+      "0x40000000"
+    ],
+    "slice_ids": [
+      "0"
+    ],
+    "interlock": {
+      "acc_txreq_enable": "0",
+      "rca_txreq_enable": "0",
+      "acc_tx_enabled": "0",
+      "tx1_enabled": "0",
+      "tx2_enabled": "0",
+      "tx3_enabled": "0",
+      "tx_delay": "0",
+      "acc_tx_delay": "0",
+      "tx1_delay": "0",
+      "tx2_delay": "0",
+      "tx3_delay": "0",
+      "acc_txreq_polarity": "0",
+      "rca_txreq_polarity": "0",
+      "timeout": "20000",
+      "tune_tx_suppress": "0",
+      "tx_client_handle": "0x00000000",
+      "state": "READY",
+      "reason": "",
+      "source": "",
+      "tx_allowed": "1",
+      "amplifier": "",
+      "band_name": "23cm"
+    },
+    "main_receiver": {
+      "active": true,
+      "adaptiveActive": false,
+      "adaptiveFilterEnabled": false,
+      "adaptiveHetReject": false,
+      "adaptiveMaxHighCut": 4000,
+      "adaptiveMinLowCut": 0,
+      "adaptiveMinSnr": 1,
+      "adaptiveResponse": 1,
+      "adaptiveSplatter": 1,
+      "agcMode": "med",
+      "agcThreshold": 60,
+      "agcThresholdMode": "manual",
+      "anf": false,
+      "apf": false,
+      "apfLevel": 30,
+      "audioGain": 50,
+      "audioMute": false,
+      "audioPan": 50,
+      "automaticAgcThresholdActiveOrPending": false,
+      "automaticSquelch": false,
+      "automaticSquelchMarginDb": 10,
+      "chainMode": "USB",
+      "daxChannel": 0,
+      "diversity": false,
+      "diversityChild": false,
+      "diversityIndex": 1342177293,
+      "diversityParent": false,
+      "externalReceiveReplacement": false,
+      "filterHigh": 2800,
+      "filterLow": 100,
+      "filterPreset": "",
+      "filterPresetId": 0,
+      "flexAgcMode": "med",
+      "flexAgcOffLevel": 10,
+      "flexAgcThreshold": 60,
+      "flexAudioGain": 50,
+      "flexAudioMute": false,
+      "flexAudioPan": 50,
+      "flexSquelch": true,
+      "flexSquelchLevel": 20,
+      "fmRepeaterOffsetFreq": 0,
+      "fmToneMode": "off",
+      "fmToneValue": "67.0",
+      "frequency": 7.15,
+      "inCapture": true,
+      "letter": "A",
+      "linkedTo": -1,
+      "locked": false,
+      "manualSquelchLevel": 20,
+      "mode": "USB",
+      "nb": false,
+      "nbFill": 0,
+      "nbKind": 0,
+      "nbLevel": 50,
+      "nr": false,
+      "nrLevel": 50,
+      "panId": "0x40000000",
+      "receiveAgcMode": "med",
+      "receiveAgcOffLevel": 10,
+      "receiveAgcThreshold": 60,
+      "receiveSquelch": true,
+      "receiveSquelchLevel": 20,
+      "repeaterOffsetDir": "simplex",
+      "rfGain": 0,
+      "ritFreq": 0,
+      "ritOn": false,
+      "rxAntenna": "RX_A",
+      "sliceId": 0,
+      "squelch": true,
+      "squelchLevel": 20,
+      "stepHz": 100,
+      "txAntenna": "ANT1",
+      "txOffsetFreq": 0,
+      "txSlice": true,
+      "xitFreq": 0,
+      "xitOn": false
+    }
+  },
+  "native_cleanup": {
+    "idle_processes": [
+      {
+        "pid": 1308,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414"
+      },
+      {
+        "pid": 1578,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 1587,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414"
+      }
+    ],
+    "all_idle_UIDs": 78666,
+    "all_idle_capability_sets_zero": true,
+    "NoNewPrivs": 1,
+    "fixed_ARP_absent": true,
+    "accept_local": "0",
+    "failed_session_records": 0,
+    "temporary_installer_paths_absent": true,
+    "runtime_hashes": {
+      "flex-tailnet-shim": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "read_only_audit_job_and_scratch_removed": true
+  },
+  "harness_attempts_before_qualification": [
+    {
+      "case": "competing-valid-gui-owners",
+      "passed": false,
+      "error": "AssertionError: ('radio_command_refused', 'sub stream all', 'R5|500000A3|Invalid subscription object name')",
+      "AetherPD_Start_requests": 0,
+      "GUI_receiver_unchanged_at_exit": true,
+      "RF_commands": []
+    },
+    {
+      "case": "competing-valid-gui-owners-02",
+      "passed": false,
+      "error": "AssertionError: ('radio_command_refused', 'client program AetherPDQualification', 'R5|10000002|unknown client program AetherPDQualification')",
+      "AetherPD_Start_requests": 0,
+      "GUI_receiver_unchanged_at_exit": true,
+      "RF_commands": []
+    },
+    {
+      "case": "competing-valid-gui-owners-03",
+      "passed": false,
+      "error": "AssertionError: ('radio_command_refused', 'client program AetherSDR', 'R5|10000002|unknown client program AetherSDR')",
+      "AetherPD_Start_requests": 0,
+      "GUI_receiver_unchanged_at_exit": true,
+      "RF_commands": []
+    },
+    {
+      "case": "competing-valid-gui-owners-04",
+      "passed": false,
+      "error": "AssertionError: ('radio_command_refused', 'client station AetherPDReceiveOnly', 'R5|500000AA|')",
+      "AetherPD_Start_requests": 0,
+      "GUI_receiver_unchanged_at_exit": true,
+      "RF_commands": []
+    },
+    {
+      "case": "competing-valid-gui-owners-05",
+      "passed": false,
+      "error": "AssertionError: API observation deadline",
+      "AetherPD_Start_requests": 0,
+      "GUI_receiver_unchanged_at_exit": true,
+      "RF_commands": []
+    },
+    {
+      "case": "competing-valid-gui-owners-06",
+      "passed": false,
+      "error": "AssertionError: API observation deadline",
+      "AetherPD_Start_requests": 0,
+      "GUI_receiver_unchanged_at_exit": true,
+      "RF_commands": []
+    }
+  ],
+  "additional_preserved_negative_inventory_check": {
+    "file": "competing-valid-gui-owners-07/final-inventory.json",
+    "passed": false,
+    "reason": "Unbound inventory observed correct resources but lacked live interlock fields; explicit documented non-GUI bind in second inventory check provided authoritative READY/owner0 status."
+  },
+  "RF_commands": [],
+  "credential_mutations": [],
+  "helper_binary_sha256": "63b9eadd125a79e2a360b0eb70993ea4c67f15cae35fe0644a7c81d3cbce252e",
+  "limitations": [
+    "One Start race ordering: main GUI won, temporary GUI lost; temporary owner was separately admitted and captured full IQ before the race. Not a stress/endurance or alternating winner test.",
+    "Two distinct radio GUI identities and receive resources use the same existing operator bearer credential on the same host/LAN address; independent operator credentials or tenant isolation are not qualified.",
+    "HTTP calls were outstanding concurrently; host dispatch timestamps are not radio kernel scheduling measurements.",
+    "Installed service was used for Start/Stop and local DAX IQ. Broad diagnostics was used only for independent read-only process/cleanup audits, never session delivery.",
+    "Current FLEX8600 firmware4.3.16.42034 and current installed c732 release only. No actual6300, RF, credential revocation/rotation, full analyzer, final fault matrix or update/disk-state qualification is claimed.",
+    "Early harness failures and unbound interlock observation are preserved as failed receipts; no production code was changed to make this test pass."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners/run.py.gz": "bf41e9201e91ec3685531722571da104887dc02d8d5601b84430765c9044281b",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners/outcome.json.gz": "488e26e9e0dbf000b791bdb4f485a17850eb15eb592ddd2ecd4cc413b256b5a5",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners/events.json.gz": "9b47ec5e24e5228966e7cc63092f9a0752d02c8782761a7fdf5da9d16a45dc52",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners/temporary-GUI-API.json.gz": "e46c238f655f4694f79f110d11e0e16a77924a386efa6dadf13b33daac0ffe58",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-02/run.py.gz": "a0b61e9cc22e09799414d233e5a128bd9c647172f29c790c10f7a98fd1f1a4bc",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-02/outcome.json.gz": "e59266d8338637d1ec3505af853105af8bd08698a48ed89281d4ce3a0cb501f0",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-02/events.json.gz": "44a02a75fb32f21003fb18bf9ef8e9cae6e8879baa4b140c82cc4b89275cbe51",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-02/temporary-GUI-API.json.gz": "d66cccbe3b3b4ea44300e627198efc7075d54f044d7b8f39a134477eadc6f98a",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-03/run.py.gz": "c93e90beb63e7aca80f7b5769cddf1f4b7c13e524f9f591b254ef51ef936473d",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-03/outcome.json.gz": "20f1df02b3aa5b303efe8b8f77484bf10c2d3a4c81ea6f9f3e4f589a22ac5345",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-03/events.json.gz": "a4acd11956c9cd06579bf18d30f9d4a341ceb39a5867c267ec3344855d84eda6",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-03/temporary-GUI-API.json.gz": "36ce02ed4081d4c41878295931689bbf76b199e9a1177872fdb815d366699a97",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-04/run.py.gz": "dd25f1bc40413ad2af2243ea939ac2b3f12893dba116e6aa46b941a322cd199d",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-04/outcome.json.gz": "3e8308bcc40141e4df53d96dd9b9ad5ca09153e810ee45e371bdfed9997e8b81",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-04/events.json.gz": "c6849ab0ab573f323da55fe2b9be31b3a385378481226b0bbaeb8db125fab39c",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-04/temporary-GUI-API.json.gz": "c322a8e5e4edc96642e50248dd584c42a71bdc59f4084378216a7d6f5d401766",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-05/run.py.gz": "0077c452f560538fc432b0728e180e82f3c7623cfbf23582b06c03892f61402e",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-05/outcome.json.gz": "acc60467db1c63f3dca481c5eddf3eab0e52ab1b4c5bae2528e6eca6d8ea3d78",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-05/events.json.gz": "ddb6f34123cd797577b86b7d193d83e21c46da4be42fd003da983619c65b0495",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-05/temporary-GUI-API.json.gz": "bd93433addbab8a272513895ee6bd5eedaa4bff22b8180fe0dd09c077b61377c",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-06/run.py.gz": "5e20b32c3b23f42db4c977471d51c1e1c9cad8f9c87894534549f4b1dd4a3a58",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-06/outcome.json.gz": "392f971036661d949fe45770a4fd5d6d6f15c7f247ba9ce779b4ec09cb332b04",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-06/events.json.gz": "5cb983a503c8080546dfb83fe39181005de288efe2d6de1c08ea9971313ce179",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-06/temporary-GUI-API.json.gz": "835335f306b272ec9c26c05f38d38a26f757797e173115ecfc7f8e9cdf15c9a2",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/run.py.gz": "7031fce1e157b7ad86f0f0707390fb74a2c0d8c4ed8f3a2ce43bddd60e41ae9f",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/outcome.json.gz": "8bbf4b484110b006cd3df594e01f580440de1da28ce81fc37190bbf1be40fe56",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/events.json.gz": "74e53e9ab561dac940332a8985c6210b30d398e5bdaeb5503d8ec3ef53e95e24",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/temporary-GUI-API.json.gz": "ced6709eb70a56cacbcc62459020a3618909ea649c3000b3d66109a08c0b32c1",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/vault-owners.cpp.gz": "0f57649ab0e174569d0f5bb1226623beb2117b09213eef9a322ff287e3fac7fe",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/build-command.json.gz": "3008aa25370c39535d54d1df0f071971e270de561c42870f594591b1d9910cbe",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/active-graph-template.py.gz": "694a0e2906771b995338a6d4ac2c40a5dcac6b91aefa4d92b1050775b8d4cbb0",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/active-graph-job.py.gz": "6c0d9d734b39daaab19b0493dd33bf80a228ff5c46d461f698b412b898f35104",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/active-graph-result.json.gz": "8c17039acfb11724b9e5b5b4ae9306e06d41aa7e57ad947e5267831a5c06cbc3",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/final-audit-job.py.gz": "0b0d5237f4e9bbc5582bbff4f92027d6c7e1f25c91da5d880df8a95987267f35",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/final-audit-result.json.gz": "330b57c2ae273c55a5245792dc66dda14c149c5f1b70168fc7421b0e8ffe2cea",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/standalone-temporary-iq.f32le.gz": "bea7e663cefac8dfd2fa4e522699626557a9af6ea3f52716e5dfe10dc1a7c79f",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/race-winner-iq.f32le.gz": "63e279c1a6c60840b88bb2b7a81437ec320fc003ed2442ebb1239f192fc446a6",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/final-inventory.py.gz": "a7687c10e21ffa83348675a3ca37b62832439b9612913dce4ef80e285bdded2e",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/final-inventory.json.gz": "cc7a4645370500382d8043a4ee5a5ece7908a83979f48af37d063e7bebb72455",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/final-inventory-02.py.gz": "3cfcdeac15c383d71803ea09b1735667e7d7bd78bb83f80d6015d03564de23e4",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/final-inventory-02.json.gz": "a8be5e5d718c54183bc1f5facf829ebc782c7e993c3fae4e07e63823d7772724",
+    "tools/pd-waveform/evidence/20261116-competing-valid-GUI-owners/competing-valid-gui-owners-07/save-evidence.py.gz": "1c37d62fba81182f472305d3c12c0ab71749aae8eef8ff191fc1cc2dbffced1f"
+  }
+}
