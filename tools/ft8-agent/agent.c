@@ -68,7 +68,7 @@
 #include "ft8_lib/common/monitor.h"
 #include "ft8_lib/common/wave.h"
 
-#define AGENT_VERSION "0.1.0"
+#define AGENT_VERSION "0.1.1"
 #define STATUS_PORT 48997   /* 48994 radio health, 48995 WSPR, 48997 here */
 #define AUDIO_RATE 24000
 /* ft8_lib works at 12 kHz, which is the WSJT-X convention and what its own
@@ -1425,6 +1425,7 @@ typedef struct {
     int seq;
     /* outstanding request numbers we care about */
     int want_slice, want_stream, want_info;
+    int want_dax;         /* the "slice set <n> dax=<ch>" whose answer picks the channel */
     int slice;            /* our slice index, -1 none */
     unsigned stream;      /* our DAX stream id, 0 none */
     double stream_retry;  /* mono_s() to ask for a refused stream again, 0 none */
@@ -1458,6 +1459,40 @@ typedef struct {
 static int dax_fallback(int tried)
 {
     return tried > 1 ? tried - 1 : 0;   /* 0: nothing left to try */
+}
+
+static int api_send(api_t *a, const char *fmt, ...);
+
+/* Put the slice on a DAX channel and wait for the radio's answer; the stream
+ * is created only once it says yes (api_line, want_dax).
+ *
+ * ⛔ This answer is the one that matters. A FLEX-6300 REFUSES
+ * "slice set <n> dax=4" with 50000016 -- and then ACCEPTS
+ * "stream create type=dax_rx dax_channel=4", handing back a stream that
+ * carries nothing because no slice feeds it. The agent used to send both at
+ * once and read only the second reply, so on a 6300 it sat bound to channel 4
+ * with "audio": true and vita_packets 0 for days. The refusal it needed was
+ * in the reply it threw away. */
+static void dax_ask(api_t *a, int channel)
+{
+    a->dax_try = channel;
+    a->want_stream = 0;
+    a->want_dax = api_send(a, "slice set %d dax=%d", a->slice, channel);
+}
+
+/* The radio refused channel dax_try, at either step: try the next one down,
+ * or, with none left, wait and start again from the configured channel. */
+static void dax_refused(api_t *a, const char *what, unsigned long code, const char *msg)
+{
+    const int next = dax_fallback(a->dax_try);
+    if (next) {
+        logf_("DAX channel %d refused at %s (%08lx); trying %d", a->dax_try, what, code, next);
+        dax_ask(a, next);
+        return;
+    }
+    logf_("DAX audio refused on every channel: %08lx %s", code, msg);
+    a->dax_try = 0;        /* start again from the config */
+    a->stream_retry = mono_s() + 10;
 }
 
 static int api_send(api_t *a, const char *fmt, ...)
@@ -1550,34 +1585,23 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             g_api_fd = a->fd;        /* so an exit can release these */
             g_api_slice = a->slice;
             api_send(a, "slice set %d tx=0", a->slice);
-            /* First attempt uses the configured channel; dax_try carries a
-             * fallback across the retry. */
-            if (!a->dax_try) a->dax_try = cfg->dax_channel;
-            api_send(a, "slice set %d dax=%d", a->slice, a->dax_try);
-            a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", a->dax_try);
+            /* A new slice always starts from the CONFIGURED channel. It used
+             * to reuse whatever dax_try was left from the last slice, so a
+             * channel saved from the Configure window was ignored: the slice
+             * was remade and asked for the old channel again. */
+            dax_ask(a, cfg->dax_channel);
             if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
             pthread_mutex_lock(&G.mu); G.slice_ok = 1; pthread_mutex_unlock(&G.mu);
             logf_("slice %d on %s", a->slice, G.band);
+        } else if (seq == a->want_dax) {
+            a->want_dax = 0;
+            /* Step down to a channel this radio has, rather than asking for
+             * the refused one again every 10 s. */
+            if (code) { dax_refused(a, "the slice", code, msg); return; }
+            a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", a->dax_try);
         } else if (seq == a->want_stream) {
             a->want_stream = 0;
-            if (code) {
-                /* Step down to a channel this radio has, rather than
-                 * asking for the refused one again every 10 s. */
-                const int next = dax_fallback(a->dax_try);
-                if (next) {
-                    logf_("DAX channel %d refused (%08lx); trying %d",
-                          a->dax_try, code, next);
-                    a->dax_try = next;
-                    api_send(a, "slice set %d dax=%d", a->slice, a->dax_try);
-                    a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d",
-                                              a->dax_try);
-                    return;
-                }
-                logf_("DAX audio refused on every channel: %08lx %s", code, msg);
-                a->dax_try = 0;        /* start again from the config */
-                a->stream_retry = mono_s() + 10;
-                return;
-            }
+            if (code) { dax_refused(a, "the stream", code, msg); return; }
             a->stream_retry = 0;
             a->stream = (unsigned)strtoul(msg, NULL, 16);
             pthread_mutex_lock(&G.mu);
@@ -1630,6 +1654,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             a->slice = -1;
             a->stream = 0;
             a->stream_retry = 0;
+            a->want_dax = 0;       /* an answer about the old slice picks nothing */
             a->lost = 1;
             pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
             logf_("our slice was removed; making it again");
@@ -2126,34 +2151,97 @@ static int selftest_radio_lines(void)
     strcpy(l, "S1|slice 1 in_use=0");
     api_line(&b, l, &c);
     fail |= b.slice != -1 || b.rf_hz[1] != 0;
-    /* A refused DAX channel now steps DOWN instead of re-asking for the same
-     * one: 50000016 is what a FLEX-6300 returns for channel 3 or 4, and the
-     * old behaviour (retry the same channel every 10 s) left a fresh install
-     * deaf forever. So the agent must issue a NEW stream create and NOT arm
-     * the retry timer while it still has channels to try. */
-    a.dax_try = 4;
-    a.want_stream = 9;
-    strcpy(l, "R9|50000016|");
-    api_line(&a, l, &c);
-    fail |= a.dax_try != 3 || a.want_stream == 0 || a.stream_retry != 0;
-    /* ...and when channel 1 is refused there is nothing left, so it falls back
-     * to the retry timer rather than looping. */
-    a.dax_try = 1;
-    a.want_stream = 11;
-    a.stream_retry = 0;
-    strcpy(l, "R11|50000016|");
-    api_line(&a, l, &c);
-    fail |= a.want_stream != 0 || a.stream_retry <= 0 || a.dax_try != 0;
-    a.want_stream = 10;
-    strcpy(l, "R10|0|04000008");
-    api_line(&a, l, &c);
-    fail |= a.stream != 0x04000008 || a.stream_retry != 0;
-    /* FlexLib's key for the antenna (Radio.cs RequestSlice). */
+    /* The DAX channel is picked by the radio's answer to
+     * "slice set <n> dax=<ch>", and the stream is created only after a yes.
+     * A FLEX-6300 refuses that for channels 3 and 4 (50000016) yet ACCEPTS a
+     * stream create on them, so an agent that read only the stream's reply
+     * sat on channel 4 with no audio. Every step below reads what was
+     * actually written to the radio. */
     char sent[256];
-    while (read(p[0], sent, sizeof sent) == (ssize_t)sizeof sent) {}
+    fcntl(p[0], F_SETFL, O_NONBLOCK);
+#define DRAIN() do { while (read(p[0], sent, sizeof sent) > 0) {} sent[0] = 0; } while (0)
+#define SENT() do { ssize_t k_ = read(p[0], sent, sizeof sent - 1); sent[k_ > 0 ? k_ : 0] = 0; } while (0)
+    /* A new slice asks for the CONFIGURED channel -- not the one left over
+     * from the last slice, which is how a saved channel used to be ignored --
+     * and does not create the stream yet. */
+    a.want_info = 0;           /* request numbers below must not match the
+                                * replies this test faked above (R7, R8...) */
+    a.seq = 1000;
+    a.slice = -1;
+    a.stream = 0;
+    a.dax_try = 4;             /* left over from an earlier slice */
+    c.dax_channel = 1;         /* what the operator saved since */
+    a.want_slice = 20;
+    DRAIN();
+    strcpy(l, "R20|0|0");
+    api_line(&a, l, &c);
+    SENT();
+    if (a.dax_try != 1 || !a.want_dax || a.want_stream || !strstr(sent, "slice set 0 dax=1")
+        || strstr(sent, "stream create")) {
+        printf("selftest FAIL: a new slice did not ask for the saved DAX channel first: %s\n", sent);
+        fail = 1;
+    }
+    /* A 6300 with the default 4: refused at the slice twice, then 2 is
+     * accepted, and only then is a stream asked for -- on 2. */
+    c.dax_channel = 4;
+    dax_ask(&a, c.dax_channel);
+    for (int ch = 4; ch > 2; ch--) {
+        DRAIN();
+        snprintf(l, sizeof l, "R%d|50000016|", a.want_dax);
+        api_line(&a, l, &c);
+        SENT();
+        char want[32];
+        snprintf(want, sizeof want, "slice set 0 dax=%d", ch - 1);
+        if (a.dax_try != ch - 1 || !a.want_dax || a.want_stream || !strstr(sent, want)
+            || strstr(sent, "stream create")) {
+            printf("selftest FAIL: channel %d refused at the slice did not step to %d: %s\n", ch, ch - 1, sent);
+            fail = 1;
+        }
+    }
+    DRAIN();
+    snprintf(l, sizeof l, "R%d|0|", a.want_dax);
+    api_line(&a, l, &c);
+    SENT();
+    if (a.want_dax || !a.want_stream || !strstr(sent, "stream create type=dax_rx dax_channel=2")) {
+        printf("selftest FAIL: an accepted channel 2 did not create its stream on 2: %s\n", sent);
+        fail = 1;
+    }
+    snprintf(l, sizeof l, "R%d|0|04000008", a.want_stream);
+    api_line(&a, l, &c);
+    if (a.stream != 0x04000008 || a.stream_retry != 0 || G.dax_bound != 2) {
+        printf("selftest FAIL: the stream on channel 2 was not recorded as bound to 2 (%d)\n", G.dax_bound);
+        fail = 1;
+    }
+    /* A stream the radio refuses steps down the same way, through the slice. */
+    a.stream = 0;
+    dax_ask(&a, 2);
+    snprintf(l, sizeof l, "R%d|0|", a.want_dax);
+    api_line(&a, l, &c);
+    DRAIN();
+    snprintf(l, sizeof l, "R%d|50000016|", a.want_stream);
+    api_line(&a, l, &c);
+    SENT();
+    if (a.dax_try != 1 || !a.want_dax || a.want_stream || !strstr(sent, "slice set 0 dax=1")) {
+        printf("selftest FAIL: a refused stream on 2 did not step to channel 1: %s\n", sent);
+        fail = 1;
+    }
+    /* ...and when channel 1 is refused there is nothing left, so it arms the
+     * retry timer and starts again from the config rather than looping. */
+    a.stream_retry = 0;
+    snprintf(l, sizeof l, "R%d|50000016|", a.want_dax);
+    api_line(&a, l, &c);
+    if (a.dax_try != 0 || a.want_dax || a.want_stream || a.stream_retry <= 0) {
+        printf("selftest FAIL: a refusal of channel 1 did not fall back to the retry timer\n");
+        fail = 1;
+    }
+    a.stream_retry = 0;
+    G.dax_bound = 0;
+    /* FlexLib's key for the antenna (Radio.cs RequestSlice). */
+    DRAIN();
+#undef DRAIN
     make_slice(&a, 14095600, "ANT2", 4);
-    ssize_t k = read(p[0], sent, sizeof sent - 1);
-    sent[k > 0 ? k : 0] = 0;
+    SENT();
+#undef SENT
     fail |= !strstr(sent, " rxant=ANT2 ");
     close(p[0]);
     close(p[1]);
@@ -2724,6 +2812,8 @@ int main(int argc, char *argv[])
             a.slice = -1;
             a.stream = 0;
             a.stream_retry = 0;
+            a.want_dax = 0;
+            a.dax_try = 0;         /* the new slice starts from the saved channel */
             tuned_for = 0;
             pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
         }
@@ -2777,10 +2867,10 @@ int main(int argc, char *argv[])
             }
         }
 
-        if (a.fd >= 0 && a.slice >= 0 && !a.stream && !a.want_stream && a.stream_retry
-            && mono_s() >= a.stream_retry) {
+        if (a.fd >= 0 && a.slice >= 0 && !a.stream && !a.want_stream && !a.want_dax
+            && a.stream_retry && mono_s() >= a.stream_retry) {
             a.stream_retry = 0;
-            a.want_stream = api_send(&a, "stream create type=dax_rx dax_channel=%d", cfg.dax_channel);
+            dax_ask(&a, cfg.dax_channel);   /* the whole walk again, from the config */
         }
 
         /* Start a capture at the top of an even minute, if the slice is

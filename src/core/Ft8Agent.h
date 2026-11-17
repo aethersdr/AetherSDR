@@ -121,9 +121,9 @@ struct Ft8Package {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.0";
+    static constexpr const char* kVersion = "0.1.1";
     static constexpr Pin kLegacy{":/waveforms/AetherFT8.ssdr_waveform", "AetherFT8.ssdr_waveform",
-                                 "6fb17ea2730563c37067e1b732229026430728f309b3e6080335f5f704c653f0", 105182};
+                                 "de5fef34b0cc5a22e1083dd8e852d6541148ee1656501842142860fec3235594", 105905};
 };
 
 // GET and POST /v1/config. A strict subset of WsprConfig: no hopping, no
