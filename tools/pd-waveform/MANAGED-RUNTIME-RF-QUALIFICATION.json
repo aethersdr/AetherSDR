@@ -1,0 +1,746 @@
+{
+  "updated_utc": "2026-11-17T11:00:03.506661+00:00",
+  "status": "current_installed_release_finite5W_and10W_tone_improvement_verified_SWR_stops_and_full_qualification_open",
+  "production_ready": false,
+  "source_checkpoint": "ff6aed8936da950d41c4303522646a99e4642042",
+  "runtime_source": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+  "installed_release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+  "desktop_source": "d1fc4b0a1728474d2b9d35cb483ad0eef39c8ac7",
+  "desktop_pid": 3647749,
+  "desktop_socket": "/tmp/aetherpd-managed-remote-access",
+  "desktop_sha256": "6e6f83a9b2978d07f8edfc7c5999be97af517e2f2b1a25f5417f30ae10b5407f",
+  "radio": {
+    "serial": "2125-1213-8600-8895",
+    "firmware": "4.3.16.42034",
+    "frequency_MHz": 7.15,
+    "TX_antenna": "ANT1",
+    "feedback_RX": "RX_A",
+    "preamp_rfGain": 0,
+    "FDX": false,
+    "IQ_channel": 4,
+    "IQ_rate_Hz": 48000,
+    "ordinary_GUI": true,
+    "no_AetherTX": true,
+    "fixed_installed_session_start_used": true,
+    "broad_diagnostic_bridge_used_only_for_read_only_final_audit": true
+  },
+  "bench_safety": {
+    "operator_authorized_max_W": 15,
+    "configured_radio_max_W": 10,
+    "debugging_nominal_W": 5,
+    "higher_nominal_W": 10,
+    "desktop_authorization_s": 10,
+    "native_cutoff_s": 9,
+    "source_limit_s": 8,
+    "minimum_time_between_explicit_keys_s": 31,
+    "LP_reported_power_stop_W_by_nominal": {
+      "5": 6,
+      "10": 12
+    },
+    "LP_SWR_stop": 1.5,
+    "LP_max_age_ms": 500,
+    "product_SWR_stop": 2,
+    "production_guard_relaxed": false,
+    "automatic_key_retry_or_source_rearm": false,
+    "processing_profiles_restored": false,
+    "LP_poll_command": "P",
+    "LP_USB_serial": "ABBDMO0I",
+    "LP_protocol": "1152008N1 USB passthrough; unchanged",
+    "LP_voltage_current": "Not provided by the documented fields; not fabricated."
+  },
+  "attempts": {
+    "managed-owner-baseline-rf-01": {
+      "whole_harness_passed": false,
+      "one_positive_GUI_key": true,
+      "nominal_setting_W": 5,
+      "configured_max_W": 10,
+      "FDX": false,
+      "LP_peak_held_max_W": 0.49,
+      "LP_max_direct_SWR_with_reported_RF": 1.0,
+      "LP_idle_after_W": 0.0,
+      "native_diagnostics": {
+        "alignment": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=2381157643629 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=176384 generated=15616 iq_frames=5164 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1481506 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5b8b1ca6 slice=0 correction=0 native_apd=0 iq_valid_ns=2381156329862",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "keyed_status_observations": 3,
+      "observed_native_faults_all_zero": true,
+      "observed_TX_input_limited_samples": 0,
+      "first_host_observed_correcting_after_intent_s": null,
+      "every_observed_keyed_status_after_first_correction_correcting": null,
+      "session_stopped": true,
+      "radio_idle_after": true,
+      "export_valid": false,
+      "export_error": "SWR above the configured limit",
+      "original_harness_error": "AssertionError: SWR above the configured limit",
+      "native_SWR_above2_rows": [
+        {
+          "host_receive_ns": 107403874905866,
+          "raw": {
+            "8": 3474,
+            "9": 993,
+            "10": 285
+          },
+          "radio_SWR": 2.2265625,
+          "nearest_LP_peak_held_W": 0.49,
+          "nearest_LP_SWR": 1.0,
+          "LP_offset_ms": -8.187048,
+          "elapsed_from_operator_intent_s": 0.828732375,
+          "forward_W": 0.5176813269217382,
+          "reflected_W": 0.005967346413107707,
+          "directional_ratio_derived_SWR": 1.240555369805177
+        }
+      ]
+    },
+    "managed-owner-corrected-rf-01": {
+      "whole_harness_passed": true,
+      "one_positive_GUI_key": true,
+      "nominal_setting_W": 5,
+      "configured_max_W": 10,
+      "FDX": false,
+      "LP_peak_held_max_W": 3.66,
+      "LP_max_direct_SWR_with_reported_RF": 1.05,
+      "LP_idle_after_W": 0.0,
+      "native_diagnostics": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=2453857290136 submitted_ns=2455606618095 started_ns=2455606645317 completed_ns=2455864664985 consumed_ns=2455881370385 delay=1902.470 envelope=0.833466 phase=0.999140 offset_hz=-0.029861 noise_left=47360 samples_left=143360 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=2461301020180 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=13312 generated=178688 iq_frames=6668 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1440728 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5b8b1ca6 slice=0 correction=1 native_apd=0 iq_valid_ns=2461297348358",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "keyed_status_observations": 36,
+      "observed_native_faults_all_zero": true,
+      "observed_TX_input_limited_samples": 0,
+      "first_host_observed_correcting_after_intent_s": 6.363633154,
+      "every_observed_keyed_status_after_first_correction_correcting": true,
+      "session_stopped": true,
+      "radio_idle_after": true,
+      "export_valid": true,
+      "export_error": "",
+      "original_harness_error": null,
+      "native_SWR_above2_rows": [],
+      "correction_active": true,
+      "frames": 4,
+      "raw_IQ_bytes": 524288,
+      "spectrum_max_error_dB": 3.076048017192079e-06,
+      "fundamental_PEP_raw_IQ_dB": 91.76477134409497,
+      "IMD3_dBc_per_tone": [
+        -44.51852005624748,
+        -53.72235353755671
+      ],
+      "IMD5_dBc_per_tone": [
+        -56.056048686319684,
+        -64.30199373566771
+      ],
+      "ACPR_dBc_per_tone": [
+        -55.38940809335806,
+        -59.067888316366236
+      ],
+      "raw_envelope_peak": 38791.5801173399
+    },
+    "managed-owner-baseline-rf-02": {
+      "whole_harness_passed": true,
+      "one_positive_GUI_key": true,
+      "nominal_setting_W": 5,
+      "configured_max_W": 10,
+      "FDX": false,
+      "LP_peak_held_max_W": 3.55,
+      "LP_max_direct_SWR_with_reported_RF": 1.06,
+      "LP_idle_after_W": 0.0,
+      "native_diagnostics": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=12 key_ns=2523173554257 submitted_ns=2524923626603 started_ns=2524923652917 completed_ns=2525183876224 consumed_ns=2525198497585 delay=1911.470 envelope=0.833435 phase=0.999142 offset_hz=-0.029801 noise_left=47360 samples_left=143360 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=2529073992336 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=50432 generated=141568 iq_frames=6378 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1045733 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5b8b1ca6 slice=0 correction=0 native_apd=0 iq_valid_ns=2529059251106",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "keyed_status_observations": 28,
+      "observed_native_faults_all_zero": true,
+      "observed_TX_input_limited_samples": 0,
+      "first_host_observed_correcting_after_intent_s": null,
+      "every_observed_keyed_status_after_first_correction_correcting": null,
+      "session_stopped": true,
+      "radio_idle_after": true,
+      "export_valid": true,
+      "export_error": "",
+      "original_harness_error": null,
+      "native_SWR_above2_rows": [],
+      "correction_active": false,
+      "frames": 4,
+      "raw_IQ_bytes": 524288,
+      "spectrum_max_error_dB": 3.430102424317738e-06,
+      "fundamental_PEP_raw_IQ_dB": 91.43718519224453,
+      "IMD3_dBc_per_tone": [
+        -27.964328722393837,
+        -27.430718253270854
+      ],
+      "IMD5_dBc_per_tone": [
+        -41.53604999588303,
+        -41.78011879441804
+      ],
+      "ACPR_dBc_per_tone": [
+        -41.217812273836316,
+        -41.45217682994516
+      ],
+      "raw_envelope_peak": 38758.62536262089
+    },
+    "managed-owner-corrected-rf-02": {
+      "whole_harness_passed": true,
+      "one_positive_GUI_key": true,
+      "nominal_setting_W": 5,
+      "configured_max_W": 10,
+      "FDX": false,
+      "LP_peak_held_max_W": 3.66,
+      "LP_max_direct_SWR_with_reported_RF": 1.06,
+      "LP_idle_after_W": 0.0,
+      "native_diagnostics": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=2620895271819 submitted_ns=2622644698327 started_ns=2622644718512 completed_ns=2622872158198 consumed_ns=2622878571349 delay=1956.970 envelope=0.997369 phase=0.999147 offset_hz=-0.024416 noise_left=48384 samples_left=144384 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=2628312107535 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=14080 generated=177920 iq_frames=10221 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=371182 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5b8b1ca6 slice=0 correction=1 native_apd=0 iq_valid_ns=2628308346603",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "keyed_status_observations": 37,
+      "observed_native_faults_all_zero": true,
+      "observed_TX_input_limited_samples": 0,
+      "first_host_observed_correcting_after_intent_s": 6.27377331,
+      "every_observed_keyed_status_after_first_correction_correcting": true,
+      "session_stopped": true,
+      "radio_idle_after": true,
+      "export_valid": true,
+      "export_error": "",
+      "original_harness_error": null,
+      "native_SWR_above2_rows": [],
+      "correction_active": true,
+      "frames": 4,
+      "raw_IQ_bytes": 524288,
+      "spectrum_max_error_dB": 3.5170255046068633e-06,
+      "fundamental_PEP_raw_IQ_dB": 91.77833412890386,
+      "IMD3_dBc_per_tone": [
+        -44.34439495793823,
+        -54.287916951360174
+      ],
+      "IMD5_dBc_per_tone": [
+        -55.96610056385171,
+        -64.79820745400791
+      ],
+      "ACPR_dBc_per_tone": [
+        -55.351538105233416,
+        -59.26806822705887
+      ],
+      "raw_envelope_peak": 38821.38132524395
+    },
+    "managed-owner-baseline-rf-03": {
+      "whole_harness_passed": false,
+      "one_positive_GUI_key": true,
+      "nominal_setting_W": 5,
+      "configured_max_W": 10,
+      "FDX": false,
+      "LP_peak_held_max_W": 0.64,
+      "LP_max_direct_SWR_with_reported_RF": 1.0,
+      "LP_idle_after_W": 0.0,
+      "native_diagnostics": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=12 key_ns=2680161478500 submitted_ns=2681914006505 started_ns=2681914031783 completed_ns=2682160369388 consumed_ns=2682166518115 delay=1836.470 envelope=0.833432 phase=0.999146 offset_hz=-0.029690 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=2684138479447 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=96512 generated=95488 iq_frames=4482 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=463755 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5b8b1ca6 slice=0 correction=0 native_apd=0 iq_valid_ns=2684134455628",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "keyed_status_observations": 20,
+      "observed_native_faults_all_zero": true,
+      "observed_TX_input_limited_samples": 0,
+      "first_host_observed_correcting_after_intent_s": null,
+      "every_observed_keyed_status_after_first_correction_correcting": null,
+      "session_stopped": true,
+      "radio_idle_after": true,
+      "export_valid": false,
+      "export_error": "SWR above the configured limit",
+      "original_harness_error": "AssertionError: SWR above the configured limit",
+      "native_SWR_above2_rows": [
+        {
+          "host_receive_ns": 107706849900135,
+          "raw": {
+            "8": 3613,
+            "9": 1061,
+            "10": 288
+          },
+          "radio_SWR": 2.25,
+          "nearest_LP_peak_held_W": 0.64,
+          "nearest_LP_SWR": 1.0,
+          "LP_offset_ms": 44.593617,
+          "elapsed_from_operator_intent_s": 4.17333837,
+          "forward_W": 0.664746791773573,
+          "reflected_W": 0.00674382434833356,
+          "directional_ratio_derived_SWR": 1.2240067476410028
+        }
+      ]
+    },
+    "managed-owner-10W-baseline-rf-01": {
+      "whole_harness_passed": true,
+      "one_positive_GUI_key": true,
+      "nominal_setting_W": 10,
+      "configured_max_W": 10,
+      "FDX": false,
+      "LP_peak_held_max_W": 7.49,
+      "LP_max_direct_SWR_with_reported_RF": 1.14,
+      "LP_idle_after_W": 0.0,
+      "native_diagnostics": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=13 key_ns=2763658158032 submitted_ns=2765406788310 started_ns=2765406877457 completed_ns=2765686223423 consumed_ns=2765703308024 delay=1846.970 envelope=0.996497 phase=0.998598 offset_hz=-0.024147 noise_left=46848 samples_left=142848 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=2769559035293 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=50304 generated=141696 iq_frames=8435 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=761216 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5b8b1ca6 slice=0 correction=0 native_apd=0 iq_valid_ns=2769556316093",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "keyed_status_observations": 30,
+      "observed_native_faults_all_zero": true,
+      "observed_TX_input_limited_samples": 0,
+      "first_host_observed_correcting_after_intent_s": null,
+      "every_observed_keyed_status_after_first_correction_correcting": null,
+      "session_stopped": true,
+      "radio_idle_after": true,
+      "export_valid": true,
+      "export_error": "",
+      "original_harness_error": null,
+      "native_SWR_above2_rows": [],
+      "correction_active": false,
+      "frames": 4,
+      "raw_IQ_bytes": 524288,
+      "spectrum_max_error_dB": 2.846299935299612e-06,
+      "fundamental_PEP_raw_IQ_dB": 94.5516916910598,
+      "IMD3_dBc_per_tone": [
+        -27.359268639244696,
+        -26.822182770179175
+      ],
+      "IMD5_dBc_per_tone": [
+        -39.30114378749574,
+        -39.50094311348497
+      ],
+      "ACPR_dBc_per_tone": [
+        -38.81834836353153,
+        -39.011034627017764
+      ],
+      "raw_envelope_peak": 55503.77861010906
+    },
+    "managed-owner-10W-corrected-rf-01": {
+      "whole_harness_passed": true,
+      "one_positive_GUI_key": true,
+      "nominal_setting_W": 10,
+      "configured_max_W": 10,
+      "FDX": false,
+      "LP_peak_held_max_W": 7.56,
+      "LP_max_direct_SWR_with_reported_RF": 1.12,
+      "LP_idle_after_W": 0.0,
+      "native_diagnostics": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=2835046408989 submitted_ns=2836798763490 started_ns=2836798781508 completed_ns=2837035619527 consumed_ns=2837051306324 delay=1840.470 envelope=0.835303 phase=0.998602 offset_hz=-0.029709 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=2842544356407 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=12032 generated=179968 iq_frames=10200 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=96684 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5b8b1ca6 slice=0 correction=1 native_apd=0 iq_valid_ns=2842539254689",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "keyed_status_observations": 37,
+      "observed_native_faults_all_zero": true,
+      "observed_TX_input_limited_samples": 0,
+      "first_host_observed_correcting_after_intent_s": 6.503884,
+      "every_observed_keyed_status_after_first_correction_correcting": true,
+      "session_stopped": true,
+      "radio_idle_after": true,
+      "export_valid": true,
+      "export_error": "",
+      "original_harness_error": null,
+      "native_SWR_above2_rows": [],
+      "correction_active": true,
+      "frames": 4,
+      "raw_IQ_bytes": 524288,
+      "spectrum_max_error_dB": 3.6560543748009877e-06,
+      "fundamental_PEP_raw_IQ_dB": 94.89098786724107,
+      "IMD3_dBc_per_tone": [
+        -43.800091618725304,
+        -52.8954527297109
+      ],
+      "IMD5_dBc_per_tone": [
+        -54.29161499714913,
+        -60.3704904266756
+      ],
+      "ACPR_dBc_per_tone": [
+        -53.74033883820205,
+        -57.50312826108863
+      ],
+      "raw_envelope_peak": 55523.53418146219
+    }
+  },
+  "comparisons": [
+    {
+      "reference": "managed-owner-baseline-rf-02",
+      "corrected": "managed-owner-corrected-rf-01",
+      "nominal_W": 5,
+      "IMD3_improvement_dB": [
+        16.554191333853645,
+        26.291635284285853
+      ],
+      "fundamental_PEP_difference_dB": 0.32758615185043993,
+      "finite_comparison_gate_passed": true,
+      "policy_saved_before_corrected_key": false,
+      "independent_pair": true,
+      "limits": "Fresh separate DSP sessions; finite tones only. The two5W corrected runs share one completed bypass reference; failed baseline03 is not a second independent pair."
+    },
+    {
+      "reference": "managed-owner-baseline-rf-02",
+      "corrected": "managed-owner-corrected-rf-02",
+      "nominal_W": 5,
+      "IMD3_improvement_dB": [
+        16.38006623554439,
+        26.85719869808932
+      ],
+      "fundamental_PEP_difference_dB": 0.3411489366593372,
+      "finite_comparison_gate_passed": true,
+      "policy_saved_before_corrected_key": true,
+      "independent_pair": false,
+      "limits": "Fresh separate DSP sessions; finite tones only. The two5W corrected runs share one completed bypass reference; failed baseline03 is not a second independent pair."
+    },
+    {
+      "reference": "managed-owner-10W-baseline-rf-01",
+      "corrected": "managed-owner-10W-corrected-rf-01",
+      "nominal_W": 10,
+      "IMD3_improvement_dB": [
+        16.440822979480608,
+        26.07326995953172
+      ],
+      "fundamental_PEP_difference_dB": 0.3392961761812643,
+      "finite_comparison_gate_passed": true,
+      "policy_saved_before_corrected_key": true,
+      "independent_pair": true,
+      "limits": "Fresh separate DSP sessions; finite tones only. The two5W corrected runs share one completed bypass reference; failed baseline03 is not a second independent pair."
+    }
+  ],
+  "summary": {
+    "actual_keys": 7,
+    "completed_spectra": 5,
+    "SWR_aborted_keys": 2,
+    "corrected5W_cold_starts_completed": 2,
+    "completed5W_bypass_references": 1,
+    "completed10W_OFF_ON_pairs": 1,
+    "all_stopped_and_unkeyed": true,
+    "natural128sample_resets_observed": 0,
+    "cold_all_bypass_reproduced": false
+  },
+  "post_RF_audit": {
+    "boot_id": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "processes": [
+      {
+        "pid": 1310,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "resident": {
+          "VmRSS": "28336 kB",
+          "VmPeak": "1281868 kB",
+          "Threads": "8"
+        },
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      },
+      {
+        "pid": 1876,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "resident": {
+          "VmRSS": "288 kB",
+          "VmPeak": "612 kB",
+          "Threads": "1"
+        },
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 1884,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "resident": {
+          "VmRSS": "24060 kB",
+          "VmPeak": "1308964 kB",
+          "Threads": "13"
+        },
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "runtime_hashes": {
+      "flex-tailnet-shim": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "identity_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+    "arp": [],
+    "accept_local": "0",
+    "private_sockets": [],
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    },
+    "all_failed_sessions": []
+  },
+  "audit_temporary_container_and_scratch_deleted": true,
+  "limits": [
+    "Two failed5W bypass attempts stopped on nativeSWR during the noise preamble (one before alignment, one after acquisition); neither overwritten nor counted as a spectrum. Freshness or transport failures did not cause these stops.",
+    "Directional forward/reflected values in the same UDP packet do not prove that the firmware detectors were physically sampled or filtered synchronously. The lower derivedSWR and LP references do not establish a firmware root cause or authorize suppressing the product guard.",
+    "Two successful5W corrected cold starts and one completed10W pair are finite evidence, not sustained repeatability or final P7 qualification. Second independent5W pair failed on baseline03.",
+    "LP readings retain peak-hold and an unknown forward/net setting. They are not calibrated average/instantaneous RF power or an independent bound on exact unkey time.",
+    "RawIQ, peak levels and TX input-limiting counters do not calibrate RXA ADC full scale, absolute headroom, receiver linearity or sampler attenuation.",
+    "Host-observed firstCorrecting times include polling/HTTP scheduling; acquisition times are process monotonic. Neither is FPGA-to-process latency.",
+    "Natural128sample slip and historical cold all-bypass cause remain unresolved. Across-key/session delay differences do not constitute an observed within-key alignment slip.",
+    "No new speech, extended duty, controlled scheduling/crash, final stockAPD, firmware update, old-kernel delivery, actual6300 or independent release qualification.",
+    "Read-only postRF process RSS is idle memory, not peak active DSP use. Signed development publisher and local-only owner remain development scope."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--prepare.py.gz": "a1617cbf7503478452a0703705354bdb85b4aae7828d1434e34406120bab0124",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--measure-once.py.gz": "0058fcd27100bc101e80dd601177c5b927a99eb86542cbb2eb69aa96ef9fbba4",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--instance.json.gz": "daf3516f53502973c75b2727cd9b5341eb5bde818b358679bdf1414e9ed1c6ac",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--prepared.json.gz": "9b43283f9dea23866ecc94574e666b7711c85ce1cca18ebc9c6242271748d0ff",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--events.json.gz": "7dd4b154d55f9cc363e50812ff32bf9b50ed27858c525a65810038603400cacc",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--outcome.json.gz": "80ec30a8132fead5be108e473f19e7ade32c9d126b03cd02735cef52c4364fbe",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--measurement.json.gz": "38d19de2c20c0532ce3a515ee8c2a0fc86e48f7800d0072102dd92c88d3e6129",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--independent-meters.json.gz": "a2498b96b06e881ab117f985eba299f970d785462e1e9b3981c239017875b788",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--application-log.json.gz": "4122992de7c8fe08f92b07b58423224829e0bf647fd82266d49e2c5c86691c95",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--lp100a-readings.jsonl.gz": "ab843946486fd6c2304ff6df98039ad5fb48026112038bd2768db267f0c307c5",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--driver.log.gz": "bbb0da4e23d322eff5f51c1cbc666d6189d9982f4ffc13bf8984dd12a7143636",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--bench_meter_monitor.py.gz": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-01--bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--prepare.py.gz": "33119a3213b728bbdbe600714c1b943c735cbe9f56af0e007f8b9571f28370cc",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--measure-once.py.gz": "e56f6756067d7fb55ede7752ceb4030360540dc2dd2942a6130b06d9ee47b1e9",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--instance.json.gz": "daf3516f53502973c75b2727cd9b5341eb5bde818b358679bdf1414e9ed1c6ac",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--prepared.json.gz": "ff573234b120340c9062fd658a96f06856254d372314bbc33de9637ef7d30abe",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--events.json.gz": "2aad7ab3cc0e272c4f0ec7d663862e94f696899120acc7444fb14fa86c14d341",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--outcome.json.gz": "0e745543f03daefc8176145d5c8c6114f168e379e3a4e71fa4fd03be98e97718",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--measurement.json.gz": "af24e4a6a472d1517ce4a468772559df724c80757549102fbecb9974f6676a01",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--independent-recheck.json.gz": "9165ba64ed215677f08f86494322e57134d55ba07845abb3ce3121d09b002adf",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--independent-meters.json.gz": "20f78bf83785469757a0240a6b92544935c732d1e5642790010e2692505bb307",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--lp100a-readings.jsonl.gz": "6b149547784a19900c0505c6ffba561b1ae235ee4554f201204c8a0efbfbd681",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--driver.log.gz": "b73a558a4651af4366dbf22a9c18c1b693084b8e452fe26685f6ff87f596fb9a",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--bench_meter_monitor.py.gz": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-01--bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--prepare.py.gz": "a1617cbf7503478452a0703705354bdb85b4aae7828d1434e34406120bab0124",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--measure-once.py.gz": "e078792c617b948a2a06da2050d21d5c8c652003b220d6d99ba12108e82c7cbd",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--instance.json.gz": "daf3516f53502973c75b2727cd9b5341eb5bde818b358679bdf1414e9ed1c6ac",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--prepared.json.gz": "a5b65e9c20b7d9b0d700e2f88aea6943e8b69a25db8c31c3ad9a8a22a365cf46",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--events.json.gz": "d7ae70a355bd38a873a9592fa75c428df6669b06b11b5e8a861065cae27ec254",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--outcome.json.gz": "23558eeecba23c251376ed8834be1aa5295345b00e22cc121874e84d27de4e88",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--measurement.json.gz": "59cbc14ea55ba6f182df8c3461d9d990f913761b4681f3dc92fa82d0d03439f8",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--independent-recheck.json.gz": "e7e7ee57f9694db087b6236629ac526a46054c420db22ad1c858f3c5af0be987",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--independent-meters.json.gz": "ceb50b43ab6f3b4d01cf434665ac3ac414466a13f9d4a111c47767e57048c992",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--lp100a-readings.jsonl.gz": "07311ffb34a4fd0cd160cd82ea19ddf5b994d79cc12139a9c23027846e03b976",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--driver.log.gz": "c04184de6422508982991e8fcbe991fb2441fc95290b30341928447c5c3d87ec",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--bench_meter_monitor.py.gz": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-02--bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--prepare.py.gz": "33119a3213b728bbdbe600714c1b943c735cbe9f56af0e007f8b9571f28370cc",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--measure-once.py.gz": "1ed59a5e80a8bb8c7364231d84d4500612a3f3c8fce3044b1892833094eddc6b",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--instance.json.gz": "daf3516f53502973c75b2727cd9b5341eb5bde818b358679bdf1414e9ed1c6ac",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--prepared.json.gz": "f1a7e9e22baaf6a02b407b0d0703f7a2d31e2cee152445dec19255c1a2067967",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--comparison-policy.json.gz": "fba6a02206eb3c668f57f3b05958eefbf715d3bb9fb1eb848b5ae6e4330948f6",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--events.json.gz": "0cc50d84632c7316c9ba892e59b6d37e66e0a834716ee77aa6b3cedb0591e7a0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--outcome.json.gz": "37f0adc0a2c961e6a3c3a299bdf682ca726f545ff494cc2cd6f81669e21df4bd",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--measurement.json.gz": "967d4e6909f2961425a57b3892e15d6629f0b0102709a5099bdd7ce535b60315",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--independent-recheck.json.gz": "b25f880212cb779386bdbfd8e3cef28e8cd583e9d1c770a855547d05c8da7644",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--independent-meters.json.gz": "c6921583dd3381ea3e3efbd5069c770abf031209254d1f7d26f69d2620fc4482",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--lp100a-readings.jsonl.gz": "19c9eed24ca9b640616ccf7a842125e2df2916621c39a6e9531493617c4d4038",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--driver.log.gz": "5325362a4cc27e28c44b9dd12fc2428a7491cc35acabd580d76b09295a0b1306",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--bench_meter_monitor.py.gz": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-corrected-rf-02--bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--prepare.py.gz": "a1617cbf7503478452a0703705354bdb85b4aae7828d1434e34406120bab0124",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--measure-once.py.gz": "35b65d42a5b12fe3760537d78294c47b9c32ca0a15664c6766943ea27d93a418",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--instance.json.gz": "daf3516f53502973c75b2727cd9b5341eb5bde818b358679bdf1414e9ed1c6ac",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--prepared.json.gz": "ffd622ecf2e541c3f7d5b3bbaa6d1a803ddcd62b83242eda59faefaeedf7e6df",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--comparison-policy.json.gz": "2235fcfc6ab09be172211525da1c807a4a32efe311a9f27a8c2afdb3ea49fe92",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--events.json.gz": "0582cee78fe601e8e4d84698dba22f069425a7eb502ec348c8b1271c56331cce",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--outcome.json.gz": "efd8b0e753b59af04495e2feb273927f41d0f277e3ba85c1e83997e6e85d90e3",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--measurement.json.gz": "a1e907628f303f2a425608aebba822b8fc6a9c58c5f7ec15014c77a1fa96e671",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--independent-meters.json.gz": "b07fe20881af9a103718936f7ebadedcbb272dc546249902ec5d32576a200e85",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--application-log.json.gz": "c89e9d93360db2cb59a52a275a8ea7c55d6296cbcf753651aef62f56dd45ecaf",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--lp100a-readings.jsonl.gz": "4a876df9325f6adf5d99cfe4ce886add8a89ed5cef46d048f2d872d8b0e7f23a",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--driver.log.gz": "5a6b83249844cae813ea4a59924485d9a9bd0eed72fe805ddfd135d362b4a266",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--bench_meter_monitor.py.gz": "e9bf27cd71006edd90ef7c32d2de5f3a648d2975428aa907fbd0eee3ec92c551",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-baseline-rf-03--bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--prepare.py.gz": "eaf234bffe283ed980cea72bf86cac34315e3a8d45a5c11b1aae54bb6cc98338",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--measure-once.py.gz": "3f014c627e6e2fd9fe9aef21df641334d9fd649b6c59069052fe6f1cd7b647c2",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--instance.json.gz": "daf3516f53502973c75b2727cd9b5341eb5bde818b358679bdf1414e9ed1c6ac",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--prepared.json.gz": "ed975790761bb7771bf8ce6ce5b07cc9d163cea322c3a29b2b661937e13ac2b0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--comparison-policy.json.gz": "9e82e853c116ec9a8c56908047dd6c67be36b042e85260cfce3383be926b9958",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--events.json.gz": "d95e0a6e7174602c804eb5b5eb2ab8f4647efd57616f65fb53f4d08f686b7676",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--outcome.json.gz": "1c1a5e738cef538424db3370626a5db8346ff083cf87df4f51d1162ad392771c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--measurement.json.gz": "50903643bba731a3c8084efcf5c0f1c6ea2cfc875351fd97d4b388070de9b2ee",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--independent-recheck.json.gz": "51531e131040156a490b5c5792817fb94fe9f7c9853cbf685d060217601af0b2",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--independent-meters.json.gz": "b0e0d53f6fba467cc21ea9dab5a36aa879f5361d8cee2f9c73b99a43196f1a05",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--lp100a-readings.jsonl.gz": "75b1bc2b4cea904f8bcff0532ebe646a40560f496aee213dcdeedcfb501dc625",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--driver.log.gz": "56ffff79ac8b87d302015dc5a3821996d9ee27bb1562d1d7391c29e7e5b20cb5",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--bench_meter_monitor.py.gz": "dd12d52a9eea56aa9cc2d71b4d316861d5329d7fef0ef7006ee86724fe56ad02",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-baseline-rf-01--bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--prepare.py.gz": "74a4bcee18347ef996f5672b0d96471aa61780bba531e21df228bd6a19d878a1",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--measure-once.py.gz": "236dfac820eb3f1277ff6afe1bc5b297793396486a9b053f686682c4c3d36e45",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--instance.json.gz": "daf3516f53502973c75b2727cd9b5341eb5bde818b358679bdf1414e9ed1c6ac",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--prepared.json.gz": "c45a1068864e8ea787f81f4b783ab5ff3987cd67cd8a561ea57ef0bac8773ab9",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--comparison-policy.json.gz": "9e82e853c116ec9a8c56908047dd6c67be36b042e85260cfce3383be926b9958",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--events.json.gz": "8a6dc5b42e7416941402df8783d831287fc94ea1ee9b58e96ea0cc7012aa37aa",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--outcome.json.gz": "78cb1ccd433fb7591e463348863f918228882532adfe9618930c5a02eeee929d",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--measurement.json.gz": "1366774da96fe4312ba0f2b9a915f073955612ee9f9923363146da83f75c025e",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--independent-recheck.json.gz": "0c1b218885ab3ff6e874228f225e9a3db60a84ee6bff3c12f33d1395acad1d70",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--independent-meters.json.gz": "5a00f8d02ca9becf33e7af279610d1b41b41f0f72edc3e001deaded28a79053c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--lp100a-readings.jsonl.gz": "730d6c0e7c8b0bac404d8cc67a5927436cd1dae2e57e7a5d60695e6a7c8bc726",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--driver.log.gz": "6ff72b433bba2731d5b19e8ce8e927c578564e78d7da29daae1ea8a128e1cc99",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--bench_meter_monitor.py.gz": "dd12d52a9eea56aa9cc2d71b4d316861d5329d7fef0ef7006ee86724fe56ad02",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/managed-owner-10W-corrected-rf-01--bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--recheck-spectrum.py.gz": "cc9bb622cd14d3144fc1006d60e8a20a52c4473b07990cf1bc32e90044376f1c",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--final-audit-job.py.gz": "bd5198f025a4c141175288076284276e79b70679613e7fa5e786706dc31e7a09",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--final-audit-result.json.gz": "d29cc7add0c2c3bcf3dd4bc0db7aa9c759fd4c3ad9b57b5a8b29cee4a42c2799",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--final-audit.log.gz": "d29cc7add0c2c3bcf3dd4bc0db7aa9c759fd4c3ad9b57b5a8b29cee4a42c2799",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--meter--lp100a_reader.py.gz": "79dc2e11dfb82e569a48625e565bf0a24db9571a6478c6fc77f548b120de5ac2",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--meter--idle-before.jsonl.gz": "0014bab19aa6baa23197d2dd46d0296f51fa0003c17d5bfc8138836c37d59c1e",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--final-desktop-state.json.gz": "a4544d3f1524247191ec534405a01160b6be03573d8644cce621ba941dd71fd4",
+    "tools/pd-waveform/evidence/20261117-managed-runtime-rf/preflight--save-qualification.py.gz": "ac89ece388e727517ffc92b53a36fae86b18b5149e72fd6ecae7e6d1d88ea1cd"
+  }
+}
