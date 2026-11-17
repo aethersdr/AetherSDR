@@ -1,10 +1,59 @@
+#define _GNU_SOURCE
+#include <signal.h>
+static int prepared_test_kill(pid_t child,int number);
+#define kill prepared_test_kill
 #define PD_RADIO_MAIN radio_launch_program_main
 #include "pd_radio_launch.c"
 #undef PD_RADIO_MAIN
+#undef kill
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <assert.h>
+static int prepared_cleanup_check,prepared_cleanup_privileged,prepared_cleanup_drop_ok;
+static unsigned prepared_cleanup_drop_calls,prepared_cleanup_kill_calls;
+static int prepared_test_kill(pid_t child,int number)
+{
+    if(prepared_cleanup_check){
+        assert(!prepared_cleanup_privileged);
+        ++prepared_cleanup_kill_calls;
+    }
+    return kill(child,number);
+}
+static int prepared_test_retire(void)
+{
+    ++prepared_cleanup_drop_calls;
+    if(!prepared_cleanup_drop_ok){return 0;}
+    prepared_cleanup_privileged=0;return 1;
+}
+static void check_prepared_cleanup_privileges(void)
+{
+    for(unsigned scenario=0;scenario<3;++scenario){
+        int lifetime[2];assert(!pipe(lifetime));
+        pid_t child=fork();assert(child>=0);
+        if(!child){
+            close(lifetime[1]);raise(SIGSTOP);char byte;
+            (void)read(lifetime[0],&byte,1);_exit(0);
+        }
+        close(lifetime[0]);siginfo_t stopped={0};
+        assert(!waitid(P_PID,(id_t)child,&stopped,WSTOPPED|WNOWAIT) && stopped.si_pid==child);
+        prepared_cleanup_check=1;prepared_cleanup_privileged=scenario!=2;
+        prepared_cleanup_drop_ok=scenario!=1;
+        prepared_cleanup_drop_calls=prepared_cleanup_kill_calls=0;
+        prepared_stop_child_as(child,lifetime[1],scenario==2?78666:0,prepared_test_retire);
+        prepared_cleanup_check=0;
+        assert(prepared_cleanup_drop_calls==(scenario==2?0u:1u));
+        int status;
+        if(scenario==1){
+            assert(prepared_cleanup_privileged && !prepared_cleanup_kill_calls);
+            assert(waitpid(child,&status,WNOHANG)==0);
+            assert(!kill(child,SIGKILL));assert(waitpid(child,&status,0)==child);
+        }else{
+            assert(!prepared_cleanup_privileged && prepared_cleanup_kill_calls==2);
+            assert(waitpid(child,&status,WNOHANG)==-1 && errno==ECHILD);
+        }
+    }
+}
 static int cleanup_privileged, cleanup_drop_ok, cleanup_reap_ok;
 static unsigned cleanup_drop_calls, cleanup_reap_calls;
 static struct radio_child* cleanup_expected;
@@ -121,6 +170,7 @@ int main(void)
     assert(!radio_reap(children));
     check_retirement_order();
     check_prepared_child_lifetime();
-    puts("PASS: retire privileges before bounded cleanup; promptly reject exited prepared child without reaping, signal only a waitable child; fixed readiness grammar and owned cleanup; no radio or privileges");
+    check_prepared_cleanup_privileges();
+    puts("PASS: retire privileges before setup reaping and prepared-child termination; failed retirement sends no signal; promptly reject exited prepared child without reaping, signal only a waitable child; fixed readiness grammar and owned cleanup; no radio or privileges");
     return 0;
 }

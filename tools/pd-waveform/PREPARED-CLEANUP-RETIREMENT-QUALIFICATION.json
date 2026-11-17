@@ -1,0 +1,231 @@
+{
+  "updated_utc": "2026-11-17T15:14:39.315460+00:00",
+  "status": "prepared_DSP_cleanup_privilege_retirement_fixed_component_qualified_not_installed",
+  "production_ready": false,
+  "installed_fix": false,
+  "source_parent_commit": "2e09f1cf9508218a647cce22465412d6c9ae4ac9",
+  "baseline": {
+    "runtime_source": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+    "DSP_before_registration_stalled": true,
+    "registered_observed": false,
+    "workers_gone_ms": 12025.081594,
+    "watchdog_used": false,
+    "post_10second_timeout_root_observation_count": 8,
+    "example_root_observation": {
+      "elapsed_ms": 10333.129408,
+      "processes": [
+        {
+          "pid": 3220,
+          "ppid": 1,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@20-1310-78666.service"
+          ],
+          "start_ticks": 1806751,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        },
+        {
+          "pid": 3228,
+          "ppid": 3220,
+          "exe": "/run/aetherpd/bin/pd-radio-launch",
+          "uid": "0\t0\t0\t0",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@20-1310-78666.service"
+          ],
+          "start_ticks": 1806776,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "000001ffffffffff",
+            "CapEff": "000001ffffffffff",
+            "CapBnd": "000001ffffffffff",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 3229,
+          "ppid": 3228,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@20-1310-78666.service"
+          ],
+          "start_ticks": 1806776,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 3230,
+          "ppid": 3229,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@20-1310-78666.service"
+          ],
+          "start_ticks": 1806777,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 3231,
+          "ppid": 3228,
+          "exe": "/run/aetherpd/bin/pd-iq-source",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@20-1310-78666.service"
+          ],
+          "start_ticks": 1806777,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        },
+        {
+          "pid": 3238,
+          "ppid": 3228,
+          "exe": "/run/aetherpd/bin/aether-pd",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "T (stopped)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@20-1310-78666.service"
+          ],
+          "start_ticks": 1806883,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        }
+      ]
+    },
+    "fixed_ARP_removed": true,
+    "ARP_journal_bytes": 0,
+    "RF_commands": []
+  },
+  "change": "Close the DSP owner pipe, confirm the direct child remains waitable, then retire root/capabilities before SIGTERM, bounded termination wait and SIGKILL. An already ordinary caller needs no further privilege operation; failed retirement sends no termination signal. Startup remains an error path.",
+  "tests": {
+    "registered_CTest": "pd_radio_launch_policy_test passed",
+    "ASan_UBSan_LSan_exit": 0,
+    "guard_mutations": [
+      {
+        "name": "missing-retirement",
+        "exit": -6,
+        "assertion": "test: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-cleanup-retirement/missing-retirement/radio_launch_test.c:18: prepared_test_kill: Assertion `!prepared_cleanup_privileged' failed."
+      },
+      {
+        "name": "ignored-retirement-failure",
+        "exit": -6,
+        "assertion": "test: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-cleanup-retirement/ignored-retirement-failure/radio_launch_test.c:18: prepared_test_kill: Assertion `!prepared_cleanup_privileged' failed."
+      },
+      {
+        "name": "retirement-after-TERM",
+        "exit": -6,
+        "assertion": "test: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-cleanup-retirement/retirement-after-TERM/radio_launch_test.c:18: prepared_test_kill: Assertion `!prepared_cleanup_privileged' failed."
+      }
+    ],
+    "cross_builds": {
+      "arm64": {
+        "sha256": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+        "bytes": 105496
+      },
+      "armv7": {
+        "sha256": "1195b127e6d8f49bc1ee697ab0d1c660f708acc36d3797585832490a13d254b1",
+        "bytes": 92240
+      }
+    },
+    "sandbox_failure_preserved": "Sandbox run failed because LSan cannot run under ptrace; unchanged binary passed on host."
+  },
+  "tested_source_sha256": {
+    "tools/pd-waveform/session/pd_prepared_launch.c": "93e43a4e30c5e394a3f4086e9b1a9c0211a49d1425bf0dacb4cf9a4ae73af858",
+    "tools/pd-waveform/session/radio_launch_test.c": "8d94f568bd5946a3479d9f978291858f66b6cf4808565a2065f30a937f2f2a88",
+    "tools/pd-waveform/session/README.md": "ab6272e13caaebb1b451022654d8cde1dbc3b50ef80f2c56d33590840bfd2638"
+  },
+  "preserved_preparation_failure": "First preparation expected stale PD mode; radio-authoritative mode was USB after normal Stop. No Start, signal or RF was sent in that preparation attempt.",
+  "remaining": [
+    "Rebuild and authenticate complete ARMv7/ARM64 runtime releases and upgrade distribution; compare byte reproducibility and disk admission.",
+    "Install through ordinary operator-approved desktop update; repeat the same DSP-startup stall and verify the parent UID/capabilities during termination.",
+    "Verify explicit ordinary restart, full DAX IQ and independent cleanup; all other P1\u2013P10 gates remain open."
+  ],
+  "limitations": [
+    "No candidate package, radio installation, reboot or actual FLEX6300 qualification yet.",
+    "Baseline required setup privileges while waiting for DSP readiness; this fix removes them on failure before child termination, without changing scheduling admission.",
+    "The operator-deferred5W SWR investigation and preamble experiment remain parked; no RF or guard changes."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/build-arm64.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/build-armv7.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/build-host-test.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/cmake-build.log.gz": "cfaf6c17374056f2d3f55c52c53b3feecf9f8bec14b71b3fe6b72f9b1d4970f1",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/ctest.log.gz": "f83a6d873c07deafa7223ea1c1d4e0a0f40be1f4083c478c2403a4070653f3e7",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/finish-verification.log.gz": "e324239b9a76fa1278a50c64ce80535a46cac8c6b0340b87d30933e857750941",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/finish-verification.py.gz": "7f22b1681553bc0b52b216973378c9a03be5325badb75be9cb290162f2d3ed8b",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/host-test.log.gz": "f93372d50e04a7bf3eda6253e3174ebd81e0bf76e8cb9db21b76465130ad465f",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/ignored-retirement-failure-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/ignored-retirement-failure-host-retest.log.gz": "852f6ed7c18f83866e4401b8e556dabe036d9787c8ba285ab489fa77783afed5",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/ignored-retirement-failure-test.log.gz": "852f6ed7c18f83866e4401b8e556dabe036d9787c8ba285ab489fa77783afed5",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/missing-retirement-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/missing-retirement-host-retest.log.gz": "fd8123ad3273a5f0fceaee1dc59fa690dbb1a195fa4843cca92d9ab7303ec643",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/missing-retirement-test.log.gz": "fd8123ad3273a5f0fceaee1dc59fa690dbb1a195fa4843cca92d9ab7303ec643",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/retirement-after-TERM-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/retirement-after-TERM-host-retest.log.gz": "e7702a34909fc15d84bc709c52310858cfae61e94fd3872fab7928b61d720e2d",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/retirement-after-TERM-test.log.gz": "e7702a34909fc15d84bc709c52310858cfae61e94fd3872fab7928b61d720e2d",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/sanitizer-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/sanitizer-host-run.log.gz": "f93372d50e04a7bf3eda6253e3174ebd81e0bf76e8cb9db21b76465130ad465f",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/sanitizer-run.log.gz": "9df66d1ba6ea794ffeec7f7e2d36da2f1a58677a3300528e63017777eb329edf",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/save.py.gz": "b183a4d9c7b07ae91bdc300f0f09e12cb3280e647930c23efbe35055d6113f4e",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/verification.json.gz": "51567fa30b4f998989c0e5ae543e609d88a3c3de7efddc7d1e2af6253913c89e",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/verification.log.gz": "8a33a72fde65753e2dc348501fcfe9f31ece1e5658050d0db8a7b5fd7a411a29",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-cleanup-retirement/verify.py.gz": "24f4387ce408eaecd87ccbc6823ccd66801010e3d263492b9d695a555a89ceb8",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-01/console.log.gz": "92c6efd6fe4469f4813e9028af92a47e2f858b5a464325167e103bc610d9d235",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-01/events.json.gz": "25efa90a9aa925366d0a3c52591c26d16c81fad1b630f7c9eb4465be8f160e98",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-01/fault-template.py.gz": "686870cc20c98a2046f4a341f8b474b26aff3af3eaf3a62cf69b710fd6887a95",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-01/instance.json.gz": "830fa0184e204fbe705ca61ccec830dd393a1e9354395962f92832aecd29b8b9",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-01/outcome.json.gz": "741c158c939a52db2be582066059375ac23940acaeed4a2671dcb3b5fb6f9c73",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-01/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-01/run-once.py.gz": "0a1500e4c4cef3ad2fb1f7f936d7f676e8eb289c2ec82e7c22339272ad406e61",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/console.log.gz": "dcfc6a27d54294381a8ea9af380f1e671308583c050c0089d30d16a04b9a467f",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/events.json.gz": "6bae66a8545a421865e677615f6d98300dd5c6854791882475737e5cd33167a1",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/fault-template.py.gz": "686870cc20c98a2046f4a341f8b474b26aff3af3eaf3a62cf69b710fd6887a95",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/instance.json.gz": "830fa0184e204fbe705ca61ccec830dd393a1e9354395962f92832aecd29b8b9",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/orchestration.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/outcome.json.gz": "88dcc5fdb9e6b05c064e156b405fd83209035056f06af0f8f04ae991178498b1",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/pause-job.py.gz": "7ae25f9853f2889c1780f4967fd554f41214b90811e12bb87351cc67153d8d27",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/pause-result.json.gz": "8bfcafa48fa04b081c6151e2672d3f186d309632d82b834553c26a42eeef2df8",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/pause.log.gz": "8bfcafa48fa04b081c6151e2672d3f186d309632d82b834553c26a42eeef2df8",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-prepared-cleanup-retirement/prepared-dsp-stall-02/run-once.py.gz": "cde1df78d6e93e68498e0f003781b7ee7b65946198cdaceb4545e2bcaa83bd05"
+  }
+}

@@ -80,6 +80,11 @@ supplies only the GUI UUID and handle; it creates the ARP keeper, ordinary
 IQ source, capture supervisor and their private lifetime channels. It then
 uses the API and prepared-DSP constructors and replaces itself with the
 unprivileged Go shim. Go inherits only internally generated child identities.
+If prepared-DSP startup fails, cleanup closes its owner pipe and retires root
+and capability authority before signaling or waiting for the still-waitable
+UID78666 child. A failed privilege retirement sends no cleanup signal; the
+startup path remains a failure. A stopped child still has the existing bounded
+SIGTERM/SIGKILL termination path after privilege retirement.
 Caller-provided child PIDs, paths, addresses and scheduling settings do not
 select the privileged operations.
 

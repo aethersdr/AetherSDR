@@ -72,12 +72,16 @@ static int prepared_wait_ready(pid_t child,int gate)
     }
     return 1;
 }
-static void prepared_stop_child(pid_t child,int owner)
+static void prepared_stop_child_as(pid_t child,int owner,uid_t effective_uid,
+                                   int (*retire_privileges)(void))
 {
     close(owner);if(child<=1){return;}
     int status;pid_t observed;
     do{observed=waitpid(child,&status,WNOHANG);}while(observed<0 && errno==EINTR);
     if(observed!=0){return;}
+    // The waitable child runs as UID78666. Terminating and reaping it needs
+    // no setup authority, including when startup left it stopped.
+    if(effective_uid==0 && !retire_privileges()){return;}
     kill(child,SIGTERM);int64_t start=prepared_ms();
     for(;;){
         int status=0;pid_t result=waitpid(child,&status,WNOHANG);
@@ -87,6 +91,10 @@ static void prepared_stop_child(pid_t child,int owner)
     }
     // This PID remains our unreaped child, so it cannot have been reused.
     kill(child,SIGKILL);while(waitpid(child,NULL,0)<0 && errno==EINTR){}
+}
+static void prepared_stop_child(pid_t child,int owner)
+{
+    prepared_stop_child_as(child,owner,geteuid(),drop_root);
 }
 static void prepared_exec_dsp(int program,const int source[7],uint32_t gui)
 {
