@@ -1,0 +1,285 @@
+{
+  "updated_utc": "2026-11-17T06:10:17.769463+00:00",
+  "status": "live_measurement_arm_fix_and_finite_radio_release5W_comparison_verified_repeatability_incomplete",
+  "production_ready": false,
+  "radio_runtime_source": "e7b3068a4eaa810ae67166cf678f9172d2f16a43",
+  "installed_release": "c732d9afcb0da6b7d1317c7e523c5cbd78800ff8e9a4993097ecd41318bf2614",
+  "desktop_fix_source": "47709a7be5d4b78901cfdde4ce4359693ad4a145",
+  "desktop": {
+    "pid": 2925772,
+    "socket": "/tmp/aetherpd-measurement-arm-status",
+    "binary_sha256": "b54cd60004df348bebd7af460756130e2a06b7cf1d0fa1a0ffd8fe9a55dc3407",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "installed_runtime_source": "e7b3068a4eaa810ae67166cf678f9172d2f16a43",
+    "desktop_source": "47709a7be5d4b78901cfdde4ce4359693ad4a145",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.117163424001774
+  },
+  "live_arm_path": {
+    "observed_armed_before_key_on_fixed_desktop_cases": [
+      "alignment-reset-baseline-rf-02",
+      "alignment-reset-baseline-rf-03",
+      "alignment-reset-baseline-rf-04",
+      "alignment-reset-corrected-rf-03"
+    ],
+    "ordinary_GUI_used": true,
+    "status_refresh_continued": true,
+    "deterministic_pending_poll_preemption_scope": "Socket-free client/model/GUI tests; live run confirms ordinary end-to-end arm/readback, not an isolated forced pending-GET race.",
+    "source_is_not_automatically_rearmed": true,
+    "RF_key_requests_each": 1
+  },
+  "finite5W_radio_release_comparison": {
+    "corrected_export": "alignment-reset-cold-start-rf-02/measurement-recovered.json",
+    "baseline_export": "alignment-reset-baseline-rf-04/measurement.json",
+    "corrected_desktop_source": "e7b3068a4eaa810ae67166cf678f9172d2f16a43",
+    "baseline_desktop_source": "47709a7be5d4b78901cfdde4ce4359693ad4a145",
+    "same_radio_DSP_release": true,
+    "same_desktop_binary": false,
+    "frames_each": 4,
+    "sample_rate_Hz": 48000,
+    "DAX_IQ_channel": 4,
+    "FDX": false,
+    "nominal_W": 5,
+    "frequency_MHz": 7.15,
+    "IMD3_baseline_dBc_per_tone": [
+      -27.959516006357326,
+      -27.43040289141608
+    ],
+    "IMD3_corrected_dBc_per_tone": [
+      -44.319932443111185,
+      -52.884673444451465
+    ],
+    "IMD3_improvement_dB": [
+      16.36041643675381,
+      25.454270553035343
+    ],
+    "fundamental_derived_PEP_difference_dB": 0.3256493993871743,
+    "independent_spectrum_max_errors_dB": [
+      3.7742784542160734e-06,
+      3.4925613476843864e-06
+    ],
+    "corrected_LP": {
+      "LP_peak_held_W": 3.66,
+      "LP_max_direct_SWR_with_RF": 1.06
+    },
+    "baseline_LP": {
+      "LP_peak_held_W": 3.61,
+      "LP_max_direct_SWR_with_RF": 1.09
+    },
+    "scope": "Finite spectral evidence on the same installed radio release and bench settings. Different desktop control builds, separate fresh DSP sessions and different times; not final same-desktop repeated qualification."
+  },
+  "attempts": {
+    "alignment-reset-baseline-rf-02": {
+      "original_harness_passed": false,
+      "actual_key_observed": true,
+      "original_error": "KeyError: 'measurement'",
+      "LP": {
+        "LP_peak_held_W": 3.55,
+        "LP_max_direct_SWR_with_RF": 1.0
+      },
+      "session_stopped": true
+    },
+    "alignment-reset-baseline-rf-03": {
+      "original_harness_passed": false,
+      "actual_key_observed": false,
+      "original_error": "RuntimeError: Steady-tone LP vector fields incoherent for250ms",
+      "LP": {
+        "LP_peak_held_W": 3.55,
+        "LP_max_direct_SWR_with_RF": 1.05
+      },
+      "session_stopped": true
+    },
+    "alignment-reset-baseline-rf-04": {
+      "original_harness_passed": true,
+      "actual_key_observed": true,
+      "original_error": null,
+      "LP": {
+        "LP_peak_held_W": 3.61,
+        "LP_max_direct_SWR_with_RF": 1.09
+      },
+      "session_stopped": true
+    },
+    "alignment-reset-corrected-rf-03": {
+      "original_harness_passed": false,
+      "actual_key_observed": true,
+      "original_error": "AssertionError: SWR above the configured limit",
+      "LP": {
+        "LP_peak_held_W": 3.5,
+        "LP_max_direct_SWR_with_RF": 1.04
+      },
+      "session_stopped": true
+    }
+  },
+  "SWR_disagreement": {
+    "alignment-reset-baseline-rf-02": {
+      "native_SWR_from_same_packet": 2.203125,
+      "same_packet_directional_derived_SWR": 1.098769055864804,
+      "directional_forward_W": 3.3617274471297645,
+      "directional_reflected_W": 0.00744517653657958,
+      "nearest_LP_SWR": 1.0,
+      "nearest_LP_W": 0.62,
+      "LP_offset_ms": -47.935218,
+      "raw_packet_offset_ms": -8.453418,
+      "product_aborted_as_configured": true
+    },
+    "alignment-reset-corrected-rf-03": {
+      "native_SWR_from_same_packet": 2.1875,
+      "same_packet_directional_derived_SWR": 1.1229806129257613,
+      "directional_forward_W": 3.3376246942920385,
+      "directional_reflected_W": 0.01120001875709024,
+      "nearest_LP_SWR": 1.04,
+      "nearest_LP_W": 3.5,
+      "LP_offset_ms": -5.847212,
+      "raw_packet_offset_ms": -6.94384,
+      "product_aborted_as_configured": true
+    }
+  },
+  "bench_vector_check": {
+    "unqualified_impedance_phase_comparison_stopped_baseline03": true,
+    "later_role": "Diagnostic quality annotation only; no assumption that peak-hold protocol fields form a calibrated synchronous vector measurement.",
+    "direct_LP_power_SWR_freshness_guards_unchanged": true,
+    "shipping_product_guards_changed": false,
+    "meter_configuration_changed": false
+  },
+  "same_fixed_desktop_comparison_gate": {
+    "policy_saved_before_corrected_key": "alignment-reset-corrected-rf-03/comparison-policy.json",
+    "passed": false,
+    "reason": "Corrected repetition stopped on the product SWR guard before a completed spectrum. The earlier corrected export is preserved as separate scoped evidence, not substituted to pass this declared gate."
+  },
+  "final_audit": {
+    "boot_id": "da955e3f-c404-4337-97fd-1d42ddb693e8",
+    "processes": [
+      {
+        "pid": 3994,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414"
+      },
+      {
+        "pid": 4906,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 4914,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414"
+      }
+    ],
+    "runtime_hashes": {
+      "flex-tailnet-shim": "d83bcff114aa3d74769a1c6cfdcb41ae42c567e7f34b8de94392124aa56bb414",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "fixed_ARP_absent": true,
+    "accept_local": "0",
+    "failed_session_records": 0,
+    "temporary_installer_paths_absent": true,
+    "audit_container_and_scratch_deleted": true
+  },
+  "limitations": [
+    "One completed corrected cold-start capture and one completed bypass capture; five total actual keys including three safely aborted RF runs in this turn. No negative receipt is overwritten.",
+    "Three original failed/zero-RF harness attempts and the valid corrected data were committed separately in ALIGNMENT-RESET-COLD-START-QUALIFICATION.json.",
+    "Cold-start success is not a root cause for the historical all-bypass failure; no natural128sample event was reproduced.",
+    "Radio native SWR and same-packet directional ratio disagree. LP agrees with a low reflection, but physical/firmware cause and a supported production resolution remain unqualified.",
+    "No production guard was relaxed to obtain a spectrum. Failed runs are included, and final same-desktop repeatability is incomplete.",
+    "Peak-held LP values are not calibrated mean output power. Absolute ADC headroom and receiver linearity remain uncalibrated.",
+    "No new10W, sustained speech/duty, stock APD, reboot or actual6300 qualification in this report.",
+    "Development publisher/local-only identity and remaining P1-P10 shipping gates stay open."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--prepare.py.gz": "7079730940558878e439d222b51ff372cba6d12490c897deff783d46b6dc8047",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--prepared.json.gz": "140331fe0a8caa5d3832a670e76e701a9ad32b6b0029698ecb99e4381c80582e",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--measure-once.py.gz": "4e3e2db3aa499511550107299dfa92c2e62f520203a67b840c3aad4bc2c4db37",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--instance.json.gz": "b52e2bf3a3931fda63e0e1a3f70dfaa8c9f2896c83ee8db95fa08641049394a5",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--outcome.json.gz": "bec3ac089615c3866932c83ea588c9163d2b29847b4e50e3421aeba398797452",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--events.json.gz": "d1b9491315f21d70c53d527e5ac19972eb4f417b7ab2c946867d860236c6bf9d",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--application-log.json.gz": "cec314faf02dc4709ad93de03297d57bc52dcc09abd004022b73ef00011f3adc",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--independent-meters.json.gz": "da19c04f099c299fd12d537a07a902f6e41f41e845eb841ce5440834dc624be6",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--lp100a-readings.jsonl.gz": "8a0749b7846df3ba73b51d71ddef0f5eb03302882985c22691b0c18df589b02d",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--measurement.json.gz": "c6f4f6084ff36c836738ad72e115c01770258b9dabb8b728dbc528ef38094ddb",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-02--SWR-reconciliation.json.gz": "ad1cf39ce5819d4de380e7acb0e8b02f8d244a10bbcdc491053ac10c1f5be3fe",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--prepare.py.gz": "2cf888f6b73a33c840a90c6d3999f24e58b0e4fc4f3a170593949a2b7c10d0d2",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--prepared.json.gz": "9c568fa9f7e92994f296338e934f292348a62a32b0cce2051304988c9784e007",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--measure-once.py.gz": "e1a4773ac4a6b14f3fcf24c0f8d815792049420466393f7dc98ecff5dfe21c4f",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--instance.json.gz": "b52e2bf3a3931fda63e0e1a3f70dfaa8c9f2896c83ee8db95fa08641049394a5",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--outcome.json.gz": "d4786322774ca7942346ac931e43aa8dffcb9b9c9c161113b21332fe735de768",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--events.json.gz": "634c82458dbe9c4d44379f009ba2aadcff9330c70cad988be97a810af8835764",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--independent-meters.json.gz": "f5da91f49e9bdc70fad74efa91bde7c0d33782075adac2a97e4aad68bb9a9472",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--lp100a-readings.jsonl.gz": "7d3ccbd8cf985caa50f6650623a90fc8ea0d10a45d3cc9970fd43fc45664ed78",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-03--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--prepare.py.gz": "2cf888f6b73a33c840a90c6d3999f24e58b0e4fc4f3a170593949a2b7c10d0d2",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--prepared.json.gz": "d8d3ff1ee6a8347e0c71b3bdedb86d9340b77a9137955e2fa2df378b3f4629f2",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--measure-once.py.gz": "5edf7d9fc97fa60704a83ddce052d3f6ee0c5e9d919a056a7598573a02dfd425",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--instance.json.gz": "b52e2bf3a3931fda63e0e1a3f70dfaa8c9f2896c83ee8db95fa08641049394a5",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--outcome.json.gz": "121c6999bc7d07d02a84ecc4ec4b3e672cb3de8864b39f465647d08534372c55",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--events.json.gz": "7a89583e78aae5a21abe525bef807b13e79647f04bcf532bafd1307e1c00ffad",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--independent-meters.json.gz": "0ef7257b47257443826899e258b74bafa902e830957d7ff4c669fe969e8e7252",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--lp100a-readings.jsonl.gz": "6806e904d275c0d9b8da994b30f631e10ae11d972c55052f197bdce13893d3d3",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--measurement.json.gz": "10e2ae5a48b1e3dbafaf88c4c2ad3c68a6f45a91a8eed5e8e92ca3ff07f97638",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--independent-recheck.json.gz": "dc7cb91a45c9afc9e16f86c99d2522f575f31443d39a988f64b77858f59410ad",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-baseline-rf-04--cross-desktop-radio-comparison.json.gz": "349077e3191d1c5556bd7c025aa4fe850bba3d1b65c341fef0c17a97f33c3798",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--prepare.py.gz": "92e570838578be579b6ff222b1524e1e68b0867da7750f90bac3be0b1aaa93bb",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--continue-preparation.py.gz": "f723ccae7325cb5d9a54404c1750709d9c1f91bd6dec1f1e574a076ff9dfa6cb",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--prepared.json.gz": "125a7396f4a504b7c470e7e43b0b3be00f599c8a03d06db0e9d4dbd2bc1e1724",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--measure-once.py.gz": "f3d58482522f8be26f83b37270931ca6e9beb7effb9cc4a8496fb4b471c07864",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--instance.json.gz": "b52e2bf3a3931fda63e0e1a3f70dfaa8c9f2896c83ee8db95fa08641049394a5",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--outcome.json.gz": "44d8ae6a6d5c3d3a686c50962ee0f78ba1dacf6d308728884a1b7fc0e358bd8a",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--events.json.gz": "10f9200057c5843950cd2ea0698c71737bdde8feb2a271da0eb3c6b9f282c704",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--application-log.json.gz": "7191c99718b03af7dbe603e615b415e90eaba79f7fe04c05dec1714676751ffb",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--independent-meters.json.gz": "c3c4a34347aab4ca534c1af689eaeb01bf30f6de8232c786ed47681ffa970784",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--lp100a-readings.jsonl.gz": "32fa4f463206b83faf0d011c7d69b5f24b30d90496fe5c3231d4d3e1b65dd16e",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--measurement.json.gz": "34efb10d1aba5cf66a1f722a73e535c901c7d81c324d3785511cff311465a8cb",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--SWR-reconciliation.json.gz": "5a69f048013a7d160977c2805812115c7473568f5500611137949b4fd3c66f27",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--comparison-policy.json.gz": "680b26eee31fa4b268391b2873182fd7b5ddb8de9dc32d4f7c36652127b98ddb",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/measurement-arm-status-preemption--relaunch.py.gz": "731b86440e33b351d3aed5e32d557e4ae0f9e4d16be68c232777aca9ed430647",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/measurement-arm-status-preemption--instance.json.gz": "b52e2bf3a3931fda63e0e1a3f70dfaa8c9f2896c83ee8db95fa08641049394a5",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/measurement-arm-status-preemption--desktop-provenance.json.gz": "5fb4f06e63baab91ffc3770a8d16e6ed5c563fd9648855172b915cd8fa1f29e4",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/measurement-arm-status-preemption--committed-desktop-build.log.gz": "a6c2be02692bab234aec1738072d6fc55f1153affdfb8c23fa2e788c76765e21",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/measurement-arm-status-preemption--save-live-qualification.py.gz": "818b8e1cd1a8cb0bc1ee70950746a7f56724b9712e9fbe8b06dd3cbaf62f4f5b",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--final-audit-job.py.gz": "41e99bde391dc8f55f0681d3e28fd53adc799839cc2b81fbed95dbc574fea14f",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/alignment-reset-corrected-rf-03--final-audit-result.json.gz": "5bded19956949c9d49e1407dd2d7180d7383bfc1415545d55c22355e64d98fdf",
+    "tools/pd-waveform/evidence/20261116-current-5W-and-arm-live/production-completion-plan.json.gz": "7d55d3e26b00fce4a564f49bd2a32941a6a235eecadded17de2cb91027f36509"
+  }
+}
