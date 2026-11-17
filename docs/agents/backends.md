@@ -142,6 +142,12 @@ keepalive before closing its transport. A missing or refused cleanup reply is
 logged, and shutdown remains bounded. Receive registrations are cleared before
 announcing the session's end.
 
+Forced, terminal and Multi-Flex-cancel disconnects request deferred TCP cleanup:
+the session and receive deliveries retire immediately, and `isConnected()` is
+false while the worker drains. Replacement dials wait for that drain to finish,
+including its nested event loops. The default disconnect and backend destruction
+wait for actual cleanup completion, even after a deferred close was requested.
+
 RadioModel retains GUI registration, settings, presentation, and desktop retry
 policy. The daemon's connection target requires fresh intent after failure.
 SmartLink retains its existing transport owner; selecting another route retires

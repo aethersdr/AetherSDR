@@ -11,33 +11,65 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QEventLoop>
 #include <QSignalSpy>
 #include <QThread>
+#include <QTimer>
 #include <QtTest>
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <utility>
 
 using namespace AetherSDR;
 
+struct CleanupGate {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> released{false};
+    std::atomic<bool> finished{false};
+};
+
 class CleanupMemorySocket final : public QTcpSocket {
 public:
-    explicit CleanupMemorySocket(QObject* parent) : QTcpSocket(parent)
+    explicit CleanupMemorySocket(QObject* parent, std::shared_ptr<CleanupGate> gate = {})
+        : QTcpSocket(parent), m_gate(std::move(gate))
     {
         open(ReadWrite);
         setSocketState(ConnectedState);
     }
     void disconnectFromHost() override
     {
+        if (m_gate) {
+            m_gate->entered = true;
+            QEventLoop loop;
+            QTimer release;
+            QObject::connect(&release, &QTimer::timeout, &loop, [&] {
+                if (m_gate->released) { loop.quit(); }
+            });
+            release.start(1);
+            QTimer::singleShot(3000, &loop, &QEventLoop::quit);
+            loop.exec();
+            m_gate->finished = true;
+        }
         setSocketState(UnconnectedState);
         emit disconnected();
     }
     bool waitForBytesWritten(int) override { return true; }
 protected:
     qint64 writeData(const char*, qint64 size) override { return size; }
+private:
+    std::shared_ptr<CleanupGate> m_gate;
 };
 
 namespace AetherSDR {
+class SessionControlTestAccess {
+public:
+    static void terminalDisconnect(RadioModel& model)
+    {
+        model.m_intentionalDisconnect = true;
+        model.closeConnectionForTerminalDisconnect();
+    }
+};
 class FlexLanSessionTestAccess {
 public:
     static std::shared_ptr<std::atomic<quint64>> epoch(FlexLanSession& session)
@@ -64,10 +96,11 @@ public:
         }, Qt::BlockingQueuedConnection);
     }
     static void installCleanupSink(RadioConnection& wire, QStringList& commands, QList<quint32>& sequences,
-                                  std::function<void(quint32)> reply = {})
+                                  std::function<void(quint32)> reply = {},
+                                  std::shared_ptr<CleanupGate> gate = {})
     {
         wire.m_socket->deleteLater(); // unbound wrapper, on its owner thread
-        wire.m_socket = new CleanupMemorySocket(&wire);
+        wire.m_socket = new CleanupMemorySocket(&wire, std::move(gate));
         wire.m_syntheticDemo = false;
         QObject::connect(wire.m_socket, &QTcpSocket::disconnected,
                          &wire, &RadioConnection::onSocketDisconnected);
@@ -164,6 +197,43 @@ private slots:
         QCOMPARE(writes.load(), 0);
     }
 
+    void forcedCleanupDoesNotWaitOnOwner_data()
+    {
+        QTest::addColumn<int>("path");
+        QTest::newRow("forced") << 0;
+        QTest::newRow("terminal") << 1;
+        QTest::newRow("multi-flex-cancel") << 2;
+    }
+
+    void forcedCleanupDoesNotWaitOnOwner()
+    {
+        QFETCH(int, path);
+        QStringList commands;
+        QList<quint32> sequences;
+        const auto gate = std::make_shared<CleanupGate>();
+        RadioModel model;
+        RadioInfo selected = demoInfo();
+        selected.family = QStringLiteral("flex");
+        model.connectToRadio(selected);
+        QTRY_VERIFY(model.backend()->connectionSession().has_value());
+        RadioConnection* wire = model.connection();
+        QSignalSpy ended(model.backend(), &IRadioBackend::disconnected);
+        QMetaObject::invokeMethod(wire, [&] {
+            RadioConnectionSessionTestAccess::installCleanupSink(*wire, commands, sequences, {}, gate);
+        }, Qt::BlockingQueuedConnection);
+        if (path == 0) { model.forceDisconnect(); }
+        else if (path == 1) { SessionControlTestAccess::terminalDisconnect(model); }
+        else { model.cancelMultiFlexConflict(); }
+        const bool returnedBeforeClose = !gate->finished;
+        const bool retired = !model.isConnected() && !model.backend()->connectionSession();
+        gate->released = true;
+        QTRY_VERIFY(gate->finished);
+        model.disconnectFromRadio();
+        QVERIFY(returnedBeforeClose);
+        QVERIFY(retired);
+        QCOMPARE(ended.size(), 1);
+    }
+
     void handshakeAndIdempotence()
     {
         FlexBackend backend;
@@ -201,6 +271,95 @@ private slots:
         QTRY_COMPARE(connected.size(), 2);
         QVERIFY(backend.connectionSession()->epoch != first.epoch);
         QCOMPARE(first.epoch, starting.first().first().toULongLong()); // immutable copy
+    }
+
+    void reconnectWaitsForEntireCleanup_data()
+    {
+        QTest::addColumn<bool>("cancelPending");
+        QTest::newRow("replacement") << false;
+        QTest::newRow("cancel-then-replace") << true;
+    }
+
+    void reconnectWaitsForEntireCleanup()
+    {
+        QFETCH(bool, cancelPending);
+        QStringList commands;
+        QList<quint32> sequences;
+        const auto gate = std::make_shared<CleanupGate>();
+        FlexBackend backend;
+        QSignalSpy connected(&backend, &IRadioBackend::connected);
+        QSignalSpy ended(&backend, &IRadioBackend::disconnected);
+        backend.connectRadio(demoRequest());
+        QTRY_COMPARE(connected.size(), 1);
+        const quint64 firstEpoch = backend.connectionSession()->epoch;
+        RadioConnection* wire = backend.connection();
+        QMetaObject::invokeMethod(wire, [&] {
+            RadioConnectionSessionTestAccess::installCleanupSink(*wire, commands, sequences, {}, gate);
+        }, Qt::BlockingQueuedConnection);
+        const RadioDisconnectRequest deferred{0, RadioDisconnectRequest::Completion::Deferred};
+        backend.disconnectRadio(deferred);
+        QTRY_VERIFY(gate->entered);
+        backend.connectRadio(demoRequest());
+        if (cancelPending) {
+            backend.disconnectRadio(deferred);
+            backend.connectRadio(demoRequest());
+        }
+        // This executes INSIDE the old close's nested event loop. A plain
+        // worker-queue ordering fence would already have admitted the new dial.
+        quint64 transportEpoch = 0;
+        QMetaObject::invokeMethod(wire, [&] { transportEpoch = wire->lineEpoch(); },
+                                  Qt::BlockingQueuedConnection);
+        const bool retired = !backend.isConnected() && !backend.connectionSession();
+        gate->released = true;
+        QTRY_COMPARE(connected.size(), 2);
+        QVERIFY(gate->finished);
+        QVERIFY(retired);
+        QCOMPARE(transportEpoch, firstEpoch);
+        QVERIFY(backend.isConnected());
+        QVERIFY(backend.connectionSession()->epoch != firstEpoch);
+        QCOMPARE(ended.size(), cancelPending ? 2 : 1);
+        backend.disconnectRadio();
+    }
+
+    void blockingDrainAfterDeferredCleanup_data()
+    {
+        QTest::addColumn<int>("path");
+        QTest::newRow("idle-disconnect") << 0;
+        QTest::newRow("pending-disconnect") << 1;
+        QTest::newRow("destruction") << 2;
+    }
+
+    void blockingDrainAfterDeferredCleanup()
+    {
+        QFETCH(int, path);
+        QStringList commands;
+        QList<quint32> sequences;
+        const auto gate = std::make_shared<CleanupGate>();
+        auto backend = std::make_unique<FlexBackend>();
+        QSignalSpy connected(backend.get(), &IRadioBackend::connected);
+        backend->connectRadio(demoRequest());
+        QTRY_COMPARE(connected.size(), 1);
+        RadioConnection* wire = backend->connection();
+        QMetaObject::invokeMethod(wire, [&] {
+            RadioConnectionSessionTestAccess::installCleanupSink(*wire, commands, sequences, {}, gate);
+        }, Qt::BlockingQueuedConnection);
+        backend->disconnectRadio({0, RadioDisconnectRequest::Completion::Deferred});
+        QTRY_VERIFY(gate->entered);
+        if (path == 1) { backend->connectRadio(demoRequest()); }
+        QMetaObject::invokeMethod(wire, [wire, gate] {
+            QTimer::singleShot(25, wire, [gate] { gate->released = true; });
+        }, Qt::BlockingQueuedConnection);
+        if (path == 2) { backend.reset(); }
+        else { backend->disconnectRadio(); }
+        QVERIFY(gate->finished);
+        QCOMPARE(connected.size(), 1);
+        if (backend) {
+            drain(wire);
+            QVERIFY(!backend->isConnected());
+            QVERIFY(!backend->connectionSession());
+            backend->connectRadio(demoRequest());
+            QTRY_COMPARE(connected.size(), 2);
+        }
     }
 
     void gracefulCleanupUsesSharedSequenceAndOriginalStream()

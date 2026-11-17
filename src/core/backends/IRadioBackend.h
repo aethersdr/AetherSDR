@@ -150,6 +150,9 @@ struct MemoryRecallDetails {
 //     before returning or asynchronously — never twice, never from a worker. The
 //     destructor completes the same drain and never waits on a
 //     BlockingQueuedConnection whose target may be waiting on this thread.
+//     An explicit Deferred request may leave bounded transport cleanup on its
+//     worker after retiring all session deliveries. A replacement dial waits
+//     for that cleanup; default disconnect and destruction drain it fully.
 //     Disconnecting signals does not drop calls already queued, so
 //     teardownBackend() bumps a generation counter and every handler bound to a
 //     backend-owned object returns early on mismatch (RadioModel::setupBackend()).

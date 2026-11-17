@@ -1078,7 +1078,8 @@ ReceiveTransportResult FlexBackend::startReceiveTransport(bool rebind)
 
 bool FlexBackend::isConnected() const
 {
-    return m_commandWan ? m_commandWan->isConnected() : m_connection && m_connection->isConnected();
+    return m_commandWan ? m_commandWan->isConnected()
+        : m_connection && !m_lanSession->closing() && m_connection->isConnected();
 }
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)

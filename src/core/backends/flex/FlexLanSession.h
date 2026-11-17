@@ -4,6 +4,7 @@
 #include "FlexCommandSession.h"
 
 #include <QObject>
+#include <QSemaphore>
 #include <QString>
 
 #include <atomic>
@@ -30,6 +31,7 @@ public:
                          quint32 keepaliveSequence = 0);
     bool isConnected() const { return m_connected; }
     bool active() const { return m_active; }
+    bool closing() const { return bool(m_cleanup); }
     std::optional<ConnectionSession> snapshot() const { return m_snapshot; }
     ReceiveTransportResult startReceiveTransport(bool rebind);
     FlexCommandSession& commands() { return m_commands; }
@@ -43,12 +45,15 @@ signals:
 
 private:
     bool current(quint64 epoch) const;
+    void startTransport(quint64 epoch);
+    void waitForCleanup();
     void finish(quint64 epoch);
     void stopReceiveTransport();
     RadioConnection* m_connection;
     PanadapterStream* m_stream;
     FlexStatusIngress* m_ingress;
     std::shared_ptr<std::atomic<quint64>> m_epoch;
+    std::shared_ptr<QSemaphore> m_cleanup;
     bool m_active{false};
     bool m_connected{false};
     bool m_synthetic{false};
