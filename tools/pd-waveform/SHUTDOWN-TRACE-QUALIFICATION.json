@@ -1,0 +1,245 @@
+{
+  "updated_utc": "2026-11-17T16:08:53.016538+00:00",
+  "status": "bounded_read_only_lab_collector_normal_live_capture_passed_disconnect_native_cleanup_verified_original_host_timing_receipt_failed",
+  "production_ready": false,
+  "runtime_source_commit": "ea92eb13efba12f9296f0f23b8ef79fee77cdd25",
+  "installed_release_blake2b_256": "b732344cad128503ee8f2bf67cfd912dee4cc947bf5beac212a606766f79a42c",
+  "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+  "RF_commands": [],
+  "reboot_commands": [],
+  "permanent_changes": [],
+  "protocol_component": {
+    "passed": true,
+    "redaction_formats": 7,
+    "fragmentation_sequence_identity_lifecycle_refusals": true,
+    "slow_consumer_drops": 9984,
+    "max_queue": 123329,
+    "total_bytes": 131590,
+    "transport": "own private Unix socket pair; no firmware peer, radio or RF"
+  },
+  "normal_live": {
+    "passed": true,
+    "RF_commands": [],
+    "reboot_commands": [],
+    "installation_actions": [],
+    "desktop_sha256": "431ef25f7cf3391671b8b0475ab489c75c8c415a0955dcf7ae7b426b316d5821",
+    "radio_before": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "native": {
+      "RF_commands": [],
+      "changes": [],
+      "collector_complete": true,
+      "journal_pid": 2234,
+      "reason": "deadline",
+      "read_bytes": 65428,
+      "read_lines": 63,
+      "journal_events": 28,
+      "oversize_lines": 0,
+      "dropped_events": 0,
+      "elapsed_s": 12.024795218000008,
+      "journal_exit": -15,
+      "total_export_bytes": 22648,
+      "max_queued_bytes": 9332
+    },
+    "hello": {
+      "firmware": [
+        {
+          "pid": 1143,
+          "exe": "/usr/bin/smartsdr",
+          "comm": "SL MAIN",
+          "cgroup": [
+            "0::/../../../system.slice/smartsdr.service"
+          ],
+          "units": [
+            "smartsdr.service"
+          ]
+        },
+        {
+          "pid": 1278,
+          "exe": "/var/lib/smartsdr/waveforms/AetherHealth/aether-health-arm64",
+          "comm": "aether-health-a",
+          "cgroup": [
+            "0::/../../../system.slice/smartsdr.service"
+          ],
+          "units": [
+            "smartsdr.service"
+          ]
+        }
+      ],
+      "units": {
+        "exit": 0,
+        "properties": "TimeoutStopUSec=1min 30s\nMainPID=0\nControlGroup=\nKillMode=control-group\nSendSIGKILL=yes\nId=aetherpd-boot.service\nRequires=system.slice sysinit.target\nWants=\nConflicts=shutdown.target\nBefore=shutdown.target aetherpd-shim.service aetherpd-start@1-1313-78666.service aetherpd-start.socket\nAfter=local-fs.target systemd-journald.socket sysinit.target basic.target system.slice\nActiveState=active\nSubState=exited\nDefaultDependencies=yes\n\nTimeoutStopUSec=12s\nMainPID=1313\nControlGroup=/system.slice/aetherpd-shim.service\nKillMode=control-group\nSendSIGKILL=yes\nId=aetherpd-shim.service\nRequires=aetherpd-boot.service aetherpd-start.socket sysinit.target system.slice\nWants=\nConflicts=shutdown.target\nBefore=multi-user.target shutdown.target\nAfter=sysinit.target systemd-journald.socket system.slice aetherpd-boot.service aetherpd-start.socket basic.target\nActiveState=active\nSubState=running\nDefaultDependencies=yes\n\nControlGroup=/system.slice/aetherpd-start.socket\nKillMode=control-group\nSendSIGKILL=yes\nId=aetherpd-start.socket\nRequires=aetherpd-boot.service system.slice\nWants=\nConflicts=shutdown.target\nBefore=aetherpd-start@1-1313-78666.service shutdown.target aetherpd-shim.service\nAfter=system.slice aetherpd-boot.service systemd-journald.socket -.mount\nActiveState=active\nSubState=listening\nDefaultDependencies=no\n\nTimeoutStopUSec=12s\nMainPID=2115\nControlGroup=/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@1-1313-78666.service\nKillMode=control-group\nSendSIGKILL=no\nId=aetherpd-start@1-1313-78666.service\nRequires=aetherpd-boot.service \"system-aetherpd\\\\x2dstart.slice\" sysinit.target\nWants=\nConflicts=shutdown.target\nBefore=shutdown.target\nAfter=aetherpd-boot.service systemd-journald.socket \"system-aetherpd\\\\x2dstart.slice\" sysinit.target basic.target aetherpd-start.socket\nActiveState=active\nSubState=running\nDefaultDependencies=yes\n\nTimeoutStopUSec=1min 30s\nMainPID=1143\nControlGroup=/system.slice/smartsdr.service\nKillMode=control-group\nSendSIGKILL=yes\nId=smartsdr.service\nRequires=system.slice sysinit.target\nWants=gpsd.service rapidm-updater.service\nConflicts=shutdown.target\nBefore=smartsdr-apd.service multi-user.target finalize-upgrade.service shutdown.target\nAfter=rapidm-updater.service sysinit.target network.target gpsd.service systemd-journald.socket system.slice basic.target\nActiveState=active\nSubState=running\nDefaultDependencies=yes\n",
+        "stderr": "",
+        "truncated": false
+      },
+      "source": "read-only journal follow; no reboot or RF controls"
+    },
+    "terminal": {
+      "complete": true,
+      "reason": "deadline",
+      "read_lines": 63,
+      "journal_events": 28,
+      "dropped_events": 0,
+      "oversize_lines": 0
+    },
+    "event_counts": {
+      "hello": 1,
+      "journal": 28,
+      "heartbeat": 11,
+      "end": 1
+    },
+    "host_trace_bytes": 21664,
+    "host_trace_sha256": "92d3b742824c7dba00da425a8b36d0aded95a333a691db3e8155635d70998397",
+    "source_sha256": "996f271e9354e2fc7ceffc2fe2f8aa467221621a9131e2068481dfc464b6aae2",
+    "radio_after": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.1875,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "disconnect": {
+    "native_disconnect_cleanup_passed": true,
+    "original_host_harness_passed": false,
+    "assessment": "Native evidence independently confirms peer EOF, journal termination/reaping, both journal PIDs absent and native job/scratch removal. The original harness then rejected its less-than-eight-second overall orchestration condition. This condition includes native carrier retirement after observer cleanup and is not a measured collector teardown deadline. Preserve the failed host outcome; do not relabel it green. No second radio test was run to replace it.",
+    "cleanup_latency_qualified": false,
+    "native": {
+      "RF_commands": [],
+      "changes": [],
+      "collector_complete": false,
+      "journal_pid": 2310,
+      "reason": "peer_closed",
+      "read_bytes": 0,
+      "read_lines": 0,
+      "journal_events": 0,
+      "oversize_lines": 0,
+      "dropped_events": 0,
+      "elapsed_s": 0.009167145999981585,
+      "journal_exit": -15,
+      "total_export_bytes": 3398,
+      "max_queued_bytes": 3105,
+      "journal_pid_gone": true,
+      "previous_journal_pid_gone": true
+    }
+  },
+  "shutdown_ordering": {
+    "firmware_main_pid": 1143,
+    "firmware_unit": "smartsdr.service",
+    "additional_inherited_listener_holder": "AetherHealth PID1278 shares the listener/cgroup; socket ownership alone is not unique firmware-process attribution. systemctl MainPID confirms1143.",
+    "explicit_AetherPD_after_firmware": false,
+    "meaning": "Current AetherPD boot/socket/shim/session After/Before lists do not order against smartsdr.service. Concurrent stops are possible. This does not establish the cause of the failed whole-radio reboot or authorize weakening guardian lifetime policy.",
+    "source": "Live systemctl show snapshot and tools/pd-waveform/boot/units.py; no proprietary executable inspection."
+  },
+  "bounds": {
+    "source_bytes": 4194304,
+    "export_bytes": 2097152,
+    "queued_bytes": 131072,
+    "frame_bytes": 32768,
+    "raw_journal_line_bytes": 65536,
+    "duration_seconds": "integer3..120; normal live12",
+    "journal_scope": "current boot, PID1/kernel/aetherpd and observed firmware units",
+    "disk": "host-only fsync after each accepted record; no radio persistent trace file"
+  },
+  "limits": [
+    "No software reboot or shutdown trace was performed in these tests. Failed prior reboot remains unqualified; prior boot journal was unavailable after hard power removal.",
+    "Read-only journal follower and initial unit snapshot cannot diagnose a kernel/firmware lockup with no emitted record. A shutdown can kill the temporary collector/container or network before its bounded deadline. Host EOF without a complete terminal record is partial evidence, never a successful reboot receipt.",
+    "Live normal capture contained28 selected journal records and11 heartbeats in12.025s; no selected drops/oversize. History includes diagnostic-waveform upload activity; no claim of a quiet baseline or absence of all unrelated work.",
+    "This is a development lab observer delivered through the existing broad privileged diagnostics transport. It is not installed or shipped. The unencrypted LAN stream, source address/nonce check and pattern-based redaction are not a production authentication or comprehensive secrecy guarantee. Receiver tokens/state and desktop credentials were excluded from the archive.",
+    "No service definitions, firmware defaults, reboot guards, scheduling, IQ routing or installed payload were changed. Native observer terminated/reaped only its own journal follower.",
+    "Collector protocol host check passed; initial restricted-sandbox socket-option denial is preserved. The original disconnect host timing receipt remains failed, with separate native cleanup evidence.",
+    "No RF, actual6300, final graph active/keyed shutdown, whole-volume disk, remote-account/platform, stockAPD or release qualification is implied. User-deferred5W SWR/preamble work remains deferred."
+  ],
+  "next_step": "Design a bounded observable service-stop sequence while firmware/API remain available, preserving guardians until receive recovery. Correlate each unit/process transition before considering another software reboot; a future reboot must have the operator aware of possible physical power recovery and cannot be automatically retried.",
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-development/collector_body.py.gz": "19a03813b138e8b6a30d02a44cfe96b6efa936e64de1201de85d2293066992fa",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-development/protocol-host-test.log.gz": "cace042e4c3d0beb6d96571d9ede4c9803ed4ca55516b9a763c457b0be302266",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-development/protocol-test.log.gz": "cc895f399fb5a51c2b182010e356c29d9311a49e391715fe746c92454876678b",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-development/save-qualification.py.gz": "910ff2f1ab2c297ed8a1bc97806d53c89a7c0470f6ff96eece13e513202179c3",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-development/test_protocol.py.gz": "ad6010f43916319a16a397aa7dbff0aada0901af72c20fc7e20e09427c9b98e5",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-development/trace_protocol.py.gz": "6753183038e0ef68bb4543a0bb1791612286fb39bfcd43f23fe01bd9e69db6db",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/console.log.gz": "626fc023d355e4b5978026975cd065371d62976b2473dbfcaf28e44dd7c8ea5b",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/orchestration.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/outcome.json.gz": "b4fff8d5131c610e3d10fce2d91d5398717974a197dfd80e7cecef4eae2cd44b",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/run.py.gz": "aad2dddcbbd97c90d21f69ea8732d4a26b90aec40d4e7d6f4e8d7fc9b07a76bc",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/trace-job.py.gz": "b9e4be5be70d9dce51e12876cfef7f706b9a548540f1710880dc9cdc0234eb9e",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/trace-result.json.gz": "d554c6d3468790f308f8319286305d92b7b490ddd28bfc7a0089e28345c9922e",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/trace.jsonl.gz": "a1a5174e158ff89739b318d905cbac74a8c1c98abea0d80cc3c92b0afc8961c5",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-live-01/trace.log.gz": "d554c6d3468790f308f8319286305d92b7b490ddd28bfc7a0089e28345c9922e",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/console.log.gz": "1bf56ff17689c91cdf8a8c8393d28e6c67215c606a68faa73d11ff40f13c675c",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/independent-assessment.json.gz": "0d812d06ef0339257f5f07f44e8e0679737cb69f2c68be9b6a3665247bd07735",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/orchestration.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/outcome.json.gz": "bab90e1095343d5ca84ed3b87543c311b78a591c3efbdc9afef21f51a9e04e64",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/run.py.gz": "ee7b1dad249418ddbf5c7329ff6aabc9dc8876cefbb4b352c150c9e6cf1fc235",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/trace-job.py.gz": "d5e012e8e461b35f1ffaf48bf23ee604db6098ef3f9ded9d05645629b05c9dfe",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/trace-result.json.gz": "7464b0f85eae7b52bc9da5bb10b9f95ae2e3fb297b5b4dfac475fad650b73a2b",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/trace.jsonl.gz": "57aad8d3f37fa7a3ac477bc9c731de8a1dd7874a31863e3d81ea99ed83f0b322",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/shutdown-trace-disconnect-01/trace.log.gz": "7464b0f85eae7b52bc9da5bb10b9f95ae2e3fb297b5b4dfac475fad650b73a2b",
+    "tools/pd-waveform/evidence/20261117-shutdown-trace/production-completion-plan.json.gz": "a54be115a3c085e8727232291eaffd7e59a4f0632476a6b2ac7ad4133173bdfa"
+  }
+}
