@@ -529,7 +529,9 @@ credential for the connected radio. Opening it reads status only.
   means DSP and worker retirement completed, but the receive helper exited
   without confirming restored receive settings. It can refuse recovery to
   protect another slice's DAX assignment; check your receive settings. This
-  status does not automatically retry restoration. A Stop receipt alone confirms
+  status does not automatically retry restoration. Successful IQ delivery does
+  not confirm receive cleanup; that requires its own acknowledgments and radio
+  readback. A Stop receipt alone confirms
   neither shutdown nor unkey. These completion messages describe the owned
   session; check the radio's transmit indicator for its current RF state.
 - **Restore receive** explicitly requests the checked receive recovery

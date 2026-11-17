@@ -170,11 +170,19 @@ func (writer *pdReceiveWriter) reply(ctx context.Context, command string) (strin
 			return "", errors.New("malformed receive command reply")
 		}
 		seq, err := pdReceiveDecimal(fields[0])
-		if err != nil || seq != writer.sequence {
-			return "", errors.New("unexpected receive command reply")
+		if err != nil {
+			return "", errors.New("invalid receive reply sequence")
 		}
 		code, err := strconv.ParseUint(fields[1], 16, 32)
-		if err != nil || code != 0 {
+		if err != nil {
+			return "", errors.New("invalid receive reply code")
+		}
+		// FlexLib Radio.ParseReply dispatches only a registered sequence.
+		// An unrelated reply cannot acknowledge or reject this command.
+		if seq != writer.sequence {
+			continue
+		}
+		if code != 0 {
 			return "", errors.New("receive command rejected")
 		}
 		return fields[2], nil

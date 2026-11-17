@@ -1,0 +1,135 @@
+{
+  "updated_utc": "2026-11-17T01:49:51.770304+00:00",
+  "status": "installed_guardian_retention_and_reconnect_qualified_receive_completion_warning_open",
+  "production_ready": false,
+  "native_source_commit": "b9a05238499cfbb4f67088b5efee6d32870ff707",
+  "release_blake2b_256": "7a2b76d1bd6939e803b08a73ecfa98cdc0244384f6bfe884fdf2295e8295c4d1",
+  "desktop_PID": 2443688,
+  "desktop_bridge": "/tmp/aetherpd-session-guardian-hold",
+  "boot_id": "839d29c7-c56e-4c61-a87e-05fdf1c6b6b6",
+  "receive_only_reconnect": {
+    "passed": true,
+    "disconnected_seconds": 30,
+    "post_reconnect_observation_seconds": 15,
+    "original_worker_count": 9,
+    "guardian_retained_at_disconnected_window_end": true,
+    "guardian_UID78666_caps0_NNP1": true,
+    "applied_after_disconnected_window": {
+      "TimeoutStopUSec": "12s",
+      "MainPID": "0",
+      "Result": "timeout",
+      "KillMode": "control-group",
+      "SendSIGKILL": "no",
+      "Id": "aetherpd-start@11-4827-78666.service",
+      "ActiveState": "deactivating",
+      "SubState": "final-sigterm"
+    },
+    "workers_gone_after_disconnect_ack_ms": 30625.98298,
+    "remaining_original_workers": [],
+    "service_manager_SIGKILL_observed": false,
+    "stale_Start_refused_disconnected": true,
+    "stale_Start_refused_reconnected": true,
+    "new_GUI_handle": "0xe8069bd",
+    "ARP_empty": true,
+    "ARP_journal_size": 0,
+    "accept_local": "0",
+    "raw_API_observations": 189,
+    "scope": "One receive-only GUI disconnect/reconnect on the installed FLEX8600 candidate, not keyed RF or actual6300."
+  },
+  "hold_observation": {
+    "slice_removed_after_disconnect": true,
+    "fresh_disconnected_interlock": "RECEIVE, source empty, tx_client_handle 0, tx_allowed 0",
+    "guard_policy_requires": "READY, source empty, zero TX client, tx_allowed 1, empty reason, fresh complete inventory and receive-safe state",
+    "interpretation": "The passive trace is consistent with the guardian holding for a non-ready interlock. It is not a capture of that guardian internal state or final exit reason/status.",
+    "unregistered_or_foreign_receiver_rule_relaxed": false
+  },
+  "post_reconnect_IQ": {
+    "full_frame_bytes": 131072,
+    "finite_nonzero": true,
+    "transport": "local_dax_iq",
+    "channel": 4,
+    "FDX_disabled": true,
+    "feedback_binding_matches_new_GUI": true,
+    "IQ_sha256": "42e56a2f3a988d9bc396926c9392b1c957157c8b79d84e8b3f0f2781b3b3300a",
+    "Stop_requested": true,
+    "clean_completion_confirmed": false,
+    "terminal_state": "stopped_receive_unconfirmed",
+    "observed_receive_guardian_error": "unexpected receive command reply",
+    "receive_guardian_exit": 4,
+    "final_control_processes": 3,
+    "actual_DSP_capture_ARP_workers_retired": true,
+    "temporary_installer_paths_absent": true,
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5"
+  },
+  "reply_routing_component": {
+    "installed": false,
+    "primary_source": {
+      "version": "FlexLib API v4.3.16.42034",
+      "path": "reference/FlexLib/FlexLib/Radio.cs:3127",
+      "dispatch_lines": "3199-3221",
+      "sha256": "5cc53b508645de15500f3b579c144f79b1ef4f7c00b637b45b4c3329002dbb36",
+      "published_zip": "https://edge.flexradio.com/www/offload/20261012095725/FlexLib_API_v4.3.16.zip",
+      "published_zip_sha256": "60978db51dac6ea781899dd80832ad4e7876ce96ed72532b57106376fc26463f"
+    },
+    "change": "Validate framing and sequence/code syntax, ignore well-formed replies for unrelated sequences, require the current matching successful reply; retain existing byte/frame/deadline limits.",
+    "new_commands_or_restore_authority": false,
+    "tests": "Writer tests and all TestPD tests pass under race detector; restoring rejection of unrelated replies and accepting own error replies each makes the tests fail.",
+    "tested_source_sha256": {
+      "docs/user/docs/tailscale-remote-access.md": "85fc388479cfc655c9dc40e2c78883be61395178d3d8eb687d2da4d604a51811",
+      "tools/flex-tailnet-shim/aetherpd_receive_restore.go": "5c8135af3850923a98f56434f8d4828332335e822e75ddf6f64669fd745373d2",
+      "tools/flex-tailnet-shim/aetherpd_receive_restore_test.go": "0b112c1838b1e62782d51417f05c8473310848c97714cee05b5e29bcd8c9b8c9",
+      "tools/pd-waveform/session/README.md": "e5c88794f59f6e7cabe6193dbb22b7660a9e3cd7d4e5a88760f4cd9928192b47"
+    },
+    "exact_failed_live_reply_identified": false,
+    "read_only_probe": {
+      "unprivileged_UID": 78666,
+      "NoNewPrivileges": "1",
+      "connections": 3,
+      "commands": [
+        "client bind current GUI",
+        "slice list"
+      ],
+      "processing_setting_writes": [],
+      "result": "All three fresh connections returned matching replies; the installed intermittent refusal was not reproduced."
+    }
+  },
+  "observer_cleanup": {
+    "job_container_deleted": true,
+    "scratch_deleted": true,
+    "audit_container_deleted": true,
+    "audit_scratch_deleted": true,
+    "wire_probe_container_deleted": true,
+    "wire_probe_scratch_deleted": true
+  },
+  "RF_commands": [],
+  "limitations": [
+    "Fresh full IQ delivery passed but fresh Stop receive completion did not; do not report full recovery clean.",
+    "The sequence-routing component follows FlexLib but has not been installed or proven to resolve the exact live refusal.",
+    "Radio service unit legitimately retained timeout failure metadata while protecting the guardian; original worker exit code/reason was not collected.",
+    "No RF, exact final-candidate reboot, physical power loss, interrupted update/rollback or actual FLEX6300 qualification is claimed.",
+    "Full P1-P10 goal remains active; LP100A stays deferred."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-events.json.gz": "af5fa5e6c0454c2d85b7e2586c952b5b89789ab106575fc1be7c3a7ca6347818",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-observe-job.py.gz": "adfb84e06aaf94b1f2352bb8a559a11f1979b739e68ac7a805c563e4552aa32b",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-observe-result.json.gz": "f4015cee95baeb696a091f2f23324ae4227f16de020baeddd8203f4a759d8737",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-observer-functions.py.gz": "21513ecb8ad14ee27eea000de3f6c961674eb55048a331866b78558b4efe32b9",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-observer-tail.py.gz": "0f9c1fe96417eef6532132522c81b9101c689aa1b2ef9a7533580d2e21adb1a3",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-outcome.json.gz": "af822fdbc9fcd923f00bc672f69f2c91dade3926bda6d0dc0e4ec50f48f87a03",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-recovery-final-audit-job.py.gz": "e9e21db479f4c0df416364a44c9f914272dd8650a331b33a506a0c75705f9b58",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-recovery-final-audit-result.json.gz": "f05b88f57546d7948653116a96cce876b21104d690f8e084bec1f3824d2f3b3f",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-recovery-receive-iq-check.py.gz": "02c3a8b5798e183ebc215066c4338c89d9012e34ae08a5cc339ec50dd732cfa4",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-recovery-usb-receive-iq-check.json.gz": "a35cdc984d93b4cecc5226a29ab7b3ded91b7178249636b82365665ff71f7161",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-recovery-usb-receive-iq.f32le.gz": "bcd377eed4ac7bc9499984456aca294af1f36444faafc9769bad53aa9683a42e",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/installed-guardian-hold-reconnect-run.py.gz": "6ac6e38a8b3b76a5ea3ea62cc66f30a8e1f1a10cdff660a13f5c97a75e04c889",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-accept-own-error.log.gz": "194986afd5634e804ac2297f3af7bb4cf52fed078daba0fcea199e9ffff5a9b5",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-go-pd-race-host-access.log.gz": "1ca72bd04c1f21391b2ca4e29b365f76c5e517e35832e5b4927df6399ae6cbe5",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-reject-unrelated.log.gz": "31d083fc29ed625e6d0aba4f3ec743295aa1da350205d4ff23af145669f2dcaf",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-reply-probe-job.py.gz": "4a730db388012e34bcad6f820d828af20d23ba66f98c36f0251d6b8c0f3c39d0",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-reply-probe-result.json.gz": "085efc2309303eee15bdfb92157a9811aa978b44fd7aa59caaa7a2547ae36acb",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-user-docs-build.log.gz": "1e169fdf4dfd234adb443dd20d8ff2bbd6dd564a63ba342ef731c03e84c5357d",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-writer-mutations.json.gz": "68091f5d30e5316fd2300f4e314621d77a5c89f842d89e0276f9b669bd72d983",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-writer-mutations.py.gz": "07a7a8c066fdb7aadc6a76c0d8483cbdfe2c16136ab7acc71ef096be7c719d42",
+    "tools/pd-waveform/evidence/20261116-guardian-hold-reconnect/receive-reply-order-probe-writer-routing-tests.log.gz": "89049be0e844904b2d102e7a2bdd6337b246409393518b8f0d94cb3c3bbb5785"
+  }
+}

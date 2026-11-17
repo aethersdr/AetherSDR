@@ -588,14 +588,25 @@ for exact artifacts and ownership checks. This does not qualify successful
 credential revocation, two real competing GUIs, other API roles or keyed RF
 failure behavior.
 
-The receive-only GUI disconnect/reconnect case remains a failed qualification.
-An original API-lease guardian survived a 25-second observation after the DSP
-and capture retired; the installed session unit subsequently force-killed it
-under its control-group stop policy. This is not confirmed voluntary lease
-retirement. Ordinary IQ recovery after that forced cleanup passed. The session
-manager policy and the guardian's missing/reassigned-owner retirement conditions
-must be qualified together, including the actual FLEX-6000 service manager.
-See [`GUI-RECONNECT-FAILURE-QUALIFICATION.json`](../GUI-RECONNECT-FAILURE-QUALIFICATION.json).
+The installed guardian-hold policy preserves the ordinary API lease guardian
+while the radio reports `RECEIVE` with `tx_allowed=0` after GUI disconnect. In
+the qualified receive-only case, all original workers retired after reconnect
+without service-manager SIGKILL, and the stale panel refused Start throughout.
+The native guardian's final exit reason/status was not captured; the passive
+API trace is separate evidence from its internal observations. The subsequent
+fresh full IQ capture succeeded, but receive recovery reported an unexpected
+reply and remains unqualified. Actual FLEX-6000 manager behavior remains open.
+See [`GUI-RECONNECT-HOLD-QUALIFICATION.json`](../GUI-RECONNECT-HOLD-QUALIFICATION.json)
+and the preserved pre-fix
+[`GUI-RECONNECT-FAILURE-QUALIFICATION.json`](../GUI-RECONNECT-FAILURE-QUALIFICATION.json).
+
+Receive-setting command replies are routed by sequence as in FlexLib
+v4.3.16.42034 `Radio.ParseReply` (`reference/FlexLib/FlexLib/Radio.cs:3127`). A
+well-formed reply for another sequence neither confirms nor rejects the pending
+command. Matching errors, malformed replies and missing matching replies still
+fail; the existing frame, byte and transport deadlines remain in force. This
+component correction does not establish the exact frame behind the installed
+receive-recovery refusal or qualify its installed resolution.
 
 ## Feedback pan binding
 

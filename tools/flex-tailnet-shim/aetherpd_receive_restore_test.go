@@ -168,3 +168,32 @@ func TestPDReceiveWriterRequiresExactSuccessfulAcknowledgement(t *testing.T) {
 		t.Fatal("short write accepted")
 	}
 }
+
+func TestPDReceiveWriterRoutesOnlyMatchingReply(t *testing.T) {
+	for _, test := range []struct {
+		name, replies string
+		success       bool
+	}{
+		{"older_success", "R40|0|old\nR41|0|current\n", true},
+		{"unrelated_failure", "R5|50000001|unrelated\nR41|0|current\n", true},
+		{"future_success", "R42|0|other\nR41|0|current\n", true},
+		{"zero_sequence", "R0|0|other\nR41|0|current\n", true},
+		{"matching_failure", "R40|0|old\nR41|50000001|refused\nR42|0|other\n", false},
+		{"matching_absent", "R40|0|old\nR42|0|other\n", false},
+		{"malformed_sequence", "Rbad|0|other\nR41|0|current\n", false},
+		{"malformed_code", "R40|invalid|other\nR41|0|current\n", false},
+		{"bounded_unrelated_flood", strings.Repeat("R40|0|old\n", 8192) + "R41|0|current\n", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &pdReceiveReplyConn{Reader: strings.NewReader(test.replies)}
+			writer := pdReceiveWriter{conn: conn, reader: bufio.NewReaderSize(conn, 4098), sequence: 40}
+			body, err := writer.reply(context.Background(), "slice list")
+			if (err == nil) != test.success || test.success && body != "current" {
+				t.Fatalf("matching reply: body=%q error=%v", body, err)
+			}
+			if conn.writes.String() != "C41|slice list\n" {
+				t.Fatal("reply routing issued extra commands", conn.writes.String())
+			}
+		})
+	}
+}
