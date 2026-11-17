@@ -635,9 +635,23 @@ after killing the IQ source; Start then succeeded without an intervening Stop.
 
 These are distinct lifecycle outcomes. The earlier continuous-polling test's
 full-automatic-cleanup assertion remains a failed assertion, not a pass inferred
-from idle expiry. Connected desktop handling of the restoration window remains
-to be qualified. Neither receive-only test proves RF unkey behavior or actual
+from idle expiry. Those runs did not qualify connected desktop handling of the
+restoration window. Neither receive-only test proves RF unkey behavior or actual
 FLEX6000 supervision. Session start and expiry never initiate transmission.
+
+The installed `0d88765b` release has separate connected-desktop proofs for
+IQ-source SIGKILL and loss of both ARP cleanup owners. In each receive-only
+case, all ten resource processes retired while the three capability-free
+control processes remained. Status reported `cleanup_unconfirmed`; explicit
+Start through AetherSDR created a successor and delivered fresh local DAX IQ
+with FDX disabled. Stop completed afterward. With both ARP owners dead, the
+fixed entry and its 64-byte ownership journal survived the fault; the ordinary
+successor reclaimed them and its Stop removed them. The laboratory observer
+performed no ARP repair or service restart. Final native inspection confirmed
+an empty journal, no fixed entry, and all 36 old session process identities
+gone, including the earlier refused probe. These are individual unkeyed cases,
+not automatic control-channel retirement, keyed fault or FLEX-6000 guarantees.
+See [`INSTALLED-RESOURCE-FAILURES-QUALIFICATION.json`](../INSTALLED-RESOURCE-FAILURES-QUALIFICATION.json).
 
 The installed ARM64 receive-only API qualification also rejects missing or
 invalid credentials, duplicate starts against an occupied session, an extra
