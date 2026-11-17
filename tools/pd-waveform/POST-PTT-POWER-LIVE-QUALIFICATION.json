@@ -1,0 +1,273 @@
+{
+  "updated_utc": "2026-11-17T13:26:38.024516+00:00",
+  "status": "deployed_power_control_fix_and_single_1W_USB_carrier_passed",
+  "production_ready": false,
+  "desktop": {
+    "pid": 3832966,
+    "socket": "/tmp/aetherpd-post-ptt-power",
+    "binary_sha256": "5410069710987385818abc17783b61ed7f298ae07dd04185241172f90f3c4c6d",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "desktop_source": "1f14740671fb2fd355a4f6d8f79b8d7de6a5b91d",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.10460461699404
+  },
+  "radio_runtime": {
+    "source_commit": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+    "boot_id": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "runtime_or_helpers_changed": false
+  },
+  "component_report": "tools/pd-waveform/POST-PTT-POWER-CONTROL-QUALIFICATION.json",
+  "live": {
+    "ordinary_AetherSDR_UI": true,
+    "AetherTX_launched": false,
+    "radio_install_or_update": false,
+    "broad_host_root_diagnostics_used": false,
+    "fixed_installed_startup_helper_used": true,
+    "positive_GUI_key_actions": 1,
+    "nominal_power_setting_W": 1,
+    "configured_maximum_W": 10,
+    "mode": "USB software PTT; correction bypassed",
+    "carrier_RF_Hz": 7150710,
+    "FDX": false,
+    "GUI_stop_after_intent_s": 2.025926225,
+    "finite_PCM_duration_s": 4,
+    "native_cleanup_initiation_ms": 9000,
+    "independent_Flex_and_LP_power_stop_W": 1.5,
+    "Flex_SWR_stop": 2,
+    "LP_SWR_stop": 1.5,
+    "RF_guard_limits_changed": false,
+    "post_release_power_control_enabled_without_reconnect": true,
+    "post_release_analyzer_source_arm_enabled": false,
+    "radio_idle_after": true,
+    "LP_zero_after": true,
+    "guard_ended": {
+      "cleanup_due_ms": "11729569",
+      "remaining_ms": 0,
+      "state": "ended",
+      "test_id": "19a78e6cc647bb98237a853c162de8dc"
+    },
+    "audio_route_cleanup": {
+      "errors": [],
+      "module": 536870916,
+      "original_edges": [
+        {
+          "output_serial": 68,
+          "input_serial": 6222
+        },
+        {
+          "output_serial": 69,
+          "input_serial": 6223
+        }
+      ],
+      "original_links_restored": true,
+      "final_capture_edges": [
+        {
+          "output_serial": 68,
+          "input_serial": 6222
+        },
+        {
+          "output_serial": 69,
+          "input_serial": 6223
+        }
+      ],
+      "module_removed": true
+    },
+    "service_stopped_HTTP200": true,
+    "owner_unchanged": true,
+    "processing_settings_restored": false
+  },
+  "current_carrier_analysis": {
+    "positive_GUI_key_actions": 1,
+    "original_harness_passed": true,
+    "capture": {
+      "capture_id": "1ec0ba5838e64104ce44a68ae24e8755",
+      "center_hz": 7150000,
+      "chunk_samples": 512,
+      "correcting": false,
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 1253029763,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "first_receive_ns": "11721263251354",
+      "format": "f32le-iq-v1",
+      "keyed": true,
+      "last_receive_ns": "11721603279412",
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "sample_count": 16384,
+      "sample_rate_hz": 48000,
+      "source": {
+        "generation": "12",
+        "kind": "local_dax_iq",
+        "stream_id": 536870912
+      }
+    },
+    "IQ_sha256": "f138cf4ca78dd17d34f225d8ac5e187500078d518a9df4ec537c0d829769c8b3",
+    "host_meter_observations_above_half_W": 38,
+    "observations_are_not_unique_hardware_samples": true,
+    "Flex_forward_W": {
+      "minimum": 0.6635520572797897,
+      "maximum": 0.6792525070055475
+    },
+    "Flex_raw_SWR": {
+      "minimum": 1.1796875,
+      "maximum": 1.3125
+    },
+    "Flex_same_packet_directional_derived_SWR": {
+      "minimum": 1.2169617638188936,
+      "maximum": 1.2197939805813904
+    },
+    "LP_peak_held_max_W": 0.9,
+    "LP_SWR_with_RF": {
+      "minimum": 1.0,
+      "maximum": 1.06
+    },
+    "IQ_raw_envelope_peak": 17586.103604835265,
+    "IQ_peak_bin_Hz": 708.984375,
+    "limits": [
+      "LP power is peak-held, with meter forward/net configuration unknown.",
+      "Directional powers arrive in the same packet; detector measurement simultaneity is not established.",
+      "IQ amplitude is uncalibrated: no RX ADC full-scale/headroom claim.",
+      "One bypassed USB carrier does not isolate modulation from the PD-mode difference or qualify corrected RF."
+    ]
+  },
+  "prior_5W_USB_carrier_analysis": {
+    "positive_GUI_key_actions": 1,
+    "original_harness_passed": false,
+    "capture": {
+      "capture_id": "469f808136fe1552c4cb27774e9e45f8",
+      "center_hz": 7150000,
+      "chunk_samples": 512,
+      "correcting": false,
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 975494996,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "first_receive_ns": "8348744298507",
+      "format": "f32le-iq-v1",
+      "keyed": true,
+      "last_receive_ns": "8349085280588",
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "sample_count": 16384,
+      "sample_rate_hz": 48000,
+      "source": {
+        "generation": "12",
+        "kind": "local_dax_iq",
+        "stream_id": 536870912
+      }
+    },
+    "IQ_sha256": "04def0a533e96209d88d1480e1b84c9c3e20fa846b028589d064ddc76e8ba623",
+    "host_meter_observations_above_half_W": 39,
+    "observations_are_not_unique_hardware_samples": true,
+    "Flex_forward_W": {
+      "minimum": 3.8542288686231063,
+      "maximum": 3.9596449889187926
+    },
+    "Flex_raw_SWR": {
+      "minimum": 1.0,
+      "maximum": 1.1796875
+    },
+    "Flex_same_packet_directional_derived_SWR": {
+      "minimum": 1.1163657291842743,
+      "maximum": 1.118829461200653
+    },
+    "LP_peak_held_max_W": 4.4,
+    "LP_SWR_with_RF": {
+      "minimum": 1.0,
+      "maximum": 1.03
+    },
+    "IQ_raw_envelope_peak": 41033.415456186434,
+    "IQ_peak_bin_Hz": 708.984375,
+    "limits": [
+      "LP power is peak-held, with meter forward/net configuration unknown.",
+      "Directional powers arrive in the same packet; detector measurement simultaneity is not established.",
+      "IQ amplitude is uncalibrated: no RX ADC full-scale/headroom claim.",
+      "One bypassed USB carrier does not isolate modulation from the PD-mode difference or qualify corrected RF."
+    ]
+  },
+  "comparison_limits": [
+    "These are two finite bypassed USB carriers on different desktop builds, not matched corrected/bypassed two-tone runs.",
+    "The original5W harness failed on an immediate503 cleanup observation; its separate later200 stopped receipt and unchanged false outcome remain preserved.",
+    "Steady carriers show low SWR; they do not isolate modulation/envelope from the PD-mode difference during the failing native noise preamble. No meter floor or universal SWR root cause established.",
+    "Two-second GUI stop timing is measured from host key intent, not FPGA RF timing. Native guard deadline expiry was not forced in this run.",
+    "The new1W keyed DAX IQ capture validates this feedback path with FDX off; no calibrated RX ADC full-scale/headroom or absolute FPGA-to-process latency established."
+  ],
+  "intermediate_failures": [
+    "Copied bench helper lost executable permission; preparation stopped before power change or RF. Verified identical bytes and restored executable mode, then continued from the running service without sending a second Start.",
+    "The earlier1W-01 preparation failure on the old desktop remains in the prior checkpoint; it issued no RF."
+  ],
+  "remaining": [
+    "Resolve safe legacy-desktop-to-independent-analyzer handoff; source preparation remains blocked until a stop/reconnect clears the unconfirmed legacy owner. Do not use ordinary idle as qualified stop proof.",
+    "Native SWR discrepancy under calibration preamble; no product safety-threshold relaxation.",
+    "Natural128sample alignment slip/cold-bypass causes; final current graph crash/unkey/cleanup/restart proof.",
+    "Repeated corrected5W/10W tone/speech/endurance and final stockAPD comparison, actual6300 qualification, disk/update/rollback/platform/credential/release gates."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/USB-idle-receive.f32le.gz": "558c5dc760ee720abbdbf36a67acf8960a70ff2d9b5b4992c769eeed6de7fbc2",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/bench-api.cpp.gz": "f4225a70a05f00cd4855f6b8d9c4aadd13ec501f283b3d150ceacf57acfcaad6",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/bench_audio_route.py.gz": "aa4463e18bbcc9c4910d1a6c725cde5d7874e44699e5781ab7f73bf160591176",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/bench_audio_route_native.py.gz": "9979f839cb27de42e294aff616d5b42a70df480aa0b1b3ba2834e0318c6de1fe",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/bench_meter_monitor.py.gz": "e4808591853ff6362386f499c822a4ff5927ed4c78d51d831845ac03746bd066",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/capture.json.gz": "29786d2b24182a3fd61ea20f403f59357a1b6e15998271a8419d0ec9db7b0105",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/carrier-IQ.f32le.gz": "941e7ccb8362f7248b77f2bf54d3efbe182c91d0ecd17f3cb76958f60704860b",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/carrier-analysis.json.gz": "e0dc5d94cb2681ab3ed58ff7d223b2442573392aad9c8e7c23aa224df7b8de6b",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/carrier-source.f32le.gz": "44bee250c5a6484ecf2cb8d488f748a17aca67b2201224db614eb4aaf305fa3b",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/driver.log.gz": "9109a53e2cbb3a8dff0c6d5f0b1c0a05dbde34618ae8eb065c5d6e9a309a1689",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/events.json.gz": "daca69bd11ad9d8d3fc4998b625b8e3482bfae65185e2fc4ac9531df9167f696",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/helper-provenance.json.gz": "0b2d063bfa9d7c85d2833168cab6e6369010f2afa8a5b7900d5f5f964ca46b63",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/independent-meters.json.gz": "f07dcaaff09c503bfe8c55002b120e0599782dd4d954cad7b9dd3a5caa958576",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/instance.json.gz": "830fa0184e204fbe705ca61ccec830dd393a1e9354395962f92832aecd29b8b9",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/lp100a-readings.jsonl.gz": "4eb1b942f501fedb1585f8e350c36bcc614869795efd391d80fe5a7853e2e0b2",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/meter-watch.py.gz": "8d2633283c4bd0d2b7fb5ccf510a2c463edc2acbb26202a65910ebd05c737082",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/outcome.json.gz": "ba11640c20be72cc25e3e9a67c9c844fe542aa7736b04af7ffb78fcffacc6fbd",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/player.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/preflight-lp100a-readings.jsonl.gz": "7f41c1261c5a9c2d9753cdd4606587acd6219c10e287354e1566035e202b9129",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/preflight-lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/preflight-result.json.gz": "2deb22e791301d7157dbd4804240ba02dc28077fece8f2255b5a51f9dd5a3888",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/preflight-route-cleanup.json.gz": "fd729ce2f5e1594404ff929a4c79f89d35b013e4c8aaedf66c63a75f956d04ac",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/preflight-route-cleanup.state.json.gz": "64efc9d09a02ce1f4415d4cb7ca81551b726b3e7c333bb81ac947344caf1d8f7",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/preflight-route-cleanup.watchdog.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/preflight.log.gz": "4a7b27393703b9df3020723323756510c2993a7513780a2f0c35631058ba4284",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/preflight.py.gz": "fca5e4f748bb16d8217ae27cb2c613752efc8a7ae8f141a65d1844c374f8cac0",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/prepare-continue.log.gz": "ded51c05b2639c2f01f1f006cdb6639597a05d77051b3b194f3ffe07135aa5e1",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/prepare-continue.py.gz": "cf92904b4e231969c2eefcee2e717f724c144df89ae78757162104fef061079c",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/prepare.log.gz": "3d3d290c0d4285c8dbe5ffbe48ce848d4bebaf9e63e01412e45eef50904a45d2",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/prepare.py.gz": "2b7fa011f63cbe8d344222b6c74df956843ba39d2031cafae7f5fee31908f8b5",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/prepared.json.gz": "566ef3a50462842fcea029067a39faa0c71f501bba933ca48cb670ec84fc8d56",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/route-cleanup.json.gz": "fd729ce2f5e1594404ff929a4c79f89d35b013e4c8aaedf66c63a75f956d04ac",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/route-cleanup.state.json.gz": "599805bc0564b674b9fbd85530b6a6027fdeb4d744e7fb71a2084e1aa64fd711",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/route-cleanup.watchdog.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/carrier-swr-diagnostic-1W-02/run-once.py.gz": "ee4d2bddc2a494eefd0738ea9ad2de0bb70ac9bb7299c16696121a5502df0c88",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/committed-desktop-build.log.gz": "a6c2be02692bab234aec1738072d6fc55f1153affdfb8c23fa2e788c76765e21",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/desktop-provenance.json.gz": "2a4f35a25274895ee65a4cc54406f75160389c633a569031f511b4135735b077",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/relaunch.py.gz": "59c0569bff9e2faede32ea495ebddca20a7e23eb5a919ab49d68bda2c0a0f8f8",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/relaunch.log.gz": "a499d6c2607353a943cf7e48a479158138a3916092ef352d2b8a972c2067c90b",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/relaunch-intent.json.gz": "130df8c237f7840122de60bfcad6f2b5d376d7d45d0ce3dfe8824ace493e9fec",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/instance.json.gz": "830fa0184e204fbe705ca61ccec830dd393a1e9354395962f92832aecd29b8b9",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/desktop.log.gz": "55efdafba6a8900b1bb7e7b7d685f78770c2d2ce2824bbbee2f1cba851ebda76",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/final-state.py.gz": "30fc5101c2d103425292b8e894649644f3c077c5eb2381e7c879ec9d9a76a4a3",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/final-state.log.gz": "cebfcbe07b1df0fc9bb9b192ea97c611ecec6e24559d2d692a318b819234171c",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/final-state.json.gz": "40724b28aa74f9fccb0c0a9dcb7b1dcc66823a8f0f9e711d30fe6da83b8c5491",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/save-live.py.gz": "ef57e926c09af3f8cef6974a2033c3e4eae91f2f5d33ebc3137666d1a4fa84b3",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-live/prior-5W-carrier-analysis.json.gz": "4ec58ef1d80c3034fec117b848cd756136b4d9a4ad3f9d27cafd0a3861cd4867"
+  }
+}
