@@ -124,7 +124,37 @@ load; a probe's successful startup is not runtime support certification.
 Keep local IQ outside Tailscale: the supplied 9.8 MB/s crypto measurement is
 for remote relaying and is not a local feedback latency measurement.
 
-The restored CPU-only regressions can be built with
+The [ordinary-user CPU diagnostic](./session/README.md#ordinary-user-cpu-regression-probe)
+runs the five existing regressions without SSH or a privileged helper. Its
+330,383-byte native package reproduced in two source/output/cache paths with
+Zig 0.17.1; the reviewed SHA256 is
+`b1136f77a78e0828c6904c41a8add2258459ffe62dd5063ea544826fe6be8074`.
+The same install/read/uninstall path has receive-only FLEX-8600 evidence in
+[the diagnostic qualification](./CPU-PROBE-QUALIFICATION.json). This does not
+qualify the ARMv7 image or Linux 2.6 execution on a 6300.
+
+Use a fresh copy of the supplied CPU diagnostic handoff kit, including its
+Python clients. Stop AetherPD and leave the radio unkeyed before installing.
+Read the completed report and uninstall the diagnostic immediately afterwards;
+return its JSON with the radio model, firmware and package digest. The probe
+requires the expected ordinary UID/GID and zero effective/permitted/inheritable
+capabilities, refuses an inherited real-time scheduler, and lowers only itself
+to nice 19. It requests no scheduling privilege. Each child has a 45-second
+watchdog budget, 30/31-second CPU limits, a 256 MiB address-space limit and no
+core/regular-file data writes. The read-only TCP48999 report server exits after
+five minutes, with a separate ten-minute overall alarm. Individual output is
+capped and marks truncation. These budgets are not hard scheduling guarantees
+under a frozen kernel.
+
+The report's elapsed time, CPU time and Linux-reported peak RSS describe these
+finite simulations. They do not measure sustained correction throughput,
+real-time priority donation, local IQ latency, capture access, RF or installation
+privileges. Keep the separate kernel/filesystem probe results: the CPU suite
+does not determine `/run` placement or the FPGA network profile. A remaining
+unresolved native 6000 bootstrap entry must still be provided and qualified;
+the available descriptor/Podman transport is not evidence of that entry.
+
+The restored CPU-only regressions can also be built with
 `tools/pd-waveform/build.py --output build/pd-tests --arch armv7 --regression-tests`.
 Run the five `*-test-armv7` binaries separately as the ordinary waveform user.
 They inject samples and datagram I/O and do not connect to the radio API or

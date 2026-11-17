@@ -1,0 +1,660 @@
+{
+  "created_utc": "2026-11-17T21:15:14.735564+00:00",
+  "status": "bounded_CPU_diagnostic_and_teammate_handoff_reproduced_and_ordinary_8600_install_run_uninstall_passed_actual6300_pending",
+  "source_base": "32267e3b94aa1b65279eca7abc85faa8ea6b5846",
+  "changed_source_sha256": {
+    "tests/tests.cmake": "8d8cf34c8a0df00aefe7940ba406c792f65e7f34176dc5ec577884913da1d05e",
+    "tools/pd-waveform/FLEX6000-HANDOFF.md": "a1bcfa189eccedac5b614fe870f832c42bcd0a3bddacfd318fcaf74d3f9e1056",
+    "tools/pd-waveform/session/README.md": "c5d3b1b57b93b06ccf8724830b5bf9992b84bc397abdcc7abc75e0f7344e5832",
+    "tools/pd-waveform/session/kernel_probe_tool.py": "d5f45bac85ade5b6dba67617e7342c9c0c497c8615f45d3ffcf89acfe54af336",
+    "tools/pd-waveform/session/cpu_probe.c": "a43affec8ce8b4dc384a3dd9c1705df8842a96f8932f9e3d05a7f52b597056e4",
+    "tools/pd-waveform/session/cpu_probe_package.py": "72605a3cc945282535e60ee601537e57518c4632e1037a41aed872a158d5faa8",
+    "tools/pd-waveform/session/cpu_probe_test.c": "9965a87c3bf7edddd38ed1ef59e8c3836ca8e80df10a336e945cc2bcc4261071",
+    "tools/pd-waveform/session/cpu_probe_tool.py": "83b4bec3e29a45677c9cd1300e58929a37a7c34abcedce610fff8964b724f5db",
+    "tools/pd-waveform/session/test_cpu_probe.py": "66ff31855f79ca7bedc06a7a06f0f815e3d89062507b181fab81888812fc2796"
+  },
+  "production_ready": false,
+  "package": {
+    "bytes": 330383,
+    "sha256": "b1136f77a78e0828c6904c41a8add2258459ffe62dd5063ea544826fe6be8074",
+    "two_distinct_source_output_cache_paths_byte_identical": true
+  },
+  "handoff_archive": {
+    "archive": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/cpu-probe-0.1.0-6300-handoff.tar.gz",
+    "bytes": 14658788,
+    "sha256": "8833eb14585a322e389f5391b045a83b215f11a065a52e05133c9b3612e5b25c",
+    "files": 248,
+    "package": {
+      "bytes": 330383,
+      "sha256": "b1136f77a78e0828c6904c41a8add2258459ffe62dd5063ea544826fe6be8074",
+      "two_distinct_source_output_cache_paths_byte_identical": true
+    },
+    "source_root_override_present": false
+  },
+  "implementation": [
+    "Five existing CPU-only regressions linked into fixed forked child entry points, no arbitrary executable/command or new RF/radio API operation. No Go dependency or privileged helper.",
+    "Ordinary UID78666/GID20, zero effective/permitted/inheritable capabilities, SCHED_OTHER admission; only self nice19 requested and verified. Inherited nonstandard descriptors closed.",
+    "Per child:256MiB AS,30/31s CPU,zero core/file-size limits,45s wall watchdog, bounded/truncation-marked output, exit/signal/errno and wait4 resource report. SIGCHLD disposition reset before own-child supervision; timeout kills/reaps only the owned child.",
+    "One bounded read-only unauthenticated JSON server on TCP48999 after cases, five-minute serve window and ten-minute overall alarm. No input/control verbs.",
+    "512KiB compressed/1MiB expanded package caps; fixed name/file list/modes/empty setup/end and ELF architecture checks. Uploader validates the same bounded byte snapshot it sends. Fixed ordinary upload/status/uninstall client; no SSH/root access needed."
+  ],
+  "verification": {
+    "registered_CTest": [
+      "pd_cpu_probe_test",
+      "pd_kernel_probe_json_test"
+    ],
+    "CTest_passed": true,
+    "socket_free_Python_tests_passed": 13,
+    "sanitizers": {
+      "address": true,
+      "undefined": true,
+      "leaks": true,
+      "scope": "Own C supervisor/JSON unit with stub cases; AS-limit request checked by a test-only adapter because ASan reserves a large virtual address space. Real native host/radio probes retain actual OS limits; WDSP production objects not instrumented by this unit."
+    },
+    "mutations": [
+      {
+        "name": "exit-status",
+        "exit": -6,
+        "watchdog_killed_entire_owned_test_process_group": false,
+        "detected": true
+      },
+      {
+        "name": "deadline",
+        "exit": -9,
+        "watchdog_killed_entire_owned_test_process_group": true,
+        "detected": true
+      },
+      {
+        "name": "output-truncation",
+        "exit": -6,
+        "watchdog_killed_entire_owned_test_process_group": false,
+        "detected": true
+      },
+      {
+        "name": "memory-limit",
+        "exit": -6,
+        "watchdog_killed_entire_owned_test_process_group": false,
+        "detected": true
+      },
+      {
+        "name": "summary",
+        "exit": -6,
+        "watchdog_killed_entire_owned_test_process_group": false,
+        "detected": true
+      },
+      {
+        "name": "cancellation",
+        "exit": -6,
+        "watchdog_killed_entire_owned_test_process_group": false,
+        "detected": true
+      }
+    ],
+    "reproduction": "Complete native package byte-identical in separate source/output/cache paths, Zig0.17.1, then reproduced from supplied minimal source handoff. Same host/compiler, not independent6300 hardware.",
+    "handoff_rebuild": {
+      "passed": true,
+      "sha256": "b1136f77a78e0828c6904c41a8add2258459ffe62dd5063ea544826fe6be8074",
+      "bytes": 330383,
+      "scope": "Actual rebuild from final supplied source kit produces identical complete native package"
+    },
+    "handoff_archive_all_members_hash_verified": true,
+    "live": {
+      "started_utc": "2026-11-17T20:54:56.257585+00:00",
+      "package": {
+        "bytes": 330383,
+        "sha256": "b1136f77a78e0828c6904c41a8add2258459ffe62dd5063ea544826fe6be8074",
+        "two_distinct_source_output_cache_paths_byte_identical": true
+      },
+      "RF_commands": [],
+      "reboot_commands": [],
+      "root_bridge_jobs": [],
+      "scope": "ordinary fixed CPU diagnostic upload/run/read/uninstall; no settings restoration or RF",
+      "observations": [
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError",
+        "ConnectionRefusedError"
+      ],
+      "install": {
+        "exit": 0,
+        "stdout": "Uploaded 330383 bytes; allow up to225s for the five cases before reading TCP48999.\n",
+        "stderr": ""
+      },
+      "CPU_results": {
+        "application": "AetherPDCpuProbe",
+        "version": 1,
+        "kernel": "5.15.92-v8+",
+        "machine": "aarch64",
+        "uid": 78666,
+        "nice": 19,
+        "passed": true,
+        "rf_commands": [],
+        "radio_api_commands": [],
+        "tests": [
+          {
+            "name": "recovery_collection",
+            "passed": true,
+            "exit": 0,
+            "signal": 0,
+            "timed_out": false,
+            "errno": 0,
+            "elapsed_ns": 6629572815,
+            "user_us": 6347914,
+            "system_us": 299508,
+            "max_rss_kib": 56188,
+            "output_truncated": false,
+            "output": "low-excitation coverage 13/16; upper counts 0/0; current solution 0?fresh calibration recovered with full amplitude coverage; fits 1 -> 3?PASS: invalidation stays bypassed under incomplete amplitude coverage and recovers on fresh full-range data, with no stale-cache reuse?"
+          },
+          {
+            "name": "eq_phase_startup",
+            "passed": true,
+            "exit": 0,
+            "signal": 0,
+            "timed_out": false,
+            "errno": 0,
+            "elapsed_ns": 3979819550,
+            "user_us": 2317124,
+            "system_us": 832543,
+            "max_rss_kib": 60320,
+            "output_truncated": true,
+            "output": "1794948903.776 transmit path fitted: 31 taps, -120.0 dB of the feedback left unexplained?phase 0.00: residual -120.00 dB, blocks 264?1794948904.291 transmit path fitted: 31 taps, -51.3 dB of the feedback left unexplained?phase 0.50: residual -51.32 dB, blocks 280?1794948904.783 transmit path fitted: 31 taps, -45.3 dB of the feedback left unexplained?phase 1.00: residual -45.30 dB, blocks 281?1794948905.280 transmit path fitted: 31 taps, -41.8 dB of the feedback left unexplained?phase 1.50: residual -41.78 dB, blocks 276?1794948905.771 transmit path fitted: 31 taps, -39.3 dB of the feedback left unexplained?phase 2.00: residual -39.28 dB, blocks 255?1794948906.266 transmit path fitted: 31 taps, -37.3 dB of the feedback left unexplained?phase 2.50: residual -37.34 dB, blocks 262?1794948906.777 transmit path fitted: 31 taps, -35.8 dB of the feedback left unexplained?phase 3.00: residual -35.76 dB, blocks 272?1794948907.263 transmit path fitted: 31 taps, -36.4 dB of the feedback left unexplained?phase -2.80: res"
+          },
+          {
+            "name": "warm_core",
+            "passed": true,
+            "exit": 0,
+            "signal": 0,
+            "timed_out": false,
+            "errno": 0,
+            "elapsed_ns": 158171119,
+            "user_us": 69647,
+            "system_us": 74000,
+            "max_rss_kib": 56064,
+            "output_truncated": false,
+            "output": "PASS: warm snapshot is independent, unkeyed bypass, 5 ms ramp, stale-fit rejection, hard invalidation; 12432 coefficient bytes in RAM?"
+          },
+          {
+            "name": "eq_worker",
+            "passed": true,
+            "exit": 0,
+            "signal": 0,
+            "timed_out": false,
+            "errno": 0,
+            "elapsed_ns": 1777763496,
+            "user_us": 1600614,
+            "system_us": 26676,
+            "max_rss_kib": 2628,
+            "output_truncated": false,
+            "output": "PASS: background EQ bitwise equivalence, busy bound, stale/wrong-kind rejection, failed solve and in-flight shutdown?"
+          },
+          {
+            "name": "dispatch_deadline",
+            "passed": true,
+            "exit": 0,
+            "signal": 0,
+            "timed_out": false,
+            "errno": 0,
+            "elapsed_ns": 7168766891,
+            "user_us": 2966831,
+            "system_us": 3547721,
+            "max_rss_kib": 60556,
+            "output_truncated": true,
+            "output": "1794948909.381 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000?1794948909.381 PD selected on slice 1?1794948909.382 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)?1794948909.387 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz?1794948909.387 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)?1794948909.387 alignment evidence: reason=tx_continuity mono_ns=19250396639239 ref_generation=11 delay=0.000 coherence=0.000 tx_packets=5 tx_discontinuities=1 tx_dropped=0 tx_age_ns=0 sent=0 send_errors=0 deadlines=0 session_max_send_gap_ns=0 session_max_work_ns=0 iq_frames=2 iq_discontinuities=0 iq_stale=0 iq_invalid=0 iq_duplicates=1 iq_old=0 iq_age_ns=148 ref_fifo=384 fb_fifo=0?1794948909.553 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000?1794948909.554 PD selected on slice 1?1794948909.554 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)?1794948909.560 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz?1794948909.731 registered Aeth"
+          }
+        ]
+      },
+      "uninstall": {
+        "exit": 0,
+        "stdout": "CPU diagnostic uninstall accepted; verify TCP48999 closes.\n",
+        "stderr": ""
+      },
+      "listener_closed_after_uninstall": true,
+      "completed_utc": "2026-11-17T20:55:16.829027+00:00"
+    },
+    "postflight": {
+      "observed_utc": "2026-11-17T20:58:40.020919+00:00",
+      "desktop_pid": 363057,
+      "desktop_image_sha256": "a2e6f53b1ade27624ddf46a30a4a1c162259015727def69bea1234834a77e973",
+      "radio": {
+        "connected": true,
+        "serial": "2125-1213-8600-8895",
+        "firmware": "4.3.16.42034",
+        "transmitting": false,
+        "fullDuplex": false
+      },
+      "AetherPD": {
+        "body": {
+          "available": false,
+          "state": "stopped"
+        },
+        "http_status": 200
+      },
+      "CPU_probe_port_refused_before_install": true,
+      "mutations": []
+    },
+    "static_checks": [
+      {
+        "command": [
+          "python3",
+          "tools/check_test_registration.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_engine_boundary.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_qsettings.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_capability_records.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_command_plane.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/docs/gen_reference.py",
+          "--check"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "node",
+          "tools/docs/test_log_rules.mjs"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_ci_test_gate.py"
+        ],
+        "exit": 0
+      }
+    ],
+    "npm_ci_and_docs_build_passed": true
+  },
+  "bootstrap_audit": {
+    "current_source": "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/operator",
+    "reviewed_file_sha256": {
+      "README.md": "c2df33735d08d6063e96831d2cd33d82b5e65bc3e2cfabab02cf3449f7e010c5",
+      "native-rootfd-prefix.py.inc": "d6d276d77c61851e3816c2f16efca2d2f2a5abd329c60fa0b94ebc3601cf7a4e"
+    },
+    "finding": "Available host-root transport delegates a native directory FD to an owner diagnostic container and uses the host /run/podman/podman.sock to launch a privileged nsenter/Python job. This does not provide a verified native6000 entry mechanism. Current shipping container entry points still require no_new_privs; no weakening was made.",
+    "operator_source_question": "Asked for original FLEX6000 code/procedure while independent CPU diagnostic work continued; no answer received during qualification.",
+    "actual_6000_bootstrap_qualified": false
+  },
+  "preserved_intermediate_evidence": [
+    "Initial combined link failed on duplicate waveform_program_main; only unused embedded waveform entry names were made unique, preserving the five test bodies.",
+    "330404-byte prior candidate passed ordinary8600 CPU run/uninstall; final330383-byte candidate adds explicit SCHED_OTHER/nice admission and has its own complete live result. Initial per-child output remains truncated where marked."
+  ],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "root_bridge_jobs": [],
+  "installed_runtime_changes_requested": [],
+  "limitations": [
+    "No actual6300/Linux2.6/CortexA8/one-core execution, FPGA profile, capture permission, RT scheduling authority, installation adapter, persistence or RF is established.",
+    "Tests are finite CPU simulations. Their elapsed/CPU/RSS include synthetic excitation/model work and do not establish sustained correction throughput, whole-service memory, live IQ latency or phase alignment. Linux ru_maxrss is per waited child in KiB, not free memory.",
+    "User-space watchdogs and SIGKILL cannot guarantee deadlines under a frozen kernel/uninterruptible task. Unexpected wait4 errors refuse a pass; they are not proof of complete cleanup.",
+    "Uninstall ACK and closed TCP listener do not independently audit every firmware-cached file or parent process identity. All passing cases returned through wait4; no extra root audit was used.",
+    "CPU diagnostic source kit is for the teammate computer; only330383-byte waveform goes to radio. Source/clients/README and manifests are supplied; separate kernel/filesystem probe still needed.",
+    "Shipping runtime, reboot-hang investigation, actual6300 privilege entry and all fullP1-P10 natural alignment/cold-start, final graph/platform/credential/power-loss, repeatable RF/stockAPD and independent release gates remain open. RF/SWR and reboot coordination holds remain in force."
+  ],
+  "references": {
+    "no_new_privs": "https://www.kernel.org/doc/html/latest/userspace-api/no_new_privs.html",
+    "Linux_peak_RSS": "https://man7.org/linux/man-pages/man2/getrusage.2.html"
+  },
+  "evidence": [
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/build-first.log.gz",
+      "bytes": 1364,
+      "sha256": "51e8d31c07321cc531e6a4050c17738d9ff2722662ccb5d1f6c129890004476f"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/build-second.log.gz",
+      "bytes": 558,
+      "sha256": "26bd26e6419c45322a21e86d9f48fa18ec77e399cffd911ab260505e58a814f7"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/build-final-first.log.gz",
+      "bytes": 560,
+      "sha256": "6580a16656ff80d7db796abb12c48a6194933ba07b934406207701d5c91cb55c"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/build-final-second.log.gz",
+      "bytes": 561,
+      "sha256": "e5911f733bd2f973dfee7e2a37902f77680ec703ed18507c777ff36501e27efa"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/build-qualified-first.log.gz",
+      "bytes": 567,
+      "sha256": "993a85d3265db4236a9ac38255e845b41ccb8a996856d04c64cfb864928a3d9c"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/build-qualified-second.log.gz",
+      "bytes": 566,
+      "sha256": "4042c5c41d516b7058130dd08791ee913cf1807cedd01a61099b770268109770"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/python-tests-complete.log.gz",
+      "bytes": 442,
+      "sha256": "05eaca9252155f7915a3c507dfab609d04abd86682d296f8afacb5262c7b1a43"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/test-build-complete.log.gz",
+      "bytes": 158,
+      "sha256": "e4c1316b82855770f3d8d7b34fc21fe5eb9ee470bb424f8650e883a2790a094c"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/ctest-complete.log.gz",
+      "bytes": 233,
+      "sha256": "dfef962d959f9e213dac7e47821743348bebf7b1352c5c78792406ed1d2ebcba"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/asan-final.log.gz",
+      "bytes": 113,
+      "sha256": "ddfa025ec7f761b0c6d2556e1b9e7b3eb6d14aa3405e8df790b7fe40bf842e59"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutations.py.gz",
+      "bytes": 844,
+      "sha256": "6af6da2396b4597f30c109a62a29397c91976fa016c4ca7bf905f5bcf7e878c1"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutations.log.gz",
+      "bytes": 172,
+      "sha256": "f411367fc54a24fa6a7a4031fc8a2adc8af8a3d844f3fa4ed5c1c93241f456b6"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutations.json.gz",
+      "bytes": 189,
+      "sha256": "5375e2a7920853dd97e9688e24901fcecae0223ed4205ba623a6ede6dee2ba8a"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/qualified-host-result.json.gz",
+      "bytes": 1301,
+      "sha256": "e4a4ea67c11a8ce8e11d77c0b83699dcc4c2e6093e07f36abbb4f564efbc9d09"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/qualified-reproduction.json.gz",
+      "bytes": 155,
+      "sha256": "a258ada10ada535005b8a0ffd849540e28d0dae56537b66e857913b7edfab982"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/qualified-live.py.gz",
+      "bytes": 1161,
+      "sha256": "db0b4f3e503994d853012ea38fc4509abf20c35f0d82116cd6b5eee73c294c23"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/qualified-live-result.json.gz",
+      "bytes": 1818,
+      "sha256": "2a3cab9ffbca6161fa1a1715d05cbe672d7fe07940dea92a2ab5b1a2c1ce3fcd"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/qualified-live-console.log.gz",
+      "bytes": 676,
+      "sha256": "bbe57db14ff9418efd4b12c855b4853bcad6e90d4240058640bbe9a96434ad76"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/qualified-preflight.py.gz",
+      "bytes": 964,
+      "sha256": "e4411d67de056d623274d875258122e86176e6c1f608ea144cc63b4092c81a6e"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/qualified-preflight.json.gz",
+      "bytes": 348,
+      "sha256": "6c361e77ceb23ad7887839d5ffe1caa1da79afbb7e87a713496778d64c542ef8"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/postflight.py.gz",
+      "bytes": 958,
+      "sha256": "79926f76b9228b1df0fd9b7f88cd0c9a9dfb6e4fbbf4fcc01f3fc7f06e4c15d7"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/postflight.json.gz",
+      "bytes": 348,
+      "sha256": "a110df52d737e54e40962868f70db558cefcc8deb817758ed1fa729675771384"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/live.py.gz",
+      "bytes": 1158,
+      "sha256": "5da5ca6bdc5774be50c8074cf7aaa4b7aaaa345d2e581cababe1ff37114f1825"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/live-result.json.gz",
+      "bytes": 1999,
+      "sha256": "57e95537a3112d9080113adc75b57e059302bde5ce35eb090a9dcbdb4d35c3f5"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/live-console.log.gz",
+      "bytes": 657,
+      "sha256": "f8b3580eefea9861f081a726f2743c197b337172636620f95d5c0cdbbb3644d3"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/preflight.py.gz",
+      "bytes": 956,
+      "sha256": "876323a0a05db0ca5c99a00b46cd20cbe0f9aea1b4fbc70803c462f204877386"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/handoff.py.gz",
+      "bytes": 2467,
+      "sha256": "eaec1cb7e2ef3bf8978f18f303a7a6ef6b7e0e1c9fb92d2465ecc9a55e24985f"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/handoff-final.py.gz",
+      "bytes": 2471,
+      "sha256": "a017e2c46128f4eed23e2c0d5ba1de7c41b115b298e2110b5e095d47f53fe814"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/handoff-final.log.gz",
+      "bytes": 320,
+      "sha256": "0e71be6f9a7e47f765a631efea57fa7ea2c3ff85c175d70c87f8e4a4cd2fc785"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/handoff-archive.json.gz",
+      "bytes": 333,
+      "sha256": "47742e57516ccf0da99fea417c18aa204c1ec03f8e99e2c1dac464814b4aeaac"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/handoff-rebuild.log.gz",
+      "bytes": 568,
+      "sha256": "b10b7998afe73c625505ef9d5333daba3153582b8f28a8e5f25c43e34b364184"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/final-handoff-rebuild.log.gz",
+      "bytes": 573,
+      "sha256": "18c741abd1e7db3ca226f6b577ed66a0cb37c44d4660283dc169e14a76135180"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/handoff-rebuild.json.gz",
+      "bytes": 191,
+      "sha256": "33bd888ffbaf7310541e6a6b5ca6b17f2aba54a34f9151cab1268d8df74dd69c"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-checks.json.gz",
+      "bytes": 214,
+      "sha256": "f10f84e73cf45ea91b2afb561fa67d48a1e1439828859aeff824f4d58333b6b9"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/docs-ci.log.gz",
+      "bytes": 432,
+      "sha256": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/docs-build.log.gz",
+      "bytes": 502,
+      "sha256": "5c8b29cff3830aafdb2fa5bd9fd6b30fc44e960bbda336d59515e36278cabbc5"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/source.patch.gz",
+      "bytes": 3745,
+      "sha256": "2d5951f842d1faa82780a93b3bf976cb460f6cf126adda0eeadfb49e5b18c2a8"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/save.py.gz",
+      "bytes": 4316,
+      "sha256": "a7f4627c76d73ad93df05c784745e699f0bd4eecd948f592ee47d9bdc980ee42"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/checkpoint.py.gz",
+      "bytes": 1967,
+      "sha256": "022e8ffb6ef8181ab978d2d6c57959895d0e0d7ed76398e7fa65abfe6277b9f8"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-0.log.gz",
+      "bytes": 84,
+      "sha256": "959aabfbd3d45f87cb2ec81df039d1fbcef4475b1bcb95d47c0062da2dbdaca0"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-1.log.gz",
+      "bytes": 1833,
+      "sha256": "45fbc88f94f9d4c91eceea1bdf38bb74a239de9529dedbbf7c9965b1a9c72707"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-2.log.gz",
+      "bytes": 61,
+      "sha256": "728dd27d76fe734e7d7a16cff56653c933c5ec7b012556d4be14ae8ebcef1097"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-3.log.gz",
+      "bytes": 91,
+      "sha256": "3dda96147739d2b9e41612b411aa76324f0fbba662fac6d3adc0c277b9bc9a8b"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-4.log.gz",
+      "bytes": 122,
+      "sha256": "0bdc84dd79a68fc0cc7307fc4bdf40a0723476cc84495da44951b2711bfc555f"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-5.log.gz",
+      "bytes": 65,
+      "sha256": "ef92287bd4b4371e61725f5f14d31857b596ee10d4c72b03f49375736759e4fb"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-6.log.gz",
+      "bytes": 404,
+      "sha256": "43f4c5c7fd6b846e8154366f1a038d47bf4af3b8a0763182f14aeb38d4dce887"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/static-7.log.gz",
+      "bytes": 147,
+      "sha256": "d0d26d716352d706ad75f6ad37e45e6a35f82db179919a999aabf59c2785e2b0"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-exit-status/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-exit-status/test.log.gz",
+      "bytes": 162,
+      "sha256": "303991c83736f0c5e463a29123e7661cf4add7b14bd039ce0be7961a926e0964"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-deadline/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-deadline/test.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-output-truncation/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-output-truncation/test.log.gz",
+      "bytes": 171,
+      "sha256": "5d47da19352b9dc9860ee3c3f2a82a5c07ae5ae357d46a9f27eff82fbb295a6a"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-memory-limit/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-memory-limit/test.log.gz",
+      "bytes": 161,
+      "sha256": "2252d3893b7695cd5fdb4d32fb120adc2ef35b21229d23f72545d66b2b873011"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-summary/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-summary/test.log.gz",
+      "bytes": 174,
+      "sha256": "37e01e4a73c4b1503438ea4da325a64463d70959805d35a5d9162d826fb1b30b"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-cancellation/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-floor-cpu-probe/mutation-cancellation/test.log.gz",
+      "bytes": 168,
+      "sha256": "c970110547652c02130511e6677395f122a45ad2b8485548143982d941e1dca8"
+    }
+  ]
+}

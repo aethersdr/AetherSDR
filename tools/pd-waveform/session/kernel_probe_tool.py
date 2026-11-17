@@ -20,6 +20,7 @@ MAX_REPORT_BYTES = 4096
 
 
 class Control:
+    name = NAME
     def __init__(self, host):
         self.socket = socket.create_connection((host, 4992), 5)
         self.sequence = 0
@@ -28,8 +29,8 @@ class Control:
 
     def command(self, text):
         allowed = (text == 'sub waveform all'
-                   or text == 'file filename ' + NAME + '.ssdr_waveform'
-                   or text == 'waveform uninstall ' + NAME
+                   or text == 'file filename ' + self.name + '.ssdr_waveform'
+                   or text == 'waveform uninstall ' + self.name
                    or re.fullmatch(r'file upload [1-9][0-9]{0,5} new_waveform', text))
         if not allowed:
             raise ValueError('not a fixed probe upload/removal command')

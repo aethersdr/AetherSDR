@@ -224,6 +224,53 @@ Socket-free Python boundary checks:
 python3 -m unittest discover -s tools/pd-waveform/session -p 'test_*.py' -v
 ```
 
+## Ordinary-user CPU regression probe
+
+`cpu_probe_package.py` builds `AetherPDCpuProbe.ssdr_waveform`, containing two
+static architecture-specific executables and license/launcher files. Each
+executable links the five existing CPU regressions into fixed child entry
+points; it never accepts a command or executable path. It sends no radio API
+or RF commands. The dispatch test uses injected datagrams and `/dev/null` for
+its API output. No root bridge, SUID file, installation helper, real-time grant
+or `no_new_privs` fallback is introduced.
+
+The ordinary waveform must run as UID78666/GID20 with zero effective,
+permitted and inheritable capabilities. Admission requires SCHED_OTHER and
+sets/verifies nice 19 on this process. Inherited descriptors beyond standard
+I/O are closed. Each test runs in a separate child with CPU, address-space,
+core and file-size limits; the parent captures at most 1023 output bytes,
+records exit/signal/deadline failures and reaps that child. Its watchdog requests
+SIGKILL after 45 seconds. Kernel hangs and uninterruptible tasks remain outside
+a user-space deadline guarantee.
+
+After all tests, `--serve` exposes one bounded immutable JSON report on TCP48999
+for at most five minutes. It reads no requests and has no control verbs. This
+temporary report is unauthenticated, contains only system/test metadata, and
+must not be treated as an installation or scheduling authorization. The overall
+process has a ten-minute alarm. Uninstall promptly after collecting the report;
+do not reboot with the diagnostic intentionally left installed.
+
+```sh
+python3 tools/pd-waveform/session/cpu_probe_package.py --output build/cpu-probe --host
+python3 tools/pd-waveform/session/cpu_probe_tool.py --host RADIO install build/cpu-probe/AetherPDCpuProbe.ssdr_waveform --sha256 REVIEWED_DIGEST
+# Wait for the five cases to finish; allow up to225 seconds.
+python3 tools/pd-waveform/session/cpu_probe_tool.py --host RADIO status > cpu-results.json
+python3 tools/pd-waveform/session/cpu_probe_tool.py --host RADIO uninstall
+```
+
+The upload client accepts only this fixed diagnostic name and a reviewed package
+digest, exact file list/modes, empty setup/end sections and expected ELF classes.
+It cannot key, reboot or uninstall another waveform. A successful uninstall
+reply and closed listener do not independently prove deletion of firmware-cached
+files. Resource values come from each waited-for child;
+[Linux documents peak RSS in KiB](https://man7.org/linux/man-pages/man2/getrusage.2.html).
+Zero or unsupported measurements must not be interpreted as free memory.
+
+This diagnostic is separate from the managed runtime. A FLEX-8600 run and
+byte-identical ARMv7 build do not qualify actual Linux2.6/Cortex-A8 hardware,
+local IQ, radio timing or RF. See [the diagnostic report](../CPU-PROBE-QUALIFICATION.json)
+and [6000 handoff](../FLEX6000-HANDOFF.md).
+
 ## Fixed local IQ capture component
 
 `pd-capture-bootstrap` and its linked `pd_ring_worker.c` are the measured
