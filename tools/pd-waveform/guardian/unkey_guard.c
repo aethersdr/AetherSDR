@@ -250,6 +250,11 @@ static int query(int fd, struct unkey_state* state, struct unkey_input* input, u
 }
 static int run(int fd, int life, uint32_t client, uint32_t owner, int duration)
 {
+    // A service stop reaches the whole session. Lifetime loss or the fixed
+    // deadline must still run ownership-checked cleanup after the owner exits.
+    struct sigaction ignored = {.sa_handler = SIG_IGN};
+    sigemptyset(&ignored.sa_mask);
+    if (sigaction(SIGTERM, &ignored, NULL) || sigaction(SIGINT, &ignored, NULL)) { return 5; }
     struct unkey_state state = {.client = client, .owner = owner, .bounded = duration != 0};
     struct unkey_input input = {0};
     struct bounded_deadline deadline = {0};

@@ -1,0 +1,1181 @@
+{
+  "updated_utc": "2026-11-17T16:23:38.719978+00:00",
+  "status": "active_receive_only_installed_session_stop_cleanup_and_separate_explicit_restart_passed_guardian_service_signal_defect_component_fixed_not_installed",
+  "production_ready": false,
+  "source_parent_commit": "8c2b5dd58e3ccc7020e91aa57690564fa8dc5373",
+  "changed_source_sha256": {
+    "tools/flex-tailnet-shim/aetherpd_receive_guardian_linux.go": "0b255f2ffb1ebcadf0da9e8a60758a664648475c93fcde0ef7f8131017896036",
+    "tools/flex-tailnet-shim/aetherpd_receive_guardian_linux_test.go": "b2c429a70fcbbc6345b415b7869c3714734ac8235af589b71d1ad0e549b65dd5",
+    "tools/pd-waveform/guardian/unkey_guard.c": "c5704e43f8dedfad28571c1b1bf4365e9449bcef02fe1f4e99507d98d383ca8c",
+    "tools/pd-waveform/guardian/unkey_guard_deadline_test.c": "b942c5997f33cb8591403a3c0172474a428aad3bf7cfff74bae2f7310b324a07",
+    "tools/pd-waveform/guardian/README.md": "716b264e5793428d777a737c6e2dc2de5ef24584eb050776c3fec807f269788a"
+  },
+  "installed_release": "b732344cad128503ee8f2bf67cfd912dee4cc947bf5beac212a606766f79a42c",
+  "installed_runtime_source": "ea92eb13efba12f9296f0f23b8ef79fee77cdd25",
+  "RF_commands": [],
+  "reboot_commands": [],
+  "service_definitions_changed": false,
+  "live_initial_attempt": {
+    "probe_complete": false,
+    "service_stop_commands": 0,
+    "reason": "Harness incorrectly required PD mode. A registered unkeyed receive-only localIQ session remainsUSB. Refused before mutation; ordinary fallbackStop returnedHTTP200stopped. Source precondition corrected in separately preserved02 attempt."
+  },
+  "live_stop": {
+    "case": "active_unkeyed_localIQ_session_systemd_stop",
+    "probe_complete": true,
+    "RF_commands": [],
+    "reboot_commands": [],
+    "commands": [
+      {
+        "argv": [
+          "/usr/bin/nsenter",
+          "--target",
+          "1",
+          "--cgroup",
+          "/usr/bin/systemctl",
+          "--no-block",
+          "stop",
+          "aetherpd-start@3-1313-78666.service"
+        ],
+        "exit": 0,
+        "stamp_ns": 2335131211581
+      }
+    ],
+    "observations": [
+      {
+        "elapsed_ms": 66.235899,
+        "unit": {
+          "TimeoutStopUSec": "12s",
+          "MainPID": "2475",
+          "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service",
+          "KillMode": "control-group",
+          "SendSIGKILL": "no",
+          "Id": "aetherpd-start@3-1313-78666.service",
+          "ActiveState": "deactivating",
+          "SubState": "stop-sigterm"
+        },
+        "original_survivor_pids": [
+          2475,
+          2486,
+          2503
+        ]
+      },
+      {
+        "elapsed_ms": 150.031302,
+        "unit": {
+          "TimeoutStopUSec": "12s",
+          "MainPID": "0",
+          "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service",
+          "KillMode": "control-group",
+          "SendSIGKILL": "no",
+          "Id": "aetherpd-start@3-1313-78666.service",
+          "ActiveState": "deactivating",
+          "SubState": "final-sigterm"
+        },
+        "original_survivor_pids": [
+          2503
+        ]
+      },
+      {
+        "elapsed_ms": 226.243656,
+        "unit": {
+          "TimeoutStopUSec": "12s",
+          "MainPID": "0",
+          "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service",
+          "KillMode": "control-group",
+          "SendSIGKILL": "no",
+          "Id": "aetherpd-start@3-1313-78666.service",
+          "ActiveState": "deactivating",
+          "SubState": "final-sigterm"
+        },
+        "original_survivor_pids": [
+          2503
+        ]
+      },
+      {
+        "elapsed_ms": 303.079061,
+        "unit": {
+          "TimeoutStopUSec": "12s",
+          "MainPID": "0",
+          "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service",
+          "KillMode": "control-group",
+          "SendSIGKILL": "no",
+          "Id": "aetherpd-start@3-1313-78666.service",
+          "ActiveState": "deactivating",
+          "SubState": "final-sigterm"
+        },
+        "original_survivor_pids": [
+          2503
+        ]
+      },
+      {
+        "elapsed_ms": 379.880428,
+        "unit": {
+          "TimeoutStopUSec": "12s",
+          "MainPID": "0",
+          "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service",
+          "KillMode": "control-group",
+          "SendSIGKILL": "no",
+          "Id": "aetherpd-start@3-1313-78666.service",
+          "ActiveState": "deactivating",
+          "SubState": "final-sigterm"
+        },
+        "original_survivor_pids": [
+          2503
+        ]
+      },
+      {
+        "elapsed_ms": 455.400714,
+        "unit": {
+          "TimeoutStopUSec": "12s",
+          "MainPID": "0",
+          "ControlGroup": "",
+          "KillMode": "control-group",
+          "SendSIGKILL": "no",
+          "Id": "aetherpd-start@3-1313-78666.service",
+          "ActiveState": "failed",
+          "SubState": "failed"
+        },
+        "original_survivor_pids": []
+      }
+    ],
+    "firmware_before": {
+      "TimeoutStopUSec": "1min 30s",
+      "MainPID": "1143",
+      "ControlGroup": "/system.slice/smartsdr.service",
+      "KillMode": "control-group",
+      "SendSIGKILL": "yes",
+      "Id": "smartsdr.service",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "before": [
+      {
+        "pid": 1313,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/aetherpd-shim.service"
+        ],
+        "start_ticks": 4189,
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      },
+      {
+        "pid": 2475,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232838,
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 2483,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232862,
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      },
+      {
+        "pid": 2484,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "state": "S (sleeping)",
+        "uid": [
+          "65534",
+          "65534",
+          "65534",
+          "65534"
+        ],
+        "nnp": "0",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232862,
+        "sha256": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49"
+      },
+      {
+        "pid": 2485,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "state": "S (sleeping)",
+        "uid": [
+          "65534",
+          "65534",
+          "65534",
+          "65534"
+        ],
+        "nnp": "0",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232862,
+        "sha256": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49"
+      },
+      {
+        "pid": 2486,
+        "exe": "/run/aetherpd/bin/pd-iq-source",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232862,
+        "sha256": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0"
+      },
+      {
+        "pid": 2489,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "state": "S (sleeping)",
+        "uid": [
+          "65534",
+          "65534",
+          "65534",
+          "65534"
+        ],
+        "nnp": "0",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232942,
+        "sha256": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc"
+      },
+      {
+        "pid": 2491,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "state": "S (sleeping)",
+        "uid": [
+          "65534",
+          "65534",
+          "65534",
+          "65534"
+        ],
+        "nnp": "0",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232942,
+        "sha256": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc"
+      },
+      {
+        "pid": 2492,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "state": "S (sleeping)",
+        "uid": [
+          "65534",
+          "65534",
+          "65534",
+          "65534"
+        ],
+        "nnp": "0",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232942,
+        "sha256": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc"
+      },
+      {
+        "pid": 2493,
+        "exe": "/run/aetherpd/bin/aether-pd",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232964,
+        "sha256": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+      },
+      {
+        "pid": 2501,
+        "exe": "/run/aetherpd/bin/pd-unkey-guard",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 232985,
+        "sha256": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662"
+      },
+      {
+        "pid": 2503,
+        "exe": "/run/aetherpd/bin/pd-lease-guard",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 233010,
+        "sha256": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+      },
+      {
+        "pid": 2507,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service"
+        ],
+        "start_ticks": 233011,
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "unit": "aetherpd-start@3-1313-78666.service",
+    "unit_before": {
+      "TimeoutStopUSec": "12s",
+      "MainPID": "2475",
+      "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1313-78666.service",
+      "KillMode": "control-group",
+      "SendSIGKILL": "no",
+      "Id": "aetherpd-start@3-1313-78666.service",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "radio_before": {
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      },
+      "slice": {
+        "in_use": "1",
+        "sample_rate": "24000",
+        "RF_frequency": "7.150000",
+        "client_handle": "0x1883E49F",
+        "index_letter": "A",
+        "rit_on": "0",
+        "rit_freq": "0",
+        "xit_on": "0",
+        "xit_freq": "0",
+        "rxant": "RX_A",
+        "mode": "USB",
+        "chain_mode": "USB",
+        "wide": "0",
+        "filter_lo": "100",
+        "filter_hi": "2800",
+        "step": "100",
+        "step_list": "1,10,50,100,500,1000,2000,3000",
+        "agc_mode": "med",
+        "agc_threshold": "60",
+        "agc_threshold_mode": "manual",
+        "agc_off_level": "10",
+        "pan": "0x40000000",
+        "txant": "ANT1",
+        "loopa": "0",
+        "loopb": "0",
+        "qsk": "0",
+        "dax_iq_channel": "0",
+        "dax": "0",
+        "dax_clients": "0",
+        "lock": "0",
+        "tx": "1",
+        "active": "1",
+        "audio_level": "50",
+        "audio_pan": "50",
+        "audio_mute": "0",
+        "record": "0",
+        "play": "disabled",
+        "record_time": "0.0",
+        "nr": "0",
+        "nr_level": "50",
+        "nr_wlen": "256",
+        "nr_delay": "25",
+        "nr_adapt_mode": "auto",
+        "nr_isdft_mode": "half",
+        "nrl": "0",
+        "nrl_level": "100",
+        "nrl_filter_size": "128",
+        "nrl_delay": "16",
+        "nrl_leakage_level": "50",
+        "nrf": "0",
+        "nrf_winc": "256",
+        "nrf_wlen": "2048",
+        "rnn": "0",
+        "nrs": "0",
+        "nrs_level": "50",
+        "anf": "0",
+        "anf_level": "50",
+        "anf_wlen": "256",
+        "anf_delay": "25",
+        "anf_adapt_mode": "auto",
+        "anf_isdft_mode": "half",
+        "anfl": "0",
+        "anfl_level": "100",
+        "anfl_filter_size": "128",
+        "anfl_delay": "16",
+        "anfl_leakage_level": "0",
+        "anft": "0",
+        "anft_min_db": "-110",
+        "anft_tone_db_diff": "12",
+        "nb": "0",
+        "nb_level": "50",
+        "apf": "0",
+        "apf_level": "30",
+        "wnb": "0",
+        "wnb_level": "90",
+        "squelch": "1",
+        "squelch_level": "20",
+        "diversity": "0",
+        "diversity_parent": "0",
+        "diversity_child": "0",
+        "diversity_index": "1342177293",
+        "ant_list": "ANT1,ANT2,RX_A,RX_B,XVTA,XVTB",
+        "mode_list": "LSB,USB,AM,CW,DIGL,DIGU,SAM,FM,NFM,DFM,RTTY,PD",
+        "fm_tone_mode": "OFF",
+        "fm_tone_value": "67.0",
+        "fm_repeater_offset_freq": "0.000000",
+        "tx_offset_freq": "0.000000",
+        "repeater_offset_dir": "SIMPLEX",
+        "fm_tone_burst": "0",
+        "fm_deviation": "5000",
+        "dfm_pre_de_emphasis": "0",
+        "post_demod_low": "300",
+        "post_demod_high": "3300",
+        "rtty_mark": "2125",
+        "rtty_shift": "170",
+        "digl_offset": "1500",
+        "digu_offset": "1500",
+        "post_demod_bypass": "0",
+        "rfgain": "0",
+        "tx_ant_list": "ANT1,ANT2,XVTA,XVTB",
+        "rx_error_mHz": "3.814694",
+        "esc": "0",
+        "esc_gain": "1.000000",
+        "esc_phase_shift": "0.000000",
+        "max_internal_pa_power": "100"
+      }
+    },
+    "retired_ms": 455.419103,
+    "after": [
+      {
+        "pid": 1313,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/aetherpd-shim.service"
+        ],
+        "start_ticks": 4189,
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "radio_after": {
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      },
+      "slice": {
+        "in_use": "1",
+        "sample_rate": "24000",
+        "RF_frequency": "7.150000",
+        "client_handle": "0x1883E49F",
+        "index_letter": "A",
+        "rit_on": "0",
+        "rit_freq": "0",
+        "xit_on": "0",
+        "xit_freq": "0",
+        "rxant": "RX_A",
+        "mode": "USB",
+        "chain_mode": "USB",
+        "wide": "0",
+        "filter_lo": "100",
+        "filter_hi": "2800",
+        "step": "100",
+        "step_list": "1,10,50,100,500,1000,2000,3000",
+        "agc_mode": "med",
+        "agc_threshold": "60",
+        "agc_threshold_mode": "manual",
+        "agc_off_level": "10",
+        "pan": "0x40000000",
+        "txant": "ANT1",
+        "loopa": "0",
+        "loopb": "0",
+        "qsk": "0",
+        "dax_iq_channel": "0",
+        "dax": "0",
+        "dax_clients": "0",
+        "lock": "0",
+        "tx": "1",
+        "active": "1",
+        "audio_level": "50",
+        "audio_pan": "50",
+        "audio_mute": "0",
+        "record": "0",
+        "play": "disabled",
+        "record_time": "0.0",
+        "nr": "0",
+        "nr_level": "50",
+        "nr_wlen": "256",
+        "nr_delay": "25",
+        "nr_adapt_mode": "auto",
+        "nr_isdft_mode": "half",
+        "nrl": "0",
+        "nrl_level": "100",
+        "nrl_filter_size": "128",
+        "nrl_delay": "16",
+        "nrl_leakage_level": "50",
+        "nrf": "0",
+        "nrf_winc": "256",
+        "nrf_wlen": "2048",
+        "rnn": "0",
+        "nrs": "0",
+        "nrs_level": "50",
+        "anf": "0",
+        "anf_level": "50",
+        "anf_wlen": "256",
+        "anf_delay": "25",
+        "anf_adapt_mode": "auto",
+        "anf_isdft_mode": "half",
+        "anfl": "0",
+        "anfl_level": "100",
+        "anfl_filter_size": "128",
+        "anfl_delay": "16",
+        "anfl_leakage_level": "0",
+        "anft": "0",
+        "anft_min_db": "-110",
+        "anft_tone_db_diff": "12",
+        "nb": "0",
+        "nb_level": "50",
+        "apf": "0",
+        "apf_level": "30",
+        "wnb": "0",
+        "wnb_level": "90",
+        "squelch": "1",
+        "squelch_level": "20",
+        "diversity": "0",
+        "diversity_parent": "0",
+        "diversity_child": "0",
+        "diversity_index": "1342177293",
+        "ant_list": "ANT1,ANT2,RX_A,RX_B,XVTA,XVTB",
+        "mode_list": "LSB,USB,AM,CW,DIGL,DIGU,SAM,FM,NFM,DFM,RTTY",
+        "fm_tone_mode": "OFF",
+        "fm_tone_value": "67.0",
+        "fm_repeater_offset_freq": "0.000000",
+        "tx_offset_freq": "0.000000",
+        "repeater_offset_dir": "SIMPLEX",
+        "fm_tone_burst": "0",
+        "fm_deviation": "5000",
+        "dfm_pre_de_emphasis": "0",
+        "post_demod_low": "300",
+        "post_demod_high": "3300",
+        "rtty_mark": "2125",
+        "rtty_shift": "170",
+        "digl_offset": "1500",
+        "digu_offset": "1500",
+        "post_demod_bypass": "0",
+        "rfgain": "0",
+        "tx_ant_list": "ANT1,ANT2,XVTA,XVTB",
+        "rx_error_mHz": "3.814694",
+        "esc": "0",
+        "esc_gain": "1.000000",
+        "esc_phase_shift": "0.000000",
+        "max_internal_pa_power": "100"
+      }
+    },
+    "firmware_after": {
+      "TimeoutStopUSec": "1min 30s",
+      "MainPID": "1143",
+      "ControlGroup": "/system.slice/smartsdr.service",
+      "KillMode": "control-group",
+      "SendSIGKILL": "yes",
+      "Id": "smartsdr.service",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "ARP_after": [],
+    "ARP_journal_bytes": 0,
+    "accept_local": "0"
+  },
+  "original_host_harness": {
+    "passed": false,
+    "reason": "Expected Stop to returnHTTP200stopped after systemd had closed the owned private channel. ActualHTTP503unavailable persisted; both original20s Stop waits failed. Dead transport is not complete-cleanup evidence; no closed-channel-to-stopped shortcut was added."
+  },
+  "explicit_recovery": {
+    "passed": true,
+    "RF_commands": [],
+    "credential_mutations": [],
+    "Start_actions": 1,
+    "Stop_actions": 1,
+    "radio_before": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.28125,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "status_before": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    },
+    "restart": {
+      "ready_s": 2.2251994230027776,
+      "status": {
+        "body": {
+          "available": true,
+          "calibration_control": true,
+          "calibration_required": false,
+          "calibration_state": "idle",
+          "correcting": false,
+          "correction_control": true,
+          "correction_enabled": true,
+          "diagnostics": {
+            "alignment": {
+              "count": 0,
+              "text": "",
+              "truncated": false
+            },
+            "alignment_reset": {
+              "count": 0,
+              "text": "",
+              "truncated": false
+            },
+            "source_end": {
+              "count": 0,
+              "text": "",
+              "truncated": false
+            },
+            "version": 2
+          },
+          "faults": {
+            "dispatch_deadlines": 0,
+            "rejected_input": 0,
+            "send_errors": 0,
+            "stale_iq": 0
+          },
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 411296927,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "input_limited_samples": 0,
+          "keyed": false,
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "measurement_capture_batch_version": 1,
+          "measurement_control": true,
+          "measurement_tone_capture_version": 3,
+          "measurement_tone_config": {
+            "center_hz": 1305,
+            "max_spacing_hz": 10000,
+            "min_spacing_hz": 200,
+            "source_id": "0000000000000000",
+            "spacing_hz": 1190
+          },
+          "measurement_tone_control": true,
+          "registered": true,
+          "source_purpose": "calibration",
+          "state": "idle"
+        },
+        "http_status": 200
+      }
+    },
+    "capture_after_restart": {
+      "metadata": {
+        "capture_id": "659152b4844b2d128ffc764f846bd704",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 411296927,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "2425810284879",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "2426151274599",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "67550608321cea064c7f8f58bdbecf5153268329e3dbc307e1a547c6935fea5f"
+    },
+    "final_stop": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    },
+    "radio_after": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.265625,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "owner_after": {
+      "auth_url_present": false,
+      "auth_url_sha256": "",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "local"
+    }
+  },
+  "independent_final_audit": {
+    "passed": true,
+    "RF_commands": [],
+    "processes": [
+      {
+        "pid": 1313,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      },
+      {
+        "pid": 2607,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 2617,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "owner_config_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "runtime_sha256": {
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+      "flex-tailnet-shim": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+    },
+    "arp": [],
+    "arp_journal_bytes": 0,
+    "accept_local": "0",
+    "private_sockets": [],
+    "temporary_installation_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    }
+  },
+  "guardian_defect": {
+    "cause": "Unkey guardian and Go receive guardian had default SIGTERM/SIGINT termination. Installed session KillMode=control-group sends SIGTERM to those independent cleanup owners too. SendSIGKILL=no alone does not protect default termination.",
+    "fix": "Unkey guardian installs ignoredSIGTERM/SIGINT before initial query/readiness; its existing lifetime/deadline/ownership validation still governs cleanup. Dedicated Go receive guardian installs the same policy before readiness and waits for owner lifetime EOF, then retains existing eight-second bounded receive restoration.",
+    "new_privileges": [],
+    "new_threads_or_command_endpoints": [],
+    "radio_commands_added": [],
+    "root_reboot_cause_established": false,
+    "installed_or_live_qualified": false
+  },
+  "component_tests": {
+    "registered_CTests_passed": [
+      "pd_unkey_guard_parser_test",
+      "pd_unkey_guard_deadline_test"
+    ],
+    "C_signal_cases": "Own forked child receives realSIGTERM andSIGINT during initial query, owned wait, and final refresh; owned softwarePTT still yields exactlyone injected xmit0, foreign ownership yieldsnone. No radio socket or peer.",
+    "baseline_C_regression_rejected": true,
+    "C_mutants": [
+      {
+        "missing_signal": "term",
+        "exit": -6,
+        "rejected": true
+      },
+      {
+        "missing_signal": "int",
+        "exit": -6,
+        "rejected": true
+      }
+    ],
+    "C_ASan_UBSan_LSan_passed": true,
+    "Go_guardian_and_full_suite_race_passed": true,
+    "Go_signal_cases": "Own subprocess/pipe only. After readiness realSIGTERM/SIGINT cannot retire a live-owner guardian; ownerEOF permits normalexit/reaping. No firmware peer, socket, or restore commands.",
+    "Go_mutants": [
+      {
+        "missing_signal": "term",
+        "rejected": true,
+        "exit": 1
+      },
+      {
+        "missing_signal": "int",
+        "rejected": true,
+        "exit": 1
+      }
+    ],
+    "host_Go_version": "go1.27.4-X:nodwarf5",
+    "cross_Go": {
+      "armv7": {
+        "bytes": 21954720,
+        "sha256": "167bab45904d97db5975e363c85ae5c1066ef070d57641066789520206f7fe7a"
+      },
+      "arm64": {
+        "bytes": 21495968,
+        "sha256": "d864f65f74ad0def40126abb83ca848c469ebdfc4cb887026defde9b5e47a861"
+      },
+      "toolchain": "go version go1.27.1 linux/amd64"
+    },
+    "cross_C": {
+      "armv7": {
+        "bytes": 35296,
+        "sha256": "f5b59cb6bb25af43f192b805357e264d4bb8fb16a945278a619325597d4614e6",
+        "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-service-signals/pd-unkey-guard-armv7: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, stripped"
+      },
+      "arm64": {
+        "bytes": 41824,
+        "sha256": "1663086c576cd08332a97c7c20771b3ee7653824c73c93e100c1583e4c88888f",
+        "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-service-signals/pd-unkey-guard-arm64: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped"
+      }
+    },
+    "test_registration_check_passed": true,
+    "docs_build_passed": true
+  },
+  "limits": [
+    "Installed active-stop test was unkeyedUSB with running localDAXIQ and FDXoff; it did not exercise keyedPD mode or actual unkey/receive restoration. Kernel metadata confirms all twelve original session processes, including zombies, disappeared; firmwarePID1143 and primaryshimPID1313 stayed.",
+    "Original host harness remainsfailed. Separate ordinaryStart reachedready in2.225s, exported131072bytes fresh finite nonzero localIQ, and ordinaryStop returnedHTTP200stopped. Final independent audit verifies three capability-free baseline control processes, originalidentity/hash, ARPabsent/emptyjournal/accept_local0 and temporary installerabsence.",
+    "Signal fix is component-only at this report. No signed combined runtime/distribution, package disk admission, installed stop qualification, RF, or reboot result is implied by ARMcompilation.",
+    "Guardians still refuse unsafe/mismatched ownership and API failures. Ignoring service-stop signals does not establish RFcessation, supply scheduling guarantees, or justify killing an uncertain leaseguardian.",
+    "Software-reboot hang remainsunresolved. Missing firmware/session unit ordering remains a hypothesis; no ordering or firmwareunit change made. Actual6300/platform/disk/credential/RF/stockAPD/release gates and deferred5WSWR/preamble scope remain intact."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/api-before-IQ.f32le.gz": "90217b34da28a8d56b4a2a02d1beb2a3bd7f7cd5ef0196f1581fa9901e7237b9",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/api-events.json.gz": "8a72638fe24dbf9a7c368bca9e6b7fe9140a802066031546179d3cebb7349194",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/api-fault-template.py.gz": "cac26808988b9048d159210ccfa1d6f1bc5da9b589dda38bcacc48030d896788",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/api-job-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/api-job.py.gz": "c2956c1a2165db62bda9459c431d97e3aae001318be47b94a5fba72f929880cd",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/api-outcome.json.gz": "1d3e291162a4df159ef79d4a6dc177d022ca2b36b2fecb145e7ac95d659ecdec",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/api-result.json.gz": "9f1f7111b3d11cc61e2bac4399ec915ddebbb491686b713cd748e2e6d20b1910",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/api.log.gz": "9f1f7111b3d11cc61e2bac4399ec915ddebbb491686b713cd748e2e6d20b1910",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/console.log.gz": "10efbfbcfb50b8b6d9e9a29cc06fb931582e1860643f829eeba53ec268f0acc9",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/instance.json.gz": "4bfbabaacd88c5d5b9ff569f8decd9967eea4d8c0c0886ccd00c2413bb0eec7e",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-01/run.py.gz": "999c5a237d19f206178fcc38e23963d74485082d8d5a282f80279dfd9fadff35",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/api-before-IQ.f32le.gz": "71670d1bd1b65cbef835fbe80bba597f4445f6c1bd2f5deb59b1f38f1a501635",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/api-events.json.gz": "832b5112aadff805c6abc8755c65d49f938e8c1902128394174a322c3c7ce7ee",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/api-fault-template.py.gz": "51e4125d147595ec5edb52a43e5470e158322910d2b8bbaea41898de400acaa0",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/api-job-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/api-job.py.gz": "6a116535de1402acca62a54b0a11f1df5b1f4a39929a3626547df514576202f9",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/api-outcome.json.gz": "ade324f3c92a1f1c311669d3e8d6d21620627589da760c06cc2954384d840fcf",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/api-result.json.gz": "1b5ec58e2d68125b33115937e1d99864712beeee33fe74b44fff673205373254",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/api.log.gz": "1b5ec58e2d68125b33115937e1d99864712beeee33fe74b44fff673205373254",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/audit-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/audit-job.py.gz": "4f799f7e8e6134f8caae36f46fa70a63672413acfb3b28986a9187b902cb7796",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/audit-result.json.gz": "3d84e6528f93bace9a291cfdcb269b95813517533e1533ac151b977b5f8d19ab",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/audit.log.gz": "3d84e6528f93bace9a291cfdcb269b95813517533e1533ac151b977b5f8d19ab",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/console.log.gz": "4df81c2c819fd1c119638710d0d578e776c554a742c73271c9188a79b7e199ff",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/dsp-stall-restarted-IQ.f32le.gz": "69de714e3fcb016bf14987881b0565becdc21155a695f8cfaf99c61fc012f31b",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/instance.json.gz": "4bfbabaacd88c5d5b9ff569f8decd9967eea4d8c0c0886ccd00c2413bb0eec7e",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/recover.py.gz": "3b4cae61b41b688dc72a62b531d077c8c92131dd7b31b09fec19e3049adbbb69",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/recovery-console.log.gz": "32d0af17b38a6a464d9d4da47976c00f472635c58fcfc88f7fcd0779ade2e3ef",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/recovery-events.json.gz": "f174a9bc2a2e5995715e38ba92606cb0bbb18330c45379c62af88c7d26262123",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/recovery-outcome.json.gz": "82b0fed093c5fd1fbfe50682b9f68a8affd8ac1bfd21d511a500b385407ad69b",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/active-session-unit-stop-02/run.py.gz": "999c5a237d19f206178fcc38e23963d74485082d8d5a282f80279dfd9fadff35",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/C-mutations-result.json.gz": "8794a13ccdb53b721b93d3415e9543aa6578773d68f03823cd223c5895026d39",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/C-sanitizer-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/C-sanitizer.log.gz": "1dbf0feb8a701625865155bfe44fc0227f9b2ee1f29b255d4207cf55f7264a6e",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/baseline-C/unkey_guard.c.gz": "7e3b06f855d1f6e3778854f58bea4a0ddb30c42c4aeee655a3bf363c82692413",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/baseline-C/unkey_guard_deadline_test.c.gz": "f7bc3d6177977fb5aa534911301aae89c11af95cd9dbeddafdf44f695c71a639",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/baseline-c-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/baseline-c-result.json.gz": "ee0b474e6da9692a9401b50335642c211a3a368c5973f57d9d84fb37c10719c1",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/baseline-c.log.gz": "8907fe5f326c5364e8fc3faf4557faab39f1ae4dde377dfc08ac6e1497897422",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/check-C.py.gz": "50a087cca9cea9b307f2f367a3c2fd27be3465eefcec392710c888afa65a51fe",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/cmake-build.log.gz": "1e9146ac437ead9500700d8c2986093a82a976c43c07a94286729e8569d62e6f",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/component-commands.json.gz": "3adbf56babac232529a35a168fc165a0dcab013312e33ce00b153d19f674fb8a",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/cross-C.json.gz": "9e13d6e1ece10f8e807dd20088776eb54ab473a19cc9c22c967dbbd380fae2f6",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/cross-Go.json.gz": "108b89bf44813091d7bd35dcf9c4420c6ea10478f7dbf2b45ded5ac1797eff70",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/cross-go-arm64.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/cross-go-armv7.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/ctest.log.gz": "9a9c11bae5e427e51dbe50e23dbcd11eabdfa3f850b47dda4a647bdf10c20e2d",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/go-full-race.log.gz": "1486bbcfad530a0fc37b373176b9a034f74defa6a6e7e8c7311d9181f28cd875",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/go-guardian-race.log.gz": "e9dd01e70cb25716a9726896f0cd6a4505de575a1b29deed41865a43d8d52529",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/go-mutant-int.json.gz": "17da51c3ff8182e316c4270a61312e11a51783a302b82dd72b61343cf0e22a1b",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/go-mutant-int.log.gz": "2a38d8e9e8d01aa0be13dfa2d49b72e1a15e3b2ad2fb7a828f043d3ed911e4c1",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/go-mutant-term.json.gz": "ffc38b9004989c61442f3aca78ec4f8cb23340cd883c9b3c919be9a26f6f4017",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/go-mutant-term.log.gz": "003f5b8067f11a80bf130d61e17b95068fcac9a2a1213168ae5e41966faa9324",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/go-mutations-result.json.gz": "9fa5fb46f094383d9017cf78e5c1e90eafacdf29d43be176808887b50dcf99b0",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/mutant-C-int/unkey_guard.c.gz": "dc0b7776f0bf70027671ad6f186c3bf82a981c9bd3e7686de79a1877b05a5d02",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/mutant-C-int/unkey_guard_deadline_test.c.gz": "f7bc3d6177977fb5aa534911301aae89c11af95cd9dbeddafdf44f695c71a639",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/mutant-C-int.log.gz": "c4966ff22eb48ca45f5a5e541b5fac9e911b3ebb3e1e4c419a64349b3425a4fb",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/mutant-C-term/unkey_guard.c.gz": "9a8286c7194c6c889a34c3ea53481351f1e9363167bfe7a2eee9cb541eab5689",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/mutant-C-term/unkey_guard_deadline_test.c.gz": "f7bc3d6177977fb5aa534911301aae89c11af95cd9dbeddafdf44f695c71a639",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/mutant-C-term.log.gz": "5dd9d4ae8b504651ff0bd61808a21b1d9ebedb06be2f4298625d9e4cf1b1bd37",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/save-qualification.py.gz": "caf3704ba8ca05134c8cd870988ab4b7d80e03215600c9bbd1852a1ea3d19779",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/guardian-service-signals/user-docs-build.log.gz": "05f20db5b56e2552fcafd33392f1b26087c35bd4066d624f3fd76bfedd438453",
+    "tools/pd-waveform/evidence/20261117-guardian-service-signals/production-completion-plan.json.gz": "213e0d15c04d972157a64daf7c80393ba6b042ed2d864d2032b622b097bc19d5"
+  }
+}

@@ -28,11 +28,13 @@ ssize_t fixture_write(int fd, const void* bytes, size_t size);
 #undef NDEBUG
 #endif
 #include <assert.h>
+#include <sys/wait.h>
 
 static struct {
     int64_t now, cleanup_due, unkey_at;
     int startup_stall, cleanup_stall, refresh_delay, cleanup_event_stall, unkey_write_stall;
     int stage, stalled, unkeys, foreign, refreshes, delayed;
+    int service_signal_stage, service_signals_sent;
     int reservation, reservation_only, reservation_released, startup_reserved;
     char pending[1024];
 } fixture;
@@ -93,6 +95,11 @@ ssize_t fixture_recv(int fd, void* data, size_t capacity, int flags)
 int fixture_poll(struct pollfd* fds, nfds_t count, int timeout)
 {
     assert(timeout >= 0);
+    if (fixture.stage == fixture.service_signal_stage && !fixture.service_signals_sent) {
+        fixture.service_signals_sent = 1;
+        assert(raise(SIGTERM) == 0);
+        assert(raise(SIGINT) == 0);
+    }
     for (nfds_t i = 0; i < count; ++i) { fds[i].revents = 0; }
     if (fixture.stage == 5) {
         assert(count == 1 && fds[0].fd == 41 && fds[0].events == POLLOUT);
@@ -165,6 +172,27 @@ static void reset(void)
 
 int main(void)
 {
+    // Each child owns its signal dispositions; no sockets or firmware peer.
+    for (int stage = 1; stage <= 3; ++stage) {
+        for (int foreign = 0; foreign <= 1; ++foreign) {
+            pid_t child = fork();
+            assert(child >= 0);
+            if (child == 0) {
+                signal(SIGTERM, SIG_DFL);
+                signal(SIGINT, SIG_DFL);
+                reset();
+                fixture.service_signal_stage = stage;
+                fixture.foreign = foreign;
+                assert(run(41, 42, 0x1234, 0x5678, 9500) == 0);
+                assert(fixture.service_signals_sent == 1);
+                assert(fixture.unkeys == (foreign ? 0 : 1));
+                _exit(0);
+            }
+            int status = 0;
+            assert(waitpid(child, &status, 0) == child);
+            assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        }
+    }
     reset();
     assert(run(41, 42, 0x1234, 0x5678, 9500) == 0);
     assert(fixture.unkeys == 1 && fixture.unkey_at == fixture.cleanup_due);

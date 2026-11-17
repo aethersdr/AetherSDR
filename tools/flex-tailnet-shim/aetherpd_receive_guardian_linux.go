@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -124,6 +125,16 @@ func waitPDReceiveGuardianLifetime(life *os.File) error {
 	}
 }
 
+// Only the dedicated guardian uses this process-wide policy. A service stop
+// must leave it alive until owner lifetime loss and bounded receive recovery.
+func guardPDReceiveLifetime(life *os.File, ready func() error) error {
+	signal.Ignore(syscall.SIGTERM, syscall.SIGINT)
+	if err := ready(); err != nil {
+		return err
+	}
+	return waitPDReceiveGuardianLifetime(life)
+}
+
 func waitPDReceiveGuardianRestore(ctx context.Context, original pdReceiveOriginal, observe func(context.Context, pdReceiveOriginal) (pdReceiveView, error)) error {
 	// Mode restoration is asynchronous. A fresh, confirmed DAX collision is
 	// a refusal, not a transition the guardian may wait out or overwrite.
@@ -211,11 +222,11 @@ func receiveGuardianMain() int {
 		return 2
 	}
 	record.Close()
-	if _, err = io.WriteString(os.Stdout, pdReceiveGuardianReady); err != nil {
-		return 3
-	}
-	os.Stdout.Close()
-	if err = waitPDReceiveGuardianLifetime(life); err != nil {
+	if err = guardPDReceiveLifetime(life, func() error {
+		_, err := io.WriteString(os.Stdout, pdReceiveGuardianReady)
+		os.Stdout.Close()
+		return err
+	}); err != nil {
 		return 3
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)

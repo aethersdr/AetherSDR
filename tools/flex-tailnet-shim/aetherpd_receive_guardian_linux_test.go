@@ -7,11 +7,85 @@ import (
 	"encoding/json"
 	"errors"
 	"golang.org/x/sys/unix"
+	"io"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestPDReceiveGuardianTerminationHelper(t *testing.T) {
+	if os.Getenv("AETHER_PD_OWN_GUARDIAN_TEST_CHILD") != "1" {
+		return
+	}
+	life := os.NewFile(3, "owned-test-lifetime")
+	err := guardPDReceiveLifetime(life, func() error {
+		_, err := os.Stdout.Write([]byte{'R'})
+		return err
+	})
+	if err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func TestPDReceiveGuardianSurvivesServiceSignalsUntilLifetimeEnds(t *testing.T) {
+	life, owner, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer life.Close()
+	defer owner.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPDReceiveGuardianTerminationHelper$")
+	cmd.Env = append(os.Environ(), "AETHER_PD_OWN_GUARDIAN_TEST_CHILD=1")
+	cmd.ExtraFiles = []*os.File{life}
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("owned guardian test child did not reap")
+		}
+	}()
+	var ready [1]byte
+	if _, err := io.ReadFull(output, ready[:]); err != nil || ready[0] != 'R' {
+		t.Fatalf("guardian readiness: %q %v", ready, err)
+	}
+	for _, sig := range []os.Signal{syscall.SIGTERM, syscall.SIGINT} {
+		if err := cmd.Process.Signal(sig); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case err := <-done:
+		done <- err
+		t.Fatalf("service signal ended guardian with a live owner: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	owner.Close()
+	select {
+	case err := <-done:
+		done <- err
+		if err != nil {
+			t.Fatalf("guardian did not complete on owner EOF: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("guardian ignored owner EOF")
+	}
+}
 
 func TestPDReceiveGuardianRetainsModeledSnapshot(t *testing.T) {
 	request, _, _ := receiveRecoveryFixture()

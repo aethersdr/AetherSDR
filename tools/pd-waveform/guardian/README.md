@@ -19,7 +19,13 @@ Invocation is `pd-unkey-guard <api-fd> <lifetime-fd> <0xAPIhandle> <0xGUIhandle>
 The process requires a non-root UID, no effective/permitted/inheritable
 capabilities, and a pipe for its event output. It opens no sockets or files.
 It ignores SIGPIPE so loss of the Go diagnostics reader cannot interrupt
-unkey or acknowledgment handling. It disables dumps and requests `no_new_privs`; Linux2.6's `EINVAL` is accepted
+unkey or acknowledgment handling. Before querying initial readiness it also
+ignores SIGTERM and SIGINT: stopping the whole session must leave its independent
+cleanup alive until lifetime hangup or its fixed deadline. Those signals grant
+no ownership and encode no additional radio command. The dedicated receive
+guardian likewise installs its termination policy before publishing readiness,
+then waits for owner lifetime loss and its existing bounded receive restoration.
+It disables dumps and requests `no_new_privs`; Linux2.6's `EINVAL` is accepted
 because the helper never executes another program or gains capabilities.
 Actual Linux2.6 hardware execution remains untested.
 
