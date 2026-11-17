@@ -30,7 +30,8 @@ class TailnetShimDialog : public CanonWindow {
     Q_OBJECT
 public:
     // `native`: the shim is installed as a legacy waveform, not a container.
-    explicit TailnetShimDialog(RadioModel* model, bool native, QWidget* parent = nullptr);
+    explicit TailnetShimDialog(RadioModel* model, bool native, QWidget* parent = nullptr,
+                              QNetworkAccessManager* network = nullptr);
 
     // For every confirmation that takes the radio off the tailnet: signing it
     // in again takes the radio's local network. Inline, so the environment
@@ -51,6 +52,7 @@ signals:
     void resetRequested(bool update);
 
 private:
+    friend class TailnetShimDialogTestAccess;
     bool current() const;
     void refresh();
     void showStatus(const TailnetShimStatus& status);
@@ -78,7 +80,8 @@ private:
     void reset();
     void updateRadioShim();   // reinstall at the pinned version, after asking
     void onProvisioned(const TailnetShimProvisionReply& reply);
-    void onRequestFailed(const QString& operation, const QString& message, bool unauthorized);
+    void onRequestFailed(const QString& operation, const QString& message, bool unauthorized,
+                         const QByteArray& credentialFingerprint);
 
     QPointer<RadioModel> m_model;
     std::function<bool()> m_originalSessionCurrent;

@@ -255,6 +255,9 @@ Service / GNOME Keyring on Linux), keyed to this radio's serial number. From
 then on the container accepts changes only from a computer that holds it:
 device sharing, disconnecting, or joining again.
 
+A rejoin can replace a legacy container's admin token. A delayed rejection of
+the older token does not remove the replacement saved on this computer.
+
 - The first setup is open to anyone on the radio's local network, the same
   trust the radio's own API uses there. So is a sign-in that was started but
   never finished.
@@ -743,6 +746,9 @@ preserving local ownership; update the managed service before signing in.
 **Disconnect** removes the tailnet identity and stops the owned AetherPD
 session, then returns to **Local access ready** with the same installation ID
 and owner credential. A failed auth-key join also retains local control.
+If the managed service rejects the saved owner credential, **Remote Access**
+reports the rejection and keeps that credential; it does not clear it as a
+revoked legacy sign-in token.
 Losing that saved owner credential is a separate recovery case; token-free
 takeover and reinstalling the legacy remote-access waveform are not recovery
 procedures for this managed installation.

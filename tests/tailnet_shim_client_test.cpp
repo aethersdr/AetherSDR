@@ -11,6 +11,7 @@
 #include "core/TailnetShimClient.h"
 #include "core/TailnetShimDownloader.h"
 #include "core/TailnetShimTokenStore.h"
+#include "AetherPDTestTransport.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -42,6 +43,34 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     using namespace AetherSDR;
     bool ok = true;
+
+    // A delayed rejection must identify the credential sent, even if another
+    // request has since used its replacement. No peer or sockets are involved.
+    {
+        AetherPDTest::Network network;
+        TailnetShimClient client(network);
+        client.setRadioAddress(QHostAddress(QStringLiteral("192.0.2.1")));
+        QByteArray rejected;
+        int failures = 0;
+        QObject::connect(&client, &TailnetShimClient::requestFailed, &client,
+            [&](const QString& operation, const QString&, bool unauthorized, const QByteArray& credential) {
+                ok &= expect(operation == QStringLiteral("login") && unauthorized,
+                             "login rejection preserves its operation and401");
+                rejected = credential;
+                ++failures;
+            });
+        client.fetchLogin(QStringLiteral("old-test-token"));
+        const QPointer<AetherPDTest::Reply> old = network.last;
+        client.setSharing({}, false, QStringLiteral("new-test-token"));
+        old->complete(401, R"({"error":"rejected"})");
+        ok &= expect(failures == 1
+                     && rejected == tailnetshim::credentialFingerprint(QStringLiteral("old-test-token"))
+                     && rejected != tailnetshim::credentialFingerprint(QStringLiteral("new-test-token"))
+                     && rejected.size() == 32 && !rejected.contains("old-test-token"),
+                     "late failure carries a digest of its own bearer credential");
+        ok &= expect(tailnetshim::credentialFingerprint({}).isEmpty(),
+                     "public requests have no credential fingerprint");
+    }
 
     const QByteArray running = R"({"version":"0.2.0","provisioned":true,"state":"running",
         "hostname":"kk7gwy-flex-8600","tailnet_ip":"100.100.1.2",

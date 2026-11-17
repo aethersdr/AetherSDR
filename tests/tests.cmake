@@ -5192,6 +5192,23 @@ target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
+# Production callback/keychain ordering; injected signals, no sockets or keyring.
+# Compile the credential object without aethercore's HAVE_KEYCHAIN definition.
+add_library(tailnet_shim_test_credentials OBJECT src/core/TailnetShimTokenStore.cpp)
+target_include_directories(tailnet_shim_test_credentials PRIVATE src)
+target_link_libraries(tailnet_shim_test_credentials PRIVATE Qt6::Core)
+add_executable(tailnet_shim_dialog_test
+    tests/tailnet_shim_dialog_test.cpp
+    src/gui/TailnetShimDialog.cpp src/gui/QrCodeImage.cpp
+    src/gui/CanonMessageBox.cpp src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp src/gui/DragValuePopup.cpp src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:tailnet_shim_test_credentials>
+    ${THEME_TEST_RESOURCES})
+target_include_directories(tailnet_shim_dialog_test PRIVATE src tests)
+target_link_libraries(tailnet_shim_dialog_test PRIVATE aethercore aether_qrcodegen Qt6::Widgets Qt6::Network)
+add_test(NAME tailnet_shim_dialog_test COMMAND tailnet_shim_dialog_test)
+set_tests_properties(tailnet_shim_dialog_test PROPERTIES TIMEOUT 15 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The radio health agent: the bundled package matches its pin and is a valid
 # legacy waveform; its readout parses, refuses and summarizes. Socket-free;
 # writes only to a QTemporaryDir.

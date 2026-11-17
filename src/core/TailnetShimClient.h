@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QHostAddress>
 #include <QNetworkAccessManager>
 #include <QObject>
@@ -118,6 +119,8 @@ bool shouldSignInUnasked(const TailnetShimStatus& status, bool tokenLoaded, bool
 // The token the window keeps when the keychain answers: one it already
 // holds (issued by a sign-in meanwhile) wins over the read.
 QString tokenAfterKeychainRead(const QString& held, const QString& read);
+// Correlates an authenticated reply without carrying its bearer token.
+QByteArray credentialFingerprint(const QString& token);
 QString parseError(const QByteArray& json);
 // An empty authKey is left out, which asks for sign-in by QR code.
 QByteArray provisionBody(const QString& authKey, const QString& hostname,
@@ -139,7 +142,9 @@ QStringList splitAllowList(const QString& text);
 class TailnetShimClient : public QObject {
     Q_OBJECT
 public:
-    explicit TailnetShimClient(QObject* parent = nullptr);
+    explicit TailnetShimClient(QObject* parent = nullptr, QNetworkAccessManager* network = nullptr);
+    // The injected transport must outlive this client.
+    TailnetShimClient(QNetworkAccessManager& network, QObject* parent = nullptr);
 
     void setRadioAddress(const QHostAddress& address) { m_address = address; }
 
@@ -157,7 +162,8 @@ signals:
     void loginReceived(const AetherSDR::TailnetShimLogin& login);
     // operation is "status", "login", "provision", "sharing" or "signout". unauthorized
     // is true when the shim refused the admin token.
-    void requestFailed(const QString& operation, const QString& message, bool unauthorized);
+    void requestFailed(const QString& operation, const QString& message, bool unauthorized,
+                       const QByteArray& credentialFingerprint);
 
 private:
     QNetworkReply* send(const QString& method, const QString& path,
@@ -165,6 +171,7 @@ private:
     void handle(QNetworkReply* reply, const QString& operation);
 
     QNetworkAccessManager m_nam;
+    QNetworkAccessManager* m_network{&m_nam};
     QHostAddress m_address;
     QPointer<QNetworkReply> m_statusReply;   // the status request in flight, if any
     QPointer<QNetworkReply> m_loginReply;    // the login request in flight, if any

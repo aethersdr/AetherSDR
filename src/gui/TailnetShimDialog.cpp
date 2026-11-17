@@ -147,9 +147,11 @@ QFrame* makeCard(const QString& title, QWidget* parent, QVBoxLayout** contents)
 
 }  // namespace
 
-TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* parent)
+TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* parent,
+                                   QNetworkAccessManager* network)
     : CanonWindow(tr("Remote Access (Tailscale)"), parent)
     , m_model(model)
+    , m_client(nullptr, network)
     , m_native(native)
 {
     setObjectName(QStringLiteral("TailnetShimDialog"));
@@ -925,10 +927,9 @@ void TailnetShimDialog::provision(const QString& authKey)
     });
     connect(transaction, &TailnetShimClient::requestFailed, qApp,
             [transaction, window](const QString& operation, const QString& message,
-                                  bool unauthorized) {
+                                  bool unauthorized, const QByteArray& credential) {
         if (window) {
-            window->m_signingIn = false;
-            window->onRequestFailed(operation, message, unauthorized);
+            window->onRequestFailed(operation, message, unauthorized, credential);
         }
         transaction->deleteLater();
     });
@@ -1049,11 +1050,27 @@ void TailnetShimDialog::setAdvancedOpen(bool open)
 }
 
 void TailnetShimDialog::onRequestFailed(const QString& operation, const QString& message,
-                                        bool unauthorized)
+                                        bool unauthorized, const QByteArray& credential)
 {
-    setBusy(false);
     if (!current()) { return; }
+    // A rejoin may replace the legacy credential while a login is pending.
+    // Its late error has no authority over the replacement credential or UI.
+    if (!credential.isEmpty() && credential != tailnetshim::credentialFingerprint(m_adminToken)) {
+        return;
+    }
+    setBusy(false);
+    if (operation == QLatin1String("provision")) {
+        m_signingIn = false;
+    }
     if (unauthorized) {
+        if (m_status && !m_status->installationId.isEmpty()) {
+            m_signingIn = false;
+            hideSignIn();
+            showError(tr("The managed service rejected this computer's owner credential. "
+                         "Owner-credential recovery is unavailable in this build; "
+                         "reinstalling the legacy remote-access waveform does not recover it."));
+            return;
+        }
         // Mid sign-in, a refused token means another computer started the
         // sign-in over, which replaced this window's code and token.
         if (operation == QLatin1String("login")) {
@@ -1068,12 +1085,6 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
             showError(tr("This radio's sign-in was started over from another computer. Finish "
                          "it there, or press Refresh for a new code here."));
             updateControls();
-            return;
-        }
-        if (m_status && !m_status->installationId.isEmpty()) {
-            showError(tr("The managed service rejected this computer's owner credential. "
-                         "Owner-credential recovery is unavailable in this build; "
-                         "reinstalling the legacy remote-access waveform does not recover it."));
             return;
         }
         showError(m_native

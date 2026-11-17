@@ -3,6 +3,7 @@
 #include "TailnetShimRelease.h"
 
 #include <QJsonArray>
+#include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
@@ -26,6 +27,12 @@ constexpr qint64 kMaxReplyBytes = 256 * 1024;
 }  // namespace
 
 namespace tailnetshim {
+
+QByteArray credentialFingerprint(const QString& token)
+{
+    return token.isEmpty() ? QByteArray{}
+        : QCryptographicHash::hash("Bearer " + token.toUtf8(), QCryptographicHash::Sha256);
+}
 
 namespace {
 // Status strings are shown in the window. Real ones are short; the caps
@@ -289,14 +296,19 @@ QStringList splitAllowList(const QString& text)
 
 }  // namespace tailnetshim
 
-TailnetShimClient::TailnetShimClient(QObject* parent)
+TailnetShimClient::TailnetShimClient(QObject* parent, QNetworkAccessManager* network)
     : QObject(parent)
+    , m_network(network ? network : &m_nam)
 {
     m_nam.setTransferTimeout(kTransferTimeoutMs);
     // The API never redirects; following one would carry the admin token
     // in its Authorization header to wherever it pointed.
     m_nam.setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
 }
+
+TailnetShimClient::TailnetShimClient(QNetworkAccessManager& network, QObject* parent)
+    : TailnetShimClient(parent, &network)
+{}
 
 QNetworkReply* TailnetShimClient::send(const QString& method, const QString& path,
                                        const QByteArray& body, const QString& adminToken)
@@ -307,6 +319,7 @@ QNetworkReply* TailnetShimClient::send(const QString& method, const QString& pat
     url.setPort(kTailnetShimApiPort);
     url.setPath(path);
     QNetworkRequest req(url);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     req.setTransferTimeout(path == QLatin1String("/v1/provision") ? kTransferTimeoutMs
                                                                   : kQuickTimeoutMs);
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -314,22 +327,25 @@ QNetworkReply* TailnetShimClient::send(const QString& method, const QString& pat
         req.setRawHeader("Authorization", "Bearer " + adminToken.toUtf8());
     }
     if (method == QLatin1String("GET")) {
-        return m_nam.get(req);
+        return m_network->get(req);
     }
     if (method == QLatin1String("PUT")) {
-        return m_nam.put(req, body);
+        return m_network->put(req, body);
     }
-    return m_nam.post(req, body);
+    return m_network->post(req, body);
 }
 
 void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
 {
+    const QByteArray authorization = reply->request().rawHeader("Authorization");
+    const QByteArray credential = authorization.isEmpty() ? QByteArray{}
+        : QCryptographicHash::hash(authorization, QCryptographicHash::Sha256);
     connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64) {
         if (received > kMaxReplyBytes) {
             reply->abort();
         }
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, operation] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, operation, credential] {
         if (reply == m_statusReply) {
             m_statusReply = nullptr;
         }
@@ -344,7 +360,7 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
                                tr("Remote access did not answer on the radio (%1). It may "
                                   "still be starting.")
                                    .arg(reply->errorString()),
-                               false);
+                               false, credential);
             return;
         }
         if (code < 200 || code >= 300) {
@@ -352,13 +368,13 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
             if (message.isEmpty()) {
                 message = tr("Remote access on the radio returned HTTP %1.").arg(code);
             }
-            emit requestFailed(operation, message, code == 401);
+            emit requestFailed(operation, message, code == 401, credential);
             return;
         }
         if (operation == QLatin1String("provision")) {
             const auto parsed = tailnetshim::parseProvisionReply(body);
             if (!parsed) {
-                emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false);
+                emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false, credential);
                 return;
             }
             emit provisioned(*parsed);
@@ -367,7 +383,7 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
         if (operation == QLatin1String("login")) {
             const auto login = tailnetshim::parseLoginReply(body);
             if (!login) {
-                emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false);
+                emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false, credential);
                 return;
             }
             emit loginReceived(*login);
@@ -375,7 +391,7 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
         }
         const auto st = tailnetshim::parseStatus(body);
         if (!st) {
-            emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false);
+            emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false, credential);
             return;
         }
         emit statusReceived(*st);
