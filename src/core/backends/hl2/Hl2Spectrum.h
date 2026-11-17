@@ -10,9 +10,9 @@ namespace AetherSDR::hl2 {
 
 // The HL2 panadapter path: accumulate raw IQ (normalized [-1, 1)) into fixed
 // FFT frames and produce a DC-centered magnitude spectrum in dBFS. Ported from
-// the live-validated tools/hl2/spectrum.py — Hanning-windowed, per-frame DC
-// removal (the direct-sampling ADC offset sits on I), coherent-gain normalized,
-// fftshifted so DC lands at the centre bin.
+// tools/hl2/spectrum.py — Hanning-windowed, a slow running DC estimate removed
+// (kDcTimeConstantS), coherent-gain normalized, fftshifted so DC lands at the
+// centre bin.
 //
 // Owns an FFTW plan; construction/destruction allocate, process() does not
 // (fftw_execute is allocation-free). FFTW's global planner is not thread-safe,
@@ -32,6 +32,12 @@ public:
     // A bin-centred steady tone of magnitude A reads 20*log10(A) plus this:
     // 20*log10(2), because the normalisation divides by half the window sum.
     static constexpr double kToneGainDb = 6.020599913279624;
+
+    // Time constant of the DC estimate subtracted before the transform, taken
+    // over every IQ sample (accumulate() included). Long, so a tone off centre
+    // barely moves it; without a sample rate it is kDcFramesWithoutRate frames.
+    static constexpr double kDcTimeConstantS = 1.0;
+    static constexpr int kDcFramesWithoutRate = 200;
 
     // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
     // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting
@@ -89,11 +95,14 @@ public:
     {
         const std::size_t discarded = m_acc.size();
         m_acc.clear();
+        restartDc();
         return discarded;
     }
 
 private:
     void computeFrame(std::vector<float>& binsDbfs);
+    void trackDc(std::complex<float> s) noexcept;
+    void restartDc() noexcept { m_dcRe = 0.0; m_dcIm = 0.0; m_dcSamples = 0; }
 
     int m_fftSize;
     std::vector<std::complex<float>> m_acc;   // accumulation buffer (< m_fftSize)
@@ -123,6 +132,12 @@ private:
     // time averaging is switched on or the geometry changes, so the first
     // frame after a drop is TAKEN rather than blended into silence.
     bool m_haveAverage = false;
+    // Running DC estimate (trackDc()). Restarted by reset() and dropAverage(),
+    // so the frame after a gap or a retune depends on post-gap samples only.
+    double m_dcAlpha = 0.0;                   // per-sample weight, from the time constant
+    double m_dcRe = 0.0;
+    double m_dcIm = 0.0;
+    std::uint64_t m_dcSamples = 0;            // counted until the time constant is reached
     // Opaque FFTW handles (kept as void* so fftw3.h stays out of the header).
     void* m_in = nullptr;                     // fftw_complex[m_fftSize]
     void* m_out = nullptr;                     // fftw_complex[m_fftSize]

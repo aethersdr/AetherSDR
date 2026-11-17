@@ -4,6 +4,7 @@
 
 #include "core/dsp/WdspChannel.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace AetherSDR::hl2 {
@@ -40,6 +41,12 @@ Hl2Spectrum::Hl2Spectrum(int fftSize, double sampleRateHz)
     // and setAverageFrames() must not allocate either, since the alternative
     // is a first-frame malloc on whichever thread happens to change the depth.
     m_avgPower.assign(static_cast<std::size_t>(m_fftSize), 0.0);
+    // Per-sample weight of the DC estimate: time constant kDcTimeConstantS at
+    // the IQ rate, or kDcFramesWithoutRate frames when no rate is known.
+    const double dcTauSamples = m_sampleRateHz > 0.0
+        ? kDcTimeConstantS * m_sampleRateHz
+        : static_cast<double>(kDcFramesWithoutRate) * m_fftSize;
+    m_dcAlpha = -std::expm1(-1.0 / dcTauSamples);
 
     {
         // FFTW's planner is process-global and not thread-safe, and this runs on
@@ -71,6 +78,7 @@ int Hl2Spectrum::process(std::span<const std::complex<float>> iq, std::vector<fl
 {
     int frames = 0;
     for (const auto& s : iq) {
+        trackDc(s);
         m_acc.push_back(s);
         ++m_samplesSinceFrame;
         if (static_cast<int>(m_acc.size()) == m_fftSize) {
@@ -132,6 +140,7 @@ void Hl2Spectrum::dropAverage() noexcept
     // this touches no allocator.
     m_avgPower.assign(static_cast<std::size_t>(m_fftSize), 0.0);
     m_haveAverage = false;
+    restartDc();
 }
 
 double Hl2Spectrum::blendAlpha(double dtSeconds, double tauSeconds) noexcept
@@ -151,6 +160,9 @@ void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
 {
     // Time passes whether or not these samples survive the cap below.
     m_samplesSinceFrame += iq.size();
+    for (const auto& s : iq) {
+        trackDc(s);
+    }
     m_acc.insert(m_acc.end(), iq.begin(), iq.end());
     // Hold at most fftSize - 1: see the header for why exactly-full would wedge
     // process()'s boundary check.
@@ -161,20 +173,30 @@ void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
     }
 }
 
+void Hl2Spectrum::trackDc(std::complex<float> s) noexcept
+{
+    // A one-pole low-pass over every sample: a tone f Hz off centre leaks in at
+    // about 1/(2*pi*f*tau) of its amplitude. Growing memory (weight >= 1/n)
+    // until the time constant is reached removes a constant offset at once.
+    double alpha = m_dcAlpha;
+    if (static_cast<double>(m_dcSamples) * alpha < 1.0) {
+        ++m_dcSamples;
+        alpha = std::max(alpha, 1.0 / static_cast<double>(m_dcSamples));
+    }
+    m_dcRe += alpha * (static_cast<double>(s.real()) - m_dcRe);
+    m_dcIm += alpha * (static_cast<double>(s.imag()) - m_dcIm);
+}
+
 void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
 {
-    // Remove the frame's DC offset (the ADC offset lives on I in direct
-    // sampling), then apply the window.
-    double meanRe = 0.0, meanIm = 0.0;
-    for (const auto& s : m_acc) { meanRe += s.real(); meanIm += s.imag(); }
-    meanRe /= m_fftSize;
-    meanIm /= m_fftSize;
-
+    // Subtract the running DC estimate, not this frame's own mean: a strong
+    // tone that is not on a bin has a non-zero frame mean, and subtracting
+    // that mean draws a line at the centre bin.
     auto* in = static_cast<fftw_complex*>(m_in);
     for (int n = 0; n < m_fftSize; ++n) {
         const double w = m_window[static_cast<std::size_t>(n)];
-        in[n][0] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].real()) - meanRe) * w;
-        in[n][1] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].imag()) - meanIm) * w;
+        in[n][0] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].real()) - m_dcRe) * w;
+        in[n][1] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].imag()) - m_dcIm) * w;
     }
 
     fftw_execute(static_cast<fftw_plan>(m_plan));
