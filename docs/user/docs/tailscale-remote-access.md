@@ -602,6 +602,8 @@ ADC headroom or calibrated output power.
    are Blackman–Harris 7, four frames and IMD7.
    **Arm measurement source** submits the chosen spacing when the shim
    supports it. A rejected configured request never falls back to fixed tones.
+   Read-only status refreshes do not block this button. Wait for the source's
+   armed readback before preparing; an arm receipt alone does not confirm it.
    The selector locks while arming, armed, transmitting, measuring or installing.
    Preparation uses the confirmed frequencies and requires
    matching metadata on every capture. A configured capture never falls back

@@ -185,7 +185,8 @@ bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32
     }
     if (m_pending) {
         const bool preempts = (operation == Operation::Stop && *m_pending != Operation::Stop)
-            || (operation == Operation::Start && *m_pending == Operation::Status)
+            || ((operation == Operation::Start || operation == Operation::ArmMeasurement)
+                && *m_pending == Operation::Status)
             || (operation == Operation::CancelCalibration
                 && (*m_pending == Operation::Status || *m_pending == Operation::ArmCalibration || *m_pending == Operation::ArmMeasurement));
         if (!preempts) {

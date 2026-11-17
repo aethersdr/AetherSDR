@@ -13,6 +13,25 @@ int main(int argc, char** argv)
     AetherPDClient client(network);
     const QString token(43, u'a');
     {
+        Network polling;
+        AetherPDClient source(polling);
+        source.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.100")));
+        source.submit(Operation::Status, token);
+        Reply* poll = polling.last;
+        if (!check(source.submit(Operation::ArmMeasurement, token, std::nullopt, 1190)
+            && poll->aborted && polling.sent.size() == 2
+            && polling.sent.back().request.url().path() == QStringLiteral("/v2/aetherpd/measurement/arm"),
+            "explicit measurement arm must replace read-only status")) { return 1; }
+        Reply* arm = polling.last;
+        const size_t sent = polling.sent.size();
+        ok &= check(!source.submit(Operation::ArmMeasurement, token, std::nullopt, 1190)
+            && !arm->aborted && polling.sent.size() == sent, "measurement arm cannot replace another arm");
+        poll->complete(200, "{}");
+        ok &= check(source.busy() && !arm->aborted, "late status cannot retire explicit arm");
+        ok &= check(source.submit(Operation::CancelCalibration, token) && arm->aborted,
+            "cancel still preempts the explicit arm");
+    }
+    {
         Network freshNetwork;
         AetherPDClient freshClient(freshNetwork);
         freshClient.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.100")));

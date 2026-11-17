@@ -535,8 +535,13 @@ int main(int argc, char** argv)
         ok &= check(!toneChoice->isEnabled() && !mb("pdMeasureArm")->isEnabled() && !model.armSource(session, 1001),
             "radio key state independently locks tone selection and arm");
         radio.transmitModel().setTransmitting(false);
+        button(*dialog, "pdRefresh")->click();
+        Reply* measurementPoll = network.last;
+        if (!check(mb("pdMeasureArm")->isEnabled() && model.sourceArmReason(session, 1001).isEmpty(),
+            "read-only status poll must not disable explicit measurement arm")) { return 1; }
         mb("pdMeasureArm")->click();
         ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v2/aetherpd/measurement/arm")
+            && measurementPoll->aborted
             && QJsonDocument::fromJson(network.sent.back().body).object() == QJsonObject{{"spacing_hz", 1001}}
             && !toneChoice->isEnabled(), "explicit arm sends exact configured spacing through original-session route");
         const size_t afterConfiguredArm = network.sent.size();

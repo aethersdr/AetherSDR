@@ -306,8 +306,9 @@ QString AetherPDMeasurementModel::sourceArmReason(const RadioControlSession& ses
         return tr("Original radio session is unavailable.");
     }
     const auto source = m_radio->aetherPDModel().status();
+    const auto pending = m_radio->aetherPDModel().pendingOperation();
     if (!source || !source->available || !source->registered || !source->measurementControl
-        || !source->calibrationControl || m_radio->aetherPDModel().pendingOperation()) {
+        || !source->calibrationControl || (pending && *pending != aetherpd::Operation::Status)) {
         return tr("Wait for a fresh measurement-capable service with no pending request.");
     }
     if (source->feedbackBinding && !source->feedbackBinding->valid) {

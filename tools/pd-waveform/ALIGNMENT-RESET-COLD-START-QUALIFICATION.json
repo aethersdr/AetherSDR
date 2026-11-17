@@ -1,0 +1,111 @@
+{
+  "updated_utc": "2026-11-17T05:50:06.892353+00:00",
+  "status": "one_corrected_5W_cold_start_export_numerically_verified_harness_failures_and_missing_baseline_preserved",
+  "production_ready": false,
+  "runtime_source_commit": "e7b3068a4eaa810ae67166cf678f9172d2f16a43",
+  "release_blake2b_256": "c732d9afcb0da6b7d1317c7e523c5cbd78800ff8e9a4993097ecd41318bf2614",
+  "desktop_source_commit": "e7b3068a4eaa810ae67166cf678f9172d2f16a43",
+  "actual_transmissions": 1,
+  "bench": {
+    "frequency_MHz": 7.15,
+    "antenna": "ANT1 dummyload/sampler to RXA",
+    "nominal_W": 5,
+    "configured_max_W": 10,
+    "DAX_IQ": 4,
+    "FDX": false,
+    "LP100A_product_integration_deferred": true,
+    "LP_bench_reference_used": true,
+    "source_max_s": 8,
+    "native_unkey_s": 9,
+    "no_DSP_or_desktop_signals": true,
+    "production_SWR_guards_changed": false
+  },
+  "corrected_capture": {
+    "original_harness_passed": false,
+    "original_verdict_untouched": true,
+    "scope": "Retained exported data and telemetry establish a completed corrected cold-start measurement; exact filename and original harness cleanup checks failed separately.",
+    "actual_transmissions": 1,
+    "correction_active": true,
+    "valid": true,
+    "frames": 4,
+    "native_observed_correcting_samples": 7,
+    "first_host_observed_correcting_after_key_intent_s": 6.699964285,
+    "all_observed_native_fault_counters_zero": true,
+    "alignment_reset_count_max": 0,
+    "LP_peak_held_W": 3.66,
+    "LP_max_direct_SWR_with_RF": 1.06,
+    "independent_spectrum_max_error_db": 3.7742784542160734e-06,
+    "unexpected_export_filename": "measurement.jsonAn",
+    "expected_filename": "measurement.json",
+    "recovered_copy_identical_to_original": true,
+    "limitations": [
+      "Original harness false receipt remains authoritative for its full test; this is a separate scoped data reanalysis.",
+      "First observed correcting includes host polling and HTTP latency; it is not absolute FPGA packet-to-DSP latency.",
+      "No new matched baseline yet. No natural slip reproduced or historical root cause claimed."
+    ]
+  },
+  "imd3_dBc_per_tone": [
+    -44.319932443111185,
+    -52.884673444451465
+  ],
+  "original_harness_verdicts": [
+    false,
+    false,
+    false
+  ],
+  "negative_attempts": [
+    {
+      "case": "initial",
+      "RF": false,
+      "reason": "Bridge refused Arm as disabled; the original finally failure label overwrote that primary error, which remains in events."
+    },
+    {
+      "case": "corrected",
+      "RF": true,
+      "reason": "Valid completed corrected export was written as measurement.jsonAn; original driver timed out looking for measurement.json and failed its cleanup observation. Byte-identical recovery preserves original file and false receipt."
+    },
+    {
+      "case": "baseline",
+      "RF": false,
+      "reason": "Deferred Arm produced no observed armed source. Export in failed finally was the old corrected result, same hash; not a bypass measurement. Stop subsequently confirmed."
+    }
+  ],
+  "limitations": [
+    "Only one finite corrected4frame window; no new matched improvement delta, sustained duty or actual6300 qualification.",
+    "No natural alignment slip or original all-bypass cold-start failure was reproduced or root-caused.",
+    "Unexpected filename suffix is retained and unattributed; no unproved GUI fault cause is claimed.",
+    "Current-source ordinary baseline, new desktop arm path and independent terminal cleanup audit remain to finish."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--prepare.py.gz": "bd2cd71767af8c99fe9a44145b4bf15ea27405c8f238b4e4325fd415765f1d3a",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--prepared.json.gz": "034172fc1b01319765c3f74ecbc03db31d63fa7d6024b10c7d9edf528652ded3",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--measure-once.py.gz": "563f90a2473aaa292ea4ff2788179c35451b8c2af9185151ae7bca8184858dc5",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--outcome.json.gz": "88a1d25a36b43ac403543d4b4b830c84806d86b83efc5e574c41aabbca578507",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--independent-meters.json.gz": "98a4b23cbc26cb1686e0b4c437d4b2c4c5dd996056b8312a9b51f16a4f05c271",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--lp100a-readings.jsonl.gz": "54f55af42060fed3e8a130e14c684ca5632de3d91f93fd3501d93d56a280fac2",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--dialog-lifetime-inspection.json.gz": "750dd48845be616933b661bcf572044a3f50070dfcf5f423e6403244e6c4d348",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf--events.json.gz": "0ba4180f24ebf77faa57597396996fadfab0a6f4ef6967c61a2302db47bd8a07",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--prepare.py.gz": "7a248c2765193e41d6a93935d019fb52647d79c9754b00d70b56acad34ae02ed",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--prepared.json.gz": "ad4f1a5c468b93f1898ec3f0a546a6d4b820036ea7b503920d8eaa7f19d852bc",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--measure-once.py.gz": "a24a01cd861dd5c5a76732cf7055fc06b7dd77614f0dbd8601c5c5b624659f72",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--outcome.json.gz": "100deff944f3615deb7eb1b535e159d5e883e2f8428c16014817859cf0385e06",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--independent-meters.json.gz": "89b9703d06394db7365ea8d641e6e905f5f72f0fc00be285059867f8b3b6aa73",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--lp100a-readings.jsonl.gz": "cb5a6e800edf7aaf6564f8a46ebdcc81c1f2871d4d35b1254bd02228ec8a3619",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--measurement.jsonAn.gz": "46e5cb451d93f1b440a850fcb8396192f5dd96841a23b523d7ee0f306bb497e9",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--measurement-recovered.json.gz": "46e5cb451d93f1b440a850fcb8396192f5dd96841a23b523d7ee0f306bb497e9",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--independent-recheck.json.gz": "d4b22c0120a2f71bc034023abf7b03a6859639502070d0465d016b92a9d262ea",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--cold-start-reanalysis.json.gz": "c7e662a66843671465680f4f2bd75ad0ea3333b48b8abb9fe028af0753e01aa1",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-cold-start-rf-02--events.json.gz": "749c98646da05bc16908b0580b446c47bee974bf8154c0f49e5f5a22b553db05",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--prepare.py.gz": "5601cb4ef70b920d2af7c46a9ea3dfd334a9b1acf70eebb76af253317385e1d6",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--prepared.json.gz": "e97ad5788c712ff5562282df762e213d5b58a783d4695f261c1e4454d8b60d3d",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--measure-once.py.gz": "e4bf905a47616ebc6e19143227d3b5490d63dbd47e358635d2166fb48ce11104",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--outcome.json.gz": "7bd7cfdd444fea7d84cd7bee5cc7818a292c4d978ccc684f7ea88ad16b928b76",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--independent-meters.json.gz": "514c7d1a713bab91de6662c3851fa7364a603c2feaedd4a74f213d6a85f3911e",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--lp100a-readings.jsonl.gz": "b18f282051d4f22353f490abe0b5d93a675024ab0333454a6a89d21c0ccda65d",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--measurement.json.gz": "46e5cb451d93f1b440a850fcb8396192f5dd96841a23b523d7ee0f306bb497e9",
+    "tools/pd-waveform/evidence/20261116-alignment-reset-cold-start/alignment-reset-baseline-rf--events.json.gz": "5f4f2d8768ee4d613db1692951eb5c9bd67a01492b94ca7a772cfd6331455c5f"
+  }
+}

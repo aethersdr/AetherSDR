@@ -144,10 +144,16 @@ int main(int argc, char** argv)
         supported[QStringLiteral("state")] = QStringLiteral("disabled");
         measurement.refresh();
         measurementNetwork.last->complete(200, QJsonDocument(supported).toJson());
+        measurement.refresh();
+        Reply* pendingPoll = measurementNetwork.last;
         if (!check(measurement.request(Operation::ArmMeasurement)
+            && pendingPoll->aborted
             && measurementNetwork.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/measurement/arm"),
-            "uncorrected measurement source was not submitted")) { return 1; }
+            "uncorrected measurement source did not replace a read-only poll")) { return 1; }
         Reply* pending = measurementNetwork.last;
+        pendingPoll->complete(200, QJsonDocument(supported).toJson());
+        if (!check(measurement.pendingOperation() == Operation::ArmMeasurement && !measurement.status(),
+            "late poll replaced explicit measurement intent")) { return 1; }
         if (!check(measurement.request(Operation::CancelCalibration) && pending->aborted,
             "cancel failed to preempt pending measurement source")) { return 1; }
         pending->complete(200, R"({"state":"measurement_arm_accepted"})");

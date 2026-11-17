@@ -18,7 +18,7 @@ bool mayPreempt(aetherpd::Operation next, aetherpd::Operation current)
     if (next == Operation::Stop) {
         return current != Operation::Stop;
     }
-    if (next == Operation::Start) {
+    if (next == Operation::Start || next == Operation::ArmMeasurement) {
         return current == Operation::Status;
     }
     return next == Operation::CancelCalibration

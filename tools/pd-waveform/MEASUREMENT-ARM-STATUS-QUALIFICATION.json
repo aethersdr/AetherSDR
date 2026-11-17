@@ -1,0 +1,68 @@
+{
+  "updated_utc": "2026-11-17T05:50:06.497447+00:00",
+  "status": "explicit_measurement_arm_status_preemption_component_verified_not_live_qualified",
+  "production_ready": false,
+  "change": "An explicit ArmMeasurement may replace only a read-only status request. Both transport/model policy and measurement control availability agree; arming still requires current valid source and ownership. No keying, delayed queue or automatic rearm is introduced.",
+  "checks": {
+    "before_fix": {
+      "aetherpd_client_test": {
+        "exit": 1,
+        "failures": [
+          "FAIL: explicit measurement arm must replace read-only status"
+        ]
+      },
+      "aetherpd_model_test": {
+        "exit": 1,
+        "failures": [
+          "FAIL: uncorrected measurement source did not replace a read-only poll"
+        ]
+      },
+      "aetherpd_dialog_test": {
+        "exit": 1,
+        "failures": [
+          "FAIL: read-only status poll must not disable explicit measurement arm"
+        ]
+      }
+    },
+    "after_fix": {
+      "aetherpd_client_test": {
+        "exit": 0,
+        "failures": []
+      },
+      "aetherpd_model_test": {
+        "exit": 0,
+        "failures": []
+      },
+      "aetherpd_dialog_test": {
+        "exit": 0,
+        "failures": []
+      }
+    },
+    "covered": [
+      "status query abort on explicit configured and legacy measurement arm",
+      "measurement button remains enabled through a fresh read-only poll",
+      "duplicate arm does not preempt an arm",
+      "late status does not override arm",
+      "Cancel still preempts arm",
+      "old or foreign session and invalid IQ/tone/keyed gates in existing complete tests"
+    ],
+    "user_docs_build_passed": true
+  },
+  "limitations": [
+    "Component qualification; new desktop must be relaunched and the ordinary receive-only arm/cancel path checked before RF.",
+    "Retained evidence shows a live disabled-before-dispatch Arm refusal and a separate deferred Arm with no observed arm. The exact deferred callback interleaving is not recorded; the socket-free test proves the status-poll blocking defect and the fix.",
+    "Radio runtime is unchanged at e7b3068a4eaa810ae67166cf678f9172d2f16a43/releasec732d9afcb0da6b7d1317c7e523c5cbd78800ff8e9a4993097ecd41318bf2614.",
+    "A corrected finite5W cold-start capture is independently verified, but the matching new baseline remains incomplete."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/before.json.gz": "74adeb9d43f8acc4e8ef07dcddda15004c030edb259f1439b0f506fa986c26ee",
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/after.json.gz": "f57442f32c60716bd8451a90cdb6f6da7fe1f3cd3a2b56631577530d0eb7bffd",
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/user-docs-build.log.gz": "efed7e8989c8ea43a1cfa352abfe94910ea17bee5ea933a049d93f6a07dee49a",
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/aetherpd_client_test-before.log.gz": "5ebc83d21514f9d3e57db16eadd461a5be55fa4b50dfc22016e700559e142e42",
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/aetherpd_model_test-before.log.gz": "22e928f577466b814dfce89fbcfe1b4482fceb167c2cb7afcc3750482a8c9a5d",
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/aetherpd_dialog_test-before.log.gz": "936be215b9311bbf42f64c83db739f3ebad8caf6293ef17e40cc140353b9bebf",
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/aetherpd_client_test-after.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/aetherpd_model_test-after.log.gz": "a2f262f09b98164f80804505284ee269a8455f7a692ee0392b9289d4417af0a4",
+    "tools/pd-waveform/evidence/20261116-measurement-arm-status/aetherpd_dialog_test-after.log.gz": "1b4c21404600cdd29588a53ca5cf93fb4a2591e31270309c80bc0c9304eebbe6"
+  }
+}
