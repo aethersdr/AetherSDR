@@ -278,7 +278,10 @@ void TciIoWorker::socketDisconnected(quint64 id)
 void TciIoWorker::heardFrom(quint64 id)
 {
     const auto it = m_clients.find(id);
-    if (it != m_clients.end()) { it->keepAlive.heard(m_keepAliveNow()); }
+    // A retired client's frames are dropped unread; they must not hold its close open.
+    if (it != m_clients.end() && it->lifetime->live.load(std::memory_order_acquire)) {
+        it->keepAlive.heard(m_keepAliveNow());
+    }
 }
 
 // Also polls a client already closing gracefully, so a close that stalls on a

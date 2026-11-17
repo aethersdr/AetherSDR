@@ -239,18 +239,30 @@ public:
                                        QStringLiteral("test backlog"));
                 }
 
-                // Frames keep it alive; no probe while the peer talks.
+                // A live peer's frames keep it alive with no probe. A closing
+                // peer's frames are dropped unread and do not: it is aborted one
+                // window after the close although it keeps writing.
+                qint64 abortedAt = -1;
                 for (; now < 3 * TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
                     worker.heardFrom(id);
                     worker.checkKeepAlive();
+                    if (aborts == 1 && abortedAt < 0) { abortedAt = now; }
+                }
+                if (alreadyClosing) {
+                    if (pings != 0 || aborts != 1 || closes != 1
+                        || abortedAt != TciKeepAlive::kSilentDropWindowMs || producer.valid()
+                        || closeCode != int(QWebSocketProtocol::CloseCodeAbnormalDisconnection)) {
+                        return false;
+                    }
+                    continue;
                 }
                 if (pings != 0 || aborts != 0 || closes != 0) { return false; }
-                // Silence: one probe (only to a live client), then the abort.
+                // Silence: one probe, then the abort.
                 const qint64 lastHeard = now - TciKeepAlive::kPollMs;
                 for (; now < lastHeard + TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
                     worker.checkKeepAlive();
                 }
-                if (pings != (alreadyClosing ? 0 : 1) || aborts != 0 || closes != 0) { return false; }
+                if (pings != 1 || aborts != 0 || closes != 0) { return false; }
                 worker.checkKeepAlive();
                 if (aborts != 1 || closes != 1
                     || closeCode != int(QWebSocketProtocol::CloseCodeAbnormalDisconnection)) {
