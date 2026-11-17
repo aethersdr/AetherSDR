@@ -1,0 +1,845 @@
+{
+  "updated_utc": "2026-11-17T10:40:11.585795+00:00",
+  "status": "ordinary_managed_UI_pending_sign_in_actual_reply_discard_software_reboot_cancellation_and_IQ_recovery_qualified_on_8600",
+  "production_ready": false,
+  "runtime_source_commit": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+  "runtime_release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+  "desktop": {
+    "pid": 3647749,
+    "socket": "/tmp/aetherpd-managed-remote-access",
+    "binary_sha256": "6e6f83a9b2978d07f8edfc7c5999be97af517e2f2b1a25f5417f30ae10b5407f",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+    "desktop_source": "d1fc4b0a1728474d2b9d35cb483ad0eef39c8ac7",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.08750518898887
+  },
+  "before_credential_config_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+  "after_credential_config_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+  "preserved_owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+  "preserved_installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+  "open_close_reopen": {
+    "passed": true,
+    "radio_before": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.109375,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "owner_before": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [
+        {
+          "expires_in_s": 554,
+          "listening": false,
+          "name": "AetherGPS",
+          "port": 2947,
+          "target": "192.168.50.100"
+        }
+      ],
+      "hostname": "flx8600",
+      "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+      "key_expiry": "",
+      "last_error": "",
+      "managed_owner_version": 1,
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": false,
+      "state": "local",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "login_before": {
+      "auth_url_present": false,
+      "auth_url_sha256": "",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "local"
+    },
+    "entry_before": {
+      "pdState": {
+        "value": "Status unknown",
+        "enabled": true,
+        "visible": true
+      },
+      "pdRemoteAccess": {
+        "value": "Remote Access\u2026",
+        "enabled": true,
+        "visible": true
+      }
+    },
+    "RF_commands": [],
+    "account_approval_requested": false,
+    "owner_pending": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [
+        {
+          "expires_in_s": 552,
+          "listening": false,
+          "name": "AetherGPS",
+          "port": 2947,
+          "target": "192.168.50.100"
+        }
+      ],
+      "hostname": "flx8600",
+      "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+      "key_expiry": "",
+      "last_error": "",
+      "managed_owner_version": 1,
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": false,
+      "state": "needs_login",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "login_pending": {
+      "auth_url_present": true,
+      "auth_url_sha256": "29eb7346cdeb0f5ea9a4540060661a0f6367149b3bf915c79ac2ca71ea7ba52c",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "needs_login"
+    },
+    "pending_panel": {
+      "tsStatusLine": {
+        "value": "Waiting for sign-in \u00b7 waveform 0.5.2",
+        "enabled": true,
+        "visible": true
+      },
+      "tsRefresh": {
+        "value": "Refresh",
+        "enabled": true,
+        "visible": true
+      },
+      "tsDisconnect": {
+        "value": "Cancel sign-in",
+        "enabled": true,
+        "visible": true
+      },
+      "tsDone": {
+        "value": "Done",
+        "enabled": true,
+        "visible": true
+      }
+    },
+    "sign_in_link_matches_backend": true,
+    "closed_while_sign_in_pending": true,
+    "reopened_panel": {
+      "tsStatusLine": {
+        "value": "Waiting for sign-in \u00b7 waveform 0.5.2",
+        "enabled": true,
+        "visible": true
+      },
+      "tsRefresh": {
+        "value": "Refresh",
+        "enabled": true,
+        "visible": true
+      },
+      "tsDisconnect": {
+        "value": "Cancel sign-in",
+        "enabled": true,
+        "visible": true
+      },
+      "tsDone": {
+        "value": "Done",
+        "enabled": true,
+        "visible": true
+      }
+    },
+    "login_reopened": {
+      "auth_url_present": true,
+      "auth_url_sha256": "29eb7346cdeb0f5ea9a4540060661a0f6367149b3bf915c79ac2ca71ea7ba52c",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "needs_login"
+    },
+    "radio_after": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.0625,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "discarded_TCP_reply": {
+    "passed": true,
+    "login_before": {
+      "auth_url_present": true,
+      "auth_url_sha256": "29eb7346cdeb0f5ea9a4540060661a0f6367149b3bf915c79ac2ca71ea7ba52c",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "needs_login"
+    },
+    "RF_commands": [],
+    "account_approval_requested": false,
+    "provision_response_consumed": false,
+    "discard": {
+      "mode": "discard-provision-reply",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "post_reply_status_observed": false,
+      "precondition_http_status": 200,
+      "reply_consumed": false,
+      "request_bytes_written": 277,
+      "socket_closed": true
+    },
+    "login_after_discard": {
+      "auth_url_present": true,
+      "auth_url_sha256": "a98c9a0d32b0e4750894ed2b61c15767364b5c918b4836145713286775c86f12",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "needs_login"
+    },
+    "same_existing_owner_recovered_new_sign_in_link": true,
+    "radio_after": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.140625,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "pending_software_reboot": {
+    "passed": true,
+    "reboot_commands_sent": 1,
+    "RF_commands": [],
+    "joined_tailnet_account": false,
+    "radio_before": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.140625,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "installation_before": {
+      "firmware": "4.3.16.42034",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+      "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed",
+      "upgrade_plan_blake2b_256": "ca1b8f835ed90fa96e641e2e5c3a9223015e3c16f709b51f5965329e504dbc30"
+    },
+    "owner_before": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [
+        {
+          "expires_in_s": 443,
+          "listening": false,
+          "name": "AetherGPS",
+          "port": 2947,
+          "target": "192.168.50.100"
+        }
+      ],
+      "hostname": "flx8600",
+      "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+      "key_expiry": "",
+      "last_error": "",
+      "managed_owner_version": 1,
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": false,
+      "state": "needs_login",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "login_before": {
+      "auth_url_present": true,
+      "auth_url_sha256": "a98c9a0d32b0e4750894ed2b61c15767364b5c918b4836145713286775c86f12",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "needs_login"
+    },
+    "boot_id_before": "d62c52ec-39f1-441b-848c-4976ee350de3",
+    "both_down_s": 11.679,
+    "installation_after": {
+      "firmware": "4.3.16.42034",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "43d1c23b5ba4c7567d234650aa77e95dc4a096732087654de0b1228ca730d043",
+      "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed",
+      "upgrade_plan_blake2b_256": "ca1b8f835ed90fa96e641e2e5c3a9223015e3c16f709b51f5965329e504dbc30"
+    },
+    "ready_s": 64.195,
+    "owner_after": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [],
+      "hostname": "flx8600",
+      "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+      "key_expiry": "",
+      "last_error": "",
+      "managed_owner_version": 1,
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": false,
+      "state": "needs_login",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "login_after": {
+      "auth_url_present": true,
+      "auth_url_sha256": "5a5825fb86d8e605d3dcbf035995fd3ff6d0e08f3dca427038939e596b4c7d00",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "needs_login"
+    },
+    "boot_id_after": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "elapsed_s": 66.61
+  },
+  "current_connection_UI_cancellation": {
+    "passed": true,
+    "RF_commands": [],
+    "account_joined": false,
+    "old_window_after_reboot": {
+      "tsStatusLine": {
+        "value": "Unavailable",
+        "visible": true,
+        "enabled": true
+      },
+      "tsRefresh": {
+        "value": "Refresh",
+        "visible": true,
+        "enabled": false
+      },
+      "tsDisconnect": {
+        "value": "Disconnect",
+        "visible": false,
+        "enabled": false
+      },
+      "tsDone": {
+        "value": "Done",
+        "visible": true,
+        "enabled": true
+      }
+    },
+    "radio_before": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "pans_before": [
+      {
+        "antennas": [
+          "ANT1",
+          "ANT2",
+          "RX_A",
+          "RX_B",
+          "XVTA",
+          "XVTB"
+        ],
+        "average": 50,
+        "averageIsRequest": false,
+        "bandwidthMhz": 0.2,
+        "centerKnown": true,
+        "centerMhz": 7.15,
+        "clientHandle": "0x5b8b1ca6",
+        "fps": 25,
+        "fpsIsRequest": false,
+        "maxDbm": 0,
+        "minDbm": -180,
+        "ownedByUs": true,
+        "panId": "0x40000000",
+        "radioReportedAverage": 50,
+        "radioReportedFps": 25,
+        "rfGain": 0,
+        "rxAntenna": "RX_A",
+        "transmitInhibitReason": "",
+        "transmitInhibited": false,
+        "waterfallLineDuration": 80,
+        "weightedAverage": false,
+        "weightedAverageKnown": true,
+        "wide": false,
+        "wnb": false,
+        "wnbLevel": 90
+      }
+    ],
+    "reopened_after_reboot": {
+      "tsStatusLine": {
+        "value": "Waiting for sign-in \u00b7 waveform 0.5.2",
+        "visible": true,
+        "enabled": true
+      },
+      "tsRefresh": {
+        "value": "Refresh",
+        "visible": true,
+        "enabled": true
+      },
+      "tsDisconnect": {
+        "value": "Cancel sign-in",
+        "visible": true,
+        "enabled": true
+      },
+      "tsDone": {
+        "value": "Done",
+        "visible": true,
+        "enabled": true
+      }
+    },
+    "login_before_cancel": {
+      "auth_url_present": true,
+      "auth_url_sha256": "5a5825fb86d8e605d3dcbf035995fd3ff6d0e08f3dca427038939e596b4c7d00",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "needs_login"
+    },
+    "confirmation_observed": true,
+    "owner_after_cancel": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [
+        {
+          "expires_in_s": 380,
+          "listening": false,
+          "name": "AetherGPS",
+          "port": 2947,
+          "target": "192.168.50.100"
+        }
+      ],
+      "hostname": "flx8600",
+      "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+      "key_expiry": "",
+      "last_error": "",
+      "managed_owner_version": 1,
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": true,
+      "state": "local",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "login_after_cancel": {
+      "auth_url_present": false,
+      "auth_url_sha256": "",
+      "http_status": 200,
+      "mode": "login",
+      "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+      "state": "local"
+    },
+    "window_after_cancel": {
+      "tsStatusLine": {
+        "value": "Local access ready \u00b7 waveform 0.5.2",
+        "visible": true,
+        "enabled": true
+      },
+      "tsRefresh": {
+        "value": "Refresh",
+        "visible": true,
+        "enabled": true
+      },
+      "tsDisconnect": {
+        "value": "Disconnect",
+        "visible": false,
+        "enabled": false
+      },
+      "tsDone": {
+        "value": "Done",
+        "visible": true,
+        "enabled": true
+      }
+    },
+    "radio_after": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "after_recovery_IQ": {
+    "iq_bytes": 131072,
+    "iq_sha256": "ffe97c449cee26551b4a7d9bea92338b388857c76eeb4d67f8dc274f40b8904e",
+    "nonzero_values": 30932,
+    "rms": 33.45776255220902
+  },
+  "IQ_binding": {
+    "channel": 4,
+    "failed": false,
+    "gui_handle": 1535843494,
+    "pan": 1073741824,
+    "transport": "local_dax_iq",
+    "valid": true
+  },
+  "FDX": false,
+  "Stop_state": "stopped",
+  "final_audit": {
+    "rf_commands": [],
+    "processes": [
+      {
+        "pid": 1310,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      },
+      {
+        "pid": 1358,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 1365,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "migration_plan_blake2b_256": "cc0929ab2bd881ac33b45a812be2d0f37230c779815150c1608fb41d007fd30d",
+    "transaction_sha256": "a924ed3a5183ec0052bae498cb2d2e70cdae0bdd1a6f0f6a47c76a1e576e2f16",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "identity_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    },
+    "private_sockets": [],
+    "containers": [
+      "nereus-net-probe",
+      "AetherGPS",
+      "nereus-inprocess-job-4a396f478d"
+    ],
+    "arp": [],
+    "accept_local": "0",
+    "legacy_container_absent": true,
+    "cached_first_artifacts": [],
+    "runtime_hashes": {
+      "flex-tailnet-shim": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "upgrade_generation_present": true,
+    "upgrade_generation_hex": "504447454e303031ca1b8f835ed90fa96e641e2e5c3a9223015e3c16f709b51f5965329e504dbc30",
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+    "prior_backup_identity_sha256": "7e315aee252647fbbaf713d7633ec4b72fbd9c73406bedc54b107bedc5476931",
+    "owned_upgrade_carrier_artifacts": [],
+    "systemd_version": "systemd 252 (252.39-1~deb12u2)\n+PAM +AUDIT +SELINUX +APPARMOR +IMA +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBFDISK +PCRE2 -PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD -BPF_FRAMEWORK -XKBCOMMON +UTMP +SYSVINIT default-hierarchy=unified\n",
+    "applied_sessions": "MainPID=1358\nKillMode=control-group\nSendSIGKILL=no\nId=aetherpd-start@0-1310-78666.service\nActiveState=active\n",
+    "permanent_boot_sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444",
+    "latest_session_journals": {
+      "aetherpd-start@0-1310-78666.service": "[  784.097827] 2125-1213-8600-8895 systemd[1]: Started aetherpd-start@0-1310-78666.service - AetherPD owned local session (PID 1310/UID 78666).\n[  785.151707] 2125-1213-8600-8895 pd-boot[1358]: {\"event\":\"native_resources_prepared\",\"source_pid\":1368,\"capture_pid\":1371,\"arp_pid\":1366,\"stream\":\"0x20000000\",\"port\":40973,\"rf_commands\":[]}\n[  785.152890] 2125-1213-8600-8895 pd-boot[1358]: {\"event\":\"supervisor_ready\",\"uid\":65534,\"worker_pid\":1373,\"status\":0,\"rf_commands\":[]}\n[  785.546983] 2125-1213-8600-8895 pd-boot[1358]: {\"event\":\"ready\",\"uid\":65534,\"clock_pid\":1374,\"raw_fd_closed\":true,\"strict_seccomp\":true}\n[  785.831204] 2125-1213-8600-8895 pd-boot[1358]: 2026/11/17 04:20:48 AetherPD: captured owned receive baseline before DSP startup\n[  785.864093] 2125-1213-8600-8895 pd-boot[1358]: 2026/11/17 04:20:48 AetherPD: owned API lease guardian armed before DSP startup\n[  785.864093] 2125-1213-8600-8895 pd-boot[1358]: 2026/11/17 04:20:48 AetherPD: owned receive guardian armed before DSP startup\n[  785.864093] 2125-1213-8600-8895 pd-boot[1358]: 1794910848.184 discarded 88 pre-activation IQ datagrams\n[  785.864093] 2125-1213-8600-8895 pd-boot[1358]: 1794910848.184 AetherPD 0.1.0 starting, radio 127.0.0.1, udp 46257, feedback DAX IQ 4 at 48000 Hz, peak 0.70, correction on\n[  785.910008] 2125-1213-8600-8895 pd-boot[1358]: 1794910848.230 command 1: 10000002 unknown client program AetherPD\n[  785.931550] 2125-1213-8600-8895 pd-boot[1358]: 1794910848.252 registered AetherPD: tx_in 0x81000001 rx_in 0x81000000\n[  787.364123] 2125-1213-8600-8895 pd-boot[1358]: 1794910849.684 shim session ended\n[  787.364123] 2125-1213-8600-8895 pd-boot[1358]: 1794910849.684 stopping\n[  787.366821] 2125-1213-8600-8895 pd-boot[1358]: {\"event\":\"complete\",\"reason\":\"output\",\"received\":497,\"forwarded\":496,\"stale\":0,\"invalid\":0,\"foreign\":0,\"backpressure\":0,\"output_errors\":1,\"loss_seen\":1,\"clock_faults\":0,\"future_wait\":239,\"clock_pid\":1374,\"startup_discarded\":64,\"strict_seccomp\":true,\"raw_fd_closed\":true,\"rf_commands\":[]}\n[  787.428367] 2125-1213-8600-8895 pd-boot[1358]: {\"event\":\"session_stopped\",\"uid\":65534,\"worker_pid\":1373,\"status\":0,\"rf_commands\":[]}\n"
+    },
+    "upgrade_journal": "-- No entries --\n",
+    "all_failed_sessions": [],
+    "boot_id": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "passed": true
+  },
+  "tailnet_cleanup": {
+    "absent_paths": {
+      "/var/lib/smartsdr/aetherpd/state/tsnet": true,
+      "/run/aetherpd/primary/tsnet": true,
+      "/var/lib/smartsdr/aetherpd/state/provision.json.tmp": true
+    },
+    "RF_commands": [],
+    "relevant_primary_journal": [
+      "[  303.748676] 2125-1213-8600-8895 pd-boot[1310]: 2026/11/17 10:12:46 api: sign-out requested by 192.168.50.221:60374"
+    ],
+    "logout_warning_observed": false,
+    "passed": true
+  },
+  "RF_commands": [],
+  "real_tailnet_account_joined": false,
+  "usable_admin_tokens_or_sign_in_URLs_saved": false,
+  "limitations": [
+    "Actual FLEX8600 firmware4.3.16.42034 only; one software reboot and one discarded provision reply. No physical power cut or actual6300 execution.",
+    "The helper wrote one authenticated provision request and consumed no response. A replacement code observed afterward proves the request committed; no HTTP success receipt for that discarded POST is claimed.",
+    "The same owner reopened the pending sign-in after an IQ-channel retirement and reboot, then used Cancel sign-in. No Tailscale account was approved, so joined node identity, ACL/routes, remote operation and account-key expiry remain unqualified.",
+    "Owner credential and installation ID are preserved semantically. The config file hash changed through real configuration transitions and serialization; byte-identical config preservation is not claimed.",
+    "Final local state and pending-state removal are observed; the UI cancellation transaction was not separately instrumented for its individual HTTP receipt. No logout warning appeared in the bounded redacted journal excerpt.",
+    "No new RF, matched tone/speech, native SWR/alignment cause, full fault matrix or stock APD qualification is claimed. Existing positive and negative RF evidence retains its original source pins.",
+    "Independent lost-owner-token recovery/rotation, same-connection legacy Login401 credential correlation, platform/sanitizer builds, minimum-platform adapter/actual6300 and independent release gates remain open.",
+    "Broad diagnostics was used only for independent read-only final audits. Provision, cancellation, Start/Stop and recovery used ordinary credentials/UI and fixed service endpoints.",
+    "The64.195s readiness value is a host-observed service startup time including polling, not FPGA-to-process latency."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--build-desktop.py.gz": "8f6c1d57ab3658769f9b1957966bbdabb18432ea1b7fd1cc070c84842929fdfc",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--desktop-provenance.json.gz": "9e5736f1cf81d5f1d3bbe6eb0a8d39f18d4e5b2b5fbb278bb632e756cffc550e",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--relaunch.py.gz": "e425b5983cf8ff54e26dd3193945419d6b220885c2a8a82acb8e44606f9e19fa",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--instance.json.gz": "0efe7c4d7e5b0f7298394354f6ee7e86fa33a72e1cb9ae15fbd7366cb37b97a0",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--credential-probe.cpp.gz": "b0292071acb459e6223d90660769eb3e86957383e16ad7b4760682ee706cbc02",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--credential-probe-build-command.json.gz": "38583f4e092435195ad9549205f496f23305fd2b47d1e62167e330b3aa0dabc0",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--credential-probe-build-final.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--open-pending.py.gz": "6ec2ec629518f6c62ca8c296dcfcb6675b7d40648d1157fa76fab424c6761428",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--open-pending-intent.json.gz": "45320355255441b1eed644bd7cfff4bee0ee30ad64432bad284dc89bba2e2bf5",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--open-pending-result.json.gz": "53d013ba1d2f70595a863a8a6aa99e63bf1661086b81c1cae6485a5ed4779224",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--discard-reply.py.gz": "01a7d4689a34e9dc079cb9f8010ce2502f105229e6c6de515b85ca201f99d028",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--discard-reply-intent.json.gz": "0667889b034e71256e570627700d4103b4f76512d5fff0097f8822b6df948f05",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--discard-reply-result.json.gz": "72e8dd7a0c613cd7fb597e5778a72a77a06c71df95eb02e6ff61c828bd6f4ba2",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--cancel-after-reboot.py.gz": "aacdafee4ef431662dddd6edc2de13c9e115b7f493d81dd2bacc40dc8d3d69c6",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--cancel-after-reboot-intent.json.gz": "dbe4320c318729d49b12ee2ca62aea0f6298f82ea80fa68d729e1e8a123217d6",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--cancel-after-reboot-result.json.gz": "09afabcd1c3588a1cbb0cd37c69171853771aad3349c53a2e114abf0a242790e",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--receive-iq-check.py.gz": "5a0120c2377c287fb41953fe2c43145c31d3f77fb7e68bbb313fbf85df20dcbd",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--usb-receive-iq-check.json.gz": "881be800803860c18984f6459f980b6df27e6db003f525fbb018c7c28d1deb21",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--usb-receive-iq.f32le.gz": "f8df4b4aac5988af4a587c85986519c9dbf264e2e9519bc1a29b9d1d7cdf3482",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--final-audit-job.py.gz": "919bd48bd46bc88428ae90b3c46bef72cffc7615d5f3ecdbab3f1a80e2f9b6de",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--final-audit-result.json.gz": "9d22b8b60b94a4f1eb3d12264be79a19a66bcce86f60df6665a489ed586ee42a",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--tailnet-cleanup-job.py.gz": "5c7aebaf0defc5d3540af567cf916a18a58d9ea18516027ad18112703933b9f4",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-remote-access-ui--tailnet-cleanup-result.json.gz": "f6c4d661b7012a094586e103b596417101b2bfdbd45e7c0618ade5a8146dd4da",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-owner-pending-reboot--reboot-check.py.gz": "a1b6c578972e156459f9daecd465cf81aef53d150a42edcc524509f3ae8aa5cf",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-owner-pending-reboot--reboot-intent.json.gz": "e5d00a4e78ac5accc91f0df577c8ba542bd02fabd5c2474d62e591297cc47387",
+    "tools/pd-waveform/evidence/20261117-managed-owner-live-recovery/managed-owner-pending-reboot--reboot-result.json.gz": "a0507fcfb9fd00f07553cbd42da632306e7f12956a2bd2be813bfa39a0e9a591"
+  }
+}
