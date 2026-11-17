@@ -883,6 +883,10 @@ the service refuses the load or write and preserves the saved file for
 recovery. It does not erase the identity or silently sign the radio out. An unreadable
 saved configuration blocks enrollment and control; it does not make the radio
 available for a new owner to claim.
+An existing empty or malformed Tailscale identity also prevents sign-in. Preserve
+the file and any temporary sibling, and ask the package provider for recovery.
+Startup does not replace damaged state with a new identity or automatically use
+a temporary file. A missing identity file can be initialized for a new sign-in.
 An uncertain native identity commit is also an error: the replacement may
 already be visible even though its directory update could not be confirmed.
 For the saved configuration, this stops the owned AetherPD session and blocks

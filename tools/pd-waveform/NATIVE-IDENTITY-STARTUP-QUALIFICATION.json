@@ -1,0 +1,112 @@
+{
+  "created_utc": "2026-11-17T21:27:37.902102+00:00",
+  "base_commit": "fbfb4452bcf63bfc29907a91b12f2458a41b715b",
+  "production_ready": false,
+  "installed_on_radio": false,
+  "problem": {
+    "reproduced": true,
+    "trigger": "Existing zero-byte native tailscaled.state and a complete temporary sibling at startup",
+    "previous_result": [
+      "constructor admitted a new server",
+      "selected empty file overwritten by {}",
+      "complete temporary recovery sibling consumed and removed",
+      "joinedBefore then returned false, permitting a fresh sign-in where damaged state had previously refused it"
+    ],
+    "root_cause": "Existing empty state was explicitly handled as the same case as a missing file in newNativeStateStore."
+  },
+  "change": "Only ENOENT initializes {}; existing empty state is passed through normal JSON validation and refused without changing either file. Initialized {} and missing-file first use remain supported.",
+  "tests": {
+    "regression_before_fix": "Failed specifically on empty selected state; missing, initialized {}, whitespace and truncated cases separately observed. This is the original guard restored before the fix, with the same new regression.",
+    "Go": "Full shim and native unpack suite, pinned Go 1.27.1, -mod=vendor -race -count=1 -v ./... passed.",
+    "process_death": {
+      "points": [
+        "successful pre-mutation parent sync",
+        "successful pending-file sync",
+        "successful rename before final directory sync",
+        "successful final parent sync"
+      ],
+      "method": "Fresh owned test subprocess per point; real file and directory sync/rename; helper kills only its own PID with SIGKILL. Context expiration is explicitly refused as success.",
+      "assertions": [
+        "parent observes the requested SIGKILL",
+        "selected file reopens to complete previous or replacement key as appropriate",
+        "before-rename selected bytes remain exact",
+        "pending complete replacement survives after file-sync death without being selected",
+        "explicit retry persists and retires temporary sibling"
+      ],
+      "scope": "Live host filesystem/process crash, not power-loss or flash-controller qualification"
+    },
+    "installer_recovery": {
+      "first_install_transaction": 26,
+      "upgrade_transaction": 20,
+      "state_transfer": {
+        "run": 17,
+        "passed": 16,
+        "skipped": 1,
+        "skip_reason": "Distinct root/waveform UIDs require native root fixture; current host test runs as ordinary user."
+      },
+      "whole_installer_worker_namespace": 46,
+      "passed_total": 108,
+      "scope": "Fresh current-source fixture builds; radio/service adapters are inert, real signatures/staging/identity transfer/journals and disposable namespace cleanup. Not actual-radio power-loss proof."
+    },
+    "docs": "npm ci and npm run build passed; update-check permission notification does not change build exit status"
+  },
+  "component_builds": {
+    "toolchain": "Go 1.27.1",
+    "architectures": {
+      "armv7": {
+        "runs": [
+          {
+            "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-empty-identity/first-armv7/flex-tailnet-shim",
+            "sha256": "e1f420240892f57fa49ea414f00721ebf358b979e778b57d70d7d426ceb7a081",
+            "bytes": 21954720
+          },
+          {
+            "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-empty-identity/second-armv7/flex-tailnet-shim",
+            "sha256": "e1f420240892f57fa49ea414f00721ebf358b979e778b57d70d7d426ceb7a081",
+            "bytes": 21954720
+          }
+        ],
+        "byte_identical": true,
+        "scope": "shim executable only; no signed full release or actual target execution"
+      },
+      "arm64": {
+        "runs": [
+          {
+            "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-empty-identity/first-arm64/flex-tailnet-shim",
+            "sha256": "b590d6afa83bbb3cd531e9de5be6d657a137bca3d2c36779db822ab8f0d2517a",
+            "bytes": 21495968
+          },
+          {
+            "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-empty-identity/second-arm64/flex-tailnet-shim",
+            "sha256": "b590d6afa83bbb3cd531e9de5be6d657a137bca3d2c36779db822ab8f0d2517a",
+            "bytes": 21495968
+          }
+        ],
+        "byte_identical": true,
+        "scope": "shim executable only; no signed full release or actual target execution"
+      }
+    },
+    "elapsed_s": 2.5226272949948907
+  },
+  "source_sha256": {
+    "docs/user/docs/tailscale-remote-access.md": "d6b5f3e9cbcccf13ba35e4e06ef8006c6bd5de03aa1b6d905057fd90052b3b39",
+    "tools/flex-tailnet-shim/README.md": "1491cb841b592d406337e0b3d363ed42fd3d0086c0bae8484a478460484999aa",
+    "tools/flex-tailnet-shim/native_state.go": "0c19e93c87afe8c3bf352c2e8fda355d031117c3093c0aab4f02925c20ecddd4",
+    "tools/flex-tailnet-shim/native_state_commit_linux_test.go": "ded20cbd42f36c56f3c7b7bdc80bc8c5b52c5b75c91baae51db4776790a667f6",
+    "tools/flex-tailnet-shim/native_state_test.go": "f992d6fb66d23a4900c343f609b9d718250eb846b2021222e291d6abcdf0f884"
+  },
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-identity-startup-components.tar.gz",
+    "bytes": 16965173,
+    "sha256": "adf90c084bd030beb90e8c5a33ee1c942e4e38a8c13291f1531381941dae24d6",
+    "scope": "unsigned component executable builds and offline evidence; not an installable signed release"
+  },
+  "radio_actions": [],
+  "limits": [
+    "No RF or reboot; deferred SWR investigation unchanged.",
+    "This corrected shim is not yet in a signed full runtime release or installed on the 8600. Existing installed c3 release remains the earlier binary.",
+    "No causality established for the failed software reboot.",
+    "Actual6300/Linux2.6/CortexA8 hardware qualification and original native6000 privilege-entry mechanism remain open.",
+    "No actual radio power-cut/full-disk/flash-controller guarantee from these component and fixture tests."
+  ]
+}

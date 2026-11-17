@@ -27,6 +27,70 @@ func nativeTestStore(t *testing.T) (*Node, ipn.StateStore) {
 	return n, srv.Store
 }
 
+func TestNativeStateInitializationPreservesDamagedIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+		missing bool
+		valid   bool
+	}{
+		{name: "missing", missing: true, valid: true},
+		{name: "initialized", payload: []byte("{}"), valid: true},
+		{name: "empty", payload: []byte{}},
+		{name: "whitespace", payload: []byte(" \n\t")},
+		{name: "partial", payload: []byte(`{"_machinekey":`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &Node{StateDir: t.TempDir(), RunDir: t.TempDir()}
+			if err := os.Mkdir(n.tsnetDir(), 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(n.tsnetDir(), "tailscaled.state")
+			if !tc.missing {
+				if err := os.WriteFile(path, tc.payload, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A complete temporary file is evidence, not authority to discard the
+			// selected damaged file or silently choose a replacement identity.
+			remnant := []byte(`{"_machinekey":"cHJldmlvdXM="}`)
+			if !tc.valid {
+				if err := os.WriteFile(path+".tmp", remnant, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv, err := n.newTsnetServer("radio", "")
+			if tc.valid {
+				if err != nil || srv == nil || srv.Store == nil {
+					t.Fatal("missing or initialized identity refused", err)
+				}
+				if _, err := srv.Store.ReadState("_machinekey"); !errors.Is(err, ipn.ErrStateNotExist) {
+					t.Fatal("new identity contains an unexpected key", err)
+				}
+			} else if err == nil || srv != nil {
+				t.Error("damaged identity admitted as a new server")
+			}
+			want := tc.payload
+			if tc.missing {
+				want = []byte("{}")
+			}
+			actual, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(actual, want) {
+				t.Error("startup replaced the selected identity", err)
+			}
+			if !tc.valid {
+				actual, err := os.ReadFile(path + ".tmp")
+				if err != nil || !bytes.Equal(actual, remnant) {
+					t.Error("startup discarded the temporary recovery evidence", err)
+				}
+				if !joinedBefore(n.tsnetDir(), true) {
+					t.Error("damaged identity became eligible for token-free replacement")
+				}
+			}
+		})
+	}
+}
+
 func TestNativeStateRejectsOversizeWithoutReplacingIdentity(t *testing.T) {
 	n, st := nativeTestStore(t)
 	key := ipn.StateKey("_machinekey")

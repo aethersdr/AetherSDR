@@ -7,13 +7,148 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"syscall"
 	"testing"
 	"time"
 
 	"tailscale.com/ipn"
 )
+
+// This helper runs only in an owned test process. SIGKILL bypasses deferred
+// cleanup so reopening exercises the selected file and actual crash remnant.
+func TestNativeIdentityCrashHelper(t *testing.T) {
+	if os.Getenv("AETHER_PD_IDENTITY_CRASH_HELPER") != "1" {
+		t.Skip("subprocess helper")
+	}
+	state, err := newNativeStateStore(os.Getenv("AETHER_PD_IDENTITY_CRASH_PATH"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	point := os.Getenv("AETHER_PD_IDENTITY_CRASH_POINT")
+	crash := func(at string) {
+		if at == point {
+			if err := syscall.Kill(os.Getpid(), syscall.SIGKILL); err != nil {
+				t.Fatal(err)
+			}
+			select {}
+		}
+	}
+	parents := 0
+	ops := nativeStateCommitOperations()
+	ops.sync = func(file *os.File) error {
+		info, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		if err := file.Sync(); err != nil {
+			return err
+		}
+		if info.IsDir() {
+			parents++
+			if parents == 1 {
+				crash("parent-before")
+			} else {
+				crash("parent-after")
+			}
+		} else {
+			crash("file-sync")
+		}
+		return nil
+	}
+	ops.rename = func(parent *os.File, from, to string) error {
+		if err := renameNativeStateFileAt(parent, from, to); err != nil {
+			return err
+		}
+		crash("rename")
+		return nil
+	}
+	state.commitOps = &ops
+	if err := state.WriteState("_machinekey", []byte("replacement")); err != nil {
+		t.Fatal(err)
+	}
+	t.Fatal("identity write did not reach the requested crash boundary")
+}
+
+func TestNativeIdentityProcessDeathKeepsCompleteSelection(t *testing.T) {
+	for _, point := range []string{"parent-before", "file-sync", "rename", "parent-after"} {
+		t.Run(point, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "tailscaled.state")
+			state, err := newNativeStateStore(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := state.WriteState("_machinekey", []byte("previous")); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestNativeIdentityCrashHelper$")
+			cmd.Env = append(os.Environ(), "AETHER_PD_IDENTITY_CRASH_HELPER=1",
+				"AETHER_PD_IDENTITY_CRASH_PATH="+path, "AETHER_PD_IDENTITY_CRASH_POINT="+point)
+			output, err := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			if ctx.Err() != nil || !errors.As(err, &exit) {
+				t.Fatalf("helper did not reach process death: %v, %s", err, output)
+			}
+			status, ok := exit.Sys().(syscall.WaitStatus)
+			if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+				t.Fatalf("helper failed without the requested SIGKILL: %v, %s", err, output)
+			}
+			want := "previous"
+			if point == "rename" || point == "parent-after" {
+				want = "replacement"
+			}
+			// Open the exact file without a tsnet client or network activity.
+			reopened, err := newNativeStateStore(path)
+			if err != nil {
+				t.Fatal("crash made the selected identity unreadable", err)
+			}
+			value, err := reopened.ReadState("_machinekey")
+			if err != nil || string(value) != want {
+				t.Fatal("restart selected a different identity", err)
+			}
+			if want == "previous" {
+				actual, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(before, actual) {
+					t.Fatal("pre-rename crash changed the committed file", err)
+				}
+			}
+			if point == "file-sync" {
+				remnant, err := newNativeStateStore(path + ".tmp")
+				if err != nil {
+					t.Fatal("complete crash remnant lost", err)
+				}
+				value, err := remnant.ReadState("_machinekey")
+				if err != nil || string(value) != "replacement" {
+					t.Fatal("crash remnant differs from the pending identity", err)
+				}
+			} else if _, err := os.Lstat(path + ".tmp"); !os.IsNotExist(err) {
+				t.Fatal("unexpected temporary identity after process death", err)
+			}
+			if err := reopened.WriteState("_machinekey", []byte("explicit-retry")); err != nil {
+				t.Fatal("explicit retry could not replace the complete selection", err)
+			}
+			after, err := newNativeStateStore(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, err = after.ReadState("_machinekey")
+			if err != nil || string(value) != "explicit-retry" {
+				t.Fatal("explicit retry did not persist", err)
+			}
+			if _, err := os.Lstat(path + ".tmp"); !os.IsNotExist(err) {
+				t.Fatal("retry left a crash remnant", err)
+			}
+		})
+	}
+}
 
 func recordingNativeCommitOps(t *testing.T, failure string) (nativeStateCommitOps, *[]string) {
 	t.Helper()

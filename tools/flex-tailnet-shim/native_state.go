@@ -162,7 +162,7 @@ func newNativeStateStore(path string) (*nativeStateStore, error) {
 	}
 	data, err := readNativeStateFile(path)
 	st := &nativeStateStore{path: path, cache: make(map[ipn.StateKey][]byte)}
-	if errors.Is(err, os.ErrNotExist) || (err == nil && len(data) == 0) {
+	if errors.Is(err, os.ErrNotExist) {
 		if err = writeNativeStateFile(path, []byte("{}")); err != nil {
 			return nil, err
 		}

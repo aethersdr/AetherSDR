@@ -680,6 +680,10 @@ replacing the saved identity. Failures before rename retain the selected file
 and state store's previous cache. A failed native configuration load reports an error and blocks control,
 boot enrollment and first-use claiming; partially decoded credentials are not
 used. The Tailscale state file remains readable by the upstream file store.
+An existing empty or malformed Tailscale state file is preserved and refused,
+including any temporary sibling. Only a missing state file is initialized to
+an empty JSON object. Startup does not choose a temporary identity or turn
+damaged state into a fresh sign-in.
 Each file uses one fixed temporary sibling, reused after an interrupted write,
 so retries do not create an unbounded collection of temporary files. Linux
 refuses symbolic links and special files when reading identities, and refuses
