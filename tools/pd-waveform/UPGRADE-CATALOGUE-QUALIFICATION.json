@@ -1,0 +1,538 @@
+{
+  "created_utc": "2026-11-17T20:22:52.510714+00:00",
+  "status": "owner_authenticated_live_inventory_and_exact_upgrade_catalogue_UI_component_qualified_no_shipping_entries",
+  "source_base": "9bf0f846d54a3e4f360253944a9ec38581fe9e7a",
+  "changed_source_sha256": {
+    "CMakeLists.txt": "c57d98b56b92e441b80712995c14b0c7a7885b88e5df6ff5e44c266d6e11fc19",
+    "docs/user/docs/tailscale-remote-access.md": "beb175a54f7f40608c8f1ec684cdcd21a83b112214faa2d2cde60aed1cf7d535",
+    "src/core/AetherPDReleaseCatalogue.cpp": "9abc0e6bac49fd950674711244590ceef7780c077045f0aeb5d1cbc4e972641e",
+    "src/core/AetherPDReleaseCatalogue.h": "1542284bcea6db0205ba4f1ba908284e0635a16f9a42973d18111e37c0616138",
+    "src/gui/AetherPDDialog.cpp": "14f6c06dfbbe4a4cdf2022bb9afa7bb6fdc4550f9e5558c9ac71154e19e51d74",
+    "src/models/AetherPDInstallationModel.cpp": "99452e92bffca65f83ee6e3d04185d0b64dd018fdefd365fc759cef134f0332a",
+    "src/models/AetherPDInstallationModel.h": "cd5a2b387bed700be8d986066feaf9bfdcef62741701f8b6f2c1e81a95d8c6e8",
+    "tests/AetherPDTestTransport.h": "82a117617ddac2dcbb4606b96c6384ba5af70f8ecbef1ca1629d80a2b0dfcf3a",
+    "tests/aetherpd_installation_coordinator_test.cpp": "c702cb05f21097a3b212a705ab016ca1fe4a4e463717038774aed4d4d6aec8c5",
+    "tests/aetherpd_installation_dialog_test.cpp": "aefac1cd904b06da41c20f038bcca42c87d44cdf0a884240ed37d343ce758f82",
+    "tests/aetherpd_package_download_test.cpp": "5124d2b7ae5cf9c07a3c2d33e41a3b2dd696036a8a1a6478710548d8f105aee0",
+    "tests/tests.cmake": "b5f69ef5389cf8475e6dac80e9749210904bccdbeac9ae2313b94005f4cee578",
+    "tools/pd-waveform/README.md": "86365cdd3660eaae4009c9dbd67455db2f47b169d8adae0abf73eeb5829d47ed",
+    "src/core/AetherPDInstallationRead.cpp": "f0d2b58822ffb8a07587d50180450e127f4fdcb50a9107fea2580c380de13830",
+    "src/core/AetherPDInstallationRead.h": "463af2be176760cf4530fc5ebf10a369958c56b8c22c6cf489878a8ba392e147",
+    "tests/aetherpd_installation_read_test.cpp": "3650bc0e3f34ca186180ebf0b29ebe3ed1ca238e2bde68b0fc4eae8c15d8e3b1"
+  },
+  "production_ready": false,
+  "implementation": [
+    "One-shot existing owner-authenticated LAN GET: fixed port/path, private address and token checks, manual redirects/no credential reuse or cookies/cache, aggregate2048-byte body cap, nonrenewable10-second deadline and late/backwards-clock refusal. No retries or mutation verbs.",
+    "Trusted immutable upgrade catalogue bound to exact backend model, firmware, profile, predecessor BLAKE2b digest and publisher key. Duplicate transitions refuse the catalogue. Independently pinned downloaded package identities must match the chosen transition.",
+    "Ordinary Prepare update action loads the existing owner credential solely for read-only inventory; a known transition proceeds to HTTPS download and exact-plan review. Local development preparation remains separate and explicitly unqualified.",
+    "Exact-plan approval reloads the owner credential and compares its fingerprint, then rechecks the installed release before starting the existing coordinator. Changed predecessor/owner/session/hardware identity, unavailable read, cancellation and stale callbacks refuse before installation starts."
+  ],
+  "verification": {
+    "registered_CTest": [
+      "aetherpd_installation_read_test",
+      "aetherpd_package_download_test",
+      "aetherpd_package_test",
+      "aetherpd_installation_coordinator_test",
+      "aetherpd_installation_dialog_test"
+    ],
+    "CTest_passed": true,
+    "desktop_build_passed": true,
+    "built_desktop_sha256": "350e8de6a15e561611a74f77c507ca205865773a567bac3fafa047b4b3586ad0",
+    "sanitizers": {
+      "address": true,
+      "undefined": true,
+      "leaks": true,
+      "QtTest_pass_counts_including_init_cleanup": {
+        "aetherpd_installation_read_test": 18,
+        "aetherpd_package_download_test": 35,
+        "aetherpd_installation_coordinator_test": 48,
+        "aetherpd_installation_dialog_test": 14
+      },
+      "scope": "Inventory/package/downloader/catalogue/installation-model/coordinator/dialog and four selected test translation units instrumented; remaining engine/dependencies uninstrumented."
+    },
+    "mutations": [
+      {
+        "name": "inventory-bound",
+        "source": "src/core/AetherPDInstallationRead.cpp",
+        "test": "failuresPublishNoObservation",
+        "exit": 2,
+        "detected": true
+      },
+      {
+        "name": "inventory-deadline",
+        "source": "src/core/AetherPDInstallationRead.cpp",
+        "test": "fragmentedReplyDoesNotExtendDeadline",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "inventory-redirect",
+        "source": "src/core/AetherPDInstallationRead.cpp",
+        "test": "oneReadHasFixedPathAndNoMutationOrRedirect",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "predecessor-key",
+        "source": "src/core/AetherPDReleaseCatalogue.cpp",
+        "test": "upgradeCatalogueBindsPredecessorKeyProfileModelAndFirmware",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "approved-recheck",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "catalogueUpgradeChecksBeforeDownloadAndAgainAfterExactApproval",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "owner-fingerprint",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "catalogueUpgradeChecksBeforeDownloadAndAgainAfterExactApproval",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "package-identity",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "catalogueUpgradeRefusesUnknownInventoryAndMetadataBeforeInstallation",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "inventory-radio",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "catalogueUpgradeRefusesUnknownInventoryAndMetadataBeforeInstallation",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "credential-generation",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "lateInventoryCredentialCannotEnterReplacementPreparation",
+        "exit": 1,
+        "detected": true
+      }
+    ],
+    "static_checks": [
+      {
+        "command": [
+          "python3",
+          "tools/check_test_registration.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_engine_boundary.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_qsettings.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_capability_records.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_command_plane.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/docs/gen_reference.py",
+          "--check"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "node",
+          "tools/docs/test_log_rules.mjs"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_ci_test_gate.py"
+        ],
+        "exit": 0
+      }
+    ],
+    "npm_ci_and_docs_build_passed": true,
+    "UI_preview_inspected": true,
+    "live_inventory": {
+      "committed": true,
+      "firmware": "4.3.16.42034",
+      "passed": true,
+      "plan_digest": "1dd0ccdc3ed7264e79931d61fed15494957fbe4e062a51212e42cd5d16609cd2",
+      "profile": 1,
+      "scope": "One owner-authenticated fixed LAN GET; no mutation, retry, install, RF or reboot",
+      "selected_release_blake2b_256": "c3d2522512f66f32025747661335e82eb8a3f572fe9888acf7af8380f9a43404",
+      "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "serial": "2125-1213-8600-8895"
+    },
+    "live_reader_binary_sha256": "07fe02b4a07880d7c067c434f239d63e6c0a3b0ab7cbbf654e83b4b872c5dc36"
+  },
+  "test_scope": "All catalogue/model/UI HTTP and credential providers injected; no peer sockets. One separate live reader executable loads the existing QtKeychain owner credential and sends one fixed status GET to the FLEX8600, without privileged diagnostics bridge. Screenshot uses injected catalogue entries, not a shipping release.",
+  "radio_changes": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "root_bridge_jobs": [],
+  "installed_candidate_unchanged": {
+    "release_blake2b_256": "c3d2522512f66f32025747661335e82eb8a3f572fe9888acf7af8380f9a43404",
+    "runtime_source": "aa5a33fc5de78ad5a9d6e5d48ba2e9c697e03bf0"
+  },
+  "limitations": [
+    "Shipping catalogue is empty. No qualified entries, public package hosting, actual HTTPS package exchange or live catalogue-driven installation claimed.",
+    "Live read checks the shim reported committed installation record, not a new independent runtime/binary audit, successful radio reboot or RF readiness. Existing LAN API uses bearer-authenticated plain HTTP; this is not TLS server authentication.",
+    "Installed-runtime upgrade, fresh installation, rollback/interruption and credential/platform proof must be repeated for the final shipping graph; these component tests are not those full release gates.",
+    "Desktop upgrade coordinator remains profile1; actual FLEX6300/Linux2.6 adapter and hardware qualification remain open. ARMv7 catalogue parsing alone is not hardware support.",
+    "Whole-radio reboot hang remains failed/unresolved; no unattended retry. RF remains stopped pending operator steering on deferred SWR diagnosis; finite corrected pair does not establish repeatability.",
+    "All other full P1-P10 natural alignment/cold-start, process/credential/platform/power-loss, sustained RF/stockAPD and independent release gates remain open."
+  ],
+  "evidence": [
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/build-initial.log.gz",
+      "bytes": 4148,
+      "sha256": "6e0c8499956c5b4782f0ca13212b11e013fc9825e9fb6013c68e7be3c01089a6"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/build-final.log.gz",
+      "bytes": 558,
+      "sha256": "513f02ee34a9bf69a8adc2c21a57fb7742773d95b00936de222535ece47c03ce"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/first-record-test-build.log.gz",
+      "bytes": 191,
+      "sha256": "6578271ff24e592ba1b827316ff66a21fcbfb98b10bdbdd59e01dd87e81f783e"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/generation-test-build.log.gz",
+      "bytes": 191,
+      "sha256": "6578271ff24e592ba1b827316ff66a21fcbfb98b10bdbdd59e01dd87e81f783e"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/ctest-initial.log.gz",
+      "bytes": 306,
+      "sha256": "84bc479d72ee6f0124495930eadb58906f3d63c7423ff7ecb183765dc6862018"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/ctest-final.log.gz",
+      "bytes": 306,
+      "sha256": "fc751fa8cc88b91914d3ef68af833d5aefafaa79ddd7424bead980693d881f78"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/ctest-complete.log.gz",
+      "bytes": 307,
+      "sha256": "e22c0f9c4574d3a0e62dbb1f98fa52d5c2f7353b745a7d37a02e2990b2395828"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/build-sanitized.py.gz",
+      "bytes": 864,
+      "sha256": "010402652c1a8f236bc01e3830d8e048004994a747706116ee4fed2eaa677f20"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/sanitizer-build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/sanitizer-generation-build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/mutations.py.gz",
+      "bytes": 1649,
+      "sha256": "20c15ed436f37b215b6aa518124b3cb99ae3f4885e2ac21dc0b33ba91ceafaab"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/mutations.json.gz",
+      "bytes": 456,
+      "sha256": "f95289e8f9fc90c88e8cf716bb3db926c269991a600b0c286008fe2d73d6ecfa"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/mutations.log.gz",
+      "bytes": 439,
+      "sha256": "3eb43e8154e173d80621202d759ef287e8280a489e4d3c5bff18a09bb596ec4b"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-checks.json.gz",
+      "bytes": 214,
+      "sha256": "f10f84e73cf45ea91b2afb561fa67d48a1e1439828859aeff824f4d58333b6b9"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/docs-ci.log.gz",
+      "bytes": 432,
+      "sha256": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/docs-build.log.gz",
+      "bytes": 501,
+      "sha256": "5cc6fbcc49569b0f32c898bc54a5cd03ca1f6ecb0c37b975b2a0f774a867faa9"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/UI-preview.log.gz",
+      "bytes": 479,
+      "sha256": "e22630412efe016e410a1296e55f824b9ad153f92c01e41a37f791f2769866a8"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/source.patch.gz",
+      "bytes": 11927,
+      "sha256": "af495fb25f3010f3e273641893c893fa582448a648695f0fab59911bb034e0f1"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/save.py.gz",
+      "bytes": 3353,
+      "sha256": "0b51b079f0eb3042e84daf7da15a36073c1c6cb0182c50d368f08f4e91ac965e"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/checkpoint.py.gz",
+      "bytes": 1810,
+      "sha256": "7a2e7ed70ce93283a3f18d02b6e590211c35f7097384e9a85a7e5b51ef10bf3c"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/live-read.cpp.gz",
+      "bytes": 988,
+      "sha256": "649bdfb175b99f9d4d5ebc8308ac4fe9e500e57d6a27bb0409bcb5d11c7ef67a"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/build-live-read.py.gz",
+      "bytes": 535,
+      "sha256": "c5659a463cfea0d935c9aab393b7d1a85cc514f420e954b70fadcd9b956b48dd"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/live-read-build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/live-read-result.json.gz",
+      "bytes": 346,
+      "sha256": "e056865a440089504f9893b176302942326b430f5e9eda962e820e7f79b7bb82"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/live-read-errors.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-0.log.gz",
+      "bytes": 84,
+      "sha256": "959aabfbd3d45f87cb2ec81df039d1fbcef4475b1bcb95d47c0062da2dbdaca0"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-1.log.gz",
+      "bytes": 1833,
+      "sha256": "45fbc88f94f9d4c91eceea1bdf38bb74a239de9529dedbbf7c9965b1a9c72707"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-2.log.gz",
+      "bytes": 61,
+      "sha256": "728dd27d76fe734e7d7a16cff56653c933c5ec7b012556d4be14ae8ebcef1097"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-3.log.gz",
+      "bytes": 91,
+      "sha256": "3dda96147739d2b9e41612b411aa76324f0fbba662fac6d3adc0c277b9bc9a8b"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-4.log.gz",
+      "bytes": 122,
+      "sha256": "0bdc84dd79a68fc0cc7307fc4bdf40a0723476cc84495da44951b2711bfc555f"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-5.log.gz",
+      "bytes": 65,
+      "sha256": "ef92287bd4b4371e61725f5f14d31857b596ee10d4c72b03f49375736759e4fb"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-6.log.gz",
+      "bytes": 404,
+      "sha256": "43f4c5c7fd6b846e8154366f1a038d47bf4af3b8a0763182f14aeb38d4dce887"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/static-7.log.gz",
+      "bytes": 147,
+      "sha256": "a8e6a04bb1a6b0427e4c1134cea528a7963f46370ecdcef336db0f5bcf2607ff"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/aetherpd_installation_read_test-asan.log.gz",
+      "bytes": 455,
+      "sha256": "eb189a5fa4745d50dc18fe0263de8ccc1fccb49447fe29256b82a75596809f32"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/aetherpd_package_download_test-asan.log.gz",
+      "bytes": 704,
+      "sha256": "b33b4676848766e3f440d29ba592532c70878cc47852f4a818c52b3c08b7106d"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/aetherpd_installation_coordinator_test-asan.log.gz",
+      "bytes": 2625,
+      "sha256": "685b0360efc0fdec19d12db9390589d160cda89e5c89b72e691d0268cf93478e"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/aetherpd_installation_dialog_test-asan.log.gz",
+      "bytes": 980,
+      "sha256": "8d4879aec23f741cff0326926afdd6033b45743cae464d2c1a7abea67ddd1c69"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-bound/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-bound/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-bound/test.log.gz",
+      "bytes": 474,
+      "sha256": "aaa90835468459629d651dcfa875b94a6bf12b6df48db7ab7f27f18ecd28c605"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-deadline/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-deadline/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-deadline/test.log.gz",
+      "bytes": 453,
+      "sha256": "a7572c39454633635f3df3596d1f17afce901261cff557303fea06f6e741c61a"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-redirect/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-redirect/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-redirect/test.log.gz",
+      "bytes": 482,
+      "sha256": "6040ea5e02f28cae705f51167e05767a277ef7570bf82440e93e411d14e1fddc"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/predecessor-key/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/predecessor-key/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/predecessor-key/test.log.gz",
+      "bytes": 434,
+      "sha256": "e6e0bedde94efdfdc8cbc83057a1bd207cea87e42a42e4dcdaaa30706afefe85"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/approved-recheck/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/approved-recheck/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/approved-recheck/test.log.gz",
+      "bytes": 582,
+      "sha256": "5cf20498c9743434ffffcb470058d6a54bac51a7c41cd9b275388d08d674de55"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/owner-fingerprint/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/owner-fingerprint/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/owner-fingerprint/test.log.gz",
+      "bytes": 603,
+      "sha256": "d84c34b58f93a2f9f2a4e38427446eac3537891624d1b3762260da9acd76add6"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/package-identity/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/package-identity/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/package-identity/test.log.gz",
+      "bytes": 621,
+      "sha256": "6bf5dbd91fadb7a68e4f8d8c87d7d6265d420169ba9ba5bb0c74bf41e00e3ad0"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-radio/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-radio/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/inventory-radio/test.log.gz",
+      "bytes": 610,
+      "sha256": "60c38001fdd2b7ae989c7a47bd3e042ab471b9b61dafd5ce09fc8bcdf0431375"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/credential-generation/build.log.gz",
+      "bytes": 276,
+      "sha256": "9c81d71d3fcde39d31b21c33d8ec8ad27fe7e0830484184c527cc78fce1266a3"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/credential-generation/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/credential-generation/test.log.gz",
+      "bytes": 574,
+      "sha256": "93de8204749eab4c309484c84a9be19853eaf3f3cde03e35fd00c14b72014503"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-upgrade-catalogue/upgrade-catalogue-preview.png",
+      "bytes": 143474,
+      "sha256": "0a3cdbb3e32563b4ca8dfeeae82634de7b46f6ef09b8d0231c4ec58f0f37fb98"
+    }
+  ]
+}

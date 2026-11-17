@@ -3,6 +3,7 @@
 #include "core/AetherPDPackageDownload.h"
 #include "core/AetherPDInstallationJournal.h"
 #include "core/AetherPDReleaseCatalogue.h"
+#include "core/AetherPDInstallationRead.h"
 #include <QFutureWatcher>
 #include <QHostAddress>
 #include <QObject>
@@ -27,6 +28,7 @@ public:
     using TokenWriter = std::function<void(const QString&, const QString&, const QString&, QObject*, std::function<void(bool)>)>;
     using Factory = std::function<std::unique_ptr<Coordinator>(RadioModel&)>;
     using DownloadFactory = std::function<std::unique_ptr<AetherPDPackageDownload>()>;
+    using ReadFactory = std::function<std::unique_ptr<AetherPDInstallationRead>()>;
     struct RecoveryServices {
         std::function<bool(const QByteArray&, const QByteArray&, bool)> journal;
         std::function<AetherPDInstallationJournal::Read(const QByteArray&)> read;
@@ -34,12 +36,16 @@ public:
         std::function<std::unique_ptr<AetherPDInstallationMonitor>()> monitor;
         std::function<bool(const QByteArray&, const QByteArray&)> retainPending;
     };
-    enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable, SavingCredential, PromotingCredential, LoadingRecoveryCredential, CheckingInstallation };
+    enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable, SavingCredential, PromotingCredential, LoadingRecoveryCredential, CheckingInstallation, LoadingInventoryCredential, ReadingInstallation };
     Q_ENUM(State)
-    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected, CredentialSaveFailed, JournalFailed };
+    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected, CredentialSaveFailed, JournalFailed, InstallationReadFailed, NoMatchingRelease };
     Q_ENUM(Failure)
     explicit AetherPDInstallationModel(RadioModel& radio, QObject* parent = nullptr);
-    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {}, RecoveryServices recovery = {}, AetherPDReleaseCatalogue catalogue = AetherPDReleaseCatalogue::shipping());
+    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {}, RecoveryServices recovery = {}, AetherPDReleaseCatalogue catalogue = AetherPDReleaseCatalogue::shipping(), ReadFactory reader = {});
+    bool updateAvailable() const;
+    bool selectedUpdateIsDevelopment() const;
+    QString selectedUpdateVersion() const;
+    bool prepareSelectedUpdate(const RadioControlSession& session);
     bool prepareRelease(const AetherPDRelease& release, const RadioControlSession& session);
     bool prepareFirstRelease(const AetherPDFirstRelease& release, const QString& hostname, const RadioControlSession& session);
     bool prepareFirstPackage(const AetherPDFirstPackage& package, const QString& hostname, const RadioControlSession& session);
@@ -112,6 +118,13 @@ private:
     };
     std::optional<SavedFirst> savedFirstSelection() const;
     bool firstJournalAbsent() const;
+    void inventoryCredential(const QString& token, quint64 generation);
+    bool beginInstallationRead(const QString& token, bool approved);
+    void installationReadFinished(quint64 generation);
+    void retireRead();
+    void clearUpgradeSelection();
+    bool matchesSelectedUpgrade(const aetherpd::InstallationPlan& plan) const;
+    void startCoordinator(const QString& token);
     bool recoverFirstSnapshot(const QByteArray& publisherKey, const RadioControlSession& session, const QByteArray& expectedPlan);
     void credential(const QString& token, quint64 generation);
     void completed(Coordinator::Outcome result, bool cleanup);
@@ -127,6 +140,12 @@ private:
     TokenWriter m_write;
     RecoveryServices m_recovery;
     AetherPDReleaseCatalogue m_catalogue;
+    ReadFactory m_readFactory;
+    std::unique_ptr<AetherPDInstallationRead> m_read;
+    std::optional<AetherPDReleaseCatalogue::Upgrade> m_selectedUpgrade;
+    QByteArray m_inventoryOwnerFingerprint;
+    QString m_upgradeToken;
+    bool m_readApproved{false};
     std::unique_ptr<AetherPDInstallationMonitor> m_recoveryMonitor;
     bool m_recovering{false};
     bool m_recoveryCleanup{false};

@@ -38,6 +38,7 @@ public:
 struct Fixture {
     AetherPDTest::Network network;
     AetherPDTest::Network downloads;
+    AetherPDTest::Network inventory;
     Channel channel;
     Carrier carrier;
     RadioModel radio;
@@ -74,7 +75,7 @@ struct Fixture {
                 [this](const QString&, const QString&, QObject*, auto done) { ++recoveryLoads; recoveryLoaded = std::move(done); },
                 [this] { return std::make_unique<AetherPDInstallationMonitor>(network, [] { return qint64(0); }); },
                 [this](const QByteArray& plan, const QByteArray& key) { return plan == journalPlan && key == files.trust.candidateKey; }
-            }, std::move(catalogue));
+            }, std::move(catalogue), [this] { return std::make_unique<AetherPDInstallationRead>(inventory, [] { return qint64(0); }); });
         RadioSetupControlTestAccess::installationModel(radio, std::move(model));
         open();
     }
@@ -98,6 +99,41 @@ struct Fixture {
 class InstallationDialogTest : public QObject {
     Q_OBJECT
 private slots:
+    void catalogueUpdateButtonChecksBeforeDownloadAndRefusesChangedPredecessor()
+    {
+        AetherPDTest::PackageFixture files;
+        const auto package = files.load(); QVERIFY(package);
+        const auto plan = aetherpd::parseInstallationPlan(package->plan("fixture-8600")); QVERIFY(plan);
+        AetherPDRelease release;
+        release.version = "0.2.0-catalogue"; release.firmware = plan->firmware; release.profile = 1; release.trust = files.trust;
+        const auto names = AetherPDPackage::fileNames();
+        for (std::size_t i = 0; i < names.size(); ++i) { release.urls[i] = QUrl(QStringLiteral("https://example.invalid/upgrade/") + names[i]); }
+        const AetherPDReleaseCatalogue::Upgrade entry{"FLEX-8600", release, QByteArray::fromHex(plan->previousDigest.toLatin1()),
+            QByteArray::fromHex(plan->candidateDigest.toLatin1())};
+        Fixture f(AetherPDReleaseCatalogue({}, {entry}));
+        QVERIFY(f.button("pdInstallPrepare")->isEnabled());
+        QTest::mouseClick(f.button("pdInstallPrepare"), Qt::LeftButton);
+        QCOMPARE(f.loads, 1); QVERIFY(f.inventory.sent.empty()); QVERIFY(f.downloads.sent.empty());
+        f.credential(QString(64, u'a'));
+        const QJsonObject installed{{"state", "committed"}, {"installation_committed", true}, {"profile", 1},
+            {"firmware", plan->firmware}, {"serial", "fixture-8600"}, {"upgrade_plan_blake2b_256", QString(64, u'a')},
+            {"selected_release_blake2b_256", plan->previousDigest}, {"selected_release_key", plan->previousKey}};
+        f.inventory.last->complete(200, QJsonDocument(installed).toJson());
+        for (std::size_t i = 0; i < 8; ++i) { f.downloads.last->complete(200, files.bytes(i)); }
+        QTRY_COMPARE(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QVERIFY(f.preview().contains("Update package 0.2.0-catalogue from this application's release catalogue"));
+        QVERIFY(f.preview().contains(plan->previousDigest)); QVERIFY(f.preview().contains(plan->candidateDigest));
+        QCOMPARE(f.loads, 1); QVERIFY(!f.job); QVERIFY(f.network.sent.empty());
+        const QString screenshot = QString::fromLocal8Bit(qgetenv("AETHERPD_UPGRADE_CATALOGUE_SCREENSHOT"));
+        if (!screenshot.isEmpty()) { f.dialog->show(); QCoreApplication::processEvents(); QVERIFY(f.dialog->grab().save(screenshot)); }
+        QTest::mouseClick(f.button("pdInstallApprove"), Qt::LeftButton);
+        QCOMPARE(f.loads, 2); f.credential(QString(64, u'a'));
+        QVERIFY(!f.job); QCOMPARE(f.inventory.sent.size(), std::size_t(2));
+        QVERIFY(f.state().contains("Checking the installed release"));
+        auto changed = installed; changed["selected_release_blake2b_256"] = QString(64, u'b');
+        f.inventory.last->complete(200, QJsonDocument(changed).toJson());
+        QVERIFY(f.state().contains("No trusted update matches")); QVERIFY(!f.job); QVERIFY(f.network.sent.empty()); QCOMPARE(f.writes, 0);
+    }
     void catalogueFirstButtonDownloadsThenShowsExactApproval()
     {
         AetherPDTest::PackageFixture files;

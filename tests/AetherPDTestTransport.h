@@ -51,6 +51,12 @@ public:
         setHeader(QNetworkRequest::ContentLengthHeader, length);
         emit metaDataChanged();
     }
+    void feed(const QByteArray& data) { payload += data; emit readyRead(); }
+    void finish(int code)
+    {
+        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, code);
+        if (!isFinished()) { setFinished(true); emit finished(); }
+    }
     qint64 bytesAvailable() const override { return payload.size() - position; }
     bool aborted{false};
 protected:

@@ -178,7 +178,7 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     installButtons->setContentsMargins(0, 0, 0, 0);
     m_installPrepare = new QPushButton(tr("Prepare update"), bodyWidget());
     m_installPrepare->setObjectName(QStringLiteral("pdInstallPrepare"));
-    m_installPrepare->setAccessibleName(tr("Prepare AetherPD development update"));
+    m_installPrepare->setAccessibleName(tr("Prepare AetherPD update"));
     m_installPrepare->setAutoDefault(false);
     layout->addWidget(m_installPrepare);
     auto* firstControls = new QHBoxLayout;
@@ -557,7 +557,7 @@ void AetherPDDialog::render()
 
 void AetherPDDialog::prepareInstallation()
 {
-    if (current()) { m_radio->aetherPDInstallationModel().prepareSelectedDevelopment(m_session); }
+    if (current()) { m_radio->aetherPDInstallationModel().prepareSelectedUpdate(m_session); }
 }
 void AetherPDDialog::prepareFirstInstallation()
 {
@@ -594,7 +594,7 @@ void AetherPDDialog::renderInstallation()
     const Model* model = current() ? &m_radio->aetherPDInstallationModel() : nullptr;
     const State state = model ? model->state() : State::Unavailable;
     const auto preview = model ? model->preview() : std::nullopt;
-    const QString developmentVersion = model ? model->selectedDevelopmentVersion() : QString{};
+    const QString developmentVersion = model && model->selectedUpdateIsDevelopment() ? model->selectedDevelopmentVersion() : QString{};
     const QString firstVersion = model ? model->selectedFirstVersion() : QString{};
     const bool savedFirst = model && model->savedFirstInstallationAvailable();
     QString detail;
@@ -644,6 +644,13 @@ void AetherPDDialog::renderInstallation()
         detail = preview ? tr("Development build — not qualified for production.\n") + detail
             : selection + tr("Choose Prepare update to verify the package and review its plan. Preparation does not change the radio.");
     }
+    if (model && !model->selectedUpdateIsDevelopment()) {
+        if (!model->selectedUpdateVersion().isEmpty()) {
+            detail = tr("Update package %1 from this application's release catalogue.\n").arg(model->selectedUpdateVersion()) + detail;
+        } else if (!preview && model->updateAvailable()) {
+            detail += tr("\nPrepare update reads the installed release with your saved owner credential, then downloads a matching trusted package. No installation starts before plan approval.");
+        }
+    }
     if (!firstVersion.isEmpty() && (!preview || preview->firstInstallation)) {
         detail = (model->selectedFirstIsDevelopment()
             ? tr("First-install development package %1 — not qualified for production.\n")
@@ -689,6 +696,8 @@ void AetherPDDialog::renderInstallation()
             : preview && preview->firstInstallation ? tr("Review the plan, then choose Approve first installation. Nothing is installed before approval.")
             : tr("Review the plan, then choose Approve update. Nothing is installed before approval."); break;
     case State::LoadingCredential: status = tr("Loading the saved radio credential…"); break;
+    case State::LoadingInventoryCredential: status = tr("Loading the saved owner credential for a read-only release check…"); break;
+    case State::ReadingInstallation: status = tr("Checking the installed release before continuing…"); break;
     case State::SavingCredential: status = tr("Saving the new credential in the system keychain before installation…"); break;
     case State::PromotingCredential: status = tr("Radio confirmed installation; saving its active credential…"); break;
     case State::LoadingRecoveryCredential: status = tr("Loading the saved installation credential…"); break;
@@ -738,6 +747,8 @@ void AetherPDDialog::renderInstallation()
         case Model::Failure::JournalFailed: status = tr("The recovery record could not be saved, or an earlier installation is unresolved. No installation was started."); break;
         case Model::Failure::DownloadFailed: status = tr("Package download or verification failed; no installation was started."); break;
         case Model::Failure::PackageRejected: status = tr("Package preparation failed; no installation was started."); break;
+        case Model::Failure::InstallationReadFailed: status = tr("The installed release could not be verified. No installation was started."); break;
+        case Model::Failure::NoMatchingRelease: status = tr("No trusted update matches the installed release and publisher. No installation was started."); break;
         default: status = tr("Update could not start. Check the connection, transmit state and upload availability."); break;
         }
         break;
@@ -745,10 +756,11 @@ void AetherPDDialog::renderInstallation()
     const bool approve = model && state == State::AwaitingApproval && preview && !m_radio->isRadioTransmitting();
     const bool cancel = model && (state == State::Downloading || state == State::Preparing || state == State::AwaitingApproval
         || state == State::LoadingCredential || state == State::SavingCredential || state == State::Running
-        || state == State::LoadingRecoveryCredential || state == State::CheckingInstallation);
+        || state == State::LoadingRecoveryCredential || state == State::CheckingInstallation
+        || state == State::LoadingInventoryCredential || state == State::ReadingInstallation);
     const QPointer<AetherPDDialog> alive(this);
-    enable(m_installPrepare, model && !developmentVersion.isEmpty() && !model->active() && state != State::AwaitingApproval,
-        tr("A development package compiled for this radio firmware and no pending update are required."));
+    enable(m_installPrepare, model && model->updateAvailable(),
+        tr("A trusted update for this radio model and firmware, and no pending installation are required."));
     if (!alive) { return; }
     enable(m_installFirst, model && model->firstInstallationAvailable(),
         tr("A trusted first-install package for this radio model and firmware, and no unresolved installation record are required. Check a saved installation first."));

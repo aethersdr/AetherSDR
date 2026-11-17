@@ -1151,6 +1151,7 @@ set(CORE_SOURCES
     src/core/AetherPDProtocol.cpp
     src/core/AetherPDClient.cpp
     src/core/AetherPDInstallationMonitor.cpp
+    src/core/AetherPDInstallationRead.cpp
     src/core/AetherPDInstallationJournal.cpp
     src/core/AetherPDPackageDownload.cpp
     src/core/AetherPDReleaseCatalogue.cpp

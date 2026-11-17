@@ -769,18 +769,23 @@ access. A Remote Access window belongs to the connection it opened on; after
 that connection ends, reopen it from the current radio's AetherPD panel.
 
 The **AetherPD service installation** section shows a prepared update's target radio,
-firmware, planned changes and authenticated package identifiers. Qualified package
-selection is not yet available. Builds explicitly configured with a development
-package show its version and **not qualified for production**. A prepared plan
-labels its selected installation type. **Prepare update**
-verifies that package against the hashes and signing keys compiled into the app
-and prepares a plan without changing the radio or loading credentials. This
-button is dimmed when no package is compiled for the connected firmware.
+firmware, planned changes and authenticated package identifiers. The shipping
+catalogue currently contains no qualified releases, so ordinary builds keep
+**Prepare update** dimmed. For a catalogue update, this action loads the saved
+owner credential and reads the installed release without changing the radio.
+It downloads a package only when the model, firmware, profile, installed release
+digest and publisher key match a trusted transition compiled into the app.
+Builds explicitly configured with a local development package show its version
+and **not qualified for production**; that separate preparation path verifies
+the local files without loading credentials. A prepared plan labels its selected
+installation type and shows both release identifiers.
 **Approve update** stays disabled until a verified plan has been prepared for
 the current connection.
 
 - **Approve update** approves exactly the displayed plan, then loads the saved
-  radio credential and starts installation. Approval is unavailable while the
+  radio credential. Catalogue updates recheck the installed release before
+  starting installation. A changed owner credential, changed predecessor or
+  unavailable status stops the update before installation starts. Approval is unavailable while the
   radio is transmitting. An update does not transmit or arm calibration.
 - **Cancel update** cancels download/preparation or requests installer cleanup.
   Canceling after installation has started does not guarantee rollback.

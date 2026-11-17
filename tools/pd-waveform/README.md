@@ -28,7 +28,13 @@ UI selects exact model/firmware catalogue entries and can download retained
 entries to rebuild a saved attempt without changing its identity. The compiled
 shipping catalogue is empty until release qualification; invalid or ambiguous
 catalogues and unreadable installation records admit no fresh installation.
-Qualified shipping entries, public hosting and upgrade catalogue selection remain incomplete;
+The update UI reads the installed release through the existing owner-protected
+LAN status API, selects an exact catalogue predecessor/key/profile transition,
+and verifies downloaded package identities before plan review. Approval reloads
+the owner credential and repeats the release check before starting installation.
+These reads are bounded and never retried automatically. Catalogue and workflow
+tests inject transport and credentials; they do not qualify live hosted delivery.
+Qualified shipping entries and public hosting remain incomplete;
 the existing local development selectors are not production distribution.
 
 Build from the repository root with Zig installed:

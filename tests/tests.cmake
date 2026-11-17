@@ -4992,6 +4992,13 @@ target_link_libraries(aetherpd_package_download_test PRIVATE aethercore Qt6::Tes
 add_test(NAME aetherpd_package_download_test COMMAND aetherpd_package_download_test)
 set_tests_properties(aetherpd_package_download_test PROPERTIES TIMEOUT 20)
 
+# Fixed owner-authenticated inventory GET; injected HTTP/clock, no sockets.
+add_executable(aetherpd_installation_read_test tests/aetherpd_installation_read_test.cpp)
+target_include_directories(aetherpd_installation_read_test PRIVATE src tests)
+target_link_libraries(aetherpd_installation_read_test PRIVATE aethercore Qt6::Test)
+add_test(NAME aetherpd_installation_read_test COMMAND aetherpd_installation_read_test)
+set_tests_properties(aetherpd_installation_read_test PROPERTIES TIMEOUT 20)
+
 # Native publisher fixtures; local files only, no executable is run.
 add_executable(aetherpd_package_test tests/aetherpd_package_test.cpp)
 target_include_directories(aetherpd_package_test PRIVATE src tests)

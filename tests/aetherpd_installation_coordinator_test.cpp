@@ -69,6 +69,25 @@ AetherPDFirstRelease firstRelease(const AetherPDTest::PackageFixture& fixture)
     }
     return release;
 }
+AetherPDReleaseCatalogue::Upgrade upgradeEntry(const AetherPDTest::PackageFixture& fixture)
+{
+    AetherPDRelease release;
+    release.version = "0.2.0-catalogue"; release.firmware = "4.3.16.42034"; release.profile = 1; release.trust = fixture.trust;
+    const auto names = AetherPDPackage::fileNames();
+    for (std::size_t i = 0; i < names.size(); ++i) { release.urls[i] = QUrl(QStringLiteral("https://example.invalid/upgrade/") + names[i]); }
+    const auto package = fixture.load();
+    const auto plan = package ? aetherpd::parseInstallationPlan(package->plan("fixture-8600")) : std::nullopt;
+    return {"FLEX-8600", release, plan ? QByteArray::fromHex(plan->previousDigest.toLatin1()) : QByteArray{},
+        plan ? QByteArray::fromHex(plan->candidateDigest.toLatin1()) : QByteArray{}};
+}
+QByteArray installedRecord(const AetherPDReleaseCatalogue::Upgrade& entry, bool first = false)
+{
+    return QJsonDocument(QJsonObject{{"state", "committed"}, {"installation_committed", true}, {"profile", 1},
+        {"firmware", entry.release.firmware}, {"serial", "fixture-8600"},
+        {first ? "first_install_plan_blake2b_256" : "upgrade_plan_blake2b_256", QString(64, u'a')},
+        {"selected_release_blake2b_256", QString::fromLatin1(entry.previousDigest.toHex())},
+        {"selected_release_key", QString::fromLatin1(entry.release.trust.previousKey.toHex())}}).toJson();
+}
 std::optional<Coordinator::Prepared> prepareFirst()
 {
     const auto package = firstPackage();
@@ -566,6 +585,128 @@ private slots:
             QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged);
         }
         QCOMPARE(loads, 0); QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+    }
+    void catalogueUpgradeChecksBeforeDownloadAndAgainAfterExactApproval()
+    {
+        for (int mode = 0; mode < 4; ++mode) {
+            Fixture f; AetherPDTest::PackageFixture fixture;
+            AetherPDTest::Network inventory, downloads;
+            const auto entry = upgradeEntry(fixture);
+            const AetherPDReleaseCatalogue catalogue({}, {entry}); QVERIFY(catalogue.valid());
+            int loads = 0, creates = 0;
+            std::function<void(const QString&)> loaded;
+            AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto done) { ++loads; loaded = std::move(done); },
+                [&](RadioModel& radio) { ++creates; return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
+                nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); }, {}, {}, catalogue,
+                [&] { return std::make_unique<AetherPDInstallationRead>(inventory, [&] { return f.clock; }); });
+            QVERIFY(model.updateAvailable()); QVERIFY(!model.selectedUpdateIsDevelopment());
+            QVERIFY(model.prepareSelectedUpdate(f.model.controlSession())); QCOMPARE(loads, 1);
+            QVERIFY(inventory.sent.empty()); QVERIFY(downloads.sent.empty()); QVERIFY(!model.approve(model.approvedPlan()));
+            loaded(QString(64, u'a')); QCOMPARE(inventory.sent.size(), std::size_t(1));
+            QCOMPARE(inventory.sent[0].method, QNetworkAccessManager::GetOperation);
+            inventory.last->complete(200, installedRecord(entry, mode == 0));
+            for (int i = 0; i < 8; ++i) { downloads.last->complete(200, fixture.bytes(i)); }
+            QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+            QCOMPARE(model.selectedUpdateVersion(), entry.release.version); QCOMPARE(creates, 0); QVERIFY(f.network.sent.empty());
+            QVERIFY(!model.approve(model.approvedPlan() + 'x')); QCOMPARE(loads, 1);
+            QVERIFY(model.approve(model.approvedPlan())); QCOMPARE(loads, 2); QCOMPARE(creates, 0);
+            loaded(QString(64, mode == 2 ? u'b' : u'a'));
+            if (mode == 2) {
+                QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged);
+                QCOMPARE(inventory.sent.size(), std::size_t(1));
+            } else {
+                QCOMPARE(model.state(), AetherPDInstallationModel::State::ReadingInstallation);
+                QCOMPARE(inventory.sent.size(), std::size_t(2)); QCOMPARE(creates, 0); QVERIFY(f.network.sent.empty());
+                if (mode == 3) { model.cancel(); inventory.last->complete(200, installedRecord(entry)); }
+                else if (mode == 1) {
+                    auto changed = entry; changed.previousDigest = QByteArray(32, 'x');
+                    inventory.last->complete(200, installedRecord(changed));
+                    QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::NoMatchingRelease);
+                } else {
+                    inventory.last->complete(200, installedRecord(entry));
+                    QCOMPARE(creates, 1); QCOMPARE(f.network.sent.size(), std::size_t(1));
+                    QCOMPARE(f.network.sent[0].method, QNetworkAccessManager::PostOperation);
+                    model.cancel();
+                }
+            }
+            if (mode != 0) { QCOMPARE(creates, 0); QVERIFY(f.network.sent.empty()); }
+            QVERIFY(f.transfers.isEmpty()); QCOMPARE(f.archive.starts, 0);
+        }
+    }
+    void catalogueUpgradeRefusesUnknownInventoryAndMetadataBeforeInstallation()
+    {
+        for (int mode = 0; mode < 6; ++mode) {
+            Fixture f; AetherPDTest::PackageFixture fixture; AetherPDTest::Network inventory, downloads;
+            auto entry = upgradeEntry(fixture); if (mode == 5) { entry.candidateDigest = QByteArray(32, 'x'); }
+            int creates = 0;
+            AetherPDInstallationModel model(f.model, [](const QString&, QObject*, auto done) { done(QString(64, u'a')); },
+                [&](RadioModel&) -> std::unique_ptr<Coordinator> { ++creates; return {}; }, nullptr,
+                [&] { return std::make_unique<AetherPDPackageDownload>(downloads); }, {}, {}, AetherPDReleaseCatalogue({}, {entry}),
+                [&] { return std::make_unique<AetherPDInstallationRead>(inventory, [&] { return f.clock; }); });
+            QVERIFY(model.prepareSelectedUpdate(f.model.controlSession()));
+            if (mode == 0) { inventory.last->complete(401, {}); }
+            if (mode == 1) { inventory.last->complete(503, {}); }
+            if (mode == 2) {
+                auto other = entry; other.previousDigest = QByteArray(32, 'p'); inventory.last->complete(200, installedRecord(other));
+            }
+            if (mode == 3) {
+                auto object = QJsonDocument::fromJson(installedRecord(entry)).object(); object["serial"] = "different-radio";
+                inventory.last->complete(200, QJsonDocument(object).toJson());
+            }
+            if (mode == 4) {
+                RadioSetupControlTestAccess::replaceConnectionGeneration(f.model);
+                inventory.last->complete(200, installedRecord(entry));
+            }
+            if (mode == 5) {
+                inventory.last->complete(200, installedRecord(entry));
+                for (int i = 0; i < 8; ++i) { downloads.last->complete(200, fixture.bytes(i)); }
+            }
+            QCOMPARE(model.state(), AetherPDInstallationModel::State::Unavailable);
+            if (mode < 5) { QVERIFY(downloads.sent.empty()); }
+            QCOMPARE(creates, 0); QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+        }
+    }
+    void lateInventoryCredentialCannotEnterReplacementPreparation()
+    {
+        Fixture f; AetherPDTest::PackageFixture fixture; AetherPDTest::Network inventory;
+        const auto entry = upgradeEntry(fixture);
+        std::function<void(const QString&)> loaded;
+        AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto done) { loaded = std::move(done); }, {},
+            nullptr, {}, {}, {}, AetherPDReleaseCatalogue({}, {entry}),
+            [&] { return std::make_unique<AetherPDInstallationRead>(inventory, [&] { return f.clock; }); });
+        QVERIFY(model.prepareSelectedUpdate(f.model.controlSession())); const auto old = loaded;
+        model.cancel(); QVERIFY(model.prepareSelectedUpdate(f.model.controlSession()));
+        old(QString(64, u'b'));
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::LoadingInventoryCredential); QVERIFY(inventory.sent.empty());
+        loaded(QString(64, u'a')); QCOMPARE(model.state(), AetherPDInstallationModel::State::ReadingInstallation);
+        QCOMPARE(inventory.sent.size(), std::size_t(1)); model.cancel();
+    }
+    void inventoryCancelAndReentrantDeletionCannotStartDownload()
+    {
+        for (int mode = 0; mode < 3; ++mode) {
+            Fixture f; AetherPDTest::PackageFixture fixture; AetherPDTest::Network inventory, downloads;
+            const auto entry = upgradeEntry(fixture);
+            std::function<void(const QString&)> loaded;
+            auto model = std::make_unique<AetherPDInstallationModel>(f.model,
+                [&](const QString&, QObject*, auto done) { loaded = std::move(done); }, AetherPDInstallationModel::Factory{}, nullptr,
+                [&] { return std::make_unique<AetherPDPackageDownload>(downloads); }, AetherPDInstallationModel::TokenWriter{},
+                AetherPDInstallationModel::RecoveryServices{}, AetherPDReleaseCatalogue({}, {entry}),
+                [&] { return std::make_unique<AetherPDInstallationRead>(inventory, [&] { return f.clock; }); });
+            QVERIFY(model->prepareSelectedUpdate(f.model.controlSession()));
+            if (mode == 0) { model->cancel(); loaded(QString(64, u'a')); QVERIFY(inventory.sent.empty()); }
+            else {
+                loaded(QString(64, u'a'));
+                if (mode == 1) { model->cancel(); }
+                else {
+                    connect(model.get(), &AetherPDInstallationModel::changed, &f.model, [&] {
+                        if (model && model->state() == AetherPDInstallationModel::State::Downloading) { model.reset(); }
+                    });
+                }
+                inventory.last->complete(200, installedRecord(entry));
+                if (mode == 2) { QVERIFY(!model); }
+            }
+            QVERIFY(downloads.sent.empty()); QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+        }
     }
     void catalogueFirstDownloadMatchesHardwareAndSignedRelease()
     {

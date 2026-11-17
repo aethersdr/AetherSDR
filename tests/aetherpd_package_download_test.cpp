@@ -33,6 +33,34 @@ AetherPDFirstRelease firstRelease(const AetherPDTest::PackageFixture& fixture)
 class DownloadTest : public QObject {
     Q_OBJECT
 private slots:
+    void upgradeCatalogueBindsPredecessorKeyProfileModelAndFirmware()
+    {
+        AetherPDTest::PackageFixture fixture;
+        const AetherPDReleaseCatalogue::Upgrade entry{"FLEX-8600", release(fixture), QByteArray(32, 'p'), QByteArray(32, 'c')};
+        const AetherPDReleaseCatalogue catalogue({}, {entry}); QVERIFY(catalogue.valid());
+        aetherpd::InstallationObservation observed;
+        observed.profile = 1; observed.firmware = entry.release.firmware;
+        observed.selectedDigest = QString::fromLatin1(entry.previousDigest.toHex());
+        observed.selectedKey = QString::fromLatin1(fixture.trust.previousKey.toHex());
+        QVERIFY(catalogue.hasUpgrades("FLEX-8600", observed.firmware));
+        QVERIFY(catalogue.upgrade("FLEX-8600", observed));
+        QVERIFY(!catalogue.upgrade("FLEX-6300", observed));
+        for (int mode = 0; mode < 4; ++mode) {
+            auto bad = observed;
+            if (mode == 0) { bad.selectedDigest = QString(64, u'a'); }
+            if (mode == 1) { bad.selectedKey = QString(64, u'a'); }
+            if (mode == 2) { bad.profile = 2; }
+            if (mode == 3) { bad.firmware = "4.0.0.0"; }
+            QVERIFY(!catalogue.upgrade("FLEX-8600", bad));
+        }
+        auto duplicate = entry; duplicate.candidateDigest = QByteArray(32, 'd');
+        const AetherPDReleaseCatalogue ambiguous({}, {entry, duplicate}); QVERIFY(!ambiguous.valid());
+        QVERIFY(!ambiguous.hasUpgrades("FLEX-8600", observed.firmware));
+        QVERIFY(!ambiguous.upgrade("FLEX-8600", observed));
+        auto differentKey = entry; differentKey.release.trust.previousKey = QByteArray(32, 'k');
+        const AetherPDReleaseCatalogue keyed({}, {entry, differentKey}); QVERIFY(keyed.valid());
+        QVERIFY(keyed.upgrade("FLEX-8600", observed));
+    }
     void catalogueBindsExactModelFirmwareAndRetainsRecoveryReleases()
     {
         AetherPDTest::PackageFixture fixture;
