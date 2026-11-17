@@ -711,6 +711,9 @@ bool WdspChannel::setMode(Mode mode) noexcept
         const std::scoped_lock setupLock(g_setupMutex);
         if (m_config.direction == Direction::Receive) {
             SetRXAMode(m_channelId, wdspMode(mode));
+            if (m_config.fmRxPanelGain) {
+                SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, mode));
+            }
             // The squelch belongs to a mode family, so a mode change moves it
             // to the new family's stage and stops the old one — see
             // setSquelch() in the header.
@@ -1568,12 +1571,22 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
             return false;
         }
     }
-    if (config.rxPanelGain && (config.direction != Direction::Receive
-        || !std::isfinite(*config.rxPanelGain) || *config.rxPanelGain < 0.0)) {
-        setError(error, "WDSP RX panel gain must be finite, non-negative and receive-only");
-        return false;
+    for (const auto& gain : {config.rxPanelGain, config.fmRxPanelGain}) {
+        if (gain && (config.direction != Direction::Receive
+            || !std::isfinite(*gain) || *gain < 0.0)) {
+            setError(error, "WDSP RX panel gain must be finite, non-negative and receive-only");
+            return false;
+        }
     }
     return true;
+}
+
+double WdspChannel::rxPanelGainFor(const Config& config, Mode mode) noexcept
+{
+    if (mode == Mode::Fm && config.fmRxPanelGain) {
+        return *config.fmRxPanelGain;
+    }
+    return config.rxPanelGain.value_or(kWdspDefaultRxPanelGain);
 }
 
 int WdspChannel::wdspMode(Mode mode) noexcept
@@ -1727,6 +1740,9 @@ bool WdspChannel::open() noexcept
         }
         if (m_config.rxPanelGain) {  // a set field wins over the FM value above
             SetRXAPanelGain1(m_channelId, *m_config.rxPanelGain);
+        }
+        if (m_config.fmRxPanelGain) {
+            SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, m_config.mode));
         }
         if (m_config.wbfmReceive) {
             m_wbfm = std::make_unique<WbfmState>(m_config);
