@@ -86,6 +86,7 @@ private:
     QPointer<RadioModel> m_model;
     std::function<bool()> m_originalSessionCurrent;
     TailnetShimClient m_client;
+    QNetworkAccessManager* m_transactionNetwork{nullptr};
     QTimer* m_pollTimer{nullptr};
 
     QString m_radioSerial;

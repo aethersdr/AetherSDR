@@ -152,6 +152,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     : CanonWindow(tr("Remote Access (Tailscale)"), parent)
     , m_model(model)
     , m_client(nullptr, network)
+    , m_transactionNetwork(network)
     , m_native(native)
 {
     setObjectName(QStringLiteral("TailnetShimDialog"));
@@ -461,9 +462,21 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
 
     connect(&m_client, &TailnetShimClient::statusReceived, this,
             [this](const TailnetShimStatus& st) {
+        if (!current()) { return; }
         setBusy(false);
         showStatus(st);
         maybeSignInUnasked();
+    });
+    connect(&m_client, &TailnetShimClient::signedOut, this,
+            [this](const TailnetShimStatus& st) {
+        if (!current()) { return; }
+        m_signingIn = false;
+        if (!st.provisioned) {
+            m_adminToken.clear();
+            TailnetShimTokenStore::save(m_radioSerial, QString());
+        }
+        setBusy(false);
+        showStatus(st);
     });
     connect(&m_client, &TailnetShimClient::requestFailed,
             this, &TailnetShimDialog::onRequestFailed);
@@ -527,6 +540,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
             return;
         }
         m_lanReachable = false;
+        m_client.retirePendingReplies();
         m_pollTimer->stop();
         hideSignIn();
         setStatusLine(tr("Unavailable"), QStringLiteral("idle"));
@@ -905,12 +919,14 @@ void TailnetShimDialog::provision(const QString& authKey)
     }
     m_messageLabel->hide();
     hideSignIn();
-    auto* transaction = new TailnetShimClient(qApp);
+    m_client.retirePendingReplies();
+    const quint64 generation = m_client.replyGeneration();
+    auto* transaction = new TailnetShimClient(qApp, m_transactionNetwork);
     transaction->setRadioAddress(m_apiAddress);
     const QPointer<TailnetShimDialog> window(this);
     const QString serial = m_radioSerial;
     connect(transaction, &TailnetShimClient::provisioned, qApp,
-            [transaction, window, serial](const TailnetShimProvisionReply& reply) {
+            [transaction, window, serial, generation](const TailnetShimProvisionReply& reply) {
         // A token the keychain refuses is kept for this session only; the
         // log says why. The window doesn't: there is nothing to act on.
         TailnetShimTokenStore::save(serial, reply.adminToken, qApp,
@@ -920,15 +936,15 @@ void TailnetShimDialog::provision(const QString& authKey)
                          qPrintable(error));
             }
         });
-        if (window) {
+        if (window && window->m_client.replyGeneration() == generation) {
             window->onProvisioned(reply);
         }
         transaction->deleteLater();
     });
     connect(transaction, &TailnetShimClient::requestFailed, qApp,
-            [transaction, window](const QString& operation, const QString& message,
+            [transaction, window, generation](const QString& operation, const QString& message,
                                   bool unauthorized, const QByteArray& credential) {
-        if (window) {
+        if (window && window->m_client.replyGeneration() == generation) {
             window->onRequestFailed(operation, message, unauthorized, credential);
         }
         transaction->deleteLater();
@@ -945,6 +961,7 @@ void TailnetShimDialog::provision(const QString& authKey)
 void TailnetShimDialog::onProvisioned(const TailnetShimProvisionReply& reply)
 {
     if (!current()) { return; }
+    m_client.retirePendingReplies();
     m_adminToken = reply.adminToken;
     setBusy(false);
     showStatus(reply.status);
@@ -1202,14 +1219,7 @@ void TailnetShimDialog::signOut()
     // reopened (or Refresh), as the confirmation says.
     m_autoSignInTried = true;
     setBusy(true, tr("Disconnecting…"));
-    connect(&m_client, &TailnetShimClient::statusReceived, this,
-            [this](const TailnetShimStatus& st) {
-        if (!st.provisioned) {
-            m_adminToken.clear();
-            TailnetShimTokenStore::save(m_radioSerial, QString());
-            updateControls();
-        }
-    }, Qt::SingleShotConnection);
+    hideSignIn();
     m_client.signOut(m_adminToken);
 }
 

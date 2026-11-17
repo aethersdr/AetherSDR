@@ -310,6 +310,17 @@ TailnetShimClient::TailnetShimClient(QNetworkAccessManager& network, QObject* pa
     : TailnetShimClient(parent, &network)
 {}
 
+void TailnetShimClient::retirePendingReplies()
+{
+    ++m_replyGeneration;
+    const QPointer<QNetworkReply> status = m_statusReply;
+    const QPointer<QNetworkReply> login = m_loginReply;
+    m_statusReply.clear();
+    m_loginReply.clear();
+    if (status) { status->abort(); }
+    if (login) { login->abort(); }
+}
+
 QNetworkReply* TailnetShimClient::send(const QString& method, const QString& path,
                                        const QByteArray& body, const QString& adminToken)
 {
@@ -340,12 +351,13 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
     const QByteArray authorization = reply->request().rawHeader("Authorization");
     const QByteArray credential = authorization.isEmpty() ? QByteArray{}
         : QCryptographicHash::hash(authorization, QCryptographicHash::Sha256);
+    const quint64 generation = m_replyGeneration;
     connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64) {
         if (received > kMaxReplyBytes) {
             reply->abort();
         }
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, operation, credential] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, operation, credential, generation] {
         if (reply == m_statusReply) {
             m_statusReply = nullptr;
         }
@@ -353,6 +365,9 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
             m_loginReply = nullptr;
         }
         reply->deleteLater();
+        if (generation != m_replyGeneration) {
+            return;
+        }
         const int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QByteArray body = reply->readAll();
         if (code == 0) {
@@ -394,7 +409,11 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
             emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false, credential);
             return;
         }
-        emit statusReceived(*st);
+        if (operation == QLatin1String("signout")) {
+            emit signedOut(*st);
+        } else {
+            emit statusReceived(*st);
+        }
     });
 }
 
@@ -421,6 +440,7 @@ void TailnetShimClient::provision(const QString& authKey, const QString& hostnam
                                   const QStringList& allow, const QStringList& routes,
                                   bool shareDiscovered, const QString& adminToken)
 {
+    retirePendingReplies();
     handle(send(QStringLiteral("POST"), QStringLiteral("/v1/provision"),
                 tailnetshim::provisionBody(authKey, hostname, allow, routes, shareDiscovered),
                 adminToken),
@@ -430,6 +450,7 @@ void TailnetShimClient::provision(const QString& authKey, const QString& hostnam
 void TailnetShimClient::setSharing(const QStringList& routes, bool shareDiscovered,
                                    const QString& adminToken)
 {
+    retirePendingReplies();
     handle(send(QStringLiteral("PUT"), QStringLiteral("/v1/routes"),
                 tailnetshim::sharingBody(routes, shareDiscovered), adminToken),
            QStringLiteral("sharing"));
@@ -437,6 +458,7 @@ void TailnetShimClient::setSharing(const QStringList& routes, bool shareDiscover
 
 void TailnetShimClient::signOut(const QString& adminToken)
 {
+    retirePendingReplies();
     handle(send(QStringLiteral("POST"), QStringLiteral("/v1/signout"), {}, adminToken),
            QStringLiteral("signout"));
 }

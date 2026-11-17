@@ -63,13 +63,45 @@ int main(int argc, char** argv)
         const QPointer<AetherPDTest::Reply> old = network.last;
         client.setSharing({}, false, QStringLiteral("new-test-token"));
         old->complete(401, R"({"error":"rejected"})");
+        ok &= expect(failures == 0 && old->aborted,
+                     "a new control retires the earlier credential's login reply");
+        client.fetchLogin(QStringLiteral("new-test-token"));
+        network.last->complete(401, R"({"error":"rejected"})");
         ok &= expect(failures == 1
-                     && rejected == tailnetshim::credentialFingerprint(QStringLiteral("old-test-token"))
-                     && rejected != tailnetshim::credentialFingerprint(QStringLiteral("new-test-token"))
-                     && rejected.size() == 32 && !rejected.contains("old-test-token"),
-                     "late failure carries a digest of its own bearer credential");
+                     && rejected == tailnetshim::credentialFingerprint(QStringLiteral("new-test-token"))
+                     && rejected != tailnetshim::credentialFingerprint(QStringLiteral("old-test-token"))
+                     && rejected.size() == 32 && !rejected.contains("new-test-token"),
+                     "current failure carries a digest of its own bearer credential");
         ok &= expect(tailnetshim::credentialFingerprint({}).isEmpty(),
                      "public requests have no credential fingerprint");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimClient client(network);
+        client.setRadioAddress(QHostAddress(QStringLiteral("192.0.2.1")));
+        int statusReplies = 0;
+        int signOutReplies = 0;
+        int failures = 0;
+        QObject::connect(&client, &TailnetShimClient::statusReceived, &client,
+                         [&](const TailnetShimStatus&) { ++statusReplies; });
+        QObject::connect(&client, &TailnetShimClient::signedOut, &client,
+                         [&](const TailnetShimStatus&) { ++signOutReplies; });
+        QObject::connect(&client, &TailnetShimClient::requestFailed, &client,
+                         [&](const QString&, const QString&, bool, const QByteArray&) { ++failures; });
+        client.setSharing({}, false, QStringLiteral("same-owner-token"));
+        const QPointer<AetherPDTest::Reply> old = network.last;
+        client.signOut(QStringLiteral("same-owner-token"));
+        const QPointer<AetherPDTest::Reply> signOut = network.last;
+        old->complete(200, R"({"version":"0.5.0","provisioned":true,"state":"running"})");
+        ok &= expect(statusReplies == 0 && signOutReplies == 0 && failures == 0,
+                     "late mutating reply cannot publish into a later same-token operation");
+        signOut->complete(200, R"({"version":"0.5.0","provisioned":false,"state":"unprovisioned"})");
+        ok &= expect(signOutReplies == 1 && statusReplies == 0,
+                     "confirmed sign-out has an operation-specific response");
+        client.fetchStatus();
+        network.last->complete(200, R"({"version":"0.5.0","provisioned":false,"state":"unprovisioned"})");
+        ok &= expect(signOutReplies == 1 && statusReplies == 1,
+                     "public status cannot impersonate a sign-out response");
     }
 
     const QByteArray running = R"({"version":"0.2.0","provisioned":true,"state":"running",

@@ -8,7 +8,10 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QLabel>
+#include <QPushButton>
+#include <QTimer>
 #include <iostream>
+#include <memory>
 
 namespace AetherSDR {
 class TailnetShimDialogTestAccess {
@@ -17,6 +20,7 @@ public:
     {
         // The null-model constructor never subscribes or reads credentials.
         dialog.m_lanReachable = true;
+        dialog.m_apiAddress = QHostAddress(QStringLiteral("192.0.2.1"));
         dialog.m_originalSessionCurrent = [] { return true; };
         dialog.m_radioSerial = QStringLiteral("TAILNET-REPLY-TEST");
         dialog.m_adminToken = token;
@@ -50,6 +54,36 @@ public:
     {
         dialog.m_client.setRadioAddress(QHostAddress(QStringLiteral("192.0.2.1")));
         dialog.m_client.fetchLogin(dialog.m_adminToken);
+    }
+    static void beginStatus(TailnetShimDialog& dialog)
+    {
+        dialog.m_client.setRadioAddress(QHostAddress(QStringLiteral("192.0.2.1")));
+        dialog.m_client.fetchStatus();
+    }
+    static void beginProvision(TailnetShimDialog& dialog)
+    {
+        dialog.m_autoSignInTried = true;
+        dialog.signInWithQr();
+    }
+    static bool signOut(TailnetShimDialog& dialog)
+    {
+        bool confirmed = false;
+        QObject callbackLifetime;
+        QTimer::singleShot(0, &callbackLifetime, [&] {
+            QPushButton* button = dialog.findChild<QPushButton*>(QStringLiteral("tsConfirmDisconnect"));
+            if (button) {
+                confirmed = true;
+                button->click();
+            } else if (QWidget* modal = QApplication::activeModalWidget()) {
+                modal->close();
+            }
+        });
+        dialog.signOut();
+        return confirmed;
+    }
+    static QString state(const TailnetShimDialog& dialog)
+    {
+        return dialog.m_status ? dialog.m_status->state : QString();
     }
     static void provisioned(TailnetShimDialog& dialog, const QString& token)
     {
@@ -104,6 +138,120 @@ int main(int argc, char** argv)
                "test links the session-only credential store")) { return 1; }
     bool ok = true;
     for (bool managed : {false, true}) {
+        for (bool replaceToken : {false, true}) {
+            AetherPDTest::Network network;
+            TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+            Access::prepare(dialog, QStringLiteral("old-test-token"), managed);
+            Access::beginLogin(dialog);
+            const QPointer<AetherPDTest::Reply> old = network.last;
+            const QString next = replaceToken ? QStringLiteral("new-test-token") : QStringLiteral("old-test-token");
+            Access::provisioned(dialog, next);
+            old->complete(200, R"({"state":"needs_login","auth_url":"https://example.invalid/obsolete-code"})");
+            ok &= check(Access::token(dialog) == next && savedToken() == next
+                            && Access::authUrl(dialog) == QStringLiteral("https://example.invalid/replacement-code"),
+                        "successful old login cannot replace a new QR, including unchanged owner token");
+        }
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("owner-test-token"), true);
+        Access::beginStatus(dialog);
+        const QPointer<AetherPDTest::Reply> old = network.last;
+        Access::provisioned(dialog, QStringLiteral("owner-test-token"));
+        old->complete(200, R"({"version":"0.5.0","provisioned":true,"state":"running"})");
+        ok &= check(Access::state(dialog) == QStringLiteral("needs_login")
+                        && Access::authUrl(dialog) == QStringLiteral("https://example.invalid/replacement-code"),
+                    "old public status cannot overwrite the completed rejoin state");
+    }
+    const QByteArray local = QByteArray(R"({"version":"0.5.0","provisioned":true,"state":"local","managed_owner_version":1,"installation_id":")")
+        + QByteArray(64, 'a') + R"("})";
+    const QByteArray pending = QByteArray(R"({"version":"0.5.0","provisioned":true,"state":"needs_login","managed_owner_version":1,"installation_id":")")
+        + QByteArray(64, 'a') + R"("})";
+    {
+        AetherPDTest::Network network;
+        std::unique_ptr<TailnetShimDialog> dialog = std::make_unique<TailnetShimDialog>(nullptr, false, nullptr, &network);
+        Access::prepare(*dialog, QStringLiteral("old-test-token"), false);
+        Access::beginProvision(*dialog);
+        const QPointer<AetherPDTest::Reply> reply = network.last;
+        dialog.reset();
+        reply->complete(200, R"({"admin_token":"new-test-token","status":{"version":"0.5.0","provisioned":true,"state":"running"}})");
+        ok &= check(savedToken() == QStringLiteral("new-test-token"),
+                    "closing the window still saves an issued legacy credential without touching its deleted UI");
+    }
+    for (bool success : {false, true}) {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("owner-test-token"), true);
+        Access::beginProvision(dialog);
+        const QPointer<AetherPDTest::Reply> old = network.last;
+        ok &= check(old && old->request().url().path() == QStringLiteral("/v1/provision"),
+                    "application-owned provision uses injected transport");
+        ok &= check(Access::signOut(dialog), "later operator confirms cancel");
+        network.last->complete(200, local);
+        const QString before = Access::message(dialog);
+        old->complete(success ? 200 : 401, success
+            ? QByteArray(R"({"admin_token":"owner-test-token","auth_url":"https://example.invalid/obsolete-code","status":)") + pending + '}'
+            : QByteArray(R"({"error":"rejected"})"));
+        ok &= check(Access::state(dialog) == QStringLiteral("local") && Access::authUrl(dialog).isEmpty()
+                        && !Access::signingIn(dialog)
+                        && Access::token(dialog) == QStringLiteral("owner-test-token")
+                        && savedToken() == QStringLiteral("owner-test-token")
+                        && Access::message(dialog) == before && !Access::busy(dialog),
+                    "late application-owned provision reply cannot undo a newer same-owner cancel");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("owner-test-token"), true);
+        Access::beginLogin(dialog);
+        const QPointer<AetherPDTest::Reply> old = network.last;
+        ok &= check(Access::signOut(dialog), "operator confirms managed sign-out");
+        network.last->complete(200, local);
+        old->complete(200, R"({"state":"needs_login","auth_url":"https://example.invalid/obsolete-code"})");
+        ok &= check(Access::state(dialog) == QStringLiteral("local") && Access::authUrl(dialog).isEmpty()
+                        && Access::token(dialog) == QStringLiteral("owner-test-token")
+                        && savedToken() == QStringLiteral("owner-test-token"),
+                    "old same-token login cannot resurrect a QR after managed sign-out");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("legacy-test-token"), false);
+        Access::beginStatus(dialog);
+        const QPointer<AetherPDTest::Reply> old = network.last;
+        ok &= check(Access::signOut(dialog), "operator confirms legacy sign-out");
+        const QPointer<AetherPDTest::Reply> signOut = network.last;
+        old->complete(200, R"({"version":"0.5.0","provisioned":true,"state":"running"})");
+        ok &= check(Access::busy(dialog), "old status cannot finish pending sign-out");
+        signOut->complete(200, R"({"version":"0.5.0","provisioned":false,"state":"unprovisioned"})");
+        ok &= check(Access::token(dialog).isEmpty() && savedToken().isEmpty() && !Access::busy(dialog),
+                    "only confirmed sign-out response retires the legacy credential");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("legacy-test-token"), false);
+        ok &= check(Access::signOut(dialog), "operator confirms rejected legacy sign-out");
+        network.last->complete(401, R"({"error":"rejected"})");
+        Access::provisioned(dialog, QStringLiteral("new-test-token"));
+        Access::beginStatus(dialog);
+        network.last->complete(200, R"({"version":"0.5.0","provisioned":false,"state":"unprovisioned"})");
+        ok &= check(Access::token(dialog) == QStringLiteral("new-test-token")
+                        && savedToken() == QStringLiteral("new-test-token"),
+                    "failed sign-out cannot leave a credential-deleting observer on later public status");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("owner-test-token"), true);
+        Access::beginStatus(dialog);
+        Access::retire(dialog);
+        network.last->complete(200, local);
+        ok &= check(Access::busy(dialog) && Access::token(dialog) == QStringLiteral("owner-test-token"),
+                    "retired original connection ignores successful status before changing busy state");
+    }
+    for (bool managed : {false, true}) {
         for (bool unauthorized : {false, true}) {
             for (const QString& operation : {QStringLiteral("login"), QStringLiteral("provision"),
                                              QStringLiteral("sharing"), QStringLiteral("signout")}) {
@@ -128,10 +276,10 @@ int main(int argc, char** argv)
         const QPointer<AetherPDTest::Reply> old = network.last;
         Access::provisioned(dialog, QStringLiteral("new-test-token"));
         old->complete(401, R"({"error":"revoked"})");
-        ok &= check(Access::token(dialog) == QStringLiteral("new-test-token")
+        ok &= check(old && old->aborted && Access::token(dialog) == QStringLiteral("new-test-token")
                         && savedToken() == QStringLiteral("new-test-token")
                         && Access::authUrl(dialog) == QStringLiteral("https://example.invalid/replacement-code")
-                        && Access::signingIn(dialog) && network.sent.size() == 1,
+                        && Access::signingIn(dialog),
                     "real delayed HTTP401 after provisioning preserves the replacement token and QR code");
     }
     {

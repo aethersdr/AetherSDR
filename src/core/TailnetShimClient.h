@@ -147,6 +147,10 @@ public:
     TailnetShimClient(QNetworkAccessManager& network, QObject* parent = nullptr);
 
     void setRadioAddress(const QHostAddress& address) { m_address = address; }
+    // Retire earlier observations when a control changes remote identity,
+    // including managed operations that retain the same owner credential.
+    void retirePendingReplies();
+    [[nodiscard]] quint64 replyGeneration() const { return m_replyGeneration; }
 
     void fetchStatus();
     void fetchLogin(const QString& adminToken);
@@ -158,6 +162,7 @@ public:
 
 signals:
     void statusReceived(const AetherSDR::TailnetShimStatus& status);
+    void signedOut(const AetherSDR::TailnetShimStatus& status);
     void provisioned(const AetherSDR::TailnetShimProvisionReply& reply);
     void loginReceived(const AetherSDR::TailnetShimLogin& login);
     // operation is "status", "login", "provision", "sharing" or "signout". unauthorized
@@ -175,6 +180,7 @@ private:
     QHostAddress m_address;
     QPointer<QNetworkReply> m_statusReply;   // the status request in flight, if any
     QPointer<QNetworkReply> m_loginReply;    // the login request in flight, if any
+    quint64 m_replyGeneration{0};
 };
 
 }  // namespace AetherSDR

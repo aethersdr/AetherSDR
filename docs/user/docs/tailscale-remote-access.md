@@ -257,6 +257,10 @@ device sharing, disconnecting, or joining again.
 
 A rejoin can replace a legacy container's admin token. A delayed rejection of
 the older token does not remove the replacement saved on this computer.
+Starting a rejoin or disconnect retires older status and sign-in replies. A
+delayed reply cannot restore an obsolete QR code or complete the new operation.
+Only the response to **Disconnect** clears a legacy container's saved token;
+an unrelated status refresh does not.
 
 - The first setup is open to anyone on the radio's local network, the same
   trust the radio's own API uses there. So is a sign-in that was started but
