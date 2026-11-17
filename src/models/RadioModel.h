@@ -1073,6 +1073,10 @@ public:
     bool setTxTimeoutSettings(const TxTimeoutSettings& settings);
     // True after an expiry until every input has released and the radio is idle.
     bool txTimeoutLatched() const { return m_txTimeout.latched(); }
+    // An input's explicit off (TCI trx false, CAT RX, rigctl T 0, a footswitch
+    // edge): always that producer letting go of the time-out latch, whatever
+    // became of its request. Any request of the producer will do. Keys nothing.
+    void noteTxInputReleased(const TxCoordinator::Request& anyRequestOfProducer);
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     // The network_mtu to send for this session: the NetworkMtu setting (or

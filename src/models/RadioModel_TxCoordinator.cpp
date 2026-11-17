@@ -213,6 +213,7 @@ void RadioModel::connectSerialPttInput(SerialPortController* source)
         if (active) {
             (void)requestProducerPttOn(input, TransmitModel::PttSource::Mox);
         } else {
+            noteTxInputReleased(input);
             requestProducerPttOff(input, TransmitModel::PttSource::Mox);
         }
     });

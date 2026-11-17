@@ -221,6 +221,16 @@ void RadioModel::noteTxTimeoutRelease(const TxCoordinator::Request& request)
     publishTxTimeoutLatch(before);
 }
 
+void RadioModel::noteTxInputReleased(const TxCoordinator::Request& anyRequestOfProducer)
+{
+    if (QThread::currentThread() != thread() || m_txTimeoutStopping) {
+        return;
+    }
+    const bool before = m_txTimeout.latched();
+    m_txTimeout.noteRelease(anyRequestOfProducer.producerKey());
+    publishTxTimeoutLatch(before);
+}
+
 void RadioModel::noteTxTimeoutRefused(const TxCoordinator::Request& request)
 {
     // Scoped to the refused input's own handling: the list is cleared when

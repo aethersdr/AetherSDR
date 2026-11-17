@@ -2555,10 +2555,11 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         txRequest = state->pttRequest;
         daxPermit = state->pttDaxPermit;
         wantsAudio = state->pttWantsAudio;
-        if (!request.transmitting && !txRequest.producerKey()) {
-            // An off after a refusal retired the request still names this
-            // client's producer, so the model sees the input let go.
-            txRequest = client->ingressRequest ? *client->ingressRequest : state->txProducer.request();
+        if (!request.transmitting && m_model) {
+            // The client's explicit off is its release of the time-out latch,
+            // whatever became of its request: refused, retired or deferred.
+            // TciIoWorker::captureTextInputs() captures no request for an off.
+            m_model->noteTxInputReleased(state->txProducer.request());
         }
         if (!request.transmitting) {
             state->pttRequest = {};

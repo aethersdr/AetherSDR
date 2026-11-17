@@ -2999,6 +2999,43 @@ void txTimeoutLatchThroughProducers()
         TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
         drain();
     }
+    {
+        // d276: through the native IO path, with TciServer's real 1250 ms
+        // refusal barrier. Re-sends outpace the barrier, so one is still
+        // deferred when the off arrives; the off must release the latch and
+        // the deferred on must never key.
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        const auto send = [&](const char* text) {
+            TxOperationIntegrationTestAccess::nativeTciText(server, socket, QString::fromLatin1(text));
+            drain();
+            AetherTest::pumpFor(20);
+        };
+        send("trx:0,true;");
+        check(f.commands.contains("mox:on"), "TOT/TCI native: the client keys through the IO path");
+        expire(f, now);
+        f.commands.clear();
+        send("trx:0,true;");   // refused; arms the refusal barrier
+        send("trx:0,true;");   // deferred behind the barrier
+        AetherTest::pumpFor(400);
+        send("trx:0,true;");   // still deferred
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI native: re-sends inside the barrier are held");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(),
+              "TOT/TCI native: an off while a re-send is still deferred releases the latch (d276)");
+        AetherTest::pumpFor(1400);   // the barrier ends and drains
+        check(!f.commands.contains("mox:on"),
+              "TOT/TCI native: the deferred re-send never keys after the off");
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.commands.contains("mox:on"), "TOT/TCI native: a new trx true after the off keys");
+        send("trx:0,false;");
+    }
 #endif
     {
         Fixture f;
@@ -3026,6 +3063,20 @@ void txTimeoutLatchThroughProducers()
         check(f.commands.contains("mox:on"), "TOT/rigctl: a new T 1 after the release keys again");
         (void)cat.handleLine("T 0");
         drain();
+        // A refused T 1 and its T 0 handled in one turn: the off still releases.
+        (void)cat.handleLine("T 1");
+        drain();
+        expire(f, now);
+        (void)cat.handleLine("T 1");
+        (void)cat.handleLine("T 0");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/rigctl: T 0 queued behind a refused T 1 releases");
+        f.commands.clear();
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: and the next T 1 keys");
+        (void)cat.handleLine("T 0");
+        drain();
     }
     {
         Fixture f;
@@ -3051,6 +3102,19 @@ void txTimeoutLatchThroughProducers()
         (void)cat.processCommand("TX");
         drain();
         check(f.commands.contains("mox:on"), "TOT/SmartCAT: a new TX after the release keys again");
+        (void)cat.processCommand("RX");
+        drain();
+        (void)cat.processCommand("TX");
+        drain();
+        expire(f, now);
+        (void)cat.processCommand("TX");   // refused
+        (void)cat.processCommand("RX");   // same turn, same request
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/SmartCAT: RX right after a refused TX releases");
+        f.commands.clear();
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: and the next TX keys");
         (void)cat.processCommand("RX");
         drain();
     }
