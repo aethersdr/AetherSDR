@@ -83,6 +83,16 @@ static int start_session_launch(const char* id,uint32_t gui,struct pd_iq_selecti
 #endif
     close(installation);return result;
 }
+static int start_session_request(int channel)
+{
+#ifdef PD_FIXED_RUNTIME_DIRECTORY
+    if(!pd_service_session_prepare()){return 6;}
+#endif
+    unsigned char frame[kStartSelectedSize];char id[37];uint32_t gui=0;struct pd_iq_selection selection;
+    int size=start_read(channel,frame);
+    if(!size || !start_frame(frame,(size_t)size,id,&gui,&selection)){return 5;}
+    return start_session_launch(id,gui,selection);
+}
 #ifndef PD_START_MAIN
 #define PD_START_MAIN main
 #endif
@@ -96,8 +106,5 @@ int PD_START_MAIN(int argc,char** argv)
     if(shim<0){return 3;}
     int admitted=start_peer(0,shim);close(shim);
     if(!admitted){return 4;}
-    unsigned char frame[kStartSelectedSize];char id[37];uint32_t gui=0;struct pd_iq_selection selection;
-    int size=start_read(0,frame);
-    if(!size || !start_frame(frame,(size_t)size,id,&gui,&selection)){return 5;}
-    return start_session_launch(id,gui,selection);
+    return start_session_request(0);
 }

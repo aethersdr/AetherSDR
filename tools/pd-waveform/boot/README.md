@@ -2379,3 +2379,29 @@ installed units. It proves manager timeout behavior and voluntary guardian
 release, not installed-session reconnect recovery. The integrated package,
 actual reconnect case and actual FLEX-6300 service-manager support remain
 unqualified until separately recorded.
+
+### Empty failed session records
+
+The fixed socket entry verifies its peer and then prepares its own live service
+instance before reading the bounded request. It partitions at most 32 live or
+populated session records and a separate batch of at most 32 empty failed records.
+Inactive empty records do not consume live slots. The 64 KiB metadata limit and
+bounded duplicate/name/policy validation remain enforced.
+
+Only exact fixed-template records with no MainPID, ControlPID or ControlGroup
+qualify for collection. A bounded host `/proc` scan must independently find no
+member in any selected unit or descendant cgroup. The helper rereads applied
+metadata before issuing `systemctl reset-failed` for explicit selected names,
+then verifies those records left the failed state without becoming populated.
+The command is never issued without names. It changes failure bookkeeping;
+it does not stop, restart or signal session processes. See the
+[systemctl command reference](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html).
+
+Other live or populated guardians remain outside the collection batch. A state
+change or incomplete kernel/manager evidence refuses collection. Reset and
+postcondition failures refuse startup. The same fixed collector runs before
+upgrade quiescence; normal session policy is checked again after request parsing
+and before installation or IQ resources. Journal history is retained. No new
+daemon, unit option, caller-supplied unit selector or general command endpoint
+is introduced. Installed qualification and actual FLEX-6300 compatibility remain
+separate gates.

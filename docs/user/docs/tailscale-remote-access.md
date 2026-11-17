@@ -751,6 +751,10 @@ An update requires confirmed AetherPD cleanup. A **Stop AetherPD** acknowledgmen
 alone is insufficient: wait until the service confirms it has stopped. An uncertain
 cleanup result keeps the session owned and prevents the update from starting.
 
+The fixed helpers clear obsolete failed AetherPD session records after checking
+that they are empty. Running sessions and uncertain cleanup remain protected.
+This housekeeping is included in the installation plan shown before approval.
+
 **Prepare first installation** is a separate development-build action for a
 radio without a managed AetherPD installation. It is dimmed unless the build
 contains a first-install package for the connected firmware, and while a saved

@@ -8,8 +8,9 @@
 #endif
 #include <assert.h>
 static int installation=-1,launches,installation_calls;
-static int hold_policy=1,hold_policy_calls;
+static int hold_policy=1,hold_policy_calls,prepare=1,prepare_calls;
 static struct pd_iq_selection launched;
+int pd_service_session_prepare(void){++prepare_calls;return prepare;}
 int pd_service_session_policy(void){++hold_policy_calls;return hold_policy;}
 int pd_start_test_installation(void){++installation_calls;return installation;}
 int pd_start_test_launch(const char* id,uint32_t gui,int control,int lease,struct pd_iq_selection selection)
@@ -80,6 +81,13 @@ int main(void)
     }
     assert(!socketpair(AF_UNIX,SOCK_STREAM,0,pair));assert(write(pair[1],"PDSTART9",8)==8);assert(!start_read(pair[0],received));close(pair[0]);close(pair[1]);
     assert(!socketpair(AF_UNIX,SOCK_STREAM,0,pair));alarm(3);assert(!start_read(pair[0],received));alarm(0);close(pair[0]);close(pair[1]);
+    assert(!socketpair(AF_UNIX,SOCK_STREAM,0,pair));
+    before=installation_calls;prepare=0;
+    assert(start_session_request(pair[0])==6 && prepare_calls==1 && installation_calls==before);
+    prepare=1;
+    assert(write(pair[1],"PDSTART9",8)==8);
+    assert(start_session_request(pair[0])==5 && prepare_calls==2 && installation_calls==before);
+    close(pair[0]);close(pair[1]);
     puts("PASS: bounded selected/legacy startup, selection propagation, pre-transaction refusal, fragments, truncation and deadline");
     return 0;
 }

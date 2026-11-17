@@ -159,7 +159,7 @@ static int service_parse(unsigned kind,const char* name,const unsigned char* byt
             (kind!=PD_SERVICE_BOOT && (!result->pid || !*values[7])) || (kind==PD_SERVICE_BOOT && result->pid))){return 0;}
     }
     if(quiet && (result->pid || (strcmp(values[4],"dead") && strcmp(values[4],"failed")))){return 0;}
-    result->active=active;result->quiet=quiet;return 1;
+    result->active=active;result->quiet=quiet;result->failed=!strcmp(values[3],"failed");return 1;
 }
 int pd_service_parse(unsigned kind,const unsigned char* bytes,size_t size,struct pd_service_state* result)
 {
@@ -189,22 +189,35 @@ int pd_service_sessions_parse(const unsigned char* bytes,size_t size,struct pd_s
     memset(sessions,0,sizeof(*sessions));if(!size){return 1;}
     if(size>=kServiceMax || bytes[size-1]!='\n' || memchr(bytes,0,size)){return 0;}
     char text[kServiceMax];memcpy(text,bytes,size);text[size]=0;char* block=text;
+    char seen[PD_SERVICE_SESSIONS_MAX*3][96];unsigned records=0;int managed=-1,hold=-1;
     while(*block){
         char* end=strstr(block,"\n\n");size_t length=end?(size_t)(end-block)+1:strlen(block);
-        if(sessions->count==PD_SERVICE_SESSIONS_MAX || !length){return 0;}
+        if(records==PD_SERVICE_SESSIONS_MAX*3 || !length){return 0;}
         char* id=!strncmp(block,"Id=",3)?block:strstr(block,"\nId=");
         if(!id || (size_t)(id-block)>=length){return 0;}if(*id=='\n'){++id;}id+=3;
         char* last=strchr(id,'\n');if(!last || (size_t)(last-block)>=length || last-id>=96){return 0;}
-        char* name=sessions->names[sessions->count];memcpy(name,id,(size_t)(last-id));name[last-id]=0;
+        char* name=seen[records];memcpy(name,id,(size_t)(last-id));name[last-id]=0;
         if(!service_instance(name)){return 0;}
-        for(unsigned i=0;i<sessions->count;++i){if(!strcmp(name,sessions->names[i])){return 0;}}
-        if(!service_parse(PD_SERVICE_SESSION,name,(const unsigned char*)block,length,&sessions->states[sessions->count])){return 0;}
-        if(sessions->count && (sessions->states[sessions->count].managed_startup!=sessions->states[0].managed_startup ||
-            sessions->states[sessions->count].guardian_hold!=sessions->states[0].guardian_hold)){return 0;}
-        ++sessions->count;if(!end){break;}block=end+2;
+        for(unsigned i=0;i<records;++i){if(!strcmp(name,seen[i])){return 0;}}
+        struct pd_service_state state;
+        if(!service_parse(PD_SERVICE_SESSION,name,(const unsigned char*)block,length,&state)){return 0;}
+        if(records && (state.managed_startup!=managed || state.guardian_hold!=hold)){return 0;}
+        managed=state.managed_startup;hold=state.guardian_hold;++records;
+        sessions->record_count=records;sessions->managed_startup=managed;sessions->guardian_hold=hold;
+        if(state.quiet && !state.pid && !state.populated){
+            if(state.failed){
+                if(sessions->retire_count==PD_SERVICE_SESSIONS_MAX){return 0;}
+                strcpy(sessions->retire_names[sessions->retire_count++],name);
+            }
+        }else{
+            if(sessions->count==PD_SERVICE_SESSIONS_MAX){return 0;}
+            strcpy(sessions->names[sessions->count],name);sessions->states[sessions->count++]=state;
+        }
+        if(!end){break;}block=end+2;
     }
     return 1;
 }
+
 static int service_directory(int fd)
 {
     struct stat st;return fd>=0 && !fstat(fd,&st) && S_ISDIR(st.st_mode) && st.st_uid==service_owner() && !(st.st_mode&022);
@@ -333,7 +346,7 @@ static int service_sessions(struct pd_service_sessions* sessions)
     char* const args[]={"/usr/bin/systemctl","show","--all","aetherpd-start@*.service",(char*)kProperties,NULL};
     int layout=service_file_layout();
     if(layout<0 || !service_command(args,bytes,&size,8000) || !pd_service_sessions_parse(bytes,size,sessions)){return 0;}
-    for(unsigned i=0;i<sessions->count;++i){if(sessions->states[i].managed_startup!=(layout&1) || sessions->states[i].guardian_hold!=(layout>>1)){return 0;}}
+    if(sessions->record_count && (sessions->managed_startup!=(layout&1) || sessions->guardian_hold!=(layout>>1))){return 0;}
     return service_file_layout()==layout;
 }
 int pd_service_session_policy(void)
@@ -346,18 +359,21 @@ int pd_service_session_policy(void)
     }
     return current==1 && service_file_layout()==layout;
 }
-static int service_owned_path(const char* path,int sessions_only)
+static int service_owned_path(const char* path,int sessions_only,const struct pd_service_sessions* retired)
 {
-    for(unsigned i=0;!sessions_only && i<3;++i){
+    for(unsigned i=0;!sessions_only && !retired && i<3;++i){
         char expected[128];snprintf(expected,sizeof(expected),"/system.slice/%s",kNames[i]);size_t n=strlen(expected);
         if(!strncmp(path,expected,n) && (!path[n] || path[n]=='/')){return 1;}
     }
     const char prefix[]="/system.slice/system-aetherpd\\x2dstart.slice/";
     if(strncmp(path,prefix,sizeof(prefix)-1)){return 0;}
     const char* name=path+sizeof(prefix)-1;const char* end=strchr(name,'/');size_t n=end?(size_t)(end-name):strlen(name);
-    if(n>=96){return 0;}char unit[96];memcpy(unit,name,n);unit[n]=0;return service_instance(unit);
+    if(n>=96){return 0;}char unit[96];memcpy(unit,name,n);unit[n]=0;
+    if(!service_instance(unit)){return 0;}if(!retired){return 1;}
+    for(unsigned i=0;i<retired->retire_count;++i){if(!strcmp(unit,retired->retire_names[i])){return 1;}}
+    return 0;
 }
-static int service_cgroup(const unsigned char* bytes,size_t size,int sessions_only)
+static int service_cgroup(const unsigned char* bytes,size_t size,int sessions_only,const struct pd_service_sessions* retired)
 {
     if(!size || size>=8192 || bytes[size-1]!='\n' || memchr(bytes,0,size)){return -1;}
     char text[8192];memcpy(text,bytes,size);text[size]=0;char* line=text;int owned=0;
@@ -367,14 +383,14 @@ static int service_cgroup(const unsigned char* bytes,size_t size,int sessions_on
         if(!first || !second || first==line || second[1]!='/'){return -1;}
         *first=*second=0;
         for(const char* p=line;*p;++p){if(*p<'0' || *p>'9'){return -1;}}
-        if((!strcmp(line,"0") && !first[1]) || !strcmp(first+1,"name=systemd")){owned|=service_owned_path(second+1,sessions_only);}
+        if((!strcmp(line,"0") && !first[1]) || !strcmp(first+1,"name=systemd")){owned|=service_owned_path(second+1,sessions_only,retired);}
         line=end+1;
     }
     return owned;
 }
 int pd_service_owned_cgroup(const unsigned char* bytes,size_t size)
 {
-    return service_cgroup(bytes,size,0);
+    return service_cgroup(bytes,size,0,NULL);
 }
 static int service_proc_read(int directory,unsigned char bytes[8192],size_t* size)
 {
@@ -387,7 +403,7 @@ static int service_proc_read(int directory,unsigned char bytes[8192],size_t* siz
     }
     close(fd);return ok && *size<8192?1:-1;
 }
-static int service_processes_quiet(int sessions_only)
+static int service_processes_quiet(int sessions_only,const struct pd_service_sessions* retired)
 {
 #ifndef PD_SERVICE_TEST
     if(getuid()!=0 || geteuid()!=0){return 0;}
@@ -415,7 +431,12 @@ static int service_processes_quiet(int sessions_only)
         int process=openat(proc,entry->d_name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
         if(process<0){if(errno==ENOENT){continue;}ok=0;break;}
         unsigned char bytes[8192];size_t size=0;int read_result=service_proc_read(process,bytes,&size);
-        if(read_result<0){ok=0;}else if(read_result>0 && service_cgroup(bytes,size,sessions_only)!=0){ok=0;}
+        if(read_result<0){ok=0;}else if(read_result>0 && service_cgroup(bytes,size,sessions_only,retired)!=0){ok=0;}
+        if(retired){
+            struct stat live;
+            if(!read_result && (!fstatat(process,"stat",&live,0) || errno!=ENOENT)){ok=0;}
+            close(process);continue;
+        }
         char executable[4096];ssize_t n=readlinkat(process,"exe",executable,sizeof(executable));
         if(n<0){if(errno!=ENOENT){ok=0;}}
         else if(n==(ssize_t)sizeof(executable)){ok=0;}
@@ -429,9 +450,42 @@ static int service_processes_quiet(int sessions_only)
     }
     closedir(directory);return ok;
 }
+static int service_collect_failed(const struct pd_service_sessions* initial)
+{
+    if(!initial->retire_count){return 1;}
+    int layout=service_file_layout();struct pd_service_sessions fresh,selected={0};
+    if(layout<0 || !service_processes_quiet(1,initial) || !service_sessions(&fresh) || service_file_layout()!=layout){return 0;}
+    for(unsigned i=0;i<initial->retire_count;++i){
+        const char* name=initial->retire_names[i];
+        for(unsigned j=0;j<fresh.count;++j){if(!strcmp(name,fresh.names[j])){return 0;}}
+        for(unsigned j=0;j<fresh.retire_count;++j){
+            if(!strcmp(name,fresh.retire_names[j])){strcpy(selected.retire_names[selected.retire_count++],name);break;}
+        }
+    }
+    if(!selected.retire_count){return 1;}
+    unsigned char bytes[kServiceMax];size_t size=0;
+    char* args[PD_SERVICE_SESSIONS_MAX+3]={"/usr/bin/systemctl","reset-failed"};
+    for(unsigned i=0;i<selected.retire_count;++i){args[i+2]=selected.retire_names[i];}
+    args[selected.retire_count+2]=NULL;
+    if(!service_command(args,bytes,&size,8000) || !service_sessions(&fresh) || service_file_layout()!=layout){return 0;}
+    for(unsigned i=0;i<selected.retire_count;++i){
+        for(unsigned j=0;j<fresh.count;++j){if(!strcmp(selected.retire_names[i],fresh.names[j])){return 0;}}
+        for(unsigned j=0;j<fresh.retire_count;++j){if(!strcmp(selected.retire_names[i],fresh.retire_names[j])){return 0;}}
+    }
+    fprintf(stderr,"{\"event\":\"empty_failed_sessions_retired\",\"count\":%u,\"rf_commands\":[]}\n",selected.retire_count);
+    return 1;
+}
+int pd_service_session_prepare(void)
+{
+    int layout=service_file_layout();struct pd_service_sessions sessions;
+    if(layout<2 || !service_sessions(&sessions)){return 0;}
+    unsigned current=0;
+    for(unsigned i=0;i<sessions.count;++i){if(sessions.states[i].pid==getpid() && sessions.states[i].active){++current;}}
+    return current==1 && service_file_layout()==layout && service_collect_failed(&sessions);
+}
 int pd_service_runtime_quiet(void)
 {
-    return service_processes_quiet(0);
+    return service_processes_quiet(0,NULL);
 }
 static int service_legacy_sessions_quiet(const struct pd_service_sessions* sessions)
 {
@@ -440,12 +494,12 @@ static int service_legacy_sessions_quiet(const struct pd_service_sessions* sessi
     for(unsigned i=0;i<sessions->count;++i){
         if(!sessions->states[i].quiet || sessions->states[i].populated){return 0;}
     }
-    return service_processes_quiet(1);
+    return service_processes_quiet(1,NULL);
 }
 int pd_service_quiesce(void)
 {
     struct pd_service_sessions sessions;
-    if(!pd_service_files() || !service_loaded() || !service_sessions(&sessions) || !service_legacy_sessions_quiet(&sessions)){return 0;}
+    if(!pd_service_files() || !service_loaded() || !service_sessions(&sessions) || !service_legacy_sessions_quiet(&sessions) || !service_collect_failed(&sessions)){return 0;}
     unsigned char bytes[kServiceMax];size_t size=0;
     char* const intake[]={"/usr/bin/systemctl","stop","aetherpd-shim.service","aetherpd-start.socket",NULL};
     if(!service_command(intake,bytes,&size,30000)){return 0;}

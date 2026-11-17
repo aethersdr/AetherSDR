@@ -1,0 +1,210 @@
+{
+  "updated_utc": "2026-11-17T03:27:03.829940+00:00",
+  "status": "component_empty_failed_session_collection_verified_installed_qualification_pending",
+  "production_ready": false,
+  "installed_fix": false,
+  "source_parent_commit": "7b1186a528690f0a1579137a151f0aeda364b9bc",
+  "tested_source_sha256": {
+    "docs/user/docs/tailscale-remote-access.md": "ff56271644ce4711232ea17df8d88fc97e832579c51599f92b52a96514c11d17",
+    "src/gui/AetherPDDialog.cpp": "36055c136f14f442fc3aa5864f9016ac705fc9839818969a958d8839821da223",
+    "tools/pd-waveform/boot/README.md": "e70e794b1f55bc3a0a69c36c4746ff652255c8a9ee6b20415677cce636a1b1b8",
+    "tools/pd-waveform/boot/pd_service.c": "c0b76bac2a8c91e6d7d61cea35bf520b40a42978296648c7098e46a0ae9b4bff",
+    "tools/pd-waveform/boot/pd_service.h": "6b43f22685ae746693265b581b07dca0acfc9b197a0be7aad381927ee90b5c47",
+    "tools/pd-waveform/boot/service_check.c": "288421989b3bec8163e86ff5ce9dac8cb0494b93c901b8ea7d5218f2ee797d4b",
+    "tools/pd-waveform/boot/test_service.py": "a9df7ef42e62ec755319ba36b6f5e3b110687e081c9f65048d8f4a0de246b614",
+    "tools/pd-waveform/session/pd_start_session.c": "7001b85d2ca336c1e269efd4276cb82c9cfc79397946ccaca6a59130e683c9de",
+    "tools/pd-waveform/session/start_session_test.c": "6c81887821398950331240336ef5f8737ad9306e7f6fa60a02871ca10f4f83f4"
+  },
+  "changes": [
+    "Keep the32live/populated session bound and add a separate32record collection batch; inactive empty metadata does not consume live slots.",
+    "After socket-peer verification and before request parsing, attest the current live root instance, complete fixed metadata and exact eligible names.",
+    "Require empty failed MainPID/ControlPID/ControlGroup and an independent bounded host-kernel membership scan, then fresh manager evidence before named reset-failed.",
+    "Never issue reset-failed without explicit names; preserve populated or ambiguous guardians, reject postcondition/race/command failures and recheck normal policy before IQ/installation resources.",
+    "Use the same fixed collector before upgrade quiescence. No new daemon, public command selector, service-manager feature or permissions grant.",
+    "Show the housekeeping action in both first-install and upgrade consent plans."
+  ],
+  "component_tests": {
+    "service_tests": 70,
+    "ASan_UBSan_LSan_tests": 70,
+    "successive_collection_batches": 8,
+    "obsolete_records_in_successive_batch_test": 256,
+    "live_bound_preserved": 32,
+    "reset_batch_bound": 32,
+    "metadata_byte_bound": 65536,
+    "parser_record_bound": 96,
+    "startup_request_before_frame": "own UNIX socket fixture passed; removing preparation causes assertion failure before any installation call",
+    "mutations_detected": [
+      "kernel membership proof removed",
+      "populated guardian considered collectable",
+      "reset postcondition removed",
+      "zero-name reset permitted",
+      "pre-frame preparation skipped"
+    ],
+    "regression_suites": {
+      "upgrade": {
+        "exit": 0,
+        "tail": "............................................................\n----------------------------------------------------------------------\nRan 60 tests in 6.441s\n\nOK\n"
+      },
+      "generation": {
+        "exit": 0,
+        "tail": "....................\n----------------------------------------------------------------------\nRan 20 tests in 0.311s\n\nOK\n"
+      },
+      "upgrade-transaction": {
+        "exit": 0,
+        "tail": "....................\n----------------------------------------------------------------------\nRan 20 tests in 0.476s\n\nOK\n"
+      },
+      "service-activation": {
+        "exit": 0,
+        "tail": "............\n----------------------------------------------------------------------\nRan 12 tests in 0.137s\n\nOK\n"
+      },
+      "signed-legacy-arm64": {
+        "exit": 0,
+        "tail": ""
+      },
+      "signed-legacy-armv7": {
+        "exit": 0,
+        "tail": ""
+      }
+    },
+    "native_builds": {
+      "host": {
+        "bytes": 737192,
+        "sha256": "6ca77b4f1e052ab2a9092dc18396330c1cfddb258633304d151c01533749e820",
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/empty-session-retirement/host/service-check"
+      },
+      "sanitized-current": {
+        "bytes": 4446520,
+        "sha256": "1f8dfd928d7a1d8e2a31c957ee0c530e1cc11c23c2465cbd0041e33616540d34",
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/empty-session-retirement/sanitized-current/service-check"
+      },
+      "arm64": {
+        "bytes": 206496,
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444",
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/empty-session-retirement/arm64/pd-boot"
+      },
+      "armv7": {
+        "bytes": 207524,
+        "sha256": "66fadc7ea15cac726edbfde9bb1d3e275bfb7a6d38f3333b32b2b8d5ac3a348c",
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/empty-session-retirement/armv7/pd-boot"
+      }
+    },
+    "GUI_consent_test": "aetherpd_installation_dialog_test rebuilt and passed offscreen",
+    "user_docs": "Docusaurus production build passed"
+  },
+  "radio_read_only_observation": {
+    "failed_records": [
+      {
+        "MainPID": "0",
+        "ControlPID": "0",
+        "ControlGroup": "",
+        "SendSIGKILL": "no",
+        "Id": "aetherpd-start@5-1304-78666.service",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "kernel_members": []
+      },
+      {
+        "MainPID": "0",
+        "ControlPID": "0",
+        "ControlGroup": "",
+        "SendSIGKILL": "no",
+        "Id": "aetherpd-start@11-4827-78666.service",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "kernel_members": []
+      },
+      {
+        "MainPID": "0",
+        "ControlPID": "0",
+        "ControlGroup": "",
+        "SendSIGKILL": "no",
+        "Id": "aetherpd-start@6-2580-78666.service",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "kernel_members": []
+      },
+      {
+        "MainPID": "0",
+        "ControlPID": "0",
+        "ControlGroup": "",
+        "SendSIGKILL": "no",
+        "Id": "aetherpd-start@2-1304-78666.service",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "kernel_members": []
+      },
+      {
+        "MainPID": "0",
+        "ControlPID": "0",
+        "ControlGroup": "",
+        "SendSIGKILL": "no",
+        "Id": "aetherpd-start@14-6711-78666.service",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "kernel_members": []
+      },
+      {
+        "MainPID": "0",
+        "ControlPID": "0",
+        "ControlGroup": "",
+        "SendSIGKILL": "no",
+        "Id": "aetherpd-start@8-2580-78666.service",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "kernel_members": []
+      }
+    ],
+    "other_records": [
+      {
+        "MainPID": "7213",
+        "ControlPID": "0",
+        "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@15-6711-78666.service",
+        "SendSIGKILL": "no",
+        "Id": "aetherpd-start@15-6711-78666.service",
+        "ActiveState": "active",
+        "SubState": "running",
+        "kernel_members": [
+          7213,
+          7219
+        ]
+      }
+    ],
+    "mutations": [],
+    "RF_commands": [],
+    "diagnostic_container_deleted": true,
+    "diagnostic_scratch_deleted": true
+  },
+  "reference": {
+    "systemctl": "https://www.freedesktop.org/software/systemd/man/latest/systemctl.html",
+    "scope": "reset-failed resets failure/start-limit bookkeeping; explicit names are supplied and journal history is not deleted."
+  },
+  "limitations": [
+    "The new collector has not been installed or exercised on live session records yet. The radio observation was read-only.",
+    "The installed radio remains on source9ba615483 / releasec52fcd67, with full receive reconnect and Stop qualified; it still lacks this collection fix.",
+    "No RF, stable-candidate reboot, physical power-loss or actualFLEX6300 qualification is claimed.",
+    "The collector remains bounded: unsupported manager/kernel evidence or over-limit input fails closed. Actual6000compatibility is a separate gate.",
+    "Full P1-P10 remains active; LP100A integration stays deferred."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/allow-global-reset.log.gz": "fc208c1efe18e1a4334f591cfb09fb417229b90ae12160ae2a687df8c3c73564",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/collect-populated.log.gz": "c09a0650cd2a4d7a0d1887272eaa22ad0dade19be5b6c1936f511f27497b341b",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/dialog-build-final.log.gz": "b9c24a5c7fd8ed6256e435877b7d2599f6daa1ae71f5f827efe7a3623c4c9ffa",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/dialog-test.log.gz": "fe83479b705ef339615de817b6095362709635dfc2d3d3aaddd2a0c5201f1ca5",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/live-observation-observe-job.py.gz": "02fa89f2987f307945ab86f2f00f23c3f273ab1c76faf87dbbb87b3c0fc05074",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/live-observation-observe-result.json.gz": "5dc83936d756a23032427bc5fee90c65552f7857a3ae5ad89aaf3ca54660e7c4",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/missing-kernel-check.log.gz": "fe5698009cd39e87e3d1e937bd6fadcb9d96af7f9352da12584d09c206a9eb5b",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/mutations-final-console.log.gz": "4774f3df406e6e3588880466efe0f6861e0ecf19eb4f063b91ddfcac3b7e5ea1",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/mutations.json.gz": "f02e7bcc092678e83e5338f4a93efccbc95bbe5a9d9b9c324294848e8166cf86",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/native-builds-current.json.gz": "01c47dcc5f4166f729bb923df9793fddcb93f8d7071efe5f26bbb8fa769c509f",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/no-postcondition.log.gz": "03ae3ebfc068df2639cf8066017b34610fb06ae35c3326cf7736e9b61c46cf7b",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/regressions.json.gz": "89d6774f1ba3270570a2bdd8059951ee139510b646ab1fbd95f9ed1f5664e7eb",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/service-sanitized-final.log.gz": "afe9919d44037bef1005ad1e3daa7a0b7248fe80c488d3553dc120718b704b70",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/service-tests-final.log.gz": "517f59cb8838d895336e42ea3a9968484cb0bda684ea63d1853212b2e6c0b766",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/service-tests.log.gz": "1a545e244ebbecd3796f0b1337268775086099b74823895990acae77d8b1a5b3",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/startup-mutant.log.gz": "5106df70fc5ed452a992ec9c7052ded81149e0c22bcde10fe1cc61c456d17f36",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/startup-test.log.gz": "45c8f494422f21519dfa6d9f9d620fcc5289e7d2dde8037c37600e0822e1d4e7",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/user-docs-build.log.gz": "c566b27b8f7f961724f5792a46844fe834e60def12d8c8c0d721f859ac657da5",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/verify-mutations.py.gz": "177688a8b28731218cb06cc2c5f4d411a1a3ee827af260eed2eca1668c49d634",
+    "tools/pd-waveform/evidence/20261116-empty-session-retirement/verify-regressions.py.gz": "bc48f50ab0105f784c2ac6e2063f33f690268d5fafded669482080e632e091ab"
+  }
+}

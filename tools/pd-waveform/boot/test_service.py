@@ -315,10 +315,104 @@ class ServiceTest(unittest.TestCase):
   p=subprocess.run([str(CHECKER),mode,str(path)],capture_output=True,timeout=5)
   self.assertEqual(p.returncode,expected,p.stderr.decode(errors='replace'))
   self.assertEqual(p.stdout,(extra+'ok 0 0 0\n').encode() if expected==0 else b'')
+ def prepare_current(self):
+  self.layout(True)
+  current=self.session(active=True);current.update(MainPID='@self',ExecStart=executable(BOOT,'--session'))
+  return current
+ def empty_failure(self,index):
+  row=self.session('aetherpd-start@%d-%d-78666.service'%(100+index,200+index))
+  row.update(ActiveState='failed',SubState='failed',ExecStart=executable(BOOT,'--session'))
+  return row
+ def records(self,rows):return '\n'.join(text(row) for row in rows)
+ def resets(self):
+  p=self.root/'commands'
+  return [line for line in p.read_text().splitlines() if 'systemctl reset-failed' in line] if p.exists() else []
+ def test_quiesce_does_not_stop_inactive_empty_records(self):
+  self.layout(True);inactive=self.empty_failure(0);inactive.update(ActiveState='inactive',SubState='dead')
+  (self.root/'sessions').write_text(text(inactive));self.invoke('quiesce')
+  stops=[line for line in (self.root/'commands').read_text().splitlines() if 'systemctl stop' in line]
+  self.assertEqual(stops,['/usr/bin/systemctl stop aetherpd-shim.service aetherpd-start.socket','/usr/bin/systemctl stop aetherpd-boot.service'])
+ def test_prepare_without_empty_failures_never_resets_all_units(self):
+  current=self.prepare_current();held=self.empty_failure(0)
+  held['ControlGroup']='/system.slice/system-aetherpd\\x2dstart.slice/'+held['Id']
+  for rows in [[current],[current,held]]:
+   (self.root/'sessions').write_text(self.records(rows));self.invoke('session-prepare');self.assertFalse(self.resets())
+ def test_prepare_keeps_live_inventory_bound(self):
+  current=self.prepare_current();held=[self.empty_failure(i) for i in range(32)]
+  for row in held:row['ControlGroup']='/system.slice/system-aetherpd\\x2dstart.slice/'+row['Id']
+  (self.root/'sessions').write_text(self.records([current,*held]))
+  self.invoke('session-prepare',expected=1);self.assertFalse(self.resets())
+ def test_prepare_many_successive_cleanup_batches_do_not_accumulate(self):
+  current=self.prepare_current()
+  for batch in range(8):
+   failed=[self.empty_failure(batch*32+i) for i in range(32)]
+   (self.root/'sessions').write_text(self.records([current,*failed]))
+   (self.root/'sessions-after-reset').write_text(text(current))
+   self.invoke('session-prepare');self.invoke('session-policy')
+  self.assertEqual(len(self.resets()),8)
+ def test_prepare_collects_32_empty_failures_without_consuming_live_limit(self):
+  current=self.prepare_current();failed=[self.empty_failure(i) for i in range(32)]
+  (self.root/'sessions').write_text(self.records([current,*failed]))
+  inactive=[dict(row,ActiveState='inactive',SubState='dead') for row in failed]
+  (self.root/'sessions-after-reset').write_text(self.records([current,*inactive]))
+  self.invoke('session-prepare');self.invoke('session-policy')
+  self.assertEqual(self.resets(),['/usr/bin/systemctl reset-failed '+' '.join(row['Id'] for row in failed)])
+  log=(self.root/'commands').read_text();self.assertNotIn('systemctl stop',log);self.assertNotIn('systemctl kill',log)
+ def test_prepare_preserves_populated_guardian_while_collecting_empty_record(self):
+  current=self.prepare_current();empty=self.empty_failure(0);held=self.empty_failure(1)
+  held['ControlGroup']='/system.slice/system-aetherpd\\x2dstart.slice/'+held['Id']
+  self.process(42,'0::'+held['ControlGroup']+'\n','/run/aetherpd/bin/pd-lease-guard')
+  (self.root/'sessions').write_text(self.records([current,empty,held]))
+  (self.root/'sessions-after-reset').write_text(self.records([current,held]))
+  self.invoke('session-prepare');self.assertEqual(self.resets(),['/usr/bin/systemctl reset-failed '+empty['Id']])
+  self.assertTrue((self.root/'proc/42/cgroup').exists())
+ def test_prepare_rejects_hidden_kernel_member_before_reset(self):
+  current=self.prepare_current();empty=self.empty_failure(0)
+  self.process(42,'0::/system.slice/system-aetherpd\\x2dstart.slice/'+empty['Id']+'\n','/run/aetherpd/bin/pd-lease-guard')
+  (self.root/'sessions').write_text(self.records([current,empty]))
+  self.invoke('session-prepare',expected=1);self.assertFalse(self.resets())
+ def test_prepare_rejects_missing_or_malformed_live_kernel_metadata(self):
+  current=self.prepare_current();empty=self.empty_failure(0);(self.root/'sessions').write_text(self.records([current,empty]))
+  self.process(42,'malformed\n','/usr/bin/ordinary');self.invoke('session-prepare',expected=1);self.assertFalse(self.resets())
+  (self.root/'proc/42/cgroup').unlink();(self.root/'proc/42/stat').write_text('live')
+  self.invoke('session-prepare',expected=1);self.assertFalse(self.resets())
+ def test_prepare_rechecks_before_reset_and_accepts_concurrent_collection(self):
+  current=self.prepare_current();empty=self.empty_failure(0);(self.root/'sessions').write_text(self.records([current,empty]))
+  populated=dict(empty,ControlGroup='/system.slice/system-aetherpd\\x2dstart.slice/'+empty['Id'])
+  (self.root/'sessions-second').write_text(self.records([current,populated]))
+  self.invoke('session-prepare',expected=1);self.assertFalse(self.resets())
+  (self.root/'sessions-second').write_text(self.records([current]))
+  self.invoke('session-prepare');self.assertFalse(self.resets())
+ def test_prepare_requires_actual_reset_postcondition(self):
+  current=self.prepare_current();empty=self.empty_failure(0);(self.root/'sessions').write_text(self.records([current,empty]))
+  self.invoke('session-prepare',expected=1);self.assertEqual(len(self.resets()),1)
+  (self.root/'command-fail').touch();self.invoke('session-prepare',expected=1)
+ def test_prepare_refuses_new_populated_state_after_reset_without_signaling(self):
+  current=self.prepare_current();empty=self.empty_failure(0);(self.root/'sessions').write_text(self.records([current,empty]))
+  populated=dict(empty,ControlGroup='/system.slice/system-aetherpd\\x2dstart.slice/'+empty['Id'])
+  (self.root/'sessions-after-reset').write_text(self.records([current,populated]))
+  self.invoke('session-prepare',expected=1)
+  log=(self.root/'commands').read_text();self.assertNotIn('systemctl stop',log);self.assertNotIn('systemctl kill',log)
+ def test_prepare_bounds_batch_and_refuses_overrides_missing_self_and_duplicates(self):
+  current=self.prepare_current();failed=[self.empty_failure(i) for i in range(33)]
+  for rows in [[current,*failed],[failed[0]],[current,failed[0],failed[0]],[current,dict(failed[0],DropInPaths='/foreign')]]:
+   (self.root/'sessions').write_text(self.records(rows));self.invoke('session-prepare',expected=1);self.assertFalse(self.resets())
+ def test_empty_only_mismatched_applied_policy_refuses_quiesce_before_actions(self):
+  self.layout(True);empty=self.empty_failure(0);empty['SendSIGKILL']='yes'
+  (self.root/'sessions').write_text(text(empty));self.invoke('quiesce',expected=1);self.assertFalse(self.resets())
+  self.assertNotIn('systemctl stop',(self.root/'commands').read_text())
  def test_empty_and_multiple_session_inventory(self):
   self.raw('sessions','')
   a=self.session();b=self.session('aetherpd-start@1-1193-78666.service',True)
-  self.raw('sessions',text(a)+'\n'+text(b)+'\n',extra=a['Id']+' 0 0 1\n'+b['Id']+' 42 1 0\n')
+  self.raw('sessions',text(a)+'\n'+text(b)+'\n',extra=b['Id']+' 42 1 0\n')
+ def test_empty_records_do_not_consume_live_parser_slots(self):
+  current=self.session(active=True)
+  failed=[self.empty_failure(i) for i in range(32)]
+  inactive=[dict(row,ActiveState='inactive',SubState='dead') for row in failed]
+  for rows in [[current,*failed],[current,*inactive]]:
+   # Use the direct-entry layout consistently for this raw parser fixture.
+   for row in rows:row['ExecStart']=executable('/run/aetherpd/bin/pd-start-session')
+   self.raw('sessions',self.records(rows),extra=current['Id']+' 42 1 0\n')
  def test_session_name_grammar_and_duplicates(self):
   for name in ['aetherpd-start@.service','other@0-1193-78666.service','aetherpd-start@0-1193-0.service','aetherpd-start@00-1193-78666.service','aetherpd-start@18446744073709551616-1193-78666.service','aetherpd-start@0-1-78666.service','aetherpd-start@0-1193-78666.service/other','aetherpd-start@0-1193-78666.service x.service']:
    self.raw('sessions',text(self.session(name)),1)
@@ -328,7 +422,7 @@ class ServiceTest(unittest.TestCase):
    d=self.session(active=True);d[field]=value;self.raw('sessions',text(d),1)
  def test_session_inventory_boundaries(self):
   for value in ['\n',text(self.session())[:-1],text(self.session())+'\n\n',b'x'*65536]:self.raw('sessions',value,1)
-  blocks=[text(self.session('aetherpd-start@%d-1193-78666.service'%i)) for i in range(33)]
+  blocks=[text(self.session('aetherpd-start@%d-1193-78666.service'%i,True)) for i in range(33)]
   self.raw('sessions','\n'.join(blocks),1)
  def test_owned_cgroup_exact_boundaries_and_descendants(self):
   for name in NAMES:
@@ -352,7 +446,8 @@ class ServiceTest(unittest.TestCase):
  def test_proc_unreadable_or_malformed_refuses(self):
   self.process(42,'invalid\n');self.invoke('quiet',expected=1)
  def test_quiesce_stops_only_verified_exact_names(self):
-  a=self.session();(self.root/'sessions').write_text(text(a));self.invoke('quiesce')
+  a=self.session();a['ControlGroup']='/system.slice/system-aetherpd\\x2dstart.slice/'+a['Id']
+  (self.root/'sessions').write_text(text(a));self.invoke('quiesce')
   commands=(self.root/'commands').read_text().splitlines();stops=[v for v in commands if 'systemctl stop' in v]
   self.assertEqual(stops,['/usr/bin/systemctl stop aetherpd-shim.service aetherpd-start.socket','/usr/bin/systemctl stop '+a['Id'],'/usr/bin/systemctl stop aetherpd-boot.service'])
  def test_foreign_session_refuses_before_any_stop(self):

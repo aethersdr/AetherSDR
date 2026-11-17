@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 static const char* test_root;
+static unsigned session_reads;
 static int input(const char* name,unsigned char* bytes,size_t* size)
 {
     int fd=open(name,O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC);if(fd<0){return 0;}*size=0;
@@ -20,6 +21,10 @@ int pd_service_test_command(char* const* args,unsigned char* bytes,size_t* size,
     for(unsigned i=0;args[i];++i){fprintf(log,"%s%s",i?" ":"",args[i]);}fputc('\n',log);fclose(log);*size=0;
     if(!strcmp(args[1],"show")){
         snprintf(path,sizeof(path),"%s/%s",test_root,!strcmp(args[3],"aetherpd-start@*.service")?"sessions":args[3]);
+        if(!strcmp(args[3],"aetherpd-start@*.service") && ++session_reads==2){
+            char alternate[4096];snprintf(alternate,sizeof(alternate),"%s/sessions-second",test_root);
+            if(!access(alternate,F_OK)){strcpy(path,alternate);}
+        }
         if(!input(path,bytes,size)){return 0;}
         const char marker[]="MainPID=@self";char* found=memmem(bytes,*size,marker,sizeof(marker)-1);
         if(found){
@@ -30,7 +35,16 @@ int pd_service_test_command(char* const* args,unsigned char* bytes,size_t* size,
         }
         return 1;
     }
-    snprintf(path,sizeof(path),"%s/command-fail",test_root);return access(path,F_OK)!=0;
+    snprintf(path,sizeof(path),"%s/command-fail",test_root);if(!access(path,F_OK)){return 0;}
+    if(!strcmp(args[1],"reset-failed")){
+        snprintf(path,sizeof(path),"%s/sessions-after-reset",test_root);
+        if(!access(path,F_OK)){
+            if(!input(path,bytes,size)){return 0;}
+            snprintf(path,sizeof(path),"%s/sessions",test_root);FILE* next=fopen(path,"w");if(!next){return 0;}
+            size_t wrote=fwrite(bytes,1,*size,next);int closed=fclose(next);if(wrote!=*size || closed){return 0;}*size=0;
+        }
+    }
+    return 1;
 }
 #endif
 int main(int argc,char** argv)
@@ -59,6 +73,7 @@ int main(int argc,char** argv)
         else if(!strcmp(argv[1],"files") && argc==3){ok=pd_service_files();}
         else if(!strcmp(argv[1],"upgrade-cleanup-idle") && argc==3){ok=pd_service_upgrade_cleanup_idle();}
         else if(!strcmp(argv[1],"reload") && argc==3){ok=pd_service_reload();}
+        else if(!strcmp(argv[1],"session-prepare") && argc==3){ok=pd_service_session_prepare();}
         else if(!strcmp(argv[1],"session-policy") && argc==3){ok=pd_service_session_policy();}
         else if(!strcmp(argv[1],"read") && argc==4){ok=pd_service_read((unsigned)strtoul(argv[3],NULL,10),&state);}
         else if(!strcmp(argv[1],"stop") && argc==3){ok=pd_service_stop_primary();}
