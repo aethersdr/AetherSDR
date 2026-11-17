@@ -527,6 +527,79 @@ void testKeepAliveAndFrameKinds()
            split.kind == FrameKind::Unknown && split.state.error == ParseError::MissingKey);
 }
 
+// The one command: the antenna port of the focused radio.
+void testAntennaCommand()
+{
+    const Snapshot hl2 = snapshotOf(kHl2OnDummy);
+    const QString id = QStringLiteral("2d00ea67-27bd-4e3f-8bc6-8408674d7a59");
+    const Command ant1 = encodeAntennaSelect(hl2, QStringLiteral("ant1"), id);
+    report("ant1 is encoded byte for byte as the recorded command",
+           ant1.error == CommandError::None && ant1.frame == kSentAntennaCommand,
+           ant1.frame.toStdString());
+    report("a port the snapshot does not list is refused",
+           encodeAntennaSelect(hl2, QStringLiteral("ant9"), id).error == CommandError::NoSuchButton
+               && encodeAntennaSelect(hl2, QStringLiteral("ant9"), id).frame.isEmpty());
+    const Snapshot marked = snapshotOf(edited(kHl2OnDummy,
+        R"("l":"Antenna3","e":true)", R"("l":"Antenna3","e":false)"));
+    report("a port marked RX only is refused",
+           encodeAntennaSelect(marked, QStringLiteral("ant3"), id).error == CommandError::ButtonDisabled);
+    report("split engaged: `v` is refused",
+           encodeAntennaSelect(snapshotOf(kD184SplitEfhwFan), QStringLiteral("ant1"), id).error
+               == CommandError::SplitEngaged);
+    report("the unsolicited id is not a request id",
+           encodeAntennaSelect(hl2, QStringLiteral("ant1"), QLatin1String(kUnsolicitedId)).error
+               == CommandError::BadRequestId);
+    report("an upper-case id is refused", encodeAntennaSelect(hl2, QStringLiteral("ant1"),
+               id.toUpper()).error == CommandError::BadRequestId);
+    report("an id one character short is refused", encodeAntennaSelect(hl2, QStringLiteral("ant1"),
+               id.left(35)).error == CommandError::BadRequestId);
+
+    const Snapshot split = snapshotOf(kD184SplitEfhwFan);
+    const QByteArray tail = QByteArrayLiteral(", \"id\": \"") + id.toLatin1() + "\"}";
+    report("split on: gid split, a JSON true",
+           encodeAntennaCommand(hl2, AntennaField::Split, QLatin1String(kToggleOn), id).frame
+               == R"({"a": "set_value", "gid": "split", "v": true)" + tail);
+    report("split off: a JSON false",
+           encodeAntennaCommand(split, AntennaField::Split, QLatin1String(kToggleOff), id).frame
+               == R"({"a": "set_value", "gid": "split", "v": false)" + tail);
+    report("a toggle takes true or false only",
+           encodeAntennaCommand(hl2, AntennaField::Split, QStringLiteral("on"), id).error
+               == CommandError::NoSuchButton);
+    report("TX half: txv with its prefix",
+           encodeAntennaCommand(split, AntennaField::TxHalf, QStringLiteral("ant6"), id).frame
+               == R"({"a": "set_value", "gid": "antenna", "txv": "tx_ant6")" + tail);
+    report("RX half: rxv with its prefix",
+           encodeAntennaCommand(split, AntennaField::RxHalf, QStringLiteral("ant1"), id).frame
+               == R"({"a": "set_value", "gid": "antenna", "rxv": "rx_ant1")" + tail);
+    report("a half without split is refused",
+           encodeAntennaCommand(hl2, AntennaField::TxHalf, QStringLiteral("ant6"), id).error
+               == CommandError::SplitOff);
+    const Snapshot markedSplit = snapshotOf(edited(kD184SplitEfhwFan,
+        R"("l":"Antenna3","e":true)", R"("l":"Antenna3","e":false)"));
+    report("an RX-only port: the RX half takes it, the TX half does not",
+           encodeAntennaCommand(markedSplit, AntennaField::RxHalf, QStringLiteral("ant3"), id).error
+                   == CommandError::None
+               && encodeAntennaCommand(markedSplit, AntennaField::TxHalf, QStringLiteral("ant3"), id).error
+                      == CommandError::ButtonDisabled);
+    report("field values: halves only in split, `v` only without",
+           antennaFieldValue(split, AntennaField::TxHalf) == QStringLiteral("ant1")
+               && antennaFieldValue(split, AntennaField::RxHalf) == QStringLiteral("ant2")
+               && antennaFieldValue(split, AntennaField::Both).isEmpty()
+               && antennaFieldValue(hl2, AntennaField::Both) == QStringLiteral("ant6")
+               && antennaFieldValue(hl2, AntennaField::TxHalf).isEmpty()
+               && antennaFieldValue(split, AntennaField::Split) == QLatin1String(kToggleOn));
+
+    report("the recorded reply acknowledges its command",
+           acknowledges(snapshotOf(kReplyAnt1), id));
+    report("a push with the zero id acknowledges nothing",
+           !acknowledges(snapshotOf(kHl2OnDummy), QLatin1String(kUnsolicitedId)));
+    report("the reply classifies as the reply while it is awaited",
+           classify(kTextFrame, kReplyAnt1, id).kind == FrameKind::StateReply);
+    report("and as a plain state when nothing is awaited",
+           classify(kTextFrame, kReplyAnt1).kind == FrameKind::State);
+}
+
+
 void testD184Split()
 {
     report("d184 split frames are 1015 bytes, the others 995 and 994",
@@ -722,6 +795,7 @@ int main()
     testSessionKeepAliveAndLiveness();
     testEviction();
     testD184Split();
+    testAntennaCommand();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);
     return g_failed ? 1 : 0;

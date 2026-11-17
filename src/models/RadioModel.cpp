@@ -3798,6 +3798,93 @@ QString RadioModel::panTransmitInhibitReason(const QString& panId) const
     return m_panTransmitInhibitReasons.value(panId.trimmed());
 }
 
+void RadioModel::addStationAntennaSource(QObject* owner, const QString& id,
+                                         StationAntennaViewFn view, StationAntennaSelectFn select)
+{
+    if (owner == nullptr || id.isEmpty() || !view || !select) {
+        return;
+    }
+    // One entry per id: a device that registers again replaces itself.
+    for (auto it = m_stationAntennaSources.begin(); it != m_stationAntennaSources.end();) {
+        if (it->owner.isNull() || it->id == id) {
+            it = m_stationAntennaSources.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    m_stationAntennaSources.push_back({owner, id, std::move(view), std::move(select)});
+    // By then the owner's QPointer is null; an entry that replaced it under
+    // the same id has a live owner and stays.
+    connect(owner, &QObject::destroyed, this, [this, id]() {
+        m_stationAntennaSources.erase(
+            std::remove_if(m_stationAntennaSources.begin(), m_stationAntennaSources.end(),
+                           [&id](const StationAntennaSource& source) {
+                               return source.id == id && source.owner.isNull();
+                           }),
+            m_stationAntennaSources.end());
+        emit stationAntennasChanged();
+    });
+    emit stationAntennasChanged();
+}
+
+QVector<StationAntennaView> RadioModel::stationAntennaViews() const
+{
+    QVector<StationAntennaView> out;
+    for (const StationAntennaSource& source : m_stationAntennaSources) {
+        if (source.owner.isNull() || !source.view) {
+            continue;
+        }
+        StationAntennaView view = source.view();
+        if (!view.active) {
+            continue;
+        }
+        view.id = source.id;
+        out.append(view);
+    }
+    return out;
+}
+
+bool RadioModel::hasStationAntennas() const
+{
+    return !stationAntennaViews().isEmpty();
+}
+
+bool RadioModel::stationAntennaSwitchBlocked() const
+{
+    return m_transmitModel.isTransmitting() || m_transmitModel.isMox()
+           || m_transmitModel.isTuning() || m_radioTransmitting || m_cwKeyActive
+           || (m_backend && m_backend->transmitPathBusy());
+}
+
+QString RadioModel::selectStationAntenna(const QString& id, const QString& token, bool tx)
+{
+    const auto source = std::find_if(m_stationAntennaSources.cbegin(),
+                                     m_stationAntennaSources.cend(),
+                                     [&id](const StationAntennaSource& entry) {
+                                         return entry.id == id && !entry.owner.isNull();
+                                     });
+    if (source == m_stationAntennaSources.cend() || !source->view || !source->select) {
+        return tr("That antenna is not on offer now.");
+    }
+    const StationAntennaView view = source->view();
+    const QVector<StationAntennaChoice>& choices = tx ? view.tx : view.rx;
+    const bool listed = std::any_of(choices.cbegin(), choices.cend(),
+                                    [&token](const StationAntennaChoice& choice) {
+                                        return choice.token == token;
+                                    });
+    if (!view.active || !listed) {
+        return tr("That antenna is not on offer now.");
+    }
+    // The tail counts, as for the radio's own transmit output: the radio
+    // still radiates after MOX-off.
+    if (stationAntennaSwitchBlocked()) {
+        return stationAntennaTransmitRefusal();
+    }
+    // Copied: the select may re-enter the registry.
+    const StationAntennaSelectFn select = source->select;
+    return select(token, tx);
+}
+
 QString RadioModel::transmitInhibitMessageForSlice(const SliceModel* slice) const
 {
     if (!slice) {

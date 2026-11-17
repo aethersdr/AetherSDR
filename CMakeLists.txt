@@ -1346,6 +1346,7 @@ set(MODEL_SOURCES
     src/models/AntennaGeniusModel.cpp
     src/models/GreenHeronModel.cpp
     src/models/MicrohamTrioModel.cpp
+    src/models/MicrohamTrioRadioLink.cpp
     src/models/AetherClockModel.cpp
     src/models/Ctr2ProxyModel.cpp
     src/models/FirmwareInstallModel.cpp

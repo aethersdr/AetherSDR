@@ -3,7 +3,7 @@
 **Radio Setup → Peripherals** configures the accessories AetherSDR talks to
 directly: Tuner Genius XL (TGXL), Power Genius XL (PGXL), Antenna Genius (AG),
 ShackSwitch, ACOM and SPE Expert amplifiers, VK3AMP, the LP-100A meter, and
-the microHAM Trio antenna switch (read-only: it changes nothing on the Trio).
+the microHAM Trio antenna switch.
 
 ## Layout
 
@@ -100,10 +100,10 @@ The **microHAM Trio** row connects to the Trio antenna-switch controller's own
 web interface (`ws://<address>/ui.ws`, port 80 by default) and shows what it
 reports: the radio with transmit focus, its antenna (both halves in split), the
 RX antenna, RX EXT and the PA loop, and the label of every radio and antenna
-port. It is read-only: AetherSDR selects no radio, antenna, split or RX EXT and
-writes no port name. After the handshake the session sends only keep-alives,
-WebSocket pongs and a close. Every name the Trio reports is shown as plain
-text, never as markup.
+port. From this page AetherSDR switches nothing on the Trio. After the
+handshake the session sends only keep-alives, WebSocket pongs and a close,
+and the antenna commands of a pick made in the antenna menus (below). Every
+name the Trio reports is shown as plain text, never as markup.
 
 - The Trio is not discovered: enter the address its own menu shows (an IPv4
   address or a host name).
@@ -127,6 +127,41 @@ text, never as markup.
 - Stored as `Peripherals.trio.ManualIp`, `Peripherals.trio.ManualPort` and
   `Peripherals.trio.AutoConnect`; the radio's port as the radio-scoped feature
   `TrioBinding`.
+
+### In the antenna menus
+
+Once **this AetherSDR** is set on a radio port, the Trio is a station switch
+of that radio: the slice's **RX ANT** and **TX ANT** menus keep the radio's
+own ports at the top (on the HL2: ANT, and RF1 for TX) and add a submenu
+**microHAM Trio (station switch)** with the Trio's six antenna ports. The
+panadapter's RX antenna list has no submenu: there the Trio is a disabled
+heading row with its ports under it. The field shows the port the Trio
+reports, never the last pick.
+
+- Split is implied, with no button of its own: an RX pick other than the TX
+  port turns the Trio's split on with that RX port; an RX pick equal to the TX
+  port turns it off; a TX pick moves RX with it while they are equal, and in
+  split moves only TX (or ends split when it equals RX). The Trio changes over
+  between the two halves on PTT in split; that hot-switch protection is the
+  Trio's own (PTT is cabled to it).
+- A pick takes up to three commands, each sent after the one before is
+  confirmed by its reply. A pick the Trio does not take, or does not answer
+  within two seconds, stops and says so, and the state is read again.
+- Every pick is refused while the radio may still radiate: keyed, MOX, tuning,
+  CW key down, the radio's interlock, or its transmit tail after un-key. It is
+  asked again before every command of a pick. The sentence is the one every
+  station switch uses: *Antenna can't change while transmitting.* Nothing here
+  refuses a key-on.
+- The submenu and its ports stay listed, disabled, with the reason, while the
+  Trio is offline, another client holds its session, its focus is on another
+  radio, or the radio port's label no longer matches the one stored; a TX
+  port the Trio marks receive only, and every port until the Trio has
+  finished the previous pick, are disabled the same way.
+- The RX-only antennas (RX1-RX3) and RX EXT stay at the Trio.
+- Only the `v` command form was recorded on the wire, sent by the Trio's own
+  page. The split toggle and the `txv` / `rxv` half commands are built from
+  the Trio page's own source and the state document's fields, and have not
+  been sent to a Trio yet.
 
 ### Transport and protocol limits
 

@@ -1448,7 +1448,8 @@ private:
     QPointer<class AtuPreTuneDialog> m_kat500PreTuneDialog;
     Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
     RfkitConnection   m_rfkitConn;       // RF-KIT amplifier, REST/JSON over HTTP (default port 8080)
-    MicrohamTrioModel m_trioModel;       // microHAM Trio antenna switch; read-only, changes nothing on it
+    MicrohamTrioModel m_trioModel;       // microHAM Trio antenna switch (web socket, port 80)
+    class MicrohamTrioRadioLink* m_trioLink = nullptr;   // its ports in the antenna menus
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_CW_RX_BACKENDS

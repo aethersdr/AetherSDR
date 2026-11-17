@@ -793,6 +793,11 @@ public:
     virtual void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) = 0;
     virtual IndependentTxControl independentTxControl() const { return {}; }
     virtual bool independentTxReady() const { return false; }
+    // The radio may still radiate: keyed, tuning, or in its own transmit tail
+    // after MOX-off (TX FIFO drain, PTT hang). A switch outside the radio does
+    // not move while this is true. Default: no tail beyond what TransmitModel
+    // reports, which the caller checks itself.
+    virtual bool transmitPathBusy() const { return false; }
     virtual void stopIndependentTx(const TxCoordinator::Operation& operation,
                                    const TxCoordinator::StopRequest& request)
     {

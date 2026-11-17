@@ -7302,6 +7302,24 @@ add_test(NAME microham_trio_peripherals_test COMMAND microham_trio_peripherals_t
 set_tests_properties(microham_trio_peripherals_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# The Trio's ports as a station device of a socket-free radio: RadioModel's
+# registry, the view the antenna menus get, the commands a pick sends, every
+# refusal, above all while keyed or in the backend's transmit tail.
+add_executable(microham_trio_link_test tests/microham_trio_link_test.cpp)
+target_include_directories(microham_trio_link_test PRIVATE src tests)
+target_link_libraries(microham_trio_link_test PRIVATE aethercore Qt6::Core)
+add_test(NAME microham_trio_link_test COMMAND microham_trio_link_test)
+
+# Station antenna switches in the RX ANT / TX ANT menus and fields: one
+# submenu per device (src/gui/StationAntennaMenu.h), the shared refusal
+# sentences. Hand-made views on a real RadioModel.
+add_executable(station_antenna_menu_test tests/station_antenna_menu_test.cpp)
+target_include_directories(station_antenna_menu_test PRIVATE src src/gui tests)
+target_link_libraries(station_antenna_menu_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME station_antenna_menu_test COMMAND station_antenna_menu_test)
+set_tests_properties(station_antenna_menu_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # aethersdr/radio/state payload shape + the drive-publish timing contract
 # (#5518). Links the real TransmitModel because the have-status latch and the
 # coalesce debounce are half the contract; MqttRadioState.cpp itself is pure.

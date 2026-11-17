@@ -4,9 +4,10 @@
 // then the web socket kept open. Frames go to MicrohamTrio::classify(); what to
 // do next comes from MicrohamTrio::decideSession(), so this class keeps the
 // state that takes and holds no policy of its own.
-// Read-only: after the handshake it sends keep-alives, pongs and a close,
-// never a command. Main-thread only. Bytes and time are injected; nothing
-// here opens a socket.
+// Commands: the focused radio's antenna fields (`v`, split, the TX and RX
+// halves: MicrohamTrio::AntennaField), one at a time, each confirmed by its
+// reply. Main-thread only. Bytes and time are injected; nothing here opens a
+// socket.
 
 #include "core/MicrohamTrioProtocol.h"
 #include "core/MicrohamTrioWebSocket.h"
@@ -66,11 +67,16 @@ public:
         // a failure.
         int    transientAttempts{3};
         qint64 transientRetryMs{1500};
+        // A command with no reply this long: the session reconnects to read
+        // the state the device holds.
+        qint64 replyTimeoutMs{2000};
     };
 
-    // Unpredictable values: random32 feeds the frame masks and the handshake nonce.
+    // Unpredictable values: random32 feeds the frame masks and the handshake
+    // nonce; requestId is a lowercase UUID per command.
     struct Entropy {
         std::function<quint32()> random32;
+        std::function<QString()> requestId;
     };
     static Entropy systemEntropy();
 
@@ -103,7 +109,25 @@ public:
 
     enum class SnapshotSource {
         OnConnect,   // the first state of a session
+        Reply,       // the one answer to our command
         Push,        // a change made elsewhere: front panel or band data
+    };
+
+    enum class WriteRefusal {
+        None,
+        NotHeld,          // no held session with a state received on it
+        WritePending,     // the last command is not answered yet
+        NoSuchButton,
+        ButtonDisabled,   // the port is marked RX only
+        SplitEngaged,     // `v` while split is on
+        SplitOff,         // a half while split is off
+        Unencodable,      // an unsafe key or a bad request id
+    };
+
+    enum class WriteOutcome {
+        Confirmed,      // answered, and the state shows the port asked for
+        Disagrees,      // answered, and the state shows another port
+        ReplyOverdue,   // no reply in time; the session reconnects to read the state
     };
 
     // `transport` and `clock` are not owned and must outlive the session.
@@ -115,6 +139,22 @@ public:
     void start(const Config& config);
     // A held session is closed with a WebSocket close frame first.
     void stop();
+
+    // Why writing `key` to `field` would be refused now, or None.
+    WriteRefusal refusal(MicrohamTrio::AntennaField field, const QString& key) const;
+    // Send it when refusal() is None. A refused write is dropped, never
+    // queued. A sent write ends in writeResult().
+    WriteRefusal write(MicrohamTrio::AntennaField field, const QString& key);
+    // `v`: one port for TX and RX.
+    WriteRefusal antennaRefusal(const QString& key) const
+    {
+        return refusal(MicrohamTrio::AntennaField::Both, key);
+    }
+    WriteRefusal selectAntenna(const QString& key)
+    {
+        return write(MicrohamTrio::AntennaField::Both, key);
+    }
+    bool writePending() const { return m_pending.has_value(); }
 
     bool    isRunning() const { return m_running; }
     Status  status() const { return m_status; }
@@ -141,6 +181,8 @@ signals:
     void snapshotChanged(const AetherSDR::MicrohamTrio::Snapshot& snapshot,
                          AetherSDR::MicrohamTrioSession::SnapshotSource source);
     void sessionStateChanged(AetherSDR::MicrohamTrioSession::Status status);
+    void writeResult(AetherSDR::MicrohamTrio::AntennaField field, const QString& key,
+                     AetherSDR::MicrohamTrioSession::WriteOutcome outcome);
 
 private slots:
     void onOpened();
@@ -208,6 +250,15 @@ private:
     bool m_stateOnThisSession{false};
 
     std::optional<MicrohamTrio::Snapshot> m_snapshot;
+
+    struct PendingWrite {
+        MicrohamTrio::AntennaField field{MicrohamTrio::AntennaField::Both};
+        QString key;
+        QString requestId;
+        qint64  sentAtMs{0};
+    };
+    std::optional<PendingWrite> m_pending;
+    QString pendingRequestId() const;
 };
 
 } // namespace AetherSDR

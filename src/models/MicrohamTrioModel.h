@@ -1,8 +1,11 @@
 #pragma once
 
 // microHAM TRIO antenna-switch controller: one held session and the state it
-// reports, for the Peripherals page. A radio-agnostic peripheral, never behind
-// IRadioBackend. Read-only: nothing here changes anything on the Trio.
+// reports, for the Peripherals page; and this radio's antenna from the RX ANT
+// and TX ANT menus (selectTxAntenna / selectRxAntenna), split implied: an RX
+// pick other than the TX port turns split on, an RX pick equal to it turns it
+// off. A radio-agnostic peripheral, never behind IRadioBackend. Nothing here
+// selects a radio, an RX-only antenna (RX1..RX3) or RX EXT on the device.
 // Wire and decisions: core/MicrohamTrioProtocol.h, core/MicrohamTrioSession.h.
 // Main-thread only; no session and no timer while none is wanted.
 
@@ -63,6 +66,12 @@ public:
         QString bindingIssue;
     };
 
+    struct WriteVerdict {
+        bool    allowed{false};
+        bool    sent{false};
+        QString message;   // why not, for the operator; empty when allowed
+    };
+
     enum class BindResult {
         Ok,
         NoTrio,
@@ -110,6 +119,31 @@ public:
     // Forget what was said about this radio.
     BindResult clearBinding();
 
+    // What a pick would meet, without sending. Allowed only with a held
+    // session and a current state, this radio bound with no label error, the
+    // Trio's focus on its port, no pick of ours still under way, the radio not
+    // transmitting (setSwitchBlocked), and for TX a port not marked RX only.
+    //   TX pick: without split moves TX and RX; in split moves the TX half, or
+    //            ends split when it equals the RX half.
+    //   RX pick: without split, a port other than TX turns split on with that
+    //            RX half; in split moves the RX half, or ends split when it
+    //            equals the TX half.
+    // Each takes up to three commands, each sent after the one before is
+    // confirmed; any refusal or disagreement on the way stops it and says so.
+    // The first reason the Trio cannot take any pick for this radio now (not
+    // configured, not bound, a label error, held by another client, not
+    // connected, focus on another radio); empty when it can.
+    QString unavailableReason() const;
+    WriteVerdict canSelectTxAntenna(const QString& key) const;
+    WriteVerdict canSelectRxAntenna(const QString& key) const;
+    // Refused picks are dropped, never queued. Allowed with nothing to send
+    // (already in place): allowed, not sent, no message.
+    WriteVerdict selectTxAntenna(const QString& key);
+    WriteVerdict selectRxAntenna(const QString& key);
+    bool pickUnderWay() const { return m_goal.has_value(); }
+    // Asked before every command: true while the radio may radiate.
+    void setSwitchBlocked(std::function<bool()> blocked) { m_switchBlocked = std::move(blocked); }
+
     bool isConnected() const { return view().session == SessionWord::Direct; }
     bool isConnecting() const { return view().session == SessionWord::Connecting; }
     QString description() const;   // "192.168.8.10:80" while a session is wanted, else empty
@@ -138,11 +172,15 @@ signals:
     void connectionFailed(const QString& error);
     // The answer to testConnection(): reachable or not, and what was read.
     void testFinished(bool reachable, const QString& report);
+    // A sentence the operator should see once: a pick the Trio did not take.
+    void notice(const QString& message);
 
 private slots:
     void onSnapshot(const AetherSDR::MicrohamTrio::Snapshot& snapshot,
                     AetherSDR::MicrohamTrioSession::SnapshotSource source);
     void onSessionState(AetherSDR::MicrohamTrioSession::Status status);
+    void onWriteResult(AetherSDR::MicrohamTrio::AntennaField field, const QString& key,
+                       AetherSDR::MicrohamTrioSession::WriteOutcome outcome);
 
 private:
     void startSession();
@@ -170,6 +208,27 @@ private:
     MicrohamTrioSession* m_session{nullptr};
     SessionWord m_word{SessionWord::NotConfigured};
     std::optional<MicrohamTrio::Snapshot> m_snapshot;
+
+    // Where a pick ends; reached one confirmed command at a time.
+    struct AntennaGoal {
+        bool    split{false};
+        QString tx;
+        QString rx;
+        int     writesLeft{3};
+    };
+    struct Step {
+        MicrohamTrio::AntennaField field;
+        QString key;
+    };
+    std::optional<AntennaGoal> m_goal;
+    std::function<bool()> m_switchBlocked;
+    WriteVerdict pickVerdict(bool tx, const QString& key) const;
+    WriteVerdict startPick(bool tx, const QString& key);
+    static std::optional<Step> nextStep(const AntennaGoal& goal, const MicrohamTrio::Snapshot& s);
+    static AntennaGoal goalFor(bool tx, const QString& key, const MicrohamTrio::Snapshot& s);
+    void continuePick();
+    void stopPick(const QString& why);
+    void stopPickSaying(const QString& sentence);
 };
 
 } // namespace AetherSDR

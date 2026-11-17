@@ -64,6 +64,7 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "models/MicrohamTrioRadioLink.h"
 #include "core/SpeConnection.h"
 #include "core/SpeLegacyProtocol.h"
 #include "core/SpeProtocol.h"
@@ -7520,18 +7521,13 @@ void MainWindow::wireMeters()
     // automatically" on, like the KPA500/KAT500 rows.
     m_trioModel.loadSettings(PeripheralSettings::autoConnect(
         QLatin1String(MicrohamTrioSettings::kPeripheralId)));
-    // The Trio is told which radio is connected, so the Peripherals page can
-    // read and store that radio's port on it.
-    {
-        const auto trioRadio = [this]() {
-            m_trioModel.setRadio(m_radioModel.isConnected() ? m_radioModel.settingsScope()
-                                                            : RadioSettingsScope());
-        };
-        connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
-                [trioRadio](bool) { trioRadio(); });
-        connect(&m_radioModel, &RadioModel::infoChanged, this, trioRadio);
-        trioRadio();
-    }
+    // The Trio is told which radio is connected (the Peripherals page reads and
+    // stores that radio's port on it), and its antenna ports are offered in
+    // the RX ANT / TX ANT menus beside the radio's own.
+    m_trioLink = new MicrohamTrioRadioLink(&m_radioModel, &m_trioModel, this);
+    connect(&m_trioModel, &MicrohamTrioModel::notice, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 8000);
+    });
 
     // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and

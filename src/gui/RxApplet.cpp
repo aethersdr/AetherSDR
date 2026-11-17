@@ -2,6 +2,7 @@
 #include "AudioButtonIcon.h"
 #include <QScopeGuard>
 #include "AntennaChoiceGate.h"
+#include "StationAntennaMenu.h"
 #include "SplitAudioProfile.h"
 #include "AgcModeAvailability.h"
 #include "AgcGainText.h"
@@ -39,6 +40,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QMenu>
+#include <QToolTip>
 #include <QApplication>
 #include <QToolButton>
 #include <QButtonGroup>
@@ -399,22 +401,28 @@ void RxApplet::buildUI()
                 return;
             }
             QPointer<SliceModel> slice = m_slice;
+            const QVector<StationAntennaView> stations =
+                m_radioModel ? m_radioModel->stationAntennaViews() : QVector<StationAntennaView>{};
+            const bool station = !stations.isEmpty();
+            const bool published = !slice->rxAntennaList().isEmpty()
+                || (m_radioModel && !m_radioModel->antennaList().isEmpty());
             // Nothing real to choose -- the radio published no port and no
-            // Kiwi receiver is on offer: refuse visibly instead of opening a
-            // menu of invented ANT1/ANT2 (AntennaChoiceGate.h).
+            // Kiwi receiver or station switch is on offer: refuse visibly
+            // instead of opening a menu of invented ANT1/ANT2 (AntennaChoiceGate.h).
             {
                 const bool connected = m_radioModel && m_radioModel->isConnected();
-                const bool published = !slice->rxAntennaList().isEmpty()
-                    || (m_radioModel && !m_radioModel->antennaList().isEmpty());
                 const bool virtualAntennas = m_kiwiSdrManager
                     && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
-                if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+                if (rxAntennaChoiceRefused(connected, published, virtualAntennas,
+                                           station)) {
                     emit antennaChoiceRefused(false);
                     return;
                 }
             }
             const QString cur = slice->rxAntenna();
-            QStringList menuOptions = rxAntennaOptions();
+            // A station switch with no radio port beside it is the whole list.
+            QStringList menuOptions =
+                published || !station ? rxAntennaOptions() : QStringList{};
             if (m_kiwiSdrManager) {
                 for (const QString& ant : m_kiwiSdrManager->virtualAntennaTokens()) {
                     if (!ant.isEmpty() && !menuOptions.contains(ant)) {
@@ -422,7 +430,7 @@ void RxApplet::buildUI()
                     }
                 }
             }
-            if (menuOptions.isEmpty()) {
+            if (menuOptions.isEmpty() && !station) {
                 menuOptions << QStringLiteral("ANT1") << QStringLiteral("ANT2");
             }
             const QString activeKiwiProfile =
@@ -449,11 +457,24 @@ void RxApplet::buildUI()
                 act->setToolTip(ant);
                 act->setStatusTip(ant);
             }
+            // A Kiwi receiver on this slice is what it hears: no switch port is checked.
+            addStationAntennaMenus(*menu, stations, false, activeKiwiProfile.isEmpty());
             connect(menu, &QMenu::triggered, this, [this, slice](QAction* sel) {
                 if (!sel || !slice) {
                     return;
                 }
                 const QString token = sel->data().toString();
+                if (const auto pick = stationAntennaPickFrom(sel->data())) {
+                    emit flexRxAntennaSelected(slice->sliceId());
+                    const QString refusal = m_radioModel
+                        ? m_radioModel->selectStationAntenna(pick->id, pick->token, false)
+                        : QString();
+                    if (!refusal.isEmpty()) {
+                        QToolTip::showText(m_rxAntBtn->mapToGlobal(QPoint(0, 0)), refusal,
+                                           m_rxAntBtn);
+                    }
+                    return;
+                }
                 const QString profileId = m_kiwiSdrManager
                     ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
                     : QString();
@@ -478,11 +499,15 @@ void RxApplet::buildUI()
             "QPushButton:hover { color: #ff6666; }");
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
             // TX has no Kiwi escape: a virtual receiver never transmits.
+            const QVector<StationAntennaView> stations =
+                m_radioModel ? m_radioModel->stationAntennaViews() : QVector<StationAntennaView>{};
+            const bool station = !stations.isEmpty();
+            const bool published = m_slice
+                && (!m_slice->txAntennaList().isEmpty()
+                    || (m_radioModel && !m_radioModel->antennaList().isEmpty()));
             if (m_slice) {
                 const bool connected = m_radioModel && m_radioModel->isConnected();
-                const bool published = !m_slice->txAntennaList().isEmpty()
-                    || (m_radioModel && !m_radioModel->antennaList().isEmpty());
-                if (txAntennaChoiceRefused(connected, published)) {
+                if (txAntennaChoiceRefused(connected, published, station)) {
                     emit antennaChoiceRefused(true);
                     return;
                 }
@@ -494,7 +519,8 @@ void RxApplet::buildUI()
             QMenu& menu = *menuOwner.get();
             menu.setToolTipsVisible(true);  // raw token behind the alias (#5546)
             const QString cur = m_slice ? m_slice->txAntenna() : "";
-            const QStringList options = txAntennaOptions();
+            const QStringList options =
+                published || !station ? txAntennaOptions() : QStringList{};
             for (const QString& ant : options) {
                 QAction* act = menu.addAction(antennaMenuLabel(ant, options));
                 act->setData(ant);
@@ -503,13 +529,24 @@ void RxApplet::buildUI()
                 act->setToolTip(ant);
                 act->setStatusTip(ant);
             }
+            addStationAntennaMenus(menu, stations, true);
             const QAction* sel = menu.exec(
                 m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
             if (!self || !menuOwner || !button || !slice
                 || self->m_slice != slice.data() || !sel) {
                 return;
             }
-            slice->setTxAntenna(sel->data().toString());
+            const QString token = sel->data().toString();
+            if (const auto pick = stationAntennaPickFrom(sel->data())) {
+                const QString refusal = self->m_radioModel
+                    ? self->m_radioModel->selectStationAntenna(pick->id, pick->token, true)
+                    : QString();
+                if (!refusal.isEmpty()) {
+                    QToolTip::showText(button->mapToGlobal(QPoint(0, 0)), refusal, button);
+                }
+                return;
+            }
+            slice->setTxAntenna(token);
         });
         row->addWidget(m_txAntBtn);
 
@@ -2169,6 +2206,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         releaseTransmitFrequencyCheck();
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &RxApplet::updateAntennaButtons);
+        disconnect(m_radioModel, &RadioModel::stationAntennasChanged, this, nullptr);
         disconnect(m_radioModel, &RadioModel::slotOccupancyChanged,
                    this, nullptr);
         disconnect(m_radioModel, &RadioModel::capabilitiesChanged,
@@ -2194,16 +2232,14 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
         m_filterAvailability->registerRestriction(m_txAntBtn,
             tr("This radio is receive-only; no transmit antenna is available"),
-            [](bool connected, const RadioCapabilities& caps) {
-                return !connected || caps.canTransmit;
-            });
+            txAntennaFieldAvailable);
         m_filterAvailability->registerRestriction(m_rxAntBtn,
             tr("This receiver has one fixed receive input"),
             [this](bool connected, const RadioCapabilities& caps) {
                 const bool virtualAntennas = m_kiwiSdrManager
                     && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
-                return !connected || caps.canTransmit || !m_slice
-                    || m_slice->rxAntennaList().size() != 1 || virtualAntennas;
+                return rxAntennaFieldAvailable(connected, caps, m_slice, virtualAntennas,
+                    m_radioModel && m_radioModel->hasStationAntennas());
             });
         m_filterAvailability->registerRestriction(m_ritContainer,
             tr("Receive incremental tuning is unavailable in this mode"),
@@ -2249,6 +2285,12 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &RxApplet::updateAntennaButtons);
+        // Re-evaluate the RX ANT restriction first (a switch bound later opens
+        // it), then redraw, so a lifted restriction does not restore a stale tooltip.
+        connect(m_radioModel, &RadioModel::stationAntennasChanged, this, [this] {
+            if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
+            updateAntennaButtons();
+        });
         // Slot-occupancy changes (other Multi-Flex clients connecting /
         // disconnecting, slots claimed / released) restyle the slice tab
         // row so foreign slots dim and free slots open back up (#2606).
@@ -2646,6 +2688,18 @@ void RxApplet::updateAntennaButton(QPushButton* button, const QString& token, bo
         : QStringLiteral("%1 antenna port: %2")
               .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
                    full));
+
+    // A Kiwi receiver on this slice still wins for RX.
+    if (profileId.isEmpty()) {
+        if (const auto station = stationAntennaField(m_radioModel, m_slice, tx)) {
+            const QString stationText =
+                fm.elidedText(station->text, Qt::ElideRight, kMaxWidth - kPad);
+            button->setText(stationText);
+            button->setFixedWidth(
+                qBound(kMinWidth, fm.horizontalAdvance(stationText) + kPad, kMaxWidth));
+            button->setToolTip(station->toolTip);
+        }
+    }
     if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
 }
 

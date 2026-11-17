@@ -30,30 +30,38 @@ static void check(bool ok, const char* what)
     if (!ok) ++g_failures;
 }
 
-static_assert(rxAntennaChoiceRefused(true, false, false), "HL2, no Kiwi: refused");
-static_assert(!txAntennaChoiceRefused(true, true), "published TX ports: allowed");
+static_assert(rxAntennaChoiceRefused(true, false, false, false), "HL2, no Kiwi: refused");
+static_assert(!txAntennaChoiceRefused(true, true, false), "published TX ports: allowed");
 
 int main()
 {
     // RX
-    check(rxAntennaChoiceRefused(true, false, false),
+    check(rxAntennaChoiceRefused(true, false, false, false),
           "RX: connected, nothing published, no Kiwi receiver -> refused (HL2)");
-    check(!rxAntennaChoiceRefused(true, true, false),
+    check(!rxAntennaChoiceRefused(true, true, false, false),
           "RX: connected with published ports -> menu opens (Flex, IC-7300MK2)");
-    check(!rxAntennaChoiceRefused(true, false, true),
+    check(!rxAntennaChoiceRefused(true, false, true, false),
           "RX: nothing published but a Kiwi receiver on offer -> menu opens");
-    check(!rxAntennaChoiceRefused(true, true, true),
+    check(!rxAntennaChoiceRefused(true, true, true, false),
           "RX: published ports and Kiwi -> menu opens");
-    check(!rxAntennaChoiceRefused(false, false, false),
+    check(!rxAntennaChoiceRefused(false, false, false, false),
           "RX: disconnected -> never refused");
 
     // TX -- no Kiwi escape exists by construction: there is no parameter for it.
-    check(txAntennaChoiceRefused(true, false),
+    check(txAntennaChoiceRefused(true, false, false),
           "TX: connected, nothing published -> refused (HL2)");
-    check(!txAntennaChoiceRefused(true, true),
+    check(!txAntennaChoiceRefused(true, true, false),
           "TX: connected with published ports -> menu opens");
-    check(!txAntennaChoiceRefused(false, false),
+    check(!txAntennaChoiceRefused(false, false, false),
           "TX: disconnected -> never refused");
+
+    // A station switch the radio is bound to (the Trio) -- RX and TX.
+    check(!rxAntennaChoiceRefused(true, false, false, true),
+          "RX: nothing published, a station switch bound -> menu opens (HL2 + Trio)");
+    check(!txAntennaChoiceRefused(true, false, true),
+          "TX: nothing published, a station switch bound -> menu opens (HL2 + Trio)");
+    check(txAntennaChoiceRefused(true, false, false),
+          "TX: a Kiwi receiver alone still opens nothing");
 
     std::printf("antenna_choice_gate_test: %s\n", g_failures == 0 ? "PASS" : "FAIL");
     return g_failures == 0 ? 0 : 1;

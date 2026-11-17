@@ -3,6 +3,7 @@
 #include "core/TxKeyingMarker.h"
 #include "ActivePlanBand.h"
 #include "AntennaChoiceGate.h"
+#include "StationAntennaMenu.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "DisplaySettings.h"
 #include "DspParamPopup.h"
@@ -25,6 +26,8 @@
 #include <QPushButton>
 #include <QComboBox>
 #include <QStandardItemModel>
+#include <QAbstractItemView>
+#include <QToolTip>
 #include <QSlider>
 #include <QLabel>
 #include <QAccessible>
@@ -53,6 +56,15 @@
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
+
+// A station port in the RX ANT combo: its pick in this role, and as item data
+// a key no radio token takes ("station:<id>:<token>").
+static constexpr int kStationAntennaRole = Qt::UserRole + 1;
+
+static QString stationAntennaComboKey(const QString& id, const QString& token)
+{
+    return QStringLiteral("station:%1:%2").arg(id, token);
+}
 
 static constexpr int BTN_W = 68;
 static constexpr int BTN_H = 22;
@@ -598,6 +610,23 @@ void SpectrumOverlayMenu::buildAntPanel()
             this, [this](int index) {
         if (m_updatingFromModel || index < 0)
             return;
+        if (const auto pick = stationAntennaPickFrom(
+                m_rxAntCmb->itemData(index, kStationAntennaRole))) {
+            if (m_radioModel) {
+                if (SliceModel* target = antennaTargetSliceForPan(m_radioModel, m_slice, m_panId)) {
+                    emit flexRxAntennaSelected(target->sliceId());
+                }
+                const QString refusal =
+                    m_radioModel->selectStationAntenna(pick->id, pick->token, false);
+                if (!refusal.isEmpty()) {
+                    QToolTip::showText(m_rxAntCmb->mapToGlobal(QPoint(0, 0)), refusal, m_rxAntCmb);
+                }
+            }
+            // The switch's echo, not the pick, decides what the combo shows.
+            QMetaObject::invokeMethod(this, [this] { refreshAntennaCombo(); },
+                                      Qt::QueuedConnection);
+            return;
+        }
         QString ant = m_rxAntCmb->itemData(index).toString();
         if (ant.isEmpty())
             ant = m_rxAntCmb->itemText(index);
@@ -626,7 +655,7 @@ void SpectrumOverlayMenu::buildAntPanel()
                 || (m_radioModel && !m_radioModel->antennaList().isEmpty());
             const bool virtualAntennas = m_kiwiSdrManager
                 && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
-            if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+            if (rxAntennaChoiceRefused(connected, published, virtualAntennas, false)) {
                 emit antennaChoiceRefused(false);
                 // Queued: this runs inside the combo's own index signal, and
                 // the refresh clears and refills that combo.
@@ -1113,6 +1142,8 @@ void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
                    this, &SpectrumOverlayMenu::refreshAntennaCombo);
         disconnect(m_radioModel, &RadioModel::panNoiseFloorRangeAvailabilityChanged,
                    this, &SpectrumOverlayMenu::syncNoiseFloorRange);
+        disconnect(m_radioModel, &RadioModel::stationAntennasChanged,
+                   this, &SpectrumOverlayMenu::refreshAntennaCombo);
     }
     if (m_panRxAntennaConnection) {
         disconnect(m_panRxAntennaConnection);
@@ -1129,6 +1160,8 @@ void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
                 this, &SpectrumOverlayMenu::refreshAntennaCombo);
         connect(m_radioModel, &RadioModel::panNoiseFloorRangeAvailabilityChanged,
                 this, &SpectrumOverlayMenu::syncNoiseFloorRange);
+        connect(m_radioModel, &RadioModel::stationAntennasChanged,
+                this, &SpectrumOverlayMenu::refreshAntennaCombo);
     }
     wirePanadapterRxAntenna();
     refreshAntennaCombo();
@@ -1241,9 +1274,10 @@ QString SpectrumOverlayMenu::currentRxAntennaToken() const
 
 void SpectrumOverlayMenu::refreshAntennaCombo()
 {
-    if (!m_rxAntCmb)
+    // Not under an open list: the switch's state changes often.
+    if (!m_rxAntCmb || (m_rxAntCmb->view() && m_rxAntCmb->view()->isVisible()))
         return;
-    const QString cur = currentRxAntennaToken();
+    QString cur = currentRxAntennaToken();
     QStringList options;
     auto append = [&options](const QString& token) {
         if (!token.isEmpty() && !options.contains(token)) {
@@ -1253,28 +1287,43 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
 
     SliceModel* targetSlice =
         antennaTargetSliceForPan(m_radioModel, m_slice, m_panId);
-    if (targetSlice) {
-        for (const QString& token : targetSlice->rxAntennaList()) {
-            append(token);
-        }
-    }
-    const bool publishedReceiveOnly = targetSlice && !targetSlice->rxAntennaList().isEmpty()
-        && m_radioModel && m_radioModel->isConnected()
-        && !m_radioModel->backendCapabilities().canTransmit;
-    if (!publishedReceiveOnly) {
-        for (const QString& token : m_antList) {
-            append(token);
-        }
-        if (m_radioModel) {
-            for (const QString& token : m_radioModel->rxAntennaMenuTokens()) {
+    const QVector<StationAntennaView> stations =
+        m_radioModel ? m_radioModel->stationAntennaViews() : QVector<StationAntennaView>{};
+    const bool published = (targetSlice && !targetSlice->rxAntennaList().isEmpty())
+        || (m_radioModel && !m_radioModel->antennaList().isEmpty());
+    // A station switch with no radio port beside it is the whole list.
+    const bool stationOnly = !stations.isEmpty() && !published;
+    const bool kiwiShown = m_kiwiSdrManager
+        && !m_kiwiSdrManager->profileIdForVirtualAntennaToken(cur).isEmpty();
+    if (!stationOnly) {
+        if (targetSlice) {
+            for (const QString& token : targetSlice->rxAntennaList()) {
                 append(token);
             }
         }
-        append(cur);
-        if (options.isEmpty()) {
-            append(QStringLiteral("ANT1"));
-            append(QStringLiteral("ANT2"));
+        const bool publishedReceiveOnly = targetSlice && !targetSlice->rxAntennaList().isEmpty()
+            && m_radioModel && m_radioModel->isConnected()
+            && !m_radioModel->backendCapabilities().canTransmit;
+        if (!publishedReceiveOnly) {
+            for (const QString& token : m_antList) {
+                append(token);
+            }
+            if (m_radioModel) {
+                for (const QString& token : m_radioModel->rxAntennaMenuTokens()) {
+                    append(token);
+                }
+            }
+            append(cur);
+            if (options.isEmpty()) {
+                append(QStringLiteral("ANT1"));
+                append(QStringLiteral("ANT2"));
+            }
         }
+    } else if (!kiwiShown) {
+        const auto reported = std::find_if(stations.cbegin(), stations.cend(),
+            [](const StationAntennaView& view) { return !view.rxCurrent.isEmpty(); });
+        cur = reported == stations.cend() ? QString()
+            : stationAntennaComboKey(reported->id, reported->rxCurrent);
     }
     if (m_kiwiSdrManager) {
         for (const QString& token : m_kiwiSdrManager->virtualAntennaTokens()) {
@@ -1285,6 +1334,38 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
     m_rxAntCmb->clear();
     for (const QString& ant : options) {
         m_rxAntCmb->addItem(antennaComboLabel(ant, options), ant);
+    }
+    // A combo has no submenu: each device is a disabled heading row titled as
+    // a station switch, its ports indented under it. A port that cannot be
+    // picked now is disabled with its reason, and so is every port of a
+    // device that cannot be used at all.
+    auto* items = qobject_cast<QStandardItemModel*>(m_rxAntCmb->model());
+    for (const StationAntennaView& view : stations) {
+        if (view.rx.isEmpty() && view.unavailable.isEmpty()) {
+            continue;
+        }
+        m_rxAntCmb->addItem(stationAntennaMenuTitle(view.heading));
+        int row = m_rxAntCmb->count() - 1;
+        m_rxAntCmb->setItemData(row, view.unavailable.isEmpty() ? view.note : view.unavailable,
+                                Qt::ToolTipRole);
+        if (items) {
+            items->item(row)->setEnabled(false);
+        }
+        for (const StationAntennaChoice& choice : view.rx) {
+            const bool enabled = choice.enabled && view.unavailable.isEmpty();
+            m_rxAntCmb->addItem(QStringLiteral("  ") + choice.label,
+                                stationAntennaComboKey(view.id, choice.token));
+            row = m_rxAntCmb->count() - 1;
+            m_rxAntCmb->setItemData(row, stationAntennaActionData(view.id, choice.token),
+                                    kStationAntennaRole);
+            m_rxAntCmb->setItemData(row,
+                enabled ? choice.hint
+                        : !view.unavailable.isEmpty() ? view.unavailable : choice.reason,
+                Qt::ToolTipRole);
+            if (items && !enabled) {
+                items->item(row)->setEnabled(false);
+            }
+        }
     }
     setRxAntennaComboToken(cur);
     updateLoopButtonVisibility();

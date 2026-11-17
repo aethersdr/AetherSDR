@@ -2,6 +2,7 @@
 
 #include <QRandomGenerator>
 #include <QTimer>
+#include <QUuid>
 
 #include <algorithm>
 #include <utility>
@@ -23,6 +24,7 @@ MicrohamTrioSession::Entropy MicrohamTrioSession::systemEntropy()
 {
     Entropy entropy;
     entropy.random32 = []() { return QRandomGenerator::system()->generate(); };
+    entropy.requestId = []() { return QUuid::createUuid().toString(QUuid::WithoutBraces); };
     return entropy;
 }
 
@@ -78,7 +80,59 @@ void MicrohamTrioSession::stop()
     m_consecutiveFailures = 0;
     m_transientFailures = 0;
     m_snapshot.reset();
+    m_pending.reset();
     setStatus(Status::Idle);
+}
+
+QString MicrohamTrioSession::pendingRequestId() const
+{
+    return m_pending ? m_pending->requestId : QString();
+}
+
+MicrohamTrioSession::WriteRefusal MicrohamTrioSession::refusal(AntennaField field,
+                                                                 const QString& key) const
+{
+    if (!m_running || !snapshotCurrent() || !m_snapshot) {
+        return WriteRefusal::NotHeld;
+    }
+    if (m_pending) {
+        return WriteRefusal::WritePending;
+    }
+    if (field == AntennaField::Split) {
+        return key == QLatin1String(kToggleOn) || key == QLatin1String(kToggleOff)
+            ? WriteRefusal::None : WriteRefusal::NoSuchButton;
+    }
+    const Button* button = m_snapshot->antenna.find(key);
+    if (button == nullptr) {
+        return WriteRefusal::NoSuchButton;
+    }
+    if (!button->enabled && field != AntennaField::RxHalf) {
+        return WriteRefusal::ButtonDisabled;
+    }
+    if (field == AntennaField::Both && m_snapshot->split.on) {
+        return WriteRefusal::SplitEngaged;
+    }
+    if (field != AntennaField::Both && !m_snapshot->split.on) {
+        return WriteRefusal::SplitOff;
+    }
+    return WriteRefusal::None;
+}
+
+MicrohamTrioSession::WriteRefusal MicrohamTrioSession::write(AntennaField field, const QString& key)
+{
+    const WriteRefusal refused = refusal(field, key);
+    if (refused != WriteRefusal::None) {
+        return refused;
+    }
+    const QString requestId = m_entropy.requestId ? m_entropy.requestId() : QString();
+    const Command command = encodeAntennaCommand(*m_snapshot, field, key, requestId);
+    if (command.error != CommandError::None) {
+        return WriteRefusal::Unencodable;
+    }
+    sendText(command.frame);
+    m_pending = PendingWrite{field, key, requestId, m_clock->nowMs()};
+    schedule(m_config.replyTimeoutMs);
+    return WriteRefusal::None;
 }
 
 State MicrohamTrioSession::state() const
@@ -147,6 +201,18 @@ void MicrohamTrioSession::evaluate()
             return;
         }
         wait = std::min(wait, m_config.firstStateTimeoutMs - held);
+    }
+
+    if (m_pending && m_phase == Phase::Open) {
+        const qint64 age = now - m_pending->sentAtMs;
+        if (age >= m_config.replyTimeoutMs) {
+            const PendingWrite write = *m_pending;
+            m_pending.reset();
+            startAttempt(now);
+            emit writeResult(write.field, write.key, WriteOutcome::ReplyOverdue);
+            return;
+        }
+        wait = std::min(wait, m_config.replyTimeoutMs - age);
     }
 
     const State state = buildState(now);
@@ -386,7 +452,7 @@ void MicrohamTrioSession::handleFrame(const MicrohamTrio::Ws::ServerFrame& frame
         return;
     }
 
-    const Frame classified = classify(frame.firstByte, frame.payload);
+    const Frame classified = classify(frame.firstByte, frame.payload, pendingRequestId());
     switch (classified.kind) {
     case FrameKind::ServerPong:
         return;
@@ -394,6 +460,7 @@ void MicrohamTrioSession::handleFrame(const MicrohamTrio::Ws::ServerFrame& frame
         m_unansweredKeepAliveAtMs.reset();
         return;
     case FrameKind::State:
+    case FrameKind::StateReply:
         takeState(classified);
         return;
     case FrameKind::Unknown:
@@ -421,6 +488,15 @@ void MicrohamTrioSession::takeState(const Frame& frame)
     m_transientFailures = 0;
     m_failure = Failure::None;
     m_snapshot = frame.state.snapshot;
+    if (frame.kind == FrameKind::StateReply && m_pending) {
+        const PendingWrite write = *m_pending;
+        m_pending.reset();
+        emit snapshotChanged(*m_snapshot, SnapshotSource::Reply);
+        const bool confirmed = antennaFieldValue(*m_snapshot, write.field) == write.key;
+        emit writeResult(write.field, write.key,
+                         confirmed ? WriteOutcome::Confirmed : WriteOutcome::Disagrees);
+        return;
+    }
     emit snapshotChanged(*m_snapshot, first ? SnapshotSource::OnConnect : SnapshotSource::Push);
 }
 
@@ -443,6 +519,11 @@ void MicrohamTrioSession::dropConnection()
     m_lastKeepAliveAtMs.reset();
     m_unansweredKeepAliveAtMs.reset();
     m_stateOnThisSession = false;
+    if (m_pending) {
+        const PendingWrite write = *m_pending;
+        m_pending.reset();
+        emit writeResult(write.field, write.key, WriteOutcome::ReplyOverdue);
+    }
 }
 
 void MicrohamTrioSession::becomeEvicted()

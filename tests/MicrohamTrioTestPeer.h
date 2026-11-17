@@ -192,6 +192,7 @@ struct Peer {
     bool          autoPong{true};
     bool          stuck{false};
     qsizetype     sentSeen{0};
+    int           requestIds{0};
 
     MicrohamTrioModel::Environment environment()
     {
@@ -201,6 +202,10 @@ struct Peer {
         out.entropy.random32 = [this]() {
             randomWord = randomWord * 1664525u + 1013904223u;
             return randomWord;
+        };
+        out.entropy.requestId = [this]() {
+            return QStringLiteral("0f0f0f0f-1111-4222-8333-%1")
+                .arg(++requestIds, 12, 10, QLatin1Char('0'));
         };
         return out;
     }

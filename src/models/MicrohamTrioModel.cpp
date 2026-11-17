@@ -2,6 +2,7 @@
 
 #include "core/LogManager.h"
 #include "core/MicrohamTrioTcpTransport.h"
+#include "models/StationAntenna.h"
 
 #include <QStringList>
 #include <QVector>
@@ -331,6 +332,8 @@ void MicrohamTrioModel::startSession()
             this, &MicrohamTrioModel::onSnapshot);
     connect(m_session, &MicrohamTrioSession::sessionStateChanged,
             this, &MicrohamTrioModel::onSessionState);
+    connect(m_session, &MicrohamTrioSession::writeResult,
+            this, &MicrohamTrioModel::onWriteResult);
     MicrohamTrioSession::Config config;
     const MicrohamTrioSettings& target = m_testing ? m_testTarget : m_settings;
     config.host = target.host;
@@ -347,6 +350,7 @@ void MicrohamTrioModel::dropSession()
     }
     MicrohamTrioSession* session = m_session;
     m_session = nullptr;
+    m_goal.reset();
     QObject::disconnect(session, nullptr, this, nullptr);
     session->stop();
     // Possibly inside one of its own signals.
@@ -425,6 +429,238 @@ void MicrohamTrioModel::onSessionState(MicrohamTrioSession::Status status)
     setWord(view().session);
     if (before == SessionWord::Direct && m_word != SessionWord::Direct) {
         emit disconnected();
+    }
+    emit changed();
+}
+
+namespace {
+
+QString antennaLabel(const MicrohamTrio::Snapshot& snapshot, const QString& key)
+{
+    const MicrohamTrio::Button* button = snapshot.antenna.find(key);
+    return button != nullptr && !button->label.isEmpty() ? button->label : key;
+}
+
+} // namespace
+
+QString MicrohamTrioModel::unavailableReason() const
+{
+    const View view = this->view();
+    if (!view.configured) {
+        return tr("No Trio is configured.");
+    }
+    if (view.binding != MicrohamTrioBinding::Stored::Bound) {
+        return tr("Set this radio's Trio port in Radio Setup \u2192 Peripherals first.");
+    }
+    if (!view.bindingIssue.isEmpty()) {
+        return tr("Trio label error: %1.").arg(view.bindingIssue);
+    }
+    if (view.session == SessionWord::Evicted) {
+        return tr("Another client holds the Trio's session.");
+    }
+    if (view.session != SessionWord::Direct || !view.stateCurrent || !view.snapshot || !m_session) {
+        return tr("The Trio is not connected.");
+    }
+    const MicrohamTrio::Snapshot& snapshot = *view.snapshot;
+    if (snapshot.radio.selected != view.slotKey) {
+        const MicrohamTrio::Button* focus = snapshot.radio.selectedButton();
+        return tr("The Trio's focus is on %1, not on this radio.")
+            .arg(focus && !focus->label.isEmpty() ? focus->label : snapshot.radio.selected);
+    }
+    return {};
+}
+
+MicrohamTrioModel::WriteVerdict MicrohamTrioModel::pickVerdict(bool tx, const QString& key) const
+{
+    WriteVerdict out;
+    out.message = unavailableReason();
+    if (!out.message.isEmpty()) {
+        return out;
+    }
+    const MicrohamTrio::Snapshot& snapshot = *m_snapshot;
+    if (m_goal || m_session->writePending()) {
+        out.message = tr("The Trio has not finished the last pick yet.");
+        return out;
+    }
+    if (m_switchBlocked && m_switchBlocked()) {
+        out.message = stationAntennaTransmitRefusal();
+        return out;
+    }
+    const MicrohamTrio::Button* button = snapshot.antenna.find(key);
+    if (button == nullptr) {
+        out.message = tr("The Trio has no antenna %1.").arg(key);
+        return out;
+    }
+    const AntennaGoal goal = goalFor(tx, key, snapshot);
+    // The port that ends up carrying TX must not be marked RX only.
+    if (!button->enabled && (tx || !goal.split)) {
+        out.message = tr("The Trio marks %1 as receive only.").arg(antennaLabel(snapshot, key));
+        return out;
+    }
+    out.allowed = true;
+    return out;
+}
+
+MicrohamTrioModel::WriteVerdict MicrohamTrioModel::canSelectTxAntenna(const QString& key) const
+{
+    return pickVerdict(true, key);
+}
+
+MicrohamTrioModel::WriteVerdict MicrohamTrioModel::canSelectRxAntenna(const QString& key) const
+{
+    return pickVerdict(false, key);
+}
+
+MicrohamTrioModel::WriteVerdict MicrohamTrioModel::selectTxAntenna(const QString& key)
+{
+    return startPick(true, key);
+}
+
+MicrohamTrioModel::WriteVerdict MicrohamTrioModel::selectRxAntenna(const QString& key)
+{
+    return startPick(false, key);
+}
+
+MicrohamTrioModel::AntennaGoal MicrohamTrioModel::goalFor(bool tx, const QString& key,
+                                                          const MicrohamTrio::Snapshot& s)
+{
+    AntennaGoal goal;
+    const QString txNow = s.antennaTx;
+    const QString rxNow = s.antennaRx;
+    if (tx) {
+        // Without split TX moves RX with it; in split a TX pick equal to the
+        // RX half ends split there.
+        if (!s.split.on || key == rxNow) {
+            goal.split = false;
+            goal.tx = goal.rx = key;
+        } else {
+            goal.split = true;
+            goal.tx = key;
+            goal.rx = rxNow;
+        }
+    } else {
+        // An RX pick other than TX is split; equal to TX it is not.
+        if (key == txNow) {
+            goal.split = false;
+            goal.tx = goal.rx = txNow;
+        } else {
+            goal.split = true;
+            goal.tx = txNow;
+            goal.rx = key;
+        }
+    }
+    return goal;
+}
+
+std::optional<MicrohamTrioModel::Step> MicrohamTrioModel::nextStep(const AntennaGoal& goal,
+                                                                   const MicrohamTrio::Snapshot& s)
+{
+    using MicrohamTrio::AntennaField;
+    if (!goal.split) {
+        if (s.split.on) {
+            return Step{AntennaField::Split, QLatin1String(MicrohamTrio::kToggleOff)};
+        }
+        if (s.antenna.selected != goal.tx) {
+            return Step{AntennaField::Both, goal.tx};
+        }
+        return std::nullopt;
+    }
+    if (!s.split.on) {
+        return Step{AntennaField::Split, QLatin1String(MicrohamTrio::kToggleOn)};
+    }
+    if (s.antennaTx != goal.tx) {
+        return Step{AntennaField::TxHalf, goal.tx};
+    }
+    if (s.antennaRx != goal.rx) {
+        return Step{AntennaField::RxHalf, goal.rx};
+    }
+    return std::nullopt;
+}
+
+MicrohamTrioModel::WriteVerdict MicrohamTrioModel::startPick(bool tx, const QString& key)
+{
+    WriteVerdict out = pickVerdict(tx, key);
+    if (!out.allowed) {
+        return out;
+    }
+    const AntennaGoal goal = goalFor(tx, key, *m_snapshot);
+    if (!nextStep(goal, *m_snapshot)) {
+        return out;   // already in place
+    }
+    qCInfo(lcDevices) << "MicrohamTrioModel:" << (tx ? "TX" : "RX") << "pick" << key
+                      << "-> split" << goal.split << "TX" << goal.tx << "RX" << goal.rx;
+    m_goal = goal;
+    continuePick();
+    out.sent = m_goal.has_value() || m_session->writePending();
+    if (!out.sent) {
+        out.allowed = false;
+        out.message = tr("The pick could not be sent to the Trio.");
+    }
+    emit changed();
+    return out;
+}
+
+void MicrohamTrioModel::continuePick()
+{
+    if (!m_goal) {
+        return;
+    }
+    if (!m_session || !m_snapshot) {
+        stopPick(tr("the Trio is not connected"));
+        return;
+    }
+    const std::optional<Step> step = nextStep(*m_goal, *m_snapshot);
+    if (!step) {
+        m_goal.reset();
+        emit changed();
+        return;
+    }
+    // Asked before every command, not only the first.
+    if (m_switchBlocked && m_switchBlocked()) {
+        stopPickSaying(stationAntennaTransmitRefusal());
+        return;
+    }
+    if (m_goal->writesLeft <= 0) {
+        stopPick(tr("the Trio did not reach it in three commands"));
+        return;
+    }
+    --m_goal->writesLeft;
+    if (m_session->write(step->field, step->key) != MicrohamTrioSession::WriteRefusal::None) {
+        stopPick(tr("the Trio's state does not allow the next command"));
+    }
+}
+
+void MicrohamTrioModel::stopPick(const QString& why)
+{
+    stopPickSaying(tr("The Trio antenna pick stopped: %1.").arg(why));
+}
+
+void MicrohamTrioModel::stopPickSaying(const QString& sentence)
+{
+    if (!m_goal) {
+        return;
+    }
+    m_goal.reset();
+    qCInfo(lcDevices).noquote() << "MicrohamTrioModel: pick stopped:" << sentence;
+    emit notice(sentence);
+    emit changed();
+}
+
+void MicrohamTrioModel::onWriteResult(MicrohamTrio::AntennaField field, const QString& key,
+                                      MicrohamTrioSession::WriteOutcome outcome)
+{
+    Q_UNUSED(field);
+    const QString label = m_snapshot ? antennaLabel(*m_snapshot, key) : key;
+    switch (outcome) {
+    case MicrohamTrioSession::WriteOutcome::Confirmed:
+        continuePick();
+        break;
+    case MicrohamTrioSession::WriteOutcome::Disagrees:
+        stopPick(tr("the Trio did not take %1").arg(label));
+        break;
+    case MicrohamTrioSession::WriteOutcome::ReplyOverdue:
+        stopPick(tr("the Trio did not answer; reading its state again"));
+        break;
     }
     emit changed();
 }

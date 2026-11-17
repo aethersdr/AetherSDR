@@ -308,6 +308,11 @@ public:
     QVector<QByteArray> sent;
 };
 
+struct SeenWrite {
+    QString key;
+    MicrohamTrioSession::WriteOutcome outcome;
+};
+
 struct SeenSnapshot {
     MicrohamTrioSession::SnapshotSource source{MicrohamTrioSession::SnapshotSource::Push};
     QString radio;
@@ -328,6 +333,7 @@ struct Harness {
 
     QVector<SeenSnapshot> snapshots;
     QVector<Status>       statuses;
+    QVector<SeenWrite>    writes;
 
     bool   autoPong{true};
     int    pings{0};
@@ -346,6 +352,11 @@ struct Harness {
                          });
         QObject::connect(&session, &MicrohamTrioSession::sessionStateChanged,
                          [this](Status status) { statuses.append(status); });
+        QObject::connect(&session, &MicrohamTrioSession::writeResult,
+                         [this](MicrohamTrio::AntennaField, const QString& key,
+                                MicrohamTrioSession::WriteOutcome outcome) {
+                             writes.append({key, outcome});
+                         });
     }
 
     MicrohamTrioSession::Entropy entropy()
@@ -356,8 +367,17 @@ struct Harness {
             randomWord = randomWord * 1664525u + 1013904223u;
             return randomWord;
         };
+        out.requestId = [this]() {
+            if (!requestIds.isEmpty()) {
+                return requestIds.takeFirst();
+            }
+            return QStringLiteral("0f0f0f0f-1111-4222-8333-%1")
+                .arg(++generatedIds, 12, 10, QLatin1Char('0'));
+        };
         return out;
     }
+    QStringList requestIds;
+    int generatedIds{0};
 
     static MicrohamTrioSession::Config config()
     {
@@ -912,7 +932,7 @@ void testRecordedHour()
     report("the on-connect state, then twenty pushes", sources);
     report("each snapshot shows the recorded selections", values);
 
-    report("nothing but the handshake and keep-alives was sent", [&h]() {
+    report("no command was sent: nothing but the handshake and keep-alives", [&h]() {
         for (qsizetype i = 2; i < h.transport.sent.size(); ++i) {
             if (!isClientText(h.transport.sent.at(i), QByteArrayLiteral("ping"))) {
                 return false;
@@ -1047,6 +1067,80 @@ void testRelease()
     h.session.start(Harness::config());
     h.advance(1);
     report("start() takes it back", h.transport.opens == opens + 1);
+}
+
+// The one selection: the antenna port, split off, one command at a time.
+void testAntennaWrite()
+{
+    using Refusal = MicrohamTrioSession::WriteRefusal;
+    using Outcome = MicrohamTrioSession::WriteOutcome;
+    {
+        Harness h;
+        report("before a held session: refused, nothing sent",
+               h.session.selectAntenna(QStringLiteral("ant1")) == Refusal::NotHeld
+                   && h.transport.sent.isEmpty());
+    }
+    Harness h;
+    h.requestIds = {QLatin1String(kIdAnt1), QLatin1String(kIdAnt2)};
+    h.connectHeld();
+    h.hold(2000);
+    report("a port the Trio does not list is refused",
+           h.session.selectAntenna(QStringLiteral("ant9")) == Refusal::NoSuchButton);
+    report("a key the device never sent is refused", h.session.antennaRefusal(
+               QStringLiteral("ant1\"")) == Refusal::NoSuchButton);
+    report("ant1 goes out", h.session.selectAntenna(QStringLiteral("ant1")) == Refusal::None);
+    report("as the bytes the Trio's own page sends", isClientText(h.lastSent(), kSentAnt1));
+    report("a second while the first is unanswered is refused",
+           h.session.selectAntenna(QStringLiteral("ant2")) == Refusal::WritePending
+               && h.session.writePending());
+    h.transport.peerSends(textFrame(stateDoc("radio2", "ant1", kIdAnt1)));
+    report("its reply confirms it",
+           h.writes.size() == 1 && h.writes.at(0).key == QStringLiteral("ant1")
+               && h.writes.at(0).outcome == Outcome::Confirmed && !h.session.writePending()
+               && h.lastSnapshot().source == Source::Reply);
+    h.transport.peerSends(textFrame(stateDoc("radio2", "ant3", kIdAnt1)));
+    report("a later document with the same id is a push, not a second reply",
+           h.lastSnapshot().source == Source::Push && h.writes.size() == 1);
+
+    report("ant2 goes out", h.session.selectAntenna(QStringLiteral("ant2")) == Refusal::None);
+    h.transport.peerSends(textFrame(stateDoc("radio2", "ant5", kIdAnt2)));
+    report("a reply that shows another port disagrees",
+           h.writes.size() == 2 && h.writes.at(1).outcome == Outcome::Disagrees);
+
+    // No reply: reconnect to read the state.
+    const int opens = h.transport.opens;
+    report("ant4 goes out", h.session.selectAntenna(QStringLiteral("ant4")) == Refusal::None);
+    h.advance(Harness::config().replyTimeoutMs - 1);
+    report("one millisecond before the reply is overdue: still waiting",
+           h.session.writePending() && h.transport.opens == opens);
+    h.advance(1);
+    report("overdue: reported, and the session reconnects to read the state",
+           h.writes.size() == 3 && h.writes.at(2).outcome == Outcome::ReplyOverdue
+               && !h.session.writePending() && h.transport.opens == opens + 1);
+
+    Harness split;
+    split.connectHeld();
+    QByteArray doc = stateDoc("radio2", "ant2", kZeroId);
+    doc.replace(R"("split":{"v":false)", R"("split":{"v":true)");
+    doc.replace(R"("antenna":{"v":"ant2")", R"("antenna":{"txv":"tx_ant1","rxv":"rx_ant2")");
+    split.transport.peerSends(textFrame(doc));
+    report("in split the antenna field is refused",
+           split.session.selectAntenna(QStringLiteral("ant1")) == Refusal::SplitEngaged);
+
+    Harness rxOnly;
+    rxOnly.session.start(Harness::config());
+    rxOnly.advance(1);
+    QByteArray marked = stateDoc("radio2", "ant2", kZeroId);
+    marked.replace(R"("l":"Antenna3","e":true)", R"("l":"Antenna3","e":false)");
+    rxOnly.handshake(textFrame(marked));
+    report("a port marked RX only is refused",
+           rxOnly.session.selectAntenna(QStringLiteral("ant3")) == Refusal::ButtonDisabled);
+
+    Harness evicted;
+    evicted.connectHeld();
+    evicted.transport.peerCloses();
+    report("after an eviction: refused", evicted.session.selectAntenna(QStringLiteral("ant1"))
+               == Refusal::NotHeld);
 }
 
 void testErrorPage()
@@ -1349,6 +1443,7 @@ int main(int argc, char** argv)
     testKeepAliveCadence();
     testDeadSession();
     testEvictionIsNotRetaken();
+    testAntennaWrite();
     testRelease();
     testErrorPage();
     testCloseAndPing();
