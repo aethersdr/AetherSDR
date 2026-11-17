@@ -780,9 +780,9 @@
   "confidence": "high"
  },
  "models/SmartLinkAccountModel.h": {
-  "tag": "vendor(flex)",
+  "tag": "mixed(flex)",
   "note": "Engine-owned SmartLink account model: the UI consumes account and discovery snapshots and typed connection requests. Credential jobs, broker transport and certificate storage stay behind the model; SmartLink remains a Flex-specific service.",
-  "split": "",
+  "split": "Core: account state, discovered-radio snapshots and typed connection requests. Flex: SmartLink authentication, broker discovery and certificate pin management are implemented in the backend.",
   "confidence": "high"
  },
  "core/backends/flex/SmartLinkClient.h": {
