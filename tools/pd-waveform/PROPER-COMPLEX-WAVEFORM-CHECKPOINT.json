@@ -1,0 +1,44 @@
+{
+  "updated_utc": "2026-11-17T14:47:45.889224+00:00",
+  "status": "isolated_experimental_waveform_build_completed_integration_tests_not_yet_run",
+  "production_ready": false,
+  "source_base_commit": "c3cbe9698ea490177dbfd5341d73a24635042d91",
+  "provenance": {
+    "production_source_unchanged": true,
+    "base_source_sha256": "a2208c8db78035fbce2d40c3b3915657c4b1107272b92d54de63bab6e757c637",
+    "experimental_source_sha256": "71484d87b619da180039736c606a7323d77f97740f77f124a2ea22e16aa1abbf",
+    "candidate_patch_sha256": "0f13cc5e6faa3eb04ec92d234266020f48a4916c8c9e587e95670ac5143f7fa8",
+    "scope": "Separate source copies only; no package/default/privilege changes."
+  },
+  "completed": [
+    "Created separate control and experimental native source copies.",
+    "Applied proper-complex preamble patch only to the experimental copy.",
+    "Configured and compiled the experimental waveform and nine existing native test executables."
+  ],
+  "verification_limits": [
+    "Compilation succeeded with compiler warnings retained in the build log.",
+    "Native regression executables and waveform selftest have not been run for this experimental build.",
+    "Actual dispatch sample comparison and full closed-loop calibration qualification remain pending.",
+    "No CPU/deadline, actual FLEX-6300 or RF qualification for this candidate."
+  ],
+  "production_source_files_changed": false,
+  "radio_package_or_defaults_changed": false,
+  "RF_key_actions": 0,
+  "resume_directory": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/proper-preamble-waveform",
+  "remaining": [
+    "Build the unchanged control copy and compare native regression results.",
+    "Verify dispatched preamble samples, peak bounds, sample budgets, tone transition, cancellation and reset.",
+    "Exercise actual waveform calibration and WDSP through a closed-loop fixture.",
+    "Measure scheduling/CPU cost before preparing any candidate radio package.",
+    "Preserve existing RF safety guards and qualify any future deployment separately."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform-checkpoint/setup.py.gz": "13575f2c6920386f7a53afd11b88731faee953e0c2e4ac6f4879e5ab4d901a45",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform-checkpoint/candidate.patch.gz": "c791483abd167e59d2c66eb9349afa0f85296786f8f72408d27bbebbc8dc4ad2",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform-checkpoint/provenance.json.gz": "1dba15c5cdb650b5487c1fbb7b0b1f8250f8205881c0c46ebeec61f7656174bc",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform-checkpoint/candidate-CMakeLists.txt.gz": "c2fbaf4eaedf39627494b0c7ff3a4a20a50d6f92459a4d22d9a8593a0eadb2e4",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform-checkpoint/control-CMakeLists.txt.gz": "c2fbaf4eaedf39627494b0c7ff3a4a20a50d6f92459a4d22d9a8593a0eadb2e4",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform-checkpoint/candidate-configure.log.gz": "8e0916da3ae5b384de3d71a944f6a5dba3fe3a485c5b32822c33f7ad24a21b9f",
+    "tools/pd-waveform/evidence/20261117-proper-preamble-waveform-checkpoint/candidate-build.log.gz": "7bb960abd299e27188de26a92d59c207817750d73e4ced3ec94831a5ff18f38b"
+  }
+}
