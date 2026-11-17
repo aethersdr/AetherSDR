@@ -25,7 +25,6 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/store"
 	"tailscale.com/tsnet"
 )
 
@@ -78,6 +77,11 @@ type Node struct {
 	pdSessionStopped          bool
 	pdSessionCleanupConfirmed bool
 	pdSessionDial             func(context.Context, pdStartIdentity) (*pdSessionChannel, error)
+
+	// A native identity that exists but cannot be loaded is not first use.
+	// Retain its file and refuse control/enrollment until explicit recovery.
+	nativeStateLoadFailed bool
+	nativeConfigMu        sync.Mutex // serializes the fixed native configuration temporary file
 
 	StateDir string
 	// RunDir, when set, holds tsnet's logs and caches on volatile storage,
@@ -181,7 +185,7 @@ func (n *Node) newTsnetServer(hostname, authKey string) (*tsnet.Server, error) {
 			return nil, err
 		}
 	}
-	st, err := store.New(func(string, ...any) {}, filepath.Join(n.tsnetDir(), "tailscaled.state"))
+	st, err := newNativeStateStore(filepath.Join(n.tsnetDir(), "tailscaled.state"))
 	if err != nil {
 		return nil, err
 	}
@@ -190,11 +194,25 @@ func (n *Node) newTsnetServer(hostname, authKey string) (*tsnet.Server, error) {
 }
 func (n *Node) provisioned() bool { return n.cfg.TokenSHA256 != "" }
 
-func (n *Node) load() error {
+func (n *Node) load() (err error) {
+	defer func() {
+		if n.RunDir != "" {
+			n.nativeStateLoadFailed = err != nil
+			if err != nil {
+				n.cfg = provisionConfig{}
+				n.state, n.lastError = stateError, err.Error()
+			}
+		}
+	}()
 	if err := os.MkdirAll(n.StateDir, 0o700); err != nil {
 		return err
 	}
-	b, err := os.ReadFile(n.cfgPath())
+	var b []byte
+	if n.RunDir != "" {
+		b, err = readNativeStateFile(n.cfgPath())
+	} else {
+		b, err = os.ReadFile(n.cfgPath())
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		n.state = stateUnprovisioned
 		return nil
@@ -230,7 +248,7 @@ func (n *Node) load() error {
 	}
 	// A pending sign-in whose completion couldn't be saved: the tailnet
 	// state says it finished, so it isn't claimable.
-	if n.cfg.PendingSignIn && joinedBefore(n.tsnetDir()) {
+	if n.cfg.PendingSignIn && joinedBefore(n.tsnetDir(), n.RunDir != "") {
 		log.Printf("sign-in recorded as pending, but the tailnet state shows it completed")
 		n.cfg.PendingSignIn = false
 		if err := n.save(n.cfg); err != nil {
@@ -246,7 +264,17 @@ func (n *Node) load() error {
 }
 
 func (n *Node) save(cfg provisionConfig) error {
-	b, _ := json.MarshalIndent(cfg, "", "  ")
+	if n.RunDir != "" {
+		n.nativeConfigMu.Lock()
+		defer n.nativeConfigMu.Unlock()
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if n.RunDir != "" {
+		return writeNativeStateFile(n.cfgPath(), b)
+	}
 	tmp := n.cfgPath() + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
@@ -268,6 +296,10 @@ func (n *Node) setState(state, lastErr string) {
 // interrupt it with interruptBoot instead of waiting their turn.
 func (n *Node) Boot() {
 	n.mu.Lock()
+	if n.nativeStateLoadFailed {
+		n.mu.Unlock()
+		return
+	}
 	provisioned := n.provisioned()
 	if n.cfg.LocalOnly {
 		n.state = stateLocal
@@ -685,9 +717,10 @@ func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bo
 func (n *Node) beginOp(presented string, firstUse bool) (end func(), err error) {
 	refused := func() bool {
 		n.mu.Lock()
+		failed := n.nativeStateLoadFailed
 		needsToken := !firstUse || (n.provisioned() && !n.cfg.PendingSignIn)
 		n.mu.Unlock()
-		return needsToken && !n.checkToken(presented)
+		return failed || needsToken && !n.checkToken(presented)
 	}
 	if refused() {
 		return nil, errUnauthorized
@@ -805,6 +838,9 @@ func (n *Node) checkToken(presented string) bool {
 }
 
 func (n *Node) checkTokenLocked(presented string) bool {
+	if n.nativeStateLoadFailed {
+		return false
+	}
 	want := n.cfg.TokenSHA256
 	if want == "" || presented == "" {
 		return false
@@ -1087,7 +1123,7 @@ func (n *Node) statusLocked() Status {
 		Hostname: n.cfg.Hostname, DNSName: n.dnsName, Allow: n.cfg.Allow,
 		InstallationID: n.cfg.InstallationID,
 		LastError:      n.lastError,
-		Claimable:      !n.provisioned() || n.cfg.PendingSignIn,
+		Claimable:      !n.nativeStateLoadFailed && (!n.provisioned() || n.cfg.PendingSignIn),
 	}
 	if n.keyExpiry != nil {
 		st.KeyExpiry = n.keyExpiry.UTC().Format(time.RFC3339)

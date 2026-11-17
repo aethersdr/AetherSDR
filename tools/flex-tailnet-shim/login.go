@@ -318,8 +318,15 @@ func (n *Node) markJoined() {
 // sign-in. tailscaled writes its current-profile key only once a login has
 // given the node an identity, so a sign-in that never finished has none. A
 // state file that can't be read or parsed counts as joined: fail closed.
-func joinedBefore(dir string) bool {
-	b, err := os.ReadFile(filepath.Join(dir, "tailscaled.state"))
+func joinedBefore(dir string, native bool) bool {
+	var b []byte
+	var err error
+	path := filepath.Join(dir, "tailscaled.state")
+	if native {
+		b, err = readNativeStateFile(path)
+	} else {
+		b, err = os.ReadFile(path)
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return false
 	}

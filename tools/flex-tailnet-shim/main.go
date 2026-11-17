@@ -68,7 +68,11 @@ func main() {
 	disc.OnChange = node.RefreshRoutes
 	disc.Start()
 	if err := node.load(); err != nil {
-		log.Printf("state: %v; starting unprovisioned", err)
+		if node.RunDir != "" {
+			log.Printf("state: %v; native enrollment and control blocked until identity recovery", err)
+		} else {
+			log.Printf("state: %v; starting unprovisioned", err)
+		}
 	}
 	node.Boot()
 	ServeAPI(node, *apiAddr)

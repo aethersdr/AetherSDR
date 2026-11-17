@@ -649,6 +649,25 @@ unpacker (`native/unpack`) puts it in `/tmp` at each start. `native/TESTING.md` 
 tester's AI assistant; `native/tool.py` installs, provisions and watches it
 from the LAN.
 
+With `-run-dir`, `provision.json` and `tsnet/tailscaled.state` each have a
+64 KiB limit, including JSON and base64 overhead. This matches the native
+installer's identity-transfer limit. Writes exceeding it are refused before
+replacing the saved identity; failed writes also retain the state store's
+previous cache. A failed native configuration load reports an error and blocks control,
+boot enrollment and first-use claiming; partially decoded credentials are not
+used. The Tailscale state file remains readable by the upstream file store.
+Each file uses one fixed temporary sibling, reused after an interrupted write,
+so retries do not create an unbounded collection of temporary files. Linux
+refuses symbolic links and special files when reading identities, and refuses
+linked or foreign-owned temporary files before truncation.
+
+These limits bound newly written native identity files and their two fixed
+temporary siblings to 256 KiB of file data. Existing oversized files and legacy
+temporary files are preserved for explicit recovery. The limits do not cap
+filesystem metadata, other waveforms, system journal or volatile caches. File sync precedes rename;
+abrupt-power-loss directory durability and actual FLEX-6300 qualification
+remain separate gates. The container layout without `-run-dir` is unchanged.
+
 ## Build
 
 ```sh

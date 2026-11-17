@@ -821,6 +821,16 @@ A connection change requires reopening the window; an old window cannot approve
 a plan for the replacement connection. Fixed boot/session helpers remain installed
 for reboot and local IQ setup; temporary delivery and upgrade workers are retired.
 
+The native development service keeps Tailscale's log and cache files in RAM.
+Its saved configuration and Tailscale identity each have a 64 KiB limit, matching what
+the installer can preserve during an update. If a file exceeds that limit,
+the service refuses the load or write and preserves the saved file for
+recovery. It does not erase the identity or silently sign the radio out. An unreadable
+saved configuration blocks enrollment and control; it does not make the radio
+available for a new owner to claim.
+This bounds those identity files, not total radio storage; FLEX-6300 disk and
+power-loss qualification remain required.
+
 Signing out or replacing the admin token also stops the shim's owned AetherPD
 session and cancels calibration. Signing in again does not restart correction
 or rearm calibration. A rejected sign-out or failed token update leaves the

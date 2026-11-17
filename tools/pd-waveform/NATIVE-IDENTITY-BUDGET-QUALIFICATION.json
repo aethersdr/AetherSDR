@@ -1,0 +1,201 @@
+{
+  "updated_utc": "2026-11-17T07:22:29.653780+00:00",
+  "status": "native_identity_size_admission_and_failed_write_load_guards_implemented_and_offline_qualified_not_installed",
+  "source_base_commit": "7c68ed181a5eb96a9a117039c43bc4b1066f9188",
+  "source_sha256": {
+    "docs/user/docs/tailscale-remote-access.md": "9a2f80d6487aee35c94a6e1532dba747e44710a494233e1e2f4525613bab7111",
+    "tools/flex-tailnet-shim/README.md": "13e0ce669e8a5620807f04f1b902e310703ce2064b6ca4ebec3f4a9f6a72b421",
+    "tools/flex-tailnet-shim/login.go": "6880890ba7dca306b576d72bae8123e1632fc20af5e41b200f65239a350590f7",
+    "tools/flex-tailnet-shim/login_test.go": "50bee7a14d17e5e41cbec0cbfe59468c89975db06f247a87b083bde61cf69e00",
+    "tools/flex-tailnet-shim/main.go": "164d1d4b970a7ec1f92741722690d08ad3405590f004e13dd49ee1c3bded5d2b",
+    "tools/flex-tailnet-shim/node.go": "883758d10a85392d8756487939c55284dc956b74cee43b933e2bcc1aa5c29b69",
+    "tools/flex-tailnet-shim/native_state.go": "92380852f583e58e482bad082b92950bf982308f1c510295a0c53630be62bc3d",
+    "tools/flex-tailnet-shim/native_state_open_linux.go": "1363ec2870d8b3092a856ad44d3a164549a4ccd134140c2612af5fc18d2574d7",
+    "tools/flex-tailnet-shim/native_state_open_linux_test.go": "3bd1a3a795fcde9fe88d9eeb1a20d5569a39e7e39cc2db63194b5e446f513a5e",
+    "tools/flex-tailnet-shim/native_state_open_other.go": "9f52a67904e1fcbc4974c3e69519b3073019fe9b1e97b3689fb5fed3496a5226",
+    "tools/flex-tailnet-shim/native_state_test.go": "6d6c6406b6b305f57cbc6fb074e720e47149bc8acd3d534ae644b24a59d26823",
+    "tools/flex-tailnet-shim/go.mod": "195d97c692aad034aafc630c92845acdaec505a250b64e622d55cfc08a06e4b5",
+    "tools/flex-tailnet-shim/go.sum": "87a3569e4090b5b58fe2c3b6b6a06c80ad88b685914e3216e973264a25fa9892",
+    "tools/pd-waveform/boot/pd_state_transfer.c": "a1bae49dac6ac3288e9134ad57ea1ff3c6831ee4dd68a8d57a5e1439f1e6c2fe",
+    "tools/flex-tailnet-shim/vendor/tailscale.com/ipn/store/stores.go": "0f68a57ebdda43ad81e341f7c96e57dfa03d7658ffa169fddf5e6532b7f00efe",
+    "tools/flex-tailnet-shim/vendor/tailscale.com/ipn/ipnlocal/local.go": "a7d012ab96e412c6bced3dee5b7be3650dc050b5c33052722627b4778dd27f25"
+  },
+  "production_ready": false,
+  "installed": false,
+  "radio_access": false,
+  "RF_commands": [],
+  "credential_mutations_on_radio": [],
+  "storage_contract": {
+    "applies_when": "Node.RunDir is nonempty (native layout)",
+    "provision_json_encoded_limit_bytes": 65536,
+    "tailscaled_state_encoded_limit_bytes": 65536,
+    "includes": [
+      "JSON formatting",
+      "base64 expansion",
+      "aggregate map keys and values"
+    ],
+    "maximum_new_file_data_including_one_temporary_for_each_bytes": 262144,
+    "temporary_names": [
+      "provision.json.tmp",
+      "tsnet/tailscaled.state.tmp"
+    ],
+    "serialization": "One native config mutex plus the native state-store mutex; single installed native service owns the file paths. No cross-process file lock is claimed.",
+    "installer_transfer_limit_bytes_per_file": 65536,
+    "existing_oversize_and_legacy_temporary_files": "Preserved for explicit recovery, not automatically removed or truncated by load.",
+    "excluded_from_cap": [
+      "filesystem metadata",
+      "other waveforms",
+      "system journal",
+      "volatile tsnet caches/log files",
+      "installer/upgrade copies and generations"
+    ],
+    "container_without_RunDir": "Existing store, layout and size behavior retained."
+  },
+  "behavior_verified": [
+    "Exact 65536-byte encoded identity admitted; extra aggregate entry refused without replacing saved identity.",
+    "Oversized individual values/keys and provision config writes refused; prior files and store cache preserved.",
+    "Real filesystem write/rename failures leave the store cache unchanged; retry persists the replacement.",
+    "Upstream Tailscale FileStore and native store read each other's files.",
+    "ReadState/All cannot mutate live store state; nil deletes and non-nil empty values remain distinct.",
+    "Concurrent state writes survive reopen; concurrent config saves are serialized and produce whole JSON.",
+    "Interrupted fixed temporary file is reused; ordinary write failure removes its temporary file.",
+    "Linux rejects symlink/FIFO reads and symlink/hardlink/FIFO temporary writes before data truncation.",
+    "Failed native configuration load blocks first-use admission, token authorization and Boot; partial decode is not used.",
+    "Oversized pending-sign-in state remains owned; container-layout pending-sign-in behavior stays unchanged.",
+    "String and GoString prevent Tailscale store error formatting from exposing the identity cache."
+  ],
+  "verification": {
+    "new_native_tests": 16,
+    "full_pinned_Go_1_27_1_race_suite": "passed: full module ./..., final reviewed source",
+    "earlier_Go_1_27_4_full_race_suite": "passed before final config serialization and formatting additions; final native subset subsequently passed with -race",
+    "mutation_checks": [
+      {
+        "mutation": "size-limit",
+        "test_pattern": "^TestNativeStateExactEncodedBoundaryAndAggregate$",
+        "exit": 1,
+        "expected_failure": "aggregate size was not bounded",
+        "rejected": true
+      },
+      {
+        "mutation": "cache-before-write",
+        "test_pattern": "^TestNativeStateFailedWriteDoesNotPoisonCacheOrRetry$",
+        "exit": 1,
+        "expected_failure": "failed write replaced the in-memory identity",
+        "rejected": true
+      },
+      {
+        "mutation": "load-claim",
+        "test_pattern": "^TestNativeStateLoadFailureCannotBecomeFirstUse$",
+        "exit": 1,
+        "expected_failure": "failed identity load exposed first-use enrollment",
+        "rejected": true
+      },
+      {
+        "mutation": "remove_native_config_serialization",
+        "test": "TestNativeProvisionConcurrentSavesStayAtomic",
+        "exit": 1,
+        "rejected": true
+      }
+    ],
+    "native_ARM_builds": {
+      "toolchain": "go version go1.27.1 linux/amd64",
+      "toolchain_sha256": "30969f97169d7f43fe6a085873d75613adc21e30818a8c61d95bd27275df4624",
+      "builds": [
+        {
+          "arch": "armv7",
+          "bytes": 21889184,
+          "sha256": "bb1c5fadb08a71d53f86c797fb4b46c3eeeb32795f601c46a5fc51f3b12f98ed",
+          "ELF_class": 1,
+          "ELF_machine": 40,
+          "command": [
+            "/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/bin/go",
+            "build",
+            "-mod=vendor",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags=-s -w",
+            "-o",
+            "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-state-budget/reviewed-armv7/flex-tailnet-shim",
+            "."
+          ],
+          "executed_on_radio": false
+        },
+        {
+          "arch": "arm64",
+          "bytes": 21495968,
+          "sha256": "76e30cfce6dc940852f5a55c34e17811b00dc52017cdb15fb987fe4918fa64d7",
+          "ELF_class": 2,
+          "ELF_machine": 183,
+          "command": [
+            "/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/bin/go",
+            "build",
+            "-mod=vendor",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags=-s -w",
+            "-o",
+            "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-state-budget/reviewed-arm64/flex-tailnet-shim",
+            "."
+          ],
+          "executed_on_radio": false
+        }
+      ]
+    },
+    "npm_ci": "passed",
+    "documentation_build": "passed",
+    "generated_reference_check": "8 pages current",
+    "log_analyzer_check": "767 checks passed for49 rules;12 existing moved citation-line notes retained"
+  },
+  "negative_evidence_preserved": [
+    "Original baseline accepted oversized writes, poisoned cache on failed writes, exposed mutable cache and accepted invalid/oversized state.",
+    "Corrupt-load test demonstrated first-use claiming and partial credential authorization, then hit a fixture-label slicing panic; corrected labels and final tests pass. Both original and intermediate receipts are preserved.",
+    "Initial full suite in the filesystem sandbox failed due denied socket operations; an existing unchecked UDP fixture then panicked. Full suites passed with required local socket permissions."
+  ],
+  "limits_and_remaining": [
+    "No new package authentication, two-path reproducibility, native installation, software reboot, abrupt power-cut or RF result is claimed for this code. Installed c732/e7 runtime remains unchanged.",
+    "The 256 KiB figure bounds the two newly written logical identity files and their fixed temporary siblings, not the entire radio filesystem or installer copies. Modelled metadata/log/state allowances and actual6300 usage still require qualification.",
+    "File fsync precedes rename; parent-directory durability under abrupt power loss and interrupted-update/rollback gates remain unresolved.",
+    "Actual Tailscale enrollment, token rotation/signout/recovery and upstream consumers' handling of a refused StateStore write are not qualified by store tests.",
+    "markJoined captures configuration under mu then saves outside it; interaction with concurrent signout/replacement warrants a deterministic persisted-credential lifetime test before live credential mutation. Configuration-write serialization alone does not prove revocation ordering.",
+    "No actual Linux2.6/CortexA8/one-core6300 hardware, final analyzer/stockAPD comparison or sustained RF qualification is substituted by these offline tests.",
+    "Guard mutations were applied before the final String/GoString addition; unchanged guarded behavior plus the final full race suite and error-formatting test are the supporting scopes."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/before.log.gz": "e260e3a74f4f7ed72eba01a675991bc3ba900bf4063657350f9bd675e886b98e",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/after.log.gz": "639c2efe60acfcfb9932734d7120408758d056f5e6ee08d9855433a2a0216051",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/after-expanded.log.gz": "f72bf46908593d649be6e4451b7ce186b9e1c46702e4395036d18ac83c2cac65",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/corrupt-load-before.log.gz": "4449779be1b8e7f79bbaee9f89fe3996d7d4a2b0115fcaa857642118dda456a9",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/after-fail-closed.log.gz": "4a2e72af507ddb8a3ca378bee8f4e390bd28454dd1990915867497426774c45e",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/after-fail-closed-02.log.gz": "9058d1d0e0d2eb105618721d55a9f3730ebe682780cd363d3ce3b94449a2a220",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/after-config-serialization.log.gz": "8cb439709ab454099942533e202dea395d9ec9b638e3174f26221929c466ed3e",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/after-formatting.log.gz": "b120dca1b9a5770cbe6cff1ff83347c3f42a00323836695572a0feeede5dd244",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/go-race.log.gz": "c83a81e80f22a9ba0fb6cc92a6164c7a15d3496295d34a31171a6813d5b8d067",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/go-race-unsandboxed.log.gz": "050172048a6c9a18feb78dbfbc9f519c4b10847ddf455988231a8bed62037e4f",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/go-race-pinned.log.gz": "6d8e46a7641627581768dba919c00971a55682a34b76e42611dd754f6eeea153",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/go-race-pinned-final.log.gz": "2977a61eb19a5f371dce6fe3f88a52addefe82b1f669c079514ff17f177d555f",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/go-race-pinned-reviewed.log.gz": "83ade92530522bd8c5693c951251f00b4d4dc338ae2de78d53a5ffe27dde7bca",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/npm-ci.log.gz": "0eaf0feb690df069b12bf61bdea7df361f6ced783b7fecd99df18deae0adfe0c",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/docs-build-reviewed.log.gz": "1effab1d57b01198741b4f402a1f5b4fd9714050d8e1c7c83820cd807405267a",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/docs-reference-check.log.gz": "ef92287bd4b4371e61725f5f14d31857b596ee10d4c72b03f49375736759e4fb",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/log-rules-check.log.gz": "43f4c5c7fd6b846e8154366f1a038d47bf4af3b8a0763182f14aeb38d4dce887",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/source-sha256.json.gz": "58cdb92365a5fa8fc6a2989e17a24e3cc083b1132539cd0c96c7cdabee5a1a00",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/cross-build-reviewed.py.gz": "977738f10120b5bde213e66ea1f8c02695005c2f52d967150a90bd7c44bc9070",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/cross-build-results-reviewed.json.gz": "316ae650ed8ccc447598e65b52a986caee82c46f573ce7968a76bbb287e2cd0d",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/reviewed-armv7/build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/reviewed-arm64/build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/mutate.py.gz": "974bf465e65027325d80844315966d40a7398d0cde1553bd9321a706012f08a6",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/mutation-results.json.gz": "67e079b81e4c8e19364591467169a10089c8a0becd2a9414a04cfad77e50f467",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/size-limit-mutant.log.gz": "e3234513466b070d3d351af2c1290837dec563dcd088375cb3961668d0f89c0b",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/cache-before-write-mutant.log.gz": "433788ee55ef9d88f97cc1b204621cac0b654e69490e3f4092e3f27318d91b38",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/load-claim-mutant.log.gz": "93bf7473c7f52ed7d9926b695018c9914ff23fb9e99564c4932eb7a255966f48",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/mutate-config.py.gz": "caba6395baf68ac4493b80694d711d90183c51d48ed3ebd99f7360c9121036c6",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/config-serialization-mutant.log.gz": "2a53b913ecd17eeab8a2ebc0e86cde9ad3dcd582653259ad7978d5cfc6c83fb9",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/config-serialization-mutation-result.json.gz": "7a37b75244053edfdbbe99e8f4ea6b112f4e8ce2fe1aec71c9e7292cbce70f68",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/final-mutations/mutate.py.gz": "4f79537dc2acb930048a0fc3b873afaca6a1ebb24097e35e8e94c16af8fdf048",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/final-mutations/mutation-results.json.gz": "67e079b81e4c8e19364591467169a10089c8a0becd2a9414a04cfad77e50f467",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/final-mutations/size-limit-mutant.log.gz": "2638c68ebd0acd93738ca30b5d529cb7a76a746e88314d7834df7a9c06ab76e5",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/final-mutations/cache-before-write-mutant.log.gz": "433788ee55ef9d88f97cc1b204621cac0b654e69490e3f4092e3f27318d91b38",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/final-mutations/load-claim-mutant.log.gz": "93956623a37916dd0b56f1e7d575c117f7f21d7f47cf9bc00215e154480a0dbd",
+    "tools/pd-waveform/evidence/20261116-native-identity-budget/save-evidence.py.gz": "1269749df4007b2689ebe7c4bf3a22d86a54ee48652714ce929fb482e5aaa0bf"
+  }
+}

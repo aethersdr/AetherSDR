@@ -402,7 +402,7 @@ func TestJoinedBeforeReadsTheTailnetState(t *testing.T) {
 		case !c.none:
 			writeTailnetState(t, dir, c.keys)
 		}
-		if got := joinedBefore(dir); got != c.want {
+		if got := joinedBefore(dir, false); got != c.want {
 			t.Errorf("%s: joinedBefore=%v, want %v", name, got, c.want)
 		}
 	}
