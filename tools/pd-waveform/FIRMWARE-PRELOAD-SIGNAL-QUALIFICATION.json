@@ -1,0 +1,607 @@
+{
+  "updated_utc": "2026-11-17T22:35:52.161913+00:00",
+  "source_commit": "71cfd2115763df5f2050db53c9924abc0e22f824",
+  "production_ready": false,
+  "original_radio_hang_cause_proven": false,
+  "original_software_reboot_qualified": false,
+  "finding": "The separate Nereus native IPv6 preload, presently mapped by SmartSDR, deadlocks a nested close() from a signal handler when interrupted while its outer close() holds the state mutex.",
+  "scope": "Deterministic fixture reproduces this behavior in the exact installed ARM64 shared library, in a separate capability-free UID78666/GID20/NNP1 process at nice19. No firmware signal handler or original reboot failure was reproduced.",
+  "test_design": {
+    "trigger": "A second test-only preload raises SIGUSR1 at the underlying-close boundary, after the IPv6 wrapper has taken its mutex. The handler closes a different /dev/null descriptor. Neither descriptor is a socket or firmware resource.",
+    "control": "Test hook without the IPv6 library; same handler returns.",
+    "timeout": "In-process one-second SIGALRM exits124 using _exit; parent has a separate three-second timeout. Observed result124 includes handler_entered and deadline, not a parent timeout.",
+    "privilege_admission": "Fixture itself verifies UID/eUID78666, GID/eGID20, all five capability sets zero and NoNewPrivs1 before arming the trigger.",
+    "actual_results": [
+      {
+        "case": "control",
+        "argv": [
+          "/usr/bin/setpriv",
+          "--reuid=78666",
+          "--regid=20",
+          "--clear-groups",
+          "--bounding-set=-all",
+          "--inh-caps=-all",
+          "--ambient-caps=-all",
+          "--no-new-privs",
+          "/usr/bin/nice",
+          "-n",
+          "19",
+          "/usr/bin/env",
+          "-i",
+          "LD_PRELOAD=/var/tmp/nereus-inprocess-31e7f2b2c7974896a258b18b37f3a5e8/signal-hook-arm64.so",
+          "/var/tmp/nereus-inprocess-31e7f2b2c7974896a258b18b37f3a5e8/signal-fixture-arm64"
+        ],
+        "exit": 0,
+        "elapsed_s": 0.014152474999718834,
+        "stdout": "admitted_uid78666_gid20_NNP1_caps0\nhandler_entered\nhandler_returned\n",
+        "stderr": ""
+      },
+      {
+        "case": "installed_preload",
+        "argv": [
+          "/usr/bin/setpriv",
+          "--reuid=78666",
+          "--regid=20",
+          "--clear-groups",
+          "--bounding-set=-all",
+          "--inh-caps=-all",
+          "--ambient-caps=-all",
+          "--no-new-privs",
+          "/usr/bin/nice",
+          "-n",
+          "19",
+          "/usr/bin/env",
+          "-i",
+          "LD_PRELOAD=/usr/local/lib/nereus-smartsdr-ipv6/libnereus_ipv6.so:/var/tmp/nereus-inprocess-31e7f2b2c7974896a258b18b37f3a5e8/signal-hook-arm64.so",
+          "/var/tmp/nereus-inprocess-31e7f2b2c7974896a258b18b37f3a5e8/signal-fixture-arm64"
+        ],
+        "exit": 124,
+        "elapsed_s": 1.0080944380024448,
+        "stdout": "admitted_uid78666_gid20_NNP1_caps0\nhandler_entered\ndeadline\n",
+        "stderr": ""
+      }
+    ],
+    "signal_target": "Only the fixture sends signals to itself; SmartSDR and AetherPD receive no signal."
+  },
+  "installed_preload": {
+    "path": "/usr/local/lib/nereus-smartsdr-ipv6/libnereus_ipv6.so",
+    "sha256": "c017fe655d6449dd7b9eba3a7d07e8d2b9b94402f6aa7e62d04a8aee62902e03",
+    "firmware_PID_observed_before_test": "1143",
+    "mapped_paths": [
+      "7faa250000-7faa255000 r-xp 00000000 b3:03 116                            /usr/local/lib/nereus-smartsdr-ipv6/libnereus_ipv6.so",
+      "7faa255000-7faa26f000 ---p 00005000 b3:03 116                            /usr/local/lib/nereus-smartsdr-ipv6/libnereus_ipv6.so",
+      "7faa26f000-7faa270000 r--p 0000f000 b3:03 116                            /usr/local/lib/nereus-smartsdr-ipv6/libnereus_ipv6.so",
+      "7faa270000-7faa271000 rw-p 00010000 b3:03 116                            /usr/local/lib/nereus-smartsdr-ipv6/libnereus_ipv6.so"
+    ],
+    "file_metadata": {
+      "/usr/local/bin/nereus-smartsdr-launch": {
+        "bytes": 486,
+        "uid": 0,
+        "gid": 0,
+        "mode": "0o755",
+        "sha256": "7d8e231130ed6aa071587b026175af42ad89cabf5457e5042f36717db0132617"
+      },
+      "/usr/local/lib/nereus-smartsdr-ipv6/libnereus_ipv6.so": {
+        "bytes": 121344,
+        "uid": 0,
+        "gid": 0,
+        "mode": "0o755",
+        "sha256": "c017fe655d6449dd7b9eba3a7d07e8d2b9b94402f6aa7e62d04a8aee62902e03"
+      },
+      "/etc/systemd/system/smartsdr.service.d/90-nereus-ipv6.conf": {
+        "bytes": 69,
+        "uid": 0,
+        "gid": 0,
+        "mode": "0o644",
+        "sha256": "c11c2457b2dc6528987ad2713113f14adeedd32b56191cff6322126f986ebf16"
+      }
+    },
+    "library_file_unchanged_through_fixture": true
+  },
+  "mechanism": {
+    "available_MIT_source_sha256": "c75f1463db29dae887ff1ffc0502cbaec06947382c0282b22ecb3743c6aaff7d",
+    "wrapper": "close() holds state_lock across next_close(); reentrant close() attempts that same normal mutex.",
+    "primary_references": [
+      {
+        "url": "https://man7.org/linux/man-pages/man7/signal-safety.7.html",
+        "supports": "POSIX requires close to be async-signal-safe."
+      },
+      {
+        "url": "https://man7.org/linux/man-pages/man3/pthread_mutex_init.3.html",
+        "supports": "Mutex operations are not async-signal-safe; reentrant mutex calls can deadlock."
+      }
+    ],
+    "available_source_host_fixture": {
+      "commands": [
+        [
+          "cc",
+          "-O2",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-DSIGNAL_PROBE_HOST",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/signal_fixture.c",
+          "-ldl",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/signal-fixture-host"
+        ],
+        [
+          "cc",
+          "-O2",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-shared",
+          "-fPIC",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/signal_hook.c",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/signal-hook-host.so"
+        ],
+        [
+          "cc",
+          "-O2",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-shared",
+          "-fPIC",
+          "-include",
+          "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/shim/glibc217-compat.h",
+          "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/shim/ipv6_shim.c",
+          "-ldl",
+          "-pthread",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/ipv6-host.so"
+        ]
+      ],
+      "results": [
+        {
+          "case": "control",
+          "exit": 0,
+          "stdout": "admitted_host_fixture\nhandler_entered\nhandler_returned\n",
+          "stderr": ""
+        },
+        {
+          "case": "available_source",
+          "exit": 124,
+          "stdout": "admitted_host_fixture\nhandler_entered\ndeadline\n",
+          "stderr": ""
+        }
+      ],
+      "source_sha256": "c75f1463db29dae887ff1ffc0502cbaec06947382c0282b22ecb3743c6aaff7d",
+      "radio_executed": false,
+      "scope": "deterministic signal at the next-close boundary, available unmodified source rebuilt for host; not proof of the original firmware signal handler or radio hang"
+    }
+  },
+  "power_controller_observation": {
+    "unit": {
+      "TimeoutStopUSec": "1min 30s",
+      "RemainAfterExit": "no",
+      "MainPID": "0",
+      "Result": "success",
+      "ExecMainCode": "0",
+      "ExecMainStatus": "0",
+      "ExecStart": "{ path=/usr/bin/smartsdr ; argv[]=/usr/bin/smartsdr --noreboot ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+      "KillMode": "control-group",
+      "SendSIGKILL": "yes",
+      "Id": "inhibit-power-pic.service",
+      "Before": "shutdown.target",
+      "After": "system.slice systemd-journald.socket sysinit.target basic.target",
+      "Triggers": "",
+      "TriggeredBy": "",
+      "LoadState": "loaded",
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "FragmentPath": "/etc/systemd/system/inhibit-power-pic.service",
+      "DropInPaths": "",
+      "ActiveEnterTimestamp": "",
+      "InactiveEnterTimestamp": "",
+      "StopWhenUnneeded": "no",
+      "DefaultDependencies": "yes"
+    },
+    "unit_file": "# /etc/systemd/system/inhibit-power-pic.service\n[Unit]\nDescription=Keep the power PIC from killing us\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/smartsdr --noreboot\n\n[Install]\nWantedBy=multi-user.target\n",
+    "PIC_only_current_history": {
+      "argv": [
+        "/usr/bin/journalctl",
+        "--boot=65be86a7fd984f16ae62505781cadb85",
+        "--unit=inhibit-power-pic.service",
+        "--lines=64",
+        "--no-pager",
+        "--output=json"
+      ],
+      "exit": 0,
+      "complete": true,
+      "refusal": null,
+      "text": ""
+    },
+    "firmware_power_history": {
+      "argv": [
+        "/usr/bin/journalctl",
+        "--boot=65be86a7fd984f16ae62505781cadb85",
+        "--unit=smartsdr.service",
+        "--grep=PIC|[Pp]ower|[Rr]eboot|[Ss]hutdown",
+        "--lines=64",
+        "--no-pager",
+        "--output=json"
+      ],
+      "exit": 0,
+      "complete": true,
+      "refusal": null,
+      "text": "{\"_MACHINE_ID\":\"2281dfeb908a453f92347ffa1bdadac4\",\"_RUNTIME_SCOPE\":\"system\",\"_PID\":\"1143\",\"MESSAGE\":\"2026-11-17T15:34:59.114Z (40123.64) <MAIN>           :         usb_cables.c        | _dump_trigger_source()-384: Power Level: 0\",\"_SYSTEMD_INVOCATION_ID\":\"3c1f48e574bf495c99deb454f54dbf26\",\"SYSLOG_FACILITY\":\"3\",\"_GID\":\"0\",\"_CAP_EFFECTIVE\":\"1ffffffffff\",\"SYSLOG_IDENTIFIER\":\"nereus-smartsdr-launch\",\"_STREAM_ID\":\"74b8cd52d95142d380d87b752f31dc5f\",\"_BOOT_ID\":\"65be86a7fd984f16ae62505781cadb85\",\"_UID\":\"0\",\"_SYSTEMD_CGROUP\":\"/system.slice/smartsdr.service\",\"_SYSTEMD_UNIT\":\"smartsdr.service\",\"__MONOTONIC_TIMESTAMP\":\"40128638\",\"_TRANSPORT\":\"stdout\",\"__REALTIME_TIMESTAMP\":\"1794929699119836\",\"_COMM\":\"smartsdr\",\"_HOSTNAME\":\"2125-1213-8600-8895\",\"PRIORITY\":\"6\",\"_SYSTEMD_SLICE\":\"system.slice\",\"_EXE\":\"/usr/bin/smartsdr\",\"_CMDLINE\":\"/usr/bin/smartsdr\",\"__CURSOR\":\"s=c7558e74290c48e8806b655d1ff89a89;i=51c;b=65be86a7fd984f16ae62505781cadb85;m=264507e;t=6607aa31ce2dc;x=88cf55be701569fa\"}\n{\"_CAP_EFFECTIVE\":\"1ffffffffff\",\"SYSLOG_IDENTIFIER\":\"nereus-smartsdr-launch\",\"_RUNTIME_SCOPE\":\"system\",\"PRIORITY\":\"6\",\"_STREAM_ID\":\"74b8cd52d95142d380d87b752f31dc5f\",\"_EXE\":\"/usr/bin/smartsdr\",\"_SYSTEMD_UNIT\":\"smartsdr.service\",\"_SYSTEMD_INVOCATION_ID\":\"3c1f48e574bf495c99deb454f54dbf26\",\"SYSLOG_FACILITY\":\"3\",\"__CURSOR\":\"s=c7558e74290c48e8806b655d1ff89a89;i=3db;b=65be86a7fd984f16ae62505781cadb85;m=1aa0ec3;t=6607aa262a120;x=af4760c259b6be66\",\"_BOOT_ID\":\"65be86a7fd984f16ae62505781cadb85\",\"_PID\":\"1143\",\"_TRANSPORT\":\"stdout\",\"__MONOTONIC_TIMESTAMP\":\"27922115\",\"__REALTIME_TIMESTAMP\":\"1794929686913312\",\"_UID\":\"0\",\"_SYSTEMD_CGROUP\":\"/system.slice/smartsdr.service\",\"_HOSTNAME\":\"2125-1213-8600-8895\",\"_COMM\":\"smartsdr\",\"_GID\":\"0\",\"_CMDLINE\":\"/usr/bin/smartsdr\",\"MESSAGE\":\"2026-11-17T15:34:46.898Z (27907.12) <PowerPIC>       :         drv_de_pic.c        | _pic_thread()-613: Initial Watchdog State: off\",\"_MACHINE_ID\":\"2281dfeb908a453f92347ffa1bdadac4\",\"_SYSTEMD_SLICE\":\"system.slice\"}\n{\"_SYSTEMD_SLICE\":\"system.slice\",\"_BOOT_ID\":\"65be86a7fd984f16ae62505781cadb85\",\"_TRANSPORT\":\"stdout\",\"_PID\":\"1143\",\"_STREAM_ID\":\"74b8cd52d95142d380d87b752f31dc5f\",\"SYSLOG_IDENTIFIER\":\"nereus-smartsdr-launch\",\"_HOSTNAME\":\"2125-1213-8600-8895\",\"SYSLOG_FACILITY\":\"3\",\"__REALTIME_TIMESTAMP\":\"1794929686896867\",\"__MONOTONIC_TIMESTAMP\":\"27905670\",\"_MACHINE_ID\":\"2281dfeb908a453f92347ffa1bdadac4\",\"_SYSTEMD_UNIT\":\"smartsdr.service\",\"PRIORITY\":\"6\",\"__CURSOR\":\"s=c7558e74290c48e8806b655d1ff89a89;i=3d9;b=65be86a7fd984f16ae62505781cadb85;m=1a9ce86;t=6607aa26260e3;x=3931f1d2d2aac98\",\"_UID\":\"0\",\"_SYSTEMD_CGROUP\":\"/system.slice/smartsdr.service\",\"_COMM\":\"smartsdr\",\"MESSAGE\":\"2026-11-17T15:34:46.894Z (27903.57) <MAIN>           :         drv_de_pic.c        | _updatePicBootloader()-713: PowerPIC Bootloader Version 1.8\",\"_CMDLINE\":\"/usr/bin/smartsdr\",\"_SYSTEMD_INVOCATION_ID\":\"3c1f48e574bf495c99deb454f54dbf26\",\"_CAP_EFFECTIVE\":\"1ffffffffff\",\"_RUNTIME_SCOPE\":\"system\",\"_EXE\":\"/usr/bin/smartsdr\",\"_GID\":\"0\"}\n{\"_CAP_EFFECTIVE\":\"1ffffffffff\",\"_MACHINE_ID\":\"2281dfeb908a453f92347ffa1bdadac4\",\"__MONOTONIC_TIMESTAMP\":\"27905670\",\"__REALTIME_TIMESTAMP\":\"1794929686896867\",\"_SYSTEMD_INVOCATION_ID\":\"3c1f48e574bf495c99deb454f54dbf26\",\"MESSAGE\":\"2026-11-17T15:34:46.892Z (27901.53) <MAIN>           :         drv_de_pic.c        | _updatePicApplication()-823: PowerPIC Application Version 1.0.9.0\",\"_SYSTEMD_UNIT\":\"smartsdr.service\",\"_UID\":\"0\",\"_RUNTIME_SCOPE\":\"system\",\"__CURSOR\":\"s=c7558e74290c48e8806b655d1ff89a89;i=3d8;b=65be86a7fd984f16ae62505781cadb85;m=1a9ce86;t=6607aa26260e3;x=3edf6e21725c04c7\",\"PRIORITY\":\"6\",\"_TRANSPORT\":\"stdout\",\"SYSLOG_FACILITY\":\"3\",\"_GID\":\"0\",\"_SYSTEMD_SLICE\":\"system.slice\",\"_STREAM_ID\":\"74b8cd52d95142d380d87b752f31dc5f\",\"_SYSTEMD_CGROUP\":\"/system.slice/smartsdr.service\",\"_BOOT_ID\":\"65be86a7fd984f16ae62505781cadb85\",\"_PID\":\"1143\",\"_COMM\":\"smartsdr\",\"SYSLOG_IDENTIFIER\":\"nereus-smartsdr-launch\",\"_CMDLINE\":\"/usr/bin/smartsdr\",\"_EXE\":\"/usr/bin/smartsdr\",\"_HOSTNAME\":\"2125-1213-8600-8895\"}\n{\"_SYSTEMD_UNIT\":\"smartsdr.service\",\"_GID\":\"0\",\"_SYSTEMD_SLICE\":\"system.slice\",\"_PID\":\"1143\",\"__CURSOR\":\"s=c7558e74290c48e8806b655d1ff89a89;i=3d7;b=65be86a7fd984f16ae62505781cadb85;m=1a9ce86;t=6607aa26260e3;x=d0f9b059a5432b95\",\"PRIORITY\":\"6\",\"SYSLOG_IDENTIFIER\":\"nereus-smartsdr-launch\",\"MESSAGE\":\"2026-11-17T15:34:46.883Z (27892.69) <MAIN>           :         drv_de_pic.c        | drv_picInit()-853: PowerPIC update gate: tryboot=no installed=1.0.9.0\",\"_RUNTIME_SCOPE\":\"system\",\"__MONOTONIC_TIMESTAMP\":\"27905670\",\"_UID\":\"0\",\"_BOOT_ID\":\"65be86a7fd984f16ae62505781cadb85\",\"_TRANSPORT\":\"stdout\",\"_HOSTNAME\":\"2125-1213-8600-8895\",\"_STREAM_ID\":\"74b8cd52d95142d380d87b752f31dc5f\",\"_SYSTEMD_CGROUP\":\"/system.slice/smartsdr.service\",\"SYSLOG_FACILITY\":\"3\",\"_SYSTEMD_INVOCATION_ID\":\"3c1f48e574bf495c99deb454f54dbf26\",\"_CAP_EFFECTIVE\":\"1ffffffffff\",\"_MACHINE_ID\":\"2281dfeb908a453f92347ffa1bdadac4\",\"_CMDLINE\":\"/usr/bin/smartsdr\",\"_EXE\":\"/usr/bin/smartsdr\",\"_COMM\":\"smartsdr\",\"__REALTIME_TIMESTAMP\":\"1794929686896867\"}\n"
+    },
+    "interpretation": "The oneshot executes smartsdr --noreboot. Inactive status does not measure the PIC hardware state or undo a prior oneshot effect. Current retained logs report Initial Watchdog State: off at boot; no inference about its later value or the failed boot.",
+    "unit_origin": "Existing installed unit; vendor origin is asserted in the older experiment documentation but not independently established by this audit."
+  },
+  "failed_boot_evidence": {
+    "boot_id": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "query": {
+      "argv": [
+        "/usr/bin/journalctl",
+        "--boot=1225abd252c44716af98e789ebb0bff5",
+        "--unit=inhibit-power-pic.service",
+        "--unit=smartsdr.service",
+        "--lines=100",
+        "--no-pager",
+        "--output=json"
+      ],
+      "exit": 1,
+      "complete": true,
+      "refusal": null,
+      "text": "Data from the specified boot (1225abd252c44716af98e789ebb0bff5) is not available: No such boot ID in journal\n"
+    },
+    "retained_boot_list": {
+      "argv": [
+        "/usr/bin/journalctl",
+        "--list-boots",
+        "--no-pager",
+        "--output=json"
+      ],
+      "exit": 0,
+      "complete": true,
+      "refusal": null,
+      "text": "[{\"index\":0,\"boot_id\":\"65be86a7fd984f16ae62505781cadb85\",\"first_entry\":1777319337048573,\"last_entry\":1794953305895469}]\n"
+    },
+    "original_operator_observation": "Green LED, unresponsive network, long power-button hold ineffective; rear DC removal required.",
+    "original_AetherPD_reboot_command": "One radio reboot command; inspected script contains no PIC guard invocation.",
+    "conclusion": "Failed reboot remains failed. Missing previous-boot journal and lack of a firmware-side stack/signal trace prevent assigning cause to the preload, PIC, firmware, AetherPD or kernel."
+  },
+  "native6000_source_audit": {
+    "inspected_source_sha256": {
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/operator/README.md": "c2df33735d08d6063e96831d2cd33d82b5e65bc3e2cfabab02cf3449f7e010c5",
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/operator/native-rootfd-prefix.py.inc": "d6d276d77c61851e3816c2f16efca2d2f2a5abd329c60fa0b94ebc3601cf7a4e",
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/native-waveform/README.md": "dd1989518d041a8c190930ab703ab8e335e18ae0a8f86803596d3721db88addb",
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/shim/ipv6_shim.c": "c75f1463db29dae887ff1ffc0502cbaec06947382c0282b22ecb3743c6aaff7d",
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/shim/glibc217-compat.h": "cab464413eccd68a15b3aa0865e476790d9ff67daf0b2d7e011fc0158b777941",
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/shim/LICENSE": "05f32f4b65b61bf7b6d15cf46edf4eb212c5c3f90f5f103d4e5b8d49bbc12863",
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/shim/README.md": "af806fa5dd38bdfcdb1448da9e73445352a0711e6195f7b4c0fd39012f136205",
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/deployment/host-smartsdr-persist.py": "25aa1b0fd597296c116a9651d432d0ee4d3e7137b8951ef20314c89f603ba81c",
+      "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/host-reference/README.md": "18d39534e6b600b1a90becafb8fc0a9b7fc8ac733e6407ef89af677d587ab42d"
+    },
+    "result": "Available operator transport explicitly follows /run/podman/podman.sock. No native6000 privilege-entry mechanism was identified in these inspected sources. This bounded search does not prove none exists.",
+    "operator_statement_retained": "The method was originally developed on6000; original native code/procedure pointer is still requested.",
+    "no_fallback_substitution": "LAN-host or DAX-audio alternatives in other research documents do not satisfy this on-radio local DAX IQ goal."
+  },
+  "initial_harness_failure": {
+    "exit": 1,
+    "cause": "First fixture job expected WORKDIR in environment; transport injects a Python global. It failed before fixture execution. Corrected attempt retained separately.",
+    "receipt": {
+      "exit": 1,
+      "job_removed": true,
+      "host_scratch_removed": true,
+      "raw_receipt_sha256": "17e92bb76821eff3564a142914930eafcb7020e04141b761ce9fd71a3a832379"
+    }
+  },
+  "temporary_jobs": {
+    "metadata": {
+      "exit": 0,
+      "job_removed": true,
+      "host_scratch_removed": true,
+      "raw_receipt_sha256": "c1c80cca2244abe3c2cc080c4b01e84ddf4726d0005b38c08eaf9b4a54cb614b"
+    },
+    "history": {
+      "exit": 0,
+      "job_removed": true,
+      "host_scratch_removed": true,
+      "raw_receipt_sha256": "ef2ea8a2589013e8cad1c92479d836c6bfd47479596c860a19077fd1da3f6ba8"
+    },
+    "initial_fixture": {
+      "exit": 1,
+      "job_removed": true,
+      "host_scratch_removed": true,
+      "raw_receipt_sha256": "17e92bb76821eff3564a142914930eafcb7020e04141b761ce9fd71a3a832379"
+    },
+    "fixture": {
+      "exit": 0,
+      "job_removed": true,
+      "host_scratch_removed": true,
+      "raw_receipt_sha256": "98421847b50d5d83370d70cfcd7fc450a6b7a0d569a207957efa883ad9d26f39"
+    }
+  },
+  "build_receipt": {
+    "host": [
+      [
+        "cc",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DSIGNAL_PROBE_HOST",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/signal_fixture.c",
+        "-ldl",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/signal-fixture-host"
+      ],
+      [
+        "cc",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-shared",
+        "-fPIC",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/signal_hook.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/signal-hook-host.so"
+      ],
+      [
+        "cc",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-shared",
+        "-fPIC",
+        "-include",
+        "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/shim/glibc217-compat.h",
+        "/home/jeremy/agent-worktrees/c3957d44/flexipv6-build/src/shim/ipv6_shim.c",
+        "-ldl",
+        "-pthread",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/power-controller-readonly-audit/ipv6-host.so"
+      ]
+    ],
+    "target": [
+      [
+        "zig",
+        "cc",
+        "-target",
+        "aarch64-linux-gnu.2.17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "signal_fixture.c",
+        "-ldl",
+        "-o",
+        "signal-fixture-arm64"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "aarch64-linux-gnu.2.17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-shared",
+        "-fPIC",
+        "signal_hook.c",
+        "-o",
+        "signal-hook-arm64.so"
+      ]
+    ],
+    "zig": "0.17.1",
+    "target_pins": {
+      "signal-fixture-arm64": "482a93db31e15d58016ef88faca54b233b9e1480186cf239a775e7bdb300f703",
+      "signal-hook-arm64.so": "b95272f85ef111e141d12f1e757ca4ae230785c355058f61ea35222ee57eb1d6"
+    },
+    "fixture_source_sha256": {
+      "signal_fixture.c": "49b281b30339b19b4f2bf7cdf918b4a85a9222953c8a4a127da065466c677860",
+      "signal_hook.c": "26d458f23775664edc5e417d03e4c419a58a133bd1d6f2aa10f36bc38180f632"
+    }
+  },
+  "final_observation": {
+    "observed_utc": "2026-11-17T22:31:30.170717+00:00",
+    "whoami": {
+      "agentName": "Codex AetherPD",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-native-durability",
+      "ok": true,
+      "pid": 618033,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-native-durability",
+      "station": "Codex AetherPD",
+      "txAllowed": true,
+      "version": "26.11.2"
+    },
+    "radio": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 22.921875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    },
+    "transmit": {
+      "model": "transmit",
+      "ok": true,
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 10,
+        "showTxInWaterfall": false,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      }
+    },
+    "installed": {
+      "aetherpd/status": {
+        "body": {
+          "available": false,
+          "state": "stopped"
+        },
+        "http_status": 200
+      },
+      "aetherpd/installation": {
+        "body": {
+          "firmware": "4.3.16.42034",
+          "installation_committed": true,
+          "profile": 1,
+          "selected_release_blake2b_256": "0d88765b3eaad89fde171f98955ac8dcef959543a93db9967b25d920912c43e7",
+          "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+          "serial": "2125-1213-8600-8895",
+          "state": "committed",
+          "upgrade_plan_blake2b_256": "9b5205957c872ee6e9419f75674120cb4dfe86b439030aa2ffc047aa96a0ee2a"
+        },
+        "http_status": 200
+      }
+    },
+    "RF_commands": [],
+    "reboot_commands": []
+  },
+  "radio_service_changes": [],
+  "firmware_preload_changes": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "next_action": "Await baseline preference and existing physical-recovery coordination before any firmware restart/reboot. Retain the preload unchanged in the meantime. Future trace must pin baseline preload identity/PIC unit metadata and current AetherPD generation before attributing a shutdown failure.",
+  "limits": [
+    "No proposed or deployed IPv6-preload fix. No AetherPD package/source/runtime change in this test.",
+    "The forced signal timing is a legitimate close() reentrancy pattern, but vendor use of this pattern is unobserved. The demonstration does not establish causality of the operator-reported whole-radio hang.",
+    "No actual6300 privilege path or hardware qualification, RF/correction comparison, keyed fault/reboot qualification or complete P1-P10 release claim.",
+    "Guard state, watchdog log and library mapping are separate observations. No direct PIC/register/device reads or writes were performed."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/firmware-preload-signal-components-v2.tar.gz",
+    "bytes": 124588,
+    "sha256": "63c87bec7613b2fc5f960d42791382fc0580502f6f3fb4e505d2a68377229f04",
+    "members": 44,
+    "all_members_verified": true,
+    "scope": "diagnostic fixture and MIT prototype reference only; not an AetherPD release, installer or deployed fix"
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/LICENSE-AetherSDR.gz": "420e2cf9f0e167b06ae3286eab8c85531f6422ec94ec0552e446908ae4953447",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/artifact-archive.json.gz": "1d7db9554c7d0349711bc21c369131f7632912980d2ffae79731c4eac419f9e1",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/build-receipt.json.gz": "db6955207391c2d9b26668f1539fb9f2d27d2bc2449b6e6b76a4801c99f8b709",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/final-observation.json.gz": "2eedebcb666a0eeeb61b7ad6232033b2cfe1ddb253e535b2410e9e1a408eb5bd",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/final-observe.py.gz": "55f60b7682af4efcbcf8527f2d118514b48f439b75c5016b18828a2f997bdb56",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/history-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/history-job.py.gz": "4d527fd256bf706dda2c326efb00b3f54b5391462ea1c646413167b2ba73012a",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/history-result.json.gz": "29735193e4384fdf06d5fb974eb79d83336e13750ac03d8246c185326cce174e",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/history.log.gz": "29735193e4384fdf06d5fb974eb79d83336e13750ac03d8246c185326cce174e",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/initial-archive-metadata.json.gz": "fa03c98a425d12097d1cb6e98723905105325854f492c815bd2f3246d757d924",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/metadata-job.py.gz": "c32b1301d29dad77a60d20ca84ca71692df8e532509ac698d5c4540a0de5d921",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/metadata-result.json.gz": "455af0f31a815af8d563f42c1600d022de793b3c70108898da2354f05cfcd87a",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/metadata.log.gz": "455af0f31a815af8d563f42c1600d022de793b3c70108898da2354f05cfcd87a",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/save-qualification.py.gz": "bc32135949f1fbf349d5bd53a61d58ee765687614398d1b5986f139604ea31fa",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-host-console.log.gz": "7aa9d65b8aa2d1284d81cea19f48b5ed5d2faf97678e9e66fb22511eeaa3eaa6",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-host-result.json.gz": "e3a39d2c64dc18f00c777c3faa597d0ea5d0fa75113b00532649dbf56cbf6125",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-host-test.py.gz": "ca870ab78c8d7372257b78098417e4e08ca715fc762d8d08c298ef7e0ac0fe49",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-native-pins.json.gz": "90f03b4119c1555071f82d9157b90d3974836317cba117cd3ef2288110593106",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-radio-02/console.log.gz": "09ffe34507314138935d860559512c32e79041c6f818ceca5ed514c12d80ef34",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-radio-02/result.json.gz": "09ffe34507314138935d860559512c32e79041c6f818ceca5ed514c12d80ef34",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-radio-02/signal-radio-job.py.gz": "7bbd7baf5f4942149b5d8ece87ab6831f8b009a2b6c9dc245ace980ad7b8b27d",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-radio-console.log.gz": "70cf7558846b445afe8e2ce27bc8316f7de772f4fde64426653eb7757f31ebbb",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-radio-job.py.gz": "6fab8839ea08e638a489a271843007100c90d63e808146cd0f528b0346c274b6",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal-radio-result.json.gz": "490e51d802cf8d09242b9ca4944fac17cc70f643456e5c3251d8822f8af65afa",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal_fixture.c.gz": "a77fec7c3457926b362bff2a0c60ae01843232c7aad47fbe3069e380dc6036a5",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal_fixture_initial.c.gz": "31df7f3847af53bb88c50ec3f31c85d52f95998bf58a110b6b81a0b801c6fe41",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/signal_hook.c.gz": "fc2b275337094dbc8223bee9be5b6b13dd894f4d793b23f7cc9156d68a44a18a",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/external-MIT-source/deployment/host-smartsdr-persist.py.gz": "6ce97bba71381580dcaff8ebf4664923303d06c81292d063f68df3fa7d88efb0",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/external-MIT-source/host-reference/README.md.gz": "bb14027dfad9b2b15e278f91e46f226ddd728e5aee074906bfee68f15330ae1b",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/external-MIT-source/native-waveform/README.md.gz": "f0256d20eeb7224b26e1d8430ca020cad88b4abdf78673575e54d659c536676b",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/external-MIT-source/operator/README.md.gz": "c57b2a3b0408031b851ef026bd8a47fd6ce91965acf5e7a72a6433f8369fc845",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/external-MIT-source/shim/LICENSE.gz": "365548f59de12dd2c3662dd93fcba5f0fb36920f6f19fc360564b9f3422b299f",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/external-MIT-source/shim/README.md.gz": "0d7d808610318e1b487c482133aa39d1cbccba809dc8c7b23ebe66bb6d2bc16e",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/external-MIT-source/shim/glibc217-compat.h.gz": "25304942e85c26a6d1250c7e5c35b37aae0d0bb705aecfa087def7d85421e6f8",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/external-MIT-source/shim/ipv6_shim.c.gz": "c3073daa7d8236e88745c40c25f2eebfb4595698ffda36817bf01a9ecb30521e",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/docs-install.log.gz": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/docs-build.log.gz": "833725dc16d606231e8c77bd04bbc9979fe9a45aafa0e5a5de207797f8a1fadb",
+    "tools/pd-waveform/evidence/20261117-firmware-preload-signal/evidence/save-docs-evidence.py.gz": "6966eecfd064aca7799f451002ece4751d32c9134243611ea267f1316f5122c9"
+  },
+  "project_checks": {
+    "docs_install": "npm ci, exit0",
+    "docs_build": "npm run build, exit0",
+    "shipping_code_changed": false
+  }
+}
