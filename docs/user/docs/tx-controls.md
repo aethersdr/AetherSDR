@@ -297,6 +297,31 @@ autotune, or transmissions keyed by other programs through TCI, DAX or CAT.
 
 The audio controls stay in place as the timer appears and fades. In minimal mode, the hidden timer reserves no space.
 
+### Transmit time-out
+
+AetherSDR stops any transmission that lasts longer than the time-out, whatever
+keyed it: MOX, PTT, a footswitch, a controller, TCI, CAT, DAX, TUNE, ATU or the
+radio's own PTT. The default is **180 s**. Set it in **Transmit time-out (this
+computer)** on the **Transmit** page of Radio Setup:
+
+- **Stop transmitting after**: on by default, 15 to 1800 seconds.
+- **Warn before (sec):**: a notice and a short beep this many seconds before
+  the stop. The default is 10; **Off** turns the warning off.
+
+It is stored on this computer, for each radio. On a FlexRadio the radio's own
+**Timeout (sec):** applies as well, and the default here is never shorter than
+the radio's. On a radio without a timeout of its own, this group replaces
+**Timeout (sec):**.
+
+When it stops a transmission, a notification says **Transmit time-out:
+transmission stopped after N s**. Nothing transmits again until every PTT input
+has been released, including a CAT or TCI program that keeps asking to
+transmit, and you key again. If the radio's own PTT input is still held, the
+notification says so. A CAT or TCI program sees the radio go back to receive.
+
+With break-in CW, each element is its own key-down, so the time-out bounds a
+key held down, not a whole over.
+
 ## Using AetherTX (Aetherial Audio)
 
 The client-side transmit voice chain — RN2 microphone denoising, Tube, EQ,
