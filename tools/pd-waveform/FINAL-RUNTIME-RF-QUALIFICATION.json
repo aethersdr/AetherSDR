@@ -1,0 +1,776 @@
+{
+  "updated_utc": "2026-11-17T19:23:45.014335+00:00",
+  "status": "installed_candidate_finite10W_pair_corrects_signal_repeat_aborted_by_existing_SWR_guard_full_RF_qualification_incomplete",
+  "production_ready": false,
+  "source_parent_commit": "e581033ee8b6ced369f034ef9c51ef1fb8628259",
+  "runtime_source_commit": "aa5a33fc5de78ad5a9d6e5d48ba2e9c697e03bf0",
+  "radio_release_blake2b_256": "c3d2522512f66f32025747661335e82eb8a3f572fe9888acf7af8380f9a43404",
+  "native_DSP_sha256": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+  "desktop": {
+    "pid": 363057,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "a2e6f53b1ade27624ddf46a30a4a1c162259015727def69bea1234834a77e973",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "e50bfbd3a2b998eac6ae69ac5d790b58c7349c28",
+    "desktop_source": "5d8d6070f28d478a65c853f3ca5d2a9224016342",
+    "keying_requires_explicit_bridge_action": true,
+    "receiver_ready": true,
+    "predecessor_channel_idle_wait_s": 20.211743724008556
+  },
+  "firmware": "4.3.16.42034",
+  "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+  "scope": {
+    "positive_GUI_key_actions": 3,
+    "each_positive_key_through_existing_AetherSDR_automation_bridge": true,
+    "AetherTX_launched": false,
+    "nominal_and_configured_max_W": 10,
+    "frequency_MHz": 7.15,
+    "path": "ANT1 dummy load/sampler feedback RXA; RF gain0",
+    "FDX": false,
+    "feedback": "local DAX IQ channel4/48000Hz",
+    "source_seconds": 8,
+    "native_helper_cleanup_budget_seconds": 9,
+    "desktop_authorization_seconds": 10,
+    "source_or_guard_thresholds_changed": false,
+    "automatic_key_retry_or_rearm": false,
+    "reboot_commands": [],
+    "radio_updates_this_turn": 0,
+    "LP_product_integration_deferred": true,
+    "broad_root_diagnostics_used_for_RF_setup_or_keying": false,
+    "broad_root_laboratory_post_RF_metadata_audit": true
+  },
+  "completed_pair": {
+    "baseline": "final-native-baseline-10W-01",
+    "corrected": "final-native-corrected-10W-01",
+    "IMD3_improvement_dB": [
+      20.29473405350395,
+      19.212538729713437
+    ],
+    "fundamental_pep_change_dB": 0.345990346629236,
+    "definition": "Positive improvement is baseline dBc_per_tone minus corrected dBc_per_tone.",
+    "repeated_pair_qualified": false,
+    "following_repeat_stopped_by_existing_SWR_guard": true
+  },
+  "cases": {
+    "final-native-baseline-10W-01": {
+      "whole_harness_passed": true,
+      "positive_GUI_key_actions": 1,
+      "export_error": "",
+      "original_cleanup_error_field": null,
+      "valid_measurement": true,
+      "radio_idle_after": true,
+      "session_stopped": true,
+      "LP_idle_after_W": 0.0,
+      "LP_peak_held_max_W": 7.49,
+      "LP_SWR_with_RF_max": 1.15,
+      "all_observed_native_faults_zero": true,
+      "input_limited_samples_max": 0,
+      "alignment_count": 1,
+      "alignment_reset_count": 0,
+      "diagnostics_after": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=12 key_ns=12093978812888 submitted_ns=12095730747562 started_ns=12095730834969 completed_ns=12095953099876 consumed_ns=12095965347108 delay=1646.970 envelope=0.996471 phase=0.998580 offset_hz=-0.023754 noise_left=48256 samples_left=144256 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=12100329707737 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=39424 generated=152576 iq_frames=23442 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1885874 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5a962501 slice=0 correction=0 native_apd=0 iq_valid_ns=12100325511864",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "outcome_sha256": "0c7b58f05a4925116d6779b001d6ba3586de5ae7e06548746598be3506bfb6e2",
+      "IMD3_dBc_per_tone": [
+        -27.345690893034927,
+        -26.80619088203408
+      ],
+      "fundamental_pep_db_raw_iq": 94.53151307512167,
+      "correction_active": false,
+      "frames": 4,
+      "per_frame_analysis": {
+        "source_export_sha256": "980f464d7f15058b158c079c255ceb19eb9f452491b35b6aea4a04656a991f94",
+        "independent_average_product_agreement_max_dB": 1.4210854715202004e-14,
+        "frames": [
+          {
+            "index": 0,
+            "capture_id": "63c0e96cd48dd8b9fdb23f9ed4d99291/0",
+            "timestamp_ns": "12098934449143",
+            "receipt_timestamp_after_native_key_s": 4.955636255,
+            "products": [
+              {
+                "order": 3,
+                "upper": false,
+                "dbc_per_tone": -27.29195424678035
+              },
+              {
+                "order": 3,
+                "upper": true,
+                "dbc_per_tone": -26.75090030998276
+              },
+              {
+                "order": 5,
+                "upper": false,
+                "dbc_per_tone": -39.23950108194826
+              },
+              {
+                "order": 5,
+                "upper": true,
+                "dbc_per_tone": -39.4293905164042
+              },
+              {
+                "order": 7,
+                "upper": false,
+                "dbc_per_tone": -48.66451972448785
+              },
+              {
+                "order": 7,
+                "upper": true,
+                "dbc_per_tone": -48.65587056857229
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "capture_id": "63c0e96cd48dd8b9fdb23f9ed4d99291/1",
+            "timestamp_ns": "12099276305655",
+            "receipt_timestamp_after_native_key_s": 5.297492767,
+            "products": [
+              {
+                "order": 3,
+                "upper": false,
+                "dbc_per_tone": -27.331133197160497
+              },
+              {
+                "order": 3,
+                "upper": true,
+                "dbc_per_tone": -26.78688802125908
+              },
+              {
+                "order": 5,
+                "upper": false,
+                "dbc_per_tone": -39.29080255075079
+              },
+              {
+                "order": 5,
+                "upper": true,
+                "dbc_per_tone": -39.4788423842519
+              },
+              {
+                "order": 7,
+                "upper": false,
+                "dbc_per_tone": -48.64621695320732
+              },
+              {
+                "order": 7,
+                "upper": true,
+                "dbc_per_tone": -48.7414401329241
+              }
+            ]
+          },
+          {
+            "index": 2,
+            "capture_id": "63c0e96cd48dd8b9fdb23f9ed4d99291/2",
+            "timestamp_ns": "12099616298459",
+            "receipt_timestamp_after_native_key_s": 5.637485571,
+            "products": [
+              {
+                "order": 3,
+                "upper": false,
+                "dbc_per_tone": -27.36912748456149
+              },
+              {
+                "order": 3,
+                "upper": true,
+                "dbc_per_tone": -26.828958554282167
+              },
+              {
+                "order": 5,
+                "upper": false,
+                "dbc_per_tone": -39.323563094515244
+              },
+              {
+                "order": 5,
+                "upper": true,
+                "dbc_per_tone": -39.524777444074374
+              },
+              {
+                "order": 7,
+                "upper": false,
+                "dbc_per_tone": -48.7833427738607
+              },
+              {
+                "order": 7,
+                "upper": true,
+                "dbc_per_tone": -48.75605617383341
+              }
+            ]
+          },
+          {
+            "index": 3,
+            "capture_id": "63c0e96cd48dd8b9fdb23f9ed4d99291/3",
+            "timestamp_ns": "12099958417209",
+            "receipt_timestamp_after_native_key_s": 5.979604321,
+            "products": [
+              {
+                "order": 3,
+                "upper": false,
+                "dbc_per_tone": -27.39109698915862
+              },
+              {
+                "order": 3,
+                "upper": true,
+                "dbc_per_tone": -26.85866808024113
+              },
+              {
+                "order": 5,
+                "upper": false,
+                "dbc_per_tone": -39.35566437350309
+              },
+              {
+                "order": 5,
+                "upper": true,
+                "dbc_per_tone": -39.53152187378844
+              },
+              {
+                "order": 7,
+                "upper": false,
+                "dbc_per_tone": -48.68995986968635
+              },
+              {
+                "order": 7,
+                "upper": true,
+                "dbc_per_tone": -48.76091301032767
+              }
+            ]
+          }
+        ],
+        "scope": "Per-frame NumPy FFT and log-parabolic peaks of retained IQ using the existing analyzer convention. Uncalibrated raw scale; radio-process receive timestamps, not FPGA timestamps or physical latency. Frames are not asserted statistically independent."
+      }
+    },
+    "final-native-corrected-10W-01": {
+      "whole_harness_passed": true,
+      "positive_GUI_key_actions": 1,
+      "export_error": "",
+      "original_cleanup_error_field": null,
+      "valid_measurement": true,
+      "radio_idle_after": true,
+      "session_stopped": true,
+      "LP_idle_after_W": 0.0,
+      "LP_peak_held_max_W": 7.49,
+      "LP_SWR_with_RF_max": 1.14,
+      "all_observed_native_faults_zero": true,
+      "input_limited_samples_max": 0,
+      "alignment_count": 1,
+      "alignment_reset_count": 0,
+      "diagnostics_after": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=12244454483404 submitted_ns=12246203093494 started_ns=12246203117364 completed_ns=12246482250452 consumed_ns=12246499762438 delay=1831.970 envelope=0.996482 phase=0.998587 offset_hz=-0.023868 noise_left=46848 samples_left=142848 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=12252448507636 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=128 generated=191872 iq_frames=10259 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=817530 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5a962501 slice=0 correction=1 native_apd=0 iq_valid_ns=12252446712669",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "outcome_sha256": "3d0feee460817d4776d7f845e1e2dd38f12cab51747dd1869eae4bb0277e11f6",
+      "IMD3_dBc_per_tone": [
+        -47.64042494653888,
+        -46.01872961174752
+      ],
+      "fundamental_pep_db_raw_iq": 94.8775034217509,
+      "correction_active": true,
+      "frames": 4,
+      "per_frame_analysis": {
+        "source_export_sha256": "f9084b2a6d21fe720d8aaa52c93896ba7257a610ab4790aeda3bc4b6f7706d41",
+        "independent_average_product_agreement_max_dB": 1.4210854715202004e-14,
+        "frames": [
+          {
+            "index": 0,
+            "capture_id": "52aa2ce71d9fb55281d2ca78b767dcc8/0",
+            "timestamp_ns": "12250976723339",
+            "receipt_timestamp_after_native_key_s": 6.522239935,
+            "products": [
+              {
+                "order": 3,
+                "upper": false,
+                "dbc_per_tone": -47.858175982135116
+              },
+              {
+                "order": 3,
+                "upper": true,
+                "dbc_per_tone": -46.11457554993196
+              },
+              {
+                "order": 5,
+                "upper": false,
+                "dbc_per_tone": -55.48150728355911
+              },
+              {
+                "order": 5,
+                "upper": true,
+                "dbc_per_tone": -58.026271344199344
+              },
+              {
+                "order": 7,
+                "upper": false,
+                "dbc_per_tone": -62.93502171558766
+              },
+              {
+                "order": 7,
+                "upper": true,
+                "dbc_per_tone": -64.4547999381639
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "capture_id": "52aa2ce71d9fb55281d2ca78b767dcc8/1",
+            "timestamp_ns": "12251317715992",
+            "receipt_timestamp_after_native_key_s": 6.863232588,
+            "products": [
+              {
+                "order": 3,
+                "upper": false,
+                "dbc_per_tone": -47.74967771063829
+              },
+              {
+                "order": 3,
+                "upper": true,
+                "dbc_per_tone": -46.04564587740053
+              },
+              {
+                "order": 5,
+                "upper": false,
+                "dbc_per_tone": -55.3812988219622
+              },
+              {
+                "order": 5,
+                "upper": true,
+                "dbc_per_tone": -58.16015560550667
+              },
+              {
+                "order": 7,
+                "upper": false,
+                "dbc_per_tone": -62.30027677564587
+              },
+              {
+                "order": 7,
+                "upper": true,
+                "dbc_per_tone": -64.53288085511709
+              }
+            ]
+          },
+          {
+            "index": 2,
+            "capture_id": "52aa2ce71d9fb55281d2ca78b767dcc8/2",
+            "timestamp_ns": "12251658720570",
+            "receipt_timestamp_after_native_key_s": 7.204237166,
+            "products": [
+              {
+                "order": 3,
+                "upper": false,
+                "dbc_per_tone": -47.55188783365617
+              },
+              {
+                "order": 3,
+                "upper": true,
+                "dbc_per_tone": -46.013413550105454
+              },
+              {
+                "order": 5,
+                "upper": false,
+                "dbc_per_tone": -55.37561353035015
+              },
+              {
+                "order": 5,
+                "upper": true,
+                "dbc_per_tone": -58.05875683673493
+              },
+              {
+                "order": 7,
+                "upper": false,
+                "dbc_per_tone": -62.26982686396333
+              },
+              {
+                "order": 7,
+                "upper": true,
+                "dbc_per_tone": -64.38361422777649
+              }
+            ]
+          },
+          {
+            "index": 3,
+            "capture_id": "52aa2ce71d9fb55281d2ca78b767dcc8/3",
+            "timestamp_ns": "12251999706594",
+            "receipt_timestamp_after_native_key_s": 7.54522319,
+            "products": [
+              {
+                "order": 3,
+                "upper": false,
+                "dbc_per_tone": -47.41557624869797
+              },
+              {
+                "order": 3,
+                "upper": true,
+                "dbc_per_tone": -45.90392549720843
+              },
+              {
+                "order": 5,
+                "upper": false,
+                "dbc_per_tone": -55.50853841834567
+              },
+              {
+                "order": 5,
+                "upper": true,
+                "dbc_per_tone": -57.8689089799914
+              },
+              {
+                "order": 7,
+                "upper": false,
+                "dbc_per_tone": -62.43398256229915
+              },
+              {
+                "order": 7,
+                "upper": true,
+                "dbc_per_tone": -64.06666800682369
+              }
+            ]
+          }
+        ],
+        "scope": "Per-frame NumPy FFT and log-parabolic peaks of retained IQ using the existing analyzer convention. Uncalibrated raw scale; radio-process receive timestamps, not FPGA timestamps or physical latency. Frames are not asserted statistically independent."
+      }
+    },
+    "final-native-baseline-10W-02": {
+      "whole_harness_passed": false,
+      "positive_GUI_key_actions": 1,
+      "export_error": "SWR above the configured limit",
+      "original_cleanup_error_field": "AssertionError: SWR above the configured limit",
+      "valid_measurement": false,
+      "radio_idle_after": true,
+      "session_stopped": true,
+      "LP_idle_after_W": 0.0,
+      "LP_peak_held_max_W": 1.28,
+      "LP_SWR_with_RF_max": 1.12,
+      "all_observed_native_faults_zero": true,
+      "input_limited_samples_max": 0,
+      "alignment_count": 0,
+      "alignment_reset_count": 0,
+      "diagnostics_after": {
+        "alignment": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=12759966957104 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=172928 generated=19072 iq_frames=13977 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=330127 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5a962501 slice=0 correction=0 native_apd=0 iq_valid_ns=12759966270869",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "outcome_sha256": "428ce53b9f2bd131d3c91ed66f2c2e9c1a6c16c9b94a5d77d20ebea5e4f769bb"
+    }
+  },
+  "analysis_environment": {
+    "python": "3.12.16 (main, Nov 11 2026, 00:15:59) [Clang 23.1.3 ]",
+    "numpy": "2.5.5",
+    "matplotlib": "3.11.2",
+    "analysis_only_not_product_dependencies": true
+  },
+  "prepared_but_not_keyed": [
+    "final-native-corrected-10W-02",
+    "final-native-baseline-10W-03",
+    "final-native-corrected-10W-03"
+  ],
+  "preserved_sequencing_mistake": {
+    "observation": "After baseline02 failed, a shell newline allowed receive-only corrected02 preparation to proceed despite the preceding Python assertion. No corrected02 arm or key command was run. Preparation was allowed to become terminal, then the ordinary Stop was verified.",
+    "stop_receipt": {
+      "reason": "Receive-only corrected02 preparation was inadvertently started after failed baseline02 assertion; no corrected02 key or arm command was run. Stop after the preparation process became terminal.",
+      "positive_key_actions_this_cleanup": 0,
+      "status": {
+        "body": {
+          "available": false,
+          "state": "stopped"
+        },
+        "http_status": 200
+      },
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.234375,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    },
+    "analysis_of_invalid_export": "Initial offline analyzers raised KeyError because the aborted export had no measurement object. The per-frame CLI now refuses invalid exports explicitly; no spectrum was computed for the failed run.",
+    "derived_sign_correction": "Initial pair JSON used corrected-minus-baseline under an improvement label; it was preserved as pair-01-initial-sign-error.json, then corrected to baseline-minus-corrected. Raw data and analyzer results were unchanged."
+  },
+  "post_RF_native_audit": {
+    "passed": true,
+    "RF_commands": [],
+    "processes": [
+      {
+        "pid": 8695,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "70783de051fd785a00c12646dd0e862824156b8cb6d57fb73f105298d67e6995"
+      },
+      {
+        "pid": 9075,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "0e9dc30619820bd06304b92c144f63858336dea21aeab00be92932d81ce6691f"
+      },
+      {
+        "pid": 9083,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "70783de051fd785a00c12646dd0e862824156b8cb6d57fb73f105298d67e6995"
+      }
+    ],
+    "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "owner_config_sha256": "7d4785dbb7087355992d037ded02bd381d2ca828d6383ac97d03681103cc6d89",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+    "configuration_temp_absent": true,
+    "owner_config_file_bytes": 257,
+    "owner_config_allocated_bytes": 4096,
+    "runtime_sha256": {
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "1663086c576cd08332a97c7c20771b3ee7653824c73c93e100c1583e4c88888f",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+      "flex-tailnet-shim": "70783de051fd785a00c12646dd0e862824156b8cb6d57fb73f105298d67e6995",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+    },
+    "arp": [],
+    "arp_journal_bytes": 0,
+    "accept_local": "0",
+    "private_sockets": [],
+    "temporary_installation_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    }
+  },
+  "post_RF_laboratory_observer_and_scratch_removed": true,
+  "plots": [
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/finite-pair-spectrum.png",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/finite-pair-spectrum.svg"
+  ],
+  "limitations": [
+    "One completed finite10W-setting OFF/ON pair, four16384-sample frames per run. The following baseline repeat hit the unchanged SWR guard. Repeatability, endurance, speech and fullP7 remain unqualified.",
+    "IMD3 is per mean fundamental tone; fundamental-only PEP rose0.345990dB ON. LP reports a7.49W peak-held maximum in both runs, not synchronized calibrated instantaneous forward watts. Its configured forward/net basis remains unknown.",
+    "Independent NumPy FFT and interpolated products agree with the application export; this is independent computation of the same IQ, not a second RF instrument. Frames are not asserted statistically independent.",
+    "No alignment reset, dispatch deadline, send error, stale IQ or TX-input limiting was observed in these bounded runs. This does not attribute the historical natural128sample slip or certify all scheduling behavior.",
+    "Raw IQ scale, absolute ADC headroom, receiver linearity and sampler attenuation remain uncalibrated. The unchanged operator-confirmed bench path and its prior\u221231dBm-at5W estimate were retained; no physical attenuation measurement was made.",
+    "SWR cause was not investigated. The earlier operator-deferred5W investigation and related preamble prototype stay deferred. A new steering question asks whether diagnosis should resume now that a10Wrepeat also stops; no answer has been received.",
+    "The previous software reboot hard lock is unchanged, unresolved and failed. No reboot retry occurred; bench recovery coordination remains unanswered.",
+    "Actual6300 adapter/kernel/resource/RF qualification, package catalogue/distribution, other process faults, credential/platform/transaction/power-loss and final stockAPD/independent release gates remain open."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/bench_meter_monitor.py.gz": "dd12d52a9eea56aa9cc2d71b4d316861d5329d7fef0ef7006ee86724fe56ad02",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/driver.log.gz": "861b76bc804bd77dc7a453afca4a34af6cefbd323f74532c22e7ad5ba9929068",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/events.json.gz": "88a4844be6233f3d811122c76f9691c0024668c1992abcbdac45259e031b6aee",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/independent-meters.json.gz": "c829d9af492d610c16fe34fda91b81aa6e72fcb80126bd4c0dc329064823b809",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/independent-recheck.json.gz": "98b0778877de9777e4134885c8995a4b89a398dbeb7a784b613d0ec84dc133f4",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/independent-recheck.log.gz": "1e3ad186f3ee789330413c5f8941a025dbbaabf1f717b06bc394d29c1565fe7f",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/input-manifest.json.gz": "1c6c00b62d5ece83dc662eefa8e942618c9e9cec72b84734c3a6eeb6be0ed6ea",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/instance.json.gz": "caa0be94b263de5664813c6aa8cd4789b17973b3fd65ddd32d29c6073ab28f45",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/lp100a-readings.jsonl.gz": "413b21af42422c9e88e5e3ee072b80c5e7983e6709d7e3d61faa81e8e4fcfe02",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/measure-once.py.gz": "0eedbac1fa3fbbe2bbfe2f236e3b2be3df8293610eef9c4fdae17b44b6c949c5",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/measurement.json.gz": "02fde216fac832960d7db6a912bff0ce8c6de436d1367ec8be59c41ed63da0b8",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/outcome.json.gz": "55d577b75ee872a6c098dcfaf72b59e37e1ef7b766fadef5f88dc18f5a757584",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/per-frame-analysis.json.gz": "d39f458986faa41e0e423cdabd2e9207a94311ac357fa33537a46abcf1614fb3",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/per-frame-analysis.log.gz": "929938e5589e82da2a05d5c61d15cb0ac19f96eb9972b70b61d549d5f1f69597",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/prepare.log.gz": "147d13e9d4d5fb316e87796cf2d924022537252c67590eb855d5530a61deddbd",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/prepare.py.gz": "e0bca6bf2bee8b73bab83e77f4b505c4ca03ed1ced4a6ce541053e3aa1ae08eb",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-01/prepared.json.gz": "f8ade64a3fdc3416f98095128e3e8e0727c53a8577117515dbf70e0755a3a33f",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/analysis-refused.log.gz": "ecbeeb7d2827c35ff7b77a3a9b6ad4fc8134da7426c5888843cdb6faa8641870",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/application-log.json.gz": "a66a75271021aa74bb3c06ff0afa2df93e5c6f86dffb3810cc60ac8de6363b36",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/bench_meter_monitor.py.gz": "dd12d52a9eea56aa9cc2d71b4d316861d5329d7fef0ef7006ee86724fe56ad02",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/driver.log.gz": "7155fca4553c08d4c548847cd90f5fc4fdb3c0a7c1fa4954f99e16fb3acbfb1a",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/events.json.gz": "9b02c191851014b223d3e0faa15546556917401f0e4bf6976cdbbd1ea9fc90a1",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/independent-meters.json.gz": "fd0f2e8bfc3acf117b992ec7e87d7a5f978f28758834d85f6a229e7a8baa7f9d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/input-manifest.json.gz": "aebeb2f337772422ad42d2e7f5506caeeb97af0964c59a30231932693da031ea",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/instance.json.gz": "caa0be94b263de5664813c6aa8cd4789b17973b3fd65ddd32d29c6073ab28f45",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/lp100a-readings.jsonl.gz": "70408c713ebf615040072ad439012a6a57c2d54c8696335d2330d19766266858",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/measure-once.py.gz": "1dfc599646cd1d51544b0b05d3e6b675c4cf9ba7718efb83c28e67a00a7b4a71",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/measurement.json.gz": "68732e64235d30a7395c829801ac8a3271dec813d4ba2daf2619e53c3e0e5b1a",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/outcome.json.gz": "7af1ecafc8c530c0242545c94ba9b448b0d9c6a7c270bf13ac80d0c4132857d7",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/prepare.log.gz": "147d13e9d4d5fb316e87796cf2d924022537252c67590eb855d5530a61deddbd",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/prepare.py.gz": "e0bca6bf2bee8b73bab83e77f4b505c4ca03ed1ced4a6ce541053e3aa1ae08eb",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-02/prepared.json.gz": "38ce0432ee5dfa9eaa291943631cec666937f2b27cc9e24a783bd25734bb9be7",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/bench_meter_monitor.py.gz": "dd12d52a9eea56aa9cc2d71b4d316861d5329d7fef0ef7006ee86724fe56ad02",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/input-manifest.json.gz": "305948e55405156ab80259e362eae7dad9a5ca8eaa92baa73199e8ad36615662",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/instance.json.gz": "caa0be94b263de5664813c6aa8cd4789b17973b3fd65ddd32d29c6073ab28f45",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/measure-once.py.gz": "b1b52d8bc9c19bb9d0e2c4a788609089cc20dd6636f073b21f8b2bbf4ea9bd23",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-baseline-10W-03/prepare.py.gz": "e0bca6bf2bee8b73bab83e77f4b505c4ca03ed1ced4a6ce541053e3aa1ae08eb",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/application-log.json.gz": "abc129be8d26e8d4afe9ce45f9d5a73c8ed9aa62810ca24ee789fe4581dc4a80",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/bench_meter_monitor.py.gz": "dd12d52a9eea56aa9cc2d71b4d316861d5329d7fef0ef7006ee86724fe56ad02",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/driver.log.gz": "af94a0d750a17b92dab4c2f11704109335497cd0383b805456a5fe4c80dbd635",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/events.json.gz": "3fc8c3547d93080f65438d0c9d3b97caf19d6fb5766b973b215e46aea917dbd6",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/independent-meters.json.gz": "c5ec7a8beba150405817d3599a2eabb8a7b4b1ccf2c32328d7c87db653e6857d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/independent-recheck.json.gz": "05bbc48b2072ce7d9f2aac7abc7effd6750541c337ca761eceb13b364d2e9d8f",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/independent-recheck.log.gz": "4023c61dc05fea7209b6ee5b1f840a784e243993a8622a2492bebc69f208c852",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/input-manifest.json.gz": "bca5c25fa8f33c8b3891a8af752f120319fe317164e9271b220f85d52c2b4638",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/instance.json.gz": "caa0be94b263de5664813c6aa8cd4789b17973b3fd65ddd32d29c6073ab28f45",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/lp100a-readings.jsonl.gz": "725c6ca0c894db0eeff2b3abf5337a90a20d7d73fc05305bce99b23d19ae2f38",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/lp100a-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/measure-once.py.gz": "b2be2d2bec62c450c2b53b83cbe70810986c28e7587fe6a56c1ed76086693b48",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/measurement.json.gz": "a32bcead61b7cf1212303a98eb4b3927194f6480c2835fbb82839b5f2c5229b6",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/outcome.json.gz": "94a4393fe090ed36101c5d66d669913912bede348439df629cbbc1f79ef2bfce",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/per-frame-analysis.json.gz": "5277ce088125cc87f895721889e01214f6cd9c4b0504b993962a35f6cbfc4423",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/per-frame-analysis.log.gz": "1c8bbc0f4ac428544c724a4efce314bb9af0e6349f3124780ba418b24ba88229",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/prepare.log.gz": "147d13e9d4d5fb316e87796cf2d924022537252c67590eb855d5530a61deddbd",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/prepare.py.gz": "eeab5ae4e66189d406d93703e72591791e1e949aaee4c1d2f956ec05b2f8d19e",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-01/prepared.json.gz": "9b35a49a5720381f59cde3e203e8984cb89207a4c7cd1e8668ebfc41077f35f9",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/bench_meter_monitor.py.gz": "dd12d52a9eea56aa9cc2d71b4d316861d5329d7fef0ef7006ee86724fe56ad02",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/input-manifest.json.gz": "e4e2042e061e511d8ba1786c677ab1105caaab944d0a96add98b22903027204b",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/instance.json.gz": "caa0be94b263de5664813c6aa8cd4789b17973b3fd65ddd32d29c6073ab28f45",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/measure-once.py.gz": "408071230eca8091ae7c0f7d04f0e1e57321bd2fe3c88e294e687c12cda2b70d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/prepare.log.gz": "147d13e9d4d5fb316e87796cf2d924022537252c67590eb855d5530a61deddbd",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/prepare.py.gz": "eeab5ae4e66189d406d93703e72591791e1e949aaee4c1d2f956ec05b2f8d19e",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-02/prepared.json.gz": "4906cd0d11d7f8fa908199f43374f9fcd84852f01ed1b146171b79a12d75d83a",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/bench-observer.py.gz": "dd3c6a1765b988e7d19587d69c051017197b8d345a28634b03ca978ee5bd6ab0",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/bench_meter_monitor.py.gz": "dd12d52a9eea56aa9cc2d71b4d316861d5329d7fef0ef7006ee86724fe56ad02",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/bench_quality.py.gz": "3858371198429d532710b484fcf9d97982be46db8705f09b816de21fada4d842",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/input-manifest.json.gz": "c70cd9ec794fac2561fe492e14e3e3f4750cdc7090e86aba42af7d2816432b33",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/instance.json.gz": "caa0be94b263de5664813c6aa8cd4789b17973b3fd65ddd32d29c6073ab28f45",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/lp100a_reader.py.gz": "2c9c680702fe787783c1f1b32465b36fc2359b741acc1442fc50ad39eb44c40d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/measure-once.py.gz": "1a97162894b9e507ab02e60b768cc12beb94656765d9fe45cd57eeaf4389abdb",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/meter-watch.py.gz": "86d9660f126ac04c759762a95d8330e25c27c3307725b00f854d4d850472b98c",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-native-corrected-10W-03/prepare.py.gz": "eeab5ae4e66189d406d93703e72591791e1e949aaee4c1d2f956ec05b2f8d19e",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-audit/audit-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-audit/audit-job.py.gz": "afbac0998faef7f5d84e5eb0e332d3e64eafc929d968b0090289700031024727",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-audit/audit-result.json.gz": "7a35642d9b4d3af474c8aa7623347305f00c82d3bd711114fbb139a8f0c54076",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-audit/audit.log.gz": "7a35642d9b4d3af474c8aa7623347305f00c82d3bd711114fbb139a8f0c54076",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-audit/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/analysis-console.log.gz": "03afc0f3cf73691be94c975364417aff5ac91855125642ae99003ba6651e94a9",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/analysis-environment.json.gz": "31d943b523c9deceef5a3527d43457a0c034d7bc9f4f93ee1f7ad13c90da10c6",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/analysis-final.log.gz": "f38d93e8a3eeb93e550455478a1f63d060a2bb13dbaf8ffd1f65f6570511af5d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/analysis.json.gz": "aba88b367dac80b281317bec1804fc05727f66247dbabb362680db291d947f23",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/analyze-and-plot.py.gz": "70f8494ca2587af1ae3b5d866e949e25cbfbdefcb6207029fa9359f9b2e17537",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/analyze-frames-initial.py.gz": "b010ef235ad1457e4f1a2e4ef730798744efc34b1b275ed3438200953e183277",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/analyze-frames.py.gz": "3d29fb8d2e31423999140d56ffe2579d5402a6274a2188269faf6a8a05f77c25",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/plot-environment.log.gz": "374f7d0f32a4129b24e968068f7f4f6f7dba57d0ba121ef53e0c4dfda89de422",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-qualification/save-qualification.py.gz": "033ecaeafb67f049e82c0b4a6ffacd07c49ee25268a132a5a967401bbd8ac7c9",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-readiness/LP-idle-stderr.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-readiness/LP-idle.jsonl.gz": "65080496cab0afdfab41657a2069de8532e3b4474fb949727e38a6b4c75df48d",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-readiness/cooldown-anchor.json.gz": "23679def37d2ed26bce0769fdb217c7b849de25a4070e5dda558c8f4fa4e661c",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-readiness/desktop-radio.json.gz": "745fbe596add0fcd8e8e5f819e814176ff44b7d41d5f93f2c21e65b11e664e9c",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-readiness/pair-01-initial-sign-error.json.gz": "9bf220b692742c26327721474817c7232dc3240a4458037f503b861cadbaa850",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-readiness/pair-01.json.gz": "ecc392cbc88d80a876ef40431ef7c0a742b0d4233f1f12b10a0d1e0b2e958445",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/final-runtime-RF-readiness/stop-unkeyed-preparation.json.gz": "8c56e29bc87139559314dc1b752fbadf1cb28535c9d7b092ed5d6184039eacce",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/finite-pair-spectrum.png": "0d52571d9460a66a75126bfe02c4bb816d10bcd42e1ae8ebdbd9d1a399a9027a",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/finite-pair-spectrum.svg": "79ab11ce3d0fae33927dca5100ebfad543da224a82da252f2820114054a95c11",
+    "tools/pd-waveform/evidence/20261117-final-runtime-RF/production-completion-plan.json.gz": "ddc7bf0b607117bbbb9587a7be35a5faf26cf310169a1d2bc4227a7279e6f33b"
+  }
+}
