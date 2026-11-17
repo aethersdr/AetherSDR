@@ -4,6 +4,7 @@
 #include "DaxTxAudioPermit.h"
 #include "PcmFrame.h"
 #include "TciClient.h"
+#include "TciKeepAlive.h"
 #include "TciRxConverter.h"
 #include "TxCoordinator.h"
 #include <QElapsedTimer>
@@ -125,6 +126,9 @@ private:
         QElapsedTimer streamDropLog;
         int error{-1};
         QString errorText;
+        TciKeepAlive keepAlive;
+        int abortCloseCode{-1};
+        bool disconnected{false};
     };
     struct RxClient {
         TciStreamConfig config;
@@ -144,6 +148,10 @@ private:
                                 const PcmFrame& frame,
                                 const std::shared_ptr<TciRxConverter>& converter) const;
     void acceptConnections();
+    void socketDisconnected(quint64 id);
+    void heardFrom(quint64 id);
+    void checkKeepAlive();
+    void abortClient(quint64 id, const QString& reason);
     void publishRxLevel(int channel, float rms);
     void publishTxLevel(float rms);
     void publishTelemetry();
@@ -180,6 +188,11 @@ private:
     std::function<qint64(quint64)> m_rxBacklog;
     std::function<void(quint64, QWebSocketProtocol::CloseCode, const QString&)> m_rxClose;
     static constexpr qint64 kMaxRxBacklogBytes = 256 * 1024;
+    // Seams for socket-free tests; production pings and aborts the QWebSocket.
+    std::function<qint64()> m_keepAliveNow;
+    std::function<void(quint64)> m_keepAlivePing;
+    std::function<void(quint64)> m_keepAliveAbort;
+    QTimer m_keepAliveTimer;
     static constexpr qint64 kMaxStreamBacklogBytes = kMaxRxBacklogBytes / 4;  // IQ's share of the backlog
     static constexpr qint64 kStreamDropLogMs = 5000;   // at most one IQ-drop warning per interval
     float m_rxChannelGain[8]{1,1,1,1,1,1,1,1};

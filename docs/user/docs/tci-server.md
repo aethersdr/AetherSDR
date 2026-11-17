@@ -75,6 +75,14 @@ audio_stop:0;            # stop it
 
 ## Using TCI with other programs
 
+**A client that goes silent is dropped.** After 5 s without any message from a
+client, AetherSDR sends it a WebSocket ping, which every standard WebSocket
+library answers by itself. A client that has sent nothing, not even that
+answer, for 15 s is disconnected; if it was transmitting, the radio unkeys.
+This covers a client that loses power or network without closing its
+connection, which would otherwise stay keyed until the operating system gives up
+on it, often after more than ten minutes.
+
 When a VFO-B request needs a new receiver, AetherSDR waits for its acknowledged
 identity and radio status before selecting it for TX. A delayed reply cannot
 adopt another client's receiver. Disconnecting, stopping TCI, or closing the

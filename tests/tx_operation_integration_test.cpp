@@ -35,6 +35,7 @@
 #include "core/TciAudioHeader.h"
 #include "core/TciClient.h"
 #include "core/TciIoWorker.h"
+#include "core/TciKeepAlive.h"
 #include "core/TciProtocol.h"
 #endif
 
@@ -235,6 +236,22 @@ public:
     }
     // Incremented only for a frame that passed the ownership + header gates.
     static qint64 tciAudioBlocks(const TciServer& server) { return server.m_io->m_txAudioBlocks; }
+    // Keepalive seams: an injected clock and a transport that never reports
+    // the abort back, as a dead peer's socket may not.
+    static void injectTciKeepAlive(TciServer& server, TciClient& socket, const qint64* now,
+                                   int* pings, int* aborts)
+    {
+        TciIoWorker& io = *server.m_io;
+        io.m_keepAliveNow = [now] { return *now; };
+        io.m_keepAlivePing = [pings](quint64) { ++*pings; };
+        io.m_keepAliveAbort = [aborts](quint64) { ++*aborts; };
+        io.m_clients[socket.id()].keepAlive = TciKeepAlive(*now);
+    }
+    static void tciKeepAliveTick(TciServer& server) { server.m_io->checkKeepAlive(); }
+    static void wireTciDisconnect(TciServer& server, TciClient& socket)
+    {
+        QObject::connect(&socket, &TciClient::disconnected, &server, &TciServer::onClientDisconnected);
+    }
 #endif
     static void transmitDelta(RadioModel& radio, const TransmitDelta& delta)
     {
@@ -3803,6 +3820,53 @@ void tciHostModulationIgnoresDaxSelection()
         "TCI worker PCM reaches host modulation and the injected audio seam despite blocked DAX selection");
 }
 
+void tciKeepAliveDeadlineUnkeysThroughTheDisconnectPath()
+{
+    // #5985: a PTT owner that goes silent is aborted at the keepalive window,
+    // and the abort reaches TciServer::onClientDisconnected() -> abortTciPtt()
+    // through the worker's clientClosed, with no socket and no peer. The
+    // transport seam never reports the abort, so teardown cannot rest on it.
+    Fixture f;
+    QPointer<TciClient> client = new TciClient;   // onClientDisconnected deleteLater()s it
+    TciServer server(&f.radio);
+    TxOperationIntegrationTestAccess::addNativeTciClient(server, *client, f.radio);
+    TxOperationIntegrationTestAccess::wireTciDisconnect(server, *client);
+    qint64 now = 1000;
+    int pings = 0;
+    int aborts = 0;
+    int edges = 0;
+    QObject::connect(&f.radio, &RadioModel::radioTransmittingChanged, [&edges] { ++edges; });
+    TxOperationIntegrationTestAccess::injectTciKeepAlive(server, *client, &now, &pings, &aborts);
+    const qint64 lastHeard = now;
+    for (; now < lastHeard + TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
+        TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
+    }
+    check(pings == 1 && aborts == 0 && f.commands.isEmpty() && edges == 0,
+          "an idle client gets one probe and nothing keys");
+
+    TxOperationIntegrationTestAccess::nativeTciText(server, *client, QStringLiteral("trx:0,true;"));
+    check(f.commands == QStringList({QStringLiteral("mox:on")}), "fixture: the TCI client owns PTT");
+    TxOperationIntegrationTestAccess::injectTciKeepAlive(server, *client, &now, &pings, &aborts);
+    const qint64 keyedAt = now;
+    for (; now < keyedAt + TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
+        TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
+    }
+    check(aborts == 0 && f.commands == QStringList({QStringLiteral("mox:on")}),
+          "inside the window the owner stays keyed");
+    TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(aborts == 1 && f.commands == QStringList({QStringLiteral("mox:on"), QStringLiteral("mox:off")}),
+          "at the window the transport is aborted and the owner's PTT is released");
+    for (int i = 0; i < 30; ++i) {
+        now += TciKeepAlive::kPollMs;
+        TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(aborts == 1 && f.commands.count(QStringLiteral("mox:on")) == 1,
+          "the expired client is not aborted twice and nothing re-keys");
+    delete client.data();
+}
+
 void tciProducerLifetimes()
 {
     // Drive the production server handler with disconnected WebSocket
@@ -4103,6 +4167,7 @@ int main(int argc, char** argv)
     tciHardwareAndCwIgnoreDaxSelection();
     tciHostModulationIgnoresDaxSelection();
     tciProducerLifetimes();
+    tciKeepAliveDeadlineUnkeysThroughTheDisconnectPath();
     tciPermissionRequiresConfirmedOwnership();
     tciPromotionRechecksPermissionAfterReply();
 #endif
