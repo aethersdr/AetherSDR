@@ -596,9 +596,17 @@ void Hl2RxDsp::dropSpectrumAverage()
     if (!m_spectrum)
         return;
     // The window accumulate() holds between due frames is old-axis IQ too;
-    // keeping it would seed the fresh average with the old spectrum.
-    m_spectrum->reset();
+    // keeping it would seed the fresh average with the old spectrum. The DC
+    // estimates are kept: a T/R edge may drop the average too.
+    m_spectrum->discardPartialFrame();
     m_spectrum->dropAverage();
+}
+
+void Hl2RxDsp::forgetSpectrumTransmitDc()
+{
+    if (m_spectrum) {
+        m_spectrum->forgetTransmitDc();
+    }
 }
 
 void Hl2RxDsp::setSpectrumTransmitting(bool on, int releaseHoldMs)

@@ -847,6 +847,7 @@ private:
     // This receiver's NCO just moved: the averaged bins describe the old
     // frequency axis. Called beside pushNotchTune() at the two retune sites.
     void dropPanAverage(const Receiver& r);
+    void forgetPanTransmitDc(const Receiver& r);
     // Same, for the APF (centred on the current CW pitch) and the AGC-off level.
     void pushApf(const Receiver& r);
     void pushAgcOffLevel(const Receiver& r);
