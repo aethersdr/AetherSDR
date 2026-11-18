@@ -2974,6 +2974,10 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(&m_dvkModel, &DvkModel::licenseRefusedChanged, this,
             [this](bool) { emit licenseFeaturesChanged(); });
+    // A firmware without the DVK API changes hasVoiceKeyer(); the same pass
+    // that follows the entitlement re-reads it (#7156).
+    connect(&m_dvkModel, &DvkModel::unsupportedChanged, this,
+            [this](bool) { emit licenseFeaturesChanged(); });
     connect(&m_dvkModel, &DvkModel::controlRequested, this, &RadioModel::dispatchDvk, Qt::DirectConnection);
     connect(&m_dvkModel, &DvkModel::operationSettled, this, [this](quint64 requestId) {
         if (m_dvkTxRequest == requestId) {
@@ -5097,7 +5101,8 @@ bool RadioModel::hasVoiceKeyer() const
     if (!m_backend || !isConnected()) {
         return true;   // nothing attached — assume present, see the header
     }
-    return backendCapabilities().hasVoiceKeyer;
+    // The family has one, but this firmware may predate its API (#7156).
+    return backendCapabilities().hasVoiceKeyer && !m_dvkModel.unsupported();
 }
 
 bool RadioModel::hasDaxStreams() const
@@ -8369,7 +8374,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::DaxIq));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Radio));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Codec));
-            requestSessionControl(SessionControlRequest::subscription(SessionTopic::Dvk));
+            subscribeDvk();
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Navtex));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::UsbCable));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Spot));
