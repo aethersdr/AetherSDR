@@ -1,0 +1,118 @@
+{
+  "observed_utc": "2026-11-18T01:10:50.420848+00:00",
+  "source": "Existing AetherSDR automation bridge, public shim status and authorized read-only SSH probe",
+  "boot": {
+    "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "uptime_s": 34555.36,
+    "kernel": "5.15.92-v8+",
+    "method": "authorized SSH probe endpoint: read /proc boot_id, uptime and uname only",
+    "RF_commands": [],
+    "reboot_commands": [],
+    "radio_mutations": []
+  },
+  "bridge": {
+    "observed_utc": "2026-11-18T01:10:50.420848+00:00",
+    "bridge": "/tmp/aetherpd-native-durability",
+    "commands": [
+      {
+        "command": "get radio",
+        "keys": [
+          "model",
+          "ok",
+          "radio"
+        ],
+        "safe_fields": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "connected": true,
+            "fullDuplex": false,
+            "model": "FLEX-8600",
+            "nickname": "FLX8600",
+            "serial": "2125-1213-8600-8895",
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      },
+      {
+        "command": "get transmit",
+        "keys": [
+          "model",
+          "ok",
+          "transmit"
+        ],
+        "safe_fields": {
+          "model": "transmit",
+          "ok": true,
+          "transmit": {
+            "mox": false,
+            "rfPower": 10
+          }
+        }
+      }
+    ],
+    "radio_mutations": []
+  },
+  "public_status": {
+    "observed_utc": "2026-11-18T01:10:49.824263+00:00",
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/v1/status",
+        "http_status": 200,
+        "field_names": [
+          "version",
+          "provisioned",
+          "state",
+          "hostname",
+          "installation_id",
+          "managed_owner_version",
+          "tailnet_ip",
+          "dns_name",
+          "allow",
+          "sessions",
+          "routes",
+          "share_discovered",
+          "discovered_devices",
+          "advertised_routes",
+          "approved_routes",
+          "session_detail",
+          "last_error",
+          "claimable",
+          "key_expiry",
+          "recent_commands",
+          "exposed_ports"
+        ],
+        "public_fields": {
+          "version": "0.5.2",
+          "provisioned": true,
+          "state": "local",
+          "hostname": "flx8600",
+          "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+          "managed_owner_version": 1,
+          "sessions": 0,
+          "claimable": false
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v1/installation",
+        "http_status": 404,
+        "error_type": "JSONDecodeError",
+        "error": "Extra data: line 1 column 5 (char 4)"
+      }
+    ],
+    "radio_mutations": []
+  },
+  "current_radio_availability_verified": true,
+  "boot_matches_previous_recovery": true,
+  "earlier_operator_power_removal_timing_proven": false,
+  "software_reboot_qualified": false,
+  "hang_cause_proven": false,
+  "Ethernet_LED_observed": false,
+  "limits": "No new reboot or cold-power-cycle was performed. Current reachability and the same recorded recovery boot do not explain the original hang. Incorrect initial bridge JSON arguments and an unrelated 404 endpoint probe are retained in raw evidence.",
+  "radio_mutations": [],
+  "RF_commands": [],
+  "reboot_commands": []
+}

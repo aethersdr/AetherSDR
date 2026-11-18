@@ -1,0 +1,69 @@
+{
+  "created_utc": "2026-11-18T01:22:46.136473+00:00",
+  "qualified_source_commit": "65b4812755d83958617b059d94e22961c0e5df3f",
+  "exact_source_sha256": {
+    "src/core/TailnetShimCredentialPersistence.cpp": "bcb127f865e61be959263e49ab4dd8c64895579b24908bd327330f7979418bba",
+    "src/core/TailnetShimCredentialPersistence.h": "a26d2f2673161ce0fc09773ff10cd080a9693126c93eb380a0b254eef287871c",
+    "src/core/TailnetShimTokenStore.cpp": "d675078a8d39c89aa6d5e6e0bb12c3defeecc0282a25da6308b2f11eba7b642f",
+    "src/core/TailnetShimTokenStore.h": "da0c25bb445cb4302100e3cc7626fa89e0c25b6cd78fed9d97d2af864c149aba",
+    "src/core/TailnetShimClient.cpp": "c180ce7e80b455132b137b3e02299a0cf5979042742b5ae71264e3a7de27ed62",
+    "src/core/TailnetShimClient.h": "3bd46ece07fc9545935943523ee1f8f6396d53e4d097c50a533ac133c2b94cb2",
+    "src/gui/TailnetShimDialog.cpp": "282cd9f2c403fe1ef69248a9120fbd72ea1aee3dcc30d312ed11198dc5662ba9",
+    "src/gui/TailnetShimDialog.h": "56d0c14a334671e38a100f02171e49747b39b77fded8c2bd962d4bcdca675261",
+    "scripts/setup/setup-qtkeychain.sh": "f5e4b5c77ecceed765fb63e30ba9a7a76d79628a8f801369be58ff4fc429f2d2"
+  },
+  "production_ready": false,
+  "finding": "The source-pinned QtKeychain 0.16.0 backend passed the Linux credential transaction and setup-admission scenarios. Earlier reports qualified the host 0.18 backend; this result closes that specific library-version gap on Linux only.",
+  "dependency": {
+    "pin_authority": "scripts/setup/setup-qtkeychain.sh",
+    "repository": "https://github.com/frankosterfeld/qtkeychain.git",
+    "version": "0.16.0",
+    "source_commit": "aa6da344e1a20b9194e12bace3665caeea6b6304",
+    "library_sha256": "cd5783cd8925b0a92c714cbcce8a436481972d6b6a7df91cd87bc4678dee1e4b",
+    "libsecret_support": true,
+    "Qt": "6.12.0 from the same pinned SDK used by the full desktop build",
+    "actual_runtime_paths_verified": true,
+    "dependency_pins_changed": false,
+    "host_library_replaced": false
+  },
+  "verification": {
+    "core": {
+      "normal_cases": 16,
+      "sanitized_cases": 16,
+      "claims": "Versioned cross-process retirement, changed/identical tokens, legacy upgrade, pending/failed saves, read/save fencing, closed callers, admission bounds and controlled process crash boundaries."
+    },
+    "setup": {
+      "normal_cases": 7,
+      "sanitized_cases": 7,
+      "claims": "Actual cross-process setup locks and keychain save lifetime through the production window/client/storage; HTTP replies injected. Close, busy, pending backend, explicit retry with fresh token, rejected request, distinct radio and caller crash."
+    },
+    "sanitizer_scope": "ASan/UBSan/LSan on the AetherSDR adapters/harness; setup also instruments window/client units. Upstream QtKeychain and other unchanged linked libraries are not asserted fully instrumented.",
+    "fixture_credential_scope": "Unique disposable primary/version entries only. No real radio credential read or mutation. All entries and owned lockfiles independently confirmed absent; all recorded children terminal.",
+    "setup_executable_format": "Debug sections removed with objcopy before testing. Tested stripped binaries and exact original/stripped hashes retained; no runtime code/data-section edits.",
+    "new_mutation_runs": false,
+    "guard_mutation_reference": "ENROLLMENT-ADMISSION-QUALIFICATION.json and KEYCHAIN-TRANSACTION-QUALIFICATION.json; same source, earlier host-backend qualification.",
+    "full_application_rebuild_for_dependency_switch": false,
+    "actual_Windows_or_macOS_runtime": false,
+    "real_radio_or_tailnet_requests": false
+  },
+  "remaining_scope": [
+    "Actual Windows/macOS keychain, OS lock and current-source application build/packaging qualification.",
+    "Actual tailnet lifecycle, owner recovery, install/update overlap, full app shutdown and ambiguous remote operations after caller crash.",
+    "Exact shipping artifact and independently reviewed release qualification; these are diagnostic fixtures, not a new distribution package.",
+    "All remaining original P1-P10 hardware, alignment, installed graph, RF/stock APD and actual 6300 qualification gates remain open."
+  ],
+  "radio_actions": [],
+  "reboot_commands": [],
+  "RF_commands": [],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pinned-keychain-016-components.tar.gz",
+    "bytes": 136578150,
+    "sha256": "cf4bfe4c92bda08e557008a96d33964ee79eaa839d537bc61e35fde22ce9c68b",
+    "verified_members": 109,
+    "scope": "Diagnostic tested Linux executables, pinned library and complete tracked upstream source, AetherSDR component source, build scripts/logs/receipts, licenses and sanitized read-only radio observations; no shipping-package or reproducibility claim."
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/PINNED-KEYCHAIN-EVIDENCE.json.gz",
+    "sha256": "50537121a276553ef0871192380577c873698906483c1b83af83ab32be9be704"
+  }
+}
