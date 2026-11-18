@@ -50,7 +50,32 @@ std::optional<QByteArray> snapshot(const QString& path, const AetherPDPackage::P
         || QCryptographicHash::hash(bytes, QCryptographicHash::Sha256) != pin.sha256) { return std::nullopt; }
     return bytes;
 }
-struct Release { quint32 arch, profile; QString firmware; QByteArray source; };
+AetherPDControlRecovery controlRecovery(const QByteArray& unit, quint32 arch)
+{
+    // Match the complete fixed definition from tools/pd-waveform/boot/units.py.
+    // A quoted directive, duplicate key or different budget is not this policy.
+    const QByteArray store = arch == 64 ? "/var/lib/smartsdr/aetherpd" : "/user/aetherpd";
+    const QByteArray prefix = "[Unit]\nDescription=AetherPD ordinary-user control service\n"
+        "Requires=aetherpd-boot.service aetherpd-start.socket\n"
+        "After=aetherpd-boot.service aetherpd-start.socket\n[Service]\nExecStart=";
+    const QByteArray suffix = "StandardOutput=journal\nStandardError=journal\nTimeoutStopSec=12\n"
+        "KillMode=control-group\nUMask=0077\n[Install]\nWantedBy=multi-user.target\n";
+    const QByteArray managed = prefix + store + "/pd-boot --primary\n";
+    if (unit == managed + suffix || unit == prefix + "/run/aetherpd/bin/pd-primary-launch\n" + suffix) {
+        return AetherPDControlRecovery::ExplicitStart;
+    }
+    if (unit == managed + "Restart=on-failure\nRestartSec=5\nStartLimitInterval=60\n"
+            "StartLimitBurst=3\nStartLimitAction=none\n" + suffix) {
+        return AetherPDControlRecovery::BoundedRestart;
+    }
+    return AetherPDControlRecovery::Unknown;
+}
+struct Release {
+    quint32 arch, profile;
+    QString firmware;
+    QByteArray source;
+    AetherPDControlRecovery recovery{AetherPDControlRecovery::Unknown};
+};
 std::optional<Release> release(const QByteArray& bytes, const QByteArray& key)
 {
     if (bytes.size() < 432 || bytes.size() > 18 * 1024 * 1024 || key.size() != 32
@@ -71,6 +96,10 @@ std::optional<Release> release(const QByteArray& bytes, const QByteArray& key)
         if (!count || count > maximum || count > bytes.size() - offset) { return std::nullopt; }
         const QByteArray member = bytes.mid(offset, count);
         if (blake(member) != bytes.mid(84 + i * 36, 32) || (i < 2 && !elf(member, result.arch))) { return std::nullopt; }
+        if (i == 7) {
+            result.recovery = controlRecovery(member, result.arch);
+            if (result.recovery == AetherPDControlRecovery::Unknown) { return std::nullopt; }
+        }
         offset += count;
     }
     return offset == bytes.size() ? std::optional<Release>(result) : std::nullopt;
@@ -142,6 +171,7 @@ std::optional<AetherPDPackage> AetherPDPackage::verify(const Files& files, const
     result.m_worker = files[0]; result.m_candidate = files[1]; result.m_previous = files[2];
     result.m_code = {files[3], files[4], files[5], files[6]}; result.m_licenses = files[7];
     result.m_profile = candidate->profile; result.m_firmware = candidate->firmware;
+    result.m_controlRecovery = candidate->recovery;
     result.m_candidateKey = trust.candidateKey; result.m_previousKey = trust.previousKey;
     return result;
 }
@@ -210,6 +240,7 @@ std::optional<AetherPDFirstPackage> AetherPDFirstPackage::verify(const Files& fi
     }
     AetherPDFirstPackage result;
     result.m_files = files; result.m_key = trust.publisherKey; result.m_firmware = candidate->firmware;
+    result.m_controlRecovery = candidate->recovery;
     return result;
 }
 QByteArray AetherPDFirstPackage::candidateDigest() const

@@ -78,6 +78,7 @@ public:
         bool firstInstallation{false};
         QString nativeName;
         QString hostname;
+        AetherPDControlRecovery controlRecovery{AetherPDControlRecovery::Unknown};
     };
     std::optional<Preview> preview() const;
     bool approve(const QByteArray& displayedPlan);

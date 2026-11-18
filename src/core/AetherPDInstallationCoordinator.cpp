@@ -44,6 +44,7 @@ std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoo
     Prepared prepared;
     prepared.m_started = std::make_shared<std::atomic_bool>(false);
     prepared.m_inputs = inputs;
+    prepared.m_controlRecovery = package.controlRecovery();
     prepared.m_inputs[1] = *attempt;
     QByteArray receipt("PDDELIV1");
     receipt.resize(16);
@@ -68,6 +69,7 @@ std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoo
     prepared.m_publisherKey = uploads->publisherKey;
     prepared.m_nativeName = uploads->nativeName;
     prepared.m_nativeArchive = uploads->nativeArchive;
+    prepared.m_controlRecovery = package.controlRecovery();
     prepared.m_image = uploads->carrier;
     return prepared;
 }
@@ -85,6 +87,7 @@ std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoo
     prepared.m_publisherKey = uploads->publisherKey;
     prepared.m_nativeName = uploads->nativeName;
     prepared.m_nativeArchive = uploads->nativeArchive;
+    prepared.m_controlRecovery = package.controlRecovery();
     prepared.m_image = uploads->carrier;
     return prepared;
 }

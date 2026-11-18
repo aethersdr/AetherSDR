@@ -101,6 +101,47 @@ struct Fixture {
 class InstallationDialogTest : public QObject {
     Q_OBJECT
 private slots:
+    void previewDisclosesExactPackageRecovery_data()
+    {
+        QTest::addColumn<bool>("bounded"); QTest::addColumn<int>("mode");
+        for (const bool bounded : {false, true}) {
+            for (int mode = 0; mode < 3; ++mode) {
+                QTest::newRow(qPrintable(QStringLiteral("%1-%2").arg(bounded ? "bounded" : "manual").arg(mode))) << bounded << mode;
+            }
+        }
+    }
+    void previewDisclosesExactPackageRecovery()
+    {
+        QFETCH(bool, bounded); QFETCH(int, mode);
+        Fixture f;
+        if (bounded) { QVERIFY(f.files.enableControlRecovery()); }
+        if (mode == 0) {
+            QVERIFY(f.offer());
+        } else {
+            const auto package = f.files.loadFirst(); QVERIFY(package);
+            if (mode == 1) {
+                QVERIFY(f.model().prepareFirstPackage(*package, "fixture-radio", f.radio.controlSession()));
+            } else {
+                const auto prepared = Coordinator::prepareFirst(*package, "fixture-8600",
+                    QCryptographicHash::hash(QByteArray(64, 'a'), QCryptographicHash::Sha256), "fixture-radio");
+                QVERIFY(prepared); f.journalPlan = prepared->approvedPlan();
+                QVERIFY(f.model().prepareSavedFirstPackage(*package, f.files.trust.candidateKey, f.radio.controlSession()));
+                f.recoveryLoaded(QString(64, u'a'));
+            }
+            QTRY_COMPARE(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval);
+        }
+        QVERIFY(f.model().preview());
+        QCOMPARE(f.model().preview()->controlRecovery, bounded ? AetherPDControlRecovery::BoundedRestart : AetherPDControlRecovery::ExplicitStart);
+        QVERIFY(f.preview().contains("Control service recovery:"));
+        if (bounded) {
+            QVERIFY(f.preview().contains("5-second delay")); QVERIFY(f.preview().contains("3 starts in 60 seconds, including the initial start"));
+            QVERIFY(f.preview().contains("does not reboot the radio"));
+        } else {
+            QVERIFY(f.preview().contains("does not automatically restart")); QVERIFY(!f.preview().contains("5-second delay"));
+        }
+        QVERIFY(f.preview().contains("Start AetherPD"));
+        QCOMPARE(f.loads, 0); QCOMPARE(f.writes, 0); QVERIFY(!f.job); QVERIFY(f.network.sent.empty());
+    }
     void setupBusyKeepsTheReviewedPlanAndAllowsExplicitRetry()
     {
         Fixture f; QVERIFY(f.offer());

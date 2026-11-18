@@ -7,6 +7,7 @@
 
 namespace AetherSDR {
 class AetherPDInstallationCoordinator;
+enum class AetherPDControlRecovery { Unknown, ExplicitStart, BoundedRestart };
 // Pins come from the application's authenticated release catalogue, never a
 // manifest or key alongside the package being loaded. No network or execution.
 class AetherPDPackage {
@@ -24,6 +25,7 @@ public:
     static std::optional<AetherPDPackage> load(const QString& directory, const Trust& trust);
     quint32 profile() const { return m_profile; }
     QString firmware() const { return m_firmware; }
+    AetherPDControlRecovery controlRecovery() const { return m_controlRecovery; }
     // A public target plan, not operator consent. Serial is supplied by the
     // connected radio; worker/source and release keys came from verified bytes.
     QByteArray plan(const QString& serial) const;
@@ -35,6 +37,7 @@ private:
     QByteArray m_licenses;
     quint32 m_profile{0};
     QString m_firmware;
+    AetherPDControlRecovery m_controlRecovery{AetherPDControlRecovery::Unknown};
 };
 // Fresh installation has no predecessor release/key. All pins and the publisher
 // key must come from the authenticated application catalogue, outside the inputs.
@@ -58,6 +61,7 @@ public:
     static std::optional<AetherPDFirstPackage> verify(const Files& files, const Trust& trust);
     static std::optional<AetherPDFirstPackage> load(const QString& directory, const Trust& trust);
     QString firmware() const { return m_firmware; }
+    AetherPDControlRecovery controlRecovery() const { return m_controlRecovery; }
     // Local preparation only, before exact-plan consent. Call off the UI thread.
     // Secret generation/storage belongs to the caller; only its hash enters ZIP.
     std::optional<Uploads> prepare(const QString& serial, const QByteArray& tokenHash,
@@ -68,5 +72,6 @@ private:
     Files m_files;
     QByteArray m_key;
     QString m_firmware;
+    AetherPDControlRecovery m_controlRecovery{AetherPDControlRecovery::Unknown};
 };
 } // namespace AetherSDR

@@ -537,7 +537,8 @@ std::optional<AetherPDInstallationModel::Preview> AetherPDInstallationModel::pre
     if (!plan) { return std::nullopt; }
     return Preview{m_plan, plan->serial, plan->firmware, plan->previousDigest, plan->candidateDigest,
         plan->candidateKey, plan->planDigest, m_carrier, m_archiveSha256, first, m_nativeName,
-        first ? QString::fromLatin1(m_plan.mid(180, 64).split('\0').first()) : QString{}};
+        first ? QString::fromLatin1(m_plan.mid(180, 64).split('\0').first()) : QString{},
+        m_package ? m_package->controlRecovery() : AetherPDControlRecovery::Unknown};
 }
 bool AetherPDInstallationModel::acquireMutationLease()
 {

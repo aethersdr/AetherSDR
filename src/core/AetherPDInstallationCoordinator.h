@@ -36,6 +36,7 @@ public:
         QByteArray publisherKey() const { return m_publisherKey; }
         QString carrierSha256() const { return m_image.archiveSha256; }
         QByteArray approvedPlan() const { return m_inputs[1]; }
+        AetherPDControlRecovery controlRecovery() const { return m_controlRecovery; }
         bool used() const { return m_started && m_started->load(); }
     private:
         friend class AetherPDInstallationCoordinator;
@@ -45,6 +46,7 @@ public:
         QByteArray m_nativeArchive, m_publisherKey;
         QString m_nativeName;
         std::shared_ptr<std::atomic_bool> m_started;
+        AetherPDControlRecovery m_controlRecovery{AetherPDControlRecovery::Unknown};
     };
     enum class State { Idle, Requesting, UploadingCarrier, WaitingForCarrier, UploadingInputs, WaitingForCommit, Cleaning, Finished, UploadingNative, WaitingForNative };
     Q_ENUM(State)

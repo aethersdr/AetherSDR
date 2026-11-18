@@ -684,6 +684,17 @@ void AetherPDDialog::renderInstallation()
                 .arg(preview->serial, preview->firmware, preview->hostname, preview->candidateDigest,
                      preview->candidateKey, preview->planDigest, preview->nativeName, preview->carrierName, preview->archiveSha256);
     }
+    if (preview && !model->recovering()) {
+        if (preview->controlRecovery == AetherPDControlRecovery::BoundedRestart) {
+            detail += tr("\n\nControl service recovery: restart after a failure with a 5-second delay; "
+                "at most 3 starts in 60 seconds, including the initial start. Reaching the limit leaves the service stopped; "
+                "it does not reboot the radio. A new correction session still requires Start AetherPD. "
+                "Recovery does not transmit or arm calibration.");
+        } else if (preview->controlRecovery == AetherPDControlRecovery::ExplicitStart) {
+            detail += tr("\n\nControl service recovery: this package does not automatically restart the control service after failure. "
+                "A new correction session requires Start AetherPD. Installation does not transmit or arm calibration.");
+        }
+    }
     QString status;
     switch (state) {
     case State::Idle: status = tr("No update prepared"); break;

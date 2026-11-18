@@ -10,6 +10,62 @@ using namespace AetherSDR;
 class PackageTest : public QObject {
     Q_OBJECT
 private slots:
+    void controlRecoveryComesFromVerifiedCandidate_data()
+    {
+        QTest::addColumn<int>("arch");
+        QTest::addColumn<bool>("bounded");
+        QTest::newRow("arm64-manual") << 64 << false;
+        QTest::newRow("arm64-bounded") << 64 << true;
+        QTest::newRow("armv7-manual") << 7 << false;
+        QTest::newRow("armv7-bounded") << 7 << true;
+    }
+    void controlRecoveryComesFromVerifiedCandidate()
+    {
+        QFETCH(int, arch); QFETCH(bool, bounded);
+        AetherPDTest::PackageFixture fixture(arch);
+        QVERIFY(fixture.valid);
+        if (bounded) { QVERIFY(fixture.enableControlRecovery()); }
+        const auto package = fixture.load(); QVERIFY(package);
+        const auto expected = bounded ? AetherPDControlRecovery::BoundedRestart : AetherPDControlRecovery::ExplicitStart;
+        QCOMPARE(package->controlRecovery(), expected);
+        if (arch == 64) {
+            const auto first = fixture.loadFirst(); QVERIFY(first);
+            QCOMPARE(first->controlRecovery(), expected);
+        }
+        QVERIFY(fixture.replacePrimaryUnit("unrecognized after verification"));
+        QVERIFY(!fixture.load());
+        QCOMPARE(package->controlRecovery(), expected);
+    }
+    void signedServiceCannotMisstateRecovery_data()
+    {
+        QTest::addColumn<QByteArray>("before"); QTest::addColumn<QByteArray>("after");
+        QTest::newRow("different-delay") << QByteArray("RestartSec=5\n") << QByteArray("RestartSec=1\n");
+        QTest::newRow("different-budget") << QByteArray("StartLimitBurst=3\n") << QByteArray("StartLimitBurst=0\n");
+        QTest::newRow("reboot-action") << QByteArray("StartLimitAction=none\n") << QByteArray("StartLimitAction=reboot\n");
+        QTest::newRow("shadowed-restart") << QByteArray("Restart=on-failure\n") << QByteArray("Restart=on-failure\nRestart=always\n");
+        QTest::newRow("description-only") << QByteArray("Restart=on-failure\n") << QByteArray("# Restart=on-failure\n");
+        QTest::newRow("foreign-command") << QByteArray("/pd-boot --primary\n") << QByteArray("/pd-boot --primary --unexpected\n");
+    }
+    void legacyManualControlEntryRemainsAccepted()
+    {
+        for (const int arch : {64, 7}) {
+            AetherPDTest::PackageFixture fixture(arch);
+            QByteArray unit = fixture.primaryUnit();
+            unit.replace(arch == 64 ? "/var/lib/smartsdr/aetherpd/pd-boot --primary" : "/user/aetherpd/pd-boot --primary",
+                "/run/aetherpd/bin/pd-primary-launch");
+            QVERIFY(fixture.replacePrimaryUnit(unit));
+            const auto package = fixture.load(); QVERIFY(package);
+            QCOMPARE(package->controlRecovery(), AetherPDControlRecovery::ExplicitStart);
+        }
+    }
+    void signedServiceCannotMisstateRecovery()
+    {
+        QFETCH(QByteArray, before); QFETCH(QByteArray, after);
+        AetherPDTest::PackageFixture fixture; QVERIFY(fixture.enableControlRecovery()); QVERIFY(fixture.load());
+        QByteArray unit = fixture.primaryUnit(); QVERIFY(unit.contains(before)); unit.replace(before, after);
+        QVERIFY(fixture.replacePrimaryUnit(unit));
+        QVERIFY(!fixture.load()); QVERIFY(!fixture.loadFirst());
+    }
     void freshPackageHasNoPredecessor()
     {
         AetherPDTest::PackageFixture fixture; QVERIFY(fixture.valid);
