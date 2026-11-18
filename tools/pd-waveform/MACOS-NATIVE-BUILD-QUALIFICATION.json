@@ -1,0 +1,101 @@
+{
+  "created_utc": "2026-11-18T04:14:49.729251+00:00",
+  "tested_source_commit": "40951b0f27cc80f9f701a4d57151174b3c81499d",
+  "current_source_parent": "4d84eda671c1d1809acb381efe7c72c8a145909b",
+  "production_ready": false,
+  "finding": "Native Apple Silicon and Intel Mac application builds and unsigned app-tarball packaging completed successfully on40951b0f2. Downloaded representative artifacts match GitHub API SHA256 digests. Static inspection confirms expected main binary architecture/minimum, QtKeychain0.16.0 and Apple Silicon ONNX loader filenames/code provenance.",
+  "workflow": {
+    "run": 44225938204,
+    "url": "https://github.com/aethersdr/AetherSDR/actions/runs/44225938204",
+    "conclusion": "success",
+    "build_jobs": [
+      {
+        "id": 134539001379,
+        "name": "build-dmg (macos-15, apple-silicon, arm64, 14.4)",
+        "conclusion": "success"
+      },
+      {
+        "id": 134539002028,
+        "name": "build-dmg (macos-15-intel, intel, x86_64, 14.4)",
+        "conclusion": "success"
+      }
+    ],
+    "Developer_ID_signing_notarization": "skipped",
+    "release_attachment": "skipped"
+  },
+  "artifact_verification": {
+    "AppleSilicon": {
+      "artifact_id": 14395237185,
+      "zip_sha256": "506291f24ea7b6138e5072f6662ef0df7f4e657e95806c6552e9d172295cc7b3",
+      "zip_bytes": 331780666,
+      "main_sha256": "71876f57df2d3fc9aa439b6c7eb8dee78c680bfca792d8fc80306bdf8e2fd0a5",
+      "architecture": "aarch64",
+      "MachO_minimum": "14.4",
+      "scope": "unsigned bundle including debug/driver staging; no code executed"
+    },
+    "Intel": {
+      "artifact_id": 14396021025,
+      "zip_sha256": "482ef5a64d1a53234bc0c84640f24c415be0709b2bea256e41540381dd8e98ce",
+      "zip_bytes": 105186600,
+      "main_sha256": "9765350203e4f1cfd0f1459edf9e1bd1762fa0006f63357a7711e1d8dde54553",
+      "architecture": "x86_64",
+      "MachO_minimum": "14.4",
+      "scope": "unsigned app update tarball; no code executed"
+    }
+  },
+  "dependency_verification": {
+    "QtKeychain": "Both packaged libraries declare current version0.16.0 and minimum14.4. This is binary metadata, not an OS-keychain transaction test.",
+    "AppleSilicon_ONNX": "Main references @rpath/libonnxruntime.1.dylib, sherpa C API references @rpath/libonnxruntime.1.27.0.dylib. Both regular files exist and are byte-identical; local bundle lookup paths are present.",
+    "ONNX_code_provenance": {
+      "cases": [
+        {
+          "label": "official_nuget",
+          "input_sha256": "e96565bc1139fd136327c449b11d210da79acbe2aed53d959224815b4e448fac",
+          "dump_exit": 0,
+          "input_unchanged": true,
+          "text_bytes": 19783240,
+          "text_sha256": "05a896e5775e2a5acdfb19ba4d252179599e2014caed0b931c62aea99dfea825"
+        },
+        {
+          "label": "CI_bundle",
+          "input_sha256": "6ae4575f6e760a822a09e9826100596d1a5c228a852618d5606cfba557a90d6c",
+          "dump_exit": 0,
+          "input_unchanged": true,
+          "text_bytes": 19783240,
+          "text_sha256": "05a896e5775e2a5acdfb19ba4d252179599e2014caed0b931c62aea99dfea825"
+        }
+      ],
+      "code_sections_match": true,
+      "scope": "Only executable-section bytes compared, no binary disassembly or execution. Packaging header/signature differences remain separate."
+    },
+    "ONNX_minimum": "14.0",
+    "producer": "Completed job log explicitly records successful verified official NuGet staging and pinned Qt6.12.0 verification.",
+    "Intel_features": "Existing workflow intentionally omits ONNX/sherpa and ASR on Intel; this qualification does not change those defaults."
+  },
+  "source_scope": "Mac artifacts were built on40951b0f2. The subsequent4d84eda67 upload min/max fix was separately Linux-tested and is in the live Windows retry; no claim that these Mac artifacts were rebuilt on that later commit.",
+  "transfer_notes": [
+    "First Apple Silicon transfer reached315179008bytes before its180s child timeout. Child termination was confirmed; HTTP206 range resume retrieved16601658remaining bytes and the complete archive digest matched. No CI job was restarted.",
+    "Initial Intel inspection assumed a prefixed bundle root; final inspection correctly handles the app-root Contents layout. Both receipts/scripts retained.",
+    "Raw job log contained ANSI escapes; CLI first refused output. Final fetch wrote directly to file and only sanitized markers were rendered."
+  ],
+  "remaining_scope": [
+    "Native Mac application execution, actual OS-keychain/UI lifecycle, hardware-connected operator workflow and signed/notarized distribution remain unqualified.",
+    "Static selected-file inspection is not a proof of all dyld behavior, loaded image count or whole-application dependency/feature correctness. The two ONNX filenames are identical regular files in this artifact.",
+    "Windows retry44230888697 on4d84eda67 is tracked separately; no Windows success inferred from Mac results.",
+    "Installed-shim control-service recovery policy and firmware-baseline decisions, final RF/stock comparison, actual6300 and all remaining P1-P10 release gates remain open."
+  ],
+  "radio_actions": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/macos-native-build-components.tar.gz",
+    "bytes": 434303181,
+    "sha256": "388c8b7b1b2f0fe27f74cf97f9291c27a14359f12bb8597be496ca86389a7f94",
+    "verified_members": 49,
+    "scope": "Original CI artifacts, producer/inspection/negative receipts, exact source subset and notice files. Not a signed release."
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/MACOS-NATIVE-BUILD-EVIDENCE.json.gz",
+    "sha256": "55e2922ec8afe7014ed3cafcdfceea9b8cfe24676dc19787535ecd77f5ee323b"
+  }
+}
