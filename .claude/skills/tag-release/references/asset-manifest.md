@@ -38,7 +38,7 @@ tarballs (rows 18–21) from the first cut after RFC #5304 Phase 5's CI half, an
 From v26.11.4, **Release Offload** (`release-offload.yml`, RFC #6964)
 moves the rows people don't download to
 `https://updates.aethersdr.com/releases/vX.Y.Z/<same name>` after the last
-signing run, once the maintainer approves its update-signing run:
+signing run, by its `offload` job in the update-signing environment (no approval):
 
 - **The page, fourteen files:** rows 1, 3, 5, 6, 7, 9, 11, 13, 14, 16, 18,
   20, 22 and 24. That is the six installers, the source, both sums files,

@@ -404,8 +404,8 @@ gh run list --workflow sign-release.yml --limit 6 --json event,status,conclusion
 signing run that succeeded. Its read-only `plan` job asks nothing until the
 release is settled: every build and Docs run for the tag finished, no
 signing run unfinished, `SHA256SUMS.txt` newer than every build artifact.
-Then its `offload` job parks at the **update-signing** gate, one approval
-per release, which the maintainer gives. It copies the per-file `.asc`
+Then its `offload` job runs in the **update-signing** environment, with no
+approval (main and `v*` refs only). It copies the per-file `.asc`
 signatures (not `SHA256SUMS.txt.asc`), the symbol archives and the
 `.msixupload` to `updates.aethersdr.com/releases/vX.Y.Z/` and checks each
 one. Only after every copy is checked does it delete them from the page,
@@ -416,8 +416,23 @@ stopped partway:
 
 ```sh
 gh workflow run release-offload.yml -f tag=vX.Y.Z -f dry_run=true   # lists, writes nothing
-gh workflow run release-offload.yml -f tag=vX.Y.Z -f dry_run=false  # moves, after approval
+gh workflow run release-offload.yml -f tag=vX.Y.Z -f dry_run=false  # moves
 ```
+
+**Update Manifest** (`update-manifest.yml`) is what offers the release to
+installed copies. Each of AppImage, Windows Installer and macOS DMG starts a
+run when it finishes. A run whose missing files belong to a build still
+running ends green as **deferred** (a `::notice::` naming that build), so
+expect two deferred runs and one that builds, from the last build to finish
+(usually macOS DMG). Its `publish` job signs and publishes with no approval.
+**Confirm the release is live** for in-app updates, which nothing else checks:
+
+```sh
+curl -s https://updates.aethersdr.com/latest/manifest.json | jq -r .version   # must print X.Y.Z
+```
+
+If it still prints the previous version once every build has finished,
+dispatch `gh workflow run update-manifest.yml -f tag=vX.Y.Z -f publish=true`.
 
 Its patch bundles never reach the page once `UPDATE_PAYLOAD_BASE` is `r2`:
 Update Manifest puts them on `updates.aethersdr.com` itself. Bundles on a
@@ -540,7 +555,7 @@ report. What it checks, and what you check by hand where it cannot run:
   `26.9.205.0` (the workflow run counter, fixed in #5467) and v26.7.4.1's
   `26.7.4.1` (a hotfix number the Store cannot take; a hotfix now produces
   none). Patch bundles on the page are `INFO` through v26.11.3 and a `WARN`
-  from v26.11.4. Files Release Offload has not moved yet are a `WARN`: approve
+  from v26.11.4. Files Release Offload has not moved yet are a `WARN`: read
   its run. A signature or the `.msixupload` on neither the page nor
   `updates.aethersdr.com` is a `FAIL`. Anything else on the release is a
   `WARN` to explain.
@@ -693,7 +708,8 @@ Each decision put through AskUserQuestion and the answer. "None." if so.
 | Sign Release Artifacts | <url> | — | success | workflow_run, after AppImage |
 | Sign Release Artifacts | <url> | — | skipped | workflow_run, Windows red |
 | Docs | <url> | 1 | success | release: published; manual PDF attached |
-| Release Offload | <url> | — | success | approved <time>; 15 files moved (14 for a hotfix) / n/a (before v26.11.4) |
+| Release Offload | <url> | — | success | 15 files moved (14 for a hotfix) / n/a (before v26.11.4) |
+| Update Manifest | <url> | — | success | built by the macOS DMG run (two deferred); latest/manifest.json reads X.Y.Z |
 Re-run or dispatched by hand: <what, when> / none.
 
 ### Assets (from v26.11.4: 14 on the page + 15 on updates.aethersdr.com, 14 for a hotfix; before: 24 / 23 for a hotfix)

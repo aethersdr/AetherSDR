@@ -15,7 +15,7 @@ name: Release Offload
 #          run for it has finished and SHA256SUMS.txt is newer than every
 #          build artifact it signed. Until then each signing run's plan stops
 #          here, without asking for an approval.
-# offload  runs in the update-signing environment (maintainer approval), the
+# offload  runs in the update-signing environment (main and v* refs, no approval), the
 #          only place the bucket's token lives. It checks the release is
 #          ready again before it copies anything.
 #
