@@ -481,6 +481,15 @@ func monitorAetherPDProcessWithSetup(pid int, wait func() error, write *os.File,
 		}
 		setupErr := setupChildren.wait(ctx)
 		cancel()
+		if guardErr != nil {
+			log.Printf("AetherPD: owned unkey guardian exited: %v", guardErr)
+		}
+		if testUnkeyErr != nil {
+			log.Printf("AetherPD: bounded test guardian cleanup: %v", testUnkeyErr)
+		}
+		if leaseErr != nil {
+			log.Printf("AetherPD: owned API lease guardian exited: %v", leaseErr)
+		}
 		if setupErr != nil {
 			log.Printf("AetherPD: setup children exited: %v", setupErr)
 		}
