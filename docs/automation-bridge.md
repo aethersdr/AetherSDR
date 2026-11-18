@@ -753,7 +753,8 @@ popup at a time and only while it is open; an empty combo is refused up front
 > `rf_power_down` shortcuts are refused the same way through `shortcut` and
 > `keyevent`, and so is a `keyevent` press of an arrow, PageUp/PageDown or
 > Home/End key while one of the two sliders holds the keyboard lease, bound or
-> not. Reading them stays open, and
+> not. A `tci send` of `drive:<trx>,<value>` or `tune_drive:<trx>,<value>` is
+> refused too. Reading them stays open, and
 > `controls scrub` (which only re-asserts the current value) is not gated. Other
 > setpoints like `VOX level` or `Microphone gain` are not blocked.
 >
@@ -3623,6 +3624,11 @@ over loopback and offers two profiles after draining the init burst through
 Removes the external-WebSocket dependency for TCI/DAX lifecycle testing.
 Requires the TCI server to be running (toggle via `invoke tciEnable click` if
 needed).
+
+Without TX permission, `send` refuses a payload that sets drive
+(`drive:<trx>,<value>` or `tune_drive:<trx>,<value>`) with the
+`sets transmit drive` error of [`transmit rfpower`](#transmit) (#5851); the
+read forms (`drive:0;`) stay open. External TCI clients are not affected.
 
 ```json
 → {"cmd":"tci","action":"start"}            // optional value = port

@@ -1480,6 +1480,26 @@ const QWidget* txSetpointInChain(const QWidget* widget)
     return nullptr;
 }
 
+#ifdef HAVE_WEBSOCKETS
+// The first `drive:` / `tune_drive:` SET (two or more arguments, TCI's set
+// convention) in a `tci send` payload, or empty. A read (`drive:0;`) is not one.
+QString tciDriveSetCommand(const QString& payload)
+{
+    for (const QString& part : payload.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const int colon = part.indexOf(QLatin1Char(':'));
+        if (colon < 0) {
+            continue;
+        }
+        const QString name = part.left(colon).trimmed().toLower();
+        if ((name == QLatin1String("drive") || name == QLatin1String("tune_drive"))
+            && part.mid(colon + 1).split(QLatin1Char(','), Qt::KeepEmptyParts).size() >= 2) {
+            return part.trimmed();
+        }
+    }
+    return {};
+}
+#endif
+
 QString txSetpointBlockedError(const QString& target)
 {
     return QStringLiteral("blocked: '") + target
@@ -12567,6 +12587,12 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         command = command.trimmed();
         if (command.isEmpty()) {
             return err(QStringLiteral("tci send requires a command"));
+        }
+        if (!m_txAllowed) {
+            if (const QString set = tciDriveSetCommand(command); !set.isEmpty()) {
+                qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint tci send" << set;
+                return err(txSetpointBlockedError(QStringLiteral("tci send ") + set));
+            }
         }
         if (command.size() > 4096 || command.contains(QLatin1Char('\n'))
             || command.contains(QLatin1Char('\r'))) {

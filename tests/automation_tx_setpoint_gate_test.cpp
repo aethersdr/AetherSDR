@@ -273,6 +273,33 @@ int main(int argc, char** argv)
               "keyevent lease: injectKeyEventForAutomation checks the lease before it sends the key");
     }
 
+    // ── `tci send` of a drive SET (#5851) ──────────────────────────────────
+    // Refused before any simulator is looked up, so no TCI client is needed.
+    const auto tciSend = [&](const QString& payload) {
+        return cmd(server, QStringLiteral("tci"), {}, QStringLiteral("send"), payload);
+    };
+    const auto driveBlocked = [](const QJsonObject& r) {
+        return !ok(r) && r.value(QStringLiteral("error")).toString()
+                             .contains(QStringLiteral("sets transmit drive"));
+    };
+    const bool tciBuilt = !tciSend(QStringLiteral("drive:0;")).value(QStringLiteral("error"))
+                               .toString().contains(QStringLiteral("not built"));
+    if (tciBuilt) {
+        const QJsonObject drive = tciSend(QStringLiteral("drive:0,100;"));
+        check(driveBlocked(drive) && drive.value(QStringLiteral("error")).toString().startsWith(
+                  QStringLiteral("blocked: 'tci send drive:0,100' sets transmit drive")),
+              "TX not allowed: tci send drive:0,100 is refused as transmit drive");
+        check(driveBlocked(tciSend(QStringLiteral("tune_drive:0,100"))),
+              "TX not allowed: tci send tune_drive:0,100 is refused");
+        check(driveBlocked(tciSend(QStringLiteral("vfo:0,0,14074000; DRIVE : 0 , 90;"))),
+              "TX not allowed: a drive SET later in a multi-command payload is refused");
+        check(!driveBlocked(tciSend(QStringLiteral("drive:0;")))
+                  && !driveBlocked(tciSend(QStringLiteral("tune_drive;"))),
+              "TX not allowed: tci send drive/tune_drive reads are not refused");
+    } else {
+        std::printf("[SKIP] tci send drive gate: TCI not built (HAVE_WEBSOCKETS off)\n");
+    }
+
     // ── TX permission: the same calls reach TransmitModel ───────────────────
     server.setTxAllowed(true);
     for (const Setpoint& sp : setpoints) {
@@ -286,6 +313,11 @@ int main(int argc, char** argv)
         const QString h = QString::number(sp.slider->height() / 2);
         check(ok(cmd(server, QStringLiteral("clickAt"), sp.name, {}, w + QLatin1Char(' ') + h)),
               "TX allowed: clickAt on " + n + " is accepted");
+    }
+
+    if (tciBuilt) {
+        check(!driveBlocked(tciSend(QStringLiteral("drive:0,100;"))),
+              "TX allowed: tci send drive:0,100 is not refused as transmit drive");
     }
 
     // ── A gesture begun with permission stops when permission is withdrawn ──
