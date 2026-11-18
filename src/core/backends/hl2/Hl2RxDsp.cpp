@@ -296,6 +296,8 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     // Held outside Config, so re-applied after the mode (the APF depends on it).
     applyAgcOffLevel();
     applyApf();
+    applyNoiseReduction();
+    applyAutoNotch();
     // A rebuild (rate change) creates a fresh channel; restore the operator's
     // current slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
@@ -440,6 +442,9 @@ void Hl2RxDsp::setMode(WdspChannel::Mode mode)
         // Entering or leaving CW switches the APF in or out of circuit; the
         // operator's request itself is untouched.
         applyApf();
+        // Likewise channel NR (out in FM) and ANF (voice modes only).
+        applyNoiseReduction();
+        applyAutoNotch();
     }
 }
 
@@ -479,6 +484,44 @@ void Hl2RxDsp::applyApf()
                            kApfGain)) {
         qCWarning(lcHl2RxDsp) << "APF" << (run ? "on" : "off") << "at" << m_apfCenterHz
                               << "Hz level" << m_apfLevel
+                              << "refused by the channel; held and re-applied on"
+                                 " the next configure()";
+    }
+}
+
+void Hl2RxDsp::setNoiseReduction(bool on, int level)
+{
+    m_nrOn = on;
+    m_nrLevel = std::clamp(level, 0, 100);
+    if (canPushToChannel()) {
+        applyNoiseReduction();
+    }
+}
+
+void Hl2RxDsp::applyNoiseReduction()
+{
+    const bool run = noiseReductionInCircuit();
+    if (!m_channel->setNoiseReduction(run, m_nrLevel)) {
+        qCWarning(lcHl2RxDsp) << "channel NR" << (run ? "on" : "off") << "level" << m_nrLevel
+                              << "refused by the channel; held and re-applied on"
+                                 " the next configure()";
+    }
+}
+
+void Hl2RxDsp::setAutoNotch(bool on, int level)
+{
+    m_anfOn = on;
+    m_anfLevel = std::clamp(level, 0, 100);
+    if (canPushToChannel()) {
+        applyAutoNotch();
+    }
+}
+
+void Hl2RxDsp::applyAutoNotch()
+{
+    const bool run = autoNotchInCircuit();
+    if (!m_channel->setAutoNotch(run, m_anfLevel)) {
+        qCWarning(lcHl2RxDsp) << "channel ANF" << (run ? "on" : "off") << "level" << m_anfLevel
                               << "refused by the channel; held and re-applied on"
                                  " the next configure()";
     }

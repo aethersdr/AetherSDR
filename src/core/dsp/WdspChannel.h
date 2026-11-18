@@ -473,6 +473,9 @@ public:
     // 0..100 in the slice model's units. Re-applied on reopen unless the
     // Config's analogReceiveDsp recipe owns NR instead. Receive channels only.
     bool setNoiseReduction(bool enabled, int level) noexcept;
+    // WDSP's ANF (LMS automatic notch) on a running receive channel; same level
+    // units, same reopen rule and the same refusal under a recipe as ANR above.
+    bool setAutoNotch(bool enabled, int level) noexcept;
 
     // Manual notches: the host-side Flex TNF equivalent, and the only notch on a
     // direct-sampling radio (HL2 has no radio-side DSP; oracle addendum 3 §B4).
@@ -664,6 +667,10 @@ private:
     bool m_liveNrSet = false;
     bool m_liveNrEnabled = false;
     int m_liveNrLevel = 50;
+    // setAutoNotch()'s request, held the same way.
+    bool m_liveAnfSet = false;
+    bool m_liveAnfEnabled = false;
+    int m_liveAnfLevel = 50;
     // These two coordinate the real-time processIq() against control-thread
     // operations. The handshake is Dekker-style — each side stores its own flag
     // then reads the other's — which is only correct under sequential

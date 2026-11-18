@@ -7,13 +7,16 @@
 // (hl2_noise_blanker_test, hl2_rxdsp_agc_test, hl2_rxdsp_notch_audio_test):
 //
 //   present:  the host noise blanker, the AGC threshold control, the CW audio
-//             peaking filter (host WDSP, Hl2Backend::setSliceApf), and the
-//             host multi-notch (maxNotchFilters, no depth choice)
+//             peaking filter (host WDSP, Hl2Backend::setSliceApf), the receive
+//             channel's NR (WDSP ANR) and auto notch (WDSP ANF), and the host
+//             multi-notch (maxNotchFilters, no depth choice)
 //   absent:   radio-side DSP, the LMS noise filters (NRL/ANFL/ANFT), extended
 //             DSP (NRS/RNN/NRF), the radio-side single manual notch
 //
 // receiveDspControl names the same set per mode (AGC, NB, RIT everywhere, APF
-// in CW), and so gates both the desktop's DSP buttons and aetherd's verbs.
+// in CW, NR outside FM, ANF in the voice modes), and so gates both the
+// desktop's DSP buttons and aetherd's verbs. hl2_rxdsp_channel_nr_anf_test
+// measures NR and ANF on the audio.
 //
 // Absent is a statement of the current wiring, not a design ruling: when one of
 // them is implemented this line should change in the same commit, and the
@@ -80,11 +83,11 @@ int main(int argc, char** argv)
               "with engine authority, so aetherd may steer it");
         check(dsp->features.contains(Feature::Agc) && dsp->features.contains(Feature::Nb)
                   && dsp->features.contains(Feature::Apf) && dsp->features.contains(Feature::Rit)
-                  && dsp->features.size() == 4,
-              "exactly AGC, the blanker, the APF and RIT are declared");
-        check(!dsp->features.contains(Feature::Nr) && !dsp->features.contains(Feature::Anf)
-                  && !dsp->features.contains(Feature::ManualNotch),
-              "NR, ANF and the single manual notch are not: nothing runs them here");
+                  && dsp->features.contains(Feature::Nr) && dsp->features.contains(Feature::Anf)
+                  && dsp->features.size() == 6,
+              "exactly AGC, the blanker, the APF, RIT, NR and ANF are declared");
+        check(!dsp->features.contains(Feature::ManualNotch),
+              "the single manual notch is not: nothing runs it here");
         // Every mode setSliceMode() accepts, each once and canonical: a slice in
         // a mode the record lacks would lose its AGC, NB and RIT controls.
         bool everyAccepted = true;
@@ -100,21 +103,70 @@ int main(int argc, char** argv)
               "the DSP modes are every accepted mode, in its canonical spelling, once");
         bool everywhere = true;
         QStringList apfModes;
+        QStringList nrModes;
+        QStringList anfModes;
         for (const QString& mode : dsp->modes) {
             everywhere &= dsp->supports(Feature::Agc, mode) && dsp->supports(Feature::Nb, mode)
                 && dsp->supports(Feature::Rit, mode);
             if (dsp->supports(Feature::Apf, mode)) {
                 apfModes.append(mode);
             }
+            if (dsp->supports(Feature::Nr, mode)) {
+                nrModes.append(mode);
+            }
+            if (dsp->supports(Feature::Anf, mode)) {
+                anfModes.append(mode);
+            }
         }
         apfModes.sort();
+        anfModes.sort();
         check(everywhere, "AGC, the blanker and RIT apply in every one of them");
         check(apfModes == QStringList({QStringLiteral("CW"), QStringLiteral("CWL")}),
               "the APF applies only where Hl2RxDsp puts it in circuit, CW and CWL");
-        // The undeclared buttons were already hidden by the legacy flags, so the
-        // record changes no button the desktop shows.
+        check(!nrModes.contains(QStringLiteral("FM")) && !nrModes.contains(QStringLiteral("WBFM"))
+                  && nrModes.size() == dsp->modes.size() - 2,
+              "NR applies in every mode but FM and WBFM");
+        check(anfModes == QStringList({QStringLiteral("AM"), QStringLiteral("DSB"), QStringLiteral("LSB"),
+                                       QStringLiteral("SAM"), QStringLiteral("USB")}),
+              "ANF applies only in the voice modes, where a steady tone is interference");
+        // The manual notch stays hidden by the legacy flags as before the record.
         check(!caps.hasRadioSideDsp && !caps.hasManualNotch,
-              "NR, ANF and the manual notch stay hidden as before the record");
+              "no radio-side DSP and no manual notch: the radio still runs none");
+
+        // NR and ANF reach the receiver and come back in its echo, per field.
+        SliceDelta echo;
+        const QMetaObject::Connection echoWatch = QObject::connect(&backend, &IRadioBackend::sliceChanged,
+            &backend, [&](int id, const SliceDelta& d) { if (id == 0) { echo = d; } });
+        const auto dspRequest = [&](SliceDspRequest::Feature feature, SliceDspRequest::Field field,
+                                    bool enabled, int level) {
+            SliceDspRequest request;
+            request.feature = feature;
+            request.field = field;
+            request.enabled = enabled;
+            request.level = level;
+            return backend.requestSliceDsp(0, request);
+        };
+        using DspFeature = SliceDspRequest::Feature;
+        using DspField = SliceDspRequest::Field;
+        check(dspRequest(DspFeature::Nr, DspField::Enabled, true, 0) == ReceiveDispatch::Dispatched
+                  && echo.nr == true && echo.nrLevel == 50 && echo.anf == false,
+              "an NR enable is dispatched and echoed on, at the held level, ANF untouched");
+        check(dspRequest(DspFeature::Nr, DspField::Level, false, 70) == ReceiveDispatch::Dispatched
+                  && echo.nr == true && echo.nrLevel == 70,
+              "an NR level moves the level only");
+        check(dspRequest(DspFeature::Anf, DspField::Enabled, true, 0) == ReceiveDispatch::Dispatched
+                  && echo.anf == true && echo.anfLevel == 50 && echo.nr == true,
+              "an ANF enable is dispatched and echoed on, NR untouched");
+        check(dspRequest(DspFeature::Anf, DspField::Level, false, 20) == ReceiveDispatch::Dispatched
+                  && echo.anf == true && echo.anfLevel == 20,
+              "an ANF level moves the level only");
+        check(dspRequest(DspFeature::Nr, DspField::Enabled, false, 0) == ReceiveDispatch::Dispatched
+                  && dspRequest(DspFeature::Anf, DspField::Enabled, false, 0) == ReceiveDispatch::Dispatched
+                  && echo.nr == false && echo.anf == false,
+              "and both switch off again");
+        check(dspRequest(DspFeature::Nrl, DspField::Enabled, true, 0) == ReceiveDispatch::Unsupported,
+              "negative control: the Flex LMS NRL is still refused");
+        QObject::disconnect(echoWatch);
 
         // The declared RIT limit is the backend's own clamp, read back.
         SliceDelta last;

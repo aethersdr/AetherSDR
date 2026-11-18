@@ -1923,6 +1923,13 @@ target_include_directories(hl2_rxdsp_notch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_notch_audio_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_notch_audio_test COMMAND hl2_rxdsp_notch_audio_test)
 
+# The HL2 receive channel's own NR (WDSP ANR) and auto notch (ANF), measured
+# on the audio through the real Hl2RxDsp.
+add_executable(hl2_rxdsp_channel_nr_anf_test tests/hl2_rxdsp_channel_nr_anf_test.cpp)
+target_include_directories(hl2_rxdsp_channel_nr_anf_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_channel_nr_anf_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_channel_nr_anf_test COMMAND hl2_rxdsp_channel_nr_anf_test)
+
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)

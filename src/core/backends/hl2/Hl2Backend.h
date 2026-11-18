@@ -716,6 +716,12 @@ private:
         // Hl2RxDsp::kDefaultApfLevel / kDefaultAgcOffLevel (the test pins it).
         bool apfOn = false;
         int  apfLevel = 50;
+        // The receive channel's own NR (WDSP ANR) and automatic notch (ANF),
+        // held the same way. Defaults are SliceModel's (off, level 50).
+        bool nrOn = false;
+        int  nrLevel = 50;
+        bool anfOn = false;
+        int  anfLevel = 50;
         int  agcOffLevel = 10;
 
         // The operator's panadapter averaging, held for the same reason: a
@@ -850,6 +856,11 @@ private:
     void dropPanAverage(const Receiver& r);
     // Same, for the APF (centred on the current CW pitch) and the AGC-off level.
     void pushApf(const Receiver& r);
+    // Same, for the channel's NR and ANF (Receiver::nrOn/anfOn and levels).
+    void pushChannelNoiseFilters(const Receiver& r);
+    // requestSliceDsp()'s Nr/Anf arm: the receive channel's own ANR and ANF,
+    // per receiver. Not setSliceNoiseReduction/AutoNotch, which name radio DSP.
+    void setSliceChannelNoiseFilter(int sliceId, const SliceDspRequest& request);
     void pushAgcOffLevel(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC. Never m_rx,
