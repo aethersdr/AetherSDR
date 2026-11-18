@@ -694,7 +694,11 @@ void AetherPDDialog::renderInstallation()
         status = m_radio->isRadioTransmitting() ? tr("Review the plan; approval is unavailable while transmitting.")
             : model->preparingSavedInstallation() ? tr("Review the saved plan, then choose Approve saved attempt. No upload starts before approval.")
             : preview && preview->firstInstallation ? tr("Review the plan, then choose Approve first installation. Nothing is installed before approval.")
-            : tr("Review the plan, then choose Approve update. Nothing is installed before approval."); break;
+            : tr("Review the plan, then choose Approve update. Nothing is installed before approval.");
+        if (model->failure() == Model::Failure::SetupBusy) {
+            status += tr(" Remote Access setup or another installation is busy, or its local lock is unavailable. Let it finish, then retry approval.");
+        }
+        break;
     case State::LoadingCredential: status = tr("Loading the saved radio credential…"); break;
     case State::LoadingInventoryCredential: status = tr("Loading the saved owner credential for a read-only release check…"); break;
     case State::ReadingInstallation: status = tr("Checking the installed release before continuing…"); break;
@@ -738,6 +742,7 @@ void AetherPDDialog::renderInstallation()
     case State::Unavailable:
         if (!model) { status = tr("Connection ended — reopen AetherPD for the current radio."); break; }
         switch (model->failure()) {
+        case Model::Failure::SetupBusy: status = tr("Remote Access setup or another installation is busy, or its local lock is unavailable. Let it finish, then choose Check saved installation again."); break;
         case Model::Failure::SessionChanged: status = tr("Radio connection changed; prepare a new update for the current connection."); break;
         case Model::Failure::NoCredential: status = preview && preview->firstInstallation
             ? tr("The saved first-install credential is unavailable. Recovery cannot continue.")

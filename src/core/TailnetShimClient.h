@@ -147,8 +147,8 @@ public:
     // The injected transport must outlive this client.
     TailnetShimClient(QNetworkAccessManager& network, QObject* parent = nullptr);
 
-    // Same-user setup admission across windows/processes, independent of the
-    // credential-store lease. Retain through the request and its token save.
+    // Same-user provisioning/installation admission across windows/processes,
+    // independent of the credential-store lease. Retain through credential saves.
     static std::shared_ptr<void> acquireProvisioningLease(const QString& radioSerial);
 
     void setRadioAddress(const QHostAddress& address) { m_address = address; }

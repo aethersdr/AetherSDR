@@ -812,6 +812,15 @@ the current connection.
   and temporary-installer cleanup are reported; recovery after application exit
   is not yet qualified.
 
+Matching instances for the same OS user coordinate Remote Access sign-in with
+approved service installations and saved-installation checks that can restore
+credentials. If setup is busy or the local lock is unavailable, the reviewed
+plan stays available: let the other operation finish, then retry approval or
+choose **Check saved installation** again. Nothing retries automatically.
+A canceled or timed-out credential save can keep setup busy until the keychain
+operation finishes. Other computers and older builds do not share this
+coordination.
+
 An update requires confirmed AetherPD cleanup. A **Stop AetherPD** acknowledgment
 alone is insufficient: wait until the service confirms it has stopped. An uncertain
 cleanup result keeps the session owned and prevents the update from starting.

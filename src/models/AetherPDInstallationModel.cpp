@@ -48,7 +48,8 @@ AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, QObject*
 AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent, DownloadFactory downloader, TokenWriter writer, RecoveryServices recovery, AetherPDReleaseCatalogue catalogue, ReadFactory reader)
     : QObject(parent), m_radio(&radio), m_load(std::move(loader)), m_write(std::move(writer)), m_recovery(std::move(recovery)), m_catalogue(std::move(catalogue)),
       m_readFactory(reader ? std::move(reader) : [] { return std::make_unique<AetherPDInstallationRead>(); }), m_factory(std::move(factory)),
-      m_downloadFactory(downloader ? std::move(downloader) : [] { return std::make_unique<AetherPDPackageDownload>(); })
+      m_downloadFactory(downloader ? std::move(downloader) : [] { return std::make_unique<AetherPDPackageDownload>(); }),
+      m_mutationAuthority(TailnetShimClient::acquireProvisioningLease)
 {
     m_timeout.setParent(this);
     m_timeout.setSingleShot(true);
@@ -538,6 +539,24 @@ std::optional<AetherPDInstallationModel::Preview> AetherPDInstallationModel::pre
         plan->candidateKey, plan->planDigest, m_carrier, m_archiveSha256, first, m_nativeName,
         first ? QString::fromLatin1(m_plan.mid(180, 64).split('\0').first()) : QString{}};
 }
+bool AetherPDInstallationModel::acquireMutationLease()
+{
+    if (m_mutationLease) { return true; }
+    const QPointer<AetherPDInstallationModel> self(this);
+    const quint64 generation = m_generation;
+    const auto authority = m_mutationAuthority;
+    const QString serial = m_serial;
+    std::shared_ptr<void> lease = authority ? authority(serial) : std::shared_ptr<void>{};
+    if (!self || generation != m_generation) { return false; }
+    if (!lease) {
+        m_failure = Failure::SetupBusy;
+        emit changed();
+        return false;
+    }
+    m_mutationLease = std::move(lease);
+    m_failure = Failure::None;
+    return true;
+}
 bool AetherPDInstallationModel::approve(const QByteArray& displayedPlan)
 {
     if (QThread::currentThread() != thread() || m_state != State::AwaitingApproval || !m_package || !m_factory
@@ -548,6 +567,8 @@ bool AetherPDInstallationModel::approve(const QByteArray& displayedPlan)
     const bool first = !m_nativeName.isEmpty();
     const auto shown = preview();
     if (first && (!shown || m_firstToken.isEmpty())) { return false; }
+    if (!acquireMutationLease()) { return false; }
+    if (!current()) { unavailable(Failure::SessionChanged); return false; }
     if (m_savedPreparation) {
         const QPointer<AetherPDInstallationModel> self(this);
         const bool retained = m_recovery.retainPending(m_plan, m_publisherKey);
@@ -569,7 +590,11 @@ bool AetherPDInstallationModel::approve(const QByteArray& displayedPlan)
     if (!current()) { unavailable(Failure::SessionChanged); return false; }
     if (first) {
         const TokenWriter writer = m_write;
-        writer(serial, shown->planDigest, m_firstToken, this, [self, generation](bool persisted) {
+        const auto held = std::make_shared<std::shared_ptr<void>>(m_mutationLease);
+        writer(serial, shown->planDigest, m_firstToken, this, [self, generation, held](bool persisted) {
+            // Callback copies share one hold. A canceled/timed-out model may
+            // release its own lease, but the backend still owns this interval.
+            [[maybe_unused]] const std::shared_ptr<void> completionLease = std::exchange(*held, {});
             if (!self || generation != self->m_generation || self->m_state != State::SavingCredential) { return; }
             if (!persisted) { self->unavailable(Failure::CredentialSaveFailed); return; }
             if (!self->current()) { self->unavailable(Failure::SessionChanged); return; }
@@ -629,12 +654,14 @@ void AetherPDInstallationModel::completed(Coordinator::Outcome result, bool clea
         m_timeout.start();
         emit changed();
         if (!self || generation != m_generation || m_state != State::PromotingCredential) { return; }
-        writer(serial, {}, token, this, [self, generation](bool persisted) {
+        const auto held = std::make_shared<std::shared_ptr<void>>(m_mutationLease);
+        writer(serial, {}, token, this, [self, generation, held](bool persisted) {
+            [[maybe_unused]] const std::shared_ptr<void> completionLease = std::exchange(*held, {});
             if (self) { self->promoted(persisted, generation); }
         });
         return;
     }
-    m_firstToken.clear(); m_state = State::Finished;
+    m_firstToken.clear(); m_state = State::Finished; m_mutationLease.reset();
     emit changed();
 }
 void AetherPDInstallationModel::promoted(bool persisted, quint64 generation)
@@ -649,6 +676,7 @@ void AetherPDInstallationModel::promoted(bool persisted, quint64 generation)
         if (!self) { return; }
         if (!recorded) { m_failure = Failure::JournalFailed; }
     }
+    m_mutationLease.reset();
     emit changed();
 }
 void AetherPDInstallationModel::unavailable(Failure reason)
@@ -659,6 +687,7 @@ void AetherPDInstallationModel::unavailable(Failure reason)
     m_state = State::Unavailable; m_failure = reason;
     m_package.reset();
     m_firstToken.clear();
+    m_mutationLease.reset();
     emit changed();
 }
 void AetherPDInstallationModel::cancel()
@@ -674,7 +703,7 @@ void AetherPDInstallationModel::cancel()
         retirePreparation();
         clearUpgradeSelection();
         ++m_generation; m_timeout.stop(); m_package.reset(); m_firstToken.clear();
-        m_state = State::Finished; m_outcome = Coordinator::Outcome::Canceled; m_cleanup = true;
+        m_state = State::Finished; m_outcome = Coordinator::Outcome::Canceled; m_cleanup = true; m_mutationLease.reset();
         emit changed();
     } else if (m_state == State::Running && m_job) {
         m_state = State::Canceling;
@@ -767,6 +796,15 @@ void AetherPDInstallationModel::recoveryCredential(const QString& token, quint64
         }, m_generation);
         return;
     }
+    const QPointer<AetherPDInstallationModel> admissionOwner(this);
+    const quint64 admissionGeneration = m_generation;
+    if (!acquireMutationLease()) {
+        if (admissionOwner && admissionGeneration == m_generation && m_state == State::LoadingRecoveryCredential) {
+            unavailable(Failure::SetupBusy);
+        }
+        return;
+    }
+    if (!current()) { unavailable(Failure::SessionChanged); return; }
     if (m_recoveryCleanup) {
         m_job = m_factory(*m_radio);
         if (!m_job || m_job->thread() != thread()) { unavailable(Failure::StartRefused); return; }

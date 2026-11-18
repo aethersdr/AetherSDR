@@ -38,7 +38,7 @@ public:
     };
     enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable, SavingCredential, PromotingCredential, LoadingRecoveryCredential, CheckingInstallation, LoadingInventoryCredential, ReadingInstallation };
     Q_ENUM(State)
-    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected, CredentialSaveFailed, JournalFailed, InstallationReadFailed, NoMatchingRelease };
+    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected, CredentialSaveFailed, JournalFailed, InstallationReadFailed, NoMatchingRelease, SetupBusy };
     Q_ENUM(Failure)
     explicit AetherPDInstallationModel(RadioModel& radio, QObject* parent = nullptr);
     AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {}, RecoveryServices recovery = {}, AetherPDReleaseCatalogue catalogue = AetherPDReleaseCatalogue::shipping(), ReadFactory reader = {});
@@ -98,7 +98,9 @@ public:
 signals:
     void changed();
 private:
+    friend class AetherPDInstallationTestAccess;
     bool current() const;
+    bool acquireMutationLease();
     void unavailable(Failure reason);
     void retirePreparation();
     void downloaded(quint64 generation);
@@ -167,5 +169,7 @@ private:
     std::unique_ptr<Coordinator> m_job;
     std::optional<Coordinator::Outcome> m_outcome;
     bool m_cleanup{false};
+    std::function<std::shared_ptr<void>(const QString&)> m_mutationAuthority;
+    std::shared_ptr<void> m_mutationLease;
 };
 } // namespace AetherSDR

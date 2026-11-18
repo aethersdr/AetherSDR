@@ -1,5 +1,6 @@
 #include "RadioSetupControlFixture.h"
 #include "AetherPDPackageFixture.h"
+#include "AetherPDInstallationTestAdmission.h"
 #include "AetherPDTestTransport.h"
 #include "gui/AetherPDDialog.h"
 #include "models/AetherPDInstallationModel.h"
@@ -76,6 +77,7 @@ struct Fixture {
                 [this] { return std::make_unique<AetherPDInstallationMonitor>(network, [] { return qint64(0); }); },
                 [this](const QByteArray& plan, const QByteArray& key) { return plan == journalPlan && key == files.trust.candidateKey; }
             }, std::move(catalogue), [this] { return std::make_unique<AetherPDInstallationRead>(inventory, [] { return qint64(0); }); });
+        AetherPDInstallationTestAccess::inject(*model);
         RadioSetupControlTestAccess::installationModel(radio, std::move(model));
         open();
     }
@@ -99,6 +101,25 @@ struct Fixture {
 class InstallationDialogTest : public QObject {
     Q_OBJECT
 private slots:
+    void setupBusyKeepsTheReviewedPlanAndAllowsExplicitRetry()
+    {
+        Fixture f; QVERIFY(f.offer());
+        const QByteArray plan = f.model().approvedPlan();
+        auto setup = AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600"));
+        QVERIFY(setup);
+        QTest::mouseClick(f.button("pdInstallApprove"), Qt::LeftButton);
+        QCOMPARE(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QCOMPARE(f.model().failure(), AetherPDInstallationModel::Failure::SetupBusy);
+        QCOMPARE(f.model().approvedPlan(), plan);
+        QVERIFY(f.state().contains("busy")); QVERIFY(f.button("pdInstallApprove")->isEnabled());
+        QCOMPARE(f.loads, 0); QCOMPARE(f.writes, 0); QVERIFY(!f.job); QVERIFY(f.network.sent.empty());
+        setup.reset();
+        QCOMPARE(f.loads, 0); QCOMPARE(f.writes, 0);
+        QTest::mouseClick(f.button("pdInstallApprove"), Qt::LeftButton);
+        QCOMPARE(f.loads, 1); QCOMPARE(f.model().failure(), AetherPDInstallationModel::Failure::None);
+        QTest::mouseClick(f.button("pdInstallCancel"), Qt::LeftButton);
+    }
+
     void catalogueUpdateButtonChecksBeforeDownloadAndRefusesChangedPredecessor()
     {
         AetherPDTest::PackageFixture files;

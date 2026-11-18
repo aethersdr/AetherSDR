@@ -1,0 +1,192 @@
+{
+  "created_utc": "2026-11-18T02:20:00.432247+00:00",
+  "base_commit": "522d482faa24cb8e1b104c1dace1d6cad5341297",
+  "exact_source_sha256": {
+    "docs/user/docs/tailscale-remote-access.md": "6528f9381b67b747364e330ad5773098a1be4544483ac5c8ced48046ac6400ec",
+    "src/core/TailnetShimClient.h": "c82a84b2504cbcba16a6167c0420a8eaf46a7c474107fc97955c4cba9a61b905",
+    "src/gui/AetherPDDialog.cpp": "0d4e77ee90f396ba240c2767558d8f8f23a6abd242348980a1e74fba3f188ada",
+    "src/models/AetherPDInstallationModel.cpp": "84d31305534532a29a052cd092836d3455fcc06e2b34a1112fe3921f9ee7080f",
+    "src/models/AetherPDInstallationModel.h": "a450f5df6a9174c53dabfad47fa7647822bb701eb082921251466c7cab795abe",
+    "tests/aetherpd_installation_coordinator_test.cpp": "2e2e06f49ab0a53c99a0e32c81fbc134a6f105c561183a709442a7c4ac1337c4",
+    "tests/aetherpd_installation_dialog_test.cpp": "133f3920e20b0a8cac6a6fdc0cb333c45efc1dcaa8f6c0c379ac392ae865c1d7",
+    "tests/AetherPDInstallationTestAdmission.h": "4f571653af78e4da989252a48ff0370a3dcc7d6f21bcee53ae6bd6bb1d9411b5",
+    "src/core/TailnetShimTokenStore.cpp": "d675078a8d39c89aa6d5e6e0bb12c3defeecc0282a25da6308b2f11eba7b642f",
+    "src/core/TailnetShimTokenStore.h": "da0c25bb445cb4302100e3cc7626fa89e0c25b6cd78fed9d97d2af864c149aba",
+    "src/core/TailnetShimCredentialPersistence.cpp": "bcb127f865e61be959263e49ab4dd8c64895579b24908bd327330f7979418bba",
+    "src/core/TailnetShimCredentialPersistence.h": "a26d2f2673161ce0fc09773ff10cd080a9693126c93eb380a0b254eef287871c"
+  },
+  "qualified_source_overlay_sha256": "0402fc48044da71e0ae2f8f11aba13260c559c0811dd0a1714a194b073c4a737",
+  "production_ready": false,
+  "running_desktop_contains_fix": false,
+  "qualified_claim": "Desktop installation approval and credential-restoring recovery now share the existing per-radio setup admission with Remote Access provisioning. Qualification covers cooperating same-UID Linux processes sharing the lock namespace, including actual OS-keychain completion after model retirement.",
+  "before": "The new injected regression failed against the unchanged approve() implementation from base 522d482fa: approval proceeded while another setup held admission. The baseline only added an unused private injection seam and the regression; it did not change approve() behavior.",
+  "implementation": {
+    "approval": "Acquire nonblocking per-radio admission before the first attempt credential save or upgrade credential load. Refusal preserves the reviewed plan and permits an explicit retry without new credentials, journal changes, upload or automatic retry.",
+    "lifetime": "Retain model admission through the running coordinator, public cleanup and active-credential promotion. Read-only saved recovery acquires it before observing a result that may restore the active credential; saved-package preparation does not hold it across human approval.",
+    "pending_writes": "A shared completion hold outlives cancellation, deadline or model destruction until the default credential backend finishes. Callback copies consume one shared hold so retaining or duplicating an acknowledged completion cannot lock out future jobs or release a newer job.",
+    "terminal_paths": "Release the model hold on finished, failed or canceled local phases. An already-started credential write independently retains admission through its actual backend outcome.",
+    "provider_contract": "TokenWriter providers run on the model thread and must retain the completion object until their backend outcome; a dead context suppresses delivery, not job ownership. The default TailnetShimTokenStore provider is exercised with actual OS-keychain jobs.",
+    "operator_status": "Existing installation status reports busy/unavailable admission and keeps approval available for explicit retry. No new widget, modal prompt, thread, signal route, dependency, endpoint or on-radio privilege."
+  },
+  "verification": {
+    "full_Linux_AetherSDR_build": "passed; final-build.log",
+    "registered_CTests": "5/5 passed; final-test-02.log. Default installer tests inject storage/admission and transport; no OS keychain or shared process lock is used by those tests.",
+    "sanitized_installer_suite": "51 QtTest results passed; sanitized-unit.log, model and test translation units instrumented with ASan/UBSan/LSan.",
+    "composed_process_cases": {
+      "host_backend_normal": 4,
+      "host_backend_sanitized": 4,
+      "pinned_016_normal": 4,
+      "pinned_016_sanitized": 4,
+      "cases": [
+        "cancel with backend pending",
+        "timeout with backend pending",
+        "model destruction with backend pending",
+        "reverse Remote Access admission and explicit installation retry"
+      ],
+      "transport_scope": "Actual production primary model, keychain provider and OS locks. Radio backend/package are fixtures; coordinator factory is replaced with a prohibition counter. Companion Remote Access uses injected HTTP. No upload, real radio API or RF can occur.",
+      "keychain_scope": "Only unique disposable active/attempt/version entries. In reverse cases the seeded active credential remains unchanged. Every owned entry and lockfile is confirmed absent after cleanup; recorded child processes are terminal.",
+      "pinned_runtime": "Recompiled keychain adapters/fixture against exact QtKeychain 0.16.0 headers/library; loaded library path/hash verified. Same pinned Qt 6.12.0 SDK.",
+      "sanitizer_scope": "Changed model and fixture are instrumented; pinned variants also instrument TokenStore/persistence. Unchanged linked application/Qt/vendor libraries are not asserted fully instrumented."
+    },
+    "mutations": [
+      {
+        "mutation": "skip_approval_admission",
+        "build_exit": 0,
+        "test_exit": 5,
+        "failures": [
+          "FAIL!  : CoordinatorTest::firstApprovalRefusesConcurrentRemoteSetup() '!model.approve(model.approvedPlan())' returned FALSE. ()",
+          "FAIL!  : CoordinatorTest::firstCredentialBackendRetainsAdmissionAfterCancelTimeoutOrDestruction() '!AetherPDInstallationTestAccess::acquire(QStringLiteral(\"fixture-8600\"))' returned FALSE. ()",
+          "FAIL!  : CoordinatorTest::twoFirstInstallationsRequireExplicitRetryAfterTheSaveOutcome() '!second.approve(second.approvedPlan())' returned FALSE. ()",
+          "FAIL!  : CoordinatorTest::firstCredentialPromotesOnlyAfterExactCommit() '!AetherPDInstallationTestAccess::acquire(QStringLiteral(\"fixture-8600\"))' returned FALSE. ()",
+          "FAIL!  : CoordinatorTest::modelOwnsApprovalAndIgnoresLateCredentialAfterCancel() '!AetherPDInstallationTestAccess::acquire(QStringLiteral(\"fixture-8600\"))' returned FALSE. ()"
+        ]
+      },
+      {
+        "mutation": "skip_recovery_admission",
+        "build_exit": 0,
+        "test_exit": 1,
+        "failures": [
+          "FAIL!  : CoordinatorTest::recoveryObservesOnlyAndPromotesExactCommit() Compared values are not the same"
+        ]
+      },
+      {
+        "mutation": "drop_first_save_hold",
+        "build_exit": 0,
+        "test_exit": 1,
+        "failures": [
+          "FAIL!  : CoordinatorTest::firstCredentialBackendRetainsAdmissionAfterCancelTimeoutOrDestruction() '!AetherPDInstallationTestAccess::acquire(QStringLiteral(\"fixture-8600\"))' returned FALSE. ()"
+        ]
+      },
+      {
+        "mutation": "drop_promotion_hold",
+        "build_exit": 0,
+        "test_exit": 1,
+        "failures": [
+          "FAIL!  : CoordinatorTest::firstCredentialPromotesOnlyAfterExactCommit() '!AetherPDInstallationTestAccess::acquire(QStringLiteral(\"fixture-8600\"))' returned FALSE. ()"
+        ]
+      },
+      {
+        "mutation": "retain_completed_callback_hold",
+        "build_exit": 0,
+        "test_exit": 3,
+        "failures": [
+          "FAIL!  : CoordinatorTest::firstCredentialBackendRetainsAdmissionAfterCancelTimeoutOrDestruction() 'next' returned FALSE. ()",
+          "FAIL!  : CoordinatorTest::twoFirstInstallationsRequireExplicitRetryAfterTheSaveOutcome() 'second.approve(second.approvedPlan())' returned FALSE. ()",
+          "FAIL!  : CoordinatorTest::firstCredentialPromotesOnlyAfterExactCommit() 'AetherPDInstallationTestAccess::acquire(QStringLiteral(\"fixture-8600\"))' returned FALSE. ()"
+        ]
+      },
+      {
+        "mutation": "retain_failed_model_lease",
+        "build_exit": 0,
+        "test_exit": 2,
+        "failures": [
+          "FAIL!  : CoordinatorTest::firstCredentialBackendRetainsAdmissionAfterCancelTimeoutOrDestruction() 'next' returned FALSE. ()",
+          "FAIL!  : CoordinatorTest::twoFirstInstallationsRequireExplicitRetryAfterTheSaveOutcome() 'second.approve(second.approvedPlan())' returned FALSE. ()"
+        ]
+      },
+      {
+        "mutation": "release_before_coordinator",
+        "build_exit": 0,
+        "test_exit": 1,
+        "failures": [
+          "FAIL!  : CoordinatorTest::firstCredentialPromotesOnlyAfterExactCommit() '!AetherPDInstallationTestAccess::acquire(QStringLiteral(\"fixture-8600\"))' returned FALSE. ()"
+        ]
+      }
+    ],
+    "docs": [
+      {
+        "step": "docs-install",
+        "exit": 0
+      },
+      {
+        "step": "docs-build",
+        "exit": 0
+      }
+    ],
+    "static_checks": [
+      {
+        "step": "registration",
+        "exit": 0
+      },
+      {
+        "step": "frozen-gate",
+        "exit": 0
+      },
+      {
+        "step": "engine-boundary",
+        "exit": 0
+      },
+      {
+        "step": "command-plane",
+        "exit": 0
+      },
+      {
+        "step": "qsettings",
+        "exit": 0
+      },
+      {
+        "step": "generated-reference",
+        "exit": 0
+      },
+      {
+        "step": "log-rules",
+        "exit": 0
+      },
+      {
+        "step": "diff-check",
+        "exit": 0
+      }
+    ],
+    "harness_corrections": [
+      "The first isolated model compile lacked its target-private generated-header include path; corrected by using the production model compile command.",
+      "The first reverse-admission fixture gave the companion an empty expected Authorization header, which its harness did not support. A disposable active fixture credential was seeded; final normal/sanitized runs additionally verify that installation retirement preserves it. Initial failed receipts are retained."
+    ]
+  },
+  "companion_probe": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pinned-keychain-016/artifacts/normal-enrollment-probe",
+    "sha256": "4457b8f78e415bfd6acca7d7ab7270eb32bf06c62a4998c0b399962641ea339b",
+    "recovery_archive": "pinned-keychain-016-components.tar.gz",
+    "recovery_archive_sha256": "cf4bfe4c92bda08e557008a96d33964ee79eaa839d537bc61e35fde22ce9c68b"
+  },
+  "remaining_scope": [
+    "Actual installed-shim installation/update overlap and broader tailnet lifecycle with final desktop/runtime packages.",
+    "Other hosts/users, older or noncooperating writers and separate filesystem lock namespaces; this is not a distributed radio-wide mutation lock.",
+    "Managed sign-out/cancel and sharing retain their existing paths; they are not serialized behind long provisioning/install requests by this change.",
+    "Full application shutdown or process/power loss with an unacknowledged OS or remote operation, and owner recovery remain unqualified.",
+    "Actual Windows/macOS runtime, final distribution builds, firmware-baseline/hang/reboot work, final RF/stock comparison and actual 6300 gates remain open."
+  ],
+  "radio_mutations": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installation-setup-admission-components.tar.gz",
+    "bytes": 194051780,
+    "sha256": "e5b25d7635afc860782bce9bf49e6823e6cb9d60a85a175c381a83c270088ddf",
+    "verified_members": 188,
+    "scope": "Diagnostic tested pinned-library actor binaries and sanitized unit executable stripped of debug before tests, source, fixtures, raw/negative receipts, build recipes, pinned library/source and license files. Host actor hashes/receipts retained; companion binary is in the referenced earlier checkpoint archive. Not a shipping package or reproducibility claim."
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/INSTALLATION-SETUP-ADMISSION-EVIDENCE.json.gz",
+    "sha256": "077d2d7bf81aeb74fcb5299365f86d705fb6d98a31e8ff78e58cb279b6c86e5d"
+  }
+}

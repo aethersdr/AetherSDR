@@ -3,6 +3,7 @@
 #include "RadioSetupControlFixture.h"
 #include "AetherPDTestTransport.h"
 #include "AetherPDPackageFixture.h"
+#include "AetherPDInstallationTestAdmission.h"
 #include "core/AetherPDInstallationCoordinator.h"
 #include "core/AetherPDInstallationMonitor.h"
 #include "core/AetherPDInstallRequestClient.h"
@@ -18,6 +19,7 @@
 #include <QtEndian>
 #include <QtTest>
 #include <QThreadPool>
+#include <QTimer>
 
 using namespace AetherSDR;
 using Coordinator = AetherPDInstallationCoordinator;
@@ -183,6 +185,7 @@ private slots:
             Model model(f.model, [&](const QString&, QObject*, auto) { ++oldLoads; },
                 [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
                 nullptr, {}, [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services);
+            AetherPDInstallationTestAccess::inject(model);
             QVERIFY(model.prepareSavedFirstPackage(*package, key, f.model.controlSession())); QVERIFY(loaded);
             QVERIFY(model.preparingSavedInstallation()); QVERIFY(f.transfers.isEmpty()); QCOMPARE(writes, 0);
             if (mode == 1) { loaded(QString(64, u'b')); QCOMPARE(model.failure(), Model::Failure::NoCredential); }
@@ -377,6 +380,85 @@ private slots:
         QVERIFY(f.network.sent.empty()); QCOMPARE(f.archive.starts, 0);
     }
 
+    void firstApprovalRefusesConcurrentRemoteSetup()
+    {
+        Fixture f; const auto package = firstPackage(); QVERIFY(package);
+        int writes = 0;
+        std::function<void(bool)> saved;
+        AetherPDInstallationModel model(f.model, {},
+            [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
+            nullptr, {}, [&](const QString&, const QString&, const QString&, QObject*, auto done) { ++writes; saved = std::move(done); }, journalServices());
+        AetherPDInstallationTestAccess::inject(model);
+        QVERIFY(model.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
+        QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+        auto setup = AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600"));
+        QVERIFY(setup);
+        const QByteArray plan = model.approvedPlan();
+        QVERIFY(!model.approve(model.approvedPlan()));
+        QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SetupBusy);
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QCOMPARE(model.approvedPlan(), plan);
+        QCOMPARE(writes, 0); QVERIFY(f.transfers.isEmpty()); QVERIFY(f.network.sent.empty());
+        setup.reset();
+        QVERIFY(model.approve(plan)); QCOMPARE(writes, 1); QVERIFY(saved);
+        saved(false); QVERIFY(f.transfers.isEmpty()); QVERIFY(f.network.sent.empty());
+    }
+
+    void firstCredentialBackendRetainsAdmissionAfterCancelTimeoutOrDestruction()
+    {
+        for (int mode = 0; mode < 3; ++mode) {
+            Fixture f; const auto package = firstPackage(); QVERIFY(package);
+            std::function<void(bool)> saved;
+            auto model = std::make_unique<AetherPDInstallationModel>(f.model, AetherPDInstallationModel::TokenLoader{},
+                [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
+                nullptr, AetherPDInstallationModel::DownloadFactory{},
+                [&](const QString&, const QString&, const QString&, QObject*, auto done) { saved = std::move(done); }, journalServices());
+            AetherPDInstallationTestAccess::inject(*model);
+            QVERIFY(model->prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
+            QTRY_COMPARE(model->state(), AetherPDInstallationModel::State::AwaitingApproval);
+            QVERIFY(model->approve(model->approvedPlan())); QVERIFY(saved);
+            QVERIFY(!AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
+            QVERIFY(AetherPDInstallationTestAccess::acquire(QStringLiteral("another-fixture-radio")));
+            if (mode == 0) { model->cancel(); }
+            else if (mode == 1) { QVERIFY(QMetaObject::invokeMethod(model->findChild<QTimer*>(), "timeout", Qt::DirectConnection)); }
+            else { model.reset(); }
+            QVERIFY(!AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
+            const auto completed = saved;
+            completed(true);
+            auto next = AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600"));
+            QVERIFY(next);
+            // Even a retained duplicate completion cannot release a later job.
+            saved(false);
+            QVERIFY(!AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
+            QVERIFY(f.transfers.isEmpty()); QVERIFY(f.network.sent.empty());
+        }
+    }
+
+    void twoFirstInstallationsRequireExplicitRetryAfterTheSaveOutcome()
+    {
+        Fixture f; const auto package = firstPackage(); QVERIFY(package);
+        std::function<void(bool)> firstSaved, secondSaved;
+        int firstWrites = 0, secondWrites = 0;
+        const auto factory = [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); };
+        AetherPDInstallationModel first(f.model, {}, factory, nullptr, {},
+            [&](const QString&, const QString&, const QString&, QObject*, auto done) { ++firstWrites; firstSaved = std::move(done); }, journalServices());
+        AetherPDInstallationModel second(f.model, {}, factory, nullptr, {},
+            [&](const QString&, const QString&, const QString&, QObject*, auto done) { ++secondWrites; secondSaved = std::move(done); }, journalServices());
+        AetherPDInstallationTestAccess::inject(first); AetherPDInstallationTestAccess::inject(second);
+        QVERIFY(first.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
+        QVERIFY(second.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
+        QTRY_COMPARE(first.state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QTRY_COMPARE(second.state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QVERIFY(first.approve(first.approvedPlan())); QCOMPARE(firstWrites, 1);
+        QVERIFY(!second.approve(second.approvedPlan())); QCOMPARE(secondWrites, 0);
+        firstSaved(false);
+        QCOMPARE(secondWrites, 0);
+        QVERIFY(second.approve(second.approvedPlan())); QCOMPARE(secondWrites, 1);
+        secondSaved(false);
+        QVERIFY(AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
+        QVERIFY(f.transfers.isEmpty()); QVERIFY(f.network.sent.empty());
+    }
+
     void firstCredentialMustPersistBeforeAnyUpload()
     {
         Fixture f; const auto package = firstPackage(); QVERIFY(package);
@@ -388,6 +470,7 @@ private slots:
             nullptr, {}, [&](const QString& serial, const QString& attempt, const QString& token, QObject*, auto done) {
                 savedSerial = serial; savedAttempt = attempt; savedToken = token; saved = std::move(done);
             }, journalServices());
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
         QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
         const auto preview = model.preview(); QVERIFY(preview); QVERIFY(preview->firstInstallation);
@@ -414,6 +497,7 @@ private slots:
             AetherPDInstallationModel model(f.model, {},
                 [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
                 nullptr, {}, [&](const QString&, const QString&, const QString&, QObject*, auto done) { saved = std::move(done); }, journalServices());
+            AetherPDInstallationTestAccess::inject(model);
             QVERIFY(model.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
             QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
             QVERIFY(model.approve(model.approvedPlan())); QVERIFY(saved);
@@ -427,7 +511,8 @@ private slots:
 
     void firstCredentialPromotesOnlyAfterExactCommit()
     {
-        for (bool persisted : {false, true}) {
+        for (int mode = 0; mode < 3; ++mode) {
+            const bool persisted = mode != 0;
             Fixture f; const auto package = firstPackage(); QVERIFY(package);
             Coordinator* job = nullptr;
             QStringList attempts;
@@ -439,6 +524,7 @@ private slots:
             }, nullptr, {}, [&](const QString&, const QString& attempt, const QString& token, QObject*, auto done) {
                 attempts << attempt; tokens << token; saved = std::move(done);
             }, journalServices());
+            AetherPDInstallationTestAccess::inject(model);
             QVERIFY(model.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
             QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
             const auto preview = model.preview(); QVERIFY(preview);
@@ -460,12 +546,19 @@ private slots:
             { const auto reply = f.transferReplies[f.transfers.indexOf("waveform remove_container " + model.carrierName())]; reply(0, {}); }
             job->poll();
             QCOMPARE(model.state(), AetherPDInstallationModel::State::PromotingCredential);
+            QVERIFY(!AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
             QCOMPARE(attempts.size(), 2); QVERIFY(attempts.last().isEmpty()); QCOMPARE(tokens.first(), tokens.last());
             model.cancel(); QCOMPARE(model.state(), AetherPDInstallationModel::State::PromotingCredential);
+            if (mode == 2) {
+                QVERIFY(QMetaObject::invokeMethod(model.findChild<QTimer*>(), "timeout", Qt::DirectConnection));
+                QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
+                QVERIFY(!AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
+            }
             { const auto complete = saved; complete(persisted); }
+            QVERIFY(AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
             QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
             QCOMPARE(model.outcome(), Coordinator::Outcome::Committed); QVERIFY(model.cleanupConfirmed());
-            QCOMPARE(model.failure(), persisted ? AetherPDInstallationModel::Failure::None : AetherPDInstallationModel::Failure::CredentialSaveFailed);
+            QCOMPARE(model.failure(), persisted && mode != 2 ? AetherPDInstallationModel::Failure::None : AetherPDInstallationModel::Failure::CredentialSaveFailed);
         }
     }
 
@@ -478,6 +571,7 @@ private slots:
         AetherPDInstallationModel model(f.model, {},
             [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
             nullptr, {}, [&](const QString&, const QString&, const QString&, QObject*, auto done) { ++writes; done(true); }, services);
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
         QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
         QVERIFY(model.approve(model.approvedPlan()));
@@ -508,10 +602,19 @@ private slots:
             [&](const QString&, const QString& attempt, const QString& token, QObject*, auto done) {
                 QVERIFY(attempt.isEmpty()); QCOMPARE(token, QString(64, u'a')); ++writes; done(true);
             }, services);
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(!model.recoverFirstInstallation(QByteArray(32, 'z'), f.model.controlSession()));
         QVERIFY(f.network.sent.empty());
+        auto setup = AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600"));
+        QVERIFY(setup);
+        QVERIFY(model.recoverFirstInstallation(key, f.model.controlSession()));
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::Unavailable);
+        QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SetupBusy);
+        QCOMPARE(writes, 0); QVERIFY(f.network.sent.empty());
+        setup.reset();
         QVERIFY(model.recoverFirstInstallation(key, f.model.controlSession()));
         QCOMPARE(model.state(), AetherPDInstallationModel::State::CheckingInstallation);
+        QVERIFY(!AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
         QVERIFY(model.recovering()); QCOMPARE(writes, 0); QVERIFY(!model.approve(model.approvedPlan()));
         const auto preview = model.preview(); QVERIFY(preview);
         auto* reply = f.pending("/installation"); QVERIFY(reply);
@@ -521,6 +624,7 @@ private slots:
         QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
         QCOMPARE(model.outcome(), Coordinator::Outcome::Committed); QVERIFY(!model.cleanupConfirmed());
         QCOMPARE(writes, 1); QCOMPARE(journalCompletions, 1); QVERIFY(f.transfers.isEmpty());
+        QVERIFY(AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
         QCOMPARE(f.archive.nativeStarts, 0); QCOMPARE(f.archive.starts, 0); QVERIFY(!f.channel.connected);
         for (const auto& sent : f.network.sent) { QCOMPARE(sent.method, QNetworkAccessManager::GetOperation); }
         QVERIFY(model.recoveredCleanupAvailable());
@@ -545,6 +649,7 @@ private slots:
             services.monitor = [&] { return std::make_unique<AetherPDInstallationMonitor>(f.network, [&] { return f.clock; }); };
             AetherPDInstallationModel model(f.model, {}, {}, nullptr, {},
                 [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services);
+            AetherPDInstallationTestAccess::inject(model);
             AetherPDTest::PackageFixture fixture;
             QVERIFY(model.recoverFirstInstallation(fixture.trust.candidateKey, f.model.controlSession())); QVERIFY(loaded);
             if (mode == 0) { model.cancel(); }
@@ -563,6 +668,7 @@ private slots:
         Fixture f;
         int loads = 0;
         AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto) { ++loads; }, {});
+        AetherPDInstallationTestAccess::inject(model);
         const bool selected = !model.selectedDevelopmentVersion().isEmpty();
         QCOMPARE(model.prepareSelectedDevelopment(f.model.controlSession()), selected);
         if (!selected) {
@@ -599,6 +705,7 @@ private slots:
                 [&](RadioModel& radio) { ++creates; return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
                 nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); }, {}, {}, catalogue,
                 [&] { return std::make_unique<AetherPDInstallationRead>(inventory, [&] { return f.clock; }); });
+            AetherPDInstallationTestAccess::inject(model);
             QVERIFY(model.updateAvailable()); QVERIFY(!model.selectedUpdateIsDevelopment());
             QVERIFY(model.prepareSelectedUpdate(f.model.controlSession())); QCOMPARE(loads, 1);
             QVERIFY(inventory.sent.empty()); QVERIFY(downloads.sent.empty()); QVERIFY(!model.approve(model.approvedPlan()));
@@ -643,6 +750,7 @@ private slots:
                 [&](RadioModel&) -> std::unique_ptr<Coordinator> { ++creates; return {}; }, nullptr,
                 [&] { return std::make_unique<AetherPDPackageDownload>(downloads); }, {}, {}, AetherPDReleaseCatalogue({}, {entry}),
                 [&] { return std::make_unique<AetherPDInstallationRead>(inventory, [&] { return f.clock; }); });
+            AetherPDInstallationTestAccess::inject(model);
             QVERIFY(model.prepareSelectedUpdate(f.model.controlSession()));
             if (mode == 0) { inventory.last->complete(401, {}); }
             if (mode == 1) { inventory.last->complete(503, {}); }
@@ -674,6 +782,7 @@ private slots:
         AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto done) { loaded = std::move(done); }, {},
             nullptr, {}, {}, {}, AetherPDReleaseCatalogue({}, {entry}),
             [&] { return std::make_unique<AetherPDInstallationRead>(inventory, [&] { return f.clock; }); });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.prepareSelectedUpdate(f.model.controlSession())); const auto old = loaded;
         model.cancel(); QVERIFY(model.prepareSelectedUpdate(f.model.controlSession()));
         old(QString(64, u'b'));
@@ -692,6 +801,7 @@ private slots:
                 [&] { return std::make_unique<AetherPDPackageDownload>(downloads); }, AetherPDInstallationModel::TokenWriter{},
                 AetherPDInstallationModel::RecoveryServices{}, AetherPDReleaseCatalogue({}, {entry}),
                 [&] { return std::make_unique<AetherPDInstallationRead>(inventory, [&] { return f.clock; }); });
+            AetherPDInstallationTestAccess::inject(*model);
             QVERIFY(model->prepareSelectedUpdate(f.model.controlSession()));
             if (mode == 0) { model->cancel(); loaded(QString(64, u'a')); QVERIFY(inventory.sent.empty()); }
             else {
@@ -722,6 +832,7 @@ private slots:
             AetherPDInstallationModel model(f.model, {}, {}, nullptr,
                 [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
                 [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services, catalogue);
+            AetherPDInstallationTestAccess::inject(model);
             QVERIFY(!model.selectedFirstIsDevelopment());
             if (mode == 0) {
                 f.backend->setModelProvider([] { return QStringLiteral("FLEX-6300"); });
@@ -767,6 +878,7 @@ private slots:
             AetherPDInstallationModel model(f.model, {}, {}, nullptr,
                 [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
                 [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services, catalogue);
+            AetherPDInstallationTestAccess::inject(model);
             QVERIFY(model.selectedFirstVersion().isEmpty()); QVERIFY(!model.firstInstallationAvailable());
             QVERIFY(model.savedFirstInstallationAvailable()); QVERIFY(model.savedFirstPreparationAvailable());
             QVERIFY(model.prepareSelectedSavedFirstInstallation(f.model.controlSession()));
@@ -805,6 +917,7 @@ private slots:
         services.monitor = [&] { return std::make_unique<AetherPDInstallationMonitor>(f.network, [&] { return f.clock; }); };
         AetherPDInstallationModel model(f.model, {}, {}, nullptr, {},
             [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services, catalogue);
+        AetherPDInstallationTestAccess::inject(model);
         QCOMPARE(model.selectedFirstVersion(), QStringLiteral("0.2.0")); QVERIFY(!model.firstInstallationAvailable());
         QVERIFY(model.savedFirstInstallationAvailable()); QVERIFY(model.recoverSelectedFirstInstallation(f.model.controlSession()));
         const auto preview = model.preview(); QVERIFY(preview);
@@ -828,6 +941,7 @@ private slots:
             AetherPDTest::Network downloads;
             AetherPDInstallationModel model(f.model, {}, {}, nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
                 [](const QString&, const QString&, const QString&, QObject*, auto) {}, services, catalogue);
+            AetherPDInstallationTestAccess::inject(model);
             QVERIFY(!model.firstInstallationAvailable());
             QVERIFY(!model.prepareSelectedFirstInstallation(f.model.controlSession())); QVERIFY(downloads.sent.empty());
         }
@@ -846,6 +960,7 @@ private slots:
                 ++writes; QCOMPARE(serial, QStringLiteral("fixture-8600")); QVERIFY(!attempt.isEmpty());
                 savedHash = QCryptographicHash::hash(token.toLatin1(), QCryptographicHash::Sha256); saved = std::move(done);
             }, journalServices());
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.prepareFirstRelease(firstRelease(fixture), "fixture-radio", f.model.controlSession()));
         QCOMPARE(model.state(), AetherPDInstallationModel::State::Downloading);
         QVERIFY(!model.approve(model.approvedPlan()));
@@ -872,6 +987,7 @@ private slots:
             AetherPDInstallationModel model(f.model, {}, {}, nullptr,
                 [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
                 [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, journalServices());
+            AetherPDInstallationTestAccess::inject(model);
             const auto selection = firstRelease(fixture);
             QVERIFY(model.prepareFirstRelease(selection, "fixture-radio", f.model.controlSession()));
             const QPointer<AetherPDTest::Reply> old = downloads.last;
@@ -905,11 +1021,14 @@ private slots:
         const auto factory = [&] { return std::make_unique<AetherPDPackageDownload>(downloads); };
         const AetherPDInstallationModel::TokenWriter writer = [](const QString&, const QString&, const QString&, QObject*, auto) {};
         AetherPDInstallationModel missingWriter(f.model, {}, {}, nullptr, factory, {}, journalServices());
+        AetherPDInstallationTestAccess::inject(missingWriter);
         AetherPDInstallationModel missingJournal(f.model, {}, {}, nullptr, factory, writer);
+        AetherPDInstallationTestAccess::inject(missingJournal);
         const auto selection = firstRelease(fixture);
         QVERIFY(!missingWriter.prepareFirstRelease(selection, "fixture-radio", f.model.controlSession()));
         QVERIFY(!missingJournal.prepareFirstRelease(selection, "fixture-radio", f.model.controlSession()));
         AetherPDInstallationModel model(f.model, {}, {}, nullptr, factory, writer, journalServices());
+        AetherPDInstallationTestAccess::inject(model);
         auto bad = selection; bad.firmware = "4.0.0.0";
         QVERIFY(!model.prepareFirstRelease(bad, "fixture-radio", f.model.controlSession()));
         bad = selection; bad.profile = 2;
@@ -929,6 +1048,7 @@ private slots:
         AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto) { ++loads; },
             [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); },
             nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.prepareRelease(release, f.model.controlSession()));
         QVERIFY(!model.approve(model.approvedPlan())); QVERIFY(!model.prepareRelease(release, f.model.controlSession()));
         for (int i = 0; i < 8; ++i) { downloads.last->complete(200, fixture.bytes(i)); }
@@ -949,6 +1069,7 @@ private slots:
         int loads = 0;
         AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto) { ++loads; }, {},
             nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.prepareRelease(release, f.model.controlSession()));
         const QPointer<AetherPDTest::Reply> old = downloads.last;
         model.cancel(); QVERIFY(old->aborted);
@@ -975,11 +1096,14 @@ private slots:
         AetherPDInstallationModel model(f.model,
             [&](const QString& serial, QObject*, auto callback) { QCOMPARE(serial, QStringLiteral("fixture-8600")); ++loads; deliver = std::move(callback); },
             [&](RadioModel& radio) { ++creates; return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.offer(*package, f.model.controlSession()));
         QCOMPARE(loads, 0); QVERIFY(f.network.sent.empty());
         QCOMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
         QVERIFY(model.approve(model.approvedPlan())); QVERIFY(!model.approve(model.approvedPlan())); QCOMPARE(loads, 1);
+        QVERIFY(!AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
         model.cancel(); deliver(QString(43, u'a'));
+        QVERIFY(AetherPDInstallationTestAccess::acquire(QStringLiteral("fixture-8600")));
         QCOMPARE(creates, 0); QVERIFY(f.network.sent.empty());
         QCOMPARE(model.outcome(), std::optional(Coordinator::Outcome::Canceled));
         QVERIFY(model.cleanupConfirmed()); QCOMPARE(model.approvedPlan(), package->approvedPlan());
@@ -992,6 +1116,7 @@ private slots:
         AetherPDInstallationModel model(f.model,
             [&](const QString&, QObject*, auto callback) { deliver = std::move(callback); },
             [&](RadioModel& radio) { ++creates; return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve(model.approvedPlan()));
         RadioSetupControlTestAccess::replaceConnectionGeneration(f.model);
         deliver(QString(43, u'a'));
@@ -1010,6 +1135,7 @@ private slots:
         AetherPDInstallationModel model(f.model,
             [&](const QString&, QObject*, auto callback) { deliver = std::move(callback); },
             [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve(model.approvedPlan())); deliver({});
         QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::NoCredential);
         QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve(model.approvedPlan()));
@@ -1026,6 +1152,7 @@ private slots:
         AetherPDInstallationModel model(f.model,
             [&](const QString&, QObject*, auto callback) { deliver = std::move(callback); },
             [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve(model.approvedPlan()));
         RadioSetupControlTestAccess::transmitting(f.model, true);
         deliver(QString(43, u'a'));
@@ -1056,6 +1183,7 @@ private slots:
                 auto created = std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; });
                 job = created.get(); return created;
             });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve(model.approvedPlan())); QVERIFY(job);
         model.cancel(); QCOMPARE(model.state(), AetherPDInstallationModel::State::Canceling);
         f.network.last->complete(202, QJsonDocument(QJsonObject{{"state", "awaiting_inputs"},
@@ -1078,6 +1206,7 @@ private slots:
         AetherPDInstallationModel model(f.model,
             [](const QString&, QObject*, auto callback) { callback(QString(43, u'a')); },
             [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        AetherPDInstallationTestAccess::inject(model);
         QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve(model.approvedPlan()));
         RadioSetupControlTestAccess::identity(f.model, "replacement", "4.3.16.42034");
         model.reconcile();
