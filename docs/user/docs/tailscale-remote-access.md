@@ -844,6 +844,8 @@ coordination.
 An update requires confirmed AetherPD cleanup. A **Stop AetherPD** acknowledgment
 alone is insufficient: wait until the service confirms it has stopped. An uncertain
 cleanup result keeps the session owned and prevents the update from starting.
+After the radio confirms that your transmission has ended, Stop can finish while
+your GUI's transmit reservation is still clearing.
 
 The fixed helpers clear obsolete failed AetherPD session records after checking
 that they are empty. Running sessions and uncertain cleanup remain protected.

@@ -1,0 +1,155 @@
+{
+  "recorded_utc": "2026-11-18T21:40:29.770249+00:00",
+  "production_ready": false,
+  "status": "Owned-READY release observed; exact state sequence fails lifetime guard before fix and passes with zero RF commands after narrow post-TX retirement change; live fixed candidate pending",
+  "parent_commit": "5cc0647eb2cf540a3312f6bd515e96b75c0acee4",
+  "observed_radio_release": "e066dc80f1ccbbe0f8408f8a077aa78f27b700fcedbebf6eebc252a41cc94878",
+  "new_RF_keys": 1,
+  "nominal_W": 5,
+  "GUI_unkey_s": 12.020583695993992,
+  "capture_frames": 4,
+  "FDX": false,
+  "feedback": "local_dax_iq",
+  "correction_enabled": false,
+  "RF_baseline_and_Stop_passed": true,
+  "independent_LP_zero_and_native_guard_ended": true,
+  "independent_interlock_subscriber_retired": true,
+  "timing": {
+    "observed_owned_READY_duration_ms": 430.494447,
+    "previous_failed_unkey_reply_to_Stop_ms": 315.021133,
+    "traced_success_unkey_request_to_Stop_ms": 2509.729063
+  },
+  "fixed_behavior": "After observed owned software TX, lifetime cleanup can retire from a complete own-handle READY snapshot with empty source/reason and tx_allowed1. This state grants no unkey or startup/key-readiness authority.",
+  "startup_prekey_foreign_fault_and_malformed_cases_preserved": true,
+  "before_fix_regression_detected": true,
+  "remove_only_new_branch_mutation_detected": true,
+  "focused_normal_and_ASan_UBSan_LSan_checks": 4,
+  "tests": {
+    "results": [
+      {
+        "name": "unkey_guard_test",
+        "ASan_UBSan_LSan": false,
+        "passed": true,
+        "compiler_command": [
+          "cc",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/guardian/unkey_guard_test.c",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/interlock-trace-live/unkey_guard_test-fixed"
+        ]
+      },
+      {
+        "name": "unkey_guard_deadline_test",
+        "ASan_UBSan_LSan": false,
+        "passed": true,
+        "compiler_command": [
+          "cc",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/guardian/unkey_guard_deadline_test.c",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/interlock-trace-live/unkey_guard_deadline_test-fixed"
+        ]
+      },
+      {
+        "name": "unkey_guard_test",
+        "ASan_UBSan_LSan": true,
+        "passed": true,
+        "compiler_command": [
+          "cc",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fsanitize=address,undefined",
+          "-fno-omit-frame-pointer",
+          "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/guardian/unkey_guard_test.c",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/interlock-trace-live/unkey_guard_test-asan"
+        ]
+      },
+      {
+        "name": "unkey_guard_deadline_test",
+        "ASan_UBSan_LSan": true,
+        "passed": true,
+        "compiler_command": [
+          "cc",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fsanitize=address,undefined",
+          "-fno-omit-frame-pointer",
+          "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/guardian/unkey_guard_deadline_test.c",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/interlock-trace-live/unkey_guard_deadline_test-asan"
+        ]
+      }
+    ],
+    "scope": "Fixed native guardian parser and lifecycle/deadline fixtures only; not whole-app or radio sanitizer proof",
+    "RF_commands": [],
+    "sandbox_LSan_refusal_preserved": true
+  },
+  "docs_npm_ci_and_build_passed": true,
+  "static_checks": [
+    {
+      "label": "reference-check",
+      "command": [
+        "python3",
+        "tools/docs/gen_reference.py",
+        "--check"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "log-rule-check",
+      "command": [
+        "node",
+        "tools/docs/test_log_rules.mjs"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "test-registration-check",
+      "command": [
+        "python3",
+        "tools/check_test_registration.py",
+        "--strict"
+      ],
+      "exit": 0
+    }
+  ],
+  "fixed_helper_installed": false,
+  "root_bridge_used": false,
+  "radio_reboots": 0,
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "next_step": "Build signed reproducible candidate and ordinary update; qualify prompt post-PTT Stop and normal speech under independent guards before clearing the RF performance hold.",
+  "scope_limits": [
+    "The independent host subscription observed UNKEY_REQUESTED, owned READY for about430ms, then unowned READY. It did not read the earlier failed native guardians' private decision snapshots. The before/after regression proves a guard defect for this real state sequence; live fixed-candidate repetition is still required.",
+    "This unchanged diagnostic release cleaned up after a later Stop about2.53s after unkey; the prior failed case requested Stop about315ms after its unkey reply. Timing correlation supports the release-race diagnosis but is not an exact native final-state capture.",
+    "The new branch applies only to lifetime cleanup after observed owned software TX. Startup remains unowned-idle-only; bounded reservation-only, foreign-owner, fault, disallowed and malformed cases retain their prior refusals. No positive RF command is added.",
+    "A local malformed-status fake-clock fixture initially failed to advance time during repeated ACKs and hit its subprocess deadline. That harness error and the ptrace-sandbox LeakSanitizer refusal are preserved separately; corrected host fixtures and sanitizers passed.",
+    "Sanitizers cover the two fixed guardian state-machine/lifecycle fixtures, not whole-app, Go/runtime, packet capture or radio execution.",
+    "This was an OFF normal-input speech baseline. No corrected speech/ACPR comparison, extended duty, floor hardware, new boot/persistence or final stockAPD qualification was performed.",
+    "Current installed radio remains the diagnostic release. All P1-P10 shipping requirements, actual6300 and independent release review remain open."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/owned-ready-cleanup-components.tar.gz",
+    "bytes": 1810140,
+    "sha256": "41a06696829f02ea2a5055b57b755ec3eff13286add3f50ce8dd252580780016",
+    "members": 68,
+    "all_members_verified": true
+  },
+  "evidence": "OWNED-READY-CLEANUP-EVIDENCE.json.gz",
+  "evidence_sha256": "bf4fd0a6367385d811e4614ab1e2b88417072fd54d07376e34867baf57361b09"
+}

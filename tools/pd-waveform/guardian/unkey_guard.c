@@ -20,7 +20,7 @@ enum { kLineBytes = 4096, kBind = 910000, kSubscribe = 910001, kRefresh = 910002
        kCleanupNominalMs = 3000 };
 struct unkey_state {
     uint32_t client, owner, query;
-    int acknowledged, rejected, binding_acknowledged, binding_rejected, valid, idle, software_owner, unkeying;
+    int acknowledged, rejected, binding_acknowledged, binding_rejected, valid, idle, software_owner, unkeying, reserved;
     int bounded, owned_seen, reservation_seen, observation_ended;
 };
 struct unkey_input { char line[kLineBytes]; size_t used; int discard; };
@@ -88,7 +88,7 @@ static int deadline_wait(struct bounded_deadline* deadline, int64_t now)
 }
 static void invalid(struct unkey_state* state)
 {
-    state->valid = state->idle = state->software_owner = state->unkeying = 0;
+    state->valid = state->idle = state->software_owner = state->unkeying = state->reserved = 0;
     if (state->bounded) { state->observation_ended = 1; }
 }
 static void parse(struct unkey_state* state, const char* line)
@@ -130,7 +130,7 @@ static void parse(struct unkey_state* state, const char* line)
     int d = field(body + 10, "tx_allowed", allowed, sizeof(allowed));
     int e = field(body + 10, "reason", reason, sizeof(reason));
     if (!a && !b && !c && !d && !e) { return; }
-    state->valid = state->idle = state->software_owner = state->unkeying = 0;
+    state->valid = state->idle = state->software_owner = state->unkeying = state->reserved = 0;
     uint32_t tx_owner;
     if (a != 1 || b != 1 || c != 1 || d != 1 || e != 1 || !handle(owner, &tx_owner)) { invalid(state); return; }
     if (strcmp(allowed, "0") && strcmp(allowed, "1")) { invalid(state); return; }
@@ -139,18 +139,18 @@ static void parse(struct unkey_state* state, const char* line)
     state->software_owner = tx_owner == state->owner && !strcmp(source, "SW") &&
         (!strcmp(mode, "TRANSMITTING") || !strcmp(mode, "PTT_REQUESTED"));
     state->unkeying = tx_owner == state->owner && !source[0] && !strcmp(mode, "UNKEY_REQUESTED");
+    state->reserved = tx_owner == state->owner && !strcmp(mode, "READY") &&
+        !source[0] && !reason[0] && !strcmp(allowed, "1");
+    if (state->software_owner) { state->owned_seen = 1; }
     if (state->bounded) {
-        const int reservation = tx_owner == state->owner && !strcmp(mode, "READY") &&
-            !source[0] && !reason[0] && !strcmp(allowed, "1");
         // FLEX-8600 4.3.16 publishes owned READY before software PTT starts.
         // It grants no unkey authority and cannot bridge a released interval.
-        if (reservation && !state->owned_seen && !state->observation_ended) {
+        if (state->reserved && !state->owned_seen && !state->observation_ended) {
             state->reservation_seen = 1;
             return;
         }
         if (state->reservation_seen && !state->software_owner) { state->observation_ended = 1; }
         if (state->unkeying || (state->owned_seen && !state->software_owner)) { state->observation_ended = 1; }
-        if (state->software_owner) { state->owned_seen = 1; }
         if (!state->idle && !state->software_owner && !state->unkeying) { state->observation_ended = 1; }
     }
 }
@@ -225,7 +225,7 @@ static int receive_status(int fd, struct unkey_state* state, struct unkey_input*
 static int query(int fd, struct unkey_state* state, struct unkey_input* input, uint32_t sequence)
 {
     state->query = sequence; state->acknowledged = state->rejected = 0;
-    if (sequence == kSubscribe) { state->valid = state->idle = state->software_owner = state->unkeying = 0; }
+    if (sequence == kSubscribe) { state->valid = state->idle = state->software_owner = state->unkeying = state->reserved = 0; }
     const char* text = sequence == kSubscribe ? "C910001|sub tx all\n" : "C910002|sub tx all\n";
     if (!send_command(fd, text)) { return 0; }
     struct bounded_deadline deadline;
@@ -288,6 +288,10 @@ static int run(int fd, int life, uint32_t client, uint32_t owner, int duration)
     if (receive_status(fd, &state, &input) != 1 || !query(fd, &state, &input, kRefresh)) { event("final_status_unknown"); return 5; }
     if (state.observation_ended) { event("bounded_observation_ended"); return 0; }
     if (state.idle || state.unkeying) { event("already_safe_or_unkeying"); return 0; }
+    // FLEX-8600 4.3.16 briefly retains this GUI's READY reservation after
+    // unkey. Retire the lifetime guard after its observed TX; never authorize
+    // unkey or positive-key readiness from that reservation.
+    if (!duration && state.owned_seen && state.reserved) { event("owned_transmission_released"); return 0; }
     if (!state.software_owner) { event("unkey_ownership_mismatch"); return 4; }
     // FlexLib Radio.Mox encodes this command. No path encodes xmit1 or tune.
     if (!send_command(fd, "C910003|xmit 0\n")) { event("unkey_write_failed"); return 5; }

@@ -36,6 +36,8 @@ static struct {
     int stage, stalled, unkeys, foreign, refreshes, delayed;
     int service_signal_stage, service_signals_sent;
     int reservation, reservation_only, reservation_released, startup_reserved;
+    int lifetime;
+    const char* lifetime_status;
     char pending[1024];
 } fixture;
 
@@ -95,12 +97,18 @@ ssize_t fixture_recv(int fd, void* data, size_t capacity, int flags)
 int fixture_poll(struct pollfd* fds, nfds_t count, int timeout)
 {
     assert(timeout >= 0);
+    if (fixture.lifetime) { ++fixture.now; }
     if (fixture.stage == fixture.service_signal_stage && !fixture.service_signals_sent) {
         fixture.service_signals_sent = 1;
         assert(raise(SIGTERM) == 0);
         assert(raise(SIGINT) == 0);
     }
     for (nfds_t i = 0; i < count; ++i) { fds[i].revents = 0; }
+    if (fixture.lifetime && fixture.stage == 2 && !fixture.pending[0]) {
+        assert(count == 2 && fds[0].fd == 42);
+        fds[0].revents = POLLHUP;
+        return 1;
+    }
     if (fixture.stage == 5) {
         assert(count == 1 && fds[0].fd == 41 && fds[0].events == POLLOUT);
         fixture.now += fixture.unkey_write_stall;
@@ -144,6 +152,10 @@ ssize_t fixture_write(int fd, const void* bytes, size_t size)
     memcpy(text, bytes, size); text[size] = 0;
     if (strstr(text, "cleanup_delayed")) { ++fixture.delayed; }
     if (strstr(text, "bounded_deadline_reached")) { fixture.now += fixture.cleanup_event_stall; }
+    if (fixture.lifetime && strstr(text, "\"event\":\"ready\"")) {
+        fixture.stage = 2;
+        queue(fixture.lifetime_status);
+    }
     if (strstr(text, "bounded_ready")) {
         const char* value = strstr(text, "cleanup_due_ms\":\"");
         assert(value);
@@ -172,6 +184,35 @@ static void reset(void)
 
 int main(void)
 {
+    const char* const owned_tx = "S0|interlock tx_client_handle=0x00005678 state=TRANSMITTING reason= source=SW tx_allowed=1\n";
+    const struct { const char* tail; int prior_tx, result, unkeys; } lifetime_cases[] = {
+        {"S0|interlock tx_client_handle=0x00005678 state=UNKEY_REQUESTED reason= source= tx_allowed=1\n"
+         "S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=1\n", 1, 0, 0},
+        {"S0|interlock tx_client_handle=0x00009999 state=READY reason= source= tx_allowed=1\n", 1, 4, 0},
+        {"S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=1\n", 0, 4, 0},
+        {"S0|interlock tx_client_handle=0x00005678 state=READY reason=FAULT source= tx_allowed=1\n", 1, 4, 0},
+        {"S0|interlock tx_client_handle=0x00005678 state=READY reason= source=SW tx_allowed=1\n", 1, 4, 0},
+        {"S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=0\n", 1, 4, 0},
+        {"S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=1\n"
+         "S0|interlock tx_client_handle=0x00005678 state=READY state=READY reason= source= tx_allowed=1\n", 1, 5, 0},
+        {"S0|interlock tx_client_handle=0x00009999 state=TRANSMITTING reason= source=SW tx_allowed=1\n", 1, 4, 0},
+        {"S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1\n", 0, 0, 0},
+        {"S0|interlock tx_client_handle=0x00005678 state=TRANSMITTING reason= source=SW tx_allowed=1\n", 1, 0, 1},
+    };
+    // FLEX-8600 4.3.16 retains the GUI handle briefly after normal PTT unkey.
+    // A refresh ACK does not replay the later unowned READY snapshot.
+    for (unsigned i = 0; i < sizeof(lifetime_cases) / sizeof(lifetime_cases[0]); ++i) {
+        reset();
+        fixture.lifetime = 1;
+        char statuses[1024] = "";
+        if (lifetime_cases[i].prior_tx) { strcat(statuses, owned_tx); }
+        strcat(statuses, lifetime_cases[i].tail);
+        fixture.lifetime_status = statuses;
+        const int result = run(41, 42, 0x1234, 0x5678, 0);
+        printf("lifetime case %u: result=%d unkeys=%d\n", i, result, fixture.unkeys);
+        fflush(stdout);
+        assert(result == lifetime_cases[i].result && fixture.unkeys == lifetime_cases[i].unkeys);
+    }
     // Each child owns its signal dispositions; no sockets or firmware peer.
     for (int stage = 1; stage <= 3; ++stage) {
         for (int foreign = 0; foreign <= 1; ++foreign) {
