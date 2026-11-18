@@ -151,6 +151,10 @@ int main(int argc, char** argv)
         check(dspRequest(DspFeature::Nr, DspField::Enabled, true, 0) == ReceiveDispatch::Dispatched
                   && echo.nr == true && echo.nrLevel == 50 && echo.anf == false,
               "an NR enable is dispatched and echoed on, at the held level, ANF untouched");
+        echo = SliceDelta{};
+        backend.setSliceAudioGain(0, 60);
+        check(echo.audioGain.has_value() && !echo.nr && !echo.nrLevel && !echo.anf && !echo.anfLevel,
+              "an unrelated echo carries no NR/ANF: SliceModel re-emits them for each one");
         check(dspRequest(DspFeature::Nr, DspField::Level, false, 70) == ReceiveDispatch::Dispatched
                   && echo.nr == true && echo.nrLevel == 70,
               "an NR level moves the level only");

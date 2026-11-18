@@ -722,6 +722,9 @@ private:
         int  nrLevel = 50;
         bool anfOn = false;
         int  anfLevel = 50;
+        // NR/ANF still to be published once, like nbEchoPending: SliceModel
+        // emits nrChanged/anfChanged for every echo that carries them.
+        bool dspEchoPending = false;
         int  agcOffLevel = 10;
 
         // The operator's panadapter averaging, held for the same reason: a

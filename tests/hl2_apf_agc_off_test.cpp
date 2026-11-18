@@ -479,6 +479,37 @@ int main(int argc, char** argv)
         check(near(c.value(QStringLiteral("apfCenterHz")), 750.0),
               "centred on the pitch moved while the slice was out of CW, not the "
               "one it left CW with");
+
+        // The channel NR/ANF reported beside the APF: requested, in circuit, level.
+        using AetherSDR::SliceDspRequest;
+        const auto dspOn = [&backend](SliceDspRequest::Feature feature, int level) {
+            SliceDspRequest on{};
+            on.feature = feature;
+            on.field = SliceDspRequest::Field::Enabled;
+            on.enabled = true;
+            backend.requestSliceDsp(0, on);
+            SliceDspRequest lvl = on;
+            lvl.field = SliceDspRequest::Field::Level;
+            lvl.level = level;
+            backend.requestSliceDsp(0, lvl);
+        };
+        c = rx0();
+        check(!c.value(QStringLiteral("nrRun")).toBool()
+                  && !c.value(QStringLiteral("anfRun")).toBool(),
+              "the chain reports NR and ANF off by default");
+        dspOn(SliceDspRequest::Feature::Nr, 70);
+        dspOn(SliceDspRequest::Feature::Anf, 30);
+        c = rx0();
+        check(c.value(QStringLiteral("nrRun")).toBool()
+                  && c.value(QStringLiteral("nrLevel")).toInt() == 70
+                  && c.value(QStringLiteral("anfRequested")).toBool()
+                  && !c.value(QStringLiteral("anfRun")).toBool()
+                  && c.value(QStringLiteral("anfLevel")).toInt() == 30,
+              "in CW the chain runs NR and holds ANF out of circuit, at their levels");
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        c = rx0();
+        check(c.value(QStringLiteral("nrRun")).toBool() && c.value(QStringLiteral("anfRun")).toBool(),
+              "in USB both run");
         QObject::disconnect(capture);
         Hl2ApfAgcOffTestAccess::tearDown(backend);
     }

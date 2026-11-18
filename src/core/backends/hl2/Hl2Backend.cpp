@@ -1167,6 +1167,7 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     seed.antennasPublished = false;
     // A new slice's blanker is announced once, like its antennas.
     seed.nbEchoPending = true;
+    seed.dspEchoPending = true;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -4050,6 +4051,7 @@ void Hl2Backend::setSliceChannelNoiseFilter(int sliceId, const SliceDspRequest& 
         level = qBound(0, request.level, 100);
     }
     pushChannelNoiseFilters(*r);
+    r->dspEchoPending = true;
     emitSliceState(ddc);
     notifyOperatingStateChanged();
 }
@@ -6626,6 +6628,14 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         e[QStringLiteral("apfCenterHz")] = c->apfCenterHz;
         e[QStringLiteral("apfBandwidthHz")] = c->apfBandwidthHz;
         e[QStringLiteral("apfGain")] = c->apfGain;
+        // The channel NR (ANR) and ANF as the chain holds them: requested,
+        // in circuit for the current mode, and level.
+        e[QStringLiteral("nrRequested")] = dsp->noiseReductionRequested();
+        e[QStringLiteral("nrRun")] = dsp->noiseReductionInCircuit();
+        e[QStringLiteral("nrLevel")] = dsp->noiseReductionLevel();
+        e[QStringLiteral("anfRequested")] = dsp->autoNotchRequested();
+        e[QStringLiteral("anfRun")] = dsp->autoNotchInCircuit();
+        e[QStringLiteral("anfLevel")] = dsp->autoNotchLevel();
         // Level 4 where it exists: these two ask WDSP itself rather than
         // reading the config, and are marked so a reader can tell.
         e[QStringLiteral("wdspNotchCount")] = dsp->wdspNotchCount();
@@ -8313,6 +8323,7 @@ std::optional<Hl2Backend::Receiver> Hl2Backend::receiverFromMemory(const QJsonOb
     r.audioGain = static_cast<float>(percent("audioGain", 100)) / 100.0f;
     r.audioPanPercent = percent("audioPan", r.audioPanPercent);
     r.nbEchoPending = true;
+    r.dspEchoPending = true;
     return r;
 }
 
@@ -8356,6 +8367,7 @@ void Hl2Backend::seedReceiverExtras(Receiver& r, const Receiver& memory) const
     r.audioGain = memory.audioGain;
     r.audioPanPercent = memory.audioPanPercent;
     r.nbEchoPending = true;
+    r.dspEchoPending = true;
     // The pan centre only where the receiver still listens inside it.
     const double usableHz = m_sampleRateHz / 2.0 * kUsablePassbandFraction;
     if (std::abs(rxTunedHz(r) - memory.ncoHz) <= usableHz) {
@@ -9788,11 +9800,16 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     d.agcOffLevel = r->agcOffLevel;
     d.apf = r->apfOn;
     d.apfLevel = r->apfLevel;
-    // The channel NR/ANF pair the receiver holds, guarded the same way.
-    d.nr = r->nrOn;
-    d.nrLevel = r->nrLevel;
-    d.anf = r->anfOn;
-    d.anfLevel = r->anfLevel;
+    // The channel NR/ANF pair only when changed, restored or re-announced,
+    // like the blanker: applyChanges() emits nrChanged/anfChanged unguarded,
+    // and the VFO's level slider follows each one.
+    if (r->dspEchoPending) {
+        d.nr = r->nrOn;
+        d.nrLevel = r->nrLevel;
+        d.anf = r->anfOn;
+        d.anfLevel = r->anfLevel;
+        r->dspEchoPending = false;
+    }
     // The squelch pair the receiver holds and has pushed to its chain, so the
     // SQL control shows the receiver's state. Safe to echo:
     // SliceModel::applyChanges() does not emit squelchCommandIssued.
@@ -9842,6 +9859,7 @@ void Hl2Backend::emitAllSliceState()
 {
     for (Receiver& r : m_rx) {
         r.nbEchoPending = true;
+        r.dspEchoPending = true;
     }
     for (const auto& ids : m_ids.all())
         emitSliceState(ids.ddcIndex, true);
