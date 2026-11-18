@@ -804,6 +804,8 @@ The plan also shows the control service's recovery policy from the verified
 package. A package with automatic recovery waits 5 seconds after a failure and
 allows at most 3 starts in 60 seconds, including the initial start. Reaching
 that limit leaves the control service stopped; it does not reboot the radio.
+To recover after reaching the limit, stop any transmission and power-cycle the
+radio. This uses the installed boot helpers and retains the saved owner identity.
 An older package can instead report that it has no automatic control restart.
 Recovery does not recreate a correction session, transmit or arm calibration:
 start a new session explicitly with **Start AetherPD**. This policy also appears
