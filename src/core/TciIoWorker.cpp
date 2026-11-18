@@ -43,6 +43,15 @@ TciIoWorker::TciIoWorker(QObject* parent)
     };
     m_keepAliveTimer.setInterval(int(TciKeepAlive::kPollMs));
     connect(&m_keepAliveTimer, &QTimer::timeout, this, &TciIoWorker::checkKeepAlive);
+    m_textSend = [this](quint64 id, const QString& message) {
+        const auto it = m_clients.constFind(id);
+        if (it == m_clients.cend() || !it->socket || !it->lifetime->live.load()) { return; }
+        if (it->socket->bytesToWrite() > kMaxRxBacklogBytes - message.size() * 4) {
+            closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI output backlog"));
+            return;
+        }
+        it->socket->sendTextMessage(message);
+    };
     m_rxSend = [this](quint64 id, const QByteArray& data) { return sendBinary(id, data); };
     m_rxBacklog = [this](quint64 id) {
         const auto client = m_clients.constFind(id);
@@ -411,13 +420,7 @@ void TciIoWorker::acknowledgeText(quint64 id)
 
 void TciIoWorker::sendText(quint64 id, const QString& message)
 {
-    const auto it = m_clients.constFind(id);
-    if (it == m_clients.cend() || !it->socket || !it->lifetime->live.load()) { return; }
-    if (it->socket->bytesToWrite() > kMaxRxBacklogBytes - message.size() * 4) {
-        closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI output backlog"));
-        return;
-    }
-    it->socket->sendTextMessage(message);
+    m_textSend(id, message);
 }
 
 qint64 TciIoWorker::sendBinary(quint64 id, const QByteArray& message)
