@@ -1952,10 +1952,7 @@ void MainWindow::registerShortcutActions()
     // ── Registry-declared actions (keyboard side; MIDI side publishes in
     // registerMidiParams). Before loadBindings so their saved keys load. ──
     registerControlActions();
-    m_controlActions.publishShortcuts([this](const ControlActionShortcutSpec& spec) {
-        m_shortcutManager.registerAction(spec.id, spec.name, spec.category, spec.defaultKey,
-                                         spec.handler, spec.autoRepeat);
-    });
+    m_controlActions.publishShortcuts(m_shortcutManager);
 
     // ── Load user bindings and create QShortcuts ────────────────────────
     m_shortcutManager.loadBindings();
@@ -2003,6 +2000,9 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
     }
     if (a->keysTx && !allowTx) {
         return ShortcutFireTxBlocked;
+    }
+    if (ShortcutManager::bridgeRefusesTxDrive(*a, allowTx)) {
+        return ShortcutFireTxDriveBlocked;
     }
     if (!a->handler && !a->txHandler) {
         return ShortcutFireNoDirectHandler;
@@ -2073,6 +2073,9 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
     const bool keysTx = a && a->keysTx;
     if (press && keysTx && (!allowTx || !controller || !controller->valid()))
         return KeyInjectTxBlocked;
+    // Drive (RF power) also gates the press only; a release moves nothing.
+    if (press && a && ShortcutManager::bridgeRefusesTxDrive(*a, allowTx))
+        return KeyInjectTxDriveBlocked;
 
     if (keysTx && a->handler) {
         if (!press) { return KeyInjectOk; }

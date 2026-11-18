@@ -749,7 +749,9 @@ popup at a time and only while it is open; an empty combo is refused up front
 > `dragAt`, `wheel` and `gesture` on them are refused, exactly as
 > `transmit rfpower|tunepower` is (#5851). A `gesture` begun with permission
 > is checked again on every `move` and `end`: once permission is withdrawn, the
-> next phase releases it where it is and is refused. Reading them stays open, and
+> next phase releases it where it is and is refused. The `rf_power_up` /
+> `rf_power_down` shortcuts are refused the same way through `shortcut` and
+> `keyevent`. Reading them stays open, and
 > `controls scrub` (which only re-asserts the current value) is not gated. Other
 > setpoints like `VOX level` or `Microphone gain` are not blocked.
 >
@@ -2729,6 +2731,12 @@ needs key **release** edges. The bridge replies with a distinct
 [`key`](#key) TX guard. The gate reads the registration flag — one source of
 truth, no bridge-side id list to drift. RX-only actions (the zoom shortcuts
 included) need no flag.
+
+Actions that set transmit drive without keying (`setsTxDrive`, declared with
+`transmitDrive()` in the control-action registry: `rf_power_up` and
+`rf_power_down`) are refused the same way, with the `sets transmit drive`
+wording of [`transmit rfpower`](#transmit); a `keyevent` press of their key is
+refused too. The operator's own keyboard is never gated.
 
 ### `midi`
 Inject one MIDI Control Change value through the same learned VFO Tune Knob

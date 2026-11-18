@@ -9953,6 +9953,9 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
         return err(QStringLiteral("blocked: '") + id
                    + QStringLiteral("' keys the transmitter (TX-safety guard). "
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    case 5:  // ShortcutFireTxDriveBlocked
+        qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint shortcut" << id;
+        return err(txSetpointBlockedError(id));
     default:
         return err(QStringLiteral("unexpected fireShortcutAction result for '")
                    + id + QStringLiteral("'"));
@@ -10043,6 +10046,9 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
         return err(QStringLiteral("blocked: '") + spec
                    + QStringLiteral("' keys the transmitter (TX-safety guard). "
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    case 6:  // KeyInjectTxDriveBlocked
+        qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint key press" << spec;
+        return err(txSetpointBlockedError(spec));
     case 3:  // KeyInjectNotConsumed — delivered, but the momentary handler's own
              // gates (shortcuts disabled, text entry focused, radio disconnected)
              // declined it. A real result, not an error: report it.

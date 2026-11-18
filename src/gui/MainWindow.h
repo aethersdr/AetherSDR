@@ -283,6 +283,7 @@ public:
     static constexpr int ShortcutFireNoDirectHandler = 2;  // event-filter action (ptt_hold, CW keys)
     static constexpr int ShortcutFireTxBlocked       = 3;  // keysTx action, allowTx false
     static constexpr int ShortcutFireTxOk            = 4;  // keysTx handler ran
+    static constexpr int ShortcutFireTxDriveBlocked  = 5;  // setsTxDrive action, allowTx false
     // Fire a registered ShortcutManager action by id — the exact path a MIDI
     // controller mapping takes (see fireShortcut in MainWindow_Controllers.cpp).
     // Used by the automation bridge (#3646) to reach MIDI/shortcut-only actions
@@ -302,6 +303,7 @@ public:
     static constexpr int KeyInjectNotConsumed = 3;  // delivered, no momentary handler claimed it
     static constexpr int KeyInjectTxOk        = 4;  // keysTx press delivered and consumed
     static constexpr int KeyInjectUnbound     = 5;  // known action id with no key binding
+    static constexpr int KeyInjectTxDriveBlocked = 6;  // setsTxDrive PRESS with allowTx false
     Q_INVOKABLE int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx);
     int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,
                                     const std::shared_ptr<TxController>& controller);

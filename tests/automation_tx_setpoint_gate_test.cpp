@@ -16,6 +16,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalSocket>
+#include <QMainWindow>
 #include <QSlider>
 #include <QStyle>
 #include <QStyleOptionSlider>
@@ -186,6 +187,44 @@ int main(int argc, char** argv)
                      QStringLiteral("setValue"), QStringLiteral("12")))
                   && other.value() == 12,
               "TX not allowed: an unmarked slider is still driven (unchanged)");
+    }
+
+    // ── The rf_power_up / rf_power_down shortcuts (#5851) ───────────────────
+    // The injected results test the bridge's mapping only; the gate that
+    // returns them is ShortcutManager::bridgeRefusesTxDrive, tested in
+    // control_action_registry_test. Both verbs dispatch only with a main window.
+    {
+        QMainWindow window;
+        window.show();
+        bool permission = true;
+        server.setShortcutAutomationHandler([&](const QString&, bool allowTx,
+                                                const std::shared_ptr<TxController>&) {
+            permission = allowTx;
+            return 5; // MainWindow::ShortcutFireTxDriveBlocked
+        });
+        const QJsonObject rep = AutomationServerTestAccess::request(server,
+            QJsonObject{{QStringLiteral("cmd"), QStringLiteral("shortcut")},
+                        {QStringLiteral("target"), QStringLiteral("rf_power_up")}});
+        check(!permission, "shortcut: rf_power_up is dispatched with TX permission off");
+        check(!ok(rep) && rep.value(QStringLiteral("error")).toString().startsWith(
+                  QStringLiteral("blocked: 'rf_power_up' sets transmit drive, like `transmit rfpower`")),
+              "shortcut: a drive-blocked result is refused as transmit drive");
+        server.setShortcutAutomationHandler({});
+
+        server.setKeyEventAutomationHandler([&](const QString&, bool press, bool allowTx,
+                                                const std::shared_ptr<TxController>&) {
+            permission = allowTx;
+            return press ? 6 : 0; // MainWindow::KeyInjectTxDriveBlocked on the press
+        });
+        const QJsonObject key = cmd(server, QStringLiteral("keyevent"), {}, QStringLiteral("press"),
+                                    QStringLiteral("rf_power_down"));
+        check(!permission && !ok(key) && key.value(QStringLiteral("error")).toString().startsWith(
+                  QStringLiteral("blocked: 'rf_power_down' sets transmit drive")),
+              "keyevent: a drive-blocked press is refused as transmit drive");
+        check(ok(cmd(server, QStringLiteral("keyevent"), {}, QStringLiteral("release"),
+                     QStringLiteral("rf_power_down"))),
+              "keyevent: the release is delivered");
+        server.setKeyEventAutomationHandler({});
     }
 
     // ── TX permission: the same calls reach TransmitModel ───────────────────
