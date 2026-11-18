@@ -109,7 +109,7 @@ bool AetherPDInstallUpload::active() const
 std::optional<qint64> AetherPDInstallUpload::now()
 {
     const qint64 stamp = m_now();
-    if (stamp < 0 || stamp < m_lastNow || stamp > std::numeric_limits<qint64>::max() - kUploadMs - kDeliveryMs) { return std::nullopt; }
+    if (stamp < 0 || stamp < m_lastNow || stamp > (std::numeric_limits<qint64>::max)() - kUploadMs - kDeliveryMs) { return std::nullopt; }
     m_lastNow = stamp;
     return stamp;
 }
@@ -230,7 +230,7 @@ void AetherPDInstallUpload::pump()
         if (guard && active() && !closed) { end(State::Unconfirmed, Reason::Transport); }
         return;
     }
-    const qint64 size = std::min(kChunkBytes - queued, static_cast<qint64>(m_output[m_part].size() - m_offset));
+    const qint64 size = (std::min)(kChunkBytes - queued, static_cast<qint64>(m_output[m_part].size() - m_offset));
     if (size == 0) { m_pumping = false; return; }
     const QPointer<AetherPDInstallUpload> guard(this);
     const QByteArray part = m_output[m_part];

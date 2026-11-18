@@ -1,0 +1,42 @@
+{
+  "created_utc": "2026-11-18T03:28:23.569317+00:00",
+  "native_failed_source": "40951b0f27cc80f9f701a4d57151174b3c81499d",
+  "qualification_parent_head": "5710593acc2aaffb95c8bf4eaa9cf6c044def93e",
+  "exact_source_sha256": {
+    "src/core/AetherPDInstallUpload.cpp": "ad5502d576ccb448f8a9eca727a6fc436498d306c0e83f4e6fa35cf1dff41a14"
+  },
+  "production_ready": false,
+  "native_Windows_fixed_build_qualified": false,
+  "finding": "The actual MSVC build passed pinned dependency setup and configure, then failed in AetherPDInstallUpload at lines112 and233 because winsock2.h supplies function-like max/min macros. Parenthesized C++ function names avoid expansion while preserving the existing deadline and upload chunk calculations.",
+  "implementation": "Only two call expressions changed: (std::numeric_limits<qint64>::max)() and (std::min)(...). No global macro changes, upload-format changes, new dependencies, settings or TX behavior.",
+  "before": {
+    "native_run": 44225931595,
+    "native_job": 134538980966,
+    "MSVC_errors": "C2589/C2059/C2143 at numeric_limits::max and C2589 at std::min",
+    "artifacts": [],
+    "native_setup_and_configure": "passed on Windows"
+  },
+  "verification": {
+    "local_macro_probe": "Compile the unchanged original production body with WinSDK-style min/max macros injected only after headers: failed. Same probe on fixed source: passed. Linux compiler, not a substitute for MSVC.",
+    "mutations": "Restore either original call independently: both macro probes fail. Production worktree unchanged by mutants.",
+    "Linux_application": "Full AetherSDR build passed; includes changed core source.",
+    "registered_CTests": "aetherpd_install_upload_test and aetherpd_installation_coordinator_test passed2/2. Existing upload tests cover injected channel, verification, backpressure, cancellation and backwards clock.",
+    "diff_check": "passed",
+    "native_retry": "Pending push and one Windows-only retry on the exact new signed source; original Mac run retained rather than duplicated."
+  },
+  "limits": [
+    "No fixed-source native MSVC success or native Windows OS-keychain/UI runtime claim yet.",
+    "Mac compile/package results are tracked separately on exact source40951b0f2; this report does not promote live jobs to a pass.",
+    "This component did not operate the radio. Independent receive-only primary crash evidence is in PRIMARY-CRASH-RESTART-QUALIFICATION.json. All final radio/reboot/RF/6300/release gates remain open."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/windows-upload-portability-components.tar.gz",
+    "bytes": 73256,
+    "sha256": "ecfa450d0fc81d41b1ab1e4ea48940a2641993654a354ea8d6d79b0e84930fb7",
+    "verified_members": 29
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/WINDOWS-UPLOAD-PORTABILITY-EVIDENCE.json.gz",
+    "sha256": "cc48f87b84e19868d503652c2d820b85c305698262e78323b5b53f80d84307ba"
+  }
+}
