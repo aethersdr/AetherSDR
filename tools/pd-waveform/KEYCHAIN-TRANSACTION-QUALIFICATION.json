@@ -1,0 +1,118 @@
+{
+  "created_utc": "2026-11-18T00:42:42.896565+00:00",
+  "base_commit": "df743b99f9c9e209376583a88bb57a5e870c03c8",
+  "exact_source_sha256": {
+    "CMakeLists.txt": "e69cafbffa3ea127b06686cc77e0aef1c0531bb5c914dc845def2408216db588",
+    "docs/user/docs/tailscale-remote-access.md": "9b205a4bcfd98222162f22f81e65b45db05faa78fc84950e714cbe67a23d618d",
+    "src/core/TailnetShimCredentialPersistence.cpp": "bcb127f865e61be959263e49ab4dd8c64895579b24908bd327330f7979418bba",
+    "src/core/TailnetShimCredentialPersistence.h": "a26d2f2673161ce0fc09773ff10cd080a9693126c93eb380a0b254eef287871c",
+    "src/core/TailnetShimTokenStore.cpp": "d675078a8d39c89aa6d5e6e0bb12c3defeecc0282a25da6308b2f11eba7b642f",
+    "src/core/TailnetShimTokenStore.h": "da0c25bb445cb4302100e3cc7626fa89e0c25b6cd78fed9d97d2af864c149aba",
+    "tests/tailnet_shim_credential_persistence_test.cpp": "e9a537b30c9ceee1a78a643f8fddb53109c10e25dc3832e9d0f46d0fba935143",
+    "tests/tests.cmake": "d65fcdbe938096e3366cacce00e2c2c3f2eeff37bfa6fa03d42270f32d42ffe0"
+  },
+  "qualified_source_overlay_sha256": "541ac8f44911b00746f67779a28956067732ff01abe3ae7232180d172d1c50d4",
+  "production_ready": false,
+  "running_desktop_contains_fix": false,
+  "qualified_claim": "On this Linux OS keychain, cooperating same-user current-version processes serialize per-entry storage operations and condition retirement on the saved version, including identical-token replacements.",
+  "supersedes_component_failure": "KEYCHAIN-FRESHNESS-QUALIFICATION.json preserves the positively reproduced identical-token retirement failure at its own source. This report qualifies the replacement transaction component only.",
+  "implementation": {
+    "primary_format": "Unchanged raw token in the AetherSDR OS keychain service.",
+    "sidecar": "TailnetShim/Version/<SHA256 primary key>; bounded schema-1 nonce, token hash and commit marker in the same OS keychain.",
+    "authority": "Per-entry QLockFile held until admitted OS backend completion. Unix profiles share a fixed UID-owned 0700 /tmp directory independent of TMPDIR and settings profile.",
+    "write": "Validate known metadata; persist pending new nonce; replace primary; verify primary; commit nonce. Never remove the old primary before writing the new one.",
+    "retire": "Under the same lease, re-read primary and committed nonce, compare both, mark pending, remove primary and then metadata. Completion reports actual persistent removal.",
+    "lifetime": "Application-owned operation survives facade/window destruction. A queue/admission deadline cannot release authority for an already started backend operation.",
+    "legacy_and_uncertainty": "Legacy primary and known interrupted metadata retain readable primary without retirement authority. Unknown/malformed/future metadata is preserved and refused. Explicit retry can recover known pending stages.",
+    "bounds": "4 KiB token, 2 KiB key, 512 B metadata, 256 global and 16 per-entry queued operations; at most 10 seconds waiting for admission.",
+    "fallback": "Production QKeychain read, write and remove jobs explicitly disable insecure plaintext fallback.",
+    "integration": "No new thread, GUI/core include, dependency, radio command or external API."
+  },
+  "verification": {
+    "full_linux_AetherSDR_build": "passed; final-build.log",
+    "targeted_registered_tests": "3/3 passed; final-test.log",
+    "injected_component": "Normal and ASan/UBSan/LSan runs passed. Injected backend/lease only; no real credentials, files or sockets in default CTest.",
+    "real_Linux_backend": {
+      "normal_passed": 16,
+      "sanitized_passed": 16,
+      "cases": [
+        "stale_changed_reload",
+        "stale_same_reload",
+        "stale_changed_no_reload",
+        "stale_same_no_reload",
+        "matching_retirement",
+        "lease_blocks_writer",
+        "lease_crash_recovery",
+        "closed_caller_queued",
+        "waiting_writer_killed",
+        "busy_admission",
+        "crash_before_primary",
+        "crash_after_primary",
+        "legacy_read_upgrade",
+        "pending_write",
+        "failed_write",
+        "inflight_read_save"
+      ],
+      "all_primary_and_sidecar_entries_absent_after_cleanup": true,
+      "all_owned_fixture_lockfiles_absent": true,
+      "all_recorded_children_terminal": true,
+      "backend": "QtKeychain 0.18.0 / GNOME Keyring 51.1; Qt 6.12.0; Linux x86_64.",
+      "crash_limits": "Only fixture children killed; phases pause before primary submission or after its backend ACK. Opaque backend operations at an arbitrary crash instant and machine power loss are not qualified."
+    },
+    "mutation_checks": [
+      {
+        "mutation": "ignore_nonce",
+        "compiled": true,
+        "rejected_by_test": true
+      },
+      {
+        "mutation": "ignore_pending_state",
+        "compiled": true,
+        "rejected_by_test": true
+      },
+      {
+        "mutation": "release_before_backend",
+        "compiled": true,
+        "rejected_by_test": true
+      },
+      {
+        "mutation": "ack_before_primary",
+        "compiled": true,
+        "rejected_by_test": true
+      },
+      {
+        "mutation": "overwrite_future_schema",
+        "compiled": true,
+        "rejected_by_test": true
+      },
+      {
+        "mutation": "timeout_active_backend",
+        "compiled": true,
+        "rejected_by_test": true
+      }
+    ],
+    "docs": "npm ci and Docusaurus build passed; docs-install.log and docs-build.log",
+    "historical_harness_failure": "The first test-source compile failed on QString literal conversion; retained in build.log. Corrected before passing builds.",
+    "radio_actions": [],
+    "real_radio_credential_mutations": []
+  },
+  "remaining_scope": [
+    "Serialize/admit radio enrollment transactions between app instances; this storage lease does not span earlier network RPCs.",
+    "Actual Windows and macOS keychain/security qualification and current-source platform compilation.",
+    "Older builds or intentional same-user direct writes bypass the cooperative protocol.",
+    "Unknown-lock/security negatives on actual platforms, arbitrary opaque backend crash, machine power loss and full application-shutdown ordering.",
+    "Actual tailnet join, owner recovery/rotation and the remaining P1-P10 installation/runtime/RF/6300/release qualification.",
+    "Whole-radio green-LED hang remains unexplained; recovery and baseline steering pending. No further RF/reboot performed here."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/keychain-transaction-components.tar.gz",
+    "bytes": 4430358,
+    "sha256": "5e7adb165e998632fd850ed112400a739e05517de132268722407a945ca41fe2",
+    "verified_members": 94,
+    "scope": "Diagnostic source, fixtures, binaries, license files, raw logs and receipts; not a signed shipping radio package or a reproducibility claim."
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/KEYCHAIN-TRANSACTION-EVIDENCE.json.gz",
+    "sha256": "619e8735fcf99fd09c7fb3b2368617601bd3a6d5c9f10395270d96e4d21acf49"
+  }
+}

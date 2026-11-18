@@ -757,14 +757,17 @@ and owner credential. A failed auth-key join also retains local control.
 If the managed service rejects the saved owner credential, **Remote Access**
 reports the rejection and keeps that credential; it does not clear it as a
 revoked legacy sign-in token.
-If multiple **Remote Access** windows are open in one AetherSDR process, an
-older window's legacy sign-in rejection or completed disconnect cannot delete
-a credential saved later by another window, including an identical token. This protection does not
-coordinate writes or deletions between separate AetherSDR processes. Close other
-AetherSDR instances before changing credentials. Loads of persistent credentials
-read the system keychain again to observe another process's replacement or
-deletion. A pending or failed keychain write retains its value for the current
-session; a matching token value alone cannot identify a newer save.
+Matching builds on the same computer coordinate versioned keychain changes.
+A stale legacy sign-in rejection or completed disconnect cannot delete a
+credential another matching instance saved later, including an identical token.
+Finish **Remote Access** setup in one instance before starting it in another,
+and close other builds first: keychain coordination does not serialize pending
+radio-enrollment requests between instances. Existing unversioned tokens remain
+readable; a legacy rejection may clear the window's sign-in state while keeping
+that saved credential when its version cannot be verified.
+Loads of persistent credentials read the keychain again. Pending or failed
+writes keep their value for the current session. Closing a setup window does
+not cancel a credential write already underway.
 Losing that saved owner credential is a separate recovery case; token-free
 takeover and reinstalling the legacy remote-access waveform are not recovery
 procedures for this managed installation.

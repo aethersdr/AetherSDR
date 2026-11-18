@@ -5217,6 +5217,15 @@ target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
+# Injected OS-keychain adapter and lease: no sockets, real credentials or files.
+add_executable(tailnet_shim_credential_persistence_test
+    tests/tailnet_shim_credential_persistence_test.cpp
+    src/core/TailnetShimCredentialPersistence.cpp)
+target_include_directories(tailnet_shim_credential_persistence_test PRIVATE src)
+target_link_libraries(tailnet_shim_credential_persistence_test PRIVATE Qt6::Core)
+add_test(NAME tailnet_shim_credential_persistence_test COMMAND tailnet_shim_credential_persistence_test)
+set_tests_properties(tailnet_shim_credential_persistence_test PROPERTIES TIMEOUT 10)
+
 # Production callback/keychain ordering; injected signals, no sockets or keyring.
 # Compile the credential object without aethercore's HAVE_KEYCHAIN definition.
 add_library(tailnet_shim_test_credentials OBJECT src/core/TailnetShimTokenStore.cpp)

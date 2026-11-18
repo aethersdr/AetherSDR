@@ -10,7 +10,7 @@
 #include <QTimer>
 
 #ifdef HAVE_KEYCHAIN
-#include <qt6keychain/keychain.h>
+#include "TailnetShimCredentialPersistence.h"
 #endif
 
 #include <utility>
@@ -61,7 +61,11 @@ QHash<QString, bool>& sessionOverrides()
     return overrides;
 }
 
-constexpr const char* kKeychainService = "AetherSDR";
+QHash<QString, QByteArray>& persistedVersions()
+{
+    static QHash<QString, QByteArray> versions;
+    return versions;
+}
 #endif
 
 }  // namespace
@@ -102,32 +106,22 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
 #ifdef HAVE_KEYCHAIN
     sessionOverrides().insert(key, true);
     const quint64 generation = saveGenerations().value(key);
-    QKeychain::Job* job = nullptr;
-    if (token.isEmpty()) {
-        job = new QKeychain::DeletePasswordJob(QString::fromLatin1(kKeychainService));
-    } else {
-        auto* write = new QKeychain::WritePasswordJob(QString::fromLatin1(kKeychainService));
-        write->setTextData(token);
-        job = write;
-    }
-    job->setKey(key);
-    job->setAutoDelete(true);
     QPointer<QObject> guard(context);
-    QObject::connect(job, &QKeychain::Job::finished, job,
-                     [guard, key, generation, deleting = token.isEmpty(), hasContext = context != nullptr, done = std::move(done)](QKeychain::Job* finished) {
-        const bool ok = finished->error() == QKeychain::NoError
-            || (deleting && finished->error() == QKeychain::EntryNotFound);
+    tailnetshim::CredentialPersistence::system().write(key, token,
+                     [guard, key, generation, deleting = token.isEmpty(), hasContext = context != nullptr, done = std::move(done)](tailnetshim::CredentialPersistence::Value result) {
+        using Error = tailnetshim::CredentialPersistence::Error;
+        const bool ok = result.error == Error::None || (deleting && result.error == Error::Missing);
         if (!ok) {
-            qWarning() << "TailnetShimTokenStore: keychain write failed:" << finished->errorString();
+            qWarning() << "TailnetShimTokenStore: keychain write failed:" << result.message;
         }
         if (saveGenerations().value(key) == generation) {
             sessionOverrides().insert(key, !ok);
+            if (ok) { persistedVersions().insert(key, result.version); }
         }
         if (done && (!hasContext || guard)) {
-            done(ok, ok ? QString() : finished->errorString());
+            done(ok, ok ? QString() : result.message);
         }
     });
-    job->start();
 #else
     if (done) {
         QTimer::singleShot(0, context ? context : QCoreApplication::instance(), [done = std::move(done)] {
@@ -143,14 +137,37 @@ quint64 TailnetShimTokenStore::revision(const QString& radioSerial, Entry entry)
 }
 
 bool TailnetShimTokenStore::clearIfCurrent(const QString& radioSerial, const QString& expectedToken,
-                                          quint64 expectedRevision, Entry entry)
+                                          quint64 expectedRevision, Entry entry, QObject* context,
+                                          std::function<void(bool)> done)
 {
     if (radioSerial.trimmed().isEmpty() || expectedToken.isEmpty()
         || sessionTokens().value(keyFor(radioSerial, entry)) != expectedToken
         || revision(radioSerial, entry) != expectedRevision) {
         return false;
     }
-    save(radioSerial, QString(), nullptr, {}, entry);
+#ifdef HAVE_KEYCHAIN
+    const QString key = keyFor(radioSerial, entry);
+    if (sessionOverrides().value(key) || persistedVersions().value(key).size() != 16) { return false; }
+    const quint64 generation = saveGenerations().value(key);
+    const QPointer<QObject> guard(context);
+    tailnetshim::CredentialPersistence::system().retire(key, expectedToken, persistedVersions().value(key),
+        [key, expectedToken, expectedRevision, generation, guard, hasContext = context != nullptr, done = std::move(done)](tailnetshim::CredentialPersistence::Value result) {
+        const bool removed = result.error == tailnetshim::CredentialPersistence::Error::Missing;
+        if (saveGenerations().value(key) == generation && credentialRevisions().value(key) == expectedRevision
+            && sessionTokens().value(key) == expectedToken) {
+            ++credentialRevisions()[key];
+            if (removed) {
+                ++saveGenerations()[key];
+                sessionTokens().remove(key);
+                sessionOverrides().insert(key, false);
+            }
+            persistedVersions().remove(key);
+        }
+        if (done && (!hasContext || guard)) { done(removed); }
+    });
+#else
+    save(radioSerial, QString(), context, [done = std::move(done)](bool, const QString&) { if (done) { done(false); } }, entry);
+#endif
     return true;
 }
 
@@ -171,29 +188,27 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
 #ifdef HAVE_KEYCHAIN
     if (session.isEmpty() || !sessionOverrides().value(key)) {
         const quint64 startedAt = saveGenerations().value(key);
-        auto* job = new QKeychain::ReadPasswordJob(QString::fromLatin1(kKeychainService));
-        job->setKey(key);
-        job->setAutoDelete(true);
         QPointer<QObject> guard(context);
-        QObject::connect(job, &QKeychain::Job::finished, context,
-                         [guard, key, startedAt, callback = std::move(callback)](QKeychain::Job* finished) {
+        tailnetshim::CredentialPersistence::system().read(key,
+                         [guard, key, startedAt, callback = std::move(callback)](tailnetshim::CredentialPersistence::Value result) {
+            using Error = tailnetshim::CredentialPersistence::Error;
             QString read;
-            if (finished->error() == QKeychain::NoError) {
-                read = static_cast<QKeychain::ReadPasswordJob*>(finished)->textData();
-            }
+            if (result.error == Error::None) { read = result.token; }
             const bool savedSince = saveGenerations().value(key) != startedAt;
             const QString token = pickLoadedToken(savedSince, read, sessionTokens().value(key));
             if (!savedSince) {
-                if (finished->error() == QKeychain::NoError || finished->error() == QKeychain::EntryNotFound) {
-                    if (sessionTokens().value(key) != token) {
+                if (result.error == Error::None || result.error == Error::Missing) {
+                    if (sessionTokens().value(key) != token || persistedVersions().value(key) != result.version) {
                         ++credentialRevisions()[key];
                     }
+                    persistedVersions().insert(key, result.version);
                     if (token.isEmpty()) { sessionTokens().remove(key); }
                     else { sessionTokens().insert(key, token); }
                 } else {
                     // An uncertain backend read cannot authorize retirement
                     // using a previously adopted process-local revision.
                     ++credentialRevisions()[key];
+                    persistedVersions().remove(key);
                 }
                 sessionOverrides().insert(key, false);
             }
@@ -201,7 +216,6 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
                 callback(token);
             }
         });
-        job->start();
         return;
     }
 #endif

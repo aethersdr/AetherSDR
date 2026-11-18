@@ -26,7 +26,8 @@ public:
     // Its hashed, attempt-specific slot never replaces the active radio token.
     enum class Entry { TailnetShim, Wspr, AetherPDFirst };
 
-    // Calls back on context's thread with the stored token, or an empty
+    // Invoke on the application thread with a context on that thread.
+    // Calls back with the stored token, or an empty
     // string when none is stored or the keychain is unavailable.
     static void load(const QString& radioSerial, QObject* context,
                      std::function<void(const QString&)> callback,
@@ -40,13 +41,15 @@ public:
                      Entry entry = Entry::TailnetShim);
     // Capture when adopting a token. Saves (including identical bytes), observed
     // backend changes and uncertain reads advance this process's revision.
-    // It does not coordinate other processes' writes or deletions.
+    // The local revision is paired with the last observed persistent version.
     [[nodiscard]] static quint64 revision(const QString& radioSerial, Entry entry = Entry::TailnetShim);
     // Retire only the token/revision pair still current in this process.
-    // A reply cannot erase a credential saved by another window in the meantime.
+    // Retirement rechecks that version under the shared persistence authority.
     // True means deletion was requested, not that persistence succeeded.
+    // An admitted request reports actual persistent removal through `done`.
     static bool clearIfCurrent(const QString& radioSerial, const QString& expectedToken,
-                               quint64 expectedRevision, Entry entry = Entry::TailnetShim);
+                               quint64 expectedRevision, Entry entry = Entry::TailnetShim,
+                               QObject* context = nullptr, std::function<void(bool)> done = {});
     [[nodiscard]] static bool persistentStoreAvailable();
     // What a finished keychain read yields: the read, unless a save happened
     // while it ran, in which case that save's (newer) token, or none if the
