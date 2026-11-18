@@ -456,7 +456,9 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     emit daxTxOwnershipChanged();
     const bool admitted = self && !m_txSessionClosing && m_backend
         && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
-    if (admitted && request) {
+    // CWX is sent text, not a held input: no producer sends an off for it,
+    // so it never holds the time-out latch.
+    if (admitted && request && activity != TxActivity::Cwx) {
         noteTxTimeoutHold(*request);
     }
     return admitted;
