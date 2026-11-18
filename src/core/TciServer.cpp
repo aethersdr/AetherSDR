@@ -2545,6 +2545,12 @@ void TciServer::retireTrxRequest(TciClient* client, const TxCoordinator::Request
     state->pttDaxPermit = DaxTxAudioPermit::blocked();
     state->pttWantsAudio = false;
     if (m_model) {
+        // Every caller retires a trx true that did not key. The client's
+        // explicit off already released the latch in handleTrxRequest(); this
+        // teardown must not, or a trx true captured just before a time-out
+        // stop (now invalid, so refused here before admission) reopens it and
+        // the client's next repeat keys again.
+        m_model->noteTxKeyDownRefused(request);
         m_model->requestProducerPttOff(request, wantsAudio ? TransmitModel::PttSource::Dax
                                                         : TransmitModel::PttSource::TciHardware);
     }

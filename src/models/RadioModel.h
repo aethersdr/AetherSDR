@@ -1099,6 +1099,10 @@ public:
     // edge): always that producer letting go of the time-out latch, whatever
     // became of its request. Any request of the producer will do. Keys nothing.
     void noteTxInputReleased(const TxCoordinator::Request& anyRequestOfProducer);
+    // A producer turning down its own key-down before admission (TCI: a stale,
+    // inhibited or contended trx true): the teardown that follows is not that
+    // input letting go of the time-out latch.
+    void noteTxKeyDownRefused(const TxCoordinator::Request& request);
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     // The network_mtu to send for this session: the NetworkMtu setting (or

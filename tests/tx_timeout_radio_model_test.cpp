@@ -325,6 +325,39 @@ int main(int argc, char** argv)
                !radio.txTimeoutLatched() && !rec.keys.contains(QStringLiteral("tx-timeout-latched")));
     }
 
+    // A TCI client repeats trx true while its PTT is held. One captured just
+    // before the stop arrives after it, invalid, and TciServer refuses it
+    // before admission (retireTrxRequest). That teardown is not a release:
+    // the client's next repeat must still be refused by the latch.
+    {
+        RadioModel radio;
+        qint64 now = 5'000'000;
+        Access::setClock(radio, &now);
+        Recorder rec(radio);
+        const TxCoordinator::Producer tci = radio.registerTxProducer();
+        Access::hold(radio, tci.request());
+        Access::radioKeyed(radio, true);
+        const TxCoordinator::Request inFlight = tci.request(); // captured before the stop
+        runOver(radio, now, 180'000);
+        Access::radioKeyed(radio, false);
+        const bool staleAfterStop = !inFlight.valid();
+        const bool latched = radio.txTimeoutLatched();
+        // TciServer::retireTrxRequest(): mark the refusal, then tear down.
+        radio.noteTxKeyDownRefused(inFlight);
+        radio.requestProducerPttOff(inFlight, TransmitModel::PttSource::Dax);
+        const bool stillLatched = radio.txTimeoutLatched();
+        rec.keys.clear();
+        Access::clearNoticeDedup(radio);
+        const bool repeatRefused = !Access::admit(radio, tci.request())
+            && rec.keys.contains(QStringLiteral("tx-timeout-latched"));
+        report("stale_trx_true_refused_after_stop_is_not_a_release",
+               staleAfterStop && latched && stillLatched && repeatRefused);
+
+        // The client's trx false still releases (handleTrxRequest).
+        radio.noteTxInputReleased(tci.request());
+        report("explicit_off_after_stale_refusal_releases", !radio.txTimeoutLatched());
+    }
+
     // A serial footswitch's release edge releases.
     {
         RadioModel radio;

@@ -231,6 +231,14 @@ void RadioModel::noteTxInputReleased(const TxCoordinator::Request& anyRequestOfP
     publishTxTimeoutLatch(before);
 }
 
+void RadioModel::noteTxKeyDownRefused(const TxCoordinator::Request& request)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    noteTxTimeoutRefused(request);
+}
+
 void RadioModel::noteTxTimeoutRefused(const TxCoordinator::Request& request)
 {
     // Scoped to the refused input's own handling: the list is cleared when
