@@ -439,6 +439,21 @@ void testRefusals()
                    && trioViewOf(rig.radio).tx.size() == 6);
     }
     {
+        // Focus moves to RADIO3 (already in split) between command 1 and 2.
+        Rig rig;
+        QStringList notices;
+        QObject::connect(&rig.trio, &MicrohamTrioModel::notice,
+                         [&notices](const QString& n) { notices << n; });
+        report("mid-pick focus: RX pick EFHW sends split on first",
+               rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant1"), false).isEmpty()
+                   && rig.commands() == 1);
+        rig.peer.push(splitDoc("radio3", "ant2", "ant2", rig.lastId()));
+        report("focus on RADIO3 in the reply: no second command, the pick stops naming it",
+               rig.commands() == 1 && !rig.trio.pickUnderWay() && notices.size() == 1
+                   && notices.first().contains(QStringLiteral("SWR")),
+               notices.isEmpty() ? std::string() : notices.first().toStdString());
+    }
+    {
         Rig rig;
         rig.peer.push(splitDoc("radio2", "ant1", "ant2"));
         report("split on at the Trio: a TX pick moves only the TX half",

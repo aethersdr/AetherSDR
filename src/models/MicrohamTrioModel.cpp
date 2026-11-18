@@ -615,7 +615,13 @@ void MicrohamTrioModel::continuePick()
         emit changed();
         return;
     }
-    // Asked before every command, not only the first.
+    // Asked before every command, not only the first: the Trio applies a
+    // command to whichever radio holds its focus now.
+    const QString unavailable = unavailableReason();
+    if (!unavailable.isEmpty()) {
+        stopPickSaying(unavailable);
+        return;
+    }
     if (m_switchBlocked && m_switchBlocked()) {
         stopPickSaying(stationAntennaTransmitRefusal());
         return;
