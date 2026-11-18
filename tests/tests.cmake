@@ -7847,6 +7847,15 @@ target_link_libraries(mon_vox_roads_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME mon_vox_roads_test COMMAND mon_vox_roads_test)
 
+# #7105: rigctl send_morse / stop_morse on a radio with no radio-side text
+# buffer key host-timed elements through RadioModel's per-edge CW gates; the
+# radio-side keyer still uses CWX. Injected backend, no socket, nothing keyed.
+add_executable(rigctl_host_cw_text_test tests/rigctl_host_cw_text_test.cpp)
+target_include_directories(rigctl_host_cw_text_test PRIVATE src tests)
+target_link_libraries(rigctl_host_cw_text_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME rigctl_host_cw_text_test COMMAND rigctl_host_cw_text_test)
+
 # #5775 / #5776: the receiver letters (slice tabs, CAT VFO targets) follow a
 # backend's capacity declared after connect. Injected backend, no socket.
 add_executable(receiver_slot_count_test tests/receiver_slot_count_test.cpp)
@@ -11673,6 +11682,7 @@ set(AETHER_SETTINGS_CONSUMERS
     phone_mon_vox_availability_test
     dax_iq_rate_limits_test
     offline_health_registry_test
+    rigctl_host_cw_text_test
     tx_operation_integration_test
     flex_cw_controls_test
     tune_inhibit_restore_test
