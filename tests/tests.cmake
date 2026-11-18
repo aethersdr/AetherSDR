@@ -5218,6 +5218,29 @@ target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
+# Explicit opt-in real OS-keychain qualification; disposable slots, no radio.
+option(AETHER_NATIVE_CREDENTIAL_QUALIFICATION
+    "Opt in to disposable writes against the real local OS keychain" OFF)
+if(AETHER_NATIVE_CREDENTIAL_QUALIFICATION)
+    if(NOT Qt6Keychain_FOUND)
+        message(FATAL_ERROR "Native credential qualification requires Qt6Keychain")
+    endif()
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(native_credential_probe
+        tests/native_credential_probe.cpp
+        src/core/TailnetShimCredentialPersistence.cpp
+        src/core/TailnetShimTokenStore.cpp)
+    target_include_directories(native_credential_probe PRIVATE src)
+    target_compile_definitions(native_credential_probe PRIVATE HAVE_KEYCHAIN)
+    target_link_libraries(native_credential_probe PRIVATE Qt6::Core Qt6Keychain::Qt6Keychain)
+    add_test(NAME native_credential_qualification
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/qualify_native_credentials.py
+            --binary $<TARGET_FILE:native_credential_probe>
+            --receipt-directory ${CMAKE_BINARY_DIR}
+            --allow-disposable-keychain-writes)
+    set_tests_properties(native_credential_qualification PROPERTIES TIMEOUT 600)
+endif()
+
 # Injected OS-keychain adapter and lease: no sockets, real credentials or files.
 add_executable(tailnet_shim_credential_persistence_test
     tests/tailnet_shim_credential_persistence_test.cpp

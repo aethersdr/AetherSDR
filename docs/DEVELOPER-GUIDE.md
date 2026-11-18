@@ -27,6 +27,42 @@ and feature support.
 
 ---
 
+## Native credential qualification
+
+Normal tests inject the credential backend. To exercise the production token
+store and persistence transaction against the current user's real OS keychain,
+configure with `-DAETHER_NATIVE_CREDENTIAL_QUALIFICATION=ON`, build
+`native_credential_probe`, and run:
+
+```bash
+python3 tools/qualify_native_credentials.py \
+  --binary build/native_credential_probe \
+  --receipt-directory build \
+  --allow-disposable-keychain-writes
+```
+
+On Windows, use `build/native_credential_probe.exe` and put the matching Qt
+and QtKeychain DLL directories on `PATH`. The backend must be available and
+unlocked; backend failure fails qualification. The probe never enables an
+insecure fallback or reads an existing radio's credential. It checks absence
+before writing randomly named fixture entries, exercises separate processes,
+and removes its primary and version entries before confirming their absence.
+Each run writes a new JSON receipt; do not treat compilation as runtime proof.
+An externally terminated runner can leave its named fixture entries behind;
+the receipt records their identifiers for bounded cleanup using the same
+probe's `cleanup` mode, never keychain-wide deletion.
+
+The explicit opt-in CTest `native_credential_qualification` runs the same
+script. It is absent from default builds, the frozen per-PR gate and the
+normal full-suite/sanitizer lanes. The existing Windows Installer and macOS
+DMG manual workflows accept `qualify_credentials=true` to run it on their
+native runners and preserve the result. That input defaults to false and does
+not request signing, release publication or a Store flight. These are backend
+transaction checks; native app UI lifetime, installed radio recovery and RF
+qualification remain separate gates.
+
+---
+
 ## Shared issue workflows
 
 Two shared issue workflows live in `.claude/skills/`, alongside the

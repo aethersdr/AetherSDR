@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      qualify_credentials:
+        description: 'Test production credential persistence using disposable OS-keychain entries (no radio)'
+        required: false
+        default: false
+        type: boolean
 
 # Each job grants itself what it needs. Only package-windows can mint the
 # Azure token that signs as the AetherSDR publisher (#6288), and it runs no
@@ -310,6 +315,28 @@ jobs:
             $devOverrides = @('-DAETHER_UPDATE_DEV_OVERRIDES=ON')
           }
           cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" @devOverrides | Tee-Object -FilePath configure.log
+
+      - name: Qualify native credential persistence (explicit opt-in)
+        if: github.event_name == 'workflow_dispatch' && inputs.qualify_credentials
+        run: |
+          cmake -S . -B build -DAETHER_NATIVE_CREDENTIAL_QUALIFICATION=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --target native_credential_probe -j 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "$env:GITHUB_WORKSPACE\third_party\qtkeychain\bin;$env:PATH"
+          python tools/qualify_native_credentials.py `
+            --binary build/native_credential_probe.exe `
+            --receipt build/native-credential-result.json `
+            --allow-disposable-keychain-writes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Preserve native credential result
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.qualify_credentials
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-credential-windows
+          path: build/native-credential-result.json
+          if-no-files-found: error
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake flips it
       # back OFF without failing when Qt6GuiPrivate can't be located, and

@@ -4,6 +4,12 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      qualify_credentials:
+        description: 'Test production credential persistence using disposable OS-keychain entries (no radio)'
+        required: false
+        default: false
+        type: boolean
 
 # The build job compiles with a read-only token and no secrets; only
 # sign-dmg below holds the Apple signing identities, and it runs no build
@@ -388,6 +394,25 @@ jobs:
             $ASR_FLAGS \
             $KEYCHAIN_FLAG \
             $GPU_FLAG 2>&1 | tee configure.log
+
+      - name: Qualify native credential persistence (explicit opt-in)
+        if: github.event_name == 'workflow_dispatch' && inputs.qualify_credentials
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DAETHER_NATIVE_CREDENTIAL_QUALIFICATION=ON
+          cmake --build build --target native_credential_probe -j2
+          python3 tools/qualify_native_credentials.py \
+            --binary build/native_credential_probe \
+            --receipt build/native-credential-result.json \
+            --allow-disposable-keychain-writes
+
+      - name: Preserve native credential result
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.qualify_credentials
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-credential-macos-${{ matrix.label }}
+          path: build/native-credential-result.json
+          if-no-files-found: error
 
       # Apple Silicon only — the Intel leg asks for OFF on purpose (see above).
       # Same reasoning as appimage.yml and windows-installer.yml: CMake turns
