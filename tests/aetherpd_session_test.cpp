@@ -29,6 +29,10 @@ int main(int argc, char** argv)
     ok &= check(!radio.attachAetherPD(radio.controlSession(), token)
         && network.sent.empty(), "disconnected radio refuses attachment");
     Access::install(radio, network);
+    if (!check(radio.automationApplySliceFixture(0, QStringLiteral("A")),
+        "injected active USB receiver can be created while disconnected")) {
+        return 1;
+    }
     Access::begin(radio);
     RadioControlSession session = radio.controlSession();
     ok &= check(radio.attachAetherPD(session, token) && network.sent.size() == 1,

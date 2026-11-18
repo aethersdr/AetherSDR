@@ -22,7 +22,9 @@ namespace AetherSDR {
 class FirmwareStager;
 
 class RadioConnection;
+class WanConnection;
 class PanadapterStream;
+class FlexReceiveData;
 
 // FlexBackend — the IRadioBackend for the SmartSDR / FlexRadio wire stack.
 // Owns the RadioConnection and PanadapterStream and their two worker threads:
@@ -35,6 +37,7 @@ class FlexBackendTestAccess;
 
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
+    friend class FlexReceiveDataTestAccess;
 
 public:
     explicit FlexBackend(QObject* parent = nullptr);
@@ -80,6 +83,11 @@ public:
     ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
         const SessionCommandGuard& guard, const SessionControlCompletion& completion = {}) override;
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    // Transverter and USB cable writes carry the entity they were aimed at, so
+    // the final write can refuse one that was removed or replaced meanwhile.
+    using SetupEntitySink = std::function<bool(const QString&, const RadioSetupCompletion&,
+                                               const std::shared_ptr<SetupStatusLifetime>&)>;
+    void setSetupEntityCommandSink(SetupEntitySink sink) { m_setupEntitySink = std::move(sink); }
     using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&,
                                                     const RadioControlCompletion&)>;
     void setTransferCommandSink(TransferCommandSink sink) { m_transferSink = std::move(sink); }
@@ -107,6 +115,10 @@ public:
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
     void setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink);
+    using RepliedTxSink = std::function<bool(const QString&, const TxCoordinator::Command&, CommandReply)>;
+    void setRepliedTxSink(RepliedTxSink sink) { m_repliedTxSink = std::move(sink); }
+    using ServiceCommandSink = std::function<bool(const QString&, const RadioControlFence&, CommandReply)>;
+    void setServiceCommandSink(ServiceCommandSink sink) { m_serviceCommandSink = std::move(sink); }
     // Queue admission and radio reply are separate. Replies run on the owner
     // thread; current is an immutable worker-safe fence at the terminal writer.
     using CwxCommandSink = std::function<bool(const QString&, const TxCoordinator::Command&,
@@ -147,6 +159,8 @@ public:
     // ---- IRadioBackend ----
     RadioCapabilities capabilities() const override;
     void onRadioSessionEstablished() override;
+    std::optional<ReceiveTelemetry> receiveTelemetry() const override { return m_receiveTelemetry; }
+    void retireReceiveData() override;
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
@@ -173,7 +187,13 @@ public:
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTxBand(const TxBandRequest& request,
-                                  const RadioSetupCompletion& completion = {}) override;
+                                  const RadioSetupCompletion& completion = {},
+                                  const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestDvk(const DvkRequest& request, const TransmitServiceCompletion& completion,
+                               const TxCoordinator::Command& fence = {},
+                               const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestNavtex(const NavtexRequest& request, const TransmitServiceCompletion& completion,
+                                  const TxCoordinator::Command& fence) override;
     ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
     ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
     ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
@@ -195,6 +215,7 @@ public:
                                      const RadioControlCompletion& completion = {},
                                      const RadioControlFence& current = {}) override;
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
+    ReceiveDispatch requestUsbCableWrite(const QString& serial, const QByteArray& bytes) override;
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                        const RadioSetupCompletion& completion = {}) override;
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
@@ -226,53 +247,14 @@ public:
                          quint64 requestId, const QVariant& arg = {}) override;
 
     // ---- status decode (aetherd RFC 2.3) ----
-    // Decode the universal panadapter display fields (center/bandwidth) out of
-    // a Flex "display pan" status kv-set and emit the normalized
-    // panCenterBandwidthChanged signal. RadioModel calls this from its status
-    // choke point (handlePanadapterStatus), so both live and deferred/replayed
-    // status flow through it. The Flex-specific pan fields still decode in
-    // PanadapterModel::applyPanStatus until they convert too.
-    void decodePanCenterBandwidth(const QString& panId,
-                                  const QMap<QString, QString>& kvs);
-    // Decode the universal panadapter display level range (min_dbm/max_dbm) and
-    // emit the normalized panRangeChanged signal. dBm is signed, so an omitted
-    // field is carried as NaN ("unchanged"), not a negative sentinel.
-    void decodePanRange(const QString& panId,
-                        const QMap<QString, QString>& kvs);
-    // Universal pan RF gain / antenna selection — decoded from Flex status and
-    // emitted as the normalized typed signals (aetherd RFC 2.3; rfgain+antenna
-    // promoted to universal per the 2026-07-05 classification).
-    void decodePanRfGain(const QString& panId, const QMap<QString, QString>& kvs);
-    void decodePanAntenna(const QString& panId, const QMap<QString, QString>& kvs);
-    // Waterfall line duration (universal display timing), decoded from the
-    // waterfall-status plane and emitted as panWaterfallLineDurationChanged.
-    void decodeWaterfallLineDuration(const QString& panId,
-                                     const QMap<QString, QString>& kvs);
-    // Decode the Flex-specific pan fields that are NOT part of the core profile
-    // (the WNB group) and emit them on the namespaced extensionStatus channel.
-    // (aetherd RFC 2.3 extension template.)
-    void decodePanExtensions(const QString& panId,
-                             const QMap<QString, QString>& kvs);
-    // The remaining Flex-specific display-pan status keys — wide, loop A/B, fps,
-    // preamp, DAX-IQ channel, MultiFlex client_handle ownership, waterfall
-    // stream-id — bundled onto the namespaced extensionStatus("flex","panState")
-    // channel. Present-only (each key rides only when the wire reported it).
-    void decodePanState(const QString& panId, const QMap<QString, QString>& kvs);
-    // Decode a Flex slice-status kv-set into the normalized, canonically-named
-    // slice change map and emit sliceChanged(sliceId, changes). Owns all the
-    // Flex wire knowledge (key names like "RF_frequency"/"filter_lo", "1"→bool,
-    // comma-split lists); SliceModel::applyChanges consumes only canonical keys.
-    // (aetherd RFC 2.3 — SliceModel touchpoint, full canonical rename.)
-    void decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs);
 
-    // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
-    // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
-    // residual). Present-only, ok-guarded numeric parses.
-    void decodeRadioStatus(const QMap<QString, QString>& kvs);
     // Drop the cached amp/tuner encode handles (#4198). Called on radio
     // disconnect/reset, where RadioModel clears the model-side presence outside
     // the decode path — without this the stale handle could survive a reconnect
     // to a *different* radio and be used to build a bogus relay command.
+    // Relay one ingress radio/client report, then any capability revision a
+    // model-name change causes.
+    void acceptRadioStatus(const RadioStatusObservation& observation);
     void clearExtensionHandles();
 
 signals:
@@ -297,11 +279,17 @@ signals:
     void interlockStatusObserved(const AetherSDR::InterlockStatusDelta& delta);
 
 private:
+    SetupEntitySink m_setupEntitySink;
+    quint64 m_radioModelRevision{0};
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
     void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
+    void initializeReceiveData();
+    void drainReceiveData(quint64 generation);
+    std::shared_ptr<FlexReceiveData> m_receiveData;
+    ReceiveTelemetry m_receiveTelemetry;
     std::unique_ptr<FlexCwControls> m_cwControls;
     FlexStatusIngress m_statusIngress;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
@@ -323,7 +311,10 @@ private:
     quint64 m_nicknameAppliedRequest{0};
     quint64 m_tuneOutputSession = 0;
     QMap<int, quint64> m_tuneOutputRequests;
+    QSet<int> m_tuneOutputKnownBands;
     std::function<bool(const QString&, const TxCoordinator::Command&)> m_txSink;
+    RepliedTxSink m_repliedTxSink;
+    ServiceCommandSink m_serviceCommandSink;
     CwxCommandSink m_cwxSink;
     CwxConfigurationSink m_cwxConfigurationSink;
     std::function<void(const QString&)> m_sliceSink;

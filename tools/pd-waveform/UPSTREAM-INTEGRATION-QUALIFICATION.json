@@ -1,0 +1,159 @@
+{
+  "recorded_utc": "2026-11-18T06:59:01.738464+00:00",
+  "feature_parent": "ffe1db15cac3c53dd83cea0faa349962d83e4d37",
+  "main_parent": "9002b51bb2ae4a50fe6776e69aa5e3c82a98868a",
+  "tested_index_tree_before_adding_this_report": "e40a6dfac45544812ff149f6cea06a86e069741c",
+  "production_ready": false,
+  "qualification_scope": "Isolated Linux Debug integration build and selected injected-transport tests. The live desktop and installed radio remain on their prior tested versions. Native platform87 results are explicitly for b2ad8a6c, not this merged source.",
+  "builds": {
+    "AetherSDR": {
+      "bytes": 833269560,
+      "sha256": "a7bfe53631b96752ef9def72a04ecc99af63c606de289561790961a91ca6a9a9"
+    },
+    "aetherd": {
+      "bytes": 413500832,
+      "sha256": "fc34d331b05e9f1269d86b62646f213bcdf237908e6f442d0131df9101dfe279"
+    }
+  },
+  "selected_CTests": {
+    "names": [
+      "aetherpd_capture_source_test",
+      "aetherpd_carrier_image_test",
+      "aetherpd_client_test",
+      "aetherpd_dialog_test",
+      "aetherpd_install_request_client_test",
+      "aetherpd_install_upload_test",
+      "aetherpd_installation_coordinator_test",
+      "aetherpd_installation_dialog_test",
+      "aetherpd_installation_journal_test",
+      "aetherpd_installation_monitor_test",
+      "aetherpd_installation_read_test",
+      "aetherpd_measurement_settings_test",
+      "aetherpd_model_test",
+      "aetherpd_package_download_test",
+      "aetherpd_package_test",
+      "aetherpd_protocol_test",
+      "aetherpd_session_test",
+      "aetherpd_test_client_test",
+      "file_transfer_control_test",
+      "flex_display_observation_test",
+      "flex_ptt_stop_tracker_test",
+      "flex_receive_path_test",
+      "flex_setup_observation_test",
+      "tailnet_shim_client_test",
+      "tailnet_shim_credential_persistence_test",
+      "tailnet_shim_dialog_test",
+      "tx_coordinator_test",
+      "tx_linearity_controller_test",
+      "tx_linearity_imd_test",
+      "tx_linearity_safety_test",
+      "tx_linearity_spectrum_test",
+      "tx_linearity_telemetry_test",
+      "tx_operation_integration_test"
+    ],
+    "final_passed": 33,
+    "initial_result": "32/33 passed; inherited session fixture lacked active USB receive baseline.",
+    "rerun": "Corrected fixture: 1/1 passed; retained the other 32 passes because their sources were unchanged.",
+    "zero_test_selector_attempt": "An invalid noncapturing CTest regex ran zero tests and is not qualification; corrected anchored selection uses --no-tests=error.",
+    "intermediate_test_fixture_failures": "Disconnected-only fixture initially placed after mocked graceful disconnect; transport remained Connected. One null dereference occurred in the first intermediate attempt, preserved. Final fixture is created before the first mocked connection.",
+    "production_guard_changed": false
+  },
+  "Go": "Pinned Go 1.27.1, offline vendored race test, -p 2 ./..., passed. No Go files changed afterwards.",
+  "static_checks": [
+    {
+      "command": [
+        "python3",
+        "tools/check_engine_boundary.py",
+        "--strict"
+      ],
+      "exit": 0,
+      "log": "post-fix-check_engine_boundary.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/gen_touchpoint_manifest.py",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "post-fix-gen_touchpoint_manifest.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_capability_records.py",
+        "--strict"
+      ],
+      "exit": 0,
+      "log": "post-fix-check_capability_records.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_command_plane.py",
+        "--strict"
+      ],
+      "exit": 0,
+      "log": "post-fix-check_command_plane.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_test_registration.py"
+      ],
+      "exit": 0,
+      "log": "post-fix-check_test_registration.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_ci_test_gate.py"
+      ],
+      "exit": 0,
+      "log": "post-fix-check_ci_test_gate.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/docs/gen_reference.py",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "post-fix-gen_reference.log"
+    },
+    {
+      "command": [
+        "node",
+        "tools/docs/test_log_rules.mjs"
+      ],
+      "exit": 0,
+      "log": "post-fix-test_log_rules.log"
+    }
+  ],
+  "architecture_ratchets": "Same 101 per-file engine findings, 70 capability booleans and 11 raw command sites as current main; no new blocked findings. Aggregate file count grows for existing feature files.",
+  "docs": "Offline npm ci from a private copy of the local cache and npm run build passed; initial empty-cache ENOTCACHED failure preserved.",
+  "manual_conflicts": [
+    "docs/DEVELOPER-GUIDE.md",
+    "docs/architecture/aetherd-touchpoint-tags.json",
+    "docs/architecture/aetherd-touchpoints.md",
+    "src/models/RadioModel.h",
+    "tests/tests.cmake"
+  ],
+  "test_only_repairs": [
+    "tests/AetherPDTestRadio.h",
+    "tests/aetherpd_dialog_test.cpp",
+    "tests/aetherpd_session_test.cpp"
+  ],
+  "shared_control_delta_review": "Retained feature confirmed-stop bookkeeping, session-scoped external upload reservation ownership, and AetherPD entry/dialog lifetime checks alongside incoming code. Incoming MeterModel is unchanged from currentmain.",
+  "compressed_evidence_sha256": "e6fd90a8d0f15ca56be49d2b673a7f7ca2ffe8cff083c0ee48cc1555e55116eb",
+  "remaining": [
+    "Signed merge commit and rebuilt version metadata; promote only after reviewed integration.",
+    "Native Mac/Windows build and controlled fixture qualification of this merged source.",
+    "Receive-only proof using merged desktop against installed radio.",
+    "Firmware baseline/recovery policy choices, whole-radio hang cause and successful software reboot remain unresolved.",
+    "All remaining original P1-P10 radio/floor/RF/release exit criteria remain open."
+  ],
+  "radio_actions": [],
+  "RF_commands": [],
+  "reboot_commands": []
+}

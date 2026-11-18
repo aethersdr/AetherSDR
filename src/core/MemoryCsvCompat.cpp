@@ -21,10 +21,6 @@ constexpr int kMinSquelchLevel = 0;
 constexpr int kMaxSquelchLevel = 100;
 constexpr int kMinFilterHz = -12000;
 constexpr int kMaxFilterHz = 12000;
-constexpr int kMinRttyMarkHz = 100;
-constexpr int kMaxRttyMarkHz = 4000;
-constexpr int kMinRttyShiftHz = 0;
-constexpr int kMaxRttyShiftHz = 4000;
 constexpr int kMinDigitalOffsetHz = -12000;
 constexpr int kMaxDigitalOffsetHz = 12000;
 
@@ -364,13 +360,15 @@ bool parseRecord(const QStringList& fields,
     }
 
     if (!parseIntField(normalizedFields.at(18), memory.rttyMark)
-            || !validateRange(memory.rttyMark, kMinRttyMarkHz, kMaxRttyMarkHz)) {
+            || !validateRange(memory.rttyMark, MemoryFields::kRttyMarkMinHz,
+                              MemoryFields::kRttyMarkMaxHz)) {
         error = QString("%1: invalid RTTY mark '%2'.").arg(rowLabel).arg(normalizedFields.at(18));
         return false;
     }
 
     if (!parseIntField(normalizedFields.at(19), memory.rttyShift)
-            || !validateRange(memory.rttyShift, kMinRttyShiftHz, kMaxRttyShiftHz)) {
+            || !validateRange(memory.rttyShift, MemoryFields::kRttyShiftMinHz,
+                              MemoryFields::kRttyShiftMaxHz)) {
         error = QString("%1: invalid RTTY shift '%2'.").arg(rowLabel).arg(normalizedFields.at(19));
         return false;
     }

@@ -317,7 +317,7 @@ int main(int argc, char** argv)
         && iqChoice->currentText().contains(QStringLiteral("7.151000"))
         && network.sent.size() == beforeChoice, "readback refresh preserves the selected IQ entry without resetting its model");
     QObject::disconnect(resetConnection);
-    feedback->applyStateExtension({{QStringLiteral("daxiq_channel"), 3}});
+    applyPanReport(*feedback, {{QStringLiteral("daxiq_channel"), QStringLiteral("3")}});
     ok &= check(iqChoice->currentIndex() == 0 && !button(*dialog, "pdStart")->isEnabled(),
         "channel reassignment silently adopted a new pair");
     iqChoice->setCurrentIndex(1);

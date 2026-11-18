@@ -1,0 +1,92 @@
+{
+  "recorded_utc": "2026-11-18T06:54:54.429557+00:00",
+  "tested_source_commit": "b2ad8a6c7681fb08812f00c923c50e2e144b6a5c",
+  "production_ready": false,
+  "scope": "Actual native OS keychain transactions plus controlled Remote Access window/client/admission lifecycle; injected HTTP, unique disposable fixture identities. This does not qualify the pending upstream merge, live radio installation/recovery, real first-install UX, or a release.",
+  "native_backend_and_window_lifecycle_qualified": {
+    "Windows": true,
+    "macOS_Apple_Silicon": true,
+    "macOS_Intel": true
+  },
+  "cases_passed": {
+    "per_platform_backend": 15,
+    "per_platform_window_lifecycle": 14,
+    "total": 87
+  },
+  "all_fixture_entries_cleaned_and_archive_digests_verified": true,
+  "artifacts": [
+    {
+      "artifact": 14403071679,
+      "name": "native-enrollment-windows",
+      "sha256": "44ca5ad1e0a6ec265980b31a30df4b7f2bc3f95cb214fcf81a75641950b49129",
+      "cases_passed": 14,
+      "cleanup_confirmed": true,
+      "source_commit": "b2ad8a6c7681fb08812f00c923c50e2e144b6a5c"
+    },
+    {
+      "artifact": 14401645157,
+      "name": "native-credential-windows",
+      "sha256": "453d0705579e0e2588915478618719901b7710e8c946dc460487517294cb6f39",
+      "cases_passed": 15,
+      "cleanup_confirmed": true,
+      "source_commit": "b2ad8a6c7681fb08812f00c923c50e2e144b6a5c"
+    },
+    {
+      "artifact": 14402531587,
+      "name": "native-enrollment-macos-apple-silicon",
+      "sha256": "7c54aa98dbe031122ff7d81b1c3c0c4301bbfb4ecfbb1c3696511dd072e7c96e",
+      "cases_passed": 14,
+      "cleanup_confirmed": true,
+      "source_commit": "b2ad8a6c7681fb08812f00c923c50e2e144b6a5c"
+    },
+    {
+      "artifact": 14401839927,
+      "name": "native-enrollment-macos-intel",
+      "sha256": "e3fac34c9c8ef7d8f516a95a685f4669a0f1f13dc174069346082caad91cfdfa",
+      "cases_passed": 14,
+      "cleanup_confirmed": true,
+      "source_commit": "b2ad8a6c7681fb08812f00c923c50e2e144b6a5c"
+    },
+    {
+      "artifact": 14400114727,
+      "name": "native-credential-macos-intel",
+      "sha256": "48d432c31f9c7ae159b757fd4e96b46efce76cd0f440507bd4d09e51c4a3fd61",
+      "cases_passed": 15,
+      "cleanup_confirmed": true,
+      "source_commit": "b2ad8a6c7681fb08812f00c923c50e2e144b6a5c"
+    },
+    {
+      "artifact": 14399899928,
+      "name": "native-credential-macos-apple-silicon",
+      "sha256": "f65353f650e96f20c2557c3af775738ad45c1e12415e1e9b2fa953b151e056ba",
+      "cases_passed": 15,
+      "cleanup_confirmed": true,
+      "source_commit": "b2ad8a6c7681fb08812f00c923c50e2e144b6a5c"
+    }
+  ],
+  "workflows": {
+    "Windows": {
+      "run": 44244246219,
+      "build_job": 134599218039,
+      "packaging_job": 134617622750,
+      "conclusion": "success",
+      "Store_and_release_jobs": "skipped"
+    },
+    "macOS": {
+      "run": 44244249560,
+      "ARM_build_job": 134599227107,
+      "Intel_build_job": 134599226853,
+      "ARM_packaging_job": 134616358839,
+      "Intel_packaging_job": 134616358869,
+      "conclusion": "success",
+      "signing_job": "skipped"
+    }
+  },
+  "macOS_control": "The core-only event-loop control still reproduces timeout; actual native Cocoa event-loop cases pass. This was a fixture correction, not a production GUI defect.",
+  "evidence_file": "NATIVE-PLATFORM-WINDOW-EVIDENCE.json.gz",
+  "evidence_sha256": "4114683c6ee103fe772337bf1a5b68670eecff043d0f12764b8d1bb34abd553d",
+  "durable_raw_proof_checkpoint": "aetherpd-checkpoints/20261117-native-platform87-b2ad8a6c7",
+  "radio_actions": [],
+  "RF_commands": [],
+  "reboot_commands": []
+}

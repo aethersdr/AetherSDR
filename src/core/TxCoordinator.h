@@ -25,8 +25,11 @@ class TxCoordinator final {
     struct StopState;
 
 public:
-    enum class Activity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
-    static constexpr unsigned kAllActivities = 63;
+    enum class Activity : unsigned {
+        Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32,
+        VoiceKeyer = 64, Navtex = 128
+    };
+    static constexpr unsigned kAllActivities = 255;
     class Operation;
     class Context;
     class Request;

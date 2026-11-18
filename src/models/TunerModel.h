@@ -64,7 +64,7 @@ public:
     int     antennaA()  const { return m_antennaA; }  // 0-indexed: 0=ANT1, 1=ANT2, 2=ANT3, -1=unknown
     float   fwdPower()  const { return m_fwdPower; }  // forward power in watts (from direct TGXL status)
     float   swr()       const { return m_swr; }       // SWR ratio (from direct TGXL status)
-    bool    hasAntennaSwitch() const { return m_oneByThree; }  // true for TGXL 3x1 model (one_by_three=1)
+    bool    hasAntennaSwitch() const;
     bool    isPresent() const { return !m_handle.isEmpty() || m_directPresence; }
     bool    hasDirectConnection() const;
 
@@ -88,6 +88,7 @@ private:
     // it has to come from the device rather than only from the radio relaying
     // for it.
     void applyDirectTuning(const QMap<QString, QString>& kvs);
+    void applyDirectMeters(const QMap<QString, QString>& kvs);
     // Forgets a tune we can no longer see the end of. Clearing to false is
     // the safe direction: abortTune() goes inert rather than commanding a
     // tuner whose state we are guessing at.
@@ -118,7 +119,7 @@ signals:
     void stateChanged();               // any property changed
     void tuningChanged(bool tuning);   // tuning started/stopped
     void antennaAChanged(int antA);    // antenna port changed (0-indexed)
-    // fwd power / SWR / peak power from a direct TGXL connection.
+    // Forward power / SWR / peak power / reported MAX (watts).
     //
     // fwdPeak is the device's own peak, not ours. The TGXL is poll-response
     // only and `fwd` is an instantaneous sample, so on SSB most polls land
@@ -126,8 +127,10 @@ signals:
     // transmission, roughly three samples in four read 0.14 W while the
     // envelope was hitting 82 W. A peak taken from those samples is a peak of
     // the silences. `peak` is computed on the device's own timebase, where
-    // the envelope is actually visible.
-    void metersChanged(float fwdPower, float swr, float fwdPeak);
+    // the envelope is actually visible. The observed peak holds for about a
+    // second after the last peak, then re-arms. MAX's display interpretation
+    // as a tuning-solution limit still needs physical hardware verification.
+    void metersChanged(float fwdPower, float swr, float fwdPeak, float maxPower);
     // Alert text from the tuner; empty means cleared. See TgxlConnection.
     void alertChanged(const QString& text);
     // Either port's reported source/frequency/keying moved.
@@ -179,6 +182,7 @@ private:
     int     m_antennaA{-1};   // 0-indexed antenna port (-1 = unknown)
     float   m_fwdPower{0.0f};  // forward power in watts (from direct TGXL status)
     float   m_fwdPeak{0.0f};   // device-side peak power in watts (TGXL `peak`)
+    float   m_maxPower{0.0f};  // reported MAX in watts; display semantics unverified
     float   m_swr{1.0f};      // SWR ratio (from direct TGXL status)
     bool    m_oneByThree{false}; // true for TGXL 3x1 model (from one_by_three=1)
 

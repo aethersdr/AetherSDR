@@ -3,7 +3,12 @@
 #include "CommandParser.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/CwxStatusDelta.h"
+#include "core/backends/DisplayObservation.h"
 #include "core/backends/InterlockStatusDelta.h"
+#include "core/backends/SetupStatusObservation.h"
+#include "core/backends/SliceObservation.h"
+#include "core/backends/RadioStatusObservation.h"
+#include "core/backends/TransmitServiceStatus.h"
 #include "core/backends/SpotStatusDelta.h"
 #include "core/backends/StreamStatusDelta.h"
 #include "core/backends/WaveformStatusDelta.h"
@@ -170,6 +175,17 @@ signals:
     void streamStatusObserved(const AetherSDR::StreamStatusDelta& delta);
     void notchChanged(int notchId, const AetherSDR::NotchDelta& delta);
     void notchRemoved(int notchId);
+    // "display pan|waterfall <id> …", stamped with the epoch it arrived in.
+    void displayObserved(const AetherSDR::DisplayObservation& observation);
+    // "xvtr", "usb_cable", "license" and "radio filter_sharpness", likewise.
+    void setupStatusObserved(const AetherSDR::SetupStatusObservation& observation);
+    // "slice N", likewise; a waveform_status report is left to the model.
+    void sliceObserved(const AetherSDR::SliceObservation& observation);
+    // "radio", "radio oscillator", "radio static_net_params", "client 0x…".
+    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
+    // "dvk …" and "navtex …", likewise (Flex only: after the value gate).
+    void dvkStatusObserved(const AetherSDR::DvkStatusObservation& observation);
+    void navtexStatusObserved(const AetherSDR::NavtexStatusObservation& observation);
     void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
     void cwxStatusObserved(const AetherSDR::CwxStatusDelta& delta);
     void graphicEqStatusObserved(const AetherSDR::GraphicEqStatus& status);

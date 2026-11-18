@@ -10,6 +10,18 @@
 // convert so GUI, radio I/O and CSV agree.
 namespace AetherSDR::MemoryFields {
 
+// RTTY Mark and Shift range. This is app policy, ruled on #7093 (2026-11-14)
+// for every backend; MemoryPatch::valid(), the memory CSV check and the VFO
+// DSP tab's Mark/Shift steppers read it. The slice request layer does not
+// (ModelControlRequest.h keeps the full register domain). Source: a FLEX-8400 on firmware 4.3.16.42034 keeps
+// a slice Mark of 0-4000 Hz and Shift of 0-2000 Hz and refuses one step past
+// each; a memory accepted Mark 0, 15, 25, 75 and 4000 and Shift 2000, and
+// refused Shift 2005. FlexLib sends both values with no range.
+inline constexpr int kRttyMarkMinHz = 0;
+inline constexpr int kRttyMarkMaxHz = 4000;
+inline constexpr int kRttyShiftMinHz = 0;
+inline constexpr int kRttyShiftMaxHz = 2000;
+
 // Strip characters that corrupt the radio protocol and downstream tooling:
 // all C0 control characters (0x00-0x1F, including the NUL bytes that have been
 // observed in imported/hand-entered Mode fields) and the lone DEL byte (0x7f),

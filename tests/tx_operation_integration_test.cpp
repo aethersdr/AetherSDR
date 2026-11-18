@@ -1,3 +1,5 @@
+#include "FlexSliceStatusTestSupport.h"
+#include "FlexRadioStatusTestSupport.h"
 // Socket-free production-path tests. Only an injected transport recorder is
 // used; no radio, peer, listener, discovery or transmitter is opened.
 #include "core/backends/flex/FlexCwxStatus.h"
@@ -35,6 +37,8 @@
 #include "core/TciServer.h"
 #include "core/LocalVoiceKeyerStore.h"
 #include "core/VoiceKeyerSettings.h"
+#include "core/TxOffDelaySettings.h"
+#include "core/AppSettings.h"
 #include "models/VoiceKeyer.h"
 #include "models/VoiceKeyerController.h"
 #ifdef HAVE_WEBSOCKETS
@@ -67,7 +71,7 @@ class TxOperationIntegrationTestAccess {
 public:
     static void clientStatus(RadioModel& radio, quint32 handle, bool localPtt, bool full)
     {
-        radio.handleStatusForTest(QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
+        observeRadioStatus(radio, QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
             .arg(full ? QStringLiteral(" connected") : QString()), {{"local_ptt", localPtt ? "1" : "0"}});
     }
     static void connectInert(RadioConnection& connection)
@@ -3186,6 +3190,315 @@ void serialInputQueueLifetimes()
     check(f.commands.isEmpty(), "serial press captured before reconnect cannot acquire in replacement session");
 }
 
+void waitMs(int ms)
+{
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+void txOffDelayHoldsPhoneRelease()
+{
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+    tx.setTxOffDelayMs(100);
+
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on"}) && tx.txOffDelayPending() && tx.isTransmitting(),
+          "TX off delay keeps the radio keyed after a phone-mode release");
+    waitMs(180);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending()
+              && !tx.isTransmitting(),
+          "TX off delay unkeys exactly once when it expires");
+
+    f.commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    check(!tx.txOffDelayPending(), "re-keying inside the TX off delay drops the held unkey");
+    waitMs(180);
+    check(!f.commands.contains("mox:off") && tx.isTransmitting(),
+          "a superseded TX off delay cannot unkey the continued transmission");
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    waitMs(180);
+    check(f.commands.last() == "mox:off" && !tx.isTransmitting(),
+          "the continued transmission still gets its own delayed release");
+
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    f.radio.forceDisconnect();
+    check(!tx.txOffDelayPending(), "disconnect cancels a pending TX off delay");
+    const qsizetype afterDisconnect = f.commands.size();
+    waitMs(180);
+    check(f.commands.size() == afterDisconnect,
+          "nothing is sent for a TX off delay canceled by disconnect");
+}
+
+void txOffDelayProducerCancellation()
+{
+    // Producer PTT (what the footswitch and TCI hardware PTT use) must hold the
+    // unkey, and abort or a radio-reported TX end must not wait out the timer.
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+    tx.setTxOffDelayMs(300);
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+    const TxCoordinator::Request request = producer.request();
+
+    check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+          "producer PTT keys");
+    f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+    waitMs(60);
+    check(f.commands == QStringList({"mox:on"}) && tx.txOffDelayPending() && tx.isTransmitting(),
+          "producer PTT release is held and the radio stays keyed (TX audio keeps flowing)");
+    f.radio.abortProducerPtt(request, TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending()
+              && !tx.isTransmitting(),
+          "abort inside the hold unkeys at once and drops the timer");
+    const qsizetype afterAbort = f.commands.size();
+    waitMs(400);
+    check(f.commands.size() == afterAbort, "an aborted hold never sends a second unkey");
+
+    f.commands.clear();
+    const TxCoordinator::Producer second = f.radio.registerTxProducer();
+    const TxCoordinator::Request secondRequest = second.request();
+    check(f.radio.requestProducerPttOn(secondRequest, TransmitModel::PttSource::Mox),
+          "producer PTT keys again");
+    f.radio.requestProducerPttOff(secondRequest, TransmitModel::PttSource::Mox);
+    check(tx.txOffDelayPending(), "second release is held");
+    tx.expireTxOffDelayNow();
+    waitMs(60);
+    check(!tx.txOffDelayPending() && f.commands.last() == "mox:off",
+          "a radio-reported TX end completes the held release without waiting out the delay");
+}
+
+void useTxOffDelayMic(Fixture& f, const QString& mic)
+{
+    TransmitDelta delta;
+    delta.micSelection = mic;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, delta);
+}
+
+void txOffDelayMicWindow()
+{
+    {
+        Fixture f;
+        TransmitModel& tx = f.radio.transmitModel();
+        useTxOffDelayMic(f, QStringLiteral("BAL"));
+        tx.setTxOffDelayMs(800);
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+              "the mic window case keys through the producer path");
+        f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
+        check(tx.txOffDelayPending() && f.commands == QStringList({"mox:on"}),
+              "a radio-side mic stays keyed for the operator's delay, past the audio window");
+        check(!tx.txOffDelayMicMuted(), "a radio-side mic hold never reports a client mute");
+        waitMs(600);
+        check(!tx.txOffDelayPending() && f.commands == QStringList({"mox:on", "mox:off"}),
+              "a radio-side mic unkeys when the operator's delay ends");
+    }
+    {
+        Fixture f;
+        TransmitModel& tx = f.radio.transmitModel();
+        useTxOffDelayMic(f, QStringLiteral("PC"));
+        tx.setTxOffDelayMs(800);
+        QList<bool> edges;
+        QObject::connect(&tx, &TransmitModel::txOffDelayMicMuteChanged, &f.radio,
+                         [&](bool muted) { edges.append(muted); });
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+              "the mic window case keys through the producer path");
+        f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+        check(!tx.txOffDelayMicMuted(), "a PC mic stays live at the start of the hold");
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
+        check(tx.txOffDelayMicMuted() && tx.txOffDelayPending()
+                  && f.commands == QStringList({"mox:on"}),
+              "a PC mic is muted after the audio window while the radio stays keyed");
+        waitMs(600);
+        check(!tx.txOffDelayMicMuted() && f.commands == QStringList({"mox:on", "mox:off"})
+                  && edges == QList<bool>({true, false}),
+              "the PC mic mute clears when the held release completes");
+    }
+    {
+        Fixture f;
+        TransmitModel& tx = f.radio.transmitModel();
+        useTxOffDelayMic(f, QStringLiteral("PC"));
+        tx.setTxOffDelayMs(5000);
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+              "the mic window case keys through the producer path");
+        f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
+        check(tx.txOffDelayMicMuted(), "the PC mic is muted before the re-key");
+        const TxCoordinator::Producer second = f.radio.registerTxProducer();
+        const TxCoordinator::Request again = second.request();
+        check(f.radio.requestProducerPttOn(again, TransmitModel::PttSource::Mox),
+              "the re-key is admitted during the hold");
+        check(!tx.txOffDelayMicMuted() && !tx.txOffDelayPending()
+                  && !f.commands.contains("mox:off"),
+              "re-keying inside the hold gives the PC mic back at once");
+        f.radio.requestProducerPttOff(again, TransmitModel::PttSource::Mox);
+        TransmitDelta stopped;
+        stopped.mox = false;
+        TxOperationIntegrationTestAccess::transmitDelta(f.radio, stopped);
+        waitMs(60);
+        check(!tx.txOffDelayMicMuted() && !tx.txOffDelayPending(),
+              "a radio-reported end of TX inside the audio window leaves no mute behind");
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 100);
+        check(!tx.txOffDelayMicMuted(), "an ended hold cannot mute the PC mic later");
+    }
+    {
+        Fixture f;
+        TransmitModel& tx = f.radio.transmitModel();
+        useTxOffDelayMic(f, QStringLiteral("PC"));
+        tx.setTxOffDelayMs(TxOffDelaySettings::kAudioWindowMs - 100);
+        bool muted = false;
+        QObject::connect(&tx, &TransmitModel::txOffDelayMicMuteChanged, &f.radio,
+                         [&](bool on) { muted = muted || on; });
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+              "the mic window case keys through the producer path");
+        f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
+        check(!muted && f.commands == QStringList({"mox:on", "mox:off"}),
+              "a delay inside the audio window never mutes the PC mic");
+    }
+}
+
+void txOffDelayRadioReportedStop()
+{
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+    useTxOffDelayMic(f, QStringLiteral("PC"));
+    tx.setTxOffDelayMs(5000);
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+    const TxCoordinator::Request request = producer.request();
+    check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+          "producer PTT keys for the backend readback case");
+    f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+    check(tx.txOffDelayPending(), "the release is held before any readback");
+
+    TransmitDelta stillKeyed;
+    stillKeyed.mox = true;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, stillKeyed);
+    waitMs(30);
+    check(tx.txOffDelayPending() && f.commands == QStringList({"mox:on"}),
+          "a keyed backend readback leaves the hold running");
+
+    TransmitDelta stopped;
+    stopped.mox = false;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, stopped);
+    waitMs(60);
+    check(!tx.txOffDelayPending() && f.commands == QStringList({"mox:on", "mox:off"}),
+          "a backend RX readback completes the held release without waiting out the delay");
+}
+
+void txOffDelayScope()
+{
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+
+    tx.setTxOffDelayMs(0);
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending(),
+          "a zero TX off delay releases immediately");
+
+    tx.setTxOffDelayMs(100);
+    tx.setTxModeGetter([] { return QStringLiteral("CW"); });
+    f.commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending(),
+          "CW is not held by the TX off delay");
+
+    tx.setTxModeGetter([] { return QStringLiteral("DIGU"); });
+    f.commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending(),
+          "digital modes are not held by the TX off delay");
+
+    tx.setTxModeGetter([] { return QStringLiteral("USB"); });
+    f.commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Dax);
+    tx.requestPttOff(TransmitModel::PttSource::Dax);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending(),
+          "DAX-sourced PTT is not held even on a phone mode");
+
+    tx.setTxOffDelayMs(50000);
+    check(tx.txOffDelayMs() == 2000, "TX off delay is capped at 2000 ms");
+    tx.setTxOffDelayMs(-5);
+    check(tx.txOffDelayMs() == 0, "a negative TX off delay reads as off");
+}
+
+void txOffDelaySettingsRoundTrip()
+{
+    auto& s = AppSettings::instance();
+    s.remove(QStringLiteral("TxOffDelay"));
+    check(TxOffDelaySettings::delayMs() == 0, "an absent TX off delay setting reads as off");
+    TxOffDelaySettings::setDelayMs(250);
+    check(TxOffDelaySettings::delayMs() == 250, "TX off delay setting round-trips");
+    TxOffDelaySettings::setDelayMs(99999);
+    check(TxOffDelaySettings::delayMs() == TxOffDelaySettings::kMaxMs,
+          "writing an oversized TX off delay stores the cap");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":50000}"));
+    check(TxOffDelaySettings::delayMs() == 0,
+          "a hand-edited out-of-range TX off delay reads as off, not as a long hold");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":2001}"));
+    check(TxOffDelaySettings::delayMs() == 0,
+          "a stored TX off delay just above the 2000 ms maximum is refused on read");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":2000}"));
+    check(TxOffDelaySettings::delayMs() == 2000,
+          "a stored TX off delay at the 2000 ms maximum is accepted on read");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("not json"));
+    check(TxOffDelaySettings::delayMs() == 0, "a malformed TX off delay setting reads as off");
+    s.remove(QStringLiteral("TxOffDelay"));
+}
+
+void serialFootswitchUsesProducerPttPaths()
+{
+    Fixture f;
+    SerialPortController source;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer(&source);
+    source.setTxProducer(producer);
+    f.radio.connectSerialPttInput(&source);
+    const auto drain = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall); };
+    TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
+    drain();
+    check(f.commands == QStringList({"mox:on"}), "serial footswitch press keys");
+    TxOperationIntegrationTestAccess::serialPtt(source, false);
+    drain();
+    check(f.commands == QStringList({"mox:on", "mox:off"}), "serial footswitch release unkeys once");
+}
+
+void serialFootswitchGetsTxOffDelay()
+{
+    Fixture f;
+    f.radio.transmitModel().setTxOffDelayMs(100);
+    SerialPortController source;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer(&source);
+    source.setTxProducer(producer);
+    f.radio.connectSerialPttInput(&source);
+    const auto drain = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall); };
+    TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
+    drain();
+    check(f.commands == QStringList({"mox:on"}), "serial footswitch press keys");
+    TxOperationIntegrationTestAccess::serialPtt(source, false);
+    drain();
+    check(f.commands == QStringList({"mox:on"}) && f.radio.transmitModel().txOffDelayPending(),
+          "serial footswitch release is held by the TX off delay");
+    waitMs(180);
+    check(f.commands == QStringList({"mox:on", "mox:off"}),
+          "serial footswitch release unkeys once the TX off delay expires");
+}
+
 // Both test-injection entry points tear the old backend down, which closes
 // admission for the dying session. Neither is followed by an onConnected()
 // edge, so each has to drain the latch itself or every later TX intent in that
@@ -3629,7 +3942,7 @@ struct DaxTciFixture {
         };
         TxOperationIntegrationTestAccess::injectTcp(f.radio, identity, wire);
         TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
-        f.radio.handleSliceStatusForTest(0, {
+        applyFlexSliceStatus(f.radio, 0, {
             {QStringLiteral("in_use"), QStringLiteral("1")},
             {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
         SliceDelta sliceState;
@@ -3757,7 +4070,7 @@ void tciDaxCreationKeepsOriginalRequest()
         } else if (interruption == 5) {
             TxOperationIntegrationTestAccess::disconnect(f.f.radio);
         } else {
-            f.f.radio.handleSliceStatusForTest(0, {}, true);
+            applyFlexSliceStatus(f.f.radio, 0, {}, true);
         }
         if (interruption != 2 && interruption != 3 && create) {
             create(0, QStringLiteral("0x4a000001"));
@@ -4181,8 +4494,8 @@ void tciPermissionRequiresConfirmedOwnership()
         }
     });
     const QMap<QString, QString> early{{QStringLiteral("in_use"), QStringLiteral("1")}};
-    f.radio.handleSliceStatusForTest(0, early);
-    f.radio.handleSliceStatusForTest(1, early);
+    applyFlexSliceStatus(f.radio, 0, early);
+    applyFlexSliceStatus(f.radio, 1, early);
     SliceDelta tx;
     tx.txSlice = true;
     tx.mode = QStringLiteral("USB");
@@ -4199,13 +4512,13 @@ void tciPermissionRequiresConfirmedOwnership()
     check(!TxOperationIntegrationTestAccess::tciPromotion(server, 0),
           "an unknown owner cannot bypass permission by requesting TX directly");
     for (const QString& owner : {QStringLiteral("0x0"), QStringLiteral("invalid")}) {
-        f.radio.handleSliceStatusForTest(0, {{QStringLiteral("client_handle"), owner}});
+        applyFlexSliceStatus(f.radio, 0, {{QStringLiteral("client_handle"), owner}});
         check(!TciProtocol::transmitPermitted(&f.radio, f.radio.slice(0)),
               "zero or malformed ownership does not grant TX permission");
     }
     TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(sent.contains(QStringLiteral("tx_enable:0,true;"))
               && !sent.contains(QStringLiteral("tx_enable:1,true;"))
@@ -4222,18 +4535,18 @@ void tciPermissionRequiresConfirmedOwnership()
     TxOperationIntegrationTestAccess::tciRequest(server, client, false, 1);
     TxOperationIntegrationTestAccess::tciSplit(server, false);
     sent.clear();
-    f.radio.handleSliceStatusForTest(1, {
+    applyFlexSliceStatus(f.radio, 1, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     check(!f.radio.slice(1) && f.radio.isSlotForeign(1)
               && sent.contains(QStringLiteral("tx_enable:1,false;"))
               && !TxOperationIntegrationTestAccess::tciPromotion(server, 1),
           "foreign owner settlement removes RX and explicitly denies TX");
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     check(!f.radio.slice(0) && sent.contains(QStringLiteral("tx_enable:0,false;")),
           "a receiver transferred away loses permission before the close debounce");
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("in_use"), QStringLiteral("1")},
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(TciProtocol::transmitPermitted(&f.radio, f.radio.slice(0)),
@@ -4250,7 +4563,7 @@ void tciPermissionRequiresConfirmedOwnership()
               && !TxOperationIntegrationTestAccess::tciPromotion(server, 0),
           "reconnect reclamation cannot reuse the old session's ownership proof");
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(sent.contains(QStringLiteral("tx_enable:0,true;")),
           "fresh owner confirmation republishes permission after reconnect");
@@ -4284,15 +4597,15 @@ void tciPromotionRechecksPermissionAfterReply()
               "owned receiver promotion waits for the injected command reply");
         return f.backend->selectionReplies.back();
     };
-    f.radio.handleSliceStatusForTest(0, ours);
+    applyFlexSliceStatus(f.radio, 0, ours);
     RadioControlCompletion reply = begin();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && !permitted,
           "a successful promotion reply cannot key a receiver whose ownership changed");
 
-    f.radio.handleSliceStatusForTest(0, ours);
+    applyFlexSliceStatus(f.radio, 0, ours);
     reply = begin();
     SliceDelta mode;
     mode.mode = QStringLiteral("WFM");
@@ -4357,6 +4670,14 @@ int main(int argc, char** argv)
     scopedWsprRoutes();
     cwxCallbackLifetimes();
     serialInputQueueLifetimes();
+    txOffDelayHoldsPhoneRelease();
+    txOffDelayScope();
+    txOffDelaySettingsRoundTrip();
+    serialFootswitchUsesProducerPttPaths();
+    serialFootswitchGetsTxOffDelay();
+    txOffDelayProducerCancellation();
+    txOffDelayRadioReportedStop();
+    txOffDelayMicWindow();
     testInjectionReopensAdmission();
     grantedModelBindingAndHandoff();
     aetherPDRunLeaseLifecycle();

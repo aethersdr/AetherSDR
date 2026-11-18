@@ -3,6 +3,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
+#include "FlexDisplayStatusTestSupport.h"
 
 #include <QDateTime>
 #include <QStringList>
@@ -99,15 +100,7 @@ struct PanControlFixture {
         backend = owned.get();
         radio.setBackendForTest(std::move(owned), QStringLiteral("flex"), backend->panStream());
         TxOperationIntegrationTestAccess::identity(radio, identity, backend);
-        // Injection installs universal receivers. Forward the existing Flex
-        // display extension as setupBackend does for a production session.
-        QObject::connect(backend, &IRadioBackend::extensionStatus, &radio,
-            [this](const QString& ns, const QString& kind, const QVariantMap& fields) {
-                PanadapterModel* pan = radio.panadapter(fields.value(QStringLiteral("panId")).toString());
-                if (pan && ns == QLatin1String("flex") && kind == QLatin1String("panState")) {
-                    pan->applyStateExtension(fields);
-                }
-            });
+
     }
     ~PanControlFixture() { TxOperationIntegrationTestAccess::release(radio); }
     void status(const QString& object, const QMap<QString, QString>& values)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AetherPDTestNetwork.h"
+#include "FlexDisplayStatusTestSupport.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 #include "models/AetherPDMeasurementModel.h"
@@ -46,7 +47,7 @@ public:
         model.m_panadapters.insert(key, pan);
         pan->setClientHandle(QStringLiteral("0x%1").arg(owner, 8, 16, QLatin1Char('0')));
         pan->setCenterBandwidth(7.15, .2);
-        pan->applyStateExtension({{QStringLiteral("daxiq_channel"), channel}});
+        applyPanReport(*pan, {{QStringLiteral("daxiq_channel"), QString::number(channel)}});
         emit model.panadapterAdded(pan);
         return pan;
     }

@@ -1,0 +1,24 @@
+{
+  "recorded_utc": "2026-11-17T22:48:06.120807+00:00",
+  "source": "operator report in conversation",
+  "incident_time_utc": null,
+  "observations": {
+    "power_LED": "green",
+    "unit_responsive": false,
+    "holding_power_button_turned_unit_off": false,
+    "physical_action": "DC power manually unplugged at rear of radio",
+    "Ethernet_link_LED": "not reported",
+    "power_reconnected": "not reported",
+    "recovered_after_DC_cycle": "not established by this message"
+  },
+  "assessment": "Apparent whole-radio hang; process, kernel and power-controller causes are not distinguished by these symptoms. No attribution to AetherPD or the separate IPv6 preload is established.",
+  "test_restrictions": [
+    "No further RF tests",
+    "No further automated reboot tests"
+  ],
+  "radio_actions_taken_for_this_note": [],
+  "related_component_report": "FIRMWARE-PRELOAD-SIGNAL-QUALIFICATION.json",
+  "relation": "The preload fixture reproduces a separate signal/close deadlock pattern. No firmware-side trace establishes it as this incident cause.",
+  "shipping_software_reboot_qualified": false,
+  "production_ready": false
+}

@@ -305,6 +305,20 @@ Listing them so they don't bite the next contributor.
 | Frameless chrome must be set up before first show | Skip `setFramelessMode(framelessWindowEnabled())` on construct | Call it in the ctor after `FramelessResizer::install(this)` | #2591, #2592 |
 | Runtime toggle needs explicit propagation | Forget to wire into `MainWindow::setFramelessWindow()` | Add `if (m_fooDialog) m_fooDialog->setFramelessMode(on);` | #2591 |
 | Include heavy Qt event headers in `.h` | `#include <QCloseEvent>` in the header | Forward-declare in `.h`, include in `.cpp` | #2591 |
+| A parentless control shown before it reaches a layout is a top-level window | `new QLabel` then `setVisible(true)`, then `addWidget()` | Pass the parent at construction: `new QLabel(text, page)` | #6277 |
+
+Give a page's controls their intended widget parent before calling `show()`
+or `setVisible(true)`. A parentless control is a top-level window: showing it
+before adding it to a layout can steal activation on macOS. Constructor
+parenting also owns alternate controls that are not initially inserted into a
+layout, such as the EQ fader's editable value and meter readout. Keep the
+existing visibility conditions; ownership is the correction. The
+`radio_setup_no_transient_window_test` records top-level show events during
+page construction and exercises both fader modes and ShackSwitch port counts;
+`stored_control_dialogs_test` does the same for Profile Manager's CW
+unsaved-changes label.
+Live GPU widget reparenting has additional resource-lifetime constraints;
+see [multi-pan pitfall 21](../architecture/multi-pan-pitfalls.md).
 
 ## See also
 
