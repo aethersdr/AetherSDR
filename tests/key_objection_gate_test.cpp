@@ -882,7 +882,7 @@ int main(int argc, char** argv)
     }
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
-    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
 
     testEveryPath();
     testUnkeyIsNeverAsked();
