@@ -12,10 +12,10 @@ import units
 @unittest.skipUnless(shutil.which('systemd-analyze'), 'requires Linux systemd verifier')
 class UnitOrderingTest(unittest.TestCase):
     def test_boot_transaction_has_no_cycle(self):
-        for arch,managed in [('arm64',False),('arm64',True),('armv7',False),('armv7',True)]:
-            with self.subTest(arch=arch,managed=managed), tempfile.TemporaryDirectory() as directory:
+        for arch,managed,restart in [('arm64',False,False),('arm64',True,False),('armv7',False,False),('armv7',True,False),('arm64',True,True),('armv7',True,True)]:
+            with self.subTest(arch=arch,managed=managed,restart=restart), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                for name, text in units.render(arch,managed).items():
+                for name, text in units.render(arch,managed,control_restart=restart).items():
                     # This test checks ordering, not payload availability on the
                     # build host. Executable validation has separate native tests.
                     lines = []

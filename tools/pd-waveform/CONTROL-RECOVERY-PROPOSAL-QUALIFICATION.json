@@ -1,0 +1,129 @@
+{
+  "recorded_utc": "2026-11-18T09:32:00.869583+00:00",
+  "base_commit": "14a9c1f1e23698727aaba152ce115294829d401a",
+  "branch": "draft/aetherpd-control-recovery-20261118",
+  "tested_implementation_patch_sha256": "551a6d7d566318ef5c94d268061fe098aaf1cff5a0fde7e0f6fdc38c2e772ef0",
+  "status": "offline scoped proposal; operator policy and installed qualification pending",
+  "production_ready": false,
+  "operator_policy_approved": false,
+  "installed": false,
+  "qualified_feature_branch_changed": false,
+  "default_policy_changed": false,
+  "automatic_session_restart": false,
+  "automatic_calibration": false,
+  "radio_commands": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "fixed_optional_policy": {
+    "Restart": "on-failure",
+    "RestartSec": 5,
+    "StartLimitInterval": 60,
+    "StartLimitBurst": 3,
+    "StartLimitAction": "none"
+  },
+  "positive_scope": {
+    "offline_tests": 231,
+    "suites": [
+      {
+        "label": "release",
+        "tests": 20,
+        "log": "release-test.log",
+        "log_sha256": "636205ae8b095ea79ca17937f18da1dd2449c08fa4924eda6da4e35e471eebcc"
+      },
+      {
+        "label": "service",
+        "tests": 73,
+        "log": "service-test.log",
+        "log_sha256": "b9c82a0de89b4ead197d364e982b5a5529e643a81b17d3bb46a20083c30eb46f"
+      },
+      {
+        "label": "management",
+        "tests": 44,
+        "log": "management-test.log",
+        "log_sha256": "a29322e296104b7bfa29581c17532c6eea80d633251c27eb5ebbae60ad569076"
+      },
+      {
+        "label": "activation",
+        "tests": 13,
+        "log": "activation-test.log",
+        "log_sha256": "495d0da76af121b0c3e9d12b63e8ef8914bc398eff53630d34b2f185d67dbc31"
+      },
+      {
+        "label": "upgrade",
+        "tests": 60,
+        "log": "upgrade-test.log",
+        "log_sha256": "95ddbe21f01c3b2da47e65eb4fd976ad361bae77bdd16b6e9ddfa5ebb94eeb21"
+      },
+      {
+        "label": "generation",
+        "tests": 20,
+        "log": "generation-test.log",
+        "log_sha256": "a6ee8be74e1e7282536b298582c28988ee683805f2c85adb1ffc6e65dfa70dfc"
+      },
+      {
+        "label": "systemd-ordering",
+        "tests": 1,
+        "log": "systemd-ordering.log",
+        "log_sha256": "59e0bd5263758b7f82dfcd1ed1ed5ded635d34d24a5d5792b549c1b91b5bd829"
+      }
+    ],
+    "native_mutations_detected": 3,
+    "default_unit_layouts_byte_identical": 8,
+    "default_signed_fixture_releases_byte_identical": 20,
+    "cross_compiled_boot_helpers": [
+      {
+        "arch": "arm64",
+        "bytes": 209040,
+        "sha256": "f99058b566884e1aaff497d229e71d44834a6f11b93c4a3594c360e0b7588514",
+        "executed": false
+      },
+      {
+        "arch": "armv7",
+        "bytes": 210164,
+        "sha256": "1f6dcd7d6a486591786ca6a02893d45f5bc0417394cb372b4e90d3fae856e529",
+        "executed": false
+      }
+    ]
+  },
+  "negative_evidence": {
+    "generation_first_invocation": "missing --upgrade-checker, exit2; correct invocation passed; original retained",
+    "sandbox_systemd_verify": "SO_PASSCRED denied, including unchanged layouts; host offline verifier passed",
+    "workstation_live_manager": {
+      "qualified": false,
+      "intended_cases_completed": 0,
+      "first_attempt": "payload capability admission assertion",
+      "second_attempt": "218/CAPABILITIES from user manager",
+      "single_attempt_preflight_exit": 218,
+      "all_three_transient_units_unloaded": true
+    }
+  },
+  "compatibility": [
+    "New native verifier recognizes exact old and optional fixed primary policies by authenticated unit hashes.",
+    "Optional policy requires managed startup, guardian hold and generation-selection contract.",
+    "Existing default unit text and signed fixture release bytes are unchanged; compiled helper bytes change.",
+    "Older helper binaries reject the optional variant. Matching management/boot helpers must be installed transactionally.",
+    "Management units may remain newer after payload rollback; rollback is not evidence of policy reversal."
+  ],
+  "remaining": [
+    "Operator recovery preference and independent security/compatibility review.",
+    "Deployment catalogue/build wiring and exact new helper/upgrade-worker delivery qualification if selected.",
+    "Actual loaded policy, ordinary receive-only crash restart, explicit stop, limit exhaustion and complete process cleanup on8600.",
+    "Installed upgrade/rollback and physical-recovery coordinated reboot qualification after baseline decision.",
+    "Actual6300 manager/kernel/Cortex-A8/privilege-entry and final RF/release requirements from P1-P10."
+  ],
+  "limitations": [
+    "Simulated service/process metadata tests do not prove live radio lifecycle or keyed cleanup.",
+    "Cross builds execute no ARM binary and establish no Linux2.6/systemd version compatibility.",
+    "No optional-policy complete runtime/worker distribution was built, admitted or installed.",
+    "No conclusion about the whole-radio lockup or the separate IPv6 preload was established."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-proposal-components.tar.gz",
+    "bytes": 384242,
+    "sha256": "7b0133c8bbd997dc1fed1a2c52d2c508587e915096e87d940d0e178fd29f8a21",
+    "members": 57,
+    "all_members_verified": true
+  },
+  "evidence": "CONTROL-RECOVERY-PROPOSAL-EVIDENCE.json.gz",
+  "evidence_sha256": "e640c2f4150a96e261b62602fa6b92bf994327e42ed6f10fcae930c0a59067af"
+}

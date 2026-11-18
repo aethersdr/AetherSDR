@@ -38,7 +38,11 @@ static int release_hash(int fd,uint32_t offset,uint32_t count,unsigned char dige
 }
 const char* pd_release_unit_text(const struct pd_release* release,unsigned index)
 {
-    if(!release || index>=4 || (release->arch!=7 && release->arch!=64) || release->guardian_hold>1){return NULL;}
+    if(!release || index>=4 || (release->arch!=7 && release->arch!=64) || release->guardian_hold>1 || release->control_restart>1){return NULL;}
+    if(release->control_restart){
+        if(!release->managed_startup || !release->generation_selection || !release->guardian_hold){return NULL;}
+        return (release->arch==7?pd_units_armv7_managed_restart:pd_units_arm64_managed_restart)[index];
+    }
     const char* const* definitions;
     if(release->arch==7){
         definitions=release->guardian_hold?
@@ -98,12 +102,18 @@ int pd_release_header_parse(const unsigned char* bytes,size_t size,const unsigne
         if(!count || count>limit || offset+count>PD_RELEASE_MAX){return 0;}
         release->offset[i]=(uint32_t)offset;release->length[i]=count;offset+=count;
     }
-    // Unit6 is authenticated by the manifest and distinguishes both fixed stop
-    // policies without accepting arbitrary service text or changing the format.
+    // Signed unit hashes select complete fixed policies. Session restart and
+    // arbitrary primary-unit additions remain outside this allow-list.
     for(unsigned hold=0;hold<2;++hold){
         release->guardian_hold=hold;const char* text=pd_release_unit_text(release,2);
         size_t count=strlen(text);unsigned char digest[32];crypto_blake2b(digest,32,(const unsigned char*)text,count);
-        if(release->length[6]==count && !crypto_verify32(digest,release->manifest+PD_RELEASE_HEADER+6*PD_RELEASE_RECORD+4)){return 1;}
+        if(release->length[6]!=count || crypto_verify32(digest,release->manifest+PD_RELEASE_HEADER+6*PD_RELEASE_RECORD+4)){continue;}
+        for(unsigned restart=0;restart<2;++restart){
+            release->control_restart=restart;text=pd_release_unit_text(release,3);if(!text){continue;}
+            count=strlen(text);crypto_blake2b(digest,32,(const unsigned char*)text,count);
+            if(release->length[7]==count && !crypto_verify32(digest,release->manifest+PD_RELEASE_HEADER+7*PD_RELEASE_RECORD+4)){return 1;}
+        }
+        release->control_restart=0;
     }
     return 0;
 }

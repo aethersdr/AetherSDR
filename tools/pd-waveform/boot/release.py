@@ -22,7 +22,7 @@ MAX_BYTES = 18 * 1024 * 1024
 LIMITS = (512*1024, 512*1024, bundle.MAX_PACKED, 512*1024, *(16*1024,)*4)
 
 
-def assemble(files, profile, firmware, source_sha256, seed, paired_boot=True, managed_startup=False, origin_recovery=False, generation_selection=False, hold_guardians=True):
+def assemble(files, profile, firmware, source_sha256, seed, paired_boot=True, managed_startup=False, origin_recovery=False, generation_selection=False, hold_guardians=True, control_restart=False):
     if (profile not in PROFILES or set(files) != set(NAMES) or len(source_sha256) != 32
             or len(seed) != 32 or not re.fullmatch(r'[0-9]+(?:\.[0-9]+){3}', firmware)
             or len(firmware) >= 28):
@@ -33,8 +33,10 @@ def assemble(files, profile, firmware, source_sha256, seed, paired_boot=True, ma
         raise ValueError('origin recovery requires managed startup')
     if generation_selection and not origin_recovery:
         raise ValueError('generation selection requires origin recovery')
+    if control_restart and not generation_selection:
+        raise ValueError('control restart requires generation selection')
     arch, profile_id = PROFILES[profile]
-    expected_units = units.render(arch, managed_startup, hold_guardians)
+    expected_units = units.render(arch, managed_startup, hold_guardians, control_restart)
     for name, expected in expected_units.items():
         if files[name] != expected.encode():
             raise ValueError('service definition differs from the fixed implementation: ' + name)
@@ -64,6 +66,7 @@ def assemble(files, profile, firmware, source_sha256, seed, paired_boot=True, ma
         raise ValueError('release exceeds maximum size')
     store = '/user/aetherpd' if arch == 'armv7' else '/var/lib/smartsdr/aetherpd'
     return release, {'format': magic.decode(), 'paired_boot': paired_boot, 'managed_startup': managed_startup, 'origin_recovery': origin_recovery, 'generation_selection': generation_selection, 'guardian_hold': hold_guardians, 'profile': profile, 'architecture': arch,
+        'control_restart': control_restart,
         'firmware': firmware, 'source_sha256': source_sha256.hex(), 'bytes': len(release),
         'sha256': hashlib.sha256(release).hexdigest(), 'blake2b_256': bundle.blake(release).hex(),
         'public_key': key.public_key().public_bytes_raw().hex(), 'files': entries,
@@ -92,6 +95,7 @@ def main():
     p.add_argument('--managed-startup', action='store_true', help='require permanent boot helper primary/session entries')
     p.add_argument('--origin-recovery', action='store_true', help='attest boot helper support for version2 upgrade capsule cleanup')
     p.add_argument('--generation-selection', action='store_true', help='attest permanent boot support for approval-derived generations')
+    p.add_argument('--control-restart', action='store_true', help='draft fixed control-only crash recovery policy')
     a = p.parse_args()
     try:
         files = {}
@@ -100,7 +104,7 @@ def main():
             if path.is_symlink() or not path.is_file() or path.stat().st_size > maximum:
                 raise ValueError('invalid release input: ' + name)
             files[name] = path.read_bytes()
-        release, plan = assemble(files, a.profile, a.firmware, bytes.fromhex(a.source_sha256), a.signing_seed.read_bytes(), not a.legacy_boot, a.managed_startup, a.origin_recovery, a.generation_selection)
+        release, plan = assemble(files, a.profile, a.firmware, bytes.fromhex(a.source_sha256), a.signing_seed.read_bytes(), not a.legacy_boot, a.managed_startup, a.origin_recovery, a.generation_selection, control_restart=a.control_restart)
         a.output.parent.mkdir(parents=True, exist_ok=True)
         bundle.atomic_write(a.output, release)
         bundle.atomic_write(a.output.with_suffix('.plan.json'), (json.dumps(plan, indent=2)+'\n').encode())

@@ -61,6 +61,36 @@ class ReleaseTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.check(self.replace(6,self.files[name].replace(b'SendSIGKILL=no',b'SendSIGKILL='+value)),1)
 
+    def test_control_restart_requires_signed_fixed_generation_policy(self):
+        for arch,platform,profile in [(64,'arm64','flex8600'),(7,'armv7','flex6300')]:
+            raw=bytearray(self.raw);raw[4]=2 if arch==64 else 1
+            struct.pack_into('<H',raw,18,183 if arch==64 else 40)
+            payload,_=bundle.assemble({n:bytes(raw) if n!='LICENSES' else b'fixture' for n in bundle.NAMES},arch,bytes(32),self.seed)
+            files={**self.files,'pd-boot':bytes(raw),'pd-update':bytes(raw),'payload.bundle':payload,
+                   **{n:s.encode() for n,s in units.render(platform,True,True,True).items()}}
+            flags=dict(managed_startup=True,origin_recovery=True,generation_selection=True,control_restart=True)
+            data,plan=release.assemble(files,profile,'4.3.16.42034',bytes(32),self.seed,**flags)
+            self.assertTrue(plan['control_restart']);self.assertFalse(plan['automatic_calibration']);self.assertEqual(plan['rf_actions'],[])
+            self.check(data,arch=arch,profile=1 if arch==64 else 2)
+            for field in ('control_restart','generation_selection','hold_guardians'):
+                with self.subTest(arch=arch,field=field),self.assertRaises(ValueError):
+                    release.assemble(files,profile,'4.3.16.42034',bytes(32),self.seed,**{**flags,field:False})
+        for managed,hold in [(False,False),(False,True),(True,False)]:
+            with self.assertRaises(ValueError):units.render('arm64',managed,hold,True)
+
+    def test_signed_restart_variations_are_rejected(self):
+        files={**self.files,**{n:s.encode() for n,s in units.render('arm64',True,True,True).items()}}
+        self.good,_=release.assemble(files,'flex8600','4.3.16.42034',bytes(32),self.seed,
+                                    managed_startup=True,origin_recovery=True,generation_selection=True,control_restart=True)
+        self.check(extract=True)
+        primary=files['aetherpd-shim.service']
+        for old,new in [(b'on-failure',b'always'),(b'RestartSec=5',b'RestartSec=0'),
+                        (b'StartLimitInterval=60',b'StartLimitInterval=0'),(b'StartLimitBurst=3',b'StartLimitBurst=0'),
+                        (b'--primary',b'--session'),(b'UMask=0077',b'UMask=0077\nExecStopPost=/bin/true')]:
+            with self.subTest(new=new):self.check(self.replace(7,primary.replace(old,new)),expected=1)
+        session=files['aetherpd-start@.service']+b'Restart=on-failure\n'
+        self.check(self.replace(6,session),expected=1)
+
     def resign(self,data):
         data=bytearray(data);data[release.MANIFEST:release.PREFIX]=self.signer.sign(data[:release.MANIFEST]);return bytes(data)
 

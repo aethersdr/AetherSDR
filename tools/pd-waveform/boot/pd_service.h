@@ -5,7 +5,7 @@
 #include "pd_upgrade.h"
 enum pd_service_kind { PD_SERVICE_BOOT=0,PD_SERVICE_SOCKET=1,PD_SERVICE_PRIMARY=2,PD_SERVICE_SESSION=3 };
 enum { PD_SERVICE_OUTPUT_MAX=65536,PD_SERVICE_SESSIONS_MAX=32 };
-struct pd_service_state { pid_t pid,control_pid;int active,quiet,managed_startup,guardian_hold,populated,failed; };
+struct pd_service_state { pid_t pid,control_pid;int active,quiet,managed_startup,guardian_hold,populated,failed,control_restart; };
 /* Fixed-unit adapter for authenticated installation transactions or the
  * peer-verified root socket entry. No client-supplied unit/path/arguments. */
 int pd_service_parse(unsigned kind,const unsigned char* bytes,size_t size,struct pd_service_state* state);

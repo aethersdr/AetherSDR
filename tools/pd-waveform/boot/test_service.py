@@ -38,10 +38,11 @@ class ServiceTest(unittest.TestCase):
   d=properties(2);name='aetherpd-recover.service' if recovery else 'aetherpd-install.service'
   d.update(Id=name,Names=name,FragmentPath='/etc/systemd/system/'+name,Type='oneshot',ExecStart=executable(BOOT,'--recover-installation' if recovery else '--install-approved'))
   return d
- def layout(self,managed,hold=True):
-  for name,value in units.render('arm64',managed,hold).items():(self.units/name).write_text(value)
+ def layout(self,managed,hold=True,control_restart=False):
+  for name,value in units.render('arm64',managed,hold,control_restart).items():(self.units/name).write_text(value)
   d=properties(2)
   if managed:d['ExecStart']=executable(BOOT,'--primary')
+  if control_restart:d.update(Restart='on-failure',RestartUSec='5s',StartLimitIntervalUSec='1min',StartLimitBurst='3',StartLimitAction='none')
   (self.root/NAMES[2]).write_text(text(d))
   d=self.session('aetherpd-start@0-2-78666.service')
   d['SendSIGKILL']='no' if hold else 'yes'
@@ -52,6 +53,31 @@ class ServiceTest(unittest.TestCase):
    self.layout(managed)
    self.invoke('files');self.invoke('reload');self.invoke('read',2,quiet=1)
    self.invoke('stop');self.invoke('quiesce')
+ def test_control_restart_layout_reload_stop_and_quiesce(self):
+  self.layout(True,control_restart=True)
+  self.invoke('files');self.invoke('reload');self.invoke('read',2,quiet=1)
+  self.invoke('stop');self.invoke('quiesce')
+ def test_control_restart_loaded_policy_must_match_files(self):
+  for restart in (False,True):
+   self.layout(True,control_restart=restart)
+   d=properties(2);d['ExecStart']=executable(BOOT,'--primary')
+   if not restart:d.update(Restart='on-failure',RestartUSec='5s',StartLimitIntervalUSec='1min',StartLimitBurst='3',StartLimitAction='none')
+   else:d['Restart']='no'
+   (self.root/NAMES[2]).write_text(text(d));(self.root/'commands').unlink(missing_ok=True)
+   self.invoke('stop',expected=1)
+   self.assertNotIn('systemctl stop',(self.root/'commands').read_text())
+ def test_control_restart_bounded_loaded_values_and_aliases(self):
+  self.layout(True,control_restart=True)
+  base=properties(2);base.update(ExecStart=executable(BOOT,'--primary'),Restart='on-failure',RestartUSec='5s',StartLimitIntervalUSec='1min',StartLimitBurst='3',StartLimitAction='none')
+  for interval in ('StartLimitIntervalUSec','StartLimitInterval'):
+   for value in ('1min','60s','60000000'):
+    d=dict(base);del d['StartLimitIntervalUSec'];d[interval]=value
+    (self.root/NAMES[2]).write_text(text(d));self.invoke('read',2,quiet=1)
+  for field,value in [('Restart','always'),('RestartUSec','0'),('RestartUSec','5ms'),('StartLimitIntervalUSec','0'),('StartLimitIntervalUSec','infinity'),('StartLimitBurst','0'),('StartLimitBurst','4'),('StartLimitBurst','03'),('StartLimitAction','reboot')]:
+   d=dict(base);d[field]=value;(self.root/NAMES[2]).write_text(text(d));self.invoke('read',2,expected=1)
+  for field in ('Restart','RestartUSec','StartLimitIntervalUSec','StartLimitBurst','StartLimitAction'):
+   d=dict(base);del d[field];(self.root/NAMES[2]).write_text(text(d));self.invoke('read',2,expected=1)
+  d=dict(base);d['StartLimitInterval']='120s';(self.root/NAMES[2]).write_text(text(d));self.invoke('read',2,expected=1)
  def test_upgrade_cleanup_guard_requires_completed_boot_and_socket_owner(self):
   for kind in (0,1):
    d=properties(kind,True);d['ControlPID']='0';(self.root/NAMES[kind]).write_text(text(d))

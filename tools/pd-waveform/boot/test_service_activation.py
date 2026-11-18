@@ -92,6 +92,17 @@ class ServiceActivationTest(unittest.TestCase):
             self.assertEqual(self.starts(), ['/usr/bin/systemctl start aetherpd-shim.service'])
             self.assertEqual(self.events(), ['start', 'open', 'wait', 'check', 'close'])
 
+    def test_bounded_control_restart_uses_existing_activation_and_rollback_gates(self):
+        for name,data in units.render('arm64',True,True,True).items():
+            self.put(self.units/name,data.encode(),0o644)
+        for prefix in ['before-', 'after-', 'changed-']:
+            path=self.root/(prefix+NAMES[2])
+            path.write_text(path.read_text()+'Restart=on-failure\nRestartUSec=5s\nStartLimitIntervalUSec=1min\nStartLimitBurst=3\nStartLimitAction=none\n')
+        for phase in (3,6):
+            self.phase(phase);self.call('prepare');self.call('activate')
+            self.assertEqual(self.starts(),['/usr/bin/systemctl start aetherpd-shim.service'])
+            self.assertEqual(self.events(),['start','open','wait','check','close'])
+
     def test_upgrade_requires_permanent_management_layout(self):
         self.layout(False)
         for phase in [3,6]:
