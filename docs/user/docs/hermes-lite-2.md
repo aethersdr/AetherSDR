@@ -192,7 +192,7 @@ PureSignal corrects the transmitter's distortion with adaptive pre-distortion. T
 
 When one of these is missing, the PureSignal button is dimmed, and the line under it says why.
 
-**Controls.**
+**Controls.** Hover over any control in the applet for a short explanation.
 
 - **PureSignal** turns it on and off. You can turn it on or off only while you are not transmitting. If you left it on, it comes back on when you connect again, including when the link recovers from a watchdog interruption. If the HL2 cannot run it at that moment, for example because three receivers are open, it stays off and the line under the button says why. Its remembered preference stays on; to change it, first restore a configuration where PureSignal is available.
 - **Auto** calibrates again and again while you transmit. Unticking **Auto** stops new calibrations and keeps the last good correction, until you press **Reset** or turn PureSignal off.
@@ -205,6 +205,8 @@ PureSignal never keys the radio. It calibrates on transmissions you make yoursel
 **Settings** (under **▸ Settings**):
 
 - **Auto-attenuate feedback** moves the receive attenuation while keyed, so the feedback level stays in the window. Turn it off to set **TX att** by hand (−28 to 31 dB).
+- If the attenuation reaches its maximum (31 dB) and the feedback is still above the window, the state line says "Feedback too strong to calibrate at 31 dB". PureSignal cannot calibrate until the level comes down. This happens with an external amplifier's RF sampler at high power. Put a fixed attenuator (for example an SMA attenuator) in the feedback line until the level settles inside the window.
+- If the HL2 itself reports ADC overload while you transmit with PureSignal on, the state line turns red: "WARNING: ADC overload while transmitting — the feedback overdrives the receive input". The feedback is then too strong for the receive converter, and no calibration done at that level can be trusted. Add the attenuator before you transmit at that power again. The warning stays after you unkey. It clears when the radio reports a clean measurement window during a transmission or when you turn PureSignal off. At the other end, "Feedback too weak at full gain" means the coupler or sampler gives too little signal.
 - **Reset** drops the correction.
 - **Save…** writes the current correction to a file. **Restore…** loads one. The file path must be shorter than 256 bytes. WDSP file errors appear in the state line, taking priority over the ready indication. WDSP latches these errors until its transmit channel is rebuilt.
 
