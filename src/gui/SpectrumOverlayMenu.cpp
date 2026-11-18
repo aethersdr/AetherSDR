@@ -619,7 +619,9 @@ void SpectrumOverlayMenu::buildAntPanel()
                 const QString refusal =
                     m_radioModel->selectStationAntenna(pick->id, pick->token, false);
                 if (!refusal.isEmpty()) {
-                    QToolTip::showText(m_rxAntCmb->mapToGlobal(QPoint(0, 0)), refusal, m_rxAntCmb);
+                    QToolTip::showText(m_rxAntCmb->mapToGlobal(QPoint(0, 0)),
+                                       stationAntennaToolTip(refusal),
+                                       m_rxAntCmb);
                 }
             }
             // The switch's echo, not the pick, decides what the combo shows.
@@ -1346,8 +1348,9 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
         }
         m_rxAntCmb->addItem(stationAntennaMenuTitle(view.heading));
         int row = m_rxAntCmb->count() - 1;
-        m_rxAntCmb->setItemData(row, view.unavailable.isEmpty() ? view.note : view.unavailable,
-                                Qt::ToolTipRole);
+        m_rxAntCmb->setItemData(row,
+            stationAntennaToolTip(view.unavailable.isEmpty() ? view.note : view.unavailable),
+            Qt::ToolTipRole);
         if (items) {
             items->item(row)->setEnabled(false);
         }
@@ -1359,8 +1362,8 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
             m_rxAntCmb->setItemData(row, stationAntennaActionData(view.id, choice.token),
                                     kStationAntennaRole);
             m_rxAntCmb->setItemData(row,
-                enabled ? choice.hint
-                        : !view.unavailable.isEmpty() ? view.unavailable : choice.reason,
+                stationAntennaToolTip(enabled ? choice.hint
+                        : !view.unavailable.isEmpty() ? view.unavailable : choice.reason),
                 Qt::ToolTipRole);
             if (items && !enabled) {
                 items->item(row)->setEnabled(false);

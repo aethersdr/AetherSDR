@@ -15,10 +15,12 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QKeySequence>
 #include <QMenu>
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QTextDocument>
 
 #include <cstdio>
 #include <string>
@@ -59,6 +61,17 @@ StationAntennaView trioView()
     view.rxLabel = QStringLiteral("Fan Dipole");
     view.txLabel = QStringLiteral("EFHW");
     return view;
+}
+
+// What a tooltip shows: rich text rendered, or the text as typed.
+QString shownTip(const QString& tip)
+{
+    if (!Qt::mightBeRichText(tip)) {
+        return tip;
+    }
+    QTextDocument doc;
+    doc.setHtml(tip);
+    return doc.toPlainText();
 }
 
 QAction* subMenuAction(const QMenu& menu, const QString& title)
@@ -113,10 +126,11 @@ void testSubmenuPerDevice()
     report("the RX field's port is checked, as the device reports it",
            !actions.at(1)->isChecked() && actions.at(2)->isChecked() && !actions.at(3)->isChecked());
     report("a port that can be picked says what the pick does",
-           actions.at(1)->isEnabled() && actions.at(1)->toolTip() == QStringLiteral("TX and RX"));
+           actions.at(1)->isEnabled() && shownTip(actions.at(1)->toolTip()) == QStringLiteral("TX and RX"));
     report("a port that cannot is listed, disabled, with the reason",
            !actions.at(3)->isEnabled()
-               && actions.at(3)->toolTip() == QStringLiteral("Trio reports this button as disabled."));
+               && shownTip(actions.at(3)->toolTip())
+                      == QStringLiteral("Trio reports this button as disabled."));
 
     QMenu tx;
     addStationAntennaMenus(tx, {trio}, true);
@@ -146,7 +160,7 @@ void testUnavailableDevice()
     addStationAntennaMenus(menu, {trio}, true);
     QAction* sub = subMenuAction(menu, QStringLiteral("Trio (station switch)"));
     report("an unusable device keeps its submenu, with the reason as its tooltip",
-           sub && sub->isVisible() && sub->toolTip() == trio.unavailable);
+           sub && sub->isVisible() && shownTip(sub->toolTip()) == trio.unavailable);
     if (!sub) {
         return;
     }
@@ -157,7 +171,7 @@ void testUnavailableDevice()
     }
     report("the reason first, then every port listed and disabled", allDisabled
                && actions.at(0)->text() == trio.unavailable
-               && actions.at(1)->toolTip() == trio.unavailable);
+               && shownTip(actions.at(1)->toolTip()) == trio.unavailable);
 
     StationAntennaView unread = trio;
     unread.rx.clear();
@@ -169,6 +183,49 @@ void testUnavailableDevice()
     report("no ports read yet: the submenu still says why",
            unreadSub && unreadSub->menu()->actions().size() == 1
                && unreadSub->menu()->actions().at(0)->text() == unread.unavailable);
+}
+
+// Port labels are operator text on the device: markup is shown as typed in
+// every tooltip, and '&' as typed in every entry (no mnemonic).
+void testDeviceTextIsPlain()
+{
+    const QString markup = QStringLiteral("<b>DUMMY</b><img src=\"file:///tmp/x.png\">");
+    StationAntennaView trio = trioView();
+    trio.id = QStringLiteral("trio");
+    trio.tx[0].label = QStringLiteral("Fan & Dipole");
+    trio.tx[0].hint = QStringLiteral("TX only; RX stays on ") + markup;
+    trio.tx[2].reason = QStringLiteral("The Trio marks ") + markup + QStringLiteral(" as receive only.");
+    trio.note = QStringLiteral("Split: RX on ") + markup + QStringLiteral(", TX on EFHW.");
+    QMenu menu;
+    addStationAntennaMenus(menu, {trio}, true);
+    QAction* sub = subMenuAction(menu, QStringLiteral("Trio (station switch)"));
+    const QList<QAction*> actions = sub ? sub->menu()->actions() : QList<QAction*>{};
+    if (actions.size() != 4) {
+        report("markup: the submenu has the note and three ports", false);
+        return;
+    }
+    const auto literal = [](const QString& tip, const QString& text) {
+        return shownTip(tip) == text && !tip.contains(QStringLiteral("<img"))
+               && !tip.contains(QStringLiteral("<b>"));
+    };
+    report("markup: a pick's hint shows the label as typed",
+           literal(actions.at(1)->toolTip(), trio.tx.at(0).hint), actions.at(1)->toolTip().toStdString());
+    report("markup: a refusal shows the label as typed",
+           literal(actions.at(3)->toolTip(), trio.tx.at(2).reason));
+    report("markup: the submenu's note tooltip shows the label as typed",
+           literal(sub->toolTip(), trio.note));
+    report("'&' in a port label is shown, not taken as a mnemonic",
+           actions.at(1)->text() == QStringLiteral("Fan && Dipole")
+               && QKeySequence::mnemonic(actions.at(1)->text()).isEmpty(),
+           actions.at(1)->text().toStdString());
+    trio.unavailable = QStringLiteral("The Trio's focus is on R&D ") + markup + QStringLiteral(", not on this radio.");
+    QMenu off;
+    addStationAntennaMenus(off, {trio}, true);
+    QAction* offSub = subMenuAction(off, QStringLiteral("Trio (station switch)"));
+    report("markup and '&' in the reason line and its tooltip",
+           offSub && literal(offSub->toolTip(), trio.unavailable)
+               && QKeySequence::mnemonic(offSub->menu()->actions().at(0)->text()).isEmpty()
+               && literal(offSub->menu()->actions().at(1)->toolTip(), trio.unavailable));
 }
 
 // One sentence for every antenna-switch refusal while transmitting, and the
@@ -209,12 +266,22 @@ void testFieldText()
     report("a bound switch and no radio port: each field shows its half",
            rx && tx && rx->text == QStringLiteral("Fan Dipole") && tx->text == QStringLiteral("EFHW"));
     report("and its tooltip names the switch",
-           tx && tx->toolTip == QStringLiteral("Transmit antenna: EFHW, on the Trio (station switch)"),
+           tx && shownTip(tx->toolTip) == QStringLiteral("Transmit antenna: EFHW, on the Trio (station switch)"),
            tx ? tx->toolTip.toStdString() : std::string());
+    view.txLabel = QStringLiteral("<i>EFHW</i>");
+    const auto marked = stationAntennaField(&radio, slice, true);
+    report("markup in the field's label: the text as typed, the tooltip literal",
+           marked && marked->text == view.txLabel
+               && shownTip(marked->toolTip).startsWith(QStringLiteral("Transmit antenna: <i>EFHW</i>,"))
+               && !marked->toolTip.contains(QStringLiteral("<i>")),
+           marked ? marked->toolTip.toStdString() : std::string());
+    view.txLabel = QStringLiteral("EFHW");
     view.unavailable = QStringLiteral("The Trio's focus is on FT710, not on this radio.");
     const auto noted = stationAntennaField(&radio, slice, false);
     report("the reason the device is unusable is added to the tooltip",
-           noted && noted->toolTip.endsWith(QStringLiteral("\nThe Trio's focus is on FT710, not on this radio.")));
+           noted && shownTip(noted->toolTip)
+                         .endsWith(QStringLiteral("\nThe Trio's focus is on FT710, not on this radio.")),
+           noted ? shownTip(noted->toolTip).toStdString() : std::string());
 
     SliceDelta delta;
     delta.rxAntennaList = QStringList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
@@ -268,6 +335,7 @@ int main(int argc, char** argv)
 
     testSubmenuPerDevice();
     testUnavailableDevice();
+    testDeviceTextIsPlain();
     testSharedSentences();
     testFieldText();
     testFieldAvailability();

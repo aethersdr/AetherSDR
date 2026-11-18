@@ -877,7 +877,8 @@ void VfoWidget::buildUI()
                     ? m_radioModel->selectStationAntenna(pick->id, pick->token, false)
                     : QString();
                 if (!refusal.isEmpty()) {
-                    QToolTip::showText(m_rxAntBtn->mapToGlobal(QPoint(0, 0)), refusal,
+                    QToolTip::showText(m_rxAntBtn->mapToGlobal(QPoint(0, 0)),
+                                       stationAntennaToolTip(refusal),
                                        m_rxAntBtn);
                 }
                 return;
@@ -943,7 +944,8 @@ void VfoWidget::buildUI()
                     ? m_radioModel->selectStationAntenna(pick->id, pick->token, true)
                     : QString();
                 if (!refusal.isEmpty()) {
-                    QToolTip::showText(m_txAntBtn->mapToGlobal(QPoint(0, 0)), refusal,
+                    QToolTip::showText(m_txAntBtn->mapToGlobal(QPoint(0, 0)),
+                                       stationAntennaToolTip(refusal),
                                        m_txAntBtn);
                 }
                 return;
@@ -7609,7 +7611,7 @@ void VfoWidget::updateAntennaButton(QPushButton* button, const QString& token, b
         if (const auto station = stationAntennaField(m_radioModel, m_slice, tx)) {
             const QString stationText =
                 fm.elidedText(station->text, Qt::ElideRight, kMaxWidth - kPad);
-            button->setText(stationText);
+            button->setText(stationAntennaActionText(stationText));
             button->setFixedWidth(
                 qBound(kMinWidth, fm.horizontalAdvance(stationText) + kPad, kMaxWidth));
             button->setToolTip(station->toolTip);

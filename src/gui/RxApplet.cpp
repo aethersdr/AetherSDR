@@ -470,7 +470,8 @@ void RxApplet::buildUI()
                         ? m_radioModel->selectStationAntenna(pick->id, pick->token, false)
                         : QString();
                     if (!refusal.isEmpty()) {
-                        QToolTip::showText(m_rxAntBtn->mapToGlobal(QPoint(0, 0)), refusal,
+                        QToolTip::showText(m_rxAntBtn->mapToGlobal(QPoint(0, 0)),
+                                           stationAntennaToolTip(refusal),
                                            m_rxAntBtn);
                     }
                     return;
@@ -542,7 +543,9 @@ void RxApplet::buildUI()
                     ? self->m_radioModel->selectStationAntenna(pick->id, pick->token, true)
                     : QString();
                 if (!refusal.isEmpty()) {
-                    QToolTip::showText(button->mapToGlobal(QPoint(0, 0)), refusal, button);
+                    QToolTip::showText(button->mapToGlobal(QPoint(0, 0)),
+                                       stationAntennaToolTip(refusal),
+                                       button);
                 }
                 return;
             }
@@ -2694,7 +2697,7 @@ void RxApplet::updateAntennaButton(QPushButton* button, const QString& token, bo
         if (const auto station = stationAntennaField(m_radioModel, m_slice, tx)) {
             const QString stationText =
                 fm.elidedText(station->text, Qt::ElideRight, kMaxWidth - kPad);
-            button->setText(stationText);
+            button->setText(stationAntennaActionText(stationText));
             button->setFixedWidth(
                 qBound(kMinWidth, fm.horizontalAdvance(stationText) + kPad, kMaxWidth));
             button->setToolTip(station->toolTip);

@@ -14,6 +14,7 @@
 #include <QMenu>
 #include <QString>
 #include <QStringList>
+#include <QTextDocument>
 #include <QVariant>
 
 #include <algorithm>
@@ -42,6 +43,19 @@ inline std::optional<StationAntennaPick> stationAntennaPickFrom(const QVariant& 
     return StationAntennaPick{parts.at(1), parts.at(2)};
 }
 
+// Device labels are operator text on the device: a tooltip shows them as
+// typed, never as markup (QToolTip renders text that looks like rich text).
+inline QString stationAntennaToolTip(const QString& text)
+{
+    return text.isEmpty() ? QString() : Qt::convertFromPlainText(text, Qt::WhiteSpaceNormal);
+}
+
+// QAction text with '&' shown as typed, not taken as a mnemonic.
+inline QString stationAntennaActionText(QString text)
+{
+    return text.replace(QLatin1Char('&'), QLatin1String("&&"));
+}
+
 // One submenu per device, titled as a station switch. Its entries stay
 // listed when they cannot be picked: disabled, the reason as the tooltip; a
 // device that cannot be used at all shows its reason first, as a line of the
@@ -63,16 +77,16 @@ inline void addStationAntennaMenus(QMenu& menu, const QVector<StationAntennaView
         sub->setObjectName(QStringLiteral("stationAntennaMenu_%1").arg(view.id));
         sub->setToolTipsVisible(true);
         const QString subTip = view.unavailable.isEmpty() ? view.note : view.unavailable;
-        sub->menuAction()->setToolTip(subTip);
+        sub->menuAction()->setToolTip(stationAntennaToolTip(subTip));
         sub->menuAction()->setStatusTip(subTip);
         if (!view.unavailable.isEmpty()) {
-            sub->addAction(view.unavailable)->setEnabled(false);
+            sub->addAction(stationAntennaActionText(view.unavailable))->setEnabled(false);
         } else if (!view.note.isEmpty()) {
-            sub->addAction(view.note)->setEnabled(false);
+            sub->addAction(stationAntennaActionText(view.note))->setEnabled(false);
         }
         const QString current = !showCurrent ? QString() : tx ? view.txCurrent : view.rxCurrent;
         for (const StationAntennaChoice& choice : choices) {
-            QAction* act = sub->addAction(choice.label);
+            QAction* act = sub->addAction(stationAntennaActionText(choice.label));
             act->setData(stationAntennaActionData(view.id, choice.token));
             act->setCheckable(true);
             act->setChecked(choice.token == current);
@@ -80,7 +94,7 @@ inline void addStationAntennaMenus(QMenu& menu, const QVector<StationAntennaView
             act->setEnabled(enabled);
             const QString tip = enabled ? choice.hint
                 : !view.unavailable.isEmpty() ? view.unavailable : choice.reason;
-            act->setToolTip(tip);
+            act->setToolTip(stationAntennaToolTip(tip));
             act->setStatusTip(tip);
         }
     }
@@ -113,7 +127,7 @@ inline bool txAntennaFieldAvailable(bool connected, const RadioCapabilities& cap
 
 struct StationAntennaField {
     QString text;
-    QString toolTip;
+    QString toolTip;   // ready for setToolTip: device text escaped
 };
 
 // What the field shows while a device owns it, or nothing: the first device
@@ -143,6 +157,7 @@ inline std::optional<StationAntennaField> stationAntennaField(const RadioModel* 
     if (!more.isEmpty()) {
         out.toolTip += QLatin1Char('\n') + more;
     }
+    out.toolTip = stationAntennaToolTip(out.toolTip);
     return out;
 }
 
