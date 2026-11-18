@@ -1,0 +1,64 @@
+{
+  "recorded_utc": "2026-11-18T07:26:40.968545+00:00",
+  "source_commit": "75ab268527293f30e74acee221759adce42087b5",
+  "source_manifest_sha256": "e78f4f52a7ba2796ee85c964360a3e217da23e49405b8cfadda074ef4ac5efa2",
+  "production_ready": false,
+  "installed": false,
+  "complete_runtime_release_two_path_byte_reproducibility": {
+    "armv7": true,
+    "arm64": true
+  },
+  "same_host_and_toolchains_separate_source_output_and_caches": true,
+  "toolchains": {
+    "python": "3.14.10",
+    "zlib": "1.4",
+    "zig": "0.17.1",
+    "go": "go version go1.27.1 linux/amd64",
+    "go_binary_sha256": "30969f97169d7f43fe6a085873d75613adc21e30818a8c61d95bd27275df4624",
+    "zig_binary_sha256": "d0245d88934e8e0f377d955b395f8483db0f45d3efd8711d5709afc439989bc5"
+  },
+  "release_artifacts": {
+    "armv7": {
+      "bytes": 9407745,
+      "sha256": "9cd43c2a6e6aebfff77fc580685febdfe97fe09a56a2b721ab0f66b447e83972",
+      "blake2b_256": "4e3058841918e95d63d85935eb1d72836e9e09a8eb016cd9c7ef44abe401a03a",
+      "expanded_bytes": 22836670
+    },
+    "arm64": {
+      "bytes": 9077761,
+      "sha256": "4a1f3768bc72645f40cd320ffe3ff3bf5238ce64e0c23cd44a6a6ffcee17a061",
+      "blake2b_256": "b2627c67e92a2f9e86d4dd994e4b6a05155c022bca6963170f0c07ecbc6182b4",
+      "expanded_bytes": 22446186
+    }
+  },
+  "complete_ARM64_upgrade_eight_file_distribution_reproduced": true,
+  "previous_release_for_upgrade": "0d88765b3eaad89fde171f98955ac8dcef959543a93db9967b25d920912c43e7",
+  "native_release_and_worker_signatures_verified": true,
+  "development_signing_key_only": true,
+  "private_signing_seed_written_to_files": false,
+  "native_disk_admission_measurements": {
+    "profiles": 8,
+    "byte_and_inode_boundary_checks_per_profile": 4,
+    "ARMv7_worst_modeled_peak_bytes": 39702528,
+    "minimum_headroom_from_rounded_41_decimal_MB": 1297472,
+    "scope": "Production admission functions with authenticated releases; synthetic statvfs capacity/block sizes plus calculated steady inventory and explicit allowances. No live 6300 free-space measurement."
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/runtime-upgrade-components.tar.gz",
+    "bytes": 39404018,
+    "sha256": "d55d5c62ccb2feaf757c269053853fbfd3737d8da329e8f55563b5b97b40e530",
+    "verified_members": 42
+  },
+  "compressed_evidence_sha256": "ec87bc47448ae23a090ddd0f053b304b7f55899974ae444db3f7e81a2c285446",
+  "limitations": [
+    "Actual 6300 execution, privilege provisioning, network profile and first-install transient storage remain unqualified.",
+    "A modeled 1.30 MB reserve is conditional on rounded free space and the stated identity, metadata and log allowances; it is not whole-volume enforcement.",
+    "Complete inputs must stay on tmpfs; firmware-retained archives and persistent extra copies are additional.",
+    "ARM64 upgrade distribution only; no 6000 first-install carrier is provided or qualified.",
+    "New artifacts have not been installed; live receive-only proof uses the prior 0d native release.",
+    "No RF, reboot, crash recovery, release catalogue, shipping publisher or independent review qualification is implied."
+  ],
+  "radio_actions": [],
+  "RF_commands": [],
+  "reboot_commands": []
+}

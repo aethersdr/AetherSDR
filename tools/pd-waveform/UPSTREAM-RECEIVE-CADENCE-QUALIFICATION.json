@@ -1,0 +1,84 @@
+{
+  "recorded_utc": "2026-11-18T07:45:43.580134+00:00",
+  "source_commit": "75ab268527293f30e74acee221759adce42087b5",
+  "desktop_pid": 1209602,
+  "production_ready": false,
+  "covered": {
+    "sinceMs": 5095,
+    "fftFps": 25,
+    "fftFramesPerSec": 9.42100098135427,
+    "nativeWaterfallUpdatesPerSec": 12.757605495583906,
+    "gpuFramesPerSec": 8.832188420019628,
+    "widthPx": 1163,
+    "heightPx": 1054
+  },
+  "uncovered": {
+    "sinceMs": 6018,
+    "fftFps": 25,
+    "fftFramesPerSec": 24.260551678298437,
+    "nativeWaterfallUpdatesPerSec": 12.961116650049851,
+    "gpuFramesPerSec": 25.09139248919907,
+    "widthPx": 683,
+    "heightPx": 1054
+  },
+  "same_geometry_controlled_comparison": false,
+  "window_layout_confounded": true,
+  "network_capture": {
+    "pcap_sha256": "025a917781544b1a43fa8e5163ad330b4a41483ae892b97d8d24fbf1265954f0",
+    "captured_packets": 819,
+    "flows": {
+      "(49676, 1073741824)": {
+        "packets": 819,
+        "observed_span_s": 10.962141036987305,
+        "unique_frame_ids": 273,
+        "complete_frame_ids": 273,
+        "incomplete_frame_ids": [],
+        "interior_incomplete_frames": [],
+        "frame_id_first": 25895,
+        "frame_id_last": 26167,
+        "first_fragment_frame_rate_hz": 24.812675407903303,
+        "median_frame_interval_ms": 40.2979850769043,
+        "packet_counter_gaps_mod16": 0,
+        "nonzero_gap_occurrences": 0,
+        "bin_counts": {
+          "1938": 819
+        },
+        "fragments_per_frame": {
+          "3": 273
+        }
+      }
+    },
+    "scope": "FFT metadata observed at the workstation interface; packet timestamps are host capture times, not FPGA emission times. Incomplete first/last frame and tcpdump cutoff are retained. No claim of FPGA-to-process latency.",
+    "payload_scope": "128-byte packet snapshots preserve packet/frame headers and bin-coverage metadata, not all FFT sample values. Numeric FFT payload quality is not tested here."
+  },
+  "queue_replacements": {
+    "first": 21946,
+    "second": 22025,
+    "increment": 79,
+    "reported_packet_loss": 0,
+    "waterfall_dropped": 0
+  },
+  "finding": "The workstation observed 273 complete FFT frames by header coverage at 24.81 frames/s, while the client replaced queued spectrum frames. GUI ingest recovered to 24.26 frames/s after stopped dialogs closed, but pan width also changed from1163to683pixels.",
+  "interpretation": "The bounded latest-spectrum mailbox replacement counter explains discarded client frames. The cause of reduced GUI drain/presentation is unproven: layout width and window coverage changed together. No code fix is made and no general display-performance qualification is claimed.",
+  "actions": {
+    "RF_commands": [],
+    "reboot_commands": [],
+    "radio_network_changes": [],
+    "processing_settings_restore_commands": [],
+    "workstation_capture": "Nonpromiscuous, max12seconds/2048packets, exact radio/IP/owned ports/FFT filter; dropped privileges to jeremy.",
+    "diagnostic_dialogs": "Closed after cached snapshots; no clipboard access.",
+    "final_UI": "MainWindow; stopped AetherPD/Waveforms dialogs closed."
+  },
+  "remaining": [
+    "Controlled same-geometry client cadence investigation if this persists under the intended production layout.",
+    "On-radio correction/RF throughput, absolute FPGA latency, reboot and actual6300 are separate unresolved gates."
+  ],
+  "failed_diagnostic_attempts": "QTabWidget action and Refresh label were refused; correct QTabBar/Refresh Snapshot succeeded. Dialogs closed after each attempt.",
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/receive-cadence-components.tar.gz",
+    "bytes": 40951,
+    "sha256": "425b528561ea7ef330d8cfd54819abf394789141a2a229292cb7620fa4077f82",
+    "verified_members": 8
+  },
+  "compressed_evidence_sha256": "ab996a8bb9b2c87f7a22f2e9712002219c9b0e7063b2ea0d95030d04149cb345"
+}
