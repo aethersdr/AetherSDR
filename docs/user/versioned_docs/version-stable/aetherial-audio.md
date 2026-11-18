@@ -7,8 +7,8 @@ description: "Aetherial Audio is AetherSDR's client-side audio processing."
 Aetherial Audio is AetherSDR's client-side audio processing. It runs on your
 computer, independent of the radio's own DSP, and comes as two windows:
 
-- **AetherTX** — the transmit voice chain: gate, EQ, compressor, split-band
-  de-esser, tube, AetherVoice exciter, reverb and a brickwall limiter.
+- **AetherTX** — the transmit voice chain: RN2 noise reduction, tube preamp,
+  EQ, compressor, AetherVoice exciter, reverb and a brickwall limiter.
   Open it from **Tools → AetherTX...**
 - **AetherRX** — the receive chain: noise reduction, gate, EQ, compressor,
   tube, AetherVoice and an output meter. Open it from
@@ -25,9 +25,19 @@ compact view of both chains (see [Using the docked applet](#using-the-docked-app
 > - Channel-strip presets are retired. The first time you open the new
 >   windows, each saved preset is split once into a TX profile and an RX
 >   profile, so nothing is lost.
-> - The **LIM** final limiter on the transmit Final Output stage is **off by
->   default**, so drive level matches SmartSDR. Turn it on if you relied on it.
+> - The **LIM** final limiter on the transmit Final Output stage is now a true
+>   brickwall with look-ahead, and it is **on by default** at a −0.5 dB ceiling
+>   with 1.5 ms of look-ahead. An installation that has saved a LIM setting
+>   (by changing anything in Final Output or applying a TX profile) keeps it;
+>   one that never did gets the new default. To get the new limiter on an
+>   installation saved with LIM off, turn LIM on in Final Output.
 > - **BYPASS** is remembered across restarts.
+> - AetherTX's **Gate** and **De-esser** are gone. If you had the TX gate on,
+>   **RN2** was switched on for you. An old profile that does not set RN2
+>   itself sets it to match its gate, on or off. A chain order still at the
+>   old default becomes the new one, with **Tube** first; an order you
+>   changed keeps its order without either stage. Old gate and de-esser
+>   settings are ignored.
 > - The compressor's **Drive** and **Phase** are saved in AetherTX profiles.
 
 <img src="/img/screens/aethertx.png" width="720" alt="AetherTX window. The left column lists the transmit chain stages Gate (selected), EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with MIC and TX indicators, REC, PLAY, a settings gear and BYPASS at the bottom. The right side shows the gate's level graph with View (Level, Curve), Mode (Gate, Expander), RN2 and Peek controls, and six knobs: Thresh, Return, Hold, Release, Floor and Ratio." />
@@ -47,6 +57,13 @@ whenever the audio path is wrong:
   applet.
 - On a radio that takes its transmit audio over the network (such as a
   networked Icom), turn on **PC Audio** in the title bar.
+- On a radio that takes its transmit audio from this computer (such as a
+  networked Icom or a Hermes-Lite 2), connect a microphone to the computer
+  when the notice says no audio input device was found. Without one,
+  AetherTX has no input, and a Hermes-Lite 2 transmits no voice at all.
+  CW, TUNE and DAX/TCI are not affected. On a Hermes-Lite 2 (a radio this
+  computer modulates), the first voice transmission in that state also shows
+  the notice on the panadapter. It does not stop the transmission.
 
 While the path is wrong, the docked Aetherial Audio applet replaces its TX
 controls with the same guidance, and AetherTX and the TX stage editors refuse
@@ -94,22 +111,26 @@ conversion takes it to the radio's 24 kHz transport rate, with dither, before
 the one final conversion to 16-bit.
 
 ```
-PC mic → (RN2) → Gate → EQ → De-esser → Compressor → Tube → Exciter → Reverb
+PC mic → (RN2) → Tube → EQ → Compressor → Exciter → Reverb
        → Final Output (Quindar, limiter, meters) → radio
 ```
 
-The middle seven stages are the reorderable chain; the order above is the
-default.
+The middle five stages are the reorderable chain; the order above is the
+default. **RN2** is not a chain stage: when it is on it always runs first,
+ahead of every stage, so the tube and everything after it work on denoised
+audio. Its switch is on the **Tube** page.
+
+AetherTX has no gate or de-esser. RN2 keeps room noise out of your pauses,
+with no threshold to set. To tame sibilance, use a gentle EQ cut around
+5–7 kHz. AetherRX has its own gate.
 
 ### Stages
 
 | Tab | What it does |
 |---|---|
-| **Gate** | Downward expander or noise gate. Also holds the **RN2** microphone noise reducer. |
+| **Tube** | Dynamic tube preamp/saturator. Also holds the **RN2** microphone noise reducer, which runs before it. |
 | **EQ** | Parametric EQ with an optional reference target curve. |
-| **De-esser** | Split-band sibilance control. |
 | **Compressor** | Compressor with Drive/Phase peak-to-average (PAPR) controls and its own brickwall limiter. |
-| **Tube** | Dynamic tube saturator. |
 | **Exciter** | AetherVoice™ harmonic exciter. |
 | **Reverb** | Freeverb room reverb. Off by default. |
 | **Final Output** | Final limiter (**LIM**), DC block, test tone, Quindar tones, output meters with **HOLD**, and a waveform scope. |
@@ -141,7 +162,9 @@ doing.
 
 At the foot of the tab column, **MIC** lights when the PC microphone is
 selected and DAX is off, which means the chain really is in the transmit
-path. **TX** lights while you are transmitting on your own slice.
+path. On a Hermes-Lite 2 (a radio this computer modulates), it also needs an
+audio input device on this computer. **TX** lights while you are transmitting
+on your own slice.
 
 ## Using AetherRX
 
@@ -162,7 +185,7 @@ first; AetherRX adds finishing on top.
 | **Final Output** | Output trim, **MUTE** and **BOOST**, output meter and waveform scope. Always last. |
 
 Gate, EQ, Compressor, Tube and Exciter are the reorderable chain. There is no
-de-esser or reverb on receive.
+reverb on receive.
 
 ### REC / PLAY and TX Playback
 
@@ -242,10 +265,10 @@ compact companion to the two windows:
 
 The ranges below are the knob ranges in the current windows.
 
-### Gate
+### Gate (AetherRX)
 
-Kills room noise, fan rumble and mic hiss in your pauses (TX), or hiss between
-overs (RX).
+Knocks down hiss between overs. AetherTX has no gate: use **RN2** on the Tube
+page.
 
 **Mode:** **Gate** (hard, snaps to 10:1 ratio and −40 dB floor) or
 **Expander** (gentle, snaps to 2:1 and −15 dB). Switching mode changes only
@@ -253,10 +276,6 @@ ratio and floor; every other knob stays where you put it.
 
 **View:** **Level** shows the live level history; **Curve** shows the static
 transfer curve.
-
-**RN2** (AetherTX only): the RNNoise microphone denoiser. It runs ahead of
-every chain stage, so noise is removed before the gate, compressor or tube can
-amplify it. Voice modes only, saved in the profile, and suppressed by BYPASS.
 
 **Peek:** look-ahead, in steps of Off, 1, 1.5, 3 and 5 ms, so the gate opens
 before a transient instead of clipping its start.
@@ -270,18 +289,19 @@ before a transient instead of clipping its start.
 | **Floor** | −80 to 0 dB | Maximum attenuation the gate applies |
 | **Ratio** | 1 to 10 : 1 | Steepness of the expansion |
 
-**Example: SSB voice with room noise.** Start in **Expander**. Set **Thresh**
-just above your noise floor and below your quietest syllables (around
-−35 dB), **Release** about 80 ms, **Hold** about 20 ms so sibilants don't
-stutter, **Floor** −15 dB so the room never goes completely dead, and
-**Return** about 3 dB so the gate doesn't flutter when your voice hovers near
-the threshold. If it pumps audibly, lengthen Release.
+**Example: hiss between overs.** Start in **Expander**. Set **Thresh** just
+above the band noise and below the quietest speech you want to hear, **Release**
+about 80 ms, **Floor** −15 dB so the band never goes completely dead, and
+**Return** about 3 dB so the gate doesn't flutter near the threshold.
 
 ### EQ
 
 A parametric EQ with ten bands by default (high-pass, low shelf, peaking
 bands, high shelf and low-pass), each with frequency, gain and Q. Drag band
 handles on the response curve, or select a band and type values.
+
+In AetherRX, the **OUT** strip below the EQ curve displays the post-EQ level,
+with its numeric readout at the end of the strip.
 
 Toolbar controls:
 
@@ -306,28 +326,6 @@ noise; −3 dB around 200 Hz to cut mud; −2 dB around 500 Hz to scoop
 boxiness; +3 dB at 2 kHz and +2 dB at 3.5 kHz for presence; low-pass at your
 SSB filter width (about 3 kHz). For a bright condenser mic, do the opposite:
 a little low-mid warmth, pull back 2–4 kHz, roll off above 4 kHz.
-
-### De-esser (AetherTX)
-
-Suppresses harsh "sss" and "shh" energy without dulling the rest of the voice.
-It is **split-band**: when the sibilant band crosses the threshold, only that
-band is turned down, so the rest of your voice keeps its level and your
-average power does not drop.
-
-| Control | Range | What it does |
-|---|---|---|
-| **Freq** | 1 to 12 kHz | Center of the sibilant band |
-| **Q** | 0.5 to 5 | Width of the band (higher = narrower) |
-| **Threshold** | −60 to 0 dB | Sidechain level where reduction begins |
-| **Amount** | −24 to 0 dB | Maximum reduction of the sibilant band |
-| **Attack** | 0.1 to 30 ms | How fast reduction engages |
-| **Release** | 10 to 500 ms | How fast it recovers |
-| **Slope button** | 12 / 24 / 36 / 48 dB/oct | Steepness of the sibilant band; click to cycle. Default 24 dB/oct |
-
-**Finding your sibilant frequency:** sweep **Freq** while saying "sister
-silver cellophane" and park where the sibilance is loudest. Start with
-**Amount** around −6 dB and go further only if you still hear harshness. Too
-low a threshold leaves the de-esser working all the time and dulls the voice.
 
 ### Compressor
 
@@ -366,7 +364,14 @@ that suits contests better than rag-chews.
 
 ### Tube
 
-Analog-style saturation for warmth and harmonic color.
+Analog-style saturation for warmth and harmonic color: the mic preamp, first
+in AetherTX's default chain.
+
+**RN2** (AetherTX only): the RNNoise microphone denoiser, at the left of the
+Tube page's toolbar. It runs ahead of the tube and every other stage, so noise
+is removed before anything can amplify it, and it replaces the gate AetherTX
+used to have. Voice modes only, saved in the profile, and switched off by
+BYPASS.
 
 **Model:** **A** (symmetric, neutral warmth), **B** (hard clip into soft
 saturation, edgier) or **C** (asymmetric, even harmonics, warmest).
@@ -429,17 +434,24 @@ The last stage before the radio.
 
 | Control | What it does |
 |---|---|
-| **LIM** | Final brickwall limiter at the end of the TX chain. **Off by default** |
+| **LIM** | Final brickwall limiter at the end of the TX chain: no 48 kHz sample leaves the limiter above the ceiling. **On by default**, ceiling −0.5 dB |
 | **DC** | 25 Hz high-pass that strips DC offset |
 | **TONE** | 1 kHz test tone injected at the head of the chain; right-click for frequency and level |
 | **QUIN** | Quindar tones on PTT engage and release; right-click for the editor (below) |
 | **Trim** | Output gain, −12 to +12 dB |
+| **Look-ahead** | 0 to 5 ms (default 1.5 ms). How far ahead LIM sees a peak coming, so it ramps down in time instead of clamping. It is also the delay LIM adds while it is on; 0 ms is an instant hard limit |
 | **HOLD** | When lit, the **PK / RMS / GR / CRST** readouts latch the worst value since you engaged it. Click again to release |
 
 The horizontal meter shows the input peak, the output peak, gain reduction and
-the limiter ceiling as a draggable handle. **OVR** latches red on a clip and
-clears itself; **LIMIT** lights while the limiter is clamping. The waveform
-scope below the meter shows what you are sending.
+the limiter ceiling as a draggable handle (−12 to 0 dB, default −0.5 dB).
+**OVR** latches red on a clip and clears itself; **LIMIT** lights while the
+limiter is clamping. The waveform scope below the meter shows what you are
+sending.
+
+LIM holds its own 48 kHz output samples under the ceiling. The conversion to
+the radio's 24 kHz rate after it can overshoot that slightly between samples,
+and LIM cannot hold the SSB RF envelope, which can rise a few dB above the
+highest audio sample.
 
 #### Quindar tones
 
@@ -468,9 +480,8 @@ after every change.
 
 | Stage | Setting |
 |---|---|
-| Gate | Expander, Thresh −40, Ratio 2.5, Release 80 ms, Floor −15 |
+| RN2 | On if the room is noisy |
 | EQ | HPF 80, −3 @ 200, +3 @ 2k, +1 @ 3.5k, LPF 3.1k |
-| De-esser | Freq 5k, Q 2, Threshold −25, Amount −6 |
 | Compressor | Ratio 4:1, Attack 25, Release 150, makeup +5, Limiter on at −1 |
 | Tube | Model A, Drive 6, Tone +0.2, Dry/Wet 40 % |
 | Exciter | Even, low Mix 20 %, high Air 6, high Mix 20 % |
@@ -480,9 +491,8 @@ after every change.
 
 | Stage | Setting |
 |---|---|
-| Gate | Expander, Thresh −45, Ratio 2, Release 60 ms |
+| RN2 | On if the room is noisy |
 | EQ | HPF 100, −2 @ 400, −2 @ 3k, +2 @ 5k, LPF 3.1k |
-| De-esser | Freq 7k, Q 2.5, Threshold −22, Amount −8 (condensers are sibilance-heavy) |
 | Compressor | Ratio 3:1, Attack 20, Release 120, makeup +4 |
 | Tube | Model C, Drive 9, Bias 20 %, Dry/Wet 45 % |
 | Exciter | Even, low Mix 15 %, high Mix 10 % |
@@ -492,9 +502,8 @@ after every change.
 
 | Stage | Setting |
 |---|---|
-| Gate | Gate mode, Thresh −35, Release 100 ms |
+| RN2 | On |
 | EQ | HPF 200, +2 @ 500, −3 @ 1k, +5 @ 2.5k |
-| De-esser | Freq 5k, Q 2, Threshold −20, Amount −9 |
 | Compressor | Ratio 8:1, Attack 10, Release 100, makeup +8, Limiter on; try Drive +6 and Phase 4 |
 | Tube | Model B, Drive 12, Dry/Wet 60 % |
 | Exciter | Odd, high Air 12, high Mix 40 % |
@@ -525,6 +534,8 @@ The audio path is wrong. The message names the fix.
 1. On a FlexRadio, set **Microphone source** to **PC** in the **P/CW** applet.
 2. On a radio that takes its transmit audio over the network, turn on
    **PC Audio** in the title bar.
+3. If the message says no audio input device was found, connect a
+   microphone to this computer.
 
 ### The monitor plays silence
 
@@ -545,11 +556,11 @@ You are probably over-processing.
 
 ### Reordering the chain did nothing audible
 
-Order matters most between dynamics stages. Gate before EQ and gate after EQ
-put the noise floor in different places; compressor before tube compresses
-the dry signal, compressor after tube compresses the saturation harmonics.
+Order matters most between dynamics stages: compressor before tube
+compresses the dry signal, compressor after tube compresses the saturation
+harmonics, and EQ before or after the tube changes what it saturates.
 
-1. Move the gate, compressor or tube relative to each other.
+1. Move the compressor, tube or EQ relative to each other.
 2. Record with **REC / PLAY** before and after the change, and compare.
 
 ### BYPASS didn't restore your previous state
