@@ -1,0 +1,69 @@
+{
+  "created_utc": "2026-11-18T04:35:33.961492+00:00",
+  "tested_source_commit": "4d84eda671c1d1809acb381efe7c72c8a145909b",
+  "production_ready": false,
+  "finding": "The exact signed-source Windows retry passed native compilation and unsigned packaging. This supersedes the pending native-build result in WINDOWS-UPLOAD-PORTABILITY-QUALIFICATION.json; both earlier dependency and MSVC macro failures remain preserved.",
+  "workflow": {
+    "run": 44230888697,
+    "url": "https://github.com/aethersdr/AetherSDR/actions/runs/44230888697",
+    "conclusion": "success",
+    "build_job": 134555355437,
+    "package_job": 134574088214,
+    "Store_and_release_jobs": "all skipped",
+    "ref_kind": "feature branch; no signing or publication requested"
+  },
+  "fixed_source": {
+    "path": "src/core/AetherPDInstallUpload.cpp",
+    "sha256": "ad5502d576ccb448f8a9eca727a6fc436498d306c0e83f4e6fa35cf1dff41a14",
+    "change": "Two parenthesized standard-library call names prevent Winsock min/max macro expansion. No protocol, settings or TX behavior change."
+  },
+  "artifacts": [
+    {
+      "id": 14398170024,
+      "name": "Windows-Payload",
+      "size_in_bytes": 167648797,
+      "digest": "sha256:bbf105f6596d3cdcbf09fae5335ddba04cd50d3914e72df31f90911a7b065fa8",
+      "expired": false
+    },
+    {
+      "id": 14397548034,
+      "name": "Windows-Installer",
+      "size_in_bytes": 1113752213,
+      "digest": "sha256:b464751877a8bf5389d0a8d7afdbfb25cf3bd8ba7ae87a4d7cea8091ca668fba",
+      "expired": false
+    },
+    {
+      "id": 14397497296,
+      "name": "Windows-Symbols-archive",
+      "size_in_bytes": 146078470,
+      "digest": "sha256:82879c272664d7e9807e66ef32c4956df89459077e972a9fcfd9ae7314ec152f",
+      "expired": false
+    },
+    {
+      "id": 14396653774,
+      "name": "Windows-Symbols",
+      "size_in_bytes": 269579364,
+      "digest": "sha256:5f74354745f7c472ef3e11fa5bb5c7704a6879abc627901180d09cf6e0691be8",
+      "expired": false
+    }
+  ],
+  "verification_scope": "Native MSVC application build and workflow packaging on4d84eda67; artifact inventory/digests are GitHub metadata only. Windows artifact bytes and native OS-keychain/UI/radio execution were not inspected in this component.",
+  "remaining_scope": [
+    "Actual Windows OS-keychain/UI lifecycle and packaged executable/runtime validation, signed distribution and required merge/review gates remain open.",
+    "Mac builds/artifact checks are separately qualified on40951b0f2; source identities are not conflated.",
+    "Installed control-service recovery policy and firmware-baseline choices, final radio/RF/reboot/stock comparison, actual6300 and full P1-P10 completion remain open."
+  ],
+  "radio_actions": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/windows-native-build-components.tar.gz",
+    "bytes": 20818,
+    "sha256": "163367466c0a1fbdfa75e2a2592fb6706516dcf01288cd1503e4f8b45d0ed057",
+    "verified_members": 5
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/WINDOWS-NATIVE-BUILD-EVIDENCE.json.gz",
+    "sha256": "e2c6edaa536e7ad36fc52224fd4d8883b44b8216f89e6ea92204ef4766b9a175"
+  }
+}
