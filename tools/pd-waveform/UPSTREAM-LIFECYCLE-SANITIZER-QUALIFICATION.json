@@ -1,0 +1,97 @@
+{
+  "recorded_utc": "2026-11-18T08:44:58.347321+00:00",
+  "tested_implementation_commit": "75ab268527293f30e74acee221759adce42087b5",
+  "production_ready": false,
+  "platform": "Linux host, Qt6.12.0, offscreen; injected transports/private test settings.",
+  "tests_passed": 4,
+  "tests": [
+    {
+      "target": "aetherpd_session_test",
+      "instrumented_target_objects": 2,
+      "binary_sha256": "82c9f134f50ab2937ef9a1a240438b02f84343197b02cf13097656014e293961",
+      "ASan_UBSan_dynamic_runtime_linked": true,
+      "host_run_passed_with_leak_detection": true
+    },
+    {
+      "target": "aetherpd_dialog_test",
+      "instrumented_target_objects": 8,
+      "binary_sha256": "2dcdef8965bae742c40818703cbebaf29934b38d3b5818daba3747cf9b3c9d8e",
+      "ASan_UBSan_dynamic_runtime_linked": true,
+      "host_run_passed_with_leak_detection": true
+    },
+    {
+      "target": "flex_receive_path_test",
+      "instrumented_target_objects": 2,
+      "binary_sha256": "f1e5875fd9e89058a3f068b337a28bc65dffabcbd7a6759191e4da2f14a9510e",
+      "ASan_UBSan_dynamic_runtime_linked": true,
+      "host_run_passed_with_leak_detection": true
+    },
+    {
+      "target": "flex_display_observation_test",
+      "instrumented_target_objects": 2,
+      "binary_sha256": "a7c307c667a1ce06a1640e3453d9bf6cd954c4dd8a799a439786096fc965d50b",
+      "ASan_UBSan_dynamic_runtime_linked": true,
+      "host_run_passed_with_leak_detection": true
+    }
+  ],
+  "instrumented_shared_TUs": [
+    "src/core/AetherPDClient.cpp",
+    "src/models/AetherPDModel.cpp",
+    "src/models/AetherPDMeasurementModel.cpp",
+    "src/models/RadioModel_AetherPD.cpp",
+    "src/models/RadioModel_DisplayObservations.cpp",
+    "src/models/RadioModel_ReceiveData.cpp",
+    "src/models/PanadapterModel.cpp",
+    "src/core/backends/flex/FlexReceiveData.cpp",
+    "src/core/backends/flex/FlexBackend_ReceiveData.cpp"
+  ],
+  "instrumented_target_object_counts": {
+    "aetherpd_session_test": 2,
+    "aetherpd_dialog_test": 8,
+    "flex_receive_path_test": 2,
+    "flex_display_observation_test": 2
+  },
+  "initial_failure": "LeakSanitizer could not inspect threads under the sandbox and exited fatally. The exact session binary passed in the host environment with leak detection still enabled. Negative output retained.",
+  "sanitizers": [
+    "AddressSanitizer",
+    "UndefinedBehaviorSanitizer",
+    "LeakSanitizer"
+  ],
+  "scope_limit": "Selected shared and all target-owned TUs are instrumented; Qt, remaining core (including RadioModel.cpp) and support dependencies are uninstrumented. This is not whole-application or on-radio sanitization.",
+  "source_sha256": {
+    "src/core/backends/flex/FlexReceiveData.cpp": "216361f94432c3df3f57a6b468354137de399b008659064f2ecf0991cb214308",
+    "src/core/backends/flex/FlexBackend_ReceiveData.cpp": "a8937edbb4e89618f4c7164b7694b08b0a58081766a76f352a9c236314cd26f1",
+    "src/models/AetherPDMeasurementModel.cpp": "08d2bcfb1151892de3b533cce30d865ef7e7924b44b533b428fa125a03782102",
+    "src/core/AetherPDClient.cpp": "0475dfd2f063e1e24f6977ec0509d6a9ae0410f16d0d9cffe5c01d42cc44f497",
+    "src/models/AetherPDModel.cpp": "5763a7f4217f608b21dc5ef3ec21cf55609c8fc1d4f6926d1e20234b78acbc18",
+    "src/models/RadioModel_ReceiveData.cpp": "49593bdc1d2477cf4e17e433d335b88ea1509fe6afaec08022b134ce7ebbacab",
+    "src/models/RadioModel_AetherPD.cpp": "d2ee2039a3af4618a0e43338369ee2a7bf4939b58553cc56e1f6886906d35b24",
+    "src/models/RadioModel_DisplayObservations.cpp": "d7c3408fbfbc2118aea4439e982cff9dec66917d567685ce1c377d279076cae1",
+    "src/models/PanadapterModel.cpp": "7681513c9c4ceca24f2b2af7bae8aed5b8cd7634d2656e9d1c4e8a342339c7f4",
+    "generated/aetherpd_session_test_autogen/mocs_compilation.cpp": "3a980c470f20620fec75ec0a390d792f1dcc9ba7d99f4ec5fc30ff04b3b16412",
+    "tests/aetherpd_session_test.cpp": "0061a4efa10abb5c50caad4e613f33f6c0ad698c85a80efa27059aed618a7f4e",
+    "generated/aetherpd_dialog_test_autogen/mocs_compilation.cpp": "889a75ca05a169342bd0285656a808b54d5c96ddb1cdb4932d5f99983c9f7acc",
+    "tests/aetherpd_dialog_test.cpp": "22208645029f23c8a9bbba83e8fca094a5baac0992794a515b4ce501f02ff5f8",
+    "src/gui/AetherPDDialog.cpp": "0d4e77ee90f396ba240c2767558d8f8f23a6abd242348980a1e74fba3f188ada",
+    "src/gui/AetherPDMeasurementDialog.cpp": "eee623e2b7a96ee9848557235f7adc2773172d6f064b003799a21febc12b66e9",
+    "src/gui/AetherPDMeasurementSpectrum.cpp": "c705681efdce5c41dfa1e2ff51dc36def2ecbd4af4cd2c8173af63d392a88de3",
+    "src/gui/AetherPDMeasurementExportDialog.cpp": "3953a7b5d488ef8108a785f15ccc27e8ec0841df3248c1b2c8a0c96422bad47d",
+    "src/gui/CanonWindow.cpp": "f857f96517ac5595a20c3d37b70f21bd98352a577e774f6ad59b6939b8e03c87",
+    "generated/build/qrc_resources.cpp": "395aa51dcfcdc037a2135433f565bf221b7e6fab95662b8149a2f3eb9dae89c6",
+    "generated/flex_receive_path_test_autogen/mocs_compilation.cpp": "3a980c470f20620fec75ec0a390d792f1dcc9ba7d99f4ec5fc30ff04b3b16412",
+    "tests/flex_receive_path_test.cpp": "30deb1bef820bea6262dcb22a830fba887e33615463d9f42e70ef7b7294f40af",
+    "generated/flex_display_observation_test_autogen/mocs_compilation.cpp": "3a980c470f20620fec75ec0a390d792f1dcc9ba7d99f4ec5fc30ff04b3b16412",
+    "tests/flex_display_observation_test.cpp": "5a5a0ef1f8f71a2c723f3c2b3c3b18d576a03b093085243689e0871d87cb8b6a"
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/scoped-lifecycle-sanitizer-components.tar.gz",
+    "bytes": 3042364,
+    "sha256": "4ff6b80f06442ee84e40fb22c0674f7f7f0887c787ee203c48cb702d06b69e7e",
+    "verified_members": 39
+  },
+  "compressed_evidence_sha256": "0ce5faaf54a4611faa1debce44b19a8ab30ea3874ee59e906b15a5959255bc7b",
+  "radio_contacts": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "OS_keychain_writes": []
+}

@@ -1,0 +1,103 @@
+{
+  "recorded_utc": "2026-11-18T08:46:29.667388+00:00",
+  "tested_implementation_commit": "75ab268527293f30e74acee221759adce42087b5",
+  "production_ready": false,
+  "native_Windows_build_and_packaging_passed": true,
+  "native_macOS_ARM64_build_and_unsigned_tarball_passed": true,
+  "native_macOS_Intel_build_and_unsigned_tarball_passed": true,
+  "native_backend_and_controlled_window_cases_passed": 87,
+  "per_platform": {
+    "backend": 15,
+    "window": 14
+  },
+  "all_fixture_keys_cleaned_and_ZIP_digests_verified": true,
+  "workflows": {
+    "Windows": {
+      "run": 44256180989,
+      "build_job": 134638306631,
+      "package_job": 134668605758,
+      "conclusion": "success",
+      "Store_flight_production_and_release_jobs": "skipped"
+    },
+    "macOS": {
+      "run": 44256184362,
+      "ARM_build_job": 134638315900,
+      "Intel_build_job": 134638315468,
+      "ARM_tarball_job": 134678647958,
+      "Intel_tarball_job": 134678647996,
+      "conclusion": "success",
+      "signing_and_notarization_job": "skipped"
+    }
+  },
+  "artifacts": [
+    {
+      "artifact_id": 14409995870,
+      "name": "native-enrollment-windows",
+      "sha256": "5f6b36fdf9cf24df38f3a3a23450506ff5bce022c7467dafc9bbc2bae85e61ee",
+      "cases_passed": 14,
+      "all_fixture_entries_cleaned": true,
+      "source_commit": "75ab268527293f30e74acee221759adce42087b5"
+    },
+    {
+      "artifact_id": 14406058519,
+      "name": "native-credential-windows",
+      "sha256": "b514de11ff3ba99f6a4561755ad3bdff479d95f5de1be1b1ae18714f0b0d98c2",
+      "cases_passed": 15,
+      "all_fixture_entries_cleaned": true,
+      "source_commit": "75ab268527293f30e74acee221759adce42087b5"
+    },
+    {
+      "artifact_id": 14411421460,
+      "name": "native-enrollment-macos-intel",
+      "sha256": "fd2cd18141ddad55a9c281849c1697387f158d8adae50ac5e484763ea2ec81cc",
+      "cases_passed": 14,
+      "all_fixture_entries_cleaned": true,
+      "source_commit": "75ab268527293f30e74acee221759adce42087b5"
+    },
+    {
+      "artifact_id": 14409130497,
+      "name": "native-enrollment-macos-apple-silicon",
+      "sha256": "027c87389671ceb5d7a3d0c72d98d82d1ce4b2302d7a99ee59b10ede724336d8",
+      "cases_passed": 14,
+      "all_fixture_entries_cleaned": true,
+      "source_commit": "75ab268527293f30e74acee221759adce42087b5"
+    },
+    {
+      "artifact_id": 14407257050,
+      "name": "native-credential-macos-intel",
+      "sha256": "d46b336f0413c36e99edcf0dd4e08e7547f687bba11bfc03a472446759b498c6",
+      "cases_passed": 15,
+      "all_fixture_entries_cleaned": true,
+      "source_commit": "75ab268527293f30e74acee221759adce42087b5"
+    },
+    {
+      "artifact_id": 14406377767,
+      "name": "native-credential-macos-apple-silicon",
+      "sha256": "1edcf8ea6034ef87244af8aaa8b20975a3c4eaf5932066fb4029e4284ef087da",
+      "cases_passed": 15,
+      "all_fixture_entries_cleaned": true,
+      "source_commit": "75ab268527293f30e74acee221759adce42087b5"
+    }
+  ],
+  "macOS_core_control": "Core-only event loop retains the negative control; actual transactions and controlled windows use Cocoa. This is fixture/event-loop qualification, not a production GUI repair.",
+  "source_sha256": {
+    "tests/native_credential_probe.cpp": "cb67a6aa91feb998baa7f5caeec2d817a3487a90817c4f7b57a48edec2858737",
+    "tests/native_enrollment_probe.cpp": "3406b843f20cd3fb621ab19815f27a25227bfaf450c1f982d0ae48ea51049c56",
+    "tools/qualify_native_credentials.py": "049f251c14d37ab88604bd3011c3ffdbad3ed531f2b624d2276dcc6216dc07f5",
+    "tools/qualify_native_enrollment.py": "cab216c31115043f1e1ace5301c2b7e46a3c8b098fef30aea7f41c83f79835a4",
+    "src/gui/TailnetShimDialog.cpp": "282cd9f2c403fe1ef69248a9120fbd72ea1aee3dcc30d312ed11198dc5662ba9",
+    "src/core/TailnetShimCredentialPersistence.cpp": "bcb127f865e61be959263e49ab4dd8c64895579b24908bd327330f7979418bba",
+    "src/core/TailnetShimTokenStore.cpp": "d675078a8d39c89aa6d5e6e0bb12c3defeecc0282a25da6308b2f11eba7b642f"
+  },
+  "scope": "Actual OS credential persistence and controlled Remote Access window/client lifecycle using disposable identities and injected HTTP. Builds/unsigned packaging also succeeded. No native Windows/Mac radio installation, hardware recovery, actual6300, RF, reboot, independent review or production-release claim.",
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/native-platform87-audit-components.tar.gz",
+    "bytes": 47363,
+    "sha256": "0abeb7c645998e14f63202fc56b722d587b7291d467305febbf6f7fd781a1393",
+    "verified_members": 18
+  },
+  "compressed_evidence_sha256": "d2eccf7baf478227076f7fcf2f8ad9ef1cf49db334d94381c30bd16683c0df59",
+  "radio_contacts": [],
+  "RF_commands": [],
+  "reboot_commands": []
+}
