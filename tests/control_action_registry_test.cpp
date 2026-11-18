@@ -131,14 +131,17 @@ private slots:
             QVERIFY(a);
             QVERIFY2(a->setsTxDrive, id);
             QVERIFY2(!a->keysTx, id);
-            QVERIFY2(ShortcutManager::bridgeRefusesTxDrive(*a, /*allowTx=*/false), id);
-            QVERIFY2(!ShortcutManager::bridgeRefusesTxDrive(*a, /*allowTx=*/true), id);
+            QVERIFY2(ShortcutManager::bridgeRefusesTxDrive(*a, /*allowTx=*/false, false), id);
+            QVERIFY2(!ShortcutManager::bridgeRefusesTxDrive(*a, /*allowTx=*/true, false), id);
+            // A step cannot be bounded: refused while the power ceiling is armed,
+            // with TX permission too.
+            QVERIFY2(ShortcutManager::bridgeRefusesTxDrive(*a, /*allowTx=*/true, true), id);
         }
         for (const char* id : {"mic_level_up", "mic_level_down"}) {
             const auto* a = find(sm, QString::fromLatin1(id));
             QVERIFY(a);
             QVERIFY2(!a->setsTxDrive, id);
-            QVERIFY2(!ShortcutManager::bridgeRefusesTxDrive(*a, /*allowTx=*/false), id);
+            QVERIFY2(!ShortcutManager::bridgeRefusesTxDrive(*a, /*allowTx=*/false, true), id);
         }
         find(sm, "rf_power_up")->handler();
         QCOMPARE(power, 55.0f);

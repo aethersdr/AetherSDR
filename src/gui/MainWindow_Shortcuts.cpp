@@ -1980,10 +1980,11 @@ void MainWindow::registerShortcutActions()
 
 int MainWindow::fireShortcutAction(const QString& id, bool allowTx)
 {
-    return fireShortcutAction(id, allowTx, {});
+    // The meta-object entry does not know the bridge's power ceiling: assume armed.
+    return fireShortcutAction(id, allowTx, /*txCeilingArmed=*/true, {});
 }
 
-int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
+int MainWindow::fireShortcutAction(const QString& id, bool allowTx, bool txCeilingArmed,
                                    const std::shared_ptr<TxController>& controller)
 {
     // Mirrors the MIDI dispatch path (fireShortcut in MainWindow_Controllers.cpp):
@@ -2002,7 +2003,7 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
     if (a->keysTx && !allowTx) {
         return ShortcutFireTxBlocked;
     }
-    if (ShortcutManager::bridgeRefusesTxDrive(*a, allowTx)) {
+    if (ShortcutManager::bridgeRefusesTxDrive(*a, allowTx, txCeilingArmed)) {
         return ShortcutFireTxDriveBlocked;
     }
     if (!a->handler && !a->txHandler) {
@@ -2034,10 +2035,11 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
 {
     Q_UNUSED(allowTx);
     // The meta-object compatibility entry has no trusted producer identity.
-    return injectKeyEventForAutomation(spec, press, false, {});
+    return injectKeyEventForAutomation(spec, press, false, /*txCeilingArmed=*/true, {});
 }
 
 int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,
+                                           bool txCeilingArmed,
                                            const std::shared_ptr<TxController>& controller)
 {
     // Resolve an action id to its CURRENT binding first, so a rebind moves the
@@ -2075,18 +2077,19 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
     if (press && keysTx && (!allowTx || !controller || !controller->valid()))
         return KeyInjectTxBlocked;
     // Drive (RF power) also gates the press only; a release moves nothing.
-    if (press && a && ShortcutManager::bridgeRefusesTxDrive(*a, allowTx))
+    if (press && a && ShortcutManager::bridgeRefusesTxDrive(*a, allowTx, txCeilingArmed))
         return KeyInjectTxDriveBlocked;
     // Any key the slider lease would apply to a focused drive slider, bound or not.
     QWidget* focus = QApplication::focusWidget();
     const bool leased = qobject_cast<QAbstractSlider*>(focus)
         && m_sliderShortcutLease.data() == focus && s_sliderShortcutLeaseActive;
-    if (press && bridgeKeyMovesTxSetpoint(leased ? focus : nullptr, seq[0].key(), allowTx))
+    if (press && bridgeKeyMovesTxSetpoint(leased ? focus : nullptr, seq[0].key(), allowTx,
+                                          txCeilingArmed))
         return KeyInjectTxDriveBlocked;
 
     if (keysTx && a->handler) {
         if (!press) { return KeyInjectOk; }
-        const int result = fireShortcutAction(a->id, allowTx, controller);
+        const int result = fireShortcutAction(a->id, allowTx, txCeilingArmed, controller);
         return result == ShortcutFireTxOk ? KeyInjectTxOk : KeyInjectTxBlocked;
     }
 

@@ -8,10 +8,12 @@ namespace AetherSDR {
 
 // MainWindow::eventFilter's slider keyboard lease sets the leased slider's value
 // from arrows, PageUp/PageDown and Home/End, bound or not. A bridge key press
-// without TX permission must not do that to a drive setpoint (#5851).
-inline bool bridgeKeyMovesTxSetpoint(const QWidget* leasedSlider, int key, bool allowTx)
+// must not do that to a drive setpoint without TX permission (#5851), nor while
+// the power ceiling is armed: End goes to maximum() past any ceiling.
+inline bool bridgeKeyMovesTxSetpoint(const QWidget* leasedSlider, int key, bool allowTx,
+                                     bool txCeilingArmed)
 {
-    if (allowTx || !leasedSlider) {
+    if ((allowTx && !txCeilingArmed) || !leasedSlider) {
         return false;
     }
     switch (key) {

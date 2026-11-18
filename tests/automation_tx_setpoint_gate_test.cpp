@@ -7,6 +7,7 @@
 #include "TestEventLoop.h"
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
+#include "core/ShortcutManager.h"
 #include "core/TxKeyingMarker.h"
 #include "gui/SliderLeaseTxGate.h"
 #include "gui/TxBandDialog.h"
@@ -42,6 +43,8 @@ public:
     {
         return server.handleLine(QJsonDocument(object).toJson(QJsonDocument::Compact), identity);
     }
+    // AETHER_AUTOMATION_TX_MAX_POWER as start() reads it; -1 disarms.
+    static void setTxMaxPower(AutomationServer& server, int ceiling) { server.m_txMaxPower = ceiling; }
 };
 } // namespace AetherSDR
 
@@ -202,7 +205,7 @@ int main(int argc, char** argv)
         QMainWindow window;
         window.show();
         bool permission = true;
-        server.setShortcutAutomationHandler([&](const QString&, bool allowTx,
+        server.setShortcutAutomationHandler([&](const QString&, bool allowTx, bool,
                                                 const std::shared_ptr<TxController>&) {
             permission = allowTx;
             return 5; // MainWindow::ShortcutFireTxDriveBlocked
@@ -216,7 +219,7 @@ int main(int argc, char** argv)
               "shortcut: a drive-blocked result is refused as transmit drive");
         server.setShortcutAutomationHandler({});
 
-        server.setKeyEventAutomationHandler([&](const QString&, bool press, bool allowTx,
+        server.setKeyEventAutomationHandler([&](const QString&, bool press, bool allowTx, bool,
                                                 const std::shared_ptr<TxController>&) {
             permission = allowTx;
             return press ? 6 : 0; // MainWindow::KeyInjectTxDriveBlocked on the press
@@ -230,6 +233,66 @@ int main(int argc, char** argv)
                      QStringLiteral("rf_power_down"))),
               "keyevent: the release is delivered");
         server.setKeyEventAutomationHandler({});
+
+        // TX allowed: the power ceiling still refuses a drive step it cannot
+        // bound. The handlers mirror fireShortcutAction / injectKeyEventForAutomation:
+        // ShortcutManager::bridgeRefusesTxDrive on the ceiling they are handed.
+        ShortcutManager::Action rfUp;
+        rfUp.id = QStringLiteral("rf_power_up");
+        rfUp.setsTxDrive = true;
+        check(ShortcutManager::bridgeRefusesTxDrive(rfUp, /*allowTx=*/true, /*ceiling=*/true),
+              "shortcut gate: TX allowed, ceiling armed: a setsTxDrive action is refused");
+        check(!ShortcutManager::bridgeRefusesTxDrive(rfUp, /*allowTx=*/true, /*ceiling=*/false),
+              "shortcut gate: TX allowed, ceiling off: a setsTxDrive action runs (unchanged)");
+        bool ceilingSeen = false;
+        int fired = 0;
+        server.setShortcutAutomationHandler([&](const QString&, bool allowTx, bool ceiling,
+                                                const std::shared_ptr<TxController>&) {
+            ceilingSeen = ceiling;
+            if (ShortcutManager::bridgeRefusesTxDrive(rfUp, allowTx, ceiling)) { return 5; }
+            ++fired;
+            return 0;
+        });
+        server.setKeyEventAutomationHandler([&](const QString&, bool press, bool allowTx,
+                                                bool ceiling, const std::shared_ptr<TxController>&) {
+            ceilingSeen = ceiling;
+            if (press && ShortcutManager::bridgeRefusesTxDrive(rfUp, allowTx, ceiling)) { return 6; }
+            ++fired;
+            return 0;
+        });
+        const auto shortcut = [&] {
+            return AutomationServerTestAccess::request(server,
+                QJsonObject{{QStringLiteral("cmd"), QStringLiteral("shortcut")},
+                            {QStringLiteral("target"), QStringLiteral("rf_power_up")}});
+        };
+        const auto ceilingBlocked = [](const QJsonObject& r, const QString& target) {
+            return !ok(r) && r.value(QStringLiteral("error")).toString().startsWith(
+                QStringLiteral("blocked: '") + target
+                + QStringLiteral("' would set transmit drive past the power ceiling "
+                                 "(AETHER_AUTOMATION_TX_MAX_POWER=10)"));
+        };
+        server.setTxAllowed(true);
+        AutomationServerTestAccess::setTxMaxPower(server, 10);
+        const QJsonObject armedShortcut = shortcut();
+        check(ceilingSeen && fired == 0 && ceilingBlocked(armedShortcut, QStringLiteral("rf_power_up")),
+              "shortcut: TX allowed, ceiling armed: rf_power_up is refused as past the ceiling");
+        const QJsonObject armedKey = cmd(server, QStringLiteral("keyevent"), {},
+                                         QStringLiteral("press"), QStringLiteral("rf_power_up"));
+        check(ceilingSeen && fired == 0 && ceilingBlocked(armedKey, QStringLiteral("rf_power_up")),
+              "keyevent: TX allowed, ceiling armed: an rf_power_up press is refused");
+        check(ok(cmd(server, QStringLiteral("keyevent"), {}, QStringLiteral("release"),
+                     QStringLiteral("rf_power_up"))),
+              "keyevent: TX allowed, ceiling armed: the release is still delivered");
+        AutomationServerTestAccess::setTxMaxPower(server, -1);
+        fired = 0;
+        check(ok(shortcut()) && !ceilingSeen && fired == 1,
+              "shortcut: TX allowed, ceiling off: rf_power_up fires (unchanged)");
+        check(ok(cmd(server, QStringLiteral("keyevent"), {}, QStringLiteral("press"),
+                     QStringLiteral("rf_power_up"))) && !ceilingSeen && fired == 2,
+              "keyevent: TX allowed, ceiling off: an rf_power_up press is delivered (unchanged)");
+        server.setShortcutAutomationHandler({});
+        server.setKeyEventAutomationHandler({});
+        server.setTxAllowed(false);
     }
 
     // ── An unbound key through the slider keyboard lease (#5851) ───────────
@@ -242,15 +305,20 @@ int main(int argc, char** argv)
         for (const Setpoint& sp : setpoints) {
             bool refused = true;
             bool allowed = true;
+            bool ceiling = true;
             for (const int k : leaseKeys) {
-                refused = refused && bridgeKeyMovesTxSetpoint(sp.slider, k, false);
-                allowed = allowed && !bridgeKeyMovesTxSetpoint(sp.slider, k, true);
+                refused = refused && bridgeKeyMovesTxSetpoint(sp.slider, k, false, false);
+                allowed = allowed && !bridgeKeyMovesTxSetpoint(sp.slider, k, true, false);
+                ceiling = ceiling && bridgeKeyMovesTxSetpoint(sp.slider, k, true, true);
             }
             check(refused, "keyevent lease: arrows, Page and Home/End on a leased "
                                + sp.name.toUtf8() + " are refused without TX permission");
-            check(allowed, "keyevent lease: with TX permission they reach " + sp.name.toUtf8());
-            check(!bridgeKeyMovesTxSetpoint(sp.slider, Qt::Key_M, false)
-                      && !bridgeKeyMovesTxSetpoint(sp.slider, Qt::Key_Return, false),
+            check(allowed, "keyevent lease: TX allowed, ceiling off: they reach "
+                               + sp.name.toUtf8() + " (unchanged)");
+            check(ceiling, "keyevent lease: TX allowed, ceiling armed: they are refused on "
+                               + sp.name.toUtf8() + " (End would jump to maximum)");
+            check(!bridgeKeyMovesTxSetpoint(sp.slider, Qt::Key_M, false, true)
+                      && !bridgeKeyMovesTxSetpoint(sp.slider, Qt::Key_Return, true, true),
                   "keyevent lease: a key the lease does not apply is not refused on "
                       + sp.name.toUtf8());
         }
@@ -258,10 +326,11 @@ int main(int argc, char** argv)
         markTxSetpoint(&marked);
         QSlider inner(&marked);
         QSlider plain;
-        check(bridgeKeyMovesTxSetpoint(&inner, Qt::Key_End, false),
+        check(bridgeKeyMovesTxSetpoint(&inner, Qt::Key_End, false, false)
+                  && bridgeKeyMovesTxSetpoint(&inner, Qt::Key_End, true, true),
               "keyevent lease: a slider inside a marked drive control is refused");
-        check(!bridgeKeyMovesTxSetpoint(&plain, Qt::Key_End, false)
-                  && !bridgeKeyMovesTxSetpoint(nullptr, Qt::Key_End, false),
+        check(!bridgeKeyMovesTxSetpoint(&plain, Qt::Key_End, false, true)
+                  && !bridgeKeyMovesTxSetpoint(nullptr, Qt::Key_End, false, true),
               "keyevent lease: an unmarked slider, or no lease, is not refused");
 
         // MainWindow cannot be built here without binding its discovery socket,
@@ -274,6 +343,9 @@ int main(int argc, char** argv)
         const qsizetype send = text.indexOf(QStringLiteral("QApplication::sendEvent(this, &ev);"), fn);
         check(fn >= 0 && gate > fn && send > gate,
               "keyevent lease: injectKeyEventForAutomation checks the lease before it sends the key");
+        const qsizetype gateEnd = text.indexOf(QLatin1Char(')'), text.indexOf(QLatin1Char(')'), gate) + 1);
+        check(gate > fn && text.mid(gate, gateEnd - gate).contains(QStringLiteral("txCeilingArmed")),
+              "keyevent lease: the lease check is handed the bridge's power ceiling");
     }
 
     // ── `tci send` of a drive SET (#5851) ──────────────────────────────────
@@ -299,6 +371,36 @@ int main(int argc, char** argv)
         check(!driveBlocked(tciSend(QStringLiteral("drive:0;")))
                   && !driveBlocked(tciSend(QStringLiteral("tune_drive;"))),
               "TX not allowed: tci send drive/tune_drive reads are not refused");
+
+        // TX allowed, ceiling armed: a SET above it is refused, at or below it
+        // passes the gate (and then needs a connected simulator).
+        const auto ceilingBlocked = [](const QJsonObject& r) {
+            return !ok(r) && r.value(QStringLiteral("error")).toString()
+                                 .contains(QStringLiteral("past the power ceiling"));
+        };
+        server.setTxAllowed(true);
+        AutomationServerTestAccess::setTxMaxPower(server, 10);
+        const QJsonObject over = tciSend(QStringLiteral("drive:0,50;"));
+        check(ceilingBlocked(over) && over.value(QStringLiteral("error")).toString().startsWith(
+                  QStringLiteral("blocked: 'tci send drive:0,50' would set transmit drive past "
+                                 "the power ceiling (AETHER_AUTOMATION_TX_MAX_POWER=10)")),
+              "TX allowed, ceiling 10: tci send drive:0,50 is refused as past the ceiling");
+        check(ceilingBlocked(tciSend(QStringLiteral("tune_drive:0,11"))),
+              "TX allowed, ceiling 10: tci send tune_drive:0,11 is refused");
+        check(ceilingBlocked(tciSend(QStringLiteral("vfo:0,0,14074000; drive:0,90;"))),
+              "TX allowed, ceiling 10: a drive SET later in the payload is refused");
+        check(ceilingBlocked(tciSend(QStringLiteral("drive:0,5,5;")))
+                  && ceilingBlocked(tciSend(QStringLiteral("drive:0,x;"))),
+              "TX allowed, ceiling 10: a drive SET the ceiling cannot read is refused");
+        check(!ceilingBlocked(tciSend(QStringLiteral("drive:0,10;")))
+                  && !ceilingBlocked(tciSend(QStringLiteral("tune_drive:0,3;")))
+                  && !ceilingBlocked(tciSend(QStringLiteral("drive:0;"))),
+              "TX allowed, ceiling 10: a SET at or below it, and a read, pass the gate");
+        AutomationServerTestAccess::setTxMaxPower(server, -1);
+        check(!ceilingBlocked(tciSend(QStringLiteral("drive:0,50;")))
+                  && !driveBlocked(tciSend(QStringLiteral("drive:0,50;"))),
+              "TX allowed, ceiling off: tci send drive:0,50 passes the gate (unchanged)");
+        server.setTxAllowed(false);
     } else {
         std::printf("[SKIP] tci send drive gate: TCI not built (HAVE_WEBSOCKETS off)\n");
     }
@@ -351,6 +453,40 @@ int main(int argc, char** argv)
         if (rf) { emit rf->editingFinished(); }
         check(backend->commands == QStringList{QStringLiteral("transmit bandset 9 rfpower=41")},
               "TX allowed: the committed edit is sent as the band's RF power");
+        backend->replyLast({RadioSetupReply::Kind::Accepted, 0, {}});
+
+        // TX allowed, ceiling armed: the edits are clamped like the sliders,
+        // keyed on the marker although neither name is "RF power"/"Tune power".
+        AutomationServerTestAccess::setTxMaxPower(server, 10);
+        const QStringList fields{QStringLiteral("rfpower"), QStringLiteral("tunepower")};
+        for (int i = 0; i < 2; ++i) {
+            const QByteArray n = names[i].toUtf8();
+            QLineEdit* edit = nullptr;
+            for (auto* e : dialog.findChildren<QLineEdit*>()) {
+                if (e->accessibleName() == names[i]) { edit = e; }
+            }
+            if (!edit) { continue; }
+            backend->commands.clear();
+            const QJsonObject set = cmd(server, QStringLiteral("invoke"), names[i],
+                                        QStringLiteral("setText"), QStringLiteral("100"));
+            check(ok(set) && edit->text() == QStringLiteral("10"),
+                  "TX allowed, ceiling 10: invoke setText 100 on " + n + " is clamped to 10 (now "
+                      + edit->text().toUtf8() + ")");
+            emit edit->editingFinished();
+            check(backend->commands
+                      == QStringList{QStringLiteral("transmit bandset 9 ") + fields[i]
+                                     + QStringLiteral("=10")},
+                  "TX allowed, ceiling 10: the committed " + n + " edit reaches the radio as 10");
+            backend->replyLast({RadioSetupReply::Kind::Accepted, 0, {}});
+            check(!ok(cmd(server, QStringLiteral("clickAt"), names[i], {}, QStringLiteral("5 5"))),
+                  "TX allowed, ceiling 10: clickAt on " + n + " is refused");
+        }
+        AutomationServerTestAccess::setTxMaxPower(server, -1);
+        backend->commands.clear();
+        check(rf && ok(cmd(server, QStringLiteral("invoke"), names[0], QStringLiteral("setText"),
+                           QStringLiteral("60")))
+                  && rf->text() == QStringLiteral("60"),
+              "TX allowed, ceiling off: invoke setText 60 on the band RF power edit is not clamped");
         server.setTxAllowed(false);
     }
 
@@ -373,6 +509,25 @@ int main(int argc, char** argv)
         check(!driveBlocked(tciSend(QStringLiteral("drive:0,100;"))),
               "TX allowed: tci send drive:0,100 is not refused as transmit drive");
     }
+
+    // TX allowed, ceiling armed: invoke setValue still clamps the sliders and
+    // a wheel notch, which has no target value, is refused.
+    AutomationServerTestAccess::setTxMaxPower(server, 10);
+    for (const Setpoint& sp : setpoints) {
+        const QByteArray n = sp.name.toUtf8();
+        check(ok(cmd(server, QStringLiteral("invoke"), sp.name, QStringLiteral("setValue"),
+                     QStringLiteral("50")))
+                  && AetherTest::waitFor([&] { return sp.model() == 10; }, 2000),
+              "TX allowed, ceiling 10: invoke setValue 50 on " + n + " is clamped to 10");
+        const QJsonObject wheel = cmd(server, QStringLiteral("invoke"), sp.name,
+                                      QStringLiteral("wheel"), QStringLiteral("1"));
+        AetherTest::pumpFor(50);
+        check(!ok(wheel) && wheel.value(QStringLiteral("error")).toString()
+                                .contains(QStringLiteral("past the power ceiling"))
+                  && sp.model() == 10,
+              "TX allowed, ceiling 10: invoke wheel on " + n + " is refused");
+    }
+    AutomationServerTestAccess::setTxMaxPower(server, -1);
 
     // ── A gesture begun with permission stops when permission is withdrawn ──
     {

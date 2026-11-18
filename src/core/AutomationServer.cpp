@@ -1498,7 +1498,38 @@ QString tciDriveSetCommand(const QString& payload)
     }
     return {};
 }
+
+// The first `drive:` / `tune_drive:` SET in `payload` whose power is above
+// `ceiling`, or that is not a plain `trx,power` pair the ceiling can be checked
+// against (TciProtocol::cmdDrive sets only on exactly two arguments), or empty.
+QString tciDriveSetAboveCeiling(const QString& payload, int ceiling)
+{
+    for (const QString& part : payload.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        if (tciDriveSetCommand(part).isEmpty()) {
+            continue;
+        }
+        const QStringList args = part.mid(part.indexOf(QLatin1Char(':')) + 1)
+                                     .split(QLatin1Char(','), Qt::KeepEmptyParts);
+        bool okPower = false;
+        const int power = args.size() == 2 ? args.at(1).trimmed().toInt(&okPower) : 0;
+        if (!okPower || power > ceiling) {
+            return part.trimmed();
+        }
+    }
+    return {};
+}
 #endif
+
+// A route that sets transmit drive by an amount the bridge cannot bound, or
+// above the bound, while AETHER_AUTOMATION_TX_MAX_POWER is armed (#5851).
+QString txCeilingBlockedError(const QString& target, int ceiling)
+{
+    return QStringLiteral("blocked: '") + target
+        + QStringLiteral("' would set transmit drive past the power ceiling "
+                         "(AETHER_AUTOMATION_TX_MAX_POWER=%1). Use `invoke 'RF power' "
+                         "setValue <n>` or `transmit rfpower <n>`, which clamp.")
+              .arg(ceiling);
+}
 
 QString txSetpointBlockedError(const QString& target)
 {
@@ -4667,19 +4698,26 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         return err(txSetpointBlockedError(target));
     }
 
-    // Power-ceiling rail (#3646): clamp RF/Tune power setpoints to the
-    // configured max (AETHER_AUTOMATION_TX_MAX_POWER) so automation can't
-    // command more power than the connected load can take.
+    // Power-ceiling rail (#3646): clamp every TX setpoint (RF/Tune power, the
+    // per-band power edits) to AETHER_AUTOMATION_TX_MAX_POWER so automation
+    // can't command more power than the connected load can take. Keyed off the
+    // marker, not the name, so a renamed or translated setpoint stays bounded
+    // (#5851). A wheel notch has no target value to clamp: refused while armed.
     QString effValue = value;
-    if (m_txMaxPower >= 0 && action == QLatin1String("setValue")) {
-        const QString an = w->accessibleName();
-        if (an == QLatin1String("RF power") || an == QLatin1String("Tune power")) {
+    if (m_txMaxPower >= 0 && isTxSetpointControl(w)) {
+        if (action == QLatin1String("wheel")) {
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED wheel on TX setpoint" << target << "— power ceiling armed";
+            return err(txCeilingBlockedError(target, m_txMaxPower));
+        }
+        if (action == QLatin1String("setValue") || action == QLatin1String("setText")
+            || action == QLatin1String("editText") || action == QLatin1String("submit")) {
             bool okN = false;
             const int n = value.toInt(&okN);
             if (okN && n > m_txMaxPower) {
                 effValue = QString::number(m_txMaxPower);
                 qCWarning(lcAutomation).noquote()
-                    << "power ceiling: clamped" << an << n << "->" << m_txMaxPower;
+                    << "power ceiling: clamped" << target << n << "->" << m_txMaxPower;
             }
         }
     }
@@ -4746,7 +4784,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         QCoreApplication::sendEvent(w, &ev);
         done = true;
     } else if (action == QLatin1String("setText")) {
-        if (auto* le = qobject_cast<QLineEdit*>(w)) { le->setText(value); done = true; }
+        if (auto* le = qobject_cast<QLineEdit*>(w)) { le->setText(effValue); done = true; }
     } else if (action == QLatin1String("editText") || action == QLatin1String("commit")) {
         auto* le = qobject_cast<QLineEdit*>(w);
         if (!le || !le->property("aetherAutomationEditCommit").toBool()) {
@@ -4758,11 +4796,11 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         if (action == QLatin1String("editText")) {
             // setText resets modified; only an actual edit arms the owner's
             // editingFinished handler. Empty text is a supported edit.
-            if (le->text() != value) {
+            if (le->text() != effValue) {
                 const QPointer<QLineEdit> edit(le);
                 const QString previous = le->text();
                 const bool modified = le->isModified();
-                le->setText(value);
+                le->setText(effValue);
                 if (!edit) {
                     return err(QStringLiteral("field was destroyed during edit"));
                 }
@@ -4799,7 +4837,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         // cluster command) attach irreversible actions to returnPressed; commit
         // must be an explicit, opt-in verb. (#3646 fidelity — item 6)
         if (auto* le = qobject_cast<QLineEdit*>(w)) {
-            if (!value.isEmpty()) le->setText(value);
+            if (!value.isEmpty()) le->setText(effValue);
             emit le->returnPressed();
             done = true;
         }
@@ -9937,11 +9975,12 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
     }
 
     const bool allowTx = m_txAllowed;
+    const bool txCeilingArmed = m_txMaxPower >= 0;
     int result = -1;
     bool invoked = false;
     if (m_shortcutAutomationHandler) {
         const auto handler = m_shortcutAutomationHandler;
-        result = handler(id, allowTx, txController());
+        result = handler(id, allowTx, txCeilingArmed, txController());
         invoked = true;
     } else {
         // An unconfigured host can still expose non-TX diagnostic shortcuts,
@@ -9975,7 +10014,8 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
     case 5:  // ShortcutFireTxDriveBlocked
         qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint shortcut" << id;
-        return err(txSetpointBlockedError(id));
+        return err(allowTx ? txCeilingBlockedError(id, m_txMaxPower)
+                           : txSetpointBlockedError(id));
     default:
         return err(QStringLiteral("unexpected fireShortcutAction result for '")
                    + id + QStringLiteral("'"));
@@ -10031,7 +10071,7 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
     bool invoked = false;
     if (m_keyEventAutomationHandler) {
         const auto handler = m_keyEventAutomationHandler;
-        result = handler(spec, press, m_txAllowed, txController());
+        result = handler(spec, press, m_txAllowed, m_txMaxPower >= 0, txController());
         invoked = true;
     } else {
         invoked = QMetaObject::invokeMethod(
@@ -10068,7 +10108,8 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
     case 6:  // KeyInjectTxDriveBlocked
         qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint key press" << spec;
-        return err(txSetpointBlockedError(spec));
+        return err(m_txAllowed ? txCeilingBlockedError(spec, m_txMaxPower)
+                               : txSetpointBlockedError(spec));
     case 3:  // KeyInjectNotConsumed — delivered, but the momentary handler's own
              // gates (shortcuts disabled, text entry focused, radio disconnected)
              // declined it. A real result, not an error: report it.
@@ -10361,12 +10402,8 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
     }
 
     if (m_txMaxPower >= 0) {
-        for (const QWidget* parent = widget; parent; parent = parent->parentWidget()) {
-            const QString accessibleName = parent->accessibleName();
-            if (accessibleName != QLatin1String("RF power")
-                && accessibleName != QLatin1String("Tune power")) {
-                continue;
-            }
+        if (const QWidget* setpoint = txSetpointInChain(widget)) {
+            const QString accessibleName = setpoint->accessibleName();
             qCWarning(lcAutomation).noquote()
                 << "BLOCKED" << verb << "on power slider" << accessibleName
                 << "— power ceiling" << m_txMaxPower << "is armed";
@@ -11528,20 +11565,17 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     // the rail is armed, refuse the click and point at the clamped path instead
     // of letting a coordinate click walk power past the configured ceiling.
     if (m_txMaxPower >= 0) {
-        for (const QWidget* p = w; p; p = p->parentWidget()) {
-            const QString an = p->accessibleName();
-            if (an == QLatin1String("RF power")
-                || an == QLatin1String("Tune power")) {
-                qCWarning(lcAutomation).noquote()
-                    << "BLOCKED clickAt on power slider" << an
-                    << "— power ceiling" << m_txMaxPower
-                    << "is armed; use invoke setValue (clamped)";
-                return err(QStringLiteral("blocked: '") + an
-                           + QStringLiteral("' click would bypass the power "
-                                            "ceiling (AETHER_AUTOMATION_TX_MAX_"
-                                            "POWER). Use `invoke '") + an
-                           + QStringLiteral("' setValue <n>`, which clamps."));
-            }
+        if (const QWidget* setpoint = txSetpointInChain(w)) {
+            const QString an = setpoint->accessibleName();
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED clickAt on TX setpoint" << an
+                << "— power ceiling" << m_txMaxPower
+                << "is armed; use invoke setValue (clamped)";
+            return err(QStringLiteral("blocked: '") + an
+                       + QStringLiteral("' click would bypass the power "
+                                        "ceiling (AETHER_AUTOMATION_TX_MAX_"
+                                        "POWER). Use `invoke '") + an
+                       + QStringLiteral("' setValue <n>`, which clamps."));
         }
     }
 
@@ -12584,6 +12618,16 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
             if (const QString set = tciDriveSetCommand(command); !set.isEmpty()) {
                 qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint tci send" << set;
                 return err(txSetpointBlockedError(QStringLiteral("tci send ") + set));
+            }
+        }
+        // With permission too: the payload is sent as written, so a SET above
+        // the armed ceiling is refused rather than rewritten (#5851).
+        if (m_txMaxPower >= 0) {
+            if (const QString set = tciDriveSetAboveCeiling(command, m_txMaxPower);
+                !set.isEmpty()) {
+                qCWarning(lcAutomation).noquote()
+                    << "BLOCKED tci send" << set << "— power ceiling" << m_txMaxPower;
+                return err(txCeilingBlockedError(QStringLiteral("tci send ") + set, m_txMaxPower));
             }
         }
         TciSimClient* sim = tciSimById(simId);

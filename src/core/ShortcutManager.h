@@ -393,8 +393,9 @@ public:
                                   // Monitor hold); the only actions a sided
                                   // key can trigger (#7354)
         bool setsTxDrive{false};  // sets transmit drive but never keys (RF
-                                  // power): the bridge needs TX permission,
-                                  // the operator's keyboard does not (#5851)
+                                  // power): the bridge needs TX permission and
+                                  // no armed power ceiling, the operator's
+                                  // keyboard needs neither (#5851)
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);
@@ -414,11 +415,13 @@ public:
     void clearBinding(const QString& actionId);
     void markHoldKeyAction(const QString& actionId);
     void markTxDriveAction(const QString& actionId);
-    // True when the automation bridge must refuse `action` for lack of TX
-    // permission because it sets transmit drive, as `transmit rfpower` does.
-    static bool bridgeRefusesTxDrive(const Action& action, bool allowTx)
+    // True when the automation bridge must refuse `action` because it sets
+    // transmit drive: without TX permission, as `transmit rfpower` refuses, and
+    // while the power ceiling (AETHER_AUTOMATION_TX_MAX_POWER) is armed, which
+    // a step of unknown size cannot respect.
+    static bool bridgeRefusesTxDrive(const Action& action, bool allowTx, bool txCeilingArmed)
     {
-        return action.setsTxDrive && !allowTx;
+        return action.setsTxDrive && (!allowTx || txCeilingArmed);
     }
     // Why `key` cannot trigger `action`, or empty when it can. A sided key
     // reaches only the momentary handlers, bare (#7354).

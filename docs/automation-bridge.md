@@ -775,6 +775,17 @@ popup at a time and only while it is open; an empty combo is refused up front
 > ATU cycle can have its own drive policy. Hardware-in-the-loop tests need a
 > separate authorized watt ceiling and a fresh calibrated forward-power
 > watchdog. See [`docs/automation/TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
+>
+> The ceiling holds whenever it is armed, **with TX permission too**, on every
+> `markTxSetpoint()` control (the RF/Tune power sliders and the TX Band Settings
+> per-band RF/Tune power edits), keyed on the marker rather than the name
+> (#5851). Where the bridge knows the target value it clamps (`invoke` `setValue`,
+> `setText`, `editText`, `submit`; `transmit rfpower|tunepower`); `tci send` sends
+> its payload as written, so a `drive:`/`tune_drive:` SET above the ceiling is
+> refused instead. Where it does not know the value it refuses while armed:
+> pointer input on a setpoint, `invoke … wheel`, the `rf_power_up` /
+> `rf_power_down` shortcuts through `shortcut` and `keyevent`, and a `keyevent`
+> lease key (arrows, Page, Home/End) on a focused power slider.
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -2554,9 +2565,10 @@ The click is **TX-guarded** like `invoke`, but stricter: the guard walks the
 **whole ancestor chain** of the widget under the point (Qt propagates an
 unaccepted press to parents, so a click on a passive child of a keying control
 must be refused too) and is refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — a
-coordinate click is never a hole around the keying gate. Clicks on the RF/Tune
-power sliders are refused while `AETHER_AUTOMATION_TX_MAX_POWER` is armed (a
-groove click can't be clamped — use `invoke … setValue`, which is). A disabled
+coordinate click is never a hole around the keying gate. Clicks on a TX setpoint
+(`markTxSetpoint()`: the RF/Tune power sliders, the per-band power edits) are
+refused while `AETHER_AUTOMATION_TX_MAX_POWER` is armed (a groove click can't be
+clamped — use `invoke … setValue`, which is). A disabled
 widget under the point is refused (`"disabled":true`), same as `invoke`.
 
 Delivery is deferred one main-loop turn (`"deferred":true`), so any popup/dialog
@@ -3628,7 +3640,10 @@ needed).
 Without TX permission, `send` refuses a payload that sets drive
 (`drive:<trx>,<value>` or `tune_drive:<trx>,<value>`) with the
 `sets transmit drive` error of [`transmit rfpower`](#transmit) (#5851); the
-read forms (`drive:0;`) stay open. External TCI clients are not affected.
+read forms (`drive:0;`) stay open. With permission, while
+`AETHER_AUTOMATION_TX_MAX_POWER` is armed, a SET above the ceiling (or one whose
+value cannot be read as `trx,power`) is refused; at or below it, it is sent.
+External TCI clients are not affected.
 
 ```json
 → {"cmd":"tci","action":"start"}            // optional value = port
@@ -4956,7 +4971,7 @@ it cannot be probed with nonsense.
 
 The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
 ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
-accessible name, so a verb reaching `TransmitModel` directly would otherwise inherit
+`markTxSetpoint()` marker, so a verb reaching `TransmitModel` directly would otherwise inherit
 no bound at all — on the surface most likely to be feeding a transverter or an
 amplifier. When a request is clamped the reply says so rather than quietly honouring
 a different number than was asked for.
