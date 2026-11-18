@@ -111,6 +111,22 @@ def qualify(binary, receipt):
     atomic_json(receipt, result)
     with tempfile.TemporaryDirectory(prefix="aetherpd-native-credentials-") as temporary:
         directory = Path(temporary)
+        if platform.system() == "Darwin":
+            # Read-only negative control: the original core-only loop times out;
+            # the following cases must complete with the native GUI event loop.
+            control = Child(binary, "core-loop-absent", "aetherpd-native-credential-" + uuid.uuid4().hex,
+                            "", directory, None)
+            try:
+                result["macos_core_loop_control"] = control.finish(expected=3)
+                require(control.output == ["deadline"], "core-only control did not reproduce callback starvation")
+                require(any("QEventDispatcherUNIX" in line for line in control.errors), "unexpected core-only dispatcher")
+                atomic_json(receipt, result)
+            except Exception as error:
+                result["macos_core_loop_control_failure"] = str(error)
+                atomic_json(receipt, result)
+                raise
+            finally:
+                control.close()
         for kind in CASES:
             case = {"kind": kind, "identifier": "aetherpd-native-credential-" + uuid.uuid4().hex,
                     "operations": [], "cleanup": []}

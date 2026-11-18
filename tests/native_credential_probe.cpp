@@ -1,11 +1,17 @@
 #include "core/TailnetShimCredentialPersistence.h"
 #include "core/TailnetShimTokenStore.h"
 
+#include <QAbstractEventDispatcher>
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QFile>
 #include <QRegularExpression>
 #include <QTimer>
 #include <qt6keychain/keychain.h>
+
+#ifdef Q_OS_MACOS
+#include <QGuiApplication>
+#endif
 
 #include <cstdio>
 #include <functional>
@@ -25,8 +31,21 @@ void report(const char* message)
 
 int main(int argc, char** argv)
 {
+#ifdef Q_OS_MACOS
+    // QtKeychain's Apple callbacks require the Cocoa main loop, as in its testclient.
+    std::unique_ptr<QCoreApplication> application;
+    if (argc == 5 && QByteArray(argv[1]) == "core-loop-absent") {
+        application = std::make_unique<QCoreApplication>(argc, argv);
+    } else {
+        application = std::make_unique<QGuiApplication>(argc, argv);
+    }
+    QCoreApplication& app = *application;
+#else
     QCoreApplication app(argc, argv);
+#endif
     app.setApplicationName(QStringLiteral("AetherSDR-native-credential-probe"));
+    std::fprintf(stderr, "qt_version=%s event_dispatcher=%s\n", qVersion(),
+                 QCoreApplication::eventDispatcher()->metaObject()->className());
     if (argc != 5) { return 2; }
     const QString mode = QString::fromLocal8Bit(argv[1]);
     const QString id = QString::fromLocal8Bit(argv[2]);
@@ -81,14 +100,14 @@ int main(int argc, char** argv)
             if (mode == u"pending-write") { read(); }
         } else if (mode == u"read") {
             TailnetShimTokenStore::load(id, &app, [finish, value](const QString& token) { finish(token == value); });
-        } else if (mode == u"raw-read" || mode == u"raw-metadata"
+        } else if (mode == u"raw-read" || mode == u"raw-metadata" || mode == u"core-loop-absent"
                    || mode == u"absent" || mode == u"absent-metadata") {
             auto* job = new QKeychain::ReadPasswordJob(QStringLiteral("AetherSDR"), &app);
             job->setKey(mode == u"raw-metadata" || mode == u"absent-metadata" ? Persistence::versionKey(key) : key);
             job->setAutoDelete(true);
             job->setInsecureFallback(false);
             QObject::connect(job, &QKeychain::Job::finished, &app, [job, mode, value, finish](QKeychain::Job*) {
-                if (mode == u"absent" || mode == u"absent-metadata") {
+                if (mode == u"absent" || mode == u"absent-metadata" || mode == u"core-loop-absent") {
                     finish(job->error() == QKeychain::EntryNotFound);
                 } else if (mode == u"raw-read") {
                     finish(job->error() == QKeychain::NoError && job->textData() == value);

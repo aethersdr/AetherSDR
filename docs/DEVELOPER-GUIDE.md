@@ -48,6 +48,9 @@ insecure fallback or reads an existing radio's credential. It checks absence
 before writing randomly named fixture entries, exercises separate processes,
 and removes its primary and version entries before confirming their absence.
 Each run writes a new JSON receipt; do not treat compilation as runtime proof.
+On macOS the probe uses the native GUI event loop required by QtKeychain's
+Apple callbacks. A read-only core-event-loop control first reproduces the
+callback timeout; the real transaction cases must then complete normally.
 An externally terminated runner can leave its named fixture entries behind;
 the receipt records their identifiers for bounded cleanup using the same
 probe's `cleanup` mode, never keychain-wide deletion.

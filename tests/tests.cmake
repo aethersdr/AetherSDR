@@ -5233,6 +5233,9 @@ if(AETHER_NATIVE_CREDENTIAL_QUALIFICATION)
     target_include_directories(native_credential_probe PRIVATE src)
     target_compile_definitions(native_credential_probe PRIVATE HAVE_KEYCHAIN)
     target_link_libraries(native_credential_probe PRIVATE Qt6::Core Qt6Keychain::Qt6Keychain)
+    if(APPLE)
+        target_link_libraries(native_credential_probe PRIVATE Qt6::Gui "-framework Cocoa")
+    endif()
     add_test(NAME native_credential_qualification
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/qualify_native_credentials.py
             --binary $<TARGET_FILE:native_credential_probe>
