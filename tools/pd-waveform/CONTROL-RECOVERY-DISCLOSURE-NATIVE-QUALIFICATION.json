@@ -1,0 +1,148 @@
+{
+  "recorded_utc": "2026-11-18T14:36:47.248649+00:00",
+  "tested_implementation_commit": "106057ccf6c56bd26e4183386c9987117e2c314d",
+  "status": "Windows x64 and macOS Intel/ARM64 native builds, packaging and archive inspections passed",
+  "production_ready": false,
+  "runs": [
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "databaseId": 44308017639,
+      "headSha": "106057ccf6c56bd26e4183386c9987117e2c314d",
+      "status": "completed",
+      "url": "https://github.com/aethersdr/AetherSDR/actions/runs/44308017639"
+    },
+    {
+      "attempt": 2,
+      "conclusion": "success",
+      "databaseId": 44308022731,
+      "headSha": "106057ccf6c56bd26e4183386c9987117e2c314d",
+      "status": "completed",
+      "url": "https://github.com/aethersdr/AetherSDR/actions/runs/44308022731"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact_id": 14434800133,
+      "file": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-106057ccf/Windows-Installer-14434800133.zip",
+      "bytes": 1132489080,
+      "sha256": "fbf2f83105281162f652f972e45a569c131b88c4cc7438d3510bd1de4111f393"
+    },
+    {
+      "artifact_id": 14432791431,
+      "file": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-106057ccf/macOS-unsigned-intel-14432791431.zip",
+      "bytes": 322405183,
+      "sha256": "22a4a59b98614e0ca213b4464c53e30d526f339bcfbab91a300c9b6b03b80b5d"
+    },
+    {
+      "artifact_id": 14434223524,
+      "file": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-106057ccf/macOS-unsigned-arm64-14434223524.zip",
+      "bytes": 344916241,
+      "sha256": "2a42efda365cbca9501b96d420a70b17f1bdf9deff9ca36c6910b53cde4170fa"
+    },
+    {
+      "artifact_id": 14436050534,
+      "file": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-106057ccf/macOS-update-arm64-14436050534.zip",
+      "bytes": 119918647,
+      "sha256": "c7b6ec5a28dd6fed1ba2dad5c3389e12019a868732a91e462f9d468f4c6eea60"
+    },
+    {
+      "artifact_id": 14435801666,
+      "file": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-106057ccf/macOS-update-intel-14435801666.zip",
+      "bytes": 105778923,
+      "sha256": "abbe966f34f4bbb4680bb31959f9ed4928a60b8f46cdc307284395919f95f8f9"
+    }
+  ],
+  "Windows": {
+    "native_build_passed": true,
+    "package_job_passed": true,
+    "portable_and_MSIX_executables_identical": true,
+    "MSIX_upload_package_and_symbols_identical": true,
+    "application_sha256": "5b1c7ef3c6127f8cf326d1ddabeea6f011034fcbd5572dee3dda53db862af2b3",
+    "MSIX_identity": {
+      "Name": "AetherSDR.AetherSDR",
+      "Publisher": "CN=E03F94A2-AEAB-46D2-8BF1-6419C305CC44",
+      "Version": "26.11.265.0",
+      "ProcessorArchitecture": "x64"
+    }
+  },
+  "macOS": {
+    "intel": {
+      "native_build_passed": true,
+      "update_packaging_passed": true,
+      "unsigned_bundle_paths_and_links_bounded": true,
+      "update_bundle_file_bytes_and_links_identical": true,
+      "application": {
+        "bytes": 104796304,
+        "sha256": "d0812764bdd3b4c0fe4c23a6b2f6f017f33a6771b1a01711d7a387a8fce3d3fc",
+        "architecture": "x86_64",
+        "minimum_macos": "14.4",
+        "signed_policy_disclosure_literals_present": [
+          "Control service recovery:",
+          "at most 3 starts in 60 seconds, including the initial start.",
+          "does not automatically restart the control service"
+        ]
+      },
+      "Info_plist": {
+        "CFBundleExecutable": "AetherSDR",
+        "CFBundleShortVersionString": "26.11.3",
+        "CFBundleVersion": "26.11.3",
+        "LSMinimumSystemVersion": null
+      }
+    },
+    "arm": {
+      "native_build_passed": true,
+      "update_packaging_passed": true,
+      "unsigned_bundle_paths_and_links_bounded": true,
+      "update_bundle_file_bytes_and_links_identical": true,
+      "application": {
+        "bytes": 108562912,
+        "sha256": "54eee3cc8d0ac26c560fed05864fb13a98fed0bd5b6863d6d8f2e015961870a3",
+        "architecture": "arm64",
+        "minimum_macos": "14.4",
+        "signed_policy_disclosure_literals_present": [
+          "Control service recovery:",
+          "at most 3 starts in 60 seconds, including the initial start.",
+          "does not automatically restart the control service"
+        ]
+      },
+      "Info_plist": {
+        "CFBundleExecutable": "AetherSDR",
+        "CFBundleShortVersionString": "26.11.3",
+        "CFBundleVersion": "26.11.3",
+        "LSMinimumSystemVersion": null
+      }
+    }
+  },
+  "negative_evidence": [
+    "First macOS ARM job was cancelled without acquiring a runner and executed zero steps; GitHub annotations cite capacity constraints.",
+    "A one-job retry request during the still-running Intel job was refused as workflow already running. One actual ARM retry after terminal attempt1 succeeded; Intel was reused.",
+    "Connector refused the Windows artifact above its512MiB transfer limit. Initial direct download timed out at389234688bytes; exact HTTP206 range resume completed the same artifact with matching full digest; no build was rerun.",
+    "Initial archive observers refused incorrect root/scope assumptions. Corrected observers validate actual build/AetherSDR.app and update Contents roots, comparing every app member and retaining the refusals."
+  ],
+  "scope_limits": [
+    "This proves native desktop compilation and packaging of implementation106057ccf, plus downloaded archive integrity and selected binary/bundle checks.",
+    "No new Windows/macOS selected installer CTests, native credential or setup-window runtime tests were run: qualify_credentials=false and those opt-in steps are skipped.",
+    "Earlier native keychain qualification is separate source-scoped evidence; it is not reasserted by these builds.",
+    "Native artifacts were not executed locally, installed, signed/notarized for production, published to a release/Store, or used against a radio.",
+    "Disclosure string retention is artifact provenance evidence, not proof of dialog behavior or parser correctness; the separate Linux component tests cover those behaviors.",
+    "These desktop artifact sizes do not represent the on-radio package footprint. macOS DAX audio driver packaging is unrelated to the local DAX IQ feedback path.",
+    "No reboot persistence, IQ latency, RF improvement, actual6300 hardware or whole-radio hang-cause conclusion follows from these results."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-disclosure-native-components.tar.gz",
+    "bytes": 309302,
+    "sha256": "223d88fd0e9ac1ac10bc84c084ae171c6c0492035abc9c09fe7d016160703d5d",
+    "members": 53,
+    "all_members_verified": true
+  },
+  "evidence": "CONTROL-RECOVERY-DISCLOSURE-NATIVE-EVIDENCE.json.gz",
+  "evidence_sha256": "d9c73d24ec163f1fbf07288bbef36eded475c4505860b25a3733aaedb5dee98f",
+  "radio_contacts": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "new_native_selected_CTests_run": false,
+  "new_native_credential_runtime_qualification": false,
+  "production_release_published": false,
+  "new_desktop_launched": false
+}
