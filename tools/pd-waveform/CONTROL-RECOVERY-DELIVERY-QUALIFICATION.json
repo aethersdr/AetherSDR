@@ -1,0 +1,329 @@
+{
+  "recorded_utc": "2026-11-18T09:49:06.073103+00:00",
+  "implementation_commit": "453ba2175f1e015c6fe867a3b7aa6255ff7defa1",
+  "source_manifest_sha256": "a8bab510a0ee78eb2cc5cfb4e9626461f30ecb2d5f98a7afaa0719ec49845424",
+  "status": "optional recovery draft; complete offline delivery verified, installed and shipping qualification pending",
+  "branch": "draft/aetherpd-control-recovery-20261118",
+  "operator_policy_approved": false,
+  "production_ready": false,
+  "installed": false,
+  "shipping_catalogue_changed": false,
+  "qualified_feature_branch_changed": false,
+  "default_policy_changed": false,
+  "RF_commands": [],
+  "reboot_commands": [],
+  "radio_commands": [],
+  "publisher": {
+    "scope": "retained development publisher; seed in RAM/pipes only",
+    "public_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce"
+  },
+  "runtime": {
+    "both_architectures_two_source_paths_identical": true,
+    "architectures": {
+      "armv7": {
+        "release_bytes": 9410177,
+        "release_blake2b_256": "aa4be93c34986c4537c85ec5aded9fc9eff77d55505e7fdf491cf7bd53ab7fec",
+        "expanded_bytes": 22836670
+      },
+      "arm64": {
+        "release_bytes": 9080129,
+        "release_blake2b_256": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+        "expanded_bytes": 22446186
+      }
+    },
+    "toolchains": {
+      "python": "3.14.10",
+      "zlib": "1.4",
+      "zig": "0.17.1",
+      "go": "go version go1.27.1 linux/amd64"
+    }
+  },
+  "delivery": {
+    "three_distribution_types_identical_across_two_builds": true,
+    "layouts": {
+      "armv7-upgrade": {
+        "selection": {
+          "version": "0.0.0-recoverydraft.453ba2175",
+          "firmware": "4.2.18.41174",
+          "profile": 2,
+          "candidate_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+          "previous_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+          "files": {
+            "LICENSES": {
+              "size": 215346,
+              "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+            },
+            "candidate.release": {
+              "size": 9410177,
+              "sha256": "c99fd9bed8347ba5948410b5aded94f371572c220dbccb3c19ab8ff9683015de"
+            },
+            "pd-accept": {
+              "size": 3372,
+              "sha256": "f11a74a9f614e53a6cb52d9c4a6eab0301329d1c0a25d183177bf090e8fde676"
+            },
+            "pd-carrier": {
+              "size": 6815904,
+              "sha256": "1d1b16fc171ef403d975a106304f42da963ed59914c7c80750df681e0c7af155"
+            },
+            "pd-deliver": {
+              "size": 109364,
+              "sha256": "94fe6c0998ab494337e366892843ca03d29e1c7a75c5c11ee38b0a0e9dad2968"
+            },
+            "pd-send": {
+              "size": 51044,
+              "sha256": "3c703c77a9ee4b4abe49f079ee554b8d68c59485cb4eedae8f461151360579fe"
+            },
+            "previous.release": {
+              "size": 9403964,
+              "sha256": "e73f45886b402d1355c15af7b236aff170cea4c7ae833d1ed82a4eb6e32f44d6"
+            },
+            "worker.envelope": {
+              "size": 504028,
+              "sha256": "e159f134dddb6c2d4199a8c58c4d05856397249ca065c56ab95f20536ae021a0"
+            }
+          }
+        },
+        "files": {
+          "LICENSES": {
+            "size": 215346,
+            "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+          },
+          "candidate.release": {
+            "size": 9410177,
+            "sha256": "c99fd9bed8347ba5948410b5aded94f371572c220dbccb3c19ab8ff9683015de"
+          },
+          "pd-accept": {
+            "size": 3372,
+            "sha256": "f11a74a9f614e53a6cb52d9c4a6eab0301329d1c0a25d183177bf090e8fde676"
+          },
+          "pd-carrier": {
+            "size": 6815904,
+            "sha256": "1d1b16fc171ef403d975a106304f42da963ed59914c7c80750df681e0c7af155"
+          },
+          "pd-deliver": {
+            "size": 109364,
+            "sha256": "94fe6c0998ab494337e366892843ca03d29e1c7a75c5c11ee38b0a0e9dad2968"
+          },
+          "pd-send": {
+            "size": 51044,
+            "sha256": "3c703c77a9ee4b4abe49f079ee554b8d68c59485cb4eedae8f461151360579fe"
+          },
+          "previous.release": {
+            "size": 9403964,
+            "sha256": "e73f45886b402d1355c15af7b236aff170cea4c7ae833d1ed82a4eb6e32f44d6"
+          },
+          "worker.envelope": {
+            "size": 504028,
+            "sha256": "e159f134dddb6c2d4199a8c58c4d05856397249ca065c56ab95f20536ae021a0"
+          }
+        }
+      },
+      "arm64-upgrade": {
+        "selection": {
+          "version": "0.0.0-recoverydraft.453ba2175",
+          "firmware": "4.3.16.42034",
+          "profile": 1,
+          "candidate_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+          "previous_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+          "files": {
+            "LICENSES": {
+              "size": 215346,
+              "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+            },
+            "candidate.release": {
+              "size": 9080129,
+              "sha256": "6b27b3113bfaf63288986d69f4843d530d994b907b507fd65093332f71fa6df2"
+            },
+            "pd-accept": {
+              "size": 29984,
+              "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+            },
+            "pd-carrier": {
+              "size": 6291616,
+              "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+            },
+            "pd-deliver": {
+              "size": 111816,
+              "sha256": "6540b3c689cee270bc4abd5a4e805c620b064cc1e39628890f9df43a33d4f381"
+            },
+            "pd-send": {
+              "size": 42344,
+              "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+            },
+            "previous.release": {
+              "size": 9075932,
+              "sha256": "b8a9a956e94b4e7a1f0fd59bc257886ddf6fe3fa2dfae488b895c500905eae57"
+            },
+            "worker.envelope": {
+              "size": 493680,
+              "sha256": "ecefb52d34493018aff72f14f1d5548981ec270a5bb54d5fbcd1610bbe8df838"
+            }
+          }
+        },
+        "files": {
+          "LICENSES": {
+            "size": 215346,
+            "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+          },
+          "candidate.release": {
+            "size": 9080129,
+            "sha256": "6b27b3113bfaf63288986d69f4843d530d994b907b507fd65093332f71fa6df2"
+          },
+          "pd-accept": {
+            "size": 29984,
+            "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+          },
+          "pd-carrier": {
+            "size": 6291616,
+            "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+          },
+          "pd-deliver": {
+            "size": 111816,
+            "sha256": "6540b3c689cee270bc4abd5a4e805c620b064cc1e39628890f9df43a33d4f381"
+          },
+          "pd-send": {
+            "size": 42344,
+            "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+          },
+          "previous.release": {
+            "size": 9075932,
+            "sha256": "b8a9a956e94b4e7a1f0fd59bc257886ddf6fe3fa2dfae488b895c500905eae57"
+          },
+          "worker.envelope": {
+            "size": 493680,
+            "sha256": "ecefb52d34493018aff72f14f1d5548981ec270a5bb54d5fbcd1610bbe8df838"
+          }
+        }
+      },
+      "arm64-first-install": {
+        "selection": {
+          "version": "0.0.0-recoverydraft.453ba2175",
+          "firmware": "4.3.16.42034",
+          "profile": 1,
+          "publisher_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+          "files": {
+            "LICENSES": {
+              "size": 215346,
+              "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+            },
+            "candidate.release": {
+              "size": 9080129,
+              "sha256": "6b27b3113bfaf63288986d69f4843d530d994b907b507fd65093332f71fa6df2"
+            },
+            "pd-accept": {
+              "size": 29984,
+              "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+            },
+            "pd-carrier": {
+              "size": 6291616,
+              "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+            },
+            "pd-deliver": {
+              "size": 111816,
+              "sha256": "6540b3c689cee270bc4abd5a4e805c620b064cc1e39628890f9df43a33d4f381"
+            },
+            "pd-first-request": {
+              "size": 96232,
+              "sha256": "a1632ceb48ed5f489f570b22b3e26e73bc98d7f7eaa0f07812ac6fd91bec098a"
+            },
+            "pd-send": {
+              "size": 42344,
+              "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+            },
+            "worker.envelope": {
+              "size": 256456,
+              "sha256": "6ffaf2eaee77dd39fc3ca3b4a169c82bb36fe512ced3acd65257a51fce635ee9"
+            }
+          }
+        },
+        "files": {
+          "LICENSES": {
+            "size": 215346,
+            "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+          },
+          "candidate.release": {
+            "size": 9080129,
+            "sha256": "6b27b3113bfaf63288986d69f4843d530d994b907b507fd65093332f71fa6df2"
+          },
+          "pd-accept": {
+            "size": 29984,
+            "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+          },
+          "pd-carrier": {
+            "size": 6291616,
+            "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+          },
+          "pd-deliver": {
+            "size": 111816,
+            "sha256": "6540b3c689cee270bc4abd5a4e805c620b064cc1e39628890f9df43a33d4f381"
+          },
+          "pd-first-request": {
+            "size": 96232,
+            "sha256": "a1632ceb48ed5f489f570b22b3e26e73bc98d7f7eaa0f07812ac6fd91bec098a"
+          },
+          "pd-send": {
+            "size": 42344,
+            "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+          },
+          "worker.envelope": {
+            "size": 256456,
+            "sha256": "6ffaf2eaee77dd39fc3ca3b4a169c82bb36fe512ced3acd65257a51fce635ee9"
+          }
+        }
+      }
+    },
+    "native_previous_candidate_and_worker_verified": true,
+    "older_native_verifier_refuses_optional_policy": true,
+    "worker_bytes": {
+      "armv7": 503844,
+      "arm64": 493496
+    },
+    "first_install_worker_bytes": 256272
+  },
+  "desktop": {
+    "implementation_commit": "75ab268527293f30e74acee221759adce42087b5",
+    "relevant_sources_identical_to_draft": true,
+    "actual_package_loaders_used": true,
+    "upgrade_plans_prepared_both_architectures": true,
+    "ARM64_first_install_uploads_prepared": true,
+    "negative_checks_per_build_set": 29,
+    "negative_check_executions_in_two_builds": 58,
+    "ARMv7_development_selection_refusal_retained": true,
+    "ARMv7_first_install_or_UI_delivery_qualified": false,
+    "fixture_binary_sha256": "d1fa152c4f35ebe98684520be23d323c486f40338094ee8495aaef70e1cfa475"
+  },
+  "disk_model": {
+    "native_admission_profiles": 8,
+    "byte_and_inode_boundary_checks_per_profile": 4,
+    "ARMv7_worst_peak_bytes": 39718912,
+    "headroom_against_41_decimal_MB": 1281088,
+    "actual6300_measurement": false,
+    "first_install_transient_storage_qualified": false
+  },
+  "automatic_session_start": "No change: fixed primary launcher supplies a clean environment and no session descriptors. The existing inherited-config test and installed lifecycle evidence remain separately scoped; no new live recovery proof.",
+  "remaining": [
+    "Resolve operator control-recovery policy and firmware-baseline preference; independent authority/compatibility review.",
+    "Production builder/catalogue/publisher selection; this is an explicit offline draft build.",
+    "Actual installed loaded policy, crash restart, explicit Stop, rate-limit exhaustion, complete graph cleanup and update/rollback.",
+    "Original whole-radio software-reboot hang and coordinated reboot qualification; no cause established here.",
+    "Actual6300 first-install privilege entry, UI delivery, kernel/manager/storage/CPU and RF evidence.",
+    "All original unexplained alignment/cold-start, integrated analyzer, repeated RF, stockAPD comparison and release gates from P1-P10."
+  ],
+  "limits": [
+    "Both builds use the same host/toolchains; separate source/output/compiler caches do not provide independent maintainer review.",
+    "ARM executables were not run. Generic ARMv7 package verification does not authorize or enable its desktop installation guard.",
+    "Native admission uses authentic signed inputs with synthetic statvfs capacity. State/storage allowances and tmpfs assumptions remain as documented.",
+    "Whole-waveform retained upload copies and first-install transient overhead on6300 are excluded; actual free storage is not measured.",
+    "The earlier workstation live-manager fixture capability refusals remain unqualified. No radio lifecycle, correction or RF claims are added."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-delivery-components.tar.gz",
+    "bytes": 44368682,
+    "sha256": "a18845278ac071b5ed72600fb5f856273c4f32dceba1db116cd0b1300cde3017",
+    "members": 90,
+    "all_members_verified": true,
+    "format": "Public content-addressed blobs plus layouts.json reconstruct exactly eight files for each of three distributions."
+  },
+  "evidence": "CONTROL-RECOVERY-DELIVERY-EVIDENCE.json.gz",
+  "evidence_sha256": "7d8dafe2bce695ab6d4c43a451bd883088faa21e097f8cd0569eb15c71eaa894"
+}

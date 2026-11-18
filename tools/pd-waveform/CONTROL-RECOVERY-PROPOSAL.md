@@ -90,6 +90,37 @@ version, parsed policy or behavior on the team's FLEX-6300. An ARMv7 build on
 this workstation does not qualify Linux 2.6, Cortex-A8 scheduling or actual
 radio cleanup.
 
+## Offline delivery qualification
+
+The [delivery qualification](./CONTROL-RECOVERY-DELIVERY-QUALIFICATION.json)
+pins implementation commit `453ba2175`. With the optional policy explicitly
+enabled, complete ARMv7/ARM64 releases and upgrade distributions, and an ARM64
+first-install distribution, reproduce byte for byte from two source/output
+paths and compiler caches. The development signing seed remains in RAM/pipes.
+These artifacts use the retained development publisher, not a shipping trust
+catalogue, and have not been installed.
+
+The real native verifier admits both the previous and candidate releases and
+the matching worker. The older verifier refuses the optional policy. The
+unchanged desktop package verifier loads the complete distributions, constructs
+public upgrade plans, and prepares the ARM64 first-install uploads without
+contacting the radio. Corrupt-file, wrong-key and changed-worker-source checks
+refuse the altered packages. All eight files in each distribution are pinned.
+
+The ARMv7 upgrade worker is 503,844 bytes and the ARM64 worker is 493,496 bytes;
+both fit the 512 KiB worker limit. The eight modeled upgrade-storage layouts
+pass byte/inode boundary checks. ARMv7's worst modeled peak is 39,718,912 bytes,
+leaving 1,281,088 bytes against the rounded 41 decimal MB inventory. This assumes
+signed inputs on tmpfs and the stated identity/metadata reserves. It does not
+include firmware-retained upload copies or qualify first-install transient
+storage on a 6300.
+
+ARMv7 package-format verification does not remove the desktop selection
+generator's profile-1-only guard. That refusal is explicitly checked. There is
+no supported 6000 first-install adapter or ordinary 6000 installation claim in
+this delivery proof. The workstation lifecycle fixture's capability refusals,
+the operator's policy choice, and installed qualification remain open.
+
 Before promotion, resolve the operator's recovery choice, independently review
 the authority and compatibility changes, qualify the exact loaded policy and
 ordinary-user receive-only crash/restart on the 8600, verify explicit Stop and
