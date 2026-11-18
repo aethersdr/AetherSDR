@@ -7515,10 +7515,10 @@ void MainWindow::wireMeters()
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
-    // ── microHAM Trio antenna switch — read-only, switches nothing ────────
-    // The Peripherals page shows its state and labels; nothing here changes
-    // anything on it. Its session is taken at startup only with "Connect
-    // automatically" on, like the KPA500/KAT500 rows.
+    // ── microHAM Trio antenna switch ──────────────────────────────────────
+    // The Peripherals page shows its state and labels; the link below sends
+    // the antenna picks made in RX ANT / TX ANT to it. Its session is taken at
+    // startup only with "Connect automatically" on, like the KPA500/KAT500 rows.
     m_trioModel.loadSettings(PeripheralSettings::autoConnect(
         QLatin1String(MicrohamTrioSettings::kPeripheralId)));
     // The Trio is told which radio is connected (the Peripherals page reads and
