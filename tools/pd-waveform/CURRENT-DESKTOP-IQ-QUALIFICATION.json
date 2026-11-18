@@ -1,0 +1,74 @@
+{
+  "updated_utc": "2026-11-18T05:54:12.363188+00:00",
+  "production_ready": false,
+  "desktop_source": "b2ad8a6c7681fb08812f00c923c50e2e144b6a5c",
+  "desktop_binary_sha256": "9b6d2c5d87c7405f2d9722cccb024fa916ddac9a1cd573af6cb024669ef9c5d7",
+  "desktop_pid": 1081209,
+  "desktop_uid": 1000,
+  "installed_release": "0d88765b3eaad89fde171f98955ac8dcef959543a93db9967b25d920912c43e7",
+  "radio_boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+  "firmware": "4.3.16.42034",
+  "platform": "Linux desktop and FLEX-8600; actual6300notqualified",
+  "finding": "Fresh current desktop loaded the existing owner credential and operated the committed installed service through the normal Waveforms/AetherPD UI. One unkeyed local DAX IQ Start/capture/Stop completed with FDX disabled.",
+  "results": {
+    "old_app_closed_normally": true,
+    "new_app_automation_TX_disabled": true,
+    "same_private_profile_reused": true,
+    "installation_metadata_unchanged": true,
+    "Start_actions": 1,
+    "Stop_actions": 1,
+    "ready_observed_s": 2.6072001729917247,
+    "ready_scope": "UI Start to observed registered status including polls; not FPGA packet latency.",
+    "sample_rate_hz": 48000,
+    "complex_samples": 16384,
+    "capture_bytes": 131072,
+    "capture_sha256": "18236339edecc124b1b4018c821e85278ab34347caaad6cbd7c7fc7c813cbc0d",
+    "binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 743761881,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "all_components_finite_and_nonzero_capture": true,
+    "keyed": false,
+    "correcting": false,
+    "final_runtime_state": "stopped",
+    "radio_connected_after": true,
+    "FDX": false,
+    "MOX": false,
+    "tuning": false,
+    "receive_fft_frames_per_s": 24.68016018067945,
+    "receive_waterfall_updates_per_s": 12.43305019024857,
+    "radio_boot_unchanged": true
+  },
+  "actions": {
+    "RF_commands": [],
+    "calibration_arm_commands": [],
+    "radio_reboot_commands": [],
+    "host_root_bridge_jobs": [],
+    "persistent_installation_changes": [],
+    "processing_settings_restore_commands": [],
+    "AetherTX_launches": []
+  },
+  "remaining_scope": [
+    "Control service was already running; this does not resolve its crash recovery policy or the whole-radio reboot hang.",
+    "Receive-only IQ does not qualify TX feedback, correction/RF performance, absolute FPGA latency, native Windows/Mac whole-UI operation or actual6300.",
+    "No fresh host PID/capability/ARP cleanup audit; runtime stopped state is the observed API result. Prior diagnostic waveform remains installed and was not used for bootstrap actions.",
+    "All remaining P1-P10 installation, alignment/cold-start, final graph, RF comparison, minimum-platform and release gates remain open."
+  ],
+  "source_sha256": {
+    "src/models/AetherPDModel.cpp": "5763a7f4217f608b21dc5ef3ec21cf55609c8fc1d4f6926d1e20234b78acbc18",
+    "src/core/AetherPDClient.cpp": "0475dfd2f063e1e24f6977ec0509d6a9ae0410f16d0d9cffe5c01d42cc44f497",
+    "src/core/TailnetShimTokenStore.cpp": "d675078a8d39c89aa6d5e6e0bb12c3defeecc0282a25da6308b2f11eba7b642f",
+    "src/core/TailnetShimCredentialPersistence.cpp": "bcb127f865e61be959263e49ab4dd8c64895579b24908bd327330f7979418bba"
+  },
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-desktop-iq-components.tar.gz",
+    "bytes": 40674,
+    "sha256": "d22f843587123cdc94e4ef33a28b7166de2271bbcf938bd7fe0676726e9e0fc8",
+    "verified_members": 13
+  },
+  "compressed_evidence_sha256": "014d46366eba1bb61211734af5d1985215d2a5b8de671676f1dc9c3c2d20bb17"
+}
