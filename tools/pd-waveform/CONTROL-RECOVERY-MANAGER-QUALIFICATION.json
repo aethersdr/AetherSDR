@@ -1,0 +1,186 @@
+{
+  "recorded_utc": "2026-11-18T16:03:54.094408+00:00",
+  "status": "Intentional Stop suppression passed; three-start budget independently verified from PID1 journal after live probe Result-label refusal",
+  "production_ready": false,
+  "installed_runtime_implementation": "453ba2175f1e015c6fe867a3b7aa6255ff7defa1",
+  "installed_release_blake2b_256": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+  "boot_id": "e84f61f8-9f01-451d-b9a9-e9f25b8b261d",
+  "intentional_Stop_observed_s": 12.20366156,
+  "intentional_Stop_suppressed_automatic_restart": true,
+  "restart_budget": {
+    "actual_starts_including_initial": 3,
+    "injected_control_crashes": 3,
+    "automatic_restart_delays_s": [
+      5.046718,
+      5.041627
+    ],
+    "start_to_refusal_window_s": 16.925593,
+    "explicit_PID1_start_limit_refusal": {
+      "__MONOTONIC_TIMESTAMP": "991574580",
+      "__REALTIME_TIMESTAMP": "1795017637137643",
+      "_BOOT_ID": "e84f61f89f01451db9a9e9f25b8b261d",
+      "_PID": "1",
+      "MESSAGE": "aetherpd-shim.service: Start request repeated too quickly.",
+      "UNIT": "aetherpd-shim.service"
+    },
+    "observed_Result": "signal",
+    "final_observed_MainPID": 0,
+    "final_observed_ActiveState": "failed",
+    "final_observed_NRestarts": 3
+  },
+  "full_live_probe_exit_code": 1,
+  "full_live_probe_passed": false,
+  "post_exhaustion12second_hold_qualified": false,
+  "native_probe_error": "AssertionError: {'elapsed_s': 13.112988946999963, 'state': {'Restart': 'on-failure', 'RestartUSec': '5s', 'MainPID': '0', 'Result': 'signal', 'NRestarts': '3', 'ExecMainCode': '2', 'ExecMainStatus': '9', 'ExecStart': '{ path=/var/lib/smartsdr/aetherpd/pd-boot ; argv[]=/var/lib/smartsdr/aetherpd/pd-boot --primary ; ignore_errors=no ; start_time=[Wed 2026-11-18 10:00:31 CST] ; stop_time=[Wed 2026-11-18 10:00:32 CST] ; pid=1737 ; code=killed ; status=9/KILL }', 'Id': 'aetherpd-shim.service', 'ActiveState': 'failed', 'SubState': 'failed', 'FragmentPath': '/etc/systemd/system/aetherpd-shim.service', 'DropInPaths': '', 'NeedDaemonReload': 'no', 'StartLimitIntervalUSec': '1min', 'StartLimitBurst': '3', 'StartLimitAction': 'none'}}",
+  "laboratory_cleanup": {
+    "passed": true,
+    "control": {
+      "Restart": "on-failure",
+      "RestartUSec": "5s",
+      "MainPID": "1829",
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainCode": "0",
+      "ExecMainStatus": "0",
+      "ExecStart": "{ path=/var/lib/smartsdr/aetherpd/pd-boot ; argv[]=/var/lib/smartsdr/aetherpd/pd-boot --primary ; ignore_errors=no ; start_time=[Wed 2026-11-18 10:00:45 CST] ; stop_time=[n/a] ; pid=1829 ; code=(null) ; status=0/0 }",
+      "Id": "aetherpd-shim.service",
+      "ActiveState": "active",
+      "SubState": "running",
+      "FragmentPath": "/etc/systemd/system/aetherpd-shim.service",
+      "DropInPaths": "",
+      "NeedDaemonReload": "no",
+      "StartLimitIntervalUSec": "1min",
+      "StartLimitBurst": "3",
+      "StartLimitAction": "none"
+    },
+    "primary": {
+      "pid": 1829,
+      "start_ticks": 99976,
+      "state": "S",
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": [
+        "78666",
+        "78666",
+        "78666",
+        "78666"
+      ],
+      "gid": [
+        "20",
+        "20",
+        "20",
+        "20"
+      ],
+      "nnp": "1",
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "cgroup": [
+        "0::/../../../system.slice/aetherpd-shim.service"
+      ],
+      "sha256": "b1ce147413f2bbead4014ce0f7dc9ead6b8f884450f9d38f7cdb905a88649464",
+      "cgroup_in_init_namespace": [
+        "0::/system.slice/aetherpd-shim.service"
+      ]
+    },
+    "observations": [
+      {
+        "monotonic_ns": 999806325701,
+        "state": {
+          "Restart": "on-failure",
+          "RestartUSec": "5s",
+          "MainPID": "1829",
+          "Result": "success",
+          "NRestarts": "0",
+          "ExecMainCode": "0",
+          "ExecMainStatus": "0",
+          "ExecStart": "{ path=/var/lib/smartsdr/aetherpd/pd-boot ; argv[]=/var/lib/smartsdr/aetherpd/pd-boot --primary ; ignore_errors=no ; start_time=[Wed 2026-11-18 10:00:45 CST] ; stop_time=[n/a] ; pid=1829 ; code=(null) ; status=0/0 }",
+          "Id": "aetherpd-shim.service",
+          "ActiveState": "active",
+          "SubState": "running",
+          "FragmentPath": "/etc/systemd/system/aetherpd-shim.service",
+          "DropInPaths": "",
+          "NeedDaemonReload": "no",
+          "StartLimitIntervalUSec": "1min",
+          "StartLimitBurst": "3",
+          "StartLimitAction": "none"
+        }
+      },
+      {
+        "monotonic_ns": 999986556112,
+        "state": {
+          "Restart": "on-failure",
+          "RestartUSec": "5s",
+          "MainPID": "1829",
+          "Result": "success",
+          "NRestarts": "0",
+          "ExecMainCode": "0",
+          "ExecMainStatus": "0",
+          "ExecStart": "{ path=/var/lib/smartsdr/aetherpd/pd-boot ; argv[]=/var/lib/smartsdr/aetherpd/pd-boot --primary ; ignore_errors=no ; start_time=[Wed 2026-11-18 10:00:45 CST] ; stop_time=[n/a] ; pid=1829 ; code=(null) ; status=0/0 }",
+          "Id": "aetherpd-shim.service",
+          "ActiveState": "active",
+          "SubState": "running",
+          "FragmentPath": "/etc/systemd/system/aetherpd-shim.service",
+          "DropInPaths": "",
+          "NeedDaemonReload": "no",
+          "StartLimitIntervalUSec": "1min",
+          "StartLimitBurst": "3",
+          "StartLimitAction": "none"
+        }
+      }
+    ],
+    "ordinary_operator_recovery_proven": false
+  },
+  "ordinary_operator_budget_recovery_qualified": false,
+  "all_temporary_jobs_and_host_directories_retired": true,
+  "firmware_identity_checks_passed_during_test_and_cleanup": true,
+  "manager_mutations": [
+    {
+      "action": "stop",
+      "unit": "aetherpd-shim.service",
+      "monotonic_ns": 962334473135,
+      "laboratory_cleanup": false
+    },
+    {
+      "action": "start",
+      "unit": "aetherpd-shim.service",
+      "monotonic_ns": 974602240473,
+      "laboratory_cleanup": true
+    },
+    {
+      "action": "reset-failed",
+      "unit": "aetherpd-shim.service",
+      "monotonic_ns": 999670198363,
+      "laboratory_cleanup": true
+    },
+    {
+      "action": "start",
+      "unit": "aetherpd-shim.service",
+      "monotonic_ns": 999725259511,
+      "laboratory_cleanup": true
+    }
+  ],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "firmware_signals": [],
+  "scope_limits": [
+    "Exact installed release622 control supervision on the FLEX-8600 stock-startup boot e84f61f8-9f01-451d-b9a9-e9f25b8b261d only. No RF or firmware restart/reboot.",
+    "One intentional manager Stop suppressed automatic restart for12seconds. PID1 journal entries independently prove three successful starts including the explicit initial start, three SIGKILL exits, two delayed successful restarts and a refused fourth start inside one60second budget window.",
+    "The complete live probe exited1 because it incorrectly required Result=start-limit-hit. This manager retained Result=signal after its explicit Start request repeated too quickly message. The intended additional12second failure-hold branch was never reached and is not qualified here; preserved final observation has ActiveState=failed, MainPID=0, NRestarts=3.",
+    "Explicit host-root laboratory reset-failed/start restored only the control primary. This is test cleanup, not a shipped ordinary-operator recovery mechanism. Ordinary recovery from budget exhaustion remains a production gate.",
+    "The temporary native helper and host directory were removed. The existing laboratory SSH container remains separate; this is not a claim that all broad lab access was absent.",
+    "Actual6300 manager/kernel behavior, active or keyed fault variants, original whole-radio hang, alignment/cold-bypass findings, final RF/stockAPD/release gates remain separate."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-manager-components.tar.gz",
+    "bytes": 34554,
+    "sha256": "0dcf5f3af4945b341a506eebb7f35934defada8dd0f3c5a2678cfe768501c078",
+    "members": 16,
+    "all_members_verified": true
+  },
+  "evidence": "CONTROL-RECOVERY-MANAGER-EVIDENCE.json.gz",
+  "evidence_sha256": "520b8ad21103d8642e37150a3824fee4127415fac57c144b2222222d644d9e24"
+}
