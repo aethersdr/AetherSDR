@@ -20,24 +20,27 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The complete ARMv7 development runtime from signed source `aa5a33fc5` is
-9,404,028 bytes; its expanded executables/licenses occupy 22,836,670 bytes in RAM. Both ARMv7 and
+The complete ARMv7 development runtime from signed source `75ab26852` is
+9,407,745 bytes; its expanded executables/licenses occupy 22,836,670 bytes in RAM. Both ARMv7 and
 ARM64 runtime releases reproduced byte for byte with pinned compilers on the
 same host. This does not qualify the first-install adapter or radio operation.
-See [reproducible runtime qualification](./NATIVE-IDENTITY-DURABILITY-RUNTIME-QUALIFICATION.json)
-and [installed ARM64 qualification](./NATIVE-IDENTITY-DURABILITY-INSTALLED-QUALIFICATION.json).
+See [current reproducible runtime qualification](./UPSTREAM-RUNTIME-QUALIFICATION.json).
+The new runtime is not installed. The [merged desktop receive-only qualification](./UPSTREAM-DESKTOP-IQ-QUALIFICATION.json)
+uses the prior installed ARM64 release `0d88765b…`, not the rebuilt runtime.
+The [installed ARM64 identity qualification](./NATIVE-IDENTITY-DURABILITY-INSTALLED-QUALIFICATION.json)
+remains bound to its recorded earlier package.
 Earlier [restart qualification](./RESTART-RUNTIME-QUALIFICATION.md) remains
-bound to its original source. This runtime adds native identity directory sync
-and uncertain-commit refusal to the Go shim. The other ten expanded payload
-records, boot helper and service definitions are byte-identical to its predecessor.
-The installed report includes receive-only whole-service stop/start and fresh
-local IQ on the 8600. The earlier [lifecycle report](./WHOLE-RUNTIME-STOP-QUALIFICATION.json)
+bound to its original source. The current runtime retains native identity
+directory sync and uncertain-commit refusal. Its new Go relay/telemetry code
+has not been qualified on the radio. The earlier installed report includes
+receive-only whole-service stop/start and fresh local IQ on the 8600.
+The [lifecycle report](./WHOLE-RUNTIME-STOP-QUALIFICATION.json)
 preserves the predecessor's results and failed observer attempt.
 
-The calculated ARMv7 successor-upgrade budget is up to 39,690,240 bytes,
+The calculated ARMv7 successor-upgrade budget is up to 39,702,528 bytes,
 including the existing compacted installation, stated state/metadata allowances,
 transient files and the native 8 MiB reserve. Against a conservative decimal
-interpretation of the reported 41 MB free, only 1,309,760 bytes remain.
+interpretation of the reported 41 MB free, only 1,297,472 bytes remain.
 One extra full release archive does not fit. The final 6000 adapter must account
 for firmware-retained upload/extraction copies as well as signed input staging;
 that adapter and first-install high-water measurement remain unqualified.
@@ -75,6 +78,14 @@ the expanded payload on persistent storage. ARMv7 execution of a fixture on an
 8600 is not evidence about that layout on a 6300.
 
 ## Receive-only qualification first
+
+The [combined readiness kit](./FLEX6300-PROBE-HANDOFF-QUALIFICATION.json)
+contains the two existing ordinary-user diagnostic packages, their Python
+clients and original source kits, and the current disk-budget reference.
+Its `START-HERE.txt` gives the install/read/uninstall sequence for a LAN
+computer with Python 3, including Windows. It contains no AetherPD runtime,
+privileged bootstrap, owner credential or RF/reboot script. The kit's hashes
+and prior FLEX-8600 probe proofs do not replace the teammate's actual 6300 results.
 
 1. Record firmware, kernel, CPU features, available memory, mount options,
    free space, waveform UID/GID and capability masks. On Linux before 3.14,
