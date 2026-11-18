@@ -1,0 +1,121 @@
+{
+  "recorded_utc": "2026-11-18T16:17:27.237188+00:00",
+  "status": "Post-manager receive IQ and power-cycle disclosure passed; control budget exhausted and held down for pending operator physical recovery",
+  "production_ready": false,
+  "tested_source_commit": "07bdfeeac4e0f8f868268b800b3a47d2082c8ab3",
+  "installed_runtime_implementation": "453ba2175f1e015c6fe867a3b7aa6255ff7defa1",
+  "installed_release_blake2b_256": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+  "operator_budget_recovery_choice": {
+    "recorded_utc": "2026-11-18T16:11:01.851734+00:00",
+    "operator_choice": "Require an operator power cycle (recommended: smallest privilege surface)",
+    "shipping_direction": "Use existing fixed boot path for recovery after control restart budget exhaustion. No new recovery listener, API verb, root dispatcher or privileged helper.",
+    "scope": "Physical cold boot and identity persistence were qualified; a cold boot directly from an exhausted budget has not yet been tested.",
+    "new_radio_changes": []
+  },
+  "shipping_privileged_recovery_code_added": false,
+  "GUI_CTests_passed": 1,
+  "docs_build_passed": true,
+  "new_desktop_launched": false,
+  "post_manager_receive": {
+    "FDX_enabled": false,
+    "Start_actions": 1,
+    "Stop_actions": 1,
+    "ready_s": 2.021047507005278,
+    "capture": {
+      "metadata": {
+        "capture_id": "2f37470646604c1a86040ca78d24a424",
+        "center_hz": 7153821,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 324904259,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "1365517351371",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "1365857319729",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "6748d19b02e847f59be44cfc811d3d66ddc9c1339a6a14df8dce11943377ee62",
+      "all_samples_finite_and_not_all_zero": true
+    },
+    "exact_stopped_cleanup_passed": true
+  },
+  "power_cycle_stage": {
+    "boot_id": "e84f61f8-9f01-451d-b9a9-e9f25b8b261d",
+    "old_initial_start_outside_budget_window": true,
+    "primary_crashes": 4,
+    "successful_new_automatic_starts": 3,
+    "automatic_restart_delays_s": [
+      5.5881329400001505,
+      5.398348362999968,
+      5.555963992999978
+    ],
+    "failed_hold_s": 12.213141713999903,
+    "process_graph_empty_and_no_API_during_hold": true,
+    "final_control": {
+      "Restart": "on-failure",
+      "RestartUSec": "5s",
+      "MainPID": "0",
+      "Result": "signal",
+      "NRestarts": "4",
+      "ExecMainCode": "2",
+      "ExecMainStatus": "9",
+      "ExecStart": "{ path=/var/lib/smartsdr/aetherpd/pd-boot ; argv[]=/var/lib/smartsdr/aetherpd/pd-boot --primary ; ignore_errors=no ; start_time=[Wed 2026-11-18 10:15:46 CST] ; stop_time=[Wed 2026-11-18 10:15:46 CST] ; pid=2249 ; code=killed ; status=9/KILL }",
+      "Id": "aetherpd-shim.service",
+      "ActiveState": "failed",
+      "SubState": "failed",
+      "FragmentPath": "/etc/systemd/system/aetherpd-shim.service",
+      "DropInPaths": "",
+      "NeedDaemonReload": "no",
+      "StartLimitIntervalUSec": "1min",
+      "StartLimitBurst": "3",
+      "StartLimitAction": "none"
+    },
+    "firmware_unchanged": true,
+    "normal_path_manager_mutations": [],
+    "ready_for_operator_cold_cycle": true,
+    "control_left_failed": true
+  },
+  "all_temporary_diagnostic_helpers_and_host_directories_retired": true,
+  "physical_cycle_from_exhausted_state_observed": false,
+  "ordinary_budget_recovery_qualified": false,
+  "RF_commands": [],
+  "reboot_commands": [],
+  "firmware_signals": [],
+  "credential_mutations": [],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-power-cycle-stage-components.tar.gz",
+    "bytes": 106242,
+    "sha256": "b8a4b9f4e995b4142c8521c605a0303d3937cd214e832caeebcade3cdf3bc6a0",
+    "members": 30,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Recovery after restart-budget exhaustion is operator-selected physical power cycle using existing boot helpers. No recovery listener, API verb, root dispatcher or privileged shipping helper was added; source changes are two text-only GUI/docs edits.",
+    "The prior laboratory reset/start was followed by one successful ordinary-GUI receive Start/local DAX IQ capture/Stop with FDX disabled; exact stopped graph, retired ARP and zero capabilities were audited.",
+    "The new bench stage deliberately leaves the control service failed for physical recovery. Four primary-only pidfd terminations were needed because the old initial start was more than65seconds old: exactly three new automatic starts occurred inside the60second window, then PID1 refused another. NRestarts counts scheduled attempts and is4; actual successful new starts are3.",
+    "No AetherPD process or API remained during the12second failed hold. Normal stage performed no reset/start, firmware signal, reboot command, credential mutation or RF. Temporary diagnostics helper and host directory were retired.",
+    "Recovery by a physical cold boot directly from this exhausted state is pending operator action and fresh observation. The earlier successful stock cold boot does not prove this pending case.",
+    "Source07bdfeeac passed one existing Linux installation-dialog CTest and the full user-docs install/build. No new mirror test was added for the text-only edit. Prior complete desktop/native builds and sanitizer evidence remain scoped to106057ccf; no new full desktop/native build, GUI launch or live rendering claim is made here.",
+    "The live desktop remains c0725b476b67de6a76793ae3551c3b2da730621061ed1428a8f73227ee54c300 and runtime remains release622. This work adds no final RF, software-reboot/hang, actual6300 or independent production qualification."
+  ],
+  "evidence": "CONTROL-RECOVERY-POWER-CYCLE-EVIDENCE.json.gz",
+  "evidence_sha256": "d0e8f18221e4afa34b943ad7fda18f3658498da0a59b358f53f41c0c38cb3244"
+}
