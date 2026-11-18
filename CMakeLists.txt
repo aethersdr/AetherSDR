@@ -1116,6 +1116,8 @@ set(CORE_SOURCES
     src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
+    src/core/TciExtensionSet.cpp
+    src/core/TciExtensionNotice.cpp
     src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
     src/core/MqttClient.cpp
@@ -1312,6 +1314,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_TxCoordinator.cpp
     src/models/RadioModel_TxTimeout.cpp
     src/models/TxTimeoutGuard.cpp
+    src/models/HostCwTextKeyer.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp

@@ -12,6 +12,7 @@
 
 namespace AetherSDR {
 
+class HostCwTextKeyer;
 class RadioModel;
 class SliceModel;
 
@@ -91,6 +92,7 @@ private:
     QString cmdDumpState();
     QString cmdSendMorse(const QString& text);  // b <text> / \send_morse
     QString cmdStopMorse();                     // \stop_morse
+    QString sendHostMorse(const QString& text);
     QString cmdSetKeySpeed(const QString& arg); // \set_level KEYSPD <wpm>
 
     // Helpers
@@ -152,6 +154,10 @@ private:
     TxCoordinator::Producer m_txProducer;
     TxCoordinator::Request m_pttRequest;
     TxCoordinator::Request m_cwxRequest;
+    // send_morse on a radio with no text buffer (hasHostCwTextKeyer). Created
+    // on first use; used on the model's thread only, and closed there by the
+    // destructor (queued only when it runs on another thread).
+    std::shared_ptr<HostCwTextKeyer> m_hostCwText;
     int  m_sliceIndex{0};
     bool m_extended{false};
     // Set when a bare `b` / `\send_morse` arrives without inline text.
