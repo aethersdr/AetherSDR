@@ -1,0 +1,552 @@
+{
+  "recorded_utc": "2026-11-18T18:00:50.232937+00:00",
+  "status": "Coherent-SWR source implemented and qualified for finite5W/10W OFF/ON DAX-IQ measurements; full production qualification incomplete",
+  "production_ready": false,
+  "tested_desktop_source_commit": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+  "desktop": {
+    "pid": 1825141,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "44ef9c8c3969c8ce6ea5627e66d1ecfc42a8f743881da03877ca1368e1261133",
+    "source_commit": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "full_Linux_desktop_and_daemon_built": true,
+  "binaries": {
+    "AetherSDR": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-disclosure/bin/AetherSDR",
+      "bytes": 833339504,
+      "sha256": "44ef9c8c3969c8ce6ea5627e66d1ecfc42a8f743881da03877ca1368e1261133"
+    },
+    "aetherd": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-disclosure/bin/aetherd",
+      "bytes": 413563344,
+      "sha256": "6a064d592fadbcba04059ba82967fce4f50de64e9e7fe7dc5454ecba7136f930"
+    }
+  },
+  "installed_radio_release_blake2b_256": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+  "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+  "operator_guard_source_choice": "Use coherent directional-power SWR",
+  "guard_source_changed": true,
+  "guard_thresholds_changed": false,
+  "max_SWR": 2.0,
+  "SWR_qualifying_forward_W": 0.5,
+  "affected_CTest_executables_passed": 5,
+  "causal_mutations_detected": 3,
+  "documentation_and_static_checks_passed": true,
+  "pre_key_refused_attempts": 1,
+  "actual_new_RF_transmissions": 4,
+  "valid_spectra": 4,
+  "corrected_RF_transmissions": 2,
+  "finite_OFF_ON_pairs": 2,
+  "comparison": {
+    "scope": "Finite two-tone pairs following operator-selected SWR-source correction; not sustained/repeatability or final P7/P8 qualification",
+    "desktop_source_commit": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "radio_release": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+    "full_duplex": false,
+    "capture_source": "local-dax-iq",
+    "pairs": [
+      {
+        "OFF": {
+          "case": "coherent-SWR-baseline-5W-02",
+          "export_sha256": "68bcda0bc30ad27f714dc058a1c92f6d43c3a59af8ce8bfcfac278ef384115af",
+          "nominal_setting_W": 5,
+          "LP_peak_held_max_W": 3.66,
+          "LP_max_direct_SWR_with_RF": 1.15,
+          "directional_SWR_max_above_0_5W": 1.2595210850912149,
+          "raw_radio_SWR_above_2_at_power_above_0_5W": [],
+          "native_correcting_observations": 0,
+          "native_transport_faults_observed": false,
+          "native_input_limiting_observed": false,
+          "unkey_and_session_stop_confirmed": true,
+          "final_safety_telemetry": {
+            "directional_forward_watts": {
+              "age_ms": 15,
+              "finite": true,
+              "observed_at_ms": 219084153,
+              "present": true,
+              "value": 3.078089714050293
+            },
+            "directional_reflected_watts": {
+              "age_ms": 15,
+              "finite": true,
+              "observed_at_ms": 219084153,
+              "present": true,
+              "value": 0.010784809477627277
+            },
+            "forward_watts": {
+              "age_ms": 15,
+              "finite": true,
+              "observed_at_ms": 219084153,
+              "present": true,
+              "value": 3.078089714050293
+            },
+            "now_ms": 219084168,
+            "pa_temp_c": {
+              "age_ms": 231,
+              "finite": true,
+              "observed_at_ms": 219083937,
+              "present": true,
+              "value": 26.28125
+            },
+            "radio_swr": {
+              "age_ms": 15,
+              "finite": true,
+              "observed_at_ms": 219084153,
+              "present": true,
+              "value": 1
+            },
+            "supply_volts": {
+              "age_ms": 231,
+              "finite": true,
+              "observed_at_ms": 219083937,
+              "present": true,
+              "value": 13.484375
+            },
+            "swr": {
+              "age_ms": 15,
+              "finite": true,
+              "observed_at_ms": 219084153,
+              "present": true,
+              "value": 1.125833060215706
+            },
+            "swr_source": "same-packet-directional-power"
+          }
+        },
+        "ON": {
+          "case": "coherent-SWR-corrected-5W-01",
+          "export_sha256": "9be6005422752f19decfcaf59fe04d9324064eccba96797190b9c04272c5d65e",
+          "nominal_setting_W": 5,
+          "LP_peak_held_max_W": 3.71,
+          "LP_max_direct_SWR_with_RF": 1.08,
+          "directional_SWR_max_above_0_5W": 1.256638206639863,
+          "raw_radio_SWR_above_2_at_power_above_0_5W": [],
+          "native_correcting_observations": 7,
+          "native_transport_faults_observed": false,
+          "native_input_limiting_observed": false,
+          "unkey_and_session_stop_confirmed": true,
+          "final_safety_telemetry": {
+            "directional_forward_watts": {
+              "age_ms": 9,
+              "finite": true,
+              "observed_at_ms": 219205472,
+              "present": true,
+              "value": 3.3860034942626953
+            },
+            "directional_reflected_watts": {
+              "age_ms": 9,
+              "finite": true,
+              "observed_at_ms": 219205472,
+              "present": true,
+              "value": 0.010980572551488876
+            },
+            "forward_watts": {
+              "age_ms": 9,
+              "finite": true,
+              "observed_at_ms": 219205472,
+              "present": true,
+              "value": 3.3860034942626953
+            },
+            "now_ms": 219205481,
+            "pa_temp_c": {
+              "age_ms": 1547,
+              "finite": true,
+              "observed_at_ms": 219203934,
+              "present": true,
+              "value": 26.640625
+            },
+            "radio_swr": {
+              "age_ms": 9,
+              "finite": true,
+              "observed_at_ms": 219205472,
+              "present": true,
+              "value": 1.2109375
+            },
+            "supply_volts": {
+              "age_ms": 1547,
+              "finite": true,
+              "observed_at_ms": 219203934,
+              "present": true,
+              "value": 13.46875
+            },
+            "swr": {
+              "age_ms": 9,
+              "finite": true,
+              "observed_at_ms": 219205472,
+              "present": true,
+              "value": 1.1207709721898007
+            },
+            "swr_source": "same-packet-directional-power"
+          }
+        },
+        "matching_station_fields": [
+          "radio_serial",
+          "mode",
+          "transmit_antenna",
+          "nominal_power_setting_w",
+          "forward_power_limit_w",
+          "center_hz",
+          "sample_rate_hz",
+          "requested_tone1_hz",
+          "requested_tone2_hz",
+          "window",
+          "requested_averages",
+          "transmit_authorization_timeout_ms"
+        ],
+        "fundamental_PEP_change_dB": 0.3451320021265758,
+        "sampled_PEP_change_dB": 0.024580349538069868,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -34.09845156652686,
+            "ON_dBc_fundamental_PEP": -50.7079502246982,
+            "improvement_dB": 16.60949865817134,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -33.57288276495792,
+            "ON_dBc_fundamental_PEP": -60.17297651306127,
+            "improvement_dB": 26.600093748103355,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -47.62705244774813,
+            "ON_dBc_fundamental_PEP": -62.06709312046436,
+            "improvement_dB": 14.44004067271623,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -47.93609573493537,
+            "ON_dBc_fundamental_PEP": -71.20729092055865,
+            "improvement_dB": 23.271195185623277,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -59.11788992625041,
+            "ON_dBc_fundamental_PEP": -78.69411001184736,
+            "improvement_dB": 19.576220085596944,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -59.37121473493233,
+            "ON_dBc_fundamental_PEP": -71.81367238859623,
+            "improvement_dB": 12.4424576536639,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          }
+        ],
+        "ACPR": {
+          "acpr_low": {
+            "OFF_dBc_fundamental_PEP": -47.30180944974609,
+            "ON_dBc_fundamental_PEP": -61.39287461293367,
+            "improvement_dB": 14.09106516318758
+          },
+          "acpr_high": {
+            "OFF_dBc_fundamental_PEP": -47.61735385213727,
+            "ON_dBc_fundamental_PEP": -66.257734954748,
+            "improvement_dB": 18.640381102610732
+          }
+        }
+      },
+      {
+        "OFF": {
+          "case": "coherent-SWR-baseline-10W-01",
+          "export_sha256": "5f0deafa342c781f33c02f2c480a2449be0227e14e0dc78ff3b8f8d5055c2845",
+          "nominal_setting_W": 10,
+          "LP_peak_held_max_W": 7.49,
+          "LP_max_direct_SWR_with_RF": 1.13,
+          "directional_SWR_max_above_0_5W": 1.282768197558058,
+          "raw_radio_SWR_above_2_at_power_above_0_5W": [],
+          "native_correcting_observations": 0,
+          "native_transport_faults_observed": false,
+          "native_input_limiting_observed": false,
+          "unkey_and_session_stop_confirmed": true,
+          "final_safety_telemetry": {
+            "directional_forward_watts": {
+              "age_ms": 60,
+              "finite": true,
+              "observed_at_ms": 219364575,
+              "present": true,
+              "value": 6.435669898986816
+            },
+            "directional_reflected_watts": {
+              "age_ms": 60,
+              "finite": true,
+              "observed_at_ms": 219364575,
+              "present": true,
+              "value": 0.017718931660056114
+            },
+            "forward_watts": {
+              "age_ms": 60,
+              "finite": true,
+              "observed_at_ms": 219364575,
+              "present": true,
+              "value": 6.435669898986816
+            },
+            "now_ms": 219364635,
+            "pa_temp_c": {
+              "age_ms": 154,
+              "finite": true,
+              "observed_at_ms": 219364481,
+              "present": true,
+              "value": 26.890625
+            },
+            "radio_swr": {
+              "age_ms": 60,
+              "finite": true,
+              "observed_at_ms": 219364575,
+              "present": true,
+              "value": 1
+            },
+            "supply_volts": {
+              "age_ms": 154,
+              "finite": true,
+              "observed_at_ms": 219364481,
+              "present": true,
+              "value": 13.4453125
+            },
+            "swr": {
+              "age_ms": 60,
+              "finite": true,
+              "observed_at_ms": 219364575,
+              "present": true,
+              "value": 1.1107540235051379
+            },
+            "swr_source": "same-packet-directional-power"
+          }
+        },
+        "ON": {
+          "case": "coherent-SWR-corrected-10W-01",
+          "export_sha256": "e7a3e4301a4f6f5e1d8e23d194b495a7a46d973a3c41f0beb40539a261848027",
+          "nominal_setting_W": 10,
+          "LP_peak_held_max_W": 7.56,
+          "LP_max_direct_SWR_with_RF": 1.14,
+          "directional_SWR_max_above_0_5W": 1.2561178893494913,
+          "raw_radio_SWR_above_2_at_power_above_0_5W": [],
+          "native_correcting_observations": 8,
+          "native_transport_faults_observed": false,
+          "native_input_limiting_observed": false,
+          "unkey_and_session_stop_confirmed": true,
+          "final_safety_telemetry": {
+            "directional_forward_watts": {
+              "age_ms": 30,
+              "finite": true,
+              "observed_at_ms": 219514311,
+              "present": true,
+              "value": 7.066735744476318
+            },
+            "directional_reflected_watts": {
+              "age_ms": 30,
+              "finite": true,
+              "observed_at_ms": 219514311,
+              "present": true,
+              "value": 0.01794346235692501
+            },
+            "forward_watts": {
+              "age_ms": 30,
+              "finite": true,
+              "observed_at_ms": 219514311,
+              "present": true,
+              "value": 7.066735744476318
+            },
+            "now_ms": 219514341,
+            "pa_temp_c": {
+              "age_ms": 1507,
+              "finite": true,
+              "observed_at_ms": 219512834,
+              "present": true,
+              "value": 27.1875
+            },
+            "radio_swr": {
+              "age_ms": 31,
+              "finite": true,
+              "observed_at_ms": 219514310,
+              "present": true,
+              "value": 1.1875
+            },
+            "supply_volts": {
+              "age_ms": 1507,
+              "finite": true,
+              "observed_at_ms": 219512834,
+              "present": true,
+              "value": 13.42578125
+            },
+            "swr": {
+              "age_ms": 30,
+              "finite": true,
+              "observed_at_ms": 219514311,
+              "present": true,
+              "value": 1.1061276088964327
+            },
+            "swr_source": "same-packet-directional-power"
+          }
+        },
+        "matching_station_fields": [
+          "radio_serial",
+          "mode",
+          "transmit_antenna",
+          "nominal_power_setting_w",
+          "forward_power_limit_w",
+          "center_hz",
+          "sample_rate_hz",
+          "requested_tone1_hz",
+          "requested_tone2_hz",
+          "window",
+          "requested_averages",
+          "transmit_authorization_timeout_ms"
+        ],
+        "fundamental_PEP_change_dB": 0.33750700377234466,
+        "sampled_PEP_change_dB": 0.0040440685008036326,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -33.50226354848478,
+            "ON_dBc_fundamental_PEP": -49.49730389739835,
+            "improvement_dB": 15.995040348913577,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -32.96486398247814,
+            "ON_dBc_fundamental_PEP": -59.843114388490065,
+            "improvement_dB": 26.878250406011922,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -45.44819453533154,
+            "ON_dBc_fundamental_PEP": -60.85284736446942,
+            "improvement_dB": 15.40465282913788,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -45.63551288634736,
+            "ON_dBc_fundamental_PEP": -65.91893241189663,
+            "improvement_dB": 20.283419525549277,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -54.81387356363041,
+            "ON_dBc_fundamental_PEP": -74.70249707468584,
+            "improvement_dB": 19.888623511055428,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -54.9035343114981,
+            "ON_dBc_fundamental_PEP": -66.62104380116942,
+            "improvement_dB": 11.717509489671322,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          }
+        ],
+        "ACPR": {
+          "acpr_low": {
+            "OFF_dBc_fundamental_PEP": -44.96768489643138,
+            "ON_dBc_fundamental_PEP": -60.459081661141155,
+            "improvement_dB": 15.491396764709776
+          },
+          "acpr_high": {
+            "OFF_dBc_fundamental_PEP": -45.14737135236498,
+            "ON_dBc_fundamental_PEP": -62.849219558801686,
+            "improvement_dB": 17.701848206436708
+          }
+        }
+      }
+    ],
+    "limitations": [
+      "Raw IQ levels are uncalibrated; reported LP power basis remains meter-configured forward or net, unknown.",
+      "Shared packet receipt establishes transport pairing, not simultaneous ADC sampling or matched averaging inside firmware.",
+      "Repeated tones, speech, duty/recovery tests and final stock-APD comparison remain open."
+    ]
+  },
+  "post_RF_exact_cleanup_passed": true,
+  "temporary_diagnostic_helper_and_directory_retired": true,
+  "radio_idle_and_owned_session_stopped": true,
+  "native_build_dispatches": [
+    {
+      "workflow": "windows-installer.yml",
+      "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+      "branch": "feat/aetherpd-shim-integration",
+      "inputs": {
+        "publish_store_flight": "false",
+        "dev_overrides": "false",
+        "qualify_credentials": "false"
+      },
+      "dispatch_utc": "2026-11-18T17:58:38.959416+00:00",
+      "dispatch_return_code": 0
+    },
+    {
+      "workflow": "macos-dmg.yml",
+      "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+      "branch": "feat/aetherpd-shim-integration",
+      "inputs": {
+        "qualify_credentials": "false"
+      },
+      "dispatch_utc": "2026-11-18T17:58:41.087172+00:00",
+      "dispatch_return_code": 0
+    }
+  ],
+  "native_builds_pending": true,
+  "software_reboot_commands": [],
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "negative_candidate_binary": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/swr-guard-diagnosis/source085-AetherSDR",
+    "bytes": 833339896,
+    "sha256": "809663921779490b0c7e2f4097665930d1743f66a408d006f65007aa0dcd515f",
+    "source_commit": "0856d5fbd7140e3b886bf15c9af9cf4421244ef6",
+    "source": "attested original live process executable inode",
+    "scope": "Preserves candidate that refused before keying on the TX meter-number check"
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/coherent-SWR-guard-components.tar.gz",
+    "bytes": 2333663,
+    "sha256": "d7e3ef35e2dc9f510c19f945fa2fbd1bb61cb01181401e9f9b7a63740d9d1786",
+    "members": 146,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "The operator explicitly selected directional-power SWR. Its 2:1 threshold, 0.5W qualifying floor, power/vitals freshness, cutoff and LP bench protections remain bounded. Raw radio SWR remains separately displayed and recorded; no hidden fallback is used.",
+    "Shared packet receipt proves transport pairing, not simultaneous ADC sampling or matched averaging inside firmware. The original radio estimator's internal discrepancy is not diagnosed or repaired.",
+    "The first candidate incorrectly treated distinct TX- sensor numbers as transmitter identities and refused before keying. Its negative traces and exact executable are retained. Source8b fixes this using actual TX- num1/2/3 definitions; three causal mutations detect radio fallback, cross-packet pairing and the mistaken number check.",
+    "All four final keys completed valid four-average finite spectra with clean unkey/Stop. No final key observed raw SWR above2 while forward power exceeded0.5W. The causal conflicting-SWR evidence comes from original preserved packets and socket-free replay, not a naturally repeated qualifying raw spike during these four keys.",
+    "Each nominal5W/10W setting has one OFF/ON pair. Measured LP peak-held power and IQ sampled/fundamental PEP deltas are reported rather than assuming the nominal setting equals output. LP forward-versus-net basis remains unknown. Absolute IQ scale and ADC headroom are uncalibrated.",
+    "These finite captures do not complete P7 sustained/repeatability qualification. Speech, repeated cold/warm/duty/fault cases, natural128sample/cold-bypass investigation and final stockAPD comparison remain open. StockAPD was disabled during all four keys.",
+    "Full Linux desktop/daemon and five affected CTests passed on source62. Mutation execution used source8b with identical final production files. Documentation and static checks passed. New Windows/macOS source62 workflows are pending; earlier source106 native/sanitizer evidence is not relabeled.",
+    "On-radio release622/native DSP b3 was unchanged. The broad lab bridge was used only for the fixed read-only post-Stop cleanup snapshot, then its helper/directory were retired. No reboot, firmware signals, AetherTX launch or processing-settings restore was performed.",
+    "Actual6300 hardware/kernel/privilege-entry qualification, software-reboot/hang cause, production publisher/catalogue and floor disk, final credential/UI/lifetime gates and independent release review remain open. The full P1\u2013P10 plan remains authoritative."
+  ],
+  "evidence": "COHERENT-SWR-GUARD-EVIDENCE.json.gz",
+  "evidence_sha256": "91f7b817b846244c26d3605238de7507339393da539d528613284e6607667cad"
+}
