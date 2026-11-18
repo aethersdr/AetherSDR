@@ -1,0 +1,197 @@
+{
+  "created_utc": "2026-11-18T02:46:41.919867+00:00",
+  "base_commit": "504a3daa08a1f1dae41990bff15749aefc5720b7",
+  "exact_source_sha256": {
+    "docs/DEVELOPER-GUIDE.md": "37337b83f7fa141890a5cdff526008769141f781d0e4c90a63c1ff090c16f243",
+    "scripts/setup/_stage_onnxruntime_nuget.py": "c4c4b8ce64aa9c68b62bf45b725364469052796ac4b999234583b7eeae73c851",
+    "scripts/setup/setup-onnxruntime.ps1": "ce41cbdb8af8743db9f2f25b9bcad304490f64a0c8f0c8f68dc2f9d2118e211a",
+    "scripts/setup/setup-onnxruntime.sh": "d4d1aedb8f6d10f1b6687acfdc09ca4e37a0b59d3b80a1dac57d217e210c773d",
+    "tests/setup_onnxruntime_nuget_test.py": "85b884067a9b5e236d819801709940646c945c39aa41e037814e908ae4e58920",
+    "tests/tests.cmake": "de4059ac49f7c9d0923ae733babb9fa170823c379b2dcca424b04cf8975bcd74"
+  },
+  "production_ready": false,
+  "running_desktop_contains_fix": false,
+  "finding": "Official GitHub ONNX Runtime 1.27.0 Windows and Apple Silicon downloads return404; the exact-version Microsoft NuGet package is available, signature-verified, and now used only for404/410 with its own pinned SHA256. Runtime version, feature defaults, existing Intel support and workflow publication/signing policies are unchanged.",
+  "upstream_package": {
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.27.0/microsoft.ml.onnxruntime.1.27.0.nupkg",
+    "version": "1.27.0",
+    "bytes": 134994248,
+    "sha256": "c725e8cefdfe4de08befb9f79b3f218c162439cdcdb97cbbb5192888d58ea669",
+    "publisher_signature": "dotnet nuget verify --all completed exit0; Microsoft author signature and NuGet repository countersignature verified",
+    "native_source_commit": "8f0278c77bf44b0cc83c098c6c722b92a36ac4b5",
+    "Mac_minimum": "14.0; loader ID @rpath/libonnxruntime.1.dylib; stage supplies major, full-version and unversioned names",
+    "Windows_machine": "IMAGE_FILE_MACHINE_AMD64"
+  },
+  "implementation": "On404/410 only, invoke common Python3.9+ stager. Verify every cached/downloaded package, bound downloads/members, copy only selected platform/header/license entries, close partial files before cleanup and preserve previous staging on validation/publication failure. Cached primary Windows downloads are now always verified too. Other HTTP errors or digest mismatches fail without fallback.",
+  "before": [
+    {
+      "script": "bash",
+      "base": "504a3daa08a1f1dae41990bff15749aefc5720b7",
+      "exit": 22,
+      "unmodified_script_sha256": "5ac174c16e9a802d546eda75c30d490be63f26cdf6dfccfa465f8b74320934a3",
+      "download_failure_reproduced": true
+    },
+    {
+      "script": "powershell",
+      "base": "504a3daa08a1f1dae41990bff15749aefc5720b7",
+      "exit": 1,
+      "unmodified_script_sha256": "66b633bcd5f8523f313d80e279bc5ae7b912ec6f4f8dac47828a5f01221fcd01",
+      "download_failure_reproduced": true
+    }
+  ],
+  "verification": {
+    "full_Linux_app": "built exit0; current ORT-disabled Linux profile, not proof of native ONNX execution",
+    "registered_CTests": "6/6passed, including five existing installer/credential suites and the new stager target; final Python/alias-only changes rechecked on stager target",
+    "stager_cases": 12,
+    "injected_script_cases": [
+      {
+        "script": "bash",
+        "mode": "404",
+        "exit": 0,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "bash",
+        "mode": "410",
+        "exit": 0,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "bash",
+        "mode": "503",
+        "exit": 1,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "bash",
+        "mode": "tampered-nuget",
+        "exit": 1,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "bash",
+        "mode": "tampered-cached-primary",
+        "exit": 1,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "powershell",
+        "mode": "404",
+        "exit": 0,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "powershell",
+        "mode": "410",
+        "exit": 0,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "powershell",
+        "mode": "503",
+        "exit": 1,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "powershell",
+        "mode": "tampered-nuget",
+        "exit": 1,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      },
+      {
+        "script": "powershell",
+        "mode": "tampered-cached-primary",
+        "exit": 1,
+        "passed": true,
+        "network": "injected GitHub status, verified local NuGet cache; no live requests"
+      }
+    ],
+    "live_PowerShell_setup": "Actual GitHub404 then fresh NuGet download and complete Windows x64 staging; portable PowerShell7.5.4 on Linux, no Windows-native execution",
+    "live_Bash_setup": "Actual GitHub404 and verified official NuGet cache; only uname platform selection injected on Linux",
+    "mutants": [
+      {
+        "mutation": "omit_integrity_check",
+        "tests": 12,
+        "failures": 1,
+        "errors": 0,
+        "detected": true
+      },
+      {
+        "mutation": "skip_cache_reverification",
+        "tests": 12,
+        "failures": 1,
+        "errors": 0,
+        "detected": true
+      },
+      {
+        "mutation": "omit_publication_rollback",
+        "tests": 12,
+        "failures": 0,
+        "errors": 1,
+        "detected": true
+      },
+      {
+        "mutation": "omit_download_handle_close",
+        "tests": 12,
+        "failures": 1,
+        "errors": 1,
+        "detected": true
+      },
+      {
+        "mutation": "omit_macos_major_alias",
+        "tests": 12,
+        "failures": 0,
+        "errors": 1,
+        "detected": true
+      }
+    ],
+    "static": [
+      {
+        "step": "registration",
+        "exit": 0
+      },
+      {
+        "step": "frozen-gate",
+        "exit": 0
+      },
+      {
+        "step": "bash-syntax",
+        "exit": 0
+      },
+      {
+        "step": "diff",
+        "exit": 0
+      }
+    ],
+    "initial_build_harness_failure": "Default ccache path was read-only. Retried with the existing writable task cache; build passed. Negative log preserved."
+  },
+  "limits": [
+    "Native Windows/macOS application compilation and actual OS-keychain/UI qualification still required.",
+    "NuGet and unavailable GitHub archives are not claimed byte-identical; the package signature, source/version metadata, binary architecture/loader metadata and exact pinned NuGet bytes were verified.",
+    "No real radio mutation, install, RF, reboot, firmware change, or new app launch. Read-only SSH still reported the prior recovery boot.",
+    "Original software-reboot hang, firmware-baseline choice, final RF/stock comparison, actual6300 qualification and remaining P1-P10 release gates remain open."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/platform-dependency-fallback-components.tar.gz",
+    "bytes": 135140564,
+    "sha256": "e1453a8d2f54b0b8bf21476986d3e64bf3fe261168593d37de39370fae543f13",
+    "verified_members": 134,
+    "scope": "Source, fixtures, receipts, original signed official NuGet package with licenses and signature. Not a shipping AetherPD package."
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/PLATFORM-DEPENDENCY-FALLBACK-EVIDENCE.json.gz",
+    "sha256": "c8cf3f47e05080cbeb76f14f250dc9c1e969515ce9ae7d68ce27714b5074fb6e"
+  },
+  "radio_mutations": [],
+  "RF_commands": [],
+  "reboot_commands": []
+}

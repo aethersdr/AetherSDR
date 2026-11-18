@@ -3,9 +3,10 @@
     Download ONNX Runtime prebuilt binaries for Windows x64.
 
 .DESCRIPTION
-    Downloads the official ONNX Runtime 1.18.x prebuilt release from GitHub
+    Downloads the pinned official ONNX Runtime prebuilt release from GitHub
     and places headers / import library / DLL in third_party/onnxruntime/
-    ready for CMake (find_library / find_path).
+    ready for CMake (find_library / find_path). If that release asset returns
+    404 or 410, Python 3.9+ stages the same version from its pinned NuGet package.
 
     Required only for the S_History_v2-AI CNN signal classifier.
     AetherSDR compiles and runs without it — ONNX is an optional enhancement.
@@ -23,8 +24,8 @@ $OrtVersion = "1.27.0"
 $OrtUrl     = "https://github.com/microsoft/onnxruntime/releases/download/v${OrtVersion}/onnxruntime-win-x64-${OrtVersion}.zip"
 # SHA256 of the release zip. Bump alongside the version.
 $OrtSha256  = "c5c81710938e68079ff1a192b04897faabe4b43830d48f39f27ecd4e16138bfc"
-$OutDir     = "third_party\onnxruntime"
-$ZipFile    = "third_party\onnxruntime-win-x64-${OrtVersion}.zip"
+$OutDir     = Join-Path "third_party" "onnxruntime"
+$ZipFile    = Join-Path "third_party" "onnxruntime-win-x64-${OrtVersion}.zip"
 
 # ── Check if already set up ──────────────────────────────────────────────
 if (Test-Path "$OutDir\lib\onnxruntime.lib") {
@@ -42,9 +43,23 @@ New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
 # ── Download ─────────────────────────────────────────────────────────────
 if (-not (Test-Path $ZipFile)) {
     Write-Host "Downloading ONNX Runtime ${OrtVersion} prebuilt package..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $OrtUrl -OutFile $ZipFile
-    Confirm-Sha256 -Path $ZipFile -Expected $OrtSha256
+    try {
+        Invoke-WebRequest -Uri $OrtUrl -OutFile "${ZipFile}.part"
+        Move-Item -Force "${ZipFile}.part" $ZipFile
+    } catch {
+        Remove-Item -Force "${ZipFile}.part" -ErrorAction SilentlyContinue
+        $status = $_.Exception.Response.StatusCode
+        if ($null -eq $status -or [int]$status -notin @(404, 410)) { throw }
+        Write-Host "GitHub release asset unavailable; using the pinned official NuGet package."
+        $python = Get-Command python, python3 -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $python) { throw "Python 3.9+ is required for the official NuGet fallback." }
+        & $python.Source "$PSScriptRoot/_stage_onnxruntime_nuget.py" `
+            --platform win-x64 --destination $OutDir --cache "third_party"
+        if ($LASTEXITCODE -ne 0) { throw "ONNX Runtime NuGet fallback failed." }
+        exit 0
+    }
 }
+Confirm-Sha256 -Path $ZipFile -Expected $OrtSha256
 
 # ── Extract ──────────────────────────────────────────────────────────────
 Write-Host "Extracting..." -ForegroundColor Cyan

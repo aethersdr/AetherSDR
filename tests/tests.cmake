@@ -8566,6 +8566,8 @@ find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME check_a11y_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_a11y_test.py)
+    add_test(NAME setup_onnxruntime_nuget_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/setup_onnxruntime_nuget_test.py)
 endif()
 
 # #5262 M3a: the three-state control doctrine as a mechanism. Pins the two

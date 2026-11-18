@@ -7,7 +7,8 @@
 # features (Silero VAD + speaker labeling). Release builds run this so those
 # ship enabled; pass -DREQUIRE_ASR_ONNX=ON to fail the build if it's missing.
 #
-# Requires: curl, tar. Usage: ./setup-onnxruntime.sh
+# Requires: curl, tar; Python 3.9+ for the macOS NuGet fallback.
+# Usage: ./setup-onnxruntime.sh
 #
 # Keep ORT_VERSION in sync with scripts/setup/setup-onnxruntime.ps1 (Windows).
 
@@ -51,7 +52,20 @@ tgz="${REPO_ROOT}/third_party/${pkg}.tgz"
 mkdir -p "${REPO_ROOT}/third_party"
 if [ ! -f "${tgz}" ]; then
     echo "Downloading ${pkg}.tgz ..."
-    curl -fSL --retry 3 -o "${tgz}" "${url}"
+    if status=$(curl -fSL --retry 3 -o "${tgz}.part" -w '%{http_code}' "${url}"); then
+        mv "${tgz}.part" "${tgz}"
+    else
+        rm -f "${tgz}.part"
+        if [[ "${asset}" == "osx-arm64" && ( "${status}" == "404" || "${status}" == "410" ) ]]; then
+            echo "GitHub release asset unavailable; using the pinned official NuGet package."
+            python3 "${REPO_ROOT}/scripts/setup/_stage_onnxruntime_nuget.py" \
+                --platform osx-arm64 --destination "${OUT_DIR}" \
+                --cache "${REPO_ROOT}/third_party"
+            exit 0
+        fi
+        echo "ERROR: ONNX Runtime download failed (HTTP ${status})." >&2
+        exit 1
+    fi
 fi
 verify_sha256 "${tgz}" "${sha}"
 

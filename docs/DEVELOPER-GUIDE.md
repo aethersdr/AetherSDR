@@ -14,6 +14,19 @@ facing condensation.
 
 ---
 
+## ONNX Runtime setup
+
+The ONNX setup scripts pin the same runtime version as sherpa-onnx. If the
+Windows x64 or Apple Silicon GitHub release asset returns HTTP 404 or 410,
+setup uses Microsoft's official NuGet package for that exact version, with a
+separate pinned SHA-256. This fallback requires Python 3.9 or newer. It stages
+only that platform's native library, the C/C++ headers and license notices;
+it does not install .NET or the managed ONNX runtime. Other download failures
+and checksum mismatches stop setup. Intel macOS retains its existing setup
+and feature support.
+
+---
+
 ## Shared issue workflows
 
 Two shared issue workflows live in `.claude/skills/`, alongside the
