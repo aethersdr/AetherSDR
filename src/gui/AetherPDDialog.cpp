@@ -507,11 +507,11 @@ void AetherPDDialog::render()
         && (!status->feedbackBinding || status->feedbackBinding->valid)
         && status->state != aetherpd::State::BlockedByRadioApd
         && status->calibrationState != aetherpd::CalibrationState::Armed
-        && status->calibrationState != aetherpd::CalibrationState::Running && !pending;
+        && status->calibrationState != aetherpd::CalibrationState::Running && (!pending || pending == Operation::Status);
     enable(m_arm, active && !installing && arm, installing ? tr("Wait for the service update to finish before arming calibration.")
         : tr("Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off."));
     if (!alive) { return; }
-    const bool correction = active && !installing && !pending && status && status->available
+    const bool correction = active && !installing && (!pending || pending == Operation::Status) && status && status->available
         && status->registered && !status->keyed && status->correctionControl
         && (!status->feedbackBinding || status->feedbackBinding->valid)
         && status->state != aetherpd::State::BlockedByRadioApd

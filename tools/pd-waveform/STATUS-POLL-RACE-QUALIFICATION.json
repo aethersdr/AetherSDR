@@ -1,0 +1,123 @@
+{
+  "recorded_utc": "2026-11-18T22:15:07.460530+00:00",
+  "production_ready": false,
+  "parent_commit": "f75063713186512a38e4e895a8598693b8018a91",
+  "status": "Explicit calibration and correction requests replace only read-only status; before/after injected regressions, scoped ASan/UBSan/LSan and docs pass; live desktop qualification pending.",
+  "new_RF_keys": 0,
+  "radio_reboots": 0,
+  "root_bridge_used": false,
+  "prekey_negative_preserved": true,
+  "original_single_click_bench_recipe_restored": {
+    "source": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/owned-ready-live/prompt-stop-OFF-5W-01/bench_common-used.py",
+    "restored": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/owned-ready-live/bench_common.py",
+    "sha256": "39ca89e18f57911b545e425014cff960d4b960087dbf6b887e4f927e9b099381",
+    "executed_RF": false
+  },
+  "before_fix_all_three_layers_reproduced": true,
+  "after_fix_all_three_tests_passed": true,
+  "guards_preserved": [
+    "Control requests do not replace other controls",
+    "Stop still interrupts controls",
+    "Expired observations cannot authorize poll replacement",
+    "Late poll replies cannot revive status or capture bindings",
+    "Existing keyed, armed, invalid binding and current-session validation remains"
+  ],
+  "sanitizers": {
+    "passed": true,
+    "scope": "Affected client, model, dialog and test translation units; other engine and Qt libraries are ordinary build artifacts.",
+    "tests": [
+      {
+        "target": "aetherpd_client_test",
+        "exit_code": 0,
+        "instrumented_objects": [
+          "CMakeFiles/aetherpd_client_test.dir/aetherpd_client_test_autogen/mocs_compilation.cpp.o",
+          "CMakeFiles/aetherpd_client_test.dir/tests/aetherpd_client_test.cpp.o",
+          "CMakeFiles/aetherpd_client_test.dir/src/core/AetherPDClient.cpp.o",
+          "CMakeFiles/aetherpd_client_test.dir/src/core/AetherPDProtocol.cpp.o"
+        ],
+        "log": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/status-poll-race/sanitized-client/test.log"
+      },
+      {
+        "target": "aetherpd_model_test",
+        "exit_code": 0,
+        "instrumented_objects": [
+          "CMakeFiles/aetherpd_model_test.dir/aetherpd_model_test_autogen/mocs_compilation.cpp.o",
+          "CMakeFiles/aetherpd_model_test.dir/tests/aetherpd_model_test.cpp.o",
+          "CMakeFiles/aetherpd_model_test.dir/src/models/AetherPDModel.cpp.o",
+          "CMakeFiles/aetherpd_model_test.dir/src/core/txlinearity/AetherPDTestClient.cpp.o",
+          "CMakeFiles/aetherpd_model_test.dir/src/core/txlinearity/AetherPDCaptureSource.cpp.o",
+          "CMakeFiles/aetherpd_model_test.dir/src/core/AetherPDClient.cpp.o",
+          "CMakeFiles/aetherpd_model_test.dir/src/core/AetherPDProtocol.cpp.o"
+        ],
+        "log": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/status-poll-race/sanitized-model/test.log"
+      },
+      {
+        "target": "aetherpd_dialog_test",
+        "exit_code": 0,
+        "instrumented_objects": [
+          "CMakeFiles/aethercore.dir/src/core/AetherPDClient.cpp.o",
+          "CMakeFiles/aethercore.dir/src/models/AetherPDModel.cpp.o",
+          "CMakeFiles/aetherpd_dialog_test.dir/aetherpd_dialog_test_autogen/mocs_compilation.cpp.o",
+          "CMakeFiles/aetherpd_dialog_test.dir/tests/aetherpd_dialog_test.cpp.o",
+          "CMakeFiles/aetherpd_dialog_test.dir/src/gui/AetherPDDialog.cpp.o",
+          "CMakeFiles/aetherpd_dialog_test.dir/src/gui/AetherPDMeasurementDialog.cpp.o",
+          "CMakeFiles/aetherpd_dialog_test.dir/src/gui/AetherPDMeasurementSpectrum.cpp.o",
+          "CMakeFiles/aetherpd_dialog_test.dir/src/gui/AetherPDMeasurementExportDialog.cpp.o"
+        ],
+        "log": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/status-poll-race/sanitized-dialog/test.log"
+      }
+    ]
+  },
+  "static_checks": [
+    {
+      "command": [
+        "python3",
+        "tools/docs/gen_reference.py",
+        "--check"
+      ],
+      "exit_code": 0,
+      "output": "generated reference pages are up to date (8 pages)\n"
+    },
+    {
+      "command": [
+        "node",
+        "tools/docs/test_log_rules.mjs"
+      ],
+      "exit_code": 0,
+      "output": "NOTE: 24 cited line number(s) moved \u2014 run with --update to refresh:\n  rule gui-registration-refused: src/models/RadioModel.cpp:7892 \u2192 7975\n  rule kicked-by-other-client: src/models/RadioModel.cpp:7813 \u2192 7896\n  rule kicked-by-other-client: src/models/RadioModel.cpp:7864 \u2192 7947\n  rule multiflex-paused: src/models/RadioModel.cpp:7720 \u2192 7803\n  rule heartbeat-lost: src/models/RadioModel.cpp:9075 \u2192 9171\n  rule no-vita-udp: src/models/RadioModel.cpp:8111 \u2192 8198\n  rule udp-port-problem: src/models/RadioModel.cpp:8089 \u2192 8176\n  rule udp-port-problem: src/models/RadioModel.cpp:8168 \u2192 8255\n  rule rx-audio-failed: src/core/AudioEngine.cpp:4294 \u2192 4327\n  rule rx-audio-failed: src/core/AudioEngine.cpp:4330 \u2192 4363\n  rule mic-open-failed: src/core/AudioEngine.cpp:8975 \u2192 9098\n  rule mic-open-failed: src/core/AudioEngine.cpp:9206 \u2192 9329\n  rule mic-open-failed: src/core/AudioEngine.cpp:9258 \u2192 9381\n  rule dax-rx-stream-refused: src/models/RadioModel.cpp:1524 \u2192 1528\n  rule dax-rx-stream-refused: src/core/backends/flex/PanadapterStream.cpp:2215 \u2192 2211\n  rule dax-tx-failed: src/models/RadioModel.cpp:12872 \u2192 12979\n  rule qrhi-failure: src/gui/SpectrumWidget.cpp:13403 \u2192 13429\n  rule software-renderer: src/gui/SpectrumWidget.cpp:2088 \u2192 2089\n  rule fftw-wisdom-missing: src/core/AudioEngine.cpp:7807 \u2192 7930\n  rule hl2-socket-failed: src/core/backends/hl2/Hl2Backend.cpp:3030 \u2192 3452\n  rule hl2-stream-silent: src/core/backends/hl2/MetisClient.cpp:540 \u2192 552\n  rule icom-auth-rejected: src/core/backends/icom/IcomSession.cpp:184 \u2192 193\n  rule icom-auth-rejected: src/core/backends/icom/IcomSession.cpp:262 \u2192 271\n  rule icom-media-released: src/core/backends/icom/IcomSession.cpp:401 \u2192 410\nOK: 767 checks passed for 49 rules.\n"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_test_registration.py",
+        "--strict"
+      ],
+      "exit_code": 0,
+      "output": "test registration: OK \u2014 all test targets declared in tests/tests.cmake\n"
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "output": ""
+    }
+  ],
+  "docs_build_passed": true,
+  "scope_limits": [
+    "No new live RF result, final speech comparison, shutdown-fix RF validation or stock APD comparison.",
+    "Sanitizers cover the listed translation units; other linked engine and Qt libraries are not instrumented.",
+    "The installed radio release remains ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e.",
+    "Actual FLEX-6300, full P1-P10 qualification and independent release gates remain open."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/status-poll-race-components.tar.gz",
+    "sha256": "c4fd81b07d52be72950ac36fc82c85a68021ccc2d5c70e7cdaca49302fbe3318",
+    "bytes": 137912,
+    "members": 32,
+    "all_members_verified": true
+  },
+  "evidence_sha256": "60cf684f7226dfbf883d7637aea30d3c17a76fb7a454fa4c3ae147a1867e7f4f"
+}

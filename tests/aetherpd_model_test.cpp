@@ -27,6 +27,37 @@ int main(int argc, char** argv)
         return 1;
     }
     const QByteArray armed = fixture.readAll();
+    for (const Operation operation : {Operation::ArmCalibration, Operation::EnableCorrection, Operation::BypassCorrection}) {
+        Network controls, captures;
+        AetherPDModel owner(controls);
+        owner.setSession(address, token, [] { return true; },
+            StartIdentity{QStringLiteral("0D3EA0E8-B052-4AC6-9D32-D96918634469"), 7});
+        QJsonObject supported = QJsonDocument::fromJson(idle).object();
+        supported["correction_control"] = true;
+        if (operation == Operation::EnableCorrection) {
+            supported["correction_enabled"] = false;
+            supported["state"] = "disabled";
+        }
+        const QByteArray observed = QJsonDocument(supported).toJson();
+        controls.last->complete(200, observed);
+        AetherSDR::txlin::AetherPDCaptureSource source(captures);
+        const std::function<bool()> fence = owner.bindCaptureSource(source);
+        if (!check(fence && fence() && owner.refresh(), "fresh status must admit capture preparation and polling")) { return 1; }
+        Reply* poll = controls.last;
+        if (!check(owner.request(operation) && poll->aborted && !owner.status() && !fence()
+            && owner.pendingOperation() == operation,
+            "explicit calibration/correction must replace poll and retire capture preparation")) { return 1; }
+        Reply* control = controls.last;
+        const size_t sent = controls.sent.size();
+        if (!check(!owner.request(operation) && !control->aborted && controls.sent.size() == sent,
+            "duplicate calibration/correction must remain busy")) { return 1; }
+        poll->complete(200, observed);
+        QMetaObject::invokeMethod(poll, "finished", Qt::DirectConnection);
+        if (!check(owner.pendingOperation() == operation && !owner.status() && !fence(),
+            "late poll revived retired status or capture preparation")) { return 1; }
+        if (!check(owner.request(Operation::Stop) && control->aborted,
+            "Stop must still preempt calibration/correction after polling")) { return 1; }
+    }
     {
         using AetherSDR::txlin::AetherPDCaptureSource;
         using AetherSDR::txlin::CaptureConfig;
@@ -351,12 +382,16 @@ int main(int argc, char** argv)
     const std::function<bool()> staleTestFence = model.bindTestClient(staleTest);
     ok &= check(staleTestFence && staleTestFence(), "fresh status could not bind helper");
     ok &= check(staleFence && staleFence(), "fresh status could not bind capture before expiry");
+    model.refresh();
+    Reply* stalePoll = network.last;
     // Do not dispatch timers: a stalled event loop cannot extend freshness.
     QThread::msleep(3'050);
     const size_t beforeStale = network.sent.size();
     ok &= check(!model.status() && !model.request(Operation::ArmCalibration)
-        && network.sent.size() == beforeStale, "monotonic expiration gates arm even before timer delivery");
-    model.refresh(); network.last->complete(200, idle);
+        && !model.request(Operation::EnableCorrection) && !model.request(Operation::BypassCorrection)
+        && !stalePoll->aborted && network.sent.size() == beforeStale,
+        "monotonic expiration must refuse calibration/correction without replacing a pending poll");
+    stalePoll->complete(200, idle);
     ok &= check(!staleFence(), "new status after an unobserved freshness gap revived old capture");
     ok &= check(!staleTestFence() && !staleTest.begin(15000) && staleTestNetwork.sent.empty(),
                 "new status after freshness gap revived helper binding");

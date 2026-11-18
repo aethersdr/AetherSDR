@@ -394,17 +394,37 @@ int main(int argc, char** argv)
     network.last->complete(200, QJsonDocument(selectable).toJson());
     ok &= check(button(*dialog, "pdBypassCorrection")->isEnabled()
         && !button(*dialog, "pdEnableCorrection")->isEnabled(), "correction choice did not follow observed state");
+    button(*dialog, "pdRefresh")->click();
+    Reply* bypassPoll = network.last;
+    ok &= check(button(*dialog, "pdBypassCorrection")->isEnabled() && button(*dialog, "pdArm")->isEnabled(),
+        "read-only poll must keep eligible explicit calibration/correction controls enabled");
     button(*dialog, "pdBypassCorrection")->click();
     ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/correction/bypass")
-        && !button(*dialog, "pdBypassCorrection")->isEnabled(), "bypass click did not use bounded model request");
+        && bypassPoll->aborted && !button(*dialog, "pdBypassCorrection")->isEnabled()
+        && !button(*dialog, "pdArm")->isEnabled(), "single bypass click did not replace polling with bounded model request");
     network.last->complete(200, R"({"state":"correction_bypass_accepted"})");
     ok &= check(label("pdState") == QStringLiteral("Status unknown"), "bypass ACK became observed state");
     selectable["correction_enabled"] = false; selectable["state"] = "disabled";
     network.last->complete(200, QJsonDocument(selectable).toJson());
     ok &= check(button(*dialog, "pdEnableCorrection")->isEnabled()
         && !button(*dialog, "pdBypassCorrection")->isEnabled(), "bypass status lost inverse control");
+    button(*dialog, "pdRefresh")->click();
+    Reply* enablePoll = network.last;
+    ok &= check(button(*dialog, "pdEnableCorrection")->isEnabled(), "read-only poll disabled explicit enable");
     button(*dialog, "pdEnableCorrection")->click();
+    ok &= check(enablePoll->aborted
+        && network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/correction/enable"),
+        "single enable click did not replace polling");
     network.last->complete(200, R"({"state":"correction_enable_accepted"})");
+    network.last->complete(200, idleBody);
+    button(*dialog, "pdRefresh")->click();
+    Reply* armPoll = network.last;
+    ok &= check(button(*dialog, "pdArm")->isEnabled(), "read-only poll disabled explicit calibration arm");
+    button(*dialog, "pdArm")->click();
+    ok &= check(armPoll->aborted && !button(*dialog, "pdArm")->isEnabled()
+        && network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/calibration/arm"),
+        "single calibration click did not replace polling");
+    network.last->complete(200, R"({"state":"calibration_arm_accepted"})");
     network.last->complete(200, idleBody);
     QJsonObject measurementStatus = QJsonDocument::fromJson(idleBody).object();
     measurementStatus[QStringLiteral("measurement_control")] = true;

@@ -12,6 +12,34 @@ int main(int argc, char** argv)
     Network network;
     AetherPDClient client(network);
     const QString token(43, u'a');
+    for (const auto& [operation, path] : std::vector<std::pair<Operation, QString>>{
+             {Operation::ArmCalibration, QStringLiteral("/v1/aetherpd/calibration/arm")},
+             {Operation::EnableCorrection, QStringLiteral("/v1/aetherpd/correction/enable")},
+             {Operation::BypassCorrection, QStringLiteral("/v1/aetherpd/correction/bypass")}}) {
+        Network polling;
+        AetherPDClient source(polling);
+        source.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.100")));
+        source.submit(Operation::Status, token);
+        Reply* poll = polling.last;
+        int statuses = 0;
+        QObject::connect(&source, &AetherPDClient::statusReceived, &app,
+            [&](const Status&) { ++statuses; });
+        if (!check(source.submit(operation, token) && poll->aborted
+            && polling.sent.size() == 2 && polling.sent.back().request.url().path() == path,
+            "explicit calibration/correction action must replace read-only status")) { return 1; }
+        Reply* control = polling.last;
+        const size_t sent = polling.sent.size();
+        for (const Operation other : {Operation::ArmCalibration, Operation::EnableCorrection, Operation::BypassCorrection}) {
+            ok &= check(!source.submit(other, token) && !control->aborted && polling.sent.size() == sent,
+                "calibration/correction cannot replace an in-flight control request");
+        }
+        poll->complete(200, "{}");
+        QMetaObject::invokeMethod(poll, "finished", Qt::DirectConnection);
+        ok &= check(source.busy() && !control->aborted && statuses == 0,
+            "late status must not retire or publish over explicit control");
+        ok &= check(source.submit(Operation::Stop, token) && control->aborted,
+            "Stop must still replace calibration/correction");
+    }
     {
         Network polling;
         AetherPDClient source(polling);

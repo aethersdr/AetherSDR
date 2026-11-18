@@ -532,6 +532,9 @@ credential for the connected radio. Opening it reads status only.
   rearms a source automatically.
 - **Arm calibration** requires fresh, unkeyed status and radio APD off.
   **Cancel calibration** withdraws the calibration request.
+  **Arm calibration**, **Enable correction** and **Bypass correction** can
+  interrupt a background status read while the last observation is still fresh.
+  They do not interrupt another control request or retry automatically.
 - **Stop AetherPD** can interrupt startup. Closing the window leaves the
   session running; use Stop when you want it stopped. **Stopped — session
   cleanup confirmed** appears only after the service confirms the DSP and its
