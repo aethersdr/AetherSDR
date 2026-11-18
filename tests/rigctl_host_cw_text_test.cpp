@@ -2,11 +2,12 @@
 // (#7105). The HL2 fixture takes its capabilities from a real, unconnected
 // Hl2Backend; only canTransmit is set, as a connected HL2 that granted TX
 // declares it. The text is timed by the real CwxLocalKeyer worker and every edge
-// is recorded where RadioModel hands it to IRadioBackend::setCwKeying().
+// is recorded at IRadioBackend::requestCwControl(Kind::Carrier).
 // Socket-free: an injected stub backend; nothing is opened and nothing is keyed.
 
 #include "TestSettingsProfile.h"
 #include "core/RigctlProtocol.h"
+#include "core/backends/CwControlRequest.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
@@ -69,10 +70,17 @@ public:
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setKeying(bool, const TxCoordinator::Operation&,
                    const TxCoordinator::Completion&) override {}
-    void setCwKeying(bool down, bool, int, const TxCoordinator::Operation&,
-                     const TxCoordinator::Completion&) override
+    ReceiveDispatch requestCwControl(const CwControlRequest& request,
+                                     const TxCoordinator::Command& command) override
     {
-        edges->push_back({down, Clock::now()});
+        if (request.kind == CwControlRequest::Kind::PttEnvelope) {
+            return IRadioBackend::requestCwControl(request, command);
+        }
+        if (!cwEdgeAdmitted(request, command, caps.canTransmit)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        edges->push_back({request.down, Clock::now()});
+        return ReceiveDispatch::Dispatched;
     }
     QString sendCwText(const QString& text, const TxCoordinator::Operation&,
                        const TxCoordinator::Completion&) override
@@ -216,7 +224,7 @@ void testHl2KeysTextInMorseTiming()
     // T E S T = 6 elements, 12 edges. Count and order stay exact.
     const bool done = pumpUntil([&] { return f.edges.size() >= 12; }, 10000);
     pumpFor(static_cast<int>(10 * unitMs));
-    check("twelve edges reach setCwKeying", done && f.edges.size() == 12);
+    check("twelve carrier edges reach the backend", done && f.edges.size() == 12);
     check("edges alternate down/up, starting down", alternates(f.edges));
     check("the elements spell T E S T", pattern(f.edges, unitMs) == QLatin1String("- . ... -"));
     if (f.edges.size() == 12) {
@@ -233,9 +241,21 @@ void testHl2KeysTextInMorseTiming()
     // The two-line form: a bare `b`, the text on the next line.
     f.edges.clear();
     check("bare b arms the next line", cat(port, QStringLiteral("b")).isEmpty());
-    check("the next line is sent: RPRT 0", cat(port, QStringLiteral("E")).endsWith(QLatin1String("RPRT 0")));
+    check("the next line is sent: RPRT 0", cat(port, QStringLiteral("e")).endsWith(QLatin1String("RPRT 0")));
     check("and keys one dit", pumpUntil([&] { return f.edges.size() >= 2; }, 2000)
                                   && f.edges.size() == 2 && f.edges[0].down && !f.edges[1].down);
+}
+
+void testUnsupportedCharacterRefusesWholeMessage()
+{
+    Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+    RigctlProtocol port(&f.radio);
+    port.setSliceIndex(0);
+
+    check("unsupported character: whole message refused",
+          cat(port, QStringLiteral("b E#E")) == QLatin1String("RPRT -1"));
+    pumpFor(500);
+    check("unsupported character: no partial message was keyed", f.edges.empty());
 }
 
 void testStopMorseKeysUpAtOnce()
@@ -352,7 +372,7 @@ void testRefusals()
     }
     {
         // A radio that transmits but leaves hostCwKeyingControl absent (the
-        // default setCwKeying is a no-op) keeps the old answer.
+        // host text route is unavailable) keeps the old answer.
         RadioCapabilities caps;
         caps.canTransmit = true;
         check("default capabilities: hostCwKeyingControl is absent",
@@ -510,6 +530,15 @@ void testMidMessageRefusalsEndTheMessage()
         },
         [](Fixture& f) { f.radio.setPanTransmitInhibited(f.radio.slice(0)->panId(), false); },
         QStringLiteral(":cw-key"));   // the key-down refusal, not the pan notice
+    const auto setTuning = [](Fixture& f, bool enabled) {
+        TransmitDelta delta;
+        delta.tune = enabled;
+        f.radio.transmitModel().applyChanges(delta);
+    };
+    runMidMessageRefusal("TUNE",
+        [setTuning](Fixture& f) { setTuning(f, true); },
+        [setTuning](Fixture& f) { setTuning(f, false); },
+        QStringLiteral("cw-text-tuning"));
     runMidMessageRefusal("break-in turned off",
         [](Fixture& f) { f.radio.transmitModel().setCwBreakIn(false); },
         [](Fixture& f) { f.radio.transmitModel().setCwBreakIn(true); },
@@ -547,6 +576,7 @@ int main(int argc, char** argv)
         return 1;
     }
     testHl2KeysTextInMorseTiming();
+    testUnsupportedCharacterRefusesWholeMessage();
     testStopMorseKeysUpAtOnce();
     testDestroyedMidMessage();
     testRefusals();

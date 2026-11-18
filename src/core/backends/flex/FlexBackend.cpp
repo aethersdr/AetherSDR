@@ -965,7 +965,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.cwTextControl = CwTextControl{{CwField::Send, CwField::SendMacro,
         CwField::SaveMacro, CwField::Speed, CwField::Delay, CwField::Qsk,
         CwField::Erase, CwField::Clear}, CwTextControl::Completion::RadioCharacterIndex};
-    // Keys CW over NetCW above the setCwKeying() seam, which stays the default no-op.
+    // Carrier edges use FlexCwControls. CW text uses the radio's CWX buffer.
     caps.hostCwKeyingControl = std::nullopt;
     caps.cwTextMinWpm = 5;
     caps.cwTextMaxWpm = 100;

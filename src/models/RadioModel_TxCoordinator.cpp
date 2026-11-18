@@ -1216,6 +1216,12 @@ void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, b
                 refused();
                 return;
             }
+            if (!m_transmitModel.admitsCwKeyEdge(true)) {
+                emitInterlockNotification(tr("CW text stopped: TUNE is active."),
+                                          QStringLiteral("cw-text-tuning"), tx->panId());
+                refused();
+                return;
+            }
             // Break-in turned off, or MOX/PTT released, mid-message: the
             // backend would not raise MOX, so the element would not go out.
             if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {

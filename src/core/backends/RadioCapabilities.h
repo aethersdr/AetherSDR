@@ -1039,10 +1039,9 @@ struct RadioCapabilities {
     // error. False means no text buffer, not no CW.
     bool hasRadioSideCwKeyer = false;
 
-    // The backend turns client-timed elements from IRadioBackend::setCwKeying()
-    // into on-air CW (HL2: shaped host IQ). Engaged: a host text keyer may key
-    // text here, asked via RadioModel::hasHostCwTextKeyer(). Absent: the default
-    // setCwKeying() is a no-op, so text would never be sent and is refused.
+    // Engaged when a host text keyer may send client-timed elements through
+    // requestCwControl(Kind::Carrier). A backend with a native text buffer may
+    // accept carrier edges for a paddle and leave this fallback absent.
     struct HostCwKeyingControl {};
     std::optional<HostCwKeyingControl> hostCwKeyingControl;
 

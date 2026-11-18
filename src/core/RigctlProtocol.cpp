@@ -1,4 +1,5 @@
 #include "RigctlProtocol.h"
+#include "CwxLocalKeyer.h"
 #include <utility>
 #include "LogManager.h"
 #include "models/HostCwTextKeyer.h"
@@ -1863,7 +1864,10 @@ QString RigctlProtocol::sendHostMorse(const QString& text)
     if (!m_model->hasHostCwTextKeyer()) {
         return rprt(-11);
     }
-    if (!m_model->cwTextValidationError(text).isEmpty()) {
+    if (text.size() > HostCwTextKeyer::kMaxMessageChars) {
+        return rprt(-9);
+    }
+    if (!CwxLocalKeyer::canEncode(text)) {
         return rprt(-1);
     }
     if (m_model->hostCwTextRefusal() != RadioModel::HostCwTextRefusal::None) {
@@ -1872,8 +1876,7 @@ QString RigctlProtocol::sendHostMorse(const QString& text)
     if (!m_hostCwText) {
         m_hostCwText = std::make_shared<HostCwTextKeyer>(m_model, QStringLiteral("rigctl:send_morse"));
     }
-    // One line on an unauthenticated listener must not become an unbounded
-    // keyed run: refuse a message, or a queue, past Hamlib's own bounds.
+    // Bound both the individual message above and the connection's queue.
     if (!m_hostCwText->admitsLength(static_cast<int>(text.size()))) {
         return rprt(-9);
     }

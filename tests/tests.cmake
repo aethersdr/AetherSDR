@@ -11664,6 +11664,7 @@ set(AETHER_SETTINGS_CONSUMERS
     phone_mon_vox_availability_test
     dax_iq_rate_limits_test
     offline_health_registry_test
+    rigctl_host_cw_text_test
     tx_operation_integration_test
     flex_cw_controls_test
     tune_inhibit_restore_test
