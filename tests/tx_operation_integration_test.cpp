@@ -42,6 +42,7 @@
 #include <QEvent>
 #include <QEventLoop>
 #include <QElapsedTimer>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QTimer>
 #include <QThread>
@@ -3138,6 +3139,26 @@ void txTimeoutLatchThroughProducers()
         drain();
         check(f.commands.contains("mox:on"), "TOT/SmartCAT: and the next TX keys");
         (void)cat.processCommand("RX");
+        drain();
+    }
+    {
+        // CWX is sent text with no off: a CAT client's send_morse during an
+        // over must not hold the latch once the expiry stopped it.
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        RigctlProtocol cat(&f.radio);
+        (void)cat.handleLine("\\send_morse CQ CQ");
+        drain();
+        check(f.commands.filter(QRegularExpression(QStringLiteral("^cwx:(?!abort)"))).size() == 1,
+              "TOT/rigctl CWX: send_morse is admitted through the client's producer");
+        expire(f, now);
+        f.commands.clear();
+        const auto desktop = f.radio.localTxController()->capture(TxController::Activity::Mox);
+        const bool latched = f.radio.txTimeoutLatched();
+        check(!latched && desktop.start() && f.commands.contains("mox:on"),
+              "TOT/rigctl CWX: after the expiry, radio idle, local MOX is admitted");
+        desktop.stop();
         drain();
     }
 }
