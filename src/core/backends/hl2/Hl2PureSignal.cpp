@@ -222,8 +222,9 @@ void Hl2PureSignal::seedChannel(WdspChannel* ch)
                               << kHwPeak;
 }
 
-void Hl2PureSignal::setEnabled(bool on)
+void Hl2PureSignal::setEnabled(bool on, quint64 generation)
 {
+    m_generation = generation;
     if (on && !m_available)
         on = false;
     if (on == m_enabled) {
@@ -268,7 +269,7 @@ void Hl2PureSignal::setAvailability(bool available, const QString& reason)
     m_available = available;
     m_unavailableReason = available ? QString() : reason;
     if (!available && m_enabled)
-        setEnabled(false);
+        setEnabled(false, m_generation);
     else
         publish();
 }
@@ -448,6 +449,7 @@ void Hl2PureSignal::publish()
 {
     const WdspChannel::PureSignalInfo& info = m_lastInfo;
     Hl2PureSignalStatus s;
+    s.generation = m_generation;
     s.available = m_available;
     s.unavailableReason = m_unavailableReason;
     s.enabled = m_enabled;
@@ -480,7 +482,8 @@ void Hl2PureSignal::publish()
                 << s.attenuationDb << " dB, full gain; check the coupler or sampler";
         }
     }
-    const bool same = m_havePublished && s.available == m_last.available
+    const bool same = m_havePublished && s.generation == m_last.generation
+        && s.available == m_last.available
         && s.unavailableReason == m_last.unavailableReason && s.enabled == m_last.enabled
         && s.autoCalibrate == m_last.autoCalibrate && s.autoAttenuate == m_last.autoAttenuate
         && s.calibrating == m_last.calibrating

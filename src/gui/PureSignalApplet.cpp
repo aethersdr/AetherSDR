@@ -98,7 +98,7 @@ QString enableTip()
         "<b>Single</b> and transmit into your antenna or a dummy load. "
         "PureSignal never keys the radio by itself.<br><br>"
         "It uses two of the HL2's four receivers, so at most two receivers can "
-        "be open. It starts off on every connect."));
+        "be open. Your on/off setting is remembered for each HL2."));
 }
 } // namespace
 

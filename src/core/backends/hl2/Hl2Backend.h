@@ -547,6 +547,8 @@ private:
     QString m_psUnavailableReason;
     int m_psFeedbackRateHz = 0;
     Hl2PureSignalStatus m_psStatus;
+    quint64 m_psGeneration = 0;
+    bool m_psAdcOverload = false;
     // The operator's PureSignal preferences. GUI thread; the backend owns them
     // and persists them per radio as the "PureSignal" radio_settings document
     // (one coupler, one feedback attenuation), loaded on every connect.
@@ -1173,12 +1175,6 @@ private:
     // Below this many observations a window has no rate, only a numerator.
     static constexpr int kAdcMinWindowSamples = 4;
     bool m_keyed = false;
-    // Started on each key-down edge: whether a telemetry window was keyed from
-    // start to end (Hl2PsOverload).
-    QElapsedTimer m_keyedClock;
-    // Hl2PsOverload's state: the ADC reported overload while keyed with
-    // PureSignal on. pureSignalFields() reports it as feedbackLimit +2.
-    bool m_psAdcOverload = false;
     // The radio reports its own PTT/key (EP6 ptt_resp). Never an input to keying.
     bool m_radioPtt = false;
     // What transmitChanged last carried as mox: m_keyed || m_radioPtt.

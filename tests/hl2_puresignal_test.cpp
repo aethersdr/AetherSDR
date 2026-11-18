@@ -125,7 +125,7 @@ void limitNeedsALevelMeasuredHere()
     offOn.observe(true, 5, 31);
     check(offOn.limit(31, 240) == 0, "off/on: the previous session's level is no +1 at 31");
     offOn.observe(true, 6, 31);
-    check(offOn.limit(31, 240) == 1, "off/on: the first fresh attempt at 31 is");
+    check(offOn.limit(31, 240) == 1, "off/on: a fresh high level at 31 reports +1");
 }
 
 void overloadState()
@@ -455,20 +455,20 @@ void receiverCountUnderFloor()
     {
         MetisClient c;
         MetisClientTestAccess::setBoardMaxRx(c, 4);
-        c.setPureSignal(true);
+        c.setPureSignal(true, 1);
         check(c.effectiveNumRx() == 4, "PS on: four DDCs");
         c.setReceiverCount(2);
         check(c.effectiveNumRx() == 4, "second receiver under the floor: still four");
-        c.setPureSignal(false);
+        c.setPureSignal(false, 2);
         check(c.effectiveNumRx() == 2, "PS off keeps the receiver added under it");
     }
     {
         MetisClient c;
         MetisClientTestAccess::setBoardMaxRx(c, 4);
         c.setReceiverCount(2);
-        c.setPureSignal(true);
+        c.setPureSignal(true, 1);
         c.setReceiverCount(1);
-        c.setPureSignal(false);
+        c.setPureSignal(false, 2);
         check(c.effectiveNumRx() == 1, "PS off keeps the receiver removed under it");
     }
 }

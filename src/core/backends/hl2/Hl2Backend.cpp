@@ -371,6 +371,9 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_pureSignal->moveToThread(m_ioThread);
     connect(m_pureSignal, &Hl2PureSignal::statusChanged, this,
             [this](const Hl2PureSignalStatus& s) {
+        if (s.generation != m_psGeneration) {
+            return;
+        }
         m_psStatus = s;
         // Worker updates queued before linkDown must not publish after the
         // seam's final disconnected notification (IRadioBackend rule 6).
@@ -1918,19 +1921,20 @@ void Hl2Backend::applyPureSignalWire(bool on)
     if (on == m_psEnabled)
         return;
     m_psEnabled = on;
-    // Order on the I/O thread: claim the DDCs before the controller starts,
-    // and stop the controller before the DDCs go back.
-    if (on) {
-        QMetaObject::invokeMethod(m_metis, "setPureSignal", Qt::QueuedConnection,
-                                  Q_ARG(bool, true));
-        QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::QueuedConnection,
-                                  Q_ARG(bool, true));
-    } else {
-        QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::QueuedConnection,
-                                  Q_ARG(bool, false));
-        QMetaObject::invokeMethod(m_metis, "setPureSignal", Qt::QueuedConnection,
-                                  Q_ARG(bool, false));
-    }
+    const quint64 generation = ++m_psGeneration;
+    m_psAdcOverload = false;
+    m_psStatus.feedbackLimit = 0;
+    // Claim DDCs before the controller starts, and stop it before releasing them.
+    QMetaObject::invokeMethod(m_metis,
+        [metis = m_metis, controller = m_pureSignal, on, generation] {
+            if (on) {
+                metis->setPureSignal(true, generation);
+                controller->setEnabled(true, generation);
+            } else {
+                controller->setEnabled(false, generation);
+                metis->setPureSignal(false, generation);
+            }
+        }, Qt::QueuedConnection);
     qCInfo(lcHl2) << "HL2: PureSignal" << (on ? "on — DDC 2/3 claimed, receiver ceiling 2"
                                               : "off");
     announceReceiverCeilingRevision();
@@ -1996,12 +2000,15 @@ QVariantMap Hl2Backend::pureSignalFields() const
     s.autoAttenuate = m_psAutoAttenuate;
     // Auto-attenuate moves the attenuation on the I/O thread; only a manual
     // setting is this thread's to report.
-    if (!m_psAutoAttenuate)
+    if (!m_psAutoAttenuate && s.attenuationDb != m_psAttenuationDb) {
         s.attenuationDb = m_psAttenuationDb;
-    // The receive input overdriven is the gateware's report, not a feedback
-    // level, and it outranks the controller's +1/-1.
-    if (m_psEnabled && m_psAdcOverload)
+        s.feedbackLimit = 0;
+    }
+    if (!m_psEnabled) {
+        s.feedbackLimit = 0;
+    } else if (m_psAdcOverload) {
         s.feedbackLimit = 2;
+    }
     return pureSignalStatusFields(s);
 }
 
@@ -5182,7 +5189,6 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // as often as during (radiocert samples it per keyed stage).
     if (keyChanged && key) {
         m_keyedSwrGateClears = 0;
-        m_keyedClock.start();
     }
     m_keyed = key;
     // PureSignal collects only while keyed (calcc's MOX). Queued to the I/O
@@ -9416,24 +9422,19 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
         m_adcOverloadAssertions = 0;
     }
 
-    // PureSignal: while keyed the converter sees the feedback, so an overload
-    // then means the feedback overdrives the receive input (Hl2PsOverload).
-    const bool keyedWholeWindow = m_keyed && t.adcSamples > 0 && m_keyedClock.isValid()
-        && m_keyedClock.elapsed() >= t.adcWindowMs;
-    const bool overloadInWindow = t.adcOverloadSamples > 0 || t.adcOverload.value_or(false);
+    // Use the keying and enable cycle at acquisition. Delivery may be after unkey.
+    const bool feedbackWindow = t.psAdcGeneration != 0 && t.psAdcGeneration == m_psGeneration;
     const bool psOverload = AetherSDR::hl2::Hl2PsOverload::next(
-        m_psAdcOverload, m_psEnabled, keyedWholeWindow, overloadInWindow);
+        m_psAdcOverload, m_psEnabled, feedbackWindow, t.adcOverloadSamples > 0);
     if (psOverload != m_psAdcOverload) {
         m_psAdcOverload = psOverload;
         if (psOverload) {
             qWarning().noquote()
                 << QStringLiteral("HL2 PureSignal: ADC overload while transmitting (%1 of %2 "
-                                  "responses) at %3 dB feedback attenuation: the feedback "
-                                  "overdrives the receive input; add an attenuator in the "
-                                  "feedback path")
+                                  "responses): feedback overdrives the receive input. "
+                                  "Add an attenuator in the feedback path.")
                        .arg(t.adcOverloadSamples)
-                       .arg(t.adcSamples)
-                       .arg(m_psAutoAttenuate ? m_psStatus.attenuationDb : m_psAttenuationDb);
+                       .arg(t.adcSamples);
         }
         emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
                              pureSignalFields());

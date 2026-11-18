@@ -61,6 +61,7 @@ class Hl2TxDsp;
 
 // What the GUI sees. Plain values, copied across the thread boundary.
 struct Hl2PureSignalStatus {
+    quint64 generation = 0;    // backend enable cycle, for queued status delivery
     bool available = false;      // board, rate and receiver count allow it
     QString unavailableReason;   // why not, when !available
     bool enabled = false;
@@ -313,7 +314,7 @@ public:
     [[nodiscard]] bool isEnabled() const noexcept { return m_enabled; }
 
 public slots:
-    void setEnabled(bool on);
+    void setEnabled(bool on, quint64 generation = 0);
     void setKeyed(bool keyed);
     // calcc is told the rate the feedback DDCs actually run at (the receive
     // rate), so its MOX and TX delays convert to the right sample counts.
@@ -352,6 +353,7 @@ private:
     bool m_wantAuto = false;
     bool m_keyed = false;
     WdspChannel::PureSignalInfo m_lastInfo;
+    quint64 m_generation = 0;
     Hl2PsMeasuredAt m_measured;   // which attenuation m_lastInfo's level belongs to
     bool m_available = false;
     QString m_unavailableReason;
