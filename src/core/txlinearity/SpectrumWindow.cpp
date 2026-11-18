@@ -9,12 +9,9 @@ namespace {
 
 // Cosine-sum window: w[n] = sum_j (-1)^j a_j cos(2*pi*j*n/N).
 //
-// PERIODIC form (divisor N, not N-1). For spectral analysis the periodic window
-// is the correct one — it is the sampled version of the continuous window that
-// makes the DFT's implicit periodic extension seamless. The symmetric (N-1)
-// form belongs to FIR filter design; using it here leaves a one-sample
-// discontinuity that raises the far sidelobes by tens of dB and would quietly
-// undo the entire reason for choosing a -92 dB window.
+// The periodic divisor N gives the intended cosine-sum coefficients on the
+// DFT grid. Comparisons must use these same taps: a symmetric N-1 window has
+// a different response and different normalization factors.
 template <std::size_t K>
 std::vector<double> cosineSum(const std::array<double, K>& a, std::size_t n)
 {
@@ -35,9 +32,8 @@ std::vector<double> cosineSum(const std::array<double, K>& a, std::size_t n)
 // Harris 1978, Table 1 / eq. 33: 4-term minimum-sidelobe Blackman-Harris.
 constexpr std::array<double, 4> kBh4{0.35875, 0.48829, 0.14128, 0.01168};
 
-// 7-term minimum-sidelobe extension of the same family. ~-92 dB peak sidelobe
-// with a far-sidelobe rolloff steep enough that a tone 60 dB down is not
-// contaminated by the neighbouring tone's skirt at the IMD3 offsets.
+// Seven-term minimum-sidelobe coefficients. Leakage at a measurement offset
+// depends on the full window response, not a single nominal sidelobe number.
 constexpr std::array<double, 7> kBh7{0.27105140069342,
                                      0.43329793923448,
                                      0.21812299954311,
