@@ -86,7 +86,7 @@ their nicknames on this computer.
 | Page | What it covers |
 |------|----------------|
 | **Radio** | Radio information (serial, hardware version, region, options), identification (model, nickname, callsign), license info and the firmware version (**FW Version**; to update it, see [Firmware Update](./firmware-update.md)) |
-| **Network** | The radio's IP address, mask, MAC and gateway; DHCP/static IP configuration; **Advanced**: Enforce Private IP Connections, **Agent Automation (MCP)** (see [Automation Bridge and MCP](./automation-bridge-and-mcp.md)), Network MTU and the VITA-49 RX buffer (see [Low Bandwidth Connections](./low-bandwidth-connections.md)) |
+| **Network** | The radio's IP address, mask, MAC and gateway; DHCP/static IP configuration (dimmed, with the reason, over SmartLink, a manual-IP connection, or a connection that runs through Tailscale; a radio reached over another VPN, such as WireGuard or OpenVPN, counts as local); **Advanced**: Enforce Private IP Connections, **Agent Automation (MCP)** (see [Automation Bridge and MCP](./automation-bridge-and-mcp.md)), Network MTU and the VITA-49 RX buffer (see [Low Bandwidth Connections](./low-bandwidth-connections.md)) |
 | **GPS** | Whether a GPS is installed, position, grid, altitude, satellites and lock status. The full dashboard is **Tools → AetherGPS...**. See [AetherClock and GPS](./aetherclock-and-gps.md). Hidden on radios without GPS hardware. |
 | **Time** | A live NTP dashboard with the selected reference, source health, GPSDO status, and eight-poll reachability. Ten numbered server tabs provide configuration, **Enabled on radio**, and **Remove**. Radios on SmartSDR v4.3.16 or later; dimmed with the reason on older firmware. See [NTP Time Sources](./ntp-time-sources.md). |
 | **Calibration** | Host-side frequency calibration in ppb, for radios that cannot calibrate themselves ([Hermes-Lite 2](./hermes-lite-2.md)). Hidden on FlexRadio, which calibrates on the Receive page. |
@@ -167,6 +167,9 @@ The connected radio or this build cannot use that control.
 The **Timings (in ms)** group on **Transmit** requires a connected radio that
 supports those controls. **Timeout (sec):** is entered in seconds; the other
 timings are entered in milliseconds. The Demo does not implement these settings.
+**TX Off Delay (ms):** is the exception: AetherSDR stores it on this computer, so
+it can be edited while disconnected. See
+[TX off delay](./tx-controls.md#tx-off-delay).
 
 1. Connect to your radio before editing a timing.
 2. Enter a whole number. Negative delays are treated as zero; invalid or

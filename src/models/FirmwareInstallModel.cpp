@@ -21,6 +21,7 @@
 #include <QVersionNumber>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace AetherSDR {
@@ -35,12 +36,65 @@ constexpr qint64 kMaxFirmwareFile = 64 * 1024 * 1024;
 
 } // namespace
 
+namespace {
+std::optional<FirmwareInstallModel::DeviceSources>& testingSources()
+{
+    static std::optional<FirmwareInstallModel::DeviceSources> sources;
+    return sources;
+}
+
+// The system's lists, or the ones set for tests; the relay's device list
+// whenever there is a relay.
+FirmwareInstallModel::DeviceSources defaultSources(Ctr2ProxyModel* relay)
+{
+    FirmwareInstallModel::DeviceSources sources;
+    if (testingSources()) {
+        sources = *testingSources();
+    } else {
+        sources.loaders = [] {
+            QList<FirmwareInstallModel::Loader> out;
+#ifdef HAVE_SERIALPORT
+            for (const EspFlasher::Device& d : EspFlasher::listDevices())
+                out.append({d.portName, d.serialNumber.toUpper()});   // as HID's: upper case
+#endif
+            return out;
+        };
+        sources.hid = [] {
+#ifdef HAVE_HIDAPI
+            return Ctr2HidapiPort::enumerate();
+#else
+            return QList<Ctr2HidPort::DeviceInfo>();
+#endif
+        };
+    }
+    sources.hid = [relay = QPointer<Ctr2ProxyModel>(relay), fallback = std::move(sources.hid)] {
+        if (relay)
+            return relay->availableUsbDevices();
+        return fallback ? fallback() : QList<Ctr2HidPort::DeviceInfo>();
+    };
+    return sources;
+}
+} // namespace
+
+void FirmwareInstallModel::setDefaultDeviceSourcesForTesting(DeviceSources sources)
+{
+    testingSources() = std::move(sources);
+}
+
 FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* parent)
+    : FirmwareInstallModel(relay, defaultSources(relay), parent)
+{
+}
+
+FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, DeviceSources sources,
+                                           QObject* parent)
     : QObject(parent)
     , m_relay(relay)
     , m_downloader(new EspFirmwareDownloader(this))
     , m_job(new EspFirmwareJob(this))
     , m_poll(new QTimer(this))
+    , m_loaders(std::move(sources.loaders))
+    , m_hid(std::move(sources.hid))
     , m_lynDownloader(new Ctr2MaxStockDownloader(this))
 {
     connect(m_lynDownloader, &Ctr2MaxStockDownloader::catalogReady, this,
@@ -81,23 +135,6 @@ FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* paren
     connect(m_lynDownloader, &Ctr2MaxStockDownloader::releaseReady, this,
             [this] { m_stockDownloadAsked = false; });
 
-    m_loaders = [] {
-        QList<Loader> out;
-#ifdef HAVE_SERIALPORT
-        for (const EspFlasher::Device& d : EspFlasher::listDevices())
-            out.append({d.portName, d.serialNumber.toUpper()});   // as HID's: upper case
-#endif
-        return out;
-    };
-    m_hid = [this] {
-        if (m_relay)
-            return m_relay->availableUsbDevices();
-#ifdef HAVE_HIDAPI
-        return Ctr2HidapiPort::enumerate();
-#else
-        return QList<Ctr2HidPort::DeviceInfo>();
-#endif
-    };
     m_poll->setInterval(kPollMs);
     connect(m_poll, &QTimer::timeout, this, &FirmwareInstallModel::poll);
 

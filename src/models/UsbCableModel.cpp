@@ -8,6 +8,15 @@ template<typename T> void assign(T& target, const std::optional<T>& value)
 {
     if (value) { target = *value; }
 }
+
+bool carriesSetting(const UsbCableStatusValues& v)
+{
+    return v.type || v.name || v.source || v.sourceRxAnt || v.sourceTxAnt || v.sourceSlice
+        || v.parity || v.flowControl || v.band || v.output || v.enabled || v.present
+        || v.loggingEnabled || v.autoReport || v.activeHigh || v.preamp || v.pttDependent
+        || v.speed || v.dataBits || v.stopBits || v.pttDelayMs || v.txDelayMs
+        || v.lowFreqMhz || v.highFreqMhz;
+}
 }
 
 UsbCableModel::UsbCableModel(QObject* parent) : QObject(parent) {}
@@ -27,6 +36,17 @@ void UsbCableModel::applyObservation(const UsbCableStatusValues& value)
     if (value.removed) {
         handleRemoved(value.serial);
         return;
+    }
+    // A passthrough reply is data, not a cable change: it must not emit
+    // cableChanged, which reseeds every cable page on each poll reply.
+    if (value.passthroughData || value.textData) {
+        if (value.passthroughData && !value.passthroughData->isEmpty()
+            && value.bit < 0 && m_cables.contains(value.serial)) {
+            const QPointer<UsbCableModel> alive(this);
+            emit passthroughDataReceived(value.serial, *value.passthroughData);
+            if (!alive) { return; }
+        }
+        if (!carriesSetting(value)) { return; }
     }
     auto existing = m_cables.constFind(value.serial);
     if (value.bit >= 0) {

@@ -111,6 +111,26 @@ private:
     ControlCredentials& m_credentials;
 };
 
+// Run-time removal without the vault: retires the record live, a moment later.
+class Admin final : public RemoteClientAdmin {
+public:
+    explicit Admin(ControlCredentials& credentials) : m_credentials(credentials) {}
+    QList<Client> clients() const override
+    {
+        QList<Client> out;
+        for (const auto& r : m_credentials.remoteRecords()) { out.append({r.id, r.name, "remote-control"}); }
+        return out;
+    }
+    void revoke(const QString& id, RevokeDone done) override
+    {
+        QTimer::singleShot(20, [this, id, done] {
+            done(m_credentials.revoke(id) ? RevokeResult::Revoked : RevokeResult::NotFound);
+        });
+    }
+private:
+    ControlCredentials& m_credentials;
+};
+
 // A wss:// client that trusts only the certificate it was told to pin.
 struct WsClient {
     QWebSocket socket;
@@ -203,12 +223,14 @@ int main(int argc, char* argv[])
     ControlCredentials credentials;
     SpeakerTarget speaker(engine.resources);
     Issuer issuer(credentials);
+    Admin admin(credentials);
     (void)engine.resources.upsert({"radioSession", {}, "radio-1"}, {{"radioSpeaker", false}});
     LocalControlServer local(engine, nullptr, {}, true);
     RemoteControlServer remote(engine, RemoteControlServer::Mode::Secure, nullptr,
                                {2, RemoteControlServer::kHandshakeTimeoutMs, RemoteControlServer::kMaxQueuedOutputBytes});
     check(credentials.replace({}) && local.bindCredentials(&credentials) && local.bindReceiveTarget(&speaker)
-              && engine.service.bindPairing({&issuer, fingerprint, [] { return qint64(0); }}),
+              && engine.service.bindPairing({&issuer, fingerprint, [] { return qint64(0); }})
+              && engine.service.bindRemoteClientAdmin(&admin),
           "compose one engine for both listeners");
     const bool localUp = local.listen("remote-loopback-" + QUuid::createUuid().toString(QUuid::Id128),
                                       LocalControlServer::ListenMode::ReserveEndpoint);
@@ -320,6 +342,26 @@ int main(int argc, char* argv[])
         check(!plain.open(port, "ws"), "plain ws:// to the TLS port does not connect");
     }
 
+    // Removing a paired client from the local socket ends its live session:
+    // its socket closes, its budget slot frees, and its token is refused.
+    {
+        const QJsonArray listed = result(panel.exchange(request("remoteClients.list", {}, panelSession)))
+                                      .value("clients").toArray();
+        QString laptopId;
+        for (const QJsonValue& c : listed) {
+            if (c.toObject().value("name") == "Shack laptop") { laptopId = c.toObject().value("credentialId").toString(); }
+        }
+        check(!laptopId.isEmpty(), "the local client lists the paired laptop by name");
+        const int before = engine.networkSessions;
+        const QJsonObject revoked = panel.exchange(request("remoteClients.revoke", {{"credentialId", laptopId}}, panelSession));
+        check(result(revoked).value("revoked") == true, "the local client removes it");
+        check(waitUntil([&] { return laptop.closed; }) && waitUntil([&] { return engine.networkSessions == before - 1; }),
+              "the laptop's open connection is closed and its budget slot freed");
+        WsClient again(fingerprint);
+        check(again.open(port) && error(again.exchange(hello(token))) == "auth.invalid",
+              "its token is refused on reconnect");
+    }
+
     // A vault write slower than the handshake deadline still reaches its
     // client: the deadline is extended once while the reply is owed.
     {
@@ -349,8 +391,10 @@ int main(int argc, char* argv[])
         slow.close();
     }
 
+    WsClient last(fingerprint);
+    check(last.open(port), "connect once more before closing the listener");
     remote.close();
-    check(waitUntil([&] { return laptop.closed; }), "closing the listener ends its sessions");
+    check(waitUntil([&] { return last.closed; }), "closing the listener ends its sessions");
     local.close();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
