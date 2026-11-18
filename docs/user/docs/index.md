@@ -56,7 +56,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 - [RX Controls](./rx-controls.md) — Filters, AGC, squelch, mute, RIT/XIT
 - [TX Controls](./tx-controls.md) — Power, ATU pre-tune, MOX, TUNE, TX filter warnings, Quindar tones
 - [Meters](./meters.md) — S-Meter, SmartMTR, cross-needle PWR, Radio Vitals, Antenna Health
-- [Aetherial Audio](./aetherial-audio.md) — The AetherTX and AetherRX audio chains: gate, EQ, compressor, de-esser, tube, exciter, reverb, limiter, presets
+- [Aetherial Audio](./aetherial-audio.md) — The AetherTX and AetherRX audio chains: RN2 (TX), gate (RX), tube, EQ, compressor, exciter, reverb, limiter, profiles
 - [Multi-Slice Operation](./multi-slice-operation.md) — Working with multiple slices, Slice Link
 - [Split Operation](./split-operation.md) — SPLIT/SWAP, Split Up offsets, Monitor TX, remembered audio, Split QSY closing
 - [Diversity and ESC](./diversity-and-esc.md) — Diversity mode and Enhanced Signal Clarity

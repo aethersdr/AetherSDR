@@ -51,20 +51,42 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
 
 *The TGXL applet with a Tuner Genius XL connected.*
 
-- **Fwd Power** gauge. It scales for barefoot (0–200 W), Aurora or a KPA500 in
-  operate (0–600 W) and PGXL (0–2000 W) power levels, and uses the tuner's own
-  peak reading, so voice peaks read correctly. An associated KXPA100 does not
-  reduce an Aurora's tuner gauge range; it remains 0–600 W even when the shared
-  transmit meters show the KXPA100's output.
-- **SWR** gauge (1.0–3.0).
+- **Fwd Power** gauge. Use **Settings** at the bottom of the applet to select
+  **Auto (200 / 2,000 W)** (the default) or **Fixed 600 W**. The choice is saved.
+  Fixed 600 W retains its scale at all power levels, including after reconnecting;
+  its labels are 0, 200, 400 and 600 W; at narrow widths intermediate labels
+  are hidden as needed to avoid overlap. Yellow starts at 400 W and red at 500 W.
+  Readings and peak markers above full scale are clamped to the end of the bar.
+  Auto starts at 0–200 W, changes to 0–2,000 W above
+  200 W, and returns to the low scale after forward power stays below 0.5 W
+  for 800 ms. This hold prevents range changes between syllables or CW elements.
+  Peak and MAX do not select the range.
+  The peak marker uses the tuner's own peak reading on a direct connection.
+  It is hidden when that reading rounds to 0 W.
+  The tuner's `max` field is still parsed, but no MAX marker is displayed until
+  a physical hardware capture establishes what it means.
+- **SWR** gauge. It starts at 1.0–3.0, changes to 1.0–10.0 above 3.0,
+  and returns to the low scale at 1.0. Green, yellow, amber and red show
+  the 1.5, 2.0 and 2.5 SWR boundaries on either scale.
+  Below 5 W the bar is empty and idle readings cannot select the high range.
+  A reported 1.0 still restores the low range.
+  Accessible meter descriptions include the selected full scale.
 - **C1**, **L** and **C2** relay bars.
 - **TUNE**: starts an auto-tune. While a tune runs it reads **STOP**;
   pressing it stops the tune. The tuner stays in operate.
 - **OPERATE**: cycles OPERATE → BYPASS → STANDBY.
-- **ANT 1 / ANT 2 / ANT 3** antenna buttons, shown with a direct connection to
-  a TGXL that has an antenna switch. On the 3-way model with firmware
+- **ANT 1 / ANT 2 / ANT 3** antenna buttons, shown when a directly connected
+  TGXL identifies itself as the 3-way model. Click a button to select that
+  antenna; the tuner's reported selection is highlighted. With firmware
   1.2.41 or later, custom port names supplied by the tuner replace these labels.
-  When no names are returned, the buttons retain their default labels.
+  When no names are returned, the buttons retain their default labels. SO2R
+  models do not show this row.
+  While transmitting (forward power at or above 5 W, or the TGXL interlock
+  cable is active), the selected antenna's button turns red.
+  Identification accepts the documented `info` reply prefix even if its
+  sequence number differs from the request. While the direct variant is unknown,
+  radio-relayed 3-way identification enables the row. A confirmed direct SO2R
+  answer overrides that fallback and hides it.
 
 Messages from the tuner appear across the applet for as long as the tuner
 shows them: after a successful tune it shows the SWR it settled on
@@ -85,9 +107,8 @@ strip for each RF port showing what is feeding it and where it is tuned, the
 C1/L/C2 relay positions as dials, and separate **STBY**, **BYP** and **TUNE**
 keys. A port shows its source only while it has a live reading.
 
-The **SWR** meter has the same flat dark track as **PWR**. With no forward
-power, the SWR track stays empty; color in the bar shows the measured SWR
-while power is flowing.
+The **SWR** meter has the same flat dark track as **PWR**. Color in the bar
+shows the reported SWR.
 
 ## Using manual relay control
 

@@ -342,7 +342,7 @@ private:
     float  m_inPeakDb{-120.0f};
     float  m_outPeakDb{-120.0f};
     float  m_grDb{0.0f};
-    float  m_ceilingDb{-1.0f};
+    float  m_ceilingDb{ClientFinalLimiter::kDefaultCeilingDb};
     float  m_holdDb{-120.0f};
     qint64 m_holdUntilMs{0};
     bool   m_dragging{false};
@@ -418,8 +418,10 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         m_enable->setCheckable(true);
         m_enable->setFixedSize(56, 18);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_enable, amberStyle);
-        m_enable->setToolTip("Enable the dedicated final-stage brickwall "
-                             "limiter at the tail of the TX chain.");
+        m_enable->setToolTip(tr("Final brickwall limiter at the tail of the "
+                                "TX chain: no 48 kHz sample leaves the limiter "
+                                "above the ceiling. Drag the amber handle on "
+                                "the meter to set the ceiling."));
         connect(m_enable, &QPushButton::toggled,
                 this, &StripFinalOutputPanel::applyEnable);
         col->addWidget(m_enable);
@@ -494,6 +496,28 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
     connect(m_trim, &ClientCompKnob::valueChanged,
             this, &StripFinalOutputPanel::applyTrim);
     row->addWidget(m_trim);
+
+    // Look-ahead — how far ahead the limiter sees a peak coming, so it can
+    // ramp down in time instead of clamping. It is also the delay LIM adds.
+    m_lookahead = new ClientCompKnob;
+    m_lookahead->setObjectName("aetherTxFinalLookahead");
+    m_lookahead->setLabel("Look-ahead");
+    m_lookahead->setCenterLabelMode(true);
+    m_lookahead->setRange(0.0f, ClientFinalLimiter::kMaxLookaheadMs);
+    m_lookahead->setDefault(ClientFinalLimiter::kDefaultLookaheadMs);
+    m_lookahead->setLabelFormat([](float v) {
+        return QString::number(v, 'f', 1) + " ms";
+    });
+    m_lookahead->setFixedSize(76, 76);
+    m_lookahead->setAccessibleName(tr("Limiter look-ahead"));
+    m_lookahead->setToolTip(tr("How far ahead LIM sees a peak coming, 0 to "
+                               "5 ms, so it ramps down in time instead of "
+                               "clamping. This is also the delay LIM adds "
+                               "while it is on. 0 ms is an instant hard "
+                               "limit."));
+    connect(m_lookahead, &ClientCompKnob::valueChanged,
+            this, &StripFinalOutputPanel::applyLookahead);
+    row->addWidget(m_lookahead);
 
     auto* meter = new HorizMeter(this);
     meter->setCeilingSetter([this](float db) { applyCeiling(db); });
@@ -685,6 +709,10 @@ void StripFinalOutputPanel::syncControlsFromEngine()
         QSignalBlocker b(m_trim);
         m_trim->setValue(lim->outputTrimDb());
     }
+    if (m_lookahead) {
+        QSignalBlocker b(m_lookahead);
+        m_lookahead->setValue(lim->lookaheadMs());
+    }
     if (m_dcBtn) {
         QSignalBlocker b(m_dcBtn);
         m_dcBtn->setChecked(lim->dcBlockEnabled());
@@ -730,6 +758,15 @@ void StripFinalOutputPanel::applyTrim(float db)
     if (!m_audio) return;
     if (auto* lim = m_audio->clientFinalLimiterTx()) {
         lim->setOutputTrimDb(db);
+        m_audio->saveClientFinalLimiterSettings();
+    }
+}
+
+void StripFinalOutputPanel::applyLookahead(float ms)
+{
+    if (!m_audio) return;
+    if (auto* lim = m_audio->clientFinalLimiterTx()) {
+        lim->setLookaheadMs(ms);
         m_audio->saveClientFinalLimiterSettings();
     }
 }

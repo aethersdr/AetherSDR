@@ -41,6 +41,7 @@
 #include "ModeFilterPresets.h"
 #include "DisplaySquelchRouting.h"
 #include "WfmApplet.h"
+#include "PureSignalApplet.h"
 #include "BandApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
@@ -4691,6 +4692,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
     }
 
+    // ── WSJT-X Rx/Tx frequency overlay (#4526) ──────────────────────────────
+    // A pan created after WSJT-X is already reporting Status (e.g. a new
+    // panadapter opened mid-session) gets today's marker state immediately,
+    // rather than waiting for the next Status message before it appears.
+    rebuildWsjtxMarkers();
+
     // ── S History Markers ─────────────────────────────────────────────────
     sw->setShowSHistory(m_sHistoryEnabled);
     sw->setShowSHistoryQrm(m_sHistoryQrmEnabled);
@@ -5332,6 +5339,23 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
         // Empty pan + wheel scroll → no-op. A stray scroll gesture shouldn't
         // conjure a slice; click is the explicit "create here" affordance.
+    });
+
+    // ── WSJT-X overlay mid-session listener start (#4526) ────────────────────
+    // The auto-start block in onConnectionStateChanged only runs at radio-
+    // connect time. If the operator enables the overlay after connecting,
+    // nothing would start the listener until the next reconnect. This signal
+    // fires from setShowWsjtxFreq(true) so we can close that gap.
+    connect(sw, &SpectrumWidget::wsjtxListenerNeeded,
+            this, [this] {
+        if (!m_radioModel.isConnected() || m_wsjtxClient->isListening())
+            return;
+        auto& s = AppSettings::instance();
+        const QString addr = s.value("WsjtxAddress", "224.0.0.1").toString();
+        const quint16 port = static_cast<quint16>(s.value("WsjtxPort", 2237).toInt());
+        QMetaObject::invokeMethod(m_wsjtxClient, [=, this] {
+            m_wsjtxClient->startListening(addr, port);
+        });
     });
 
     // ── Edge auto-pan step during slice drag (user-reported) ─────────────────
@@ -7843,8 +7867,6 @@ void MainWindow::wireMeters()
         const bool integratedAmp = m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
-        m_appletPanel->tunerApplet()->setPowerScale(tunerMaxWatts(radioMaxWatts, selection),
-                                                   selection.highPowerAmplifier);
         m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
         m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };
@@ -8398,6 +8420,15 @@ void MainWindow::announceAntennaChoiceRefused(bool tx)
                          << "antenna choice refused: this radio publishes no"
                          << "antenna port to choose";
     showUnsupportedControlNotice();
+}
+
+
+void MainWindow::wirePureSignalApplet(IRadioBackend* backend)
+{
+    // The applet binds only to an advertised extension and otherwise unbinds.
+    if (m_appletPanel && m_appletPanel->pureSignalApplet()) {
+        m_appletPanel->pureSignalApplet()->setBackend(backend);
+    }
 }
 
 } // namespace AetherSDR

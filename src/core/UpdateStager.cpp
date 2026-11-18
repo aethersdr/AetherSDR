@@ -36,13 +36,9 @@ namespace fs = std::filesystem;
 
 namespace AetherSDR {
 
-const char* const UpdateStager::kManifestUrl = "https://updates.aethersdr.com/latest/manifest.json";
+const char* const UpdateStager::kManifestUrl = "https://updates.aethersdr.com/latest/manifest-v2.json";
 
 namespace {
-
-// Every URL a manifest may name: a download of the release it describes, on
-// the one repository the app trusts (UpdateChecker::isTrustedDownloadUrl).
-const QString kDownloadBase = QStringLiteral("https://github.com/aethersdr/AetherSDR/releases/download/");
 
 // packaging/update-signing.pub's raw Ed25519 key (key_id 788fb6e31f7ecba4).
 // update_stager_test checks it against that file.
@@ -135,11 +131,8 @@ bool readAsset(const QJsonObject& o, const QString& tag, UpdateManifest::Asset* 
     a->url = QUrl(o.value(QLatin1String("url")).toString(), QUrl::StrictMode);
     a->sha256 = o.value(QLatin1String("sha256")).toString();
     a->size = o.value(QLatin1String("size")).toInteger(-1);
-    const QString url = a->url.toString();
-    return a->url.isValid() && UpdateChecker::isTrustedDownloadUrl(a->url)
-           && url.startsWith(kDownloadBase + tag + QLatin1Char('/'))
-           && !url.mid(kDownloadBase.size() + tag.size() + 1).contains(QLatin1Char('/'))
-           && !a->url.hasQuery() && !a->url.hasFragment() && hexSha().match(a->sha256).hasMatch()
+    // Every URL a manifest names is one file of the release it describes.
+    return UpdateChecker::isTrustedPayloadUrl(a->url, tag) && hexSha().match(a->sha256).hasMatch()
            && a->size >= 0;
 }
 
