@@ -294,6 +294,33 @@ int main(int argc, char** argv)
         check(f.controller->prepare(f.config, f.request), "diagnostic prevented subsequent receive preparation");
         check(abortEvidence.size() == 1, "new preparation reused old abort evidence");
     }
+    {
+        Fixture f; f.start(); abortEvidence.clear();
+        TxTelemetry telemetry{{3.0, f.now}, {40.0, f.now}, {13.8, f.now}, {1.0, f.now}};
+        telemetry.swrSource = TxTelemetry::SwrSource::DirectionalPower;
+        telemetry.radioSwr = {1.0, f.now - 4};
+        telemetry.directionalForwardWatts = {1.0, f.now};
+        telemetry.directionalReflectedWatts = {0.25, f.now};
+        f.observedTelemetry = telemetry;
+        f.lease->onRelease = [&] { f.observedTelemetry.reset(); };
+        f.controller->poll();
+        check(f.lease->releases == 1 && abortEvidence.size() == 1,
+              "directional high SWR requests immediate release despite unity raw radio SWR");
+        if (abortEvidence.size() == 1) {
+            const QJsonObject record = abortEvidence.front();
+            check(record.value("swr_source") == "same-packet-directional-power"
+                && record.value("swr").toObject().value("value") == 3.0
+                && record.value("radio_swr").toObject().value("value") == 1.0
+                && record.value("directional_forward_watts").toObject().value("value") == 1.0
+                && record.value("directional_reflected_watts").toObject().value("value") == 0.25,
+                "release must not erase SWR source or either original directional input");
+        }
+        f.lease->observed = Lease::State::Released; f.controller->poll();
+        check(f.result && f.result->safetyTelemetry && f.result->safetyTelemetryAtMs
+            && safetyTelemetryEvidence(*f.result->safetyTelemetry, *f.result->safetyTelemetryAtMs)
+                .value("swr_source") == "same-packet-directional-power",
+            "completed error export must retain directional-source provenance");
+    }
     for (const int fault : {0, 1, 2, 3}) {
         Fixture f; f.start(); abortEvidence.clear();
         f.observedTelemetry = TxTelemetry{{1.08, f.now}, {40.0, f.now}, {13.8, f.now}, {5.0, f.now}};

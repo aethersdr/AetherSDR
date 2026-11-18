@@ -159,6 +159,29 @@ int main()
               "a stopped run has nothing to abort");
     }
 
+    {
+        TxLinearitySafety safety;
+        TxTelemetry directional = samples(1000, 1.22, 40.0, 13.8, 5.0);
+        directional.swrSource = TxTelemetry::SwrSource::DirectionalPower;
+        directional.directionalForwardWatts = {5.0, 1000};
+        directional.directionalReflectedWatts = {0.05, 1000};
+        check(safety.evaluateTelemetry(1000, directional) == AbortReason::None,
+              "selected directional source requires no raw radio-SWR fallback");
+        directional.directionalReflectedWatts = {};
+        check(safety.evaluateTelemetry(1000, directional) == AbortReason::TelemetryStale,
+              "missing reflected power fails closed");
+        directional.forwardWatts.value = 0.001;
+        check(safety.evaluateTelemetry(1000, directional) == AbortReason::TelemetryStale,
+              "selected directional source requires a complete pair before keying at idle");
+        directional.directionalReflectedWatts = {0.001, 999};
+        check(safety.evaluateTelemetry(1000, directional) == AbortReason::TelemetryStale,
+              "different sample times cannot satisfy the selected directional source");
+        directional.directionalReflectedWatts = {0.001, 1000};
+        directional.directionalForwardWatts.value = -1;
+        check(safety.evaluateTelemetry(1000, directional) == AbortReason::TelemetryStale,
+              "negative directional power fails closed");
+    }
+
     // ── Band plan ───────────────────────────────────────────────────────────
     {
         TxLinearitySafety safety;

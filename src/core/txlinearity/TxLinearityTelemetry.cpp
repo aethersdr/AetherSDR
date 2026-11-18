@@ -22,6 +22,9 @@ TelemetrySample TxLinearityTelemetry::observe(std::size_t index, double value,
         return {};
     }
     if (sourceStamp == previous.sourceStamp) {
+        // Several accepted samples can share a UTC millisecond. Keep the
+        // original mapped age while mirroring the latest accepted value.
+        previous.sample.value = value;
         return previous.sample;
     }
     if (sourceStamp > wallNowMs || wallNowMs - sourceStamp > monotonicNowMs) {
