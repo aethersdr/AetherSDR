@@ -1,0 +1,447 @@
+{
+  "recorded_utc": "2026-11-18T23:48:00.443500+00:00",
+  "production_ready": false,
+  "status": "Current installed5W integrated analyzer OFF/ON pair passes declared level and IMD3 gates, independent guard and GUI JSON/CSV/PNG exports; native Windows/macOS builds pass, artifact collection partly pending.",
+  "parent_commit": "5a81aebc73c10d774d06f475541654b65d74b738",
+  "installed_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "desktop_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+  "comparison": {
+    "production_ready": false,
+    "scope": "One finite current-candidate ordinary integrated-analyzer5W tone pair after clearing the known legacy ownership tail; four contiguous native frames per run; not full P7/P8.",
+    "installed_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+    "desktop_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "FDX": false,
+    "capture_source": "local-dax-iq",
+    "matching_station_fields": [
+      "radio_serial",
+      "mode",
+      "transmit_antenna",
+      "nominal_power_setting_w",
+      "forward_power_limit_w",
+      "center_hz",
+      "sample_rate_hz",
+      "requested_tone1_hz",
+      "requested_tone2_hz",
+      "window",
+      "requested_averages",
+      "transmit_authorization_timeout_ms"
+    ],
+    "cases": [
+      {
+        "case": "baseline-5W-01",
+        "LP_peak_W": 3.61,
+        "observed_RF_seconds": 6.014632331,
+        "exports": [
+          {
+            "file": "measurement.json",
+            "bytes": 1239357,
+            "sha256": "4335c8fd520070f47af11e0be12bdab2ba590281151e440f6fb55cd47bb2b508"
+          },
+          {
+            "file": "measurement.csv",
+            "bytes": 7048,
+            "sha256": "5ee3ed66987c5d2a8d12ee848208088b7fa2f07f2b8198815ea7f2ebb9f486bc"
+          },
+          {
+            "file": "measurement.png",
+            "bytes": 111203,
+            "sha256": "0a346b0a0463e3595e5b65120bbc0065fe930cb6e959814b6c65a09f76f33f8a"
+          }
+        ],
+        "independent_guard_passed": true
+      },
+      {
+        "case": "corrected-5W-01",
+        "LP_peak_W": 3.66,
+        "observed_RF_seconds": 7.433433207,
+        "exports": [
+          {
+            "file": "measurement.json",
+            "bytes": 1239331,
+            "sha256": "0ec10fb3866f98a866acb25c8a0aea6410ab82ea29195c315c1d43108f77ec38"
+          },
+          {
+            "file": "measurement.csv",
+            "bytes": 7053,
+            "sha256": "f5beea8f84e60bbe7c5d739359fb7eca839ebf7ab5e13921b743543157a112b7"
+          },
+          {
+            "file": "measurement.png",
+            "bytes": 110136,
+            "sha256": "c949fc8583a0b43b327adcff1ac3b7711484882b8f7c8c6a9f8f5600f437bc97"
+          }
+        ],
+        "independent_guard_passed": true
+      }
+    ],
+    "fundamental_PEP_change_dB": 0.331184603990323,
+    "products": [
+      {
+        "order": 3,
+        "upper": false,
+        "OFF_dBc_fundamental_PEP": -34.02832725354709,
+        "ON_dBc_fundamental_PEP": -50.198648780375585,
+        "improvement_dB": 16.170321526828495,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 3,
+        "upper": true,
+        "OFF_dBc_fundamental_PEP": -33.50164139849106,
+        "ON_dBc_fundamental_PEP": -57.850439378202594,
+        "improvement_dB": 24.348797979711534,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 5,
+        "upper": false,
+        "OFF_dBc_fundamental_PEP": -47.59611748994525,
+        "ON_dBc_fundamental_PEP": -62.35266864038721,
+        "improvement_dB": 14.756551150441958,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 5,
+        "upper": true,
+        "OFF_dBc_fundamental_PEP": -47.84725104620933,
+        "ON_dBc_fundamental_PEP": -70.08681943846582,
+        "improvement_dB": 22.239568392256494,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 7,
+        "upper": false,
+        "OFF_dBc_fundamental_PEP": -59.08925336585197,
+        "ON_dBc_fundamental_PEP": -86.15973465562904,
+        "improvement_dB": 27.07048128977707,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 7,
+        "upper": true,
+        "OFF_dBc_fundamental_PEP": -59.336749992067354,
+        "ON_dBc_fundamental_PEP": -69.61196382174309,
+        "improvement_dB": 10.275213829675735,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      }
+    ],
+    "predeclared_pair_gate_passed": true,
+    "raw_IQ_checksums_and_owned_binding_verified": true,
+    "independent_NumPy_full_spectrum_error_dB": [
+      3.7966284196500055e-06,
+      3.2054084329047328e-06
+    ],
+    "legacy_to_analyzer_handoff_resolved": false,
+    "stock_APD_compared": false,
+    "actual_6300_qualified": false
+  },
+  "native_builds": {
+    "source_commit": "ec6dc102ef06b52a12e39f196828bbfb2579e430",
+    "jobs": [
+      {
+        "run": 44411398529,
+        "jobs": [
+          {
+            "id": 135180189502,
+            "name": "build-windows",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135206665849,
+            "name": "package-windows",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135209110943,
+            "name": "release-windows",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "id": 135209111184,
+            "name": "Publish Microsoft Store production",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "id": 135209111291,
+            "name": "Fully submit developer Store flight",
+            "status": "completed",
+            "conclusion": "skipped"
+          }
+        ]
+      },
+      {
+        "run": 44411406775,
+        "jobs": [
+          {
+            "id": 135180213248,
+            "name": "build-dmg (macos-15, apple-silicon, arm64, 14.4)",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135180214039,
+            "name": "build-dmg (macos-15-intel, intel, x86_64, 14.4)",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135215693070,
+            "name": "App update tarball (apple-silicon)",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135215693288,
+            "name": "App update tarball (intel)",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135215696079,
+            "name": "Sign and notarize (${{ matrix.label }})",
+            "status": "completed",
+            "conclusion": "skipped"
+          }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "artifacts": [
+          {
+            "id": 14481725565,
+            "name": "Windows-Payload",
+            "size_in_bytes": 168718993,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14481725565",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14481725565/zip",
+            "expired": false,
+            "created_at": "2026-11-18T23:14:21Z",
+            "expires_at": "2026-11-25T23:14:12Z",
+            "updated_at": "2026-11-18T23:14:21Z",
+            "digest": "sha256:16b275443ab590a263bfe37fbcc8c768895ca06840cc2b89b94dc76f38269c13",
+            "workflow_run": {
+              "id": 44411398529,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430"
+            }
+          },
+          {
+            "id": 14481276450,
+            "name": "Windows-Symbols-archive",
+            "size_in_bytes": 149936513,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14481276450",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14481276450/zip",
+            "expired": false,
+            "created_at": "2026-11-18T23:14:11Z",
+            "expires_at": "2027-02-16T22:25:15Z",
+            "updated_at": "2026-11-18T23:14:11Z",
+            "digest": "sha256:cb80b84ec1f82980acd102310d50ee459ea8d820b09cc11cc0ca2b342abe5345",
+            "workflow_run": {
+              "id": 44411398529,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430"
+            }
+          },
+          {
+            "id": 14480796156,
+            "name": "Windows-Symbols",
+            "size_in_bytes": 277243081,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14480796156",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14480796156/zip",
+            "expired": false,
+            "created_at": "2026-11-18T23:12:27Z",
+            "expires_at": "2027-02-16T22:25:15Z",
+            "updated_at": "2026-11-18T23:12:27Z",
+            "digest": "sha256:8a3dbc94a17ffc37d7c964bf14ef155d653836819ca65b97bd4213b4925a9503",
+            "workflow_run": {
+              "id": 44411398529,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430"
+            }
+          },
+          {
+            "id": 14480537565,
+            "name": "Windows-Installer",
+            "size_in_bytes": 1132325903,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14480537565",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14480537565/zip",
+            "expired": false,
+            "created_at": "2026-11-18T23:19:07Z",
+            "expires_at": "2027-02-16T22:25:15Z",
+            "updated_at": "2026-11-18T23:19:07Z",
+            "digest": "sha256:c8967aa30dd4f7597a81578ad2a3aea490556775d491c67b5b0d65d6ae8f085b",
+            "workflow_run": {
+              "id": 44411398529,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430"
+            }
+          }
+        ]
+      },
+      {
+        "artifacts": [
+          {
+            "id": 14482342146,
+            "name": "macOS-app-tarball-intel",
+            "size_in_bytes": 105775249,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14482342146",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14482342146/zip",
+            "expired": false,
+            "created_at": "2026-11-18T23:34:13Z",
+            "expires_at": "2027-02-16T22:25:18Z",
+            "updated_at": "2026-11-18T23:34:13Z",
+            "digest": "sha256:59f6288e6759a00bef32d6fd01856ef41c4c96423aa462541602e73ec8deecd2",
+            "workflow_run": {
+              "id": 44411406775,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430"
+            }
+          },
+          {
+            "id": 14481434666,
+            "name": "macOS-app-tarball-apple-silicon",
+            "size_in_bytes": 120097914,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14481434666",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14481434666/zip",
+            "expired": false,
+            "created_at": "2026-11-18T23:33:47Z",
+            "expires_at": "2027-02-16T22:25:18Z",
+            "updated_at": "2026-11-18T23:33:47Z",
+            "digest": "sha256:ca2b0157acb7300a924c9561cb5596fa3531f1948e414bbe93e71e37943167ed",
+            "workflow_run": {
+              "id": 44411406775,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430"
+            }
+          },
+          {
+            "id": 14481144618,
+            "name": "macOS-unsigned-intel",
+            "size_in_bytes": 322428586,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14481144618",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14481144618/zip",
+            "expired": false,
+            "created_at": "2026-11-18T23:31:58Z",
+            "expires_at": "2026-11-19T23:31:28Z",
+            "updated_at": "2026-11-18T23:31:58Z",
+            "digest": "sha256:bb17f88b6dd020d10b29f3ea296c7fc4e63d2d0df6adcd05c5b5428e647dbea6",
+            "workflow_run": {
+              "id": 44411406775,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430"
+            }
+          },
+          {
+            "id": 14477929734,
+            "name": "macOS-unsigned-apple-silicon",
+            "size_in_bytes": 345493833,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14477929734",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14477929734/zip",
+            "expired": false,
+            "created_at": "2026-11-18T22:52:32Z",
+            "expires_at": "2026-11-19T22:52:04Z",
+            "updated_at": "2026-11-18T22:52:32Z",
+            "digest": "sha256:df0989cf915bb9acf1d306afeee7a35adb7ff1712e88a0c664761b769d336b12",
+            "workflow_run": {
+              "id": 44411406775,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "macOS_artifact_verification": {
+    "source_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430",
+    "architectures": {
+      "apple-silicon": {
+        "unsigned_artifact_id": 14477929734,
+        "update_artifact_id": 14481434666,
+        "all_bundle_files_and_symlinks_identical": true,
+        "bundle_members": 128,
+        "app_binary": {
+          "path": "build/AetherSDR.app/Contents/MacOS/AetherSDR",
+          "type": "file",
+          "bytes": 108579792,
+          "sha256": "f314190938b3291638dd17da1e929a1ad493f9fdd4da526e425358a23a57ddec",
+          "architecture": "arm64"
+        }
+      },
+      "intel": {
+        "unsigned_artifact_id": 14481144618,
+        "update_artifact_id": 14482342146,
+        "all_bundle_files_and_symlinks_identical": true,
+        "bundle_members": 125,
+        "app_binary": {
+          "path": "build/AetherSDR.app/Contents/MacOS/AetherSDR",
+          "type": "file",
+          "bytes": 104796656,
+          "sha256": "f03babc68b0684b31b24bc34a84ee013d6b4d5587927b05f1f72ff8b06173f7f",
+          "architecture": "x86_64"
+        }
+      }
+    },
+    "apps_executed": false,
+    "code_signing_or_notarization_performed": false,
+    "published": false,
+    "native_credential_or_window_runtime_tests_rerun": false,
+    "production_ready": false
+  },
+  "new_RF_keys": 2,
+  "radio_reboots": 0,
+  "root_bridge_used": false,
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "legacy_to_analyzer_handoff_resolved": false,
+  "prior_handoff_report": "POST-PTT-POWER-CONTROL-QUALIFICATION.json",
+  "negative_preparations": {
+    "before_reconnect": "Fresh native source was valid, but the already-documented legacy operation prevented independent source arming.",
+    "after_reconnect": "The recipe waited for Arm before checking the required dummy-load confirmation. The saved fourth attempt explicitly reports that confirmation reason; fixing recipe order passed.",
+    "debugger": "Host attach refused by Yama. Same binary was relaunched as a parent-debugger child, flags read without writes; debugger detached and exited before RF. Long symbol reads caused stale original-session observations; these are not shipping failure claims."
+  },
+  "scope_limits": [
+    "One finite5W setting pair, four native tone frames each; repeated10W current-candidate tones, raw/sustained speech and the remaining duty/recovery cases are still required.",
+    "Raw IQ scale, ADC headroom and exact FPGA packet latency remain uncalibrated. Same-packet directional power does not prove simultaneous sensor sampling.",
+    "JSON/CSV/PNG were exported through the ordinary GUI. Every IQ checksum, owned channel/generation and all spectrum bins were independently verified; NumPy error is below0.000004dB.",
+    "The known legacy PTT-to-independent-analyzer handoff is unresolved. Reconnect and process replacement were lab recoveries, not a production fix.",
+    "Windows and both macOS builds/packaging passed. macOS unsigned/update regular files and symlinks match. Windows large artifact transfer remains in progress and is not yet integrity/layout-qualified.",
+    "Native credential/window runtime opt-ins were not rerun; no native app execution, signing/notarization, release/Store publication or catalogue update is claimed.",
+    "No post-Stop root process/ARP audit was performed in this component. Ordinary sessionStopped and external RF-idle evidence are preserved.",
+    "Final stock APD comparison, actual FLEX6300 hardware and all remaining P1-P10 production/release gates remain open."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/integrated-current-components.tar.gz",
+    "bytes": 1721576,
+    "sha256": "c79ab9ee22bbef5092f2a75fbd757e0bd6fb270d778fa13fa28891f2c8607b60",
+    "members": 111,
+    "all_members_verified": true
+  },
+  "evidence_sha256": "5e309a15c121d640bcdbe8550f98fa25fdb0dbcc9c5152f8a7370690e3eda421"
+}
