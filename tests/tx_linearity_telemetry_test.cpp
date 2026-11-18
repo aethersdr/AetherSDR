@@ -199,12 +199,14 @@ int main(int argc, char** argv)
         // Start with a clean model so the old receipt is accepted, not reordered.
         model.clear(); define(model);
         received(model, 30.0f, 10.0f, receipt, session);
-        check(telemetry.read(10000).swr.observedAtMs <= 7900,
+        const TxTelemetry delayed = telemetry.read(10000);
+        check(delayed.swr.observedAtMs && *delayed.swr.observedAtMs <= 7900,
               "delivery delay is charged to the original monotonic receipt");
         receipt = ReceiveReceipt::now();
         receipt.monotonicNs += 1000000000LL;
         received(model, 30.0f, 10.0f, receipt, session);
-        check(telemetry.read(10000).swr.observedAtMs <= 7900,
+        const TxTelemetry future = telemetry.read(10000);
+        check(future.swr.observedAtMs == delayed.swr.observedAtMs && future.swr.value == delayed.swr.value,
               "rejected future receipt cannot renew the old pair");
         model.clear(); define(model); feed(model);
         const ReceiveReceipt negativeReceipt = ReceiveReceipt::now();
