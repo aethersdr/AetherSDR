@@ -1,0 +1,81 @@
+{
+  "created_utc": "2026-11-18T03:26:39.525356+00:00",
+  "qualification_workspace_base": "40951b0f27cc80f9f701a4d57151174b3c81499d",
+  "production_ready": false,
+  "tested_installed_release_blake2b_256": "0d88765b3eaad89fde171f98955ac8dcef959543a93db9967b25d920912c43e7",
+  "runtime_build_source": "92488a6a1f55723f44c7be0efa720b651282131a",
+  "desktop_source_provenance": "92488a6a1f55723f44c7be0efa720b651282131a; inherited last build mapping, current PID/executable SHA independently revalidated",
+  "desktop_pid": 618033,
+  "desktop_executable_sha256": "7465bdf5c3beba705bda4d233a1be222b1a10e23c80a79f3e4fc35163f504096",
+  "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+  "finding": "One receive-only primary SIGKILL retired all thirteen old AetherPD process identities and owned session resources. After one manual fixed control-service restart, an explicit ordinary GUI Start produced fresh local DAX IQ with FDX disabled. Installed control service does not auto-restart; ordinary control-service recovery is still open.",
+  "before": "Earlier primary-crash case01 refused before injection because its laboratory cgroup guard compared a namespace-relative path to the native absolute path. Case02 in this turn refused before Start because its open dialog captured an expired connection. Both refusals are preserved; neither is a successful fault test.",
+  "preflight": {
+    "Restart": "no",
+    "raw_cgroup": [
+      "0::/../../../system.slice/aetherpd-shim.service"
+    ],
+    "native_init_cgroup": [
+      "0::/system.slice/aetherpd-shim.service"
+    ],
+    "unit_MainPID_matched": true,
+    "target_UID": 78666,
+    "target_NNP": 1,
+    "target_capabilities": "all five sets zero",
+    "target_executable_sha256": "b590d6afa83bbb3cd531e9de5be6d657a137bca3d2c36779db822ab8f0d2517a",
+    "namespace_fix": "Read cgroup metadata inside native init cgroup namespace; retain exact fixed service path rather than normalizing or accepting suffixes."
+  },
+  "measured": {
+    "prior_process_identities_retired": 13,
+    "complete_retirement_observed_ms": 1973.325766,
+    "fixed_control_service_manual_start_ready_ms": 399.53554,
+    "explicit_GUI_session_start_ready_s": 1.9826741059951019,
+    "IQ_before_bytes": 131072,
+    "IQ_after_bytes": 131072,
+    "IQ_rate_hz": 48000,
+    "IQ_transport": "local_dax_iq",
+    "FDX": false,
+    "transmitting": false,
+    "correcting": false,
+    "automatic_control_recovery_observed": false
+  },
+  "verification": {
+    "old_graph": "All original PID/start-time identities including zombies gone; fixed primary/session cgroups empty before manual recovery",
+    "receive_restoration": "PD receive mode changed to USB without keying; firmware PID1143 and radio boot unchanged",
+    "network_cleanup": "Fixed ARP absent, journal empty, accept_local0; no direct laboratory ARP repair",
+    "persistence": "Installed release, provision config fingerprint and protected unit files preserved",
+    "independent_safety": "Process executable hashes, UID/capabilities, boot/generation, unit files/MainPID and native cgroup checked before one pidfd SIGKILL; no arbitrary targets or escalation",
+    "ordinary_UI": "Same AetherSDR PID; closed/reopened only expired AetherPD dialog, explicit two Starts and one Stop; no AetherTX or app launch",
+    "temporary_jobs": "Read-only preflight and fault job containers/host scratch removed; bounded journal child reaped; private token scan passed"
+  },
+  "limits": [
+    "One unkeyed8600 case; timings include observation overhead and are not worst-case bounds, keyed unkey proof or FPGA-to-process latency.",
+    "The manual recovery step used the existing broad laboratory transport only to start the fixed control service. It is not an ordinary-user crash-recovery or shipping privilege-delivery proof.",
+    "Automatic-control recovery versus explicit GUI recovery preference was requested; no new default or installed service policy was changed.",
+    "Final keyed/failure matrix, firmware-baseline/reboot hang, repeated RF/stock APD, actual6300 and original P1-P10 release gates remain open."
+  ],
+  "radio_actions": [
+    "Two explicit ordinary GUI session Starts",
+    "One unkeyed PD mode request",
+    "Normal receive restoration to USB and one GUI Stop"
+  ],
+  "native_fault_actions": [
+    "One SIGKILL via pidfd to verified primary",
+    "One manual start of fixed aetherpd-shim.service after old graph retirement"
+  ],
+  "RF_keying_commands": [],
+  "reboot_commands": [],
+  "firmware_service_changes": [],
+  "persistent_installation_changes": [],
+  "direct_ARP_mutations": [],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-primary-crash-components.tar.gz",
+    "bytes": 179705,
+    "sha256": "b4a18aad319566a973059cfe875d3ad80d33fc24879d23f941bdf3007631adca",
+    "verified_members": 33
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/PRIMARY-CRASH-RESTART-EVIDENCE.json.gz",
+    "sha256": "96a431803add9fce7911ecd1d47141b05317b492bef9a3872d7a5e3ca5de6991"
+  }
+}
