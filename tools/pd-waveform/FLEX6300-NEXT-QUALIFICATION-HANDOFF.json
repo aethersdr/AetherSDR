@@ -1,0 +1,77 @@
+{
+  "recorded_utc": "2026-11-18T18:20:05.153657+00:00",
+  "status": "Existing receive-only 6300 kit ready; actual floor results and on-radio privilege/IQ/RF qualification still required",
+  "actual_6300_qualified": false,
+  "kit": {
+    "durable_path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/20261118-floor-ready-230138cfd/aetherpd-6300-readiness-75ab26852.zip",
+    "bytes": 15214417,
+    "sha256": "089da728f9c4e08ee4bb67a39318d51f7c6fcc10f035e894d6463ec847ad4c3c",
+    "source_reference": "75ab268527293f30e74acee221759adce42087b5",
+    "unchanged_existing_kit": true,
+    "contents": "Two ordinary-user kernel/filesystem and CPU probes, clients, pinned source kits and scoped8600 references; no runtime, root bootstrap, RF or reboot job"
+  },
+  "current_8600_progress": {
+    "desktop_source": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "radio_release": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+    "local_DAX_IQ_FDX_off_finite_OFF_ON_pairs": {
+      "5W_setting_IMD3_improvement_dB": [
+        16.60949865817134,
+        26.600093748103355
+      ],
+      "10W_setting_IMD3_improvement_dB": [
+        15.995040348913577,
+        26.878250406011922
+      ]
+    },
+    "scope": "Finite pairs and8600 cold-power/control-recovery qualification are not6300 proof."
+  },
+  "floor_information_from_operator": {
+    "model": "FLEX-6300",
+    "firmware": "4.2.18.41174",
+    "kernel": "2.6.37-0.1-microburst+",
+    "CPU": "one Cortex-A8, armv7l, NEON/VFPv3",
+    "ordinary_uid": 78666,
+    "ordinary_gid": 20,
+    "internal_address": "172.30.1.1",
+    "waveform_parent": "/usr/bin/smartsdr",
+    "firmware_service": "flex6k-firmware.service",
+    "user_partition_reported_free_MB": 41,
+    "root_partition_reported_free_MB": 27,
+    "MemAvailable_field_absent": true,
+    "MemFree_reported_kB": 389920
+  },
+  "physical_feedback_port_gate": {
+    "finding": "The 6300 rear-panel illustration has ANT1,ANT2 andXVTR, without the 8600 RXA connector. Do not apply the 8600 RX_A bench recipe to it.",
+    "primary_reference": "https://www.flexradio.com/documentation/flex-6000-hardware-reference-manual-pdf/",
+    "published_manual": "https://edge.flexradio.com/www/uploads/20200818185018/FLEX-6000-Hardware-Reference-Manual.pdf",
+    "manual_sha256": "8b0cbb8fd26e896f636b1b3296f07ea93d9550964d8a674f44ab2261b0f6ad13",
+    "reference_sections": "Rear-panel illustrations and section 10 Transverter Connector",
+    "required_before_any_RF": [
+      "Inventory actual rear-panel inputs and API receive-antenna choices.",
+      "Establish which input can deliver IQ during ANT1 transmission with FDX disabled; not inferred from the 8600.",
+      "Verify that input's documented rating and measured sampler/attenuation before a separately authorized RF plan."
+    ],
+    "receive_only_kit_changes_antennas": false
+  },
+  "teammate_sequence": [
+    "Extract the pinned kit and follow START-HERE.txt from that kit unchanged; keep radio unkeyed and hold competing waveform uploads.",
+    "Install kernel probe 0.1.3, collect kernel-features.json, uninstall and confirm TCP 48998 closes.",
+    "Install CPU probe 0.1.0 only after kernel probe removal, allow its bounded five cases to complete, collect cpu-results.json, uninstall and confirm TCP 48999 closes.",
+    "Return exact reports/errors, model/firmware, package hashes, observed timings, uninstall acknowledgments and port closures. Do not include credentials or environment dumps.",
+    "Supply a clean repository/commit or artifact pointer for the original 6000 setup mechanism if available. This kit does not request its execution."
+  ],
+  "probe_package_sha256": {
+    "AetherPDKernelProbe.ssdr_waveform": "a0eee63db1e4af071ef3302a2f07380e36e4142148ce50f3c99e9e538985c718",
+    "AetherPDCpuProbe.ssdr_waveform": "b1136f77a78e0828c6904c41a8add2258459ffe62dd5063ea544826fe6be8074"
+  },
+  "qualification_gates_after_readiness": [
+    "Actual Linux 2.6 kernel hardening, filesystem layout, scheduling and packet-ring support; preserve unsupported no_new_privs separately from strict-seccomp failure.",
+    "Qualify the narrow privilege-entry/boot adapter for the actual firmware service and internal interface/address. Do not reuse 8600 hard-coded network or service assumptions.",
+    "Measure real disk high-water including firmware-retained uploads, both versions, installation adapters and persistent identity. The existing 39,702,528 byte modeled peak leaves 1,297,472 bytes against a rounded 41,000,000 byte report, not a measured floor margin.",
+    "Qualify local IQ availability and latency, DSP CPU/resource use, cleanup/recovery, then separately authorize actual 6300 RF."
+  ],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "privileged_actions": [],
+  "external_message_sent": false
+}

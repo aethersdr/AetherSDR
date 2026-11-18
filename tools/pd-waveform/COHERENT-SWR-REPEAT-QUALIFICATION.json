@@ -1,0 +1,1543 @@
+{
+  "recorded_utc": "2026-11-18T18:47:26.183490+00:00",
+  "status": "Finite repeat gates,32frame independent checks and scoped sanitizers passed; macOS ARM artifact verified; full production gates remain",
+  "production_ready": false,
+  "tested_desktop_source_commit": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+  "additional_RF_keys": 4,
+  "total_successful_source62_RF_keys": 8,
+  "total_valid_spectra": 8,
+  "finite_OFF_ON_pairs_per_setting": 2,
+  "repeat_gates": {
+    "gates_sha256": "c2574e21f65e3bafaaa0e316474d3bd6b49adeffc4fcda475d8580bbc6bd26e4",
+    "checks": [
+      {
+        "power_setting_W": 5,
+        "IMD3_gain_both_sides": true,
+        "output_matching": true,
+        "IMD5_IMD7_no_material_regression": true,
+        "ACPR_no_material_regression": true,
+        "OFF_capture_and_cleanup": true,
+        "OFF_transport_and_alignment": true,
+        "ON_capture_and_cleanup": true,
+        "ON_transport_and_alignment": true,
+        "passed": true
+      },
+      {
+        "power_setting_W": 10,
+        "IMD3_gain_both_sides": true,
+        "output_matching": true,
+        "IMD5_IMD7_no_material_regression": true,
+        "ACPR_no_material_regression": true,
+        "OFF_capture_and_cleanup": true,
+        "OFF_transport_and_alignment": true,
+        "ON_capture_and_cleanup": true,
+        "ON_transport_and_alignment": true,
+        "passed": true
+      }
+    ],
+    "all_development_repeat_gates_passed": true,
+    "scope": "Two separately keyed finite OFF/ON pairs per setting when combined with the first milestone. Not sustained speech, endurance, all-mode or floor qualification.",
+    "production_ready": false
+  },
+  "repeat_comparison": {
+    "scope": "Finite two-tone pairs following operator-selected SWR-source correction; not sustained/repeatability or final P7/P8 qualification",
+    "desktop_source_commit": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "radio_release": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+    "full_duplex": false,
+    "capture_source": "local-dax-iq",
+    "pairs": [
+      {
+        "OFF": {
+          "case": "coherent-SWR-repeat-baseline-5W-01",
+          "export_sha256": "923b45d63a0c174f05b493bc3e4e693acd7c2b356165d146d821e474f834bcd4",
+          "nominal_setting_W": 5,
+          "LP_peak_held_max_W": 3.66,
+          "LP_max_direct_SWR_with_RF": 1.09,
+          "directional_SWR_max_above_0_5W": 1.2579441585035265,
+          "raw_radio_SWR_above_2_at_power_above_0_5W": [
+            {
+              "receipt_ns": 221486256307312,
+              "raw": {
+                "8": 4511,
+                "9": 1322,
+                "10": 264
+              },
+              "forward_watts": 3.343634132897234,
+              "reflected_watts": 0.010784810040256543,
+              "derived_swr": 1.1204259219317139,
+              "radio_swr": 2.0625
+            }
+          ],
+          "native_correcting_observations": 0,
+          "native_transport_faults_observed": false,
+          "native_input_limiting_observed": false,
+          "unkey_and_session_stop_confirmed": true,
+          "final_safety_telemetry": {
+            "directional_forward_watts": {
+              "age_ms": 62,
+              "finite": true,
+              "observed_at_ms": 221487983,
+              "present": true,
+              "value": 2.990757465362549
+            },
+            "directional_reflected_watts": {
+              "age_ms": 62,
+              "finite": true,
+              "observed_at_ms": 221487983,
+              "present": true,
+              "value": 0.011039990931749344
+            },
+            "forward_watts": {
+              "age_ms": 62,
+              "finite": true,
+              "observed_at_ms": 221487983,
+              "present": true,
+              "value": 2.990757465362549
+            },
+            "now_ms": 221488045,
+            "pa_temp_c": {
+              "age_ms": 94,
+              "finite": true,
+              "observed_at_ms": 221487951,
+              "present": true,
+              "value": 26.71875
+            },
+            "radio_swr": {
+              "age_ms": 62,
+              "finite": true,
+              "observed_at_ms": 221487983,
+              "present": true,
+              "value": 1
+            },
+            "supply_volts": {
+              "age_ms": 94,
+              "finite": true,
+              "observed_at_ms": 221487951,
+              "present": true,
+              "value": 13.48828125
+            },
+            "swr": {
+              "age_ms": 62,
+              "finite": true,
+              "observed_at_ms": 221487983,
+              "present": true,
+              "value": 1.1293735882044789
+            },
+            "swr_source": "same-packet-directional-power"
+          }
+        },
+        "ON": {
+          "case": "coherent-SWR-repeat-corrected-5W-01",
+          "export_sha256": "6e6a4755705573058108f3bf5561afbca89703b93fcec8b6468ca5ef7a95d18b",
+          "nominal_setting_W": 5,
+          "LP_peak_held_max_W": 3.71,
+          "LP_max_direct_SWR_with_RF": 1.06,
+          "directional_SWR_max_above_0_5W": 1.2664798410454194,
+          "raw_radio_SWR_above_2_at_power_above_0_5W": [],
+          "native_correcting_observations": 8,
+          "native_transport_faults_observed": false,
+          "native_input_limiting_observed": false,
+          "unkey_and_session_stop_confirmed": true,
+          "final_safety_telemetry": {
+            "directional_forward_watts": {
+              "age_ms": 43,
+              "finite": true,
+              "observed_at_ms": 221874922,
+              "present": true,
+              "value": 3.3017940521240234
+            },
+            "directional_reflected_watts": {
+              "age_ms": 43,
+              "finite": true,
+              "observed_at_ms": 221874922,
+              "present": true,
+              "value": 0.011039990931749344
+            },
+            "forward_watts": {
+              "age_ms": 43,
+              "finite": true,
+              "observed_at_ms": 221874922,
+              "present": true,
+              "value": 3.3017940521240234
+            },
+            "now_ms": 221874965,
+            "pa_temp_c": {
+              "age_ms": 1676,
+              "finite": true,
+              "observed_at_ms": 221873289,
+              "present": true,
+              "value": 26.84375
+            },
+            "radio_swr": {
+              "age_ms": 43,
+              "finite": true,
+              "observed_at_ms": 221874922,
+              "present": true,
+              "value": 1
+            },
+            "supply_volts": {
+              "age_ms": 1676,
+              "finite": true,
+              "observed_at_ms": 221873289,
+              "present": true,
+              "value": 13.4609375
+            },
+            "swr": {
+              "age_ms": 43,
+              "finite": true,
+              "observed_at_ms": 221874922,
+              "present": true,
+              "value": 1.122746015206779
+            },
+            "swr_source": "same-packet-directional-power"
+          }
+        },
+        "matching_station_fields": [
+          "radio_serial",
+          "mode",
+          "transmit_antenna",
+          "nominal_power_setting_w",
+          "forward_power_limit_w",
+          "center_hz",
+          "sample_rate_hz",
+          "requested_tone1_hz",
+          "requested_tone2_hz",
+          "window",
+          "requested_averages",
+          "transmit_authorization_timeout_ms"
+        ],
+        "fundamental_PEP_change_dB": 0.329578988987862,
+        "sampled_PEP_change_dB": 0.00014135800130077314,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -34.12681996265679,
+            "ON_dBc_fundamental_PEP": -53.62753345126044,
+            "improvement_dB": 19.50071348860365,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -33.59376459895211,
+            "ON_dBc_fundamental_PEP": -54.625121132685265,
+            "improvement_dB": 21.031356533733153,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -47.6894466741242,
+            "ON_dBc_fundamental_PEP": -63.10023556384186,
+            "improvement_dB": 15.410788889717665,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -47.95072222235098,
+            "ON_dBc_fundamental_PEP": -68.86466606481186,
+            "improvement_dB": 20.913943842460874,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -59.10988372058517,
+            "ON_dBc_fundamental_PEP": -72.61451074868731,
+            "improvement_dB": 13.504627028102142,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -59.348350114273956,
+            "ON_dBc_fundamental_PEP": -74.70272965306732,
+            "improvement_dB": 15.354379538793367,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          }
+        ],
+        "ACPR": {
+          "acpr_low": {
+            "OFF_dBc_fundamental_PEP": -47.3648157384728,
+            "ON_dBc_fundamental_PEP": -61.993796731224904,
+            "improvement_dB": 14.628980992752105
+          },
+          "acpr_high": {
+            "OFF_dBc_fundamental_PEP": -47.63030733184918,
+            "ON_dBc_fundamental_PEP": -66.05158179636638,
+            "improvement_dB": 18.421274464517197
+          }
+        }
+      },
+      {
+        "OFF": {
+          "case": "coherent-SWR-repeat-baseline-10W-01",
+          "export_sha256": "d5c9a7ed2eb7db2e058cf953566811e316e1ac578b943772d00b32ca91121b52",
+          "nominal_setting_W": 10,
+          "LP_peak_held_max_W": 7.49,
+          "LP_max_direct_SWR_with_RF": 1.2,
+          "directional_SWR_max_above_0_5W": 1.2683887865251473,
+          "raw_radio_SWR_above_2_at_power_above_0_5W": [],
+          "native_correcting_observations": 0,
+          "native_transport_faults_observed": false,
+          "native_input_limiting_observed": false,
+          "unkey_and_session_stop_confirmed": true,
+          "final_safety_telemetry": {
+            "directional_forward_watts": {
+              "age_ms": 11,
+              "finite": true,
+              "observed_at_ms": 222094681,
+              "present": true,
+              "value": 7.079455852508545
+            },
+            "directional_reflected_watts": {
+              "age_ms": 11,
+              "finite": true,
+              "observed_at_ms": 222094681,
+              "present": true,
+              "value": 0.01697021909058094
+            },
+            "forward_watts": {
+              "age_ms": 11,
+              "finite": true,
+              "observed_at_ms": 222094681,
+              "present": true,
+              "value": 7.079455852508545
+            },
+            "now_ms": 222094692,
+            "pa_temp_c": {
+              "age_ms": 179,
+              "finite": true,
+              "observed_at_ms": 222094513,
+              "present": true,
+              "value": 26.9375
+            },
+            "radio_swr": {
+              "age_ms": 11,
+              "finite": true,
+              "observed_at_ms": 222094681,
+              "present": true,
+              "value": 1.171875
+            },
+            "supply_volts": {
+              "age_ms": 179,
+              "finite": true,
+              "observed_at_ms": 222094513,
+              "present": true,
+              "value": 13.453125
+            },
+            "swr": {
+              "age_ms": 11,
+              "finite": true,
+              "observed_at_ms": 222094681,
+              "present": true,
+              "value": 1.102961561476647
+            },
+            "swr_source": "same-packet-directional-power"
+          }
+        },
+        "ON": {
+          "case": "coherent-SWR-repeat-corrected-10W-01",
+          "export_sha256": "c6876c018e364ca52e79a654af9a10103a86f49700098f6d5ee7e2b5ef33b13e",
+          "nominal_setting_W": 10,
+          "LP_peak_held_max_W": 7.56,
+          "LP_max_direct_SWR_with_RF": 1.15,
+          "directional_SWR_max_above_0_5W": 1.229225763898885,
+          "raw_radio_SWR_above_2_at_power_above_0_5W": [],
+          "native_correcting_observations": 7,
+          "native_transport_faults_observed": false,
+          "native_input_limiting_observed": false,
+          "unkey_and_session_stop_confirmed": true,
+          "final_safety_telemetry": {
+            "directional_forward_watts": {
+              "age_ms": 44,
+              "finite": true,
+              "observed_at_ms": 222290989,
+              "present": true,
+              "value": 5.999638080596924
+            },
+            "directional_reflected_watts": {
+              "age_ms": 44,
+              "finite": true,
+              "observed_at_ms": 222290989,
+              "present": true,
+              "value": 0.01709277369081974
+            },
+            "forward_watts": {
+              "age_ms": 44,
+              "finite": true,
+              "observed_at_ms": 222290989,
+              "present": true,
+              "value": 5.999638080596924
+            },
+            "now_ms": 222291033,
+            "pa_temp_c": {
+              "age_ms": 1582,
+              "finite": true,
+              "observed_at_ms": 222289451,
+              "present": true,
+              "value": 27.09375
+            },
+            "radio_swr": {
+              "age_ms": 44,
+              "finite": true,
+              "observed_at_ms": 222290989,
+              "present": true,
+              "value": 1
+            },
+            "supply_volts": {
+              "age_ms": 1582,
+              "finite": true,
+              "observed_at_ms": 222289451,
+              "present": true,
+              "value": 13.421875
+            },
+            "swr": {
+              "age_ms": 44,
+              "finite": true,
+              "observed_at_ms": 222290989,
+              "present": true,
+              "value": 1.112770654462204
+            },
+            "swr_source": "same-packet-directional-power"
+          }
+        },
+        "matching_station_fields": [
+          "radio_serial",
+          "mode",
+          "transmit_antenna",
+          "nominal_power_setting_w",
+          "forward_power_limit_w",
+          "center_hz",
+          "sample_rate_hz",
+          "requested_tone1_hz",
+          "requested_tone2_hz",
+          "window",
+          "requested_averages",
+          "transmit_authorization_timeout_ms"
+        ],
+        "fundamental_PEP_change_dB": 0.33265536854153765,
+        "sampled_PEP_change_dB": -0.0019011100862371677,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -33.50438756666428,
+            "ON_dBc_fundamental_PEP": -49.42758237664944,
+            "improvement_dB": 15.923194809985162,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -32.96339142181837,
+            "ON_dBc_fundamental_PEP": -59.852672662159854,
+            "improvement_dB": 26.889281240341482,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -45.44911482963548,
+            "ON_dBc_fundamental_PEP": -60.495940726377995,
+            "improvement_dB": 15.046825896742519,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -45.6459453608605,
+            "ON_dBc_fundamental_PEP": -66.62515536272817,
+            "improvement_dB": 20.979210001867663,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "OFF_dBc_fundamental_PEP": -54.81806983149583,
+            "ON_dBc_fundamental_PEP": -73.80451733864778,
+            "improvement_dB": 18.98644750715195,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "OFF_dBc_fundamental_PEP": -54.857734881336896,
+            "ON_dBc_fundamental_PEP": -67.3770515113027,
+            "improvement_dB": 12.5193166299658,
+            "OFF_noise_limited": false,
+            "ON_noise_limited": false
+          }
+        ],
+        "ACPR": {
+          "acpr_low": {
+            "OFF_dBc_fundamental_PEP": -44.96769900073888,
+            "ON_dBc_fundamental_PEP": -60.08074942603612,
+            "improvement_dB": 15.113050425297239
+          },
+          "acpr_high": {
+            "OFF_dBc_fundamental_PEP": -45.15083957504012,
+            "ON_dBc_fundamental_PEP": -63.51332972594915,
+            "improvement_dB": 18.362490150909025
+          }
+        }
+      }
+    ],
+    "limitations": [
+      "Raw IQ levels are uncalibrated; reported LP power basis remains meter-configured forward or net, unknown.",
+      "Shared packet receipt establishes transport pairing, not simultaneous ADC sampling or matched averaging inside firmware.",
+      "Repeated tones, speech, duty/recovery tests and final stock-APD comparison remain open."
+    ]
+  },
+  "independently_recomputed_frames": 32,
+  "scoped_sanitizer": {
+    "tested_source_commit": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "instrumented_translation_units": {
+      "meter": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/worktree/src/models/MeterModel.cpp",
+        "sha256": "cab7ba8e283b119af2f34eca78b1ff83ab5332dc819e54a6363bceb7faf1b054"
+      },
+      "reader": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/worktree/src/core/txlinearity/TxLinearityTelemetry.cpp",
+        "sha256": "11631c3252ce8c226a75c3d270ef216e6d0cc5087648ac87a76a4695cfb028fd"
+      },
+      "safety": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/worktree/src/core/txlinearity/TxLinearitySafety.cpp",
+        "sha256": "4b7699cbd41c9b3f9503b7c25cf2a6351dbef50c41a8ca50b04ce128176ca7ab"
+      },
+      "controller": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/worktree/src/core/txlinearity/TxLinearityController.cpp",
+        "sha256": "3631c1fde21b7889c6c72bf541b1eaf7610ee39b43af3badb2b8b9554a3ef24e"
+      },
+      "telemetry-test": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/worktree/tests/tx_linearity_telemetry_test.cpp",
+        "sha256": "14057fb40e6f1395f1cc79c38083fe4bbb29dd70adc67e8fa28a80d3445db28b"
+      },
+      "controller-test": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/worktree/tests/tx_linearity_controller_test.cpp",
+        "sha256": "572d9747233a44eaedb7f6e25b3d39eee6147087ada40c695dec8c93c0219f07"
+      }
+    },
+    "results": [
+      {
+        "test": "tx_linearity_telemetry_test",
+        "exit_code": 0,
+        "ASan_UBSan_LSan_passed": true
+      },
+      {
+        "test": "tx_linearity_controller_test",
+        "exit_code": 0,
+        "ASan_UBSan_LSan_passed": true
+      }
+    ],
+    "scope": "Changed model, telemetry reader, safety policy, controller and both test translation units only. Other aethercore/Qt/dependency objects are uninstrumented. Not a whole-app sanitizer qualification.",
+    "RF_commands": [],
+    "product_tree_modified": false
+  },
+  "post_repeat_cleanup_passed": true,
+  "temporary_audit_transport_retired": true,
+  "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+  "control_restart_count": "0",
+  "native_ARM_artifact": {
+    "artifact_id": 14456759664,
+    "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-62f7dcbd3/macOS-unsigned-apple-silicon.zip",
+    "bytes": 345492902,
+    "sha256": "370a63089283da9d2af85a9ea948e09ef5e32563d5835dd8c12129c6e1995b6f",
+    "GitHub_digest_matched": true,
+    "all_ZIP_CRCs_verified": true,
+    "members": [
+      {
+        "name": "macos-unsigned.tar",
+        "bytes": 971286528,
+        "CRC": 1229906852
+      }
+    ],
+    "download_URL_persisted": false
+  },
+  "native_ARM_app_binary": {
+    "path": "build/AetherSDR.app/Contents/MacOS/AetherSDR",
+    "type": "file",
+    "bytes": 108579792,
+    "sha256": "3c1e632ab2420abffbf7c4efadec15e869252c36d17d3072b782ffccb27bd177"
+  },
+  "native_progress": {
+    "observed_utc": "2026-11-18 18:46:25 UTC",
+    "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "runs": [
+      {
+        "id": 44364580991,
+        "jobs": [
+          {
+            "id": 135014788960,
+            "name": "build-windows",
+            "status": "completed",
+            "conclusion": "success",
+            "run_id": 44364580991,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Plan Authenticode signing",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3
+              },
+              {
+                "name": "Plan Store build",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Check Store packaging policy",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5
+              },
+              {
+                "name": "Set up MSVC",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6
+              },
+              {
+                "name": "Prepare Qt extraction directory",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 7
+              },
+              {
+                "name": "Install Qt6",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8
+              },
+              {
+                "name": "Install Ninja and LLVM",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 9
+              },
+              {
+                "name": "Cache Opus",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10
+              },
+              {
+                "name": "Setup Opus (SmartLink audio codec)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 11
+              },
+              {
+                "name": "Cache FFTW3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12
+              },
+              {
+                "name": "Setup FFTW3 float (NR4 dependency)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 13
+              },
+              {
+                "name": "Cache RTL-SDR and libusb",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14
+              },
+              {
+                "name": "Setup RTL-SDR and libusb",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 15
+              },
+              {
+                "name": "Cache hidapi",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16
+              },
+              {
+                "name": "Setup hidapi (USB HID device support)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 17
+              },
+              {
+                "name": "Cache PortAudio",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 18
+              },
+              {
+                "name": "Setup PortAudio (CW sidetone callback sink)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 19
+              },
+              {
+                "name": "Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 20
+              },
+              {
+                "name": "Setup DeepFilterNet3 (DFNR)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 21
+              },
+              {
+                "name": "Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 22
+              },
+              {
+                "name": "Setup qtkeychain (SmartLink credential persistence)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 23
+              },
+              {
+                "name": "Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 24
+              },
+              {
+                "name": "Setup sherpa-onnx (non-whisper ASR backend)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 25
+              },
+              {
+                "name": "Cache Vulkan SDK",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 26
+              },
+              {
+                "name": "Setup Vulkan SDK (whisper GPU backend)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 27
+              },
+              {
+                "name": "Configure",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 28
+              },
+              {
+                "name": "Qualify native credential persistence (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 29
+              },
+              {
+                "name": "Preserve native credential result",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 30
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually enabled",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 31
+              },
+              {
+                "name": "Assert PortAudio sidetone sink actually enabled",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 32
+              },
+              {
+                "name": "Build Opus (RADE dependency)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 33
+              },
+              {
+                "name": "Build whisper + ggml-vulkan (vendored ASR engine)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 34
+              },
+              {
+                "name": "Build",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 35
+              },
+              {
+                "name": "Qualify native setup window lifetime (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 36
+              },
+              {
+                "name": "Preserve native setup window result",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 37
+              },
+              {
+                "name": "Deploy Qt",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 38
+              },
+              {
+                "name": "Stage application and Qt debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 39
+              },
+              {
+                "name": "Verify DPI awareness manifest",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 40
+              },
+              {
+                "name": "Stage MSVC runtime for installer",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 41
+              },
+              {
+                "name": "Verify deploy payload is self-contained",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 42
+              },
+              {
+                "name": "Verify required debug symbols present",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 43
+              },
+              {
+                "name": "Upload debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 44
+              },
+              {
+                "name": "Package debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 45
+              },
+              {
+                "name": "Upload symbol archive",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 46
+              },
+              {
+                "name": "Upload unsigned payload for packaging",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 47
+              },
+              {
+                "name": "Post Cache Vulkan SDK",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 85
+              },
+              {
+                "name": "Post Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 86
+              },
+              {
+                "name": "Post Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 87
+              },
+              {
+                "name": "Post Cache PortAudio",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 88
+              },
+              {
+                "name": "Post Cache hidapi",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 89
+              },
+              {
+                "name": "Post Cache RTL-SDR and libusb",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 90
+              },
+              {
+                "name": "Post Cache FFTW3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 91
+              },
+              {
+                "name": "Post Cache Opus",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 92
+              },
+              {
+                "name": "Post Install Qt6",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 93
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 94
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 95
+              }
+            ]
+          },
+          {
+            "id": 135041236463,
+            "name": "package-windows",
+            "status": "in_progress",
+            "conclusion": null,
+            "run_id": 44364580991,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Download unsigned payload",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3
+              },
+              {
+                "name": "Download debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Azure login for Authenticode signing",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 5
+              },
+              {
+                "name": "Set up Authenticode signing tools",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 6
+              },
+              {
+                "name": "Sign payload",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7
+              },
+              {
+                "name": "Create portable ZIP",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8
+              },
+              {
+                "name": "Create installer (Inno Setup)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 9
+              },
+              {
+                "name": "Create MSIX package",
+                "status": "in_progress",
+                "conclusion": null,
+                "number": 10
+              },
+              {
+                "name": "Verify Authenticode signatures",
+                "status": "pending",
+                "conclusion": null,
+                "number": 11
+              },
+              {
+                "name": "End the signing session",
+                "status": "pending",
+                "conclusion": null,
+                "number": 12
+              },
+              {
+                "name": "Verify Store symbol package topology",
+                "status": "pending",
+                "conclusion": null,
+                "number": 13
+              },
+              {
+                "name": "Upload artifacts",
+                "status": "pending",
+                "conclusion": null,
+                "number": 14
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "pending",
+                "conclusion": null,
+                "number": 28
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 44364588168,
+        "jobs": [
+          {
+            "id": 135014825696,
+            "name": "build-dmg (macos-15, apple-silicon, arm64, 14.4)",
+            "status": "completed",
+            "conclusion": "success",
+            "run_id": 44364588168,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Install dependencies via Homebrew",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3
+              },
+              {
+                "name": "Install Qt LTS via aqtinstall",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Assert no Homebrew Qt is discoverable",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5
+              },
+              {
+                "name": "Cache macOS deps (fftw, portaudio, hidapi)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6
+              },
+              {
+                "name": "Build macOS deps at the deployment target",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7
+              },
+              {
+                "name": "Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8
+              },
+              {
+                "name": "Setup qtkeychain (SmartLink credential persistence)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 9
+              },
+              {
+                "name": "Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10
+              },
+              {
+                "name": "Setup DeepFilterNet3 (DFNR)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 11
+              },
+              {
+                "name": "Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12
+              },
+              {
+                "name": "Setup sherpa-onnx (non-whisper ASR backend)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13
+              },
+              {
+                "name": "Set up ccache",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14
+              },
+              {
+                "name": "Ensure offline Metal toolchain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 15
+              },
+              {
+                "name": "Configure",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16
+              },
+              {
+                "name": "Qualify native credential persistence (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 17
+              },
+              {
+                "name": "Preserve native credential result",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 18
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually enabled",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 19
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually disabled",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 20
+              },
+              {
+                "name": "Build",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 21
+              },
+              {
+                "name": "Split debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 22
+              },
+              {
+                "name": "Qualify native setup window lifetime (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 23
+              },
+              {
+                "name": "Preserve native setup window result",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 24
+              },
+              {
+                "name": "Bundle DFNR model",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 25
+              },
+              {
+                "name": "Build DAX audio driver",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 26
+              },
+              {
+                "name": "Verify binaries",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 27
+              },
+              {
+                "name": "Bundle Qt frameworks",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 28
+              },
+              {
+                "name": "Assert the bundled Qt is the pinned Qt",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 29
+              },
+              {
+                "name": "Assert nothing in the bundle outranks the deployment target",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 30
+              },
+              {
+                "name": "Stage the unsigned bundle for signing",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 31
+              },
+              {
+                "name": "Upload unsigned bundle",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 32
+              },
+              {
+                "name": "Post Set up ccache",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 60
+              },
+              {
+                "name": "Post Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 61
+              },
+              {
+                "name": "Post Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 62
+              },
+              {
+                "name": "Post Cache macOS deps (fftw, portaudio, hidapi)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 63
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 64
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 65
+              }
+            ]
+          },
+          {
+            "id": 135014826365,
+            "name": "build-dmg (macos-15-intel, intel, x86_64, 14.4)",
+            "status": "in_progress",
+            "conclusion": null,
+            "run_id": 44364588168,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Install dependencies via Homebrew",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3
+              },
+              {
+                "name": "Install Qt LTS via aqtinstall",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Assert no Homebrew Qt is discoverable",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5
+              },
+              {
+                "name": "Cache macOS deps (fftw, portaudio, hidapi)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6
+              },
+              {
+                "name": "Build macOS deps at the deployment target",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7
+              },
+              {
+                "name": "Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8
+              },
+              {
+                "name": "Setup qtkeychain (SmartLink credential persistence)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 9
+              },
+              {
+                "name": "Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10
+              },
+              {
+                "name": "Setup DeepFilterNet3 (DFNR)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 11
+              },
+              {
+                "name": "Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 12
+              },
+              {
+                "name": "Setup sherpa-onnx (non-whisper ASR backend)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 13
+              },
+              {
+                "name": "Set up ccache",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14
+              },
+              {
+                "name": "Ensure offline Metal toolchain",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 15
+              },
+              {
+                "name": "Configure",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16
+              },
+              {
+                "name": "Qualify native credential persistence (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 17
+              },
+              {
+                "name": "Preserve native credential result",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 18
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually enabled",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 19
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually disabled",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 20
+              },
+              {
+                "name": "Build",
+                "status": "in_progress",
+                "conclusion": null,
+                "number": 21
+              },
+              {
+                "name": "Split debug symbols",
+                "status": "pending",
+                "conclusion": null,
+                "number": 22
+              },
+              {
+                "name": "Qualify native setup window lifetime (explicit opt-in)",
+                "status": "pending",
+                "conclusion": null,
+                "number": 23
+              },
+              {
+                "name": "Preserve native setup window result",
+                "status": "pending",
+                "conclusion": null,
+                "number": 24
+              },
+              {
+                "name": "Bundle DFNR model",
+                "status": "pending",
+                "conclusion": null,
+                "number": 25
+              },
+              {
+                "name": "Build DAX audio driver",
+                "status": "pending",
+                "conclusion": null,
+                "number": 26
+              },
+              {
+                "name": "Verify binaries",
+                "status": "pending",
+                "conclusion": null,
+                "number": 27
+              },
+              {
+                "name": "Bundle Qt frameworks",
+                "status": "pending",
+                "conclusion": null,
+                "number": 28
+              },
+              {
+                "name": "Assert the bundled Qt is the pinned Qt",
+                "status": "pending",
+                "conclusion": null,
+                "number": 29
+              },
+              {
+                "name": "Assert nothing in the bundle outranks the deployment target",
+                "status": "pending",
+                "conclusion": null,
+                "number": 30
+              },
+              {
+                "name": "Stage the unsigned bundle for signing",
+                "status": "pending",
+                "conclusion": null,
+                "number": 31
+              },
+              {
+                "name": "Upload unsigned bundle",
+                "status": "pending",
+                "conclusion": null,
+                "number": 32
+              },
+              {
+                "name": "Post Set up ccache",
+                "status": "pending",
+                "conclusion": null,
+                "number": 60
+              },
+              {
+                "name": "Post Cache DeepFilterNet3",
+                "status": "pending",
+                "conclusion": null,
+                "number": 61
+              },
+              {
+                "name": "Post Cache qtkeychain",
+                "status": "pending",
+                "conclusion": null,
+                "number": 62
+              },
+              {
+                "name": "Post Cache macOS deps (fftw, portaudio, hidapi)",
+                "status": "pending",
+                "conclusion": null,
+                "number": 63
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "pending",
+                "conclusion": null,
+                "number": 64
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "radio_reboots": 0,
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "floor_handoff": "FLEX6300-NEXT-QUALIFICATION-HANDOFF.json",
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/coherent-SWR-repeat-components.tar.gz",
+    "bytes": 3170857,
+    "sha256": "5a9128bd7f07497b8c6bfed130c3ca022369d3f5c5f32eaba31adba9fa0022d5",
+    "members": 150,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Two finite separately keyed OFF/ON pairs per power setting, not sustained speech, long duty, all-band or all-microphone qualification. The predeclared development repeat gates are not an independently approved shipping acceptance policy.",
+    "All32 retained frames were independently recomputed with the same stated FFT/window convention. Numeric agreement does not calibrate RF watts or ADC headroom, establish FPGA timestamps or prove stability outside those late finite windows.",
+    "Scoped ASan/UBSan/LSan instruments exactly the changed model, reader, safety policy, controller and both test translation units. Other aethercore/Qt/dependency code is uninstrumented; this is not a whole-app sanitizer pass.",
+    "Source62 macOS ARM build and unsigned artifact digest/CRC/member checks passed. Windows and Intel macOS were still in progress at this checkpoint. These workflows do not run the new selected CTests or opt-in credential/window runtime probes; previous source106/75 evidence is retained with its original scope.",
+    "The6300 readiness kit already existed durably; its digest was verified and a current handoff note added without replacing the pinned kit. Actual6300 kernel/CPU/disk/privilege/IQ/RF qualification is still external. Its rear panel lacks the8600 RXA connector; no input routing or RF authorization is inferred.",
+    "No natural128sample event or original all-bypass cold-start defect was reproduced or root-caused by these captures. Software-reboot/hang investigation, final process-graph duty/failure matrix, production publisher/catalogue and independent release review remain open.",
+    "The final read-only lab audit found unchanged firmware/installation, zero control restarts, cap0 user processes, no packet sockets/ARP residue and accept_local0. Its temporary transport was retired. No reboot, AetherTX launch or processing-settings restore occurred."
+  ],
+  "evidence": "COHERENT-SWR-REPEAT-EVIDENCE.json.gz",
+  "evidence_sha256": "5b6446d18829501c71f8b8b5ee00ac0b6bd34c7b8070642b251c5675a1a882d1"
+}
