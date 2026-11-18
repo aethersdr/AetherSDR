@@ -20,6 +20,11 @@ struct TxTelemetry {
     TelemetrySample paTempC;
     TelemetrySample supplyVolts;
     TelemetrySample forwardWatts;
+    enum class SwrSource { Radio, DirectionalPower };
+    SwrSource swrSource = SwrSource::Radio;
+    TelemetrySample radioSwr;
+    TelemetrySample directionalForwardWatts;
+    TelemetrySample directionalReflectedWatts;
 };
 
 struct SafetyLimits {
@@ -147,7 +152,8 @@ public:
     //
     // Each reading carries its actual sample time, never the polling time.
     // Temperature, voltage and forward power are required; SWR is required
-    // once forward power exceeds 0.5 W.
+    // once forward power exceeds 0.5 W. Directional-source consumers also
+    // require the complete original power pair while idle, before keying.
     [[nodiscard]] AbortReason evaluate(std::int64_t nowMs,
                                        const TxTelemetry& telemetry) const;
     // Also used before keying; preserves each reading's original timestamp.

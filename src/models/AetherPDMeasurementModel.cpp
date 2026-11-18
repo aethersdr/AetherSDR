@@ -438,6 +438,10 @@ QByteArray AetherPDMeasurementModel::Result::toCsv() const
             ? QString::number(stamp.sourceStream->generation) : QString{},
             {}, id, stamp.sourceStream ? QStringLiteral("reported") : QStringLiteral("unknown"));
     }
+    if (measurement.safetyTelemetry) {
+        row(QStringLiteral("SWR guard source"), measurement.safetyTelemetry->swrSource == txlin::TxTelemetry::SwrSource::DirectionalPower
+            ? QStringLiteral("same-packet directional power") : QStringLiteral("radio SWR"));
+    }
     if (!measurement.error.empty()) {
         row(QStringLiteral("Run error"), text(QString::fromStdString(measurement.error)), {}, {}, QStringLiteral("invalid"));
     }
@@ -533,6 +537,10 @@ QByteArray AetherPDMeasurementModel::exportResult() const
         {"correction_active", r.measurement.correctionActive ? QJsonValue(*r.measurement.correctionActive) : QJsonValue()},
         {"error", QString::fromStdString(r.measurement.error)}, {"captures", captures}, {"allocations", allocations},
         {"limitations", "Raw IQ levels are not calibrated dBFS or watts. Spectral validity does not prove ADC headroom. Timestamps are radio process monotonic receipt times, not FPGA timestamps. Null numbers are unavailable."}};
+    if (r.measurement.safetyTelemetry && r.measurement.safetyTelemetryAtMs) {
+        out.insert(QStringLiteral("safety_telemetry"), txlin::safetyTelemetryEvidence(
+            *r.measurement.safetyTelemetry, *r.measurement.safetyTelemetryAtMs));
+    }
     if (r.measurement.measurement) {
         const txlin::LinearityResult& m = *r.measurement.measurement;
         const auto optional = [](const std::optional<double>& value) { return value ? QJsonValue(*value) : QJsonValue(); };

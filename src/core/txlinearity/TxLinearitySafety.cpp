@@ -224,6 +224,17 @@ AbortReason TxLinearitySafety::evaluateTelemetry(std::int64_t nowMs,
         || !fresh(telemetry.forwardWatts, m_limits.telemetryMaxAgeMs) || *telemetry.forwardWatts.value < 0.0) {
         return AbortReason::TelemetryStale;
     }
+    if (telemetry.swrSource == TxTelemetry::SwrSource::DirectionalPower) {
+        if (!fresh(telemetry.directionalForwardWatts, m_limits.telemetryMaxAgeMs)
+            || !fresh(telemetry.directionalReflectedWatts, m_limits.telemetryMaxAgeMs)
+            || *telemetry.directionalForwardWatts.value < 0.0
+            || *telemetry.directionalReflectedWatts.value < 0.0
+            || telemetry.directionalForwardWatts.observedAtMs != telemetry.directionalReflectedWatts.observedAtMs
+            || telemetry.forwardWatts.observedAtMs != telemetry.directionalForwardWatts.observedAtMs
+            || (telemetry.swr.value && telemetry.swr.observedAtMs != telemetry.directionalForwardWatts.observedAtMs)) {
+            return AbortReason::TelemetryStale;
+        }
+    }
     // SWR is meaningful only with forward power above the noise floor.
     if (*telemetry.forwardWatts.value > 0.5) {
         if (!fresh(telemetry.swr, m_limits.telemetryMaxAgeMs) || *telemetry.swr.value < 1.0) {

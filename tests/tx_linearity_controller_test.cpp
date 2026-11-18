@@ -286,6 +286,9 @@ int main(int argc, char** argv)
         f.lease->observed = Lease::State::Released; f.controller->poll();
         check(f.finished == 1 && f.result && !f.result->measurement,
               "SWR diagnostic altered refusal or release semantics");
+        check(f.result && f.result->safetyTelemetry && f.result->safetyTelemetryAtMs == sampledAt + 17
+            && f.result->safetyTelemetry->swr.value == 2.58,
+            "result must preserve the abort sample before release changes telemetry");
         releaseObserved = {};
         f.observedTelemetry.reset(); f.now += 30000; f.controller->confirmDummyLoad();
         check(f.controller->prepare(f.config, f.request), "diagnostic prevented subsequent receive preparation");

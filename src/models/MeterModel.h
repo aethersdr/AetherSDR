@@ -143,6 +143,14 @@ public:
     std::optional<float> fwdPowerIfLive() const;
     float fwdPowerInstant() const { return m_fwdPowerInstant; }
     float reflectedPower() const { return m_reflectedPower; }
+    struct DirectionalPowerSample {
+        float forwardWatts = 0;
+        float reflectedWatts = 0;
+        ReceiveReceipt receipt;
+    };
+    // Both accepted readings must belong to one received batch and transmitter.
+    // A partial directional update invalidates the pair; polling cannot form one.
+    std::optional<DirectionalPowerSample> directionalPowerSample() const;
     float tgxlFwdPower() const { return m_tgxlFwdPwr; }
 
     // How long after the last TX meter sample a TX-derived reading still counts
@@ -456,6 +464,10 @@ private:
     QMap<int, float>    m_values;      // meter index → last converted value
     QMap<int, qint64>   m_valueReceivedNs; // monotonic receipt time, never delivery time
     qint64 m_lastTxMeterReceivedNs = 0;
+    std::optional<DirectionalPowerSample> m_directionalPowerSample;
+    ReceiveDataLease m_directionalPowerSession;
+    ReceiveDataLease m_directionalForwardDefinition;
+    ReceiveDataLease m_directionalReflectedDefinition;
     QMap<int, qint64>   m_valueUpdatedMs; // meter index → epoch ms of last value
                                           // update. Lets consumers reject stale
                                           // reads (e.g. PACURRENT, which the

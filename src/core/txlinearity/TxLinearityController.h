@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QTimer>
+#include <QJsonObject>
 
 #include <complex>
 #include <functional>
@@ -60,7 +61,11 @@ struct LinearityRunResult {
     std::vector<LinearityCaptureStamp> captures;
     std::optional<bool> correctionActive;
     std::string error;
+    std::optional<TxTelemetry> safetyTelemetry;
+    std::optional<std::int64_t> safetyTelemetryAtMs;
 };
+
+QJsonObject safetyTelemetryEvidence(const TxTelemetry& telemetry, std::int64_t nowMs);
 
 // Owner-thread controller. Readiness never keys: startRun is a separate,
 // explicit operator action. Capture memory is bounded, and spectral analysis
@@ -125,5 +130,7 @@ private:
     bool m_shuttingDown = false;
     bool m_finishingCapture = false;
     bool m_captureSealed = false;
+    std::optional<TxTelemetry> m_lastTelemetry;
+    std::optional<std::int64_t> m_lastTelemetryAtMs;
 };
 } // namespace AetherSDR::txlin

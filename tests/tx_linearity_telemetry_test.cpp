@@ -7,6 +7,8 @@
 #include <array>
 #include <cstdio>
 #include <memory>
+#include <cmath>
+#include <limits>
 
 using namespace AetherSDR;
 using namespace AetherSDR::txlin;
@@ -23,12 +25,12 @@ void check(bool condition, const char* message)
 
 void define(MeterModel& model)
 {
-    const std::array<QString, 4> names = {"SWR", "PATEMP", "+13.8A", "FWDPWR"};
-    const std::array<QString, 4> units = {"SWR", "degC", "Volts", "Watts"};
-    for (int i = 0; i < 4; ++i) {
+    const std::array<QString, 5> names = {"SWR", "PATEMP", "+13.8A", "FWDPWR", "REFPWR"};
+    const std::array<QString, 5> units = {"SWR", "degC", "Volts", "dBm", "dBm"};
+    for (int i = 0; i < 5; ++i) {
         MeterDef def;
         def.index = i + 1;
-        def.source = (i == 0 || i == 3) ? "TX" : "RAD";
+        def.source = (i == 0 || i >= 3) ? "TX" : "RAD";
         def.name = names[i];
         def.unit = units[i];
         model.defineMeter(def);
@@ -37,10 +39,16 @@ void define(MeterModel& model)
 
 void feed(MeterModel& model)
 {
-    check(model.updateValueByName("TX", "SWR", 1.08f), "feed SWR");
-    check(model.updateValueByName("RAD", "PATEMP", 40.0f), "feed temperature");
-    check(model.updateValueByName("RAD", "+13.8A", 13.8f), "feed voltage");
-    check(model.updateValueByName("TX", "FWDPWR", 5.0f), "feed power");
+    model.updateValues({1, 2, 3, 4, 5}, {138, 2560, 3533, 4735, 1280});
+}
+
+void received(MeterModel& model, float forwardDbm, float reflectedDbm,
+              ReceiveReceipt receipt, ReceiveDataLease session,
+              ReceiveDataLease forwardDefinition = {}, ReceiveDataLease reflectedDefinition = {})
+{
+    if (!forwardDefinition) { forwardDefinition = std::make_shared<ReceiveDataEpoch>(); }
+    if (!reflectedDefinition) { reflectedDefinition = std::make_shared<ReceiveDataEpoch>(); }
+    model.updateReceivedValues({{{4, forwardDbm, forwardDefinition}, {5, reflectedDbm, reflectedDefinition}}, receipt, session});
 }
 }
 
@@ -80,8 +88,11 @@ int main(int argc, char** argv)
     check(safety.evaluate(12700, reader.read(12700)) == AbortReason::None,
           "new unchanged samples for every meter restore freshness");
     meters->removeMeter(1);
-    check(safety.evaluate(12701, reader.read(12701)) == AbortReason::TelemetryStale,
-          "removed SWR cannot leave a valid cached ratio");
+    check(safety.evaluate(12701, reader.read(12701)) == AbortReason::None,
+          "raw radio SWR is optional and never replaces the directional ratio");
+    meters->removeMeter(5);
+    check(safety.evaluate(12702, reader.read(12702)) == AbortReason::TelemetryStale,
+          "removed reflected-power meter invalidates the pair");
     meters->clear();
     check(safety.evaluate(12800, reader.read(12800)) == AbortReason::TelemetryStale,
           "disconnect clearing cannot reuse previous samples");
@@ -91,6 +102,117 @@ int main(int argc, char** argv)
     meters.reset();
     check(safety.evaluate(13000, reader.read(13000)) == AbortReason::TelemetryStale,
           "destroyed model produces missing telemetry");
+
+    {
+        MeterModel model;
+        define(model);
+        TxLinearityTelemetry telemetry(&model);
+        TxLinearitySafety guard;
+        guard.noteRunStarted(10000);
+        feed(model);
+        for (const std::array<qint16, 3>& observed : {std::array<qint16, 3>{3586, 1014, 323},
+                                                   std::array<qint16, 3>{3741, 1111, 294}}) {
+            model.updateValues({4, 5, 1}, {observed[0], observed[1], observed[2]});
+            const TxTelemetry t = telemetry.read(10000);
+            check(t.swrSource == TxTelemetry::SwrSource::DirectionalPower
+                && t.swr.value && *t.swr.value > 1.20 && *t.swr.value < 1.22
+                && t.radioSwr.value == double(observed[2]) / 128,
+                "preserved 5W/10W packets keep raw SWR while deriving the coherent ratio");
+            check(guard.evaluate(10000, t) == AbortReason::None,
+                  "actual conflicting radio-SWR packets no longer stop a safe directional ratio");
+        }
+        model.updateValues({4, 5, 1}, {3840, 3072, 128});
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::HighSwr,
+              "high reflected power stops immediately even when raw radio SWR says unity");
+        model.updateValues({4, 5}, {3840, 3840});
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::TelemetryStale,
+              "unity reflection coefficient fails closed rather than clamping to a safe SWR");
+        model.updateValues({4, 5}, {3840, 4000});
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::TelemetryStale,
+              "reflected power above forward power fails closed");
+        feed(model);
+        model.updateValues({4}, {3840});
+        model.updateValues({5}, {1280});
+        check(!model.directionalPowerSample()
+            && guard.evaluate(10000, telemetry.read(10000)) == AbortReason::TelemetryStale,
+            "separate directional packets in the same millisecond cannot form a coherent pair");
+        model.updateValues({4, 5, 4}, {3840, 1280, 3840});
+        check(!model.directionalPowerSample(), "duplicate directional entries cannot establish a pair");
+        MeterDef reflected = *model.meterDef(5);
+        reflected.unit = "Counts";
+        model.defineMeter(reflected);
+        feed(model);
+        check(!model.directionalPowerSample(), "unknown power units cannot establish a physical pair");
+        reflected.unit = "dBm";
+        reflected.sourceIndex = 9;
+        model.defineMeter(reflected);
+        feed(model);
+        check(!model.directionalPowerSample(), "power from distinct transmitters cannot establish a pair");
+        reflected.sourceIndex = 0;
+        model.defineMeter(reflected);
+        feed(model);
+        const TxTelemetry beforeRefresh = telemetry.read(10000);
+        model.updateValues({1}, {323});
+        const TxTelemetry rawRefresh = telemetry.read(12100);
+        check(rawRefresh.swr.observedAtMs == beforeRefresh.swr.observedAtMs
+            && guard.evaluate(12100, rawRefresh) == AbortReason::TelemetryStale,
+            "new raw SWR cannot refresh the old directional pair");
+    }
+    {
+        MeterModel model;
+        define(model);
+        feed(model);
+        TxLinearityTelemetry telemetry(&model);
+        TxLinearitySafety guard;
+        guard.noteRunStarted(10000);
+        auto session = std::make_shared<ReceiveDataEpoch>();
+        auto definition = std::make_shared<ReceiveDataEpoch>();
+        ReceiveReceipt receipt = ReceiveReceipt::now();
+        received(model, 30.0f, 10.0f, receipt, session, definition, definition);
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::None,
+              "accepted converted batch provides a coherent pair");
+        definition->active.store(false);
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::TelemetryStale,
+              "definition revocation withdraws a cached pair immediately");
+        received(model, 30.0f, 10.0f, ReceiveReceipt::now(), session);
+        session->active.store(false);
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::TelemetryStale,
+              "session revocation withdraws a cached pair immediately");
+        session = std::make_shared<ReceiveDataEpoch>();
+        receipt = ReceiveReceipt::now();
+        received(model, 30.0f, 10.0f, receipt, session);
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::None,
+              "fresh pair is accepted after a new session");
+        ++receipt.monotonicNs;
+        received(model, 30.0f, 24.0f, receipt, session);
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::HighSwr,
+              "new pair in the same UTC millisecond replaces the values");
+        receipt.monotonicNs -= 2;
+        received(model, 30.0f, 10.0f, receipt, session);
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::HighSwr,
+              "reordered older packet cannot replace the newer high-reflection pair");
+        receipt = ReceiveReceipt::now();
+        receipt.monotonicNs -= 2100000000LL;
+        // Start with a clean model so the old receipt is accepted, not reordered.
+        model.clear(); define(model);
+        received(model, 30.0f, 10.0f, receipt, session);
+        check(telemetry.read(10000).swr.observedAtMs <= 7900,
+              "delivery delay is charged to the original monotonic receipt");
+        receipt = ReceiveReceipt::now();
+        receipt.monotonicNs += 1000000000LL;
+        received(model, 30.0f, 10.0f, receipt, session);
+        check(telemetry.read(10000).swr.observedAtMs <= 7900,
+              "rejected future receipt cannot renew the old pair");
+        model.clear(); define(model); feed(model);
+        const ReceiveReceipt negativeReceipt = ReceiveReceipt::now();
+        MeterDef forward = *model.meterDef(4);
+        MeterDef reflected = *model.meterDef(5);
+        forward.unit = reflected.unit = "Watts";
+        model.defineMeter(forward); model.defineMeter(reflected);
+        received(model, 1.0f, -0.01f, negativeReceipt, session);
+        check(guard.evaluate(10000, telemetry.read(10000)) == AbortReason::TelemetryStale,
+              "negative physical power fails closed");
+    }
     if (failures == 0) {
         std::puts("tx_linearity_telemetry_test: all checks passed");
     }

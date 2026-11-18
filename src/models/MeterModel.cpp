@@ -169,6 +169,10 @@ void MeterModel::rescanAmpMeters()
 void MeterModel::defineMeter(const MeterDef& def)
 {
     ++m_definitionRevision;
+    if (def.index == m_fwdPwrIdx || def.index == m_refPwrIdx
+        || (def.source.startsWith("TX") && (def.name == "FWDPWR" || def.name == "REFPWR"))) {
+        m_directionalPowerSample.reset();
+    }
     const auto previous = m_defs.constFind(def.index);
     const bool redefinition = previous != m_defs.constEnd()
         && previous->source == def.source && previous->sourceIndex == def.sourceIndex
@@ -322,6 +326,9 @@ QList<int> MeterModel::firstDefinedIndices(int limit, std::optional<int> after) 
 void MeterModel::removeMeter(int index)
 {
     ++m_definitionRevision;
+    if (index == m_fwdPwrIdx || index == m_refPwrIdx) {
+        m_directionalPowerSample.reset();
+    }
     // Withdrawing an undeclared index is a no-op: backends withdraw defensively
     // during teardown without knowing which declarations landed. Proceeding would
     // reset m_manifestSliceContext (the next definition loses its SLC context) and
@@ -567,6 +574,10 @@ bool MeterModel::updateValueByName(const QString& source, const QString& name,
 void MeterModel::clear()
 {
     ++m_definitionRevision;
+    m_directionalPowerSample.reset();
+    m_directionalPowerSession.reset();
+    m_directionalForwardDefinition.reset();
+    m_directionalReflectedDefinition.reset();
     m_defs.clear();
     m_values.clear();
     m_valueUpdatedMs.clear();
@@ -1034,6 +1045,16 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
     applyValues(ids, vals);
 }
 
+std::optional<MeterModel::DirectionalPowerSample> MeterModel::directionalPowerSample() const
+{
+    if ((m_directionalPowerSession && !m_directionalPowerSession->current())
+        || (m_directionalForwardDefinition && !m_directionalForwardDefinition->current())
+        || (m_directionalReflectedDefinition && !m_directionalReflectedDefinition->current())) {
+        return {};
+    }
+    return m_directionalPowerSample;
+}
+
 template<typename Value>
 void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& vals,
                             ReceiveReceipt receipt, ReceiveDataLease session,
@@ -1060,6 +1081,10 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     bool txChanged = false;
     bool directionalChanged = false;
     bool fwdInstantChanged = false;
+    int forwardSamples = 0;
+    int reflectedSamples = 0;
+    ReceiveDataLease forwardDefinition;
+    ReceiveDataLease reflectedDefinition;
     bool micChanged = false;
     bool hwAlcChangedFlag = false;
     bool swAlcChangedFlag = false;
@@ -1116,6 +1141,9 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
         if (isSliceLevel) {
             // no-op, already emitted
         } else if (idx == m_fwdPwrIdx) {
+            m_directionalPowerSample.reset();
+            ++forwardSamples;
+            if (!definitions.empty()) { forwardDefinition = definitions[i]; }
             m_lastTxMeterUpdateMs = packetUpdatedMs;
             m_lastTxMeterReceivedNs = receipt.monotonicNs;
             m_lastFwdPowerUpdateMs = m_lastTxMeterUpdateMs;
@@ -1147,6 +1175,9 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             }
             txChanged = true;
         } else if (idx == m_refPwrIdx) {
+            m_directionalPowerSample.reset();
+            ++reflectedSamples;
+            if (!definitions.empty()) { reflectedDefinition = definitions[i]; }
             m_lastTxMeterUpdateMs = packetUpdatedMs;
             m_lastTxMeterReceivedNs = receipt.monotonicNs;
             m_lastReflectedPowerUpdateMs = m_lastTxMeterUpdateMs;
@@ -1282,6 +1313,27 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     // other consumers clamp it to 1.0, so an unaccompanied 0.0f means opposite
     // things on different surfaces (#4536 review, blocker 2).
     const float publishedSwr = swrValid ? m_swr : 0.0f;
+
+    if (forwardSamples || reflectedSamples) {
+        m_directionalPowerSample.reset();
+        m_directionalPowerSession.reset();
+        m_directionalForwardDefinition.reset();
+        m_directionalReflectedDefinition.reset();
+        const auto unitKnown = [](const QString& unit) {
+            return unit == QStringLiteral("dBm")
+                || unit.compare(QLatin1String("Watts"), Qt::CaseInsensitive) == 0
+                || unit.compare(QLatin1String("W"), Qt::CaseInsensitive) == 0;
+        };
+        if (forwardSamples == 1 && reflectedSamples == 1 && receipt.monotonicNs > 0
+            && unitKnown(m_fwdPwrUnit) && unitKnown(m_refPwrUnit)
+            && m_defs.value(m_fwdPwrIdx).source == m_defs.value(m_refPwrIdx).source
+            && m_defs.value(m_fwdPwrIdx).sourceIndex == m_defs.value(m_refPwrIdx).sourceIndex) {
+            m_directionalPowerSample = DirectionalPowerSample{m_fwdPowerInstant, m_reflectedPower, receipt};
+            m_directionalPowerSession = session;
+            m_directionalForwardDefinition = forwardDefinition;
+            m_directionalReflectedDefinition = reflectedDefinition;
+        }
+    }
 
     // sLevelChanged is now emitted per-slice inline above
     if (txChanged) {

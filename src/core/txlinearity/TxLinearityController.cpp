@@ -38,6 +38,21 @@ QJsonObject telemetryEvidence(const TelemetrySample& sample, std::int64_t now)
 }
 }
 
+QJsonObject safetyTelemetryEvidence(const TxTelemetry& telemetry, std::int64_t nowMs)
+{
+    return {
+        {QStringLiteral("swr_source"), telemetry.swrSource == TxTelemetry::SwrSource::DirectionalPower
+            ? QStringLiteral("same-packet-directional-power") : QStringLiteral("radio-swr")},
+        {QStringLiteral("now_ms"), qint64(nowMs)},
+        {QStringLiteral("swr"), telemetryEvidence(telemetry.swr, nowMs)},
+        {QStringLiteral("radio_swr"), telemetryEvidence(telemetry.radioSwr, nowMs)},
+        {QStringLiteral("directional_forward_watts"), telemetryEvidence(telemetry.directionalForwardWatts, nowMs)},
+        {QStringLiteral("directional_reflected_watts"), telemetryEvidence(telemetry.directionalReflectedWatts, nowMs)},
+        {QStringLiteral("forward_watts"), telemetryEvidence(telemetry.forwardWatts, nowMs)},
+        {QStringLiteral("pa_temp_c"), telemetryEvidence(telemetry.paTempC, nowMs)},
+        {QStringLiteral("supply_volts"), telemetryEvidence(telemetry.supplyVolts, nowMs)}};
+}
+
 TxLinearityController::TxLinearityController(std::unique_ptr<ITxCaptureSource> source,
                                              Environment environment, QObject* parent)
     : QObject(parent), m_source(std::move(source)), m_environment(std::move(environment))
@@ -171,6 +186,8 @@ bool TxLinearityController::prepare(const LinearityRunConfig& config, const RunR
     m_config = config;
     m_request = preflightRequest;
     m_prepareMs = now;
+    m_lastTelemetry.reset();
+    m_lastTelemetryAtMs.reset();
     m_frames.clear();
     m_frames.reserve(config.targetAverages);
     m_keyObservedMs.reset();
@@ -226,6 +243,8 @@ bool TxLinearityController::startRun(std::shared_ptr<ITxLinearityRunLease> lease
     m_preflight = m_safety.preflight(now, m_request);
     if (!m_preflight.ok()) { finishCapture(m_preflight.message); return false; }
     const TxTelemetry telemetry = m_environment.telemetry(now);
+    m_lastTelemetry = telemetry;
+    m_lastTelemetryAtMs = now;
     const AbortReason refusal = m_safety.evaluateTelemetry(now, telemetry);
     if (refusal != AbortReason::None || *telemetry.forwardWatts.value > 0.5
         || lease->state() != ITxLinearityRunLease::State::AwaitingKey) {
@@ -278,6 +297,8 @@ void TxLinearityController::poll()
         return;
     }
     const TxTelemetry telemetry = m_environment.telemetry(now);
+    m_lastTelemetry = telemetry;
+    m_lastTelemetryAtMs = now;
     const AbortReason abort = now >= m_deadlineMs ? AbortReason::TransmitTimeout : m_safety.evaluate(now, telemetry);
     if (abort != AbortReason::None) { finishTelemetryCapture(abortReasonText(abort), now, telemetry); return; }
     if (*telemetry.forwardWatts.value > m_config.maxForwardWatts) {
@@ -379,22 +400,17 @@ void TxLinearityController::finishTelemetryCapture(const std::string& error, std
     // Release can replace meter readings or destroy this controller. Preserve
     // the decision inputs; serialize/log only after requesting unkey and stop.
     finishCapture(error);
-    const QJsonObject record{
-        {QStringLiteral("reason"), QString::fromStdString(error)},
-        {QStringLiteral("phase"), QString::fromLatin1(phase)},
-        {QStringLiteral("now_ms"), qint64(now)},
-        {QStringLiteral("swr"), telemetryEvidence(observed.swr, now)},
-        {QStringLiteral("forward_watts"), telemetryEvidence(observed.forwardWatts, now)},
-        {QStringLiteral("pa_temp_c"), telemetryEvidence(observed.paTempC, now)},
-        {QStringLiteral("supply_volts"), telemetryEvidence(observed.supplyVolts, now)},
-        {QStringLiteral("limits"), QJsonObject{
+    QJsonObject record = safetyTelemetryEvidence(observed, now);
+    record.insert(QStringLiteral("reason"), QString::fromStdString(error));
+    record.insert(QStringLiteral("phase"), QString::fromLatin1(phase));
+    record.insert(QStringLiteral("limits"), QJsonObject{
             {QStringLiteral("max_swr"), limits.maxSwr},
             {QStringLiteral("max_forward_watts"), maxForward},
             {QStringLiteral("max_pa_temp_c"), limits.maxPaTempC},
             {QStringLiteral("min_supply_volts"), limits.minSupplyVolts},
             {QStringLiteral("telemetry_max_age_ms"), limits.telemetryMaxAgeMs},
             {QStringLiteral("vitals_max_age_ms"), limits.vitalsMaxAgeMs},
-            {QStringLiteral("max_transmit_ms"), limits.maxTransmitMs}}}};
+            {QStringLiteral("max_transmit_ms"), limits.maxTransmitMs}});
     qCWarning(lcTxLinearityMeasurement).noquote() << "TX linearity safety abort"
         << QJsonDocument(record).toJson(QJsonDocument::Compact);
 }
@@ -427,6 +443,10 @@ void TxLinearityController::complete()
     m_lease.reset();
     m_state = State::Analyzing;
     LinearityRunResult result;
+    result.safetyTelemetry = m_lastTelemetry;
+    result.safetyTelemetryAtMs = m_lastTelemetryAtMs;
+    m_lastTelemetry.reset();
+    m_lastTelemetryAtMs.reset();
     result.error = m_status;
     if (result.error.empty() && now < m_prepareMs) { result.error = "Measurement clock moved backwards"; }
     if (result.error.empty() && !current()) { result.error = "Original radio session is no longer current"; }

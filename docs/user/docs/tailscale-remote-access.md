@@ -718,14 +718,23 @@ input cancels the preparation or run. A new receive check is needed after
 readiness expires. Changing correction state requires a separately prepared
 run; compare exported runs made with matching station settings.
 
-During a measurement, PA temperature and supply voltage samples expire after
-three seconds, accommodating the radio's slower updates. Forward-power and
-SWR samples retain a two-second limit. Missing or expired required telemetry
-stops the measurement; rereading a cached value does not extend its lifetime.
+During a measurement, the SWR guard uses the forward and reflected power
+readings accepted together in one meter packet from the same transmitter. It
+calculates SWR from their power ratio and stops above 2:1 once forward power
+exceeds 0.5 W. The radio's separately reported SWR remains on the normal meters;
+it does not replace a missing directional-power pair.
+
+PA temperature and supply voltage samples expire after three seconds,
+accommodating the radio's slower updates. Directional-power samples retain a
+two-second limit. Missing, invalid or expired required telemetry stops the
+measurement; rereading a cached value does not extend its lifetime. A partial
+directional update invalidates the pair until a complete packet arrives.
 
 If a measurement stops for SWR, power, temperature, voltage or stale telemetry,
 the application log includes `TX linearity safety abort` with the exact readings,
-their sample ages and the limits used for that decision. Use this record when a
+their sample ages, the SWR source, both directional-power inputs, the raw radio
+SWR and the limits used for that decision. JSON exports include the final safety
+sample and its source. Use this record when a
 brief spike is no longer visible on the meters. Missing readings remain marked
 as missing; the record reports the radio's telemetry and does not independently
 verify the load or confirm that transmission has stopped.

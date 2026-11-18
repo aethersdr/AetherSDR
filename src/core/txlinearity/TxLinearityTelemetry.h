@@ -27,9 +27,11 @@ private:
     };
     TelemetrySample observe(std::size_t index, double value, std::int64_t sourceStamp,
                             std::int64_t wallNowMs, std::int64_t monotonicNowMs);
+    TelemetrySample observeReceived(std::size_t index, double value, std::int64_t receivedNs,
+                                    std::int64_t receiptClockNowNs, std::int64_t monotonicNowMs);
 
     QPointer<const MeterModel> m_meters;
-    std::array<Observation, 4> m_observations;
+    std::array<Observation, 7> m_observations;
 };
 
 } // namespace AetherSDR::txlin
