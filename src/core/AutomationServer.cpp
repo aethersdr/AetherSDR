@@ -12578,6 +12578,14 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
     if (normalizedAction == QLatin1String("send")) {
         QString command = value;
         const QString simId = takeSimId(command);
+        // Before the simulator lookup: a refused SET is refused whether or not
+        // a simulator is connected.
+        if (!m_txAllowed) {
+            if (const QString set = tciDriveSetCommand(command); !set.isEmpty()) {
+                qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint tci send" << set;
+                return err(txSetpointBlockedError(QStringLiteral("tci send ") + set));
+            }
+        }
         TciSimClient* sim = tciSimById(simId);
         if (!sim || !sim->socket
             || sim->socket->state() != QAbstractSocket::ConnectedState) {
@@ -12587,12 +12595,6 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         command = command.trimmed();
         if (command.isEmpty()) {
             return err(QStringLiteral("tci send requires a command"));
-        }
-        if (!m_txAllowed) {
-            if (const QString set = tciDriveSetCommand(command); !set.isEmpty()) {
-                qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint tci send" << set;
-                return err(txSetpointBlockedError(QStringLiteral("tci send ") + set));
-            }
         }
         if (command.size() > 4096 || command.contains(QLatin1Char('\n'))
             || command.contains(QLatin1Char('\r'))) {
