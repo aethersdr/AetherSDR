@@ -261,37 +261,113 @@ ServiceReply ControlService::completePairing(const ProtocolRequest& request,
     case ControlPairing::Attempt::Expired:
         return refuse("capability.unavailable", "no pairing is open on the radio");
     }
-    // An issuer may answer before issue() returns (an early refusal). That
-    // answer becomes this call's ordinary reply: the pump only waits for a
-    // deferred one after handle() has returned.
-    struct Pending {
-        bool issuing{true};
-        std::optional<QJsonObject> early;
-    };
-    const auto pending = std::make_shared<Pending>();
-    const QPointer<ControlSession> target(session);
     const QString id = request.id;
-    m_pairingBinding->issuer->issue(name.toString().trimmed(),
-        [target, id, pending](std::optional<PairingIssuer::Issued> issued) {
-            const QJsonObject message = issued
+    PairingIssuer* issuer = m_pairingBinding->issuer;
+    const QString clientName = name.toString().trimmed();
+    return deferReply(session, true, [issuer, clientName, id](Answer answer) {
+        issuer->issue(clientName, [answer, id](std::optional<PairingIssuer::Issued> issued) {
+            answer(issued
                 ? ControlProtocolCodec::successResponse(id, {
                       {QStringLiteral("credentialId"), issued->credentialId},
                       {QStringLiteral("token"), issued->token}})
                 : ControlProtocolCodec::errorResponse(id, {QStringLiteral("engine.failed"),
-                      QStringLiteral("the credential could not be stored"), {}, false});
-            if (pending->issuing) {
-                pending->early = message;
-                return;
-            }
-            if (target) { (void)target->completeDeferred(message, true); }
+                      QStringLiteral("the credential could not be stored"), {}, false}));
         });
-    pending->issuing = false;
+    });
+}
+
+ServiceReply ControlService::deferReply(ControlSession* session, bool closeAfterWrite,
+    const std::function<void(Answer)>& start)
+{
+    // An operation may answer before start() returns (an early refusal). That
+    // answer becomes this call's ordinary reply: the pump only waits for a
+    // deferred one after handle() has returned.
+    struct Pending {
+        bool starting{true};
+        std::optional<QJsonObject> early;
+    };
+    const auto pending = std::make_shared<Pending>();
+    const QPointer<ControlSession> target(session);
+    start([target, pending, closeAfterWrite](const QJsonObject& message) {
+        if (pending->starting) {
+            pending->early = message;
+            return;
+        }
+        if (target) { (void)target->completeDeferred(message, closeAfterWrite); }
+    });
+    pending->starting = false;
     if (pending->early) {
-        return {*pending->early, true};
+        return {*pending->early, closeAfterWrite};
     }
     ServiceReply reply;
     reply.deferred = true;
     return reply;
+}
+
+bool ControlService::bindRemoteClientAdmin(RemoteClientAdmin* admin)
+{
+    if (m_resources->thread() != QThread::currentThread() || !admin || m_remoteClients
+        || m_dispatchStarted) {
+        return false;
+    }
+    m_remoteClients = admin;
+    return true;
+}
+
+ServiceReply ControlService::handleRemoteClients(const ProtocolRequest& request,
+    ControlSession* session) const
+{
+    const auto reject = [&request](const char* code, const char* message) {
+        return failure(request.id, {QString::fromLatin1(code), QString::fromLatin1(message), {}, false});
+    };
+    if (session->isNetwork() || !session->canControl()) {
+        return reject("auth.grant_denied", "paired clients are managed only on the local control socket");
+    }
+    if (!m_remoteClients) {
+        return reject("capability.unavailable", "remote clients are not enabled");
+    }
+    if (request.method == QStringLiteral("remoteClients.list")) {
+        if (!request.params.isEmpty()) {
+            return reject("request.invalid_params", "remoteClients.list takes no parameters");
+        }
+        QJsonArray clients;
+        for (const RemoteClientAdmin::Client& c : m_remoteClients->clients()) {
+            clients.append(QJsonObject{{QStringLiteral("credentialId"), c.credentialId},
+                                       {QStringLiteral("name"), c.name},
+                                       {QStringLiteral("scope"), c.scope}});
+        }
+        return {ControlProtocolCodec::successResponse(request.id, {{QStringLiteral("clients"), clients}}), false};
+    }
+    const QJsonValue id = request.params.value(QStringLiteral("credentialId"));
+    const auto credentialIdShape = [](const QString& text) {   // 32 lowercase hex digits
+        if (text.size() != 32) { return false; }
+        for (const QChar c : text) {
+            if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f'))) { return false; }
+        }
+        return true;
+    };
+    if (request.params.size() != 1 || !id.isString() || !credentialIdShape(id.toString())) {
+        return reject("request.invalid_params", "remoteClients.revoke takes credentialId (32 hex digits)");
+    }
+    RemoteClientAdmin* admin = m_remoteClients;
+    const QString requestId = request.id;
+    return deferReply(session, false, [admin, credentialId = id.toString(), requestId](Answer answer) {
+        admin->revoke(credentialId, [answer, requestId](RemoteClientAdmin::RevokeResult result) {
+            switch (result) {
+            case RemoteClientAdmin::RevokeResult::Revoked:
+                answer(ControlProtocolCodec::successResponse(requestId, {{QStringLiteral("revoked"), true}}));
+                return;
+            case RemoteClientAdmin::RevokeResult::NotFound:
+                answer(ControlProtocolCodec::errorResponse(requestId, {QStringLiteral("resource.not_found"),
+                    QStringLiteral("no paired client has that id"), {}, false}));
+                return;
+            case RemoteClientAdmin::RevokeResult::Failed:
+                answer(ControlProtocolCodec::errorResponse(requestId, {QStringLiteral("engine.failed"),
+                    QStringLiteral("the credential store did not confirm the removal; the client stays paired until it does"), {}, false}));
+                return;
+            }
+        });
+    });
 }
 
 ServiceReply ControlService::handle(
@@ -416,6 +492,10 @@ ServiceReply ControlService::handle(
     }
     if (request.method == QStringLiteral("pairing.begin")) {
         return beginPairing(request, *session);
+    }
+    if (request.method == QStringLiteral("remoteClients.list")
+        || request.method == QStringLiteral("remoteClients.revoke")) {
+        return handleRemoteClients(request, session);
     }
     if (request.method == QStringLiteral("radio.connect")
         || request.method == QStringLiteral("radio.disconnect")) {
@@ -852,6 +932,10 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
     }
     if (m_pairingBinding && session.canControl() && !session.isNetwork()) {
         available.append(QStringLiteral("pairing.begin"));
+    }
+    if (m_remoteClients && session.canControl() && !session.isNetwork()) {
+        available.append(QStringLiteral("remoteClients.list"));
+        available.append(QStringLiteral("remoteClients.revoke"));
     }
     if (m_transmit && !session.isNetwork()) {
         for (const QJsonValue& method : m_transmit->methods(session)) {

@@ -1,6 +1,8 @@
 #include "RadioModel.h"
+#include "ModeVocabulary.h"
 #include "TxController.h"
 #include "core/LogManager.h"
+#include "core/SerialPortController.h"
 
 #include <QPointer>
 #include <QScopeGuard>
@@ -198,6 +200,20 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
                 receiver->endLocalTxActivity(intent);
             }
         }});
+}
+
+void RadioModel::connectSerialPttInput(SerialPortController* source)
+{
+    // Both edges go through the normal PTT paths so the footswitch gets the
+    // same tails as MOX: Quindar intro/outro, RADE end-of-over, TX off delay.
+    connect(source, &SerialPortController::externalPttChanged,
+            this, [this](bool active, const TxCoordinator::Request& input) {
+        if (active) {
+            (void)requestProducerPttOn(input, TransmitModel::PttSource::Mox);
+        } else {
+            requestProducerPttOff(input, TransmitModel::PttSource::Mox);
+        }
+    });
 }
 
 void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
@@ -1176,13 +1192,49 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
 
 void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                        const QString& source, quint64 traceId, quint64 sourceMs,
-                                       std::chrono::steady_clock::time_point scheduledAt)
+                                       std::chrono::steady_clock::time_point scheduledAt,
+                                       bool hostTextGates, std::function<void()> onDownRefused)
 {
-    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt] {
+    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt,
+                                     hostTextGates, onDownRefused = std::move(onDownRefused)] {
+        const auto refused = [down, &onDownRefused] {
+            if (down && onDownRefused) {
+                onDownRefused();
+            }
+        };
         if (m_txSessionClosing || scheduledAt < m_cwInputNotBefore) {
+            refused();
             return;
         }
-        (void)sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request);
+        if (down && hostTextGates) {
+            SliceModel* tx = txSlice();
+            if (!tx || !isCwMode(tx->mode())) {
+                emitInterlockNotification(
+                    tr("CW text stopped: the transmit slice is not in a CW mode."),
+                    QStringLiteral("cw-text-mode:%1").arg(tx ? tx->mode() : QString()),
+                    tx ? tx->panId() : QString());
+                refused();
+                return;
+            }
+            if (!m_transmitModel.admitsCwKeyEdge(true)) {
+                emitInterlockNotification(tr("CW text stopped: TUNE is active."),
+                                          QStringLiteral("cw-text-tuning"), tx->panId());
+                refused();
+                return;
+            }
+            // Break-in turned off, or MOX/PTT released, mid-message: the
+            // backend would not raise MOX, so the element would not go out.
+            if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
+                emitInterlockNotification(
+                    tr("CW text stopped: break-in is off and transmit is not keyed."),
+                    QStringLiteral("cw-text-unkeyed"), tx->panId());
+                refused();
+                return;
+            }
+        }
+        if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
+            refused();
+        }
     }, Qt::QueuedConnection);
 }
 

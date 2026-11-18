@@ -51,6 +51,9 @@ public:
         std::function<qint64()> nowMs;
     };
     [[nodiscard]] bool bindPairing(PairingBinding binding);
+    // Listing and removing paired clients at run time (local socket, control).
+    // The admin outlives the service.
+    [[nodiscard]] bool bindRemoteClientAdmin(RemoteClientAdmin* admin);
 
     [[nodiscard]] ServiceReply handle(
         const QByteArray& bytes, ControlSession* session) const;
@@ -73,6 +76,14 @@ private:
         const ControlSession& session) const;
     [[nodiscard]] ServiceReply completePairing(const ProtocolRequest& request,
         ControlSession* session) const;
+    [[nodiscard]] ServiceReply handleRemoteClients(const ProtocolRequest& request,
+        ControlSession* session) const;
+    // Runs an operation that answers through Answer, later or at once. An
+    // answer given before start() returns is the ordinary reply; otherwise
+    // the reply is deferred (ServiceReply::deferred) and written when given.
+    using Answer = std::function<void(const QJsonObject& message)>;
+    [[nodiscard]] static ServiceReply deferReply(ControlSession* session, bool closeAfterWrite,
+                                                 const std::function<void(Answer)>& start);
 
     ControlResourceStore* m_resources{nullptr};
     QPointer<RadioConnectionTarget> m_connectionTarget;
@@ -84,6 +95,7 @@ private:
     QPointer<ControlCredentials> m_credentials;
     bool m_credentialsBound{false};
     std::optional<PairingBinding> m_pairingBinding;
+    RemoteClientAdmin* m_remoteClients{nullptr};
     mutable ControlPairing m_pairing;
     mutable bool m_dispatchStarted{false};
     std::unique_ptr<TransmitControlService> m_transmit;

@@ -41,6 +41,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStandardItemModel>
 #include <QTimer>
 #include <QTreeWidget>
 #include <cstdio>
@@ -1610,6 +1611,188 @@ bool checkFieldDescriptions()
     }
     return true;
 }
+
+// LP-100A over Radio USB: the chooser follows what the radio reports. Saved in
+// Radio mode with the dialog open before any cable is reported, the row is
+// dimmed with a reason; once the radio reports a CAT cable, the chooser, the
+// Radio USB item and Connect are usable again, with the chooser's own help
+// text. Connect asks before changing any cable setting, and only then.
+bool checkRadioCableChooser()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    PeripheralSettings::setVisibleDeviceIds({QStringLiteral("lp100a")});
+    PeripheralSettings::setDeviceString(QStringLiteral("Lp100a"), QStringLiteral("ConnectionMode"),
+                                        QStringLiteral("Radio"));
+    const auto cleanup = qScopeGuard([] { AppSettings::instance().remove(QStringLiteral("Peripherals")); });
+    const QString sn = QStringLiteral("ABBDMO0I");
+    const QString help = QStringLiteral(
+        "The USB cable on the radio this device is plugged into. Connecting sets "
+        "that cable to passthrough at the device's serial speed.");
+    const QString noCable = QStringLiteral("The radio reports no CAT or passthrough USB cable for the LP-100A.");
+
+    RadioModel model;
+    LpMeterConnection meter;
+    int configures = 0;
+    LpMeterConnection::RadioCableHooks hooks;
+    // The radio's view, read from the model as MainWindow's hook does.
+    hooks.snapshot = [&model](const QString& serial) {
+        LpMeter::CableSnapshot snap;
+        const auto& cables = model.usbCableModel().cables();
+        const auto it = cables.constFind(serial);
+        if (it == cables.constEnd()) {
+            return snap;
+        }
+        snap = {true, it->present, it->type, it->speed, it->dataBits, it->parity, it->stopBits,
+                it->flowControl};
+        return snap;
+    };
+    hooks.configure = [&configures](const QString&, const LpMeter::CableChange&) {
+        ++configures;
+        return true;
+    };
+    hooks.write = [](const QString&, const QByteArray&) { return true; };
+    meter.setRadioCableHooks(std::move(hooks));
+    RadioSetupDialog dialog(&model, nullptr, nullptr, nullptr, nullptr, nullptr,
+                            nullptr, nullptr, nullptr, &meter);
+    dialog.resize(960, 720);
+    dialog.show();
+    dialog.selectTab(QStringLiteral("Peripherals"));
+    QCoreApplication::processEvents();
+    auto* mode = dialog.findChild<QComboBox*>(QStringLiteral("peripheralMode_lp100a"));
+    auto* chooser = dialog.findChild<QComboBox*>(QStringLiteral("peripheralRadioCable_lp100a"));
+    auto* connectButton = dialog.findChild<QPushButton*>(QStringLiteral("peripheralConnect_lp100a"));
+    auto* items = mode ? qobject_cast<QStandardItemModel*>(mode->model()) : nullptr;
+    if (!mode || !chooser || !connectButton || !items
+        || mode->currentData().toString() != QStringLiteral("Radio")) {
+        std::fprintf(stderr, "LP-100A Radio USB controls missing or not in Radio mode\n");
+        return false;
+    }
+    QStandardItem* radioItem = items->item(mode->findData(QStringLiteral("Radio")));
+    auto state = [&](const char* when) {
+        std::fprintf(stderr, "  %s: radioItem=%d chooser=%d items=%d connect=%d\n"
+                             "    chooser description=\"%s\"\n    chooser tooltip=\"%s\"\n",
+                     when, radioItem && radioItem->isEnabled(), chooser->isEnabled(), chooser->count(),
+                     connectButton->isEnabled(), qPrintable(chooser->accessibleDescription()),
+                     qPrintable(chooser->toolTip()));
+    };
+    auto observe = [&model](UsbCableStatusValues value) {
+        model.usbCableModel().applyObservation(value);
+        pokeRefresh(model);
+        QCoreApplication::processEvents();
+    };
+    auto blockedWithReason = [&] {
+        return radioItem && !radioItem->isEnabled() && !chooser->isEnabled() && !connectButton->isEnabled()
+            && chooser->accessibleDescription() == help + QStringLiteral(" ") + noCable
+            && connectButton->accessibleDescription() == noCable;
+    };
+    auto usable = [&] {
+        return radioItem && radioItem->isEnabled() && chooser->isEnabled() && connectButton->isEnabled()
+            && chooser->count() == 1 && chooser->currentData().toString() == sn
+            && chooser->accessibleDescription() == help && chooser->toolTip().isEmpty()
+            && connectButton->accessibleDescription().isEmpty();
+    };
+
+    pokeRefresh(model);
+    QCoreApplication::processEvents();
+    if (!blockedWithReason()) {
+        state("before the radio reports a cable");
+        std::fprintf(stderr, "Radio USB was not dimmed, with its reason, before any cable was reported\n");
+        return false;
+    }
+
+    UsbCableStatusValues cat;
+    cat.serial = sn;
+    cat.type = QStringLiteral("cat");
+    cat.present = true;
+    cat.speed = 9600;
+    cat.dataBits = 8;
+    cat.parity = QStringLiteral("none");
+    cat.stopBits = 1;
+    cat.flowControl = QStringLiteral("none");
+    observe(cat);
+    if (!usable()) {
+        state("after the radio reports a CAT cable");
+        std::fprintf(stderr, "The Radio USB cable chooser stayed dimmed after the radio reported a cable\n");
+        return false;
+    }
+
+    // Another client retypes it to BIT: an excluded type the radio still
+    // reports, so it is not offered back as "not reported by the radio".
+    UsbCableStatusValues bit;
+    bit.serial = sn;
+    bit.type = QStringLiteral("bit");
+    observe(bit);
+    for (int i = 0; i < chooser->count(); ++i) {
+        if (chooser->itemText(i).contains(QStringLiteral("not reported"))) {
+            state("after the cable became a BIT cable");
+            std::fprintf(stderr, "A reported BIT cable was offered as not reported by the radio\n");
+            return false;
+        }
+    }
+    if (chooser->count() != 0 || !blockedWithReason()) {
+        state("after the cable became a BIT cable");
+        std::fprintf(stderr, "A cable retyped to BIT left Radio USB usable\n");
+        return false;
+    }
+    observe(cat);
+    if (!usable()) {
+        state("after the cable came back as CAT");
+        std::fprintf(stderr, "The Radio USB cable chooser stayed dimmed after the cable came back\n");
+        return false;
+    }
+
+    // Connect asks whenever any setting would change. Every prompt is answered
+    // Cancel, so an unexpected one cannot block the test.
+    int prompts = 0;
+    QTimer answer;
+    answer.setInterval(10);
+    QObject::connect(&answer, &QTimer::timeout, [&prompts] {
+        for (QWidget* top : QApplication::topLevelWidgets()) {
+            if (top->objectName() == QStringLiteral("lp100aRadioCableConfirm") && top->isVisible()) {
+                if (auto* cancel = top->findChild<QPushButton*>(QStringLiteral("lp100aRadioCableCancel"))) {
+                    ++prompts;
+                    cancel->click();
+                }
+            }
+        }
+    });
+    answer.start();
+    struct Ask {
+        const char* what;
+        UsbCableStatusValues status;
+        bool expectPrompt;
+    };
+    UsbCableStatusValues ready = cat;
+    ready.type = QStringLiteral("passthrough");
+    ready.speed = 115200;
+    UsbCableStatusValues slowPassthrough = ready;
+    slowPassthrough.speed = 9600;  // driving some other serial device
+    UsbCableStatusValues sevenBits = ready;
+    sevenBits.dataBits = 7;
+    UsbCableStatusValues unpluggedReady = ready;
+    unpluggedReady.present = false;
+    for (const Ask& ask : {Ask{"a CAT cable", cat, true},
+                           Ask{"a passthrough cable at 9600", slowPassthrough, true},
+                           Ask{"a passthrough 115200 7N1 cable", sevenBits, true},
+                           Ask{"an unplugged passthrough 115200 8N1 cable", unpluggedReady, false},
+                           Ask{"a passthrough 115200 8N1 cable", ready, false}}) {
+        observe(ask.status);
+        prompts = 0;
+        configures = 0;
+        connectButton->click();
+        QCoreApplication::processEvents();
+        const bool prompted = prompts > 0;
+        if (prompted != ask.expectPrompt || (prompted && configures != 0)) {
+            std::fprintf(stderr, "Connect on %s: prompted=%d (expected %d), cable settings sent=%d\n",
+                         ask.what, prompted, ask.expectPrompt, configures);
+            return false;
+        }
+        meter.disconnect();
+        pokeRefresh(model);
+        QCoreApplication::processEvents();
+    }
+    return true;
+}
 } // namespace
 
 // The per-device "Connect automatically" toggle: default on, stored under
@@ -2017,8 +2200,22 @@ int checkInteraction(QApplication& app)
     PeripheralSettings::setDeviceInt(QStringLiteral("Lp100a"), QStringLiteral("RangeHighW"), 3000);
     PeripheralSettings::setDeviceString(QStringLiteral("Vkamp"), QStringLiteral("ManualIp"),
                                         QStringLiteral("192.0.2.20"));
+    PeripheralSettings::setDeviceString(QStringLiteral("Lp100a"), QStringLiteral("ConnectionMode"),
+                                        QStringLiteral("Radio"));
+    PeripheralSettings::setDeviceString(QStringLiteral("Lp100a"), QStringLiteral("RadioCable"),
+                                        QStringLiteral("ABBDMO0I"));
+    PeripheralSettings::setDeviceInt(QStringLiteral("Lp100a"), QStringLiteral("PollIntervalMs"), 500);
     PeripheralSettings::clearDeviceConnection(QStringLiteral("Vkamp"));
     PeripheralSettings::clearDeviceConnection(QStringLiteral("Lp100a"));
+    // A removed Radio USB target must not survive to be reused at startup,
+    // where a saved cable counts as the go-ahead to configure it.
+    if (!PeripheralSettings::deviceString(QStringLiteral("Lp100a"), QStringLiteral("RadioCable")).isEmpty()
+        || !PeripheralSettings::deviceString(QStringLiteral("Lp100a"),
+                                              QStringLiteral("ConnectionMode")).isEmpty()
+        || PeripheralSettings::deviceInt(QStringLiteral("Lp100a"), QStringLiteral("PollIntervalMs")) != 500) {
+        std::fprintf(stderr, "Removing the LP-100A left its Radio USB cable, or dropped its poll interval\n");
+        return 1;
+    }
     if (PeripheralSettings::deviceInt(QStringLiteral("Vkamp"), QStringLiteral("Variant")) != 1
         || PeripheralSettings::deviceInt(QStringLiteral("Lp100a"),
                                          QStringLiteral("RangeHighW")) != 3000
@@ -2668,8 +2865,9 @@ int main(int argc, char** argv)
         return 1;
     }
     if (selected("availability") && runStage("availability", [] {
-            if (!checkUnavailableKeychainRemoval() || !checkFieldDescriptions()) {
-                std::fprintf(stderr, "Keychain-unavailable removal or field descriptions regressed\n");
+            if (!checkUnavailableKeychainRemoval() || !checkFieldDescriptions()
+                || !checkRadioCableChooser()) {
+                std::fprintf(stderr, "Keychain-unavailable removal, field descriptions or the Radio USB chooser regressed\n");
                 return 1;
             }
             return 0;

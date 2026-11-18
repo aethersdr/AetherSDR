@@ -66,6 +66,26 @@ private:
     Done m_done;
 };
 
+// The run-time admin, minus the vault: answers held until settle(), or at once.
+class FakeAdmin final : public RemoteClientAdmin {
+public:
+    QList<Client> list{{QStringLiteral("0123456789abcdef0123456789abcdef"), QStringLiteral("Laptop"),
+                        QStringLiteral("remote-control")}};
+    std::optional<RevokeResult> immediate;
+    QStringList asked;
+    QList<Client> clients() const override { return list; }
+    void revoke(const QString& id, RevokeDone done) override
+    {
+        asked.append(id);
+        if (immediate) { done(*immediate); return; }
+        m_done = std::move(done);
+    }
+    void settle(RevokeResult result) { RevokeDone d = std::move(m_done); d(result); }
+    [[nodiscard]] bool owed() const { return bool(m_done); }
+private:
+    RevokeDone m_done;
+};
+
 struct Harness {
     ControlResourceStore store;
     ControlCredentials credentials;
@@ -348,6 +368,77 @@ int main(int argc, char* argv[])
         Wire wire(h, true);
         wire.feed(h.request(wire.session, "pairing.complete", {{"code", "123-456-7890"}, {"clientName", "x"}}, false));
         check(error(wire.written.value(0)) == "capability.unavailable", "with no open pairing nothing is accepted");
+    }
+
+    // ---- paired clients at run time ----
+    {
+        Harness h;
+        FakeAdmin admin;
+        check(h.service.bindRemoteClientAdmin(&admin), "bind the paired-client admin before dispatch");
+        ControlSession local(&h.store, 1 << 20, SessionAuthorization::ObserverController);
+        const QJsonObject caps = result(h.hello(local));
+        check(advertises(caps, "remoteClients.list") && advertises(caps, "remoteClients.revoke"),
+              "a local controller is offered remoteClients.list and remoteClients.revoke");
+        const QJsonArray listed = result(h.invoke(local, "remoteClients.list")).value("clients").toArray();
+        check(listed.size() == 1 && listed.first().toObject().value("name") == "Laptop"
+                  && listed.first().toObject().value("credentialId") == "0123456789abcdef0123456789abcdef"
+                  && listed.first().toObject().value("scope") == "remote-control"
+                  && listed.first().toObject().size() == 3,
+              "remoteClients.list returns id, name and scope, nothing else");
+        for (const QJsonObject& bad : {QJsonObject{}, QJsonObject{{"credentialId", "abc"}},
+                                       QJsonObject{{"credentialId", "0123456789ABCDEF0123456789ABCDEF"}},
+                                       QJsonObject{{"credentialId", "0123456789abcdef0123456789abcdef"}, {"x", 1}}}) {
+            check(error(h.invoke(local, "remoteClients.revoke", bad)) == "request.invalid_params",
+                  "a malformed credentialId is refused before the admin");
+        }
+        check(admin.asked.isEmpty(), "no malformed revoke reached the admin");
+
+        // Through the real input pump: the reply is deferred, then the local
+        // session keeps going (the connection stays open).
+        ControlSession pumped(&h.store, 1 << 20, SessionAuthorization::ObserverController);
+        QByteArray input; QList<QJsonObject> written; int closes = 0;
+        ControlInputPump pump(h.service, pumped,
+            [&](qint64 max) { const QByteArray out = input.left(max); input.remove(0, out.size()); return out; },
+            [&](const QJsonObject& m) { written.append(m); return true; }, [&](bool) { ++closes; });
+        const auto feed = [&](const QJsonObject& r) {
+            input.append(QJsonDocument(r).toJson(QJsonDocument::Compact) + '\n'); pump.readAvailable(); };
+        feed(h.request(pumped, "hello", {{"versions", QJsonArray{1}}}, false));
+        feed(h.request(pumped, "remoteClients.revoke", {{"credentialId", "0123456789abcdef0123456789abcdef"}}));
+        feed(h.request(pumped, "capabilities.get", {}));
+        check(written.size() == 1 && pump.awaitingReply() && admin.owed(),
+              "a revoke defers its reply, and later input waits");
+        admin.settle(RemoteClientAdmin::RevokeResult::Revoked);
+        drain();
+        check(written.size() == 3 && result(written.value(1)).value("revoked") == true
+                  && error(written.value(2)).isEmpty() && closes == 0,
+              "the revoke is answered, then the waiting request runs, and the local connection stays open");
+
+        admin.immediate = RemoteClientAdmin::RevokeResult::NotFound;
+        check(error(h.invoke(local, "remoteClients.revoke", {{"credentialId", "ffffffffffffffffffffffffffffffff"}}))
+                  == "resource.not_found", "an unknown or local id is resource.not_found");
+        admin.immediate = RemoteClientAdmin::RevokeResult::Failed;
+        check(error(h.invoke(local, "remoteClients.revoke", {{"credentialId", "0123456789abcdef0123456789abcdef"}}))
+                  == "engine.failed", "a refused vault write is engine.failed, answered at once when immediate");
+
+        ControlSession observer(&h.store, 1 << 20, SessionAuthorization::Observer);
+        check(!advertises(result(h.hello(observer)), "remoteClients.list")
+                  && error(h.invoke(observer, "remoteClients.list")) == "auth.grant_denied",
+              "a local observer cannot list or revoke paired clients");
+        QByteArray token;
+        auto remote = ControlCredentials::generateRemote(ControlCredentials::Role::RemoteControl, &token);
+        check(h.credentials.add(remote), "a paired network client");
+        ControlSession network(&h.store, 1 << 20, SessionAuthorization::NetworkScoped);
+        const QJsonObject netCaps = result(h.hello(network, QString::fromLatin1(token.toHex())));
+        check(!advertises(netCaps, "remoteClients.list")
+                  && error(h.invoke(network, "remoteClients.revoke", {{"credentialId", remote.id}})) == "auth.grant_denied",
+              "a network client cannot list or revoke paired clients, not even itself");
+    }
+    {
+        Harness h;
+        ControlSession local(&h.store, 1 << 20, SessionAuthorization::ObserverController);
+        check(!advertises(result(h.hello(local)), "remoteClients.list")
+                  && error(h.invoke(local, "remoteClients.list")) == "capability.unavailable",
+              "without remote clients enabled the methods are unavailable");
     }
 
     // ---- the verifier and the vault ----

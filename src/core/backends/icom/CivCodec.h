@@ -159,6 +159,7 @@ inline constexpr std::uint8_t kReadFreq     = 0x03;
 inline constexpr std::uint8_t kReadMode     = 0x04;
 inline constexpr std::uint8_t kSetFreq      = 0x05;
 inline constexpr std::uint8_t kSetMode      = 0x06;
+inline constexpr std::uint8_t kVfoControl   = 0x07; // selection, MAIN/SUB and Dualwatch
 inline constexpr std::uint8_t kReadRepeaterOffset = 0x0C; // 100 Hz units, LE BCD
 inline constexpr std::uint8_t kSetRepeaterOffset  = 0x0D;
 inline constexpr std::uint8_t kDuplex       = 0x0F;   // 10 simplex, 11 down, 12 up
@@ -729,6 +730,9 @@ inline constexpr std::array<ScopeEdgeRange, 3> kScopeEdgeRangesIc9700{{
 // "Set the upper Edge frequency within 1 MHz of the lower frequency" (MK2
 // Advanced Manual, Fixed Edges). Icom publishes no minimum; 5 kHz is the
 // narrowest Center span.
+inline constexpr int kScopeEdgeWriteIntervalMs = 200;
+inline constexpr double kScopeDragVfoMarginFraction = 0.02;
+inline constexpr double kScopeDragVfoMarginMinHz = 2000.0;
 inline constexpr std::uint64_t kScopeFixedEdgeMaxWidthHz = 1'000'000;
 inline constexpr std::uint64_t kScopeFixedEdgeMinWidthHz = 5'000;
 
