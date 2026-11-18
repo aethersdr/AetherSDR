@@ -310,7 +310,7 @@ void AetherRxProfilesTest::retiredSettingsKeysAreDroppedOnLoad()
     settings.setValue(QStringLiteral("ClientGateTxAttackMs"), QStringLiteral("0.5"));
     settings.setValue(QStringLiteral("ClientTubeRxAttackMs"), QStringLiteral("5.0"));
     // A key that is still live must survive the sweep.
-    settings.setValue(QStringLiteral("ClientGateTxHoldMs"), QStringLiteral("20.0"));
+    settings.setValue(QStringLiteral("ClientGateRxHoldMs"), QStringLiteral("20.0"));
 
     AudioEngine engine;   // its constructor runs the load sequence
 
@@ -319,7 +319,7 @@ void AetherRxProfilesTest::retiredSettingsKeysAreDroppedOnLoad()
         QVERIFY2(settings.value(QLatin1String(gone), QString()).toString().isEmpty(),
                  gone);
     }
-    QCOMPARE(settings.value(QStringLiteral("ClientGateTxHoldMs")).toString(),
+    QCOMPARE(settings.value(QStringLiteral("ClientGateRxHoldMs")).toString(),
              QStringLiteral("20.0"));
 }
 

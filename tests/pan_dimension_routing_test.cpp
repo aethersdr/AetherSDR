@@ -23,6 +23,7 @@ public:
     QStringList ids;
     QList<int> points;
     bool refuseClose{false};
+    bool deferCreate{false};
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return true; }
     void connectRadio(const RadioConnectRequest&) override {}
@@ -37,7 +38,7 @@ public:
     void setPanPixelWidth(const QString& id, int width) override { ids.append(id); points.append(width); }
     bool createPanadapter() override
     {
-        emit panCenterBandwidthChanged(QStringLiteral("native-new"), 7.1, 0.384);
+        if (!deferCreate) { emit panCenterBandwidthChanged(QStringLiteral("native-new"), 7.1, 0.384); }
         return true;
     }
     bool removePanadapter(const QString&) override { return !refuseClose; }
@@ -69,6 +70,7 @@ void native(const QString& family)
         && radio.requestPanDimensions(nullptr, 1111, 700, 2222) == ReceiveDispatch::Unsupported,
           "invalid dimensions and missing pan are refused");
     if (caps.panLifecycleControl && caps.panLifecycleControl->creation == PanLifecycleControl::Creation::Native) {
+        backend->caps.maxPanadapters = 2;
         int calls = 0;
         QPointer<PanadapterModel> created;
         const ReceiveDispatch dispatched = radio.requestPanCreation(&radio, [&](const RadioControlReply& reply, PanadapterModel* value) {
@@ -76,9 +78,28 @@ void native(const QString& family)
         });
         check(dispatched == ReceiveDispatch::Dispatched && calls == 1 && created
             && created->panId() == RadioModel::neutralPanIdStringForTest(1), "native immediate creation timing and exact identity preserved");
+        if (!created) { return; }
         backend->refuseClose = true;
         check(!radio.removePanadapter(created->panId(), PanCloseIntent::ExplicitTeardown)
             && radio.panadapter(created->panId()) == created, "explicit teardown never overrides native refusal");
+        // A native radio can wait for receive-enable readback before it
+        // publishes the pane. Admission alone must not report capacity full.
+        RadioModel deferredRadio;
+        auto deferredOwned = std::make_unique<NativeBackend>();
+        NativeBackend* deferred = deferredOwned.get();
+        deferred->caps = backend->caps;
+        deferred->deferCreate = true;
+        deferredRadio.setBackendForTest(std::move(deferredOwned), family);
+        emit deferred->panCenterBandwidthChanged(QStringLiteral("native-first"), 14.1, 0.384);
+        calls = 0;
+        created.clear();
+        check(deferredRadio.requestPanCreation(&deferredRadio, [&](const RadioControlReply& reply, PanadapterModel* value) {
+            ++calls; if (reply.kind == RadioControlReply::Kind::Accepted) { created = value; }
+        }) == ReceiveDispatch::Dispatched && calls == 0,
+              "delayed native creation waits without a false refusal");
+        emit deferred->panCenterBandwidthChanged(QStringLiteral("native-new"), 7.1, 0.384);
+        check(calls == 1 && created && created->panId() == RadioModel::neutralPanIdStringForTest(1),
+              "native pane completes after its confirmed publication");
     }
 }
 } // namespace
