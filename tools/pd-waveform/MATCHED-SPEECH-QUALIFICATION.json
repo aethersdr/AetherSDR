@@ -1,0 +1,435 @@
+{
+  "recorded_utc": "2026-11-18T22:46:53.645141+00:00",
+  "production_ready": false,
+  "status": "Finite matched processed-speech pair passes predeclared source/output and both-side6dB adjacent-power gates, with actual production spectrum-core cross-check. Earlier higher-drive output mismatch remains preserved.",
+  "parent_commit": "5cd56623eaef43a72f15bb58bc98109a6927b117",
+  "installed_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "desktop_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+  "new_RF_keys": 3,
+  "total_RF_keys_this_goal_turn": 8,
+  "FDX": false,
+  "feedback": "local_dax_iq",
+  "nominal_W": 5,
+  "frequency_MHz": 7.15,
+  "independent_unkey_seconds": 14,
+  "root_bridge_used": false,
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "radio_reboots": 0,
+  "runs": [
+    {
+      "directory": "speech-drive2-live",
+      "case": "prompt-stop-OFF-5W-01",
+      "corrected": false,
+      "key_seconds": 12.038272034027614,
+      "LP_max_whole_run_W": 2.13,
+      "clean_stop": true,
+      "Stop_ms_after_owned_READY": 68.601936,
+      "captures": 4,
+      "no_native_faults_limiting_or_alignment_resets": true
+    },
+    {
+      "directory": "speech-drive2-live",
+      "case": "prompt-stop-ON-5W-01",
+      "corrected": true,
+      "key_seconds": 12.082425230997615,
+      "LP_max_whole_run_W": 3.71,
+      "clean_stop": true,
+      "Stop_ms_after_owned_READY": 81.976633,
+      "captures": 4,
+      "no_native_faults_limiting_or_alignment_resets": true
+    },
+    {
+      "directory": "speech-drive2-adjusted-live",
+      "case": "prompt-stop-ON-5W-01",
+      "corrected": true,
+      "key_seconds": 12.141273985995213,
+      "LP_max_whole_run_W": 3.71,
+      "clean_stop": true,
+      "Stop_ms_after_owned_READY": 71.439206,
+      "captures": 4,
+      "no_native_faults_limiting_or_alignment_resets": true
+    }
+  ],
+  "speech_comparison": {
+    "production_ready": false,
+    "scope": "Development NumPy analysis of four independent late speech windows; no noncontiguous concatenation; this is not the integrated analyzer qualification.",
+    "OFF": {
+      "nominal_W": 5,
+      "LP_peak_W": 2.13,
+      "GUI_key_seconds": 12.038272034027614
+    },
+    "ON": {
+      "nominal_W": 5,
+      "LP_peak_W": 3.71,
+      "GUI_key_seconds": 12.141273985995213
+    },
+    "gates_declared_before_RF": {
+      "FFT_size": 4096,
+      "sample_rate_hz": 48000,
+      "window": "hann",
+      "main_band_Hz": [
+        300,
+        2700
+      ],
+      "lower_adjacent_Hz": [
+        -2700,
+        -300
+      ],
+      "upper_adjacent_Hz": [
+        3300,
+        5700
+      ],
+      "maximum_absolute_occupied_level_delta_dB": 0.5,
+      "minimum_envelope_correlation": 0.95,
+      "minimum_eligible_aligned_samples": 24000,
+      "minimum_ACPR_improvement_both_sides_dB": 6,
+      "no_comparison_claim_when_source_alignment_or_level_gate_fails": true
+    },
+    "alignment_search_ms": 200,
+    "edge_exclusion_ms": 10,
+    "rows": [
+      {
+        "frame": 0,
+        "matched_samples": 13680,
+        "envelope_correlation": 0.9564788019728265,
+        "lag_ms": -36,
+        "occupied_level_change_dB": 0.1033591415786164,
+        "OFF_ACPR_dBc": {
+          "lower": -31.26879957732365,
+          "upper": -46.07919318457827
+        },
+        "ON_ACPR_dBc": {
+          "lower": -49.286497140858245,
+          "upper": -60.95127629856133
+        },
+        "ACPR_improvement_dB": {
+          "lower": 18.017697563534593,
+          "upper": 14.87208311398306
+        },
+        "source_and_level_eligible": true
+      },
+      {
+        "frame": 1,
+        "matched_samples": 13824,
+        "envelope_correlation": 0.959159898980946,
+        "lag_ms": -33,
+        "occupied_level_change_dB": 0.2401446772562248,
+        "OFF_ACPR_dBc": {
+          "lower": -33.01721831264836,
+          "upper": -43.6068295274472
+        },
+        "ON_ACPR_dBc": {
+          "lower": -50.41090938008757,
+          "upper": -61.26980236538516
+        },
+        "ACPR_improvement_dB": {
+          "lower": 17.393691067439207,
+          "upper": 17.662972837937957
+        },
+        "source_and_level_eligible": true
+      },
+      {
+        "frame": 2,
+        "matched_samples": 12960,
+        "envelope_correlation": 0.9740473010320189,
+        "lag_ms": -51,
+        "occupied_level_change_dB": 0.0983682025389103,
+        "OFF_ACPR_dBc": {
+          "lower": -34.81550478054754,
+          "upper": -41.74854288558531
+        },
+        "ON_ACPR_dBc": {
+          "lower": -52.38340451847413,
+          "upper": -60.04040774707944
+        },
+        "ACPR_improvement_dB": {
+          "lower": 17.567899737926588,
+          "upper": 18.291864861494133
+        },
+        "source_and_level_eligible": true
+      },
+      {
+        "frame": 3,
+        "matched_samples": 13680,
+        "envelope_correlation": 0.9913535669850367,
+        "lag_ms": -36,
+        "occupied_level_change_dB": 0.06717926461135641,
+        "OFF_ACPR_dBc": {
+          "lower": -34.12941365360091,
+          "upper": -46.901903058179606
+        },
+        "ON_ACPR_dBc": {
+          "lower": -51.423299154964596,
+          "upper": -60.486136245325326
+        },
+        "ACPR_improvement_dB": {
+          "lower": 17.293885501363683,
+          "upper": 13.58423318714572
+        },
+        "source_and_level_eligible": true
+      }
+    ],
+    "source_and_level_comparison_eligible": true,
+    "declared_ACPR_gate_passed": true,
+    "scope_limits": [
+      "Per-frame envelope alignment cannot establish absolute FPGA-to-process latency.",
+      "ADC clipping convention and adjacent-band noise floor are not calibrated.",
+      "Nominal power settings are not measured speech PEP."
+    ]
+  },
+  "production_core_crosscheck": {
+    "passed": true,
+    "production_spectral_gates_passed": true,
+    "scope": "Actual TxSpectrumAnalyzer and SpectrumWindow on identical aligned captured IQ; FFTW independently compared with periodic-Hann NumPy. This does not exercise the live analyzer UI/controller.",
+    "original_analysis_window": "NumPy symmetric Hann N-1; original declared RF analysis and gates remain preserved.",
+    "initial_crosscheck_mismatch": "The first comparison used symmetric NumPy Hann against production periodic Hann and differed by0.000123946430719dB in frame0, exceeding the1e-6 comparison tolerance. Matching the periodic taps resolves this deterministic analysis-fixture mismatch.",
+    "maximum_allowed_difference_dB": 1e-06,
+    "maximum_observed_difference_dB": 2.1316282072803006e-14,
+    "same_RF_acceptance_outcome_under_both_window_conventions": true,
+    "rows": [
+      {
+        "frame": 0,
+        "production_core": {
+          "level": 0.10337867018931586,
+          "gain": {
+            "lower": 18.017573617103874,
+            "upper": 14.872102796067558
+          }
+        },
+        "same_periodic_window_NumPy": {
+          "level": 0.10337867018932151,
+          "gain": {
+            "lower": 18.017573617103864,
+            "upper": 14.872102796067551
+          }
+        },
+        "maximum_difference_dB": 1.0658141036401503e-14,
+        "difference_from_original_symmetric_Hann_dB": 0.0001239464307190019,
+        "averages": {
+          "OFF": 5,
+          "ON": 5
+        }
+      },
+      {
+        "frame": 1,
+        "production_core": {
+          "level": 0.24013020615155864,
+          "gain": {
+            "lower": 17.393821226681773,
+            "upper": 17.662866907067325
+          }
+        },
+        "same_periodic_window_NumPy": {
+          "level": 0.24013020615155592,
+          "gain": {
+            "lower": 17.39382122668178,
+            "upper": 17.662866907067347
+          }
+        },
+        "maximum_difference_dB": 2.1316282072803006e-14,
+        "difference_from_original_symmetric_Hann_dB": 0.00013015924256620792,
+        "averages": {
+          "OFF": 5,
+          "ON": 5
+        }
+      },
+      {
+        "frame": 2,
+        "production_core": {
+          "level": 0.09833978364306994,
+          "gain": {
+            "lower": 17.56795712719279,
+            "upper": 18.292211206985634
+          }
+        },
+        "same_periodic_window_NumPy": {
+          "level": 0.09833978364307278,
+          "gain": {
+            "lower": 17.567957127192805,
+            "upper": 18.29221120698564
+          }
+        },
+        "maximum_difference_dB": 1.4210854715202004e-14,
+        "difference_from_original_symmetric_Hann_dB": 0.00034634549150069915,
+        "averages": {
+          "OFF": 5,
+          "ON": 5
+        }
+      },
+      {
+        "frame": 3,
+        "production_core": {
+          "level": 0.06721591357531148,
+          "gain": {
+            "lower": 17.293727119008963,
+            "upper": 13.583962338739369
+          }
+        },
+        "same_periodic_window_NumPy": {
+          "level": 0.06721591357531433,
+          "gain": {
+            "lower": 17.29372711900897,
+            "upper": 13.583962338739376
+          }
+        },
+        "maximum_difference_dB": 7.105427357601002e-15,
+        "difference_from_original_symmetric_Hann_dB": 0.00027084840635183127,
+        "averages": {
+          "OFF": 5,
+          "ON": 5
+        }
+      }
+    ],
+    "source_sha256": {
+      "src/core/txlinearity/TxSpectrumAnalyzer.cpp": "5eff9a066e47360821d96bdef83e385142b7cc5436ab3f5e1a965c6bd72c3c64",
+      "src/core/txlinearity/SpectrumWindow.cpp": "8e60977778e75c7f34fe2b3db0a7d891b02c5fa676c11b37e8c50bb35d8e742e",
+      "src/core/dsp/FftwPlannerLock.cpp": "fa82096a14d0d86645dfd7adcc2589d057b58183ad4c297bbd0c089ad3915234"
+    }
+  },
+  "prior_higher_drive_comparison": {
+    "production_ready": false,
+    "scope": "Development NumPy analysis of four independent late speech windows; no noncontiguous concatenation; this is not the integrated analyzer qualification.",
+    "OFF": {
+      "nominal_W": 5,
+      "LP_peak_W": 2.13,
+      "GUI_key_seconds": 12.038272034027614
+    },
+    "ON": {
+      "nominal_W": 5,
+      "LP_peak_W": 3.71,
+      "GUI_key_seconds": 12.082425230997615
+    },
+    "gates_declared_before_RF": {
+      "FFT_size": 4096,
+      "sample_rate_hz": 48000,
+      "window": "hann",
+      "main_band_Hz": [
+        300,
+        2700
+      ],
+      "lower_adjacent_Hz": [
+        -2700,
+        -300
+      ],
+      "upper_adjacent_Hz": [
+        3300,
+        5700
+      ],
+      "maximum_absolute_occupied_level_delta_dB": 0.5,
+      "minimum_envelope_correlation": 0.95,
+      "minimum_eligible_aligned_samples": 24000,
+      "minimum_ACPR_improvement_both_sides_dB": 6,
+      "no_comparison_claim_when_source_alignment_or_level_gate_fails": true
+    },
+    "alignment_search_ms": 200,
+    "edge_exclusion_ms": 10,
+    "rows": [
+      {
+        "frame": 0,
+        "matched_samples": 15168,
+        "envelope_correlation": 0.9308091276344371,
+        "lag_ms": -5,
+        "occupied_level_change_dB": -0.861834823338191,
+        "OFF_ACPR_dBc": {
+          "lower": -31.19182429890801,
+          "upper": -46.861469363333505
+        },
+        "ON_ACPR_dBc": {
+          "lower": -51.05391405746062,
+          "upper": -60.74684867940082
+        },
+        "ACPR_improvement_dB": {
+          "lower": 19.862089758552607,
+          "upper": 13.885379316067315
+        },
+        "source_and_level_eligible": false
+      },
+      {
+        "frame": 1,
+        "matched_samples": 13008,
+        "envelope_correlation": 0.9882710363443462,
+        "lag_ms": 50,
+        "occupied_level_change_dB": -0.7779621166722085,
+        "OFF_ACPR_dBc": {
+          "lower": -33.92455564284988,
+          "upper": -43.80049978178326
+        },
+        "ON_ACPR_dBc": {
+          "lower": -53.35230881977633,
+          "upper": -60.91115810111813
+        },
+        "ACPR_improvement_dB": {
+          "lower": 19.42775317692645,
+          "upper": 17.110658319334874
+        },
+        "source_and_level_eligible": false
+      },
+      {
+        "frame": 2,
+        "matched_samples": 13536,
+        "envelope_correlation": 0.9802351871250122,
+        "lag_ms": 39,
+        "occupied_level_change_dB": -0.6412395861678648,
+        "OFF_ACPR_dBc": {
+          "lower": -34.62750675706144,
+          "upper": -41.08690364491864
+        },
+        "ON_ACPR_dBc": {
+          "lower": -53.21968425213247,
+          "upper": -59.13100041091715
+        },
+        "ACPR_improvement_dB": {
+          "lower": 18.592177495071027,
+          "upper": 18.04409676599851
+        },
+        "source_and_level_eligible": false
+      },
+      {
+        "frame": 3,
+        "matched_samples": 13152,
+        "envelope_correlation": 0.988535382082626,
+        "lag_ms": 47,
+        "occupied_level_change_dB": -0.8539507871767394,
+        "OFF_ACPR_dBc": {
+          "lower": -33.821401160249,
+          "upper": -49.139693342186916
+        },
+        "ON_ACPR_dBc": {
+          "lower": -52.32437714477216,
+          "upper": -60.42036137606301
+        },
+        "ACPR_improvement_dB": {
+          "lower": 18.502975984523154,
+          "upper": 11.280668033876097
+        },
+        "source_and_level_eligible": false
+      }
+    ],
+    "source_and_level_comparison_eligible": false,
+    "declared_ACPR_gate_passed": false,
+    "scope_limits": [
+      "Per-frame envelope alignment cannot establish absolute FPGA-to-process latency.",
+      "ADC clipping convention and adjacent-band noise floor are not calibrated.",
+      "Nominal power settings are not measured speech PEP."
+    ]
+  },
+  "earlier_limiter_and_low_drive_evidence": "SPEECH-HEADROOM-QUALIFICATION.json",
+  "scope_limits": [
+    "Processed recorded speech, one matched baseline/corrected pair with four independent late windows each; this does not establish raw speech, sustained duty, every recovery case,10W speech or actual FLEX-6300 qualification.",
+    "The baseline LP whole-run speech peak is2.13W at the5W setting. Corrected whole-run peaks include calibration tones and do not establish corrected speech PEP.",
+    "No absolute ADC clipping/full-scale calibration, receiver noise-floor calibration or absolute FPGA-to-process latency claim.",
+    "The production FFTW estimator agrees numerically, but the live integrated analyzer controller/UI and final stock APD comparison remain open.",
+    "Original analysis uses symmetric Hann; production uses periodic Hann. Their small deterministic difference is recorded; both meet unchanged RF gates.",
+    "Private native guardian decision snapshots were not captured; independent subscriptions prove Stop requests occurred inside owned READY and clean termination followed.",
+    "All remaining P1-P10 production requirements, publisher/catalogue, native qualification and independent release review remain open."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/matched-speech-components.tar.gz",
+    "bytes": 12967856,
+    "sha256": "57273686d4129c578556213597f883f223495e08338a9af9f7c2c48a87c561fc",
+    "members": 158,
+    "all_members_verified": true
+  },
+  "evidence_sha256": "09dfa08d32faa32bd59ed802f4313f84780811e6c289724270c046b089884dcd"
+}
