@@ -1,0 +1,218 @@
+{
+  "recorded_utc": "2026-11-18T19:29:35.935149+00:00",
+  "status": "Source62 Windows and both macOS native builds, package integrity and USB-mode receive-only DAX IQ preflight passed",
+  "tested_desktop_source_commit": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+  "production_ready": false,
+  "native_successful_jobs": [
+    135014788960,
+    135014825696,
+    135014826365,
+    135041236463,
+    135061662061,
+    135061662218
+  ],
+  "native_run_ids": [
+    44364580991,
+    44364588168
+  ],
+  "artifact_receipts": [
+    {
+      "artifact_id": 14460860288,
+      "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+      "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-62f7dcbd3/Windows-Installer.zip",
+      "bytes": 1134087079,
+      "sha256": "63410a3e7c915a08fb2aa63a128182d661edd49a2bf2320bff2fdb6627cb49d0",
+      "GitHub_digest_matched": true,
+      "all_ZIP_CRCs_verified": true,
+      "members": [
+        {
+          "name": "AetherSDR-26.11.266.0-Windows-x64.appxsym",
+          "bytes": 273073362,
+          "CRC": 4294014065
+        },
+        {
+          "name": "AetherSDR-26.11.266.0-Windows-x64.msixupload",
+          "bytes": 418916620,
+          "CRC": 2995002521
+        },
+        {
+          "name": "AetherSDR-26.11.266.0-Windows-x64.msix",
+          "bytes": 150230205,
+          "CRC": 1502585162
+        },
+        {
+          "name": "AetherSDR-feat_aetherpd-shim-integration-Windows-x64-portable.zip",
+          "bytes": 168255156,
+          "CRC": 2866636857
+        },
+        {
+          "name": "AetherSDR-vfeat_aetherpd-shim-integration-Windows-x64-setup.exe",
+          "bytes": 128917662,
+          "CRC": 1293507152
+        }
+      ],
+      "resumed_prefix_bytes": 358629376,
+      "parallel_range_workers": 4,
+      "credentials_or_redirect_URLs_persisted": false
+    },
+    {
+      "artifact_id": 14462172229,
+      "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+      "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-62f7dcbd3/macOS-app-tarball-apple-silicon.zip",
+      "bytes": 120100380,
+      "sha256": "775531552456fe9c55abb4215b595b3b3acd7885fe23edcff94cd5f76d2f3132",
+      "GitHub_digest_matched": true,
+      "all_ZIP_CRCs_verified": true,
+      "members": [
+        {
+          "name": "AetherSDR-feat_aetherpd-shim-integration-macOS-apple-silicon.app.tar.zst",
+          "bytes": 120101337,
+          "CRC": 483985245
+        }
+      ],
+      "download_URL_persisted": false
+    },
+    {
+      "artifact_id": 14461743771,
+      "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+      "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-62f7dcbd3/macOS-app-tarball-intel.zip",
+      "bytes": 105781949,
+      "sha256": "eb385e3124b2d7012f5bf4c7ef47a588fcee356216358e52c0db5965bf73368d",
+      "GitHub_digest_matched": true,
+      "all_ZIP_CRCs_verified": true,
+      "members": [
+        {
+          "name": "AetherSDR-feat_aetherpd-shim-integration-macOS-intel.app.tar.zst",
+          "bytes": 105781953,
+          "CRC": 1247610682
+        }
+      ],
+      "download_URL_persisted": false
+    },
+    {
+      "artifact_id": 14456759664,
+      "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+      "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-62f7dcbd3/macOS-unsigned-apple-silicon.zip",
+      "bytes": 345492902,
+      "sha256": "370a63089283da9d2af85a9ea948e09ef5e32563d5835dd8c12129c6e1995b6f",
+      "GitHub_digest_matched": true,
+      "all_ZIP_CRCs_verified": true,
+      "members": [
+        {
+          "name": "macos-unsigned.tar",
+          "bytes": 971286528,
+          "CRC": 1229906852
+        }
+      ],
+      "download_URL_persisted": false
+    },
+    {
+      "artifact_id": 14460219750,
+      "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+      "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-62f7dcbd3/macOS-unsigned-intel.zip",
+      "bytes": 322429127,
+      "sha256": "c4b9aa7872ad02b65c877fb44595ef6563e46d256ede969a861c86e48b999ca6",
+      "GitHub_digest_matched": true,
+      "all_ZIP_CRCs_verified": true,
+      "members": [
+        {
+          "name": "macos-unsigned.tar",
+          "bytes": 901885440,
+          "CRC": 697568343
+        }
+      ],
+      "download_URL_persisted": false
+    }
+  ],
+  "macOS": {
+    "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "architectures": {
+      "apple-silicon": {
+        "unsigned_artifact_id": 14456759664,
+        "update_artifact_id": 14462172229,
+        "all_bundle_files_and_symlinks_identical": true,
+        "bundle_members": 128,
+        "app_binary": {
+          "path": "build/AetherSDR.app/Contents/MacOS/AetherSDR",
+          "type": "file",
+          "bytes": 108579792,
+          "sha256": "3c1e632ab2420abffbf7c4efadec15e869252c36d17d3072b782ffccb27bd177",
+          "architecture": "arm64"
+        }
+      },
+      "intel": {
+        "unsigned_artifact_id": 14460219750,
+        "update_artifact_id": 14461743771,
+        "all_bundle_files_and_symlinks_identical": true,
+        "bundle_members": 125,
+        "app_binary": {
+          "path": "build/AetherSDR.app/Contents/MacOS/AetherSDR",
+          "type": "file",
+          "bytes": 104796656,
+          "sha256": "492b8cea970d70a70fb20a45790ee2d9f4c698909031079c208cf8273b7bc815",
+          "architecture": "x86_64"
+        }
+      }
+    },
+    "apps_executed": false,
+    "code_signing_or_notarization_performed": false,
+    "published": false,
+    "native_credential_or_window_runtime_tests_rerun": false,
+    "production_ready": false
+  },
+  "Windows": {
+    "artifact_id": 14460860288,
+    "source_sha": "62f7dcbd3c3f907084419344a96ad5f4f7b4c6d1",
+    "portable_and_MSIX_binary_identical": true,
+    "layouts": {
+      "-portable.zip": {
+        "outer_member": "AetherSDR-feat_aetherpd-shim-integration-Windows-x64-portable.zip",
+        "inner_member": "AetherSDR.exe",
+        "binary_bytes": 203386368,
+        "binary_sha256": "6edfea907b56d21ee18da2cfc5bf072e75aafe0e75ae08303a0dea815f9120f5",
+        "all_inner_ZIP_CRCs_verified": true,
+        "machine": "AMD64",
+        "member_count": 72
+      },
+      ".msix": {
+        "outer_member": "AetherSDR-26.11.266.0-Windows-x64.msix",
+        "inner_member": "AetherSDR.exe",
+        "binary_bytes": 203386368,
+        "binary_sha256": "6edfea907b56d21ee18da2cfc5bf072e75aafe0e75ae08303a0dea815f9120f5",
+        "all_inner_ZIP_CRCs_verified": true,
+        "machine": "AMD64",
+        "member_count": 93
+      }
+    }
+  },
+  "new_RF_keys": 0,
+  "receive_only_preflight_passed": true,
+  "session_stopped": true,
+  "post_receive_cleanup_passed": true,
+  "temporary_diagnostics_transport_removed": true,
+  "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+  "control_restart_count": "0",
+  "radio_reboots": 0,
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/source62-native-and-USB-components.tar.gz",
+    "bytes": 344623,
+    "sha256": "2328c13f3f37a592966a4e66da4eb733c2813c7bdc08e479646aad9ae983cd82",
+    "members": 51,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Native full desktop builds and unsigned packaging passed. The selected new CTests ran on Linux only; these Windows/macOS dispatches skipped opt-in credential/window runtime tests and do not establish native interactive runtime qualification.",
+    "Portable and MSIX app executable hashes match. Every macOS app regular file and symlink matches its architecture-specific update archive. This is artifact integrity/layout proof, not a Windows/macOS application launch or radio functional test.",
+    "Signing/notarization, Store publication and release jobs were skipped. No release, Store flight, catalogue update or production publication occurred.",
+    "The artifact receiver used temporary private URLs only in process memory/unechoed stdin. The connector refused the >512MB Windows archive; an explicitly owned stream handoff resumed HTTP ranges and preserved that interruption as download evidence, not a product failure.",
+    "The first local macOS verifier incorrectly expected an AetherSDR.app directory prefix in the app-only update tar. The initial assertion and recipe are preserved; the corrected verifier recognizes Contents/ at archive root. This was a local inspection error, not a CI or app failure.",
+    "USB preflight03 proved local DAX IQ and idle bounded-unkey observer retirement without RF. The two earlier receive-only preparations did not observe bypass before timeout; they omitted the prior recipe's explicit PD-mode-before-bypass step. Root cause of that dependency remains unproved; no shipping bug is claimed.",
+    "USB input means the ordinary transmit mode in this preflight; feedback remained local DAX IQ. No DAX audio fallback, microphone capture, synthetic PCM routing, stock APD RF test or additional AetherPD RF key occurred in this milestone.",
+    "The final fixed read-only lab audit verified the unchanged boot, firmware and installed service with no capture/ARP residue. The temporary diagnostics transport was removed. No firmware/control restart, radio reboot, AetherTX launch or processing-settings restore occurred.",
+    "This closes the source62 native build/artifact collection item only. Speech/duty/fault/recovery, original unexplained alignment/cold-start behavior, software-reboot hang, final stock comparison, actual FLEX6300 qualification, publisher/catalogue and independent shipping review remain open."
+  ],
+  "evidence": "COHERENT-SWR-NATIVE-EVIDENCE.json.gz",
+  "evidence_sha256": "ebf66a044cbb5a5143a7ffc9d44a873dbef6b598cadd30c27ad1995416d059cc"
+}
