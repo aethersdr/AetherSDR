@@ -27,10 +27,13 @@ void define(MeterModel& model)
 {
     const std::array<QString, 5> names = {"SWR", "PATEMP", "+13.8A", "FWDPWR", "REFPWR"};
     const std::array<QString, 5> units = {"SWR", "degC", "Volts", "dBm", "dBm"};
+    // FLEX-8600 4.3.16: TX- num=1 FWDPWR, num=2 REFPWR, num=3 SWR.
+    const std::array<int, 5> numbers = {3, 0, 0, 1, 2};
     for (int i = 0; i < 5; ++i) {
         MeterDef def;
         def.index = i + 1;
-        def.source = (i == 0 || i >= 3) ? "TX" : "RAD";
+        def.source = (i == 0 || i >= 3) ? "TX-" : "RAD";
+        def.sourceIndex = numbers[i];
         def.name = names[i];
         def.unit = units[i];
         model.defineMeter(def);
@@ -144,11 +147,11 @@ int main(int argc, char** argv)
         feed(model);
         check(!model.directionalPowerSample(), "unknown power units cannot establish a physical pair");
         reflected.unit = "dBm";
-        reflected.sourceIndex = 9;
+        reflected.source = "TX-other";
         model.defineMeter(reflected);
         feed(model);
-        check(!model.directionalPowerSample(), "power from distinct transmitters cannot establish a pair");
-        reflected.sourceIndex = 0;
+        check(!model.directionalPowerSample(), "power from different meter sources cannot establish a pair");
+        reflected.source = "TX-";
         model.defineMeter(reflected);
         feed(model);
         const TxTelemetry beforeRefresh = telemetry.read(10000);

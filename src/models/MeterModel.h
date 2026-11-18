@@ -148,7 +148,8 @@ public:
         float reflectedWatts = 0;
         ReceiveReceipt receipt;
     };
-    // Both accepted readings must belong to one received batch and transmitter.
+    // Both accepted readings must belong to one received batch and this radio's
+    // TX meter source. Its source numbers identify sensors, not transmitters.
     // A partial directional update invalidates the pair; polling cannot form one.
     std::optional<DirectionalPowerSample> directionalPowerSample() const;
     float tgxlFwdPower() const { return m_tgxlFwdPwr; }

@@ -1326,8 +1326,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
         };
         if (forwardSamples == 1 && reflectedSamples == 1 && receipt.monotonicNs > 0
             && unitKnown(m_fwdPwrUnit) && unitKnown(m_refPwrUnit)
-            && m_defs.value(m_fwdPwrIdx).source == m_defs.value(m_refPwrIdx).source
-            && m_defs.value(m_fwdPwrIdx).sourceIndex == m_defs.value(m_refPwrIdx).sourceIndex) {
+            && m_defs.value(m_fwdPwrIdx).source == m_defs.value(m_refPwrIdx).source) {
             m_directionalPowerSample = DirectionalPowerSample{m_fwdPowerInstant, m_reflectedPower, receipt};
             m_directionalPowerSession = session;
             m_directionalForwardDefinition = forwardDefinition;
