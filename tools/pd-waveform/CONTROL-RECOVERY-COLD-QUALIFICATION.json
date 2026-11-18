@@ -1,0 +1,152 @@
+{
+  "recorded_utc": "2026-11-18T15:56:08.038331+00:00",
+  "status": "Stock-startup physical cold boot, saved-owner autostart and ordinary-GUI receive DAX IQ qualified on FLEX-8600",
+  "production_ready": false,
+  "installed_runtime_implementation": "453ba2175f1e015c6fe867a3b7aa6255ff7defa1",
+  "installed_release_blake2b_256": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+  "previous_boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+  "boot_id": "e84f61f8-9f01-451d-b9a9-e9f25b8b261d",
+  "saved_owner_authenticated_before_diagnostics": true,
+  "public_installation_identical_to_pre_cold": true,
+  "stock_firmware_ExecStart": "{ path=/usr/bin/smartsdr ; argv[]=/usr/bin/smartsdr ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+  "IPv6_preload_absent_from_running_firmware": true,
+  "vendor_launcher_library_and_rollback_hashes_verified": true,
+  "autostart_control": {
+    "Restart": "on-failure",
+    "RestartUSec": "5s",
+    "MainPID": "1302",
+    "NRestarts": "0",
+    "ExecStart": "{ path=/var/lib/smartsdr/aetherpd/pd-boot ; argv[]=/var/lib/smartsdr/aetherpd/pd-boot --primary ; ignore_errors=no ; start_time=[Wed 2026-11-18 09:44:48 CST] ; stop_time=[n/a] ; pid=1302 ; code=(null) ; status=0/0 }",
+    "Id": "aetherpd-shim.service",
+    "ActiveState": "active",
+    "SubState": "running",
+    "FragmentPath": "/etc/systemd/system/aetherpd-shim.service",
+    "DropInPaths": "",
+    "UnitFileState": "enabled",
+    "NeedDaemonReload": "no",
+    "StartLimitIntervalUSec": "1min",
+    "StartLimitBurst": "3",
+    "StartLimitAction": "none"
+  },
+  "pre_Start_primary": {
+    "pid": 1302,
+    "start_ticks": 4302,
+    "state": "S",
+    "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+    "uid": [
+      "78666",
+      "78666",
+      "78666",
+      "78666"
+    ],
+    "gid": [
+      "20",
+      "20",
+      "20",
+      "20"
+    ],
+    "nnp": "1",
+    "caps": {
+      "CapInh": "0000000000000000",
+      "CapPrm": "0000000000000000",
+      "CapEff": "0000000000000000",
+      "CapBnd": "0000000000000000",
+      "CapAmb": "0000000000000000"
+    },
+    "cgroup": [
+      "0::/../../../system.slice/aetherpd-shim.service"
+    ],
+    "sha256": "b1ce147413f2bbead4014ce0f7dc9ead6b8f884450f9d38f7cdb905a88649464",
+    "cgroup_in_init_namespace": [
+      "0::/system.slice/aetherpd-shim.service"
+    ]
+  },
+  "automatic_control_restart_policy_retained": {
+    "delay_seconds": 5,
+    "maximum_starts_including_initial": 3,
+    "interval_seconds": 60,
+    "reboot_action": "none"
+  },
+  "ordinary_GUI_receive_cycle": {
+    "fresh_dialog": true,
+    "FDX_enabled": false,
+    "Start_actions": 1,
+    "Stop_actions": 1,
+    "session_ready_s": 2.10980499300058,
+    "complex_samples": 16384,
+    "sample_rate_hz": 48000,
+    "raw_bytes": 131072,
+    "all_samples_finite_and_not_all_zero": true,
+    "capture": {
+      "metadata": {
+        "capture_id": "03d27d0ed881074e4c8d48b32d4ed776",
+        "center_hz": 7153821,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 324904259,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "605741324428",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "606082324322",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "0e14eed039a873388d66ca38b6503abd67d9627b24a9338457d55632f9da9726",
+      "all_samples_finite_and_not_all_zero": true
+    },
+    "diagnostic_bridge_used_for_Start_capture_Stop": false
+  },
+  "after_Stop": {
+    "processes": 3,
+    "retained_status_frontends": 2,
+    "all_capabilities_zero_and_NNP1": true,
+    "no_packet_FDs": true,
+    "no_DSP_capture_processes": true,
+    "owned_ARP_absent": true,
+    "ARP_journal_bytes": 0,
+    "accept_local": 0,
+    "same_control_and_firmware_identities": true
+  },
+  "temporary_diagnostic_jobs": 2,
+  "all_temporary_jobs_and_host_directories_retired": true,
+  "manager_mutations": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "firmware_signals": [],
+  "credential_mutations": [],
+  "scope_limits": [
+    "One operator-confirmed physical cold boot of the FLEX-8600, firmware4.3.16.42034, installed release6229124. No software reboot or firmware shutdown trace was performed; original hang cause remains unproven.",
+    "Saved owner credential authentication and unchanged public installation identity were proven before any new diagnostics. This is not joined-tailnet enrollment, transport routing, owner-token loss recovery or credential rotation qualification.",
+    "The existing laboratory SSH container remained reachable. Two temporary fixed read-only host snapshots used the host-root diagnostic bridge and were retired; ordinary API startup was already proven before them. This does not prove the lab bridge was absent or qualify its delivery on6300.",
+    "The existing desktop binary c0725b476b67de6a76793ae3551c3b2da730621061ed1428a8f73227ee54c300 performed GUI Start/Stop. Newly built disclosure binaries were not launched.",
+    "One finite receive-only local DAX IQ capture with FDX disabled is not RF correction, sustained operation, absolute FPGA-to-process latency, rate-limit exhaustion or intentional manager-Stop qualification.",
+    "The2.1098-second GUI startup observation is session readiness, not packet latency. Two capability-free private status-channel frontends retained after Stop are expected; capture/DSP/ARP resources are gone.",
+    "Actual6300 platform/privilege-entry qualification, historical128sample slip/cold-bypass diagnosis, final failure/RF/stockAPD matrix and independent production/release gates remain open."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-cold-components.tar.gz",
+    "bytes": 59479,
+    "sha256": "8a0691690ff4584641a7f0783e31a2f96af5e84a3c12f78897f81906581f0c61",
+    "members": 22,
+    "all_members_verified": true
+  },
+  "evidence": "CONTROL-RECOVERY-COLD-EVIDENCE.json.gz",
+  "evidence_sha256": "74b8f3a7b43b2351dc7d229edb6d7ee486985c593ef3920a0cd3e5faef1e7f20"
+}
