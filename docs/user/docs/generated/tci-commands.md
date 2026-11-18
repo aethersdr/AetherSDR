@@ -28,6 +28,7 @@ Handled per client connection: audio and IQ streams, stream format, and sensor r
 | `rx_sensors_enable` |
 | `tx_sensors_enable` |
 | `hw_sensors_enable` |
+| `aethersdr_ext_enable` |
 | `iq_samplerate` |
 | `iq_start` |
 | `iq_stop` |
