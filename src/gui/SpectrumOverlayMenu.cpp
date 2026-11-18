@@ -613,12 +613,15 @@ void SpectrumOverlayMenu::buildAntPanel()
         if (const auto pick = stationAntennaPickFrom(
                 m_rxAntCmb->itemData(index, kStationAntennaRole))) {
             if (m_radioModel) {
-                if (SliceModel* target = antennaTargetSliceForPan(m_radioModel, m_slice, m_panId)) {
-                    emit flexRxAntennaSelected(target->sliceId());
-                }
                 const QString refusal =
                     m_radioModel->selectStationAntenna(pick->id, pick->token, false);
-                if (!refusal.isEmpty()) {
+                // Only a pick that was taken ends the slice's Kiwi receiver.
+                if (refusal.isEmpty()) {
+                    if (SliceModel* target =
+                            antennaTargetSliceForPan(m_radioModel, m_slice, m_panId)) {
+                        emit flexRxAntennaSelected(target->sliceId());
+                    }
+                } else {
                     QToolTip::showText(m_rxAntCmb->mapToGlobal(QPoint(0, 0)),
                                        stationAntennaToolTip(refusal),
                                        m_rxAntCmb);

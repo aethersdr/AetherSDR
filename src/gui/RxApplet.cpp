@@ -465,11 +465,13 @@ void RxApplet::buildUI()
                 }
                 const QString token = sel->data().toString();
                 if (const auto pick = stationAntennaPickFrom(sel->data())) {
-                    emit flexRxAntennaSelected(slice->sliceId());
                     const QString refusal = m_radioModel
                         ? m_radioModel->selectStationAntenna(pick->id, pick->token, false)
                         : QString();
-                    if (!refusal.isEmpty()) {
+                    // Only a pick that was taken ends the slice's Kiwi receiver.
+                    if (refusal.isEmpty()) {
+                        emit flexRxAntennaSelected(slice->sliceId());
+                    } else {
                         QToolTip::showText(m_rxAntBtn->mapToGlobal(QPoint(0, 0)),
                                            stationAntennaToolTip(refusal),
                                            m_rxAntBtn);
