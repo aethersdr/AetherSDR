@@ -1,0 +1,221 @@
+{
+  "scope": "Offline diagnosis of two preserved negative attempts; no RF or guard changes",
+  "vendor_reference": {
+    "page": "https://www.flexradio.com/software/smartsdr-v4-x-api-flexlib/",
+    "archive": "https://edge.flexradio.com/www/offload/20261116144029/FlexLib_API_v4.3.19.zip",
+    "archive_sha256": "314e490cf053d8ddeea38410b257c611e626ee723ab939e3bb86562e3306b1aa",
+    "meter_source": "FlexLib_API_v4.3.19.42208/FlexLib/Meter.cs:201-225",
+    "conversion": "SWR, dBm: signed raw / 128.0f; watts = 10^(dBm/10)/1000"
+  },
+  "attempts": [
+    {
+      "case": "post-budget-baseline-5W-01",
+      "inputs_sha256": {
+        "application-log.json": "87069d525cc6cab93676b6b079520af4d19c38d0c7c46326dab52b95509127c4",
+        "independent-meters.json": "0bedb62254db7a875f01ca2d5c05e1d0b03567964cf402a217b7046a6ca71533",
+        "events.json": "4ee2d25f759ed525824c47f8782349bff5d749776243e2ed65f5e0e60e64ac18",
+        "outcome.json": "c0c8a9783de5ad1aa751cf3781ccd8dab323e4fb4cb5911a1b7e79a24b687a08"
+      },
+      "abort": {
+        "forward_watts": {
+          "age_ms": 4,
+          "finite": true,
+          "observed_at_ms": 215822885,
+          "present": true,
+          "value": 0.6332315802574158
+        },
+        "limits": {
+          "max_forward_watts": 5,
+          "max_pa_temp_c": 75,
+          "max_swr": 2,
+          "max_transmit_ms": 10000,
+          "min_supply_volts": 11,
+          "telemetry_max_age_ms": 2000,
+          "vitals_max_age_ms": 3000
+        },
+        "now_ms": 215822889,
+        "pa_temp_c": {
+          "age_ms": 960,
+          "finite": true,
+          "observed_at_ms": 215821929,
+          "present": true,
+          "value": 23.671875
+        },
+        "phase": "keyed",
+        "reason": "SWR above the configured limit",
+        "supply_volts": {
+          "age_ms": 960,
+          "finite": true,
+          "observed_at_ms": 215821929,
+          "present": true,
+          "value": 13.53125
+        },
+        "swr": {
+          "age_ms": 4,
+          "finite": true,
+          "observed_at_ms": 215822885,
+          "present": true,
+          "value": 2.5234375
+        }
+      },
+      "same_packet_independent_observation": {
+        "ns": 215822884916149,
+        "kernel_receive_realtime_ns": 1795020862481620056,
+        "drained_ns": 215822916243650,
+        "packet_count": 12,
+        "raw": {
+          "8": 3586,
+          "9": 1014,
+          "10": 323
+        },
+        "forward_watts": 0.6332314844898854,
+        "reflected_watts": 0.0061970856702517904,
+        "derived_swr": 1.2195746819170674,
+        "radio_swr": 2.5234375
+      },
+      "independent_delivery_minus_model_sample_ms": -0.08385100960731506,
+      "key_intent_to_abort_s": 2.63119035,
+      "all_keyed_native_observations_before_tones": true,
+      "all_keyed_native_observations_bypass_no_transport_faults": true,
+      "unkey_and_session_stop_confirmed": true
+    },
+    {
+      "case": "post-budget-baseline-10W-01",
+      "inputs_sha256": {
+        "application-log.json": "3dcc9775434b4df76a81fbb5abb037b87a472c8662f6e1237089cd8ce3aeeefd",
+        "independent-meters.json": "334d1e48dd01c734ff1fd4d6231ccdcf2fdef1d8329fec1d82043ed7d141224b",
+        "events.json": "028c3b0929eba5d9e8036b443cfc68cbad0339032836e0c0765b866e148ac235",
+        "outcome.json": "925ecaa6285070f36803a2624742767679842b2b2aabf5035b0b59057b5f1363"
+      },
+      "abort": {
+        "forward_watts": {
+          "age_ms": 0,
+          "finite": true,
+          "observed_at_ms": 216099844,
+          "present": true,
+          "value": 0.8368666768074036
+        },
+        "limits": {
+          "max_forward_watts": 10,
+          "max_pa_temp_c": 75,
+          "max_swr": 2,
+          "max_transmit_ms": 10000,
+          "min_supply_volts": 11,
+          "telemetry_max_age_ms": 2000,
+          "vitals_max_age_ms": 3000
+        },
+        "now_ms": 216099844,
+        "pa_temp_c": {
+          "age_ms": 0,
+          "finite": true,
+          "observed_at_ms": 216099844,
+          "present": true,
+          "value": 24.421875
+        },
+        "phase": "keyed",
+        "reason": "SWR above the configured limit",
+        "supply_volts": {
+          "age_ms": 0,
+          "finite": true,
+          "observed_at_ms": 216099844,
+          "present": true,
+          "value": 13.5234375
+        },
+        "swr": {
+          "age_ms": 0,
+          "finite": true,
+          "observed_at_ms": 216099844,
+          "present": true,
+          "value": 2.296875
+        }
+      },
+      "same_packet_independent_observation": {
+        "ns": 216099844241632,
+        "kernel_receive_realtime_ns": 1795021139440945577,
+        "drained_ns": 216099844266521,
+        "packet_count": 6,
+        "raw": {
+          "4": 3462,
+          "8": 3741,
+          "9": 1111,
+          "10": 294,
+          "11": 1563
+        },
+        "forward_watts": 0.8368666285723972,
+        "reflected_watts": 0.007378511355618434,
+        "derived_swr": 1.2072569711645202,
+        "radio_swr": 2.296875
+      },
+      "independent_delivery_minus_model_sample_ms": 0.24163201451301575,
+      "key_intent_to_abort_s": 3.927745107,
+      "all_keyed_native_observations_before_tones": true,
+      "all_keyed_native_observations_bypass_no_transport_faults": true,
+      "unkey_and_session_stop_confirmed": true
+    }
+  ],
+  "established": [
+    "The radio transmitted the high raw SWR values; the client decoded them according to published FlexLib.",
+    "Each abort's SWR and forward power match an independent observer's single complete meter packet within 1 ms.",
+    "The same packets imply directional-power SWR below 1.22; the raw SWR fields exceed 2.",
+    "Both attempts stopped during the alignment-noise preamble before measurement tones.",
+    "The desktop analyzer's SWR policy initiated these stops; native transport diagnostics had no faults."
+  ],
+  "not_established": [
+    "The radio's internal SWR estimator fault or averaging/peak behavior is not visible in FlexLib.",
+    "Meters sharing a UDP packet do not prove simultaneous ADC sampling or matched averaging windows.",
+    "LP-100A poll and peak-hold readings do not exclude a short reflected-power transient.",
+    "These aborted baseline attempts provide no current corrected-versus-bypass spectrum."
+  ],
+  "guard_source_proposal": {
+    "pending_operator_choice": true,
+    "change": "Use an explicitly identified, fresh same-packet FWDPWR/REFPWR-derived SWR for AetherPD measurements; retain raw SWR for display/evidence.",
+    "unchanged": [
+      "2:1 stop threshold",
+      "0.5 W qualifying floor",
+      "power/vitals/deadline interlocks",
+      "independent bench LP-100A guard"
+    ],
+    "required": [
+      "No pair reconstructed from unrelated packets",
+      "Freshness tied to original receipt, never polling",
+      "Fail closed on absent, invalid, or expired pair",
+      "No hidden raw-SWR fallback",
+      "Source and both inputs in abort/export evidence",
+      "Socket-free causal regressions before bounded RF verification"
+    ]
+  },
+  "recorded_utc": "2026-11-18T17:24:00.938072+00:00",
+  "source_commit": "6e94454ccf6636b53ccefca242d0459991bb2f3b",
+  "current_policy_replayed": true,
+  "current_policy_results": [
+    {
+      "start_ms": 215820257,
+      "raw_abort_reproduced": true,
+      "swr_input_isolated": true,
+      "expiry_retained": true,
+      "unconditional_timeout_retained": true
+    },
+    {
+      "start_ms": 216095916,
+      "raw_abort_reproduced": true,
+      "swr_input_isolated": true,
+      "expiry_retained": true,
+      "unconditional_timeout_retained": true
+    }
+  ],
+  "new_RF_transmissions": 0,
+  "production_policy_changed": false,
+  "production_ready": false,
+  "operator_scope_resumed": {
+    "recorded_utc": "2026-11-18T17:14:15.906039+00:00",
+    "operator_answer": "Address the SWR guard stops now",
+    "supersedes": "Earlier deferral of unexplained5W SWR stop investigation",
+    "scope": "Diagnose and fix demonstrated guard stops using preserved evidence and protocol authority before bounded verification. Existing RF limits and protections remain in effect."
+  },
+  "diagnostic_files_sha256": {
+    "replay.py": "65e5eadfa8d5aae08acfa755bca946f3886b5a4ed4c6691e3e6d03700a21d589",
+    "replay-current-policy.cpp": "3e7234a4acb4ceb6ed2c4ed2fe6ec064548d88f5a11d1b405df2d62d59ebdef3",
+    "current-policy-result.jsonl": "9f09a14e3de1d49c67f3e0661f662b367fcd4ba8234dd8609ba880b33c0eb684"
+  },
+  "status": "Raw radio-SWR cause established; estimator mismatch persists; guard-source policy choice pending; no threshold or RF change"
+}
