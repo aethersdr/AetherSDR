@@ -1,0 +1,187 @@
+{
+  "recorded_utc": "2026-11-18T22:35:38.688501+00:00",
+  "production_ready": false,
+  "status": "Two processed-speech runs passed source/output matching and prompt cleanup with no limiting; lower adjacent improvement8.8\u201310.6dB, upper1.7\u20135.1dB fails the unchanged6dB gate. One earlier stronger-source limiter stop is preserved.",
+  "source_commit": "ec6dc102ef06b52a12e39f196828bbfb2579e430",
+  "installed_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "desktop_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+  "new_RF_keys": 2,
+  "FDX": false,
+  "feedback": "local_dax_iq",
+  "nominal_W": 5,
+  "frequency_MHz": 7.15,
+  "independent_unkey_seconds": 14,
+  "root_bridge_used": false,
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "radio_reboots": 0,
+  "receive_only_preflights_passed": true,
+  "runs": [
+    {
+      "case": "prompt-stop-OFF-5W-01",
+      "correction_enabled": false,
+      "key_seconds": 12.044473947025836,
+      "captures": 4,
+      "LP_peak_W_whole_run": 0.45,
+      "Stop_ms_after_owned_READY": 62.596456,
+      "owned_READY_ms": 437.229045,
+      "clean_stop": true,
+      "no_faults_input_limiting_or_alignment_resets": true
+    },
+    {
+      "case": "prompt-stop-ON-5W-01",
+      "correction_enabled": true,
+      "key_seconds": 12.093608878989471,
+      "captures": 4,
+      "LP_peak_W_whole_run": 3.66,
+      "Stop_ms_after_owned_READY": 61.554538,
+      "owned_READY_ms": 437.381066,
+      "clean_stop": true,
+      "no_faults_input_limiting_or_alignment_resets": true
+    }
+  ],
+  "speech_comparison": {
+    "production_ready": false,
+    "scope": "Development NumPy analysis of four independent late speech windows; no noncontiguous concatenation; this is not the integrated analyzer qualification.",
+    "OFF": {
+      "nominal_W": 5,
+      "LP_peak_W": 0.45,
+      "GUI_key_seconds": 12.044473947025836
+    },
+    "ON": {
+      "nominal_W": 5,
+      "LP_peak_W": 3.66,
+      "GUI_key_seconds": 12.093608878989471
+    },
+    "gates_declared_before_RF": {
+      "FFT_size": 4096,
+      "sample_rate_hz": 48000,
+      "window": "hann",
+      "main_band_Hz": [
+        300,
+        2700
+      ],
+      "lower_adjacent_Hz": [
+        -2700,
+        -300
+      ],
+      "upper_adjacent_Hz": [
+        3300,
+        5700
+      ],
+      "maximum_absolute_occupied_level_delta_dB": 0.5,
+      "minimum_envelope_correlation": 0.95,
+      "minimum_eligible_aligned_samples": 24000,
+      "minimum_ACPR_improvement_both_sides_dB": 6,
+      "no_comparison_claim_when_source_alignment_or_level_gate_fails": true
+    },
+    "alignment_search_ms": 200,
+    "edge_exclusion_ms": 10,
+    "rows": [
+      {
+        "frame": 0,
+        "matched_samples": 14208,
+        "envelope_correlation": 0.9657314740775007,
+        "lag_ms": -25,
+        "occupied_level_change_dB": -0.21111438112534742,
+        "OFF_ACPR_dBc": {
+          "lower": -38.88241846240268,
+          "upper": -51.31402621898387
+        },
+        "ON_ACPR_dBc": {
+          "lower": -49.4546852057306,
+          "upper": -54.15074229687023
+        },
+        "ACPR_improvement_dB": {
+          "lower": 10.572266743327916,
+          "upper": 2.836716077886358
+        },
+        "source_and_level_eligible": true
+      },
+      {
+        "frame": 1,
+        "matched_samples": 14208,
+        "envelope_correlation": 0.9922200939129201,
+        "lag_ms": -25,
+        "occupied_level_change_dB": -0.012063426418757232,
+        "OFF_ACPR_dBc": {
+          "lower": -42.65679520410373,
+          "upper": -50.8559063076907
+        },
+        "ON_ACPR_dBc": {
+          "lower": -52.044166999313404,
+          "upper": -54.3646602120502
+        },
+        "ACPR_improvement_dB": {
+          "lower": 9.387371795209674,
+          "upper": 3.5087539043594944
+        },
+        "source_and_level_eligible": true
+      },
+      {
+        "frame": 2,
+        "matched_samples": 15360,
+        "envelope_correlation": 0.9746738219393896,
+        "lag_ms": 1,
+        "occupied_level_change_dB": -0.21823379896730588,
+        "OFF_ACPR_dBc": {
+          "lower": -42.73888345571167,
+          "upper": -49.05349334109489
+        },
+        "ON_ACPR_dBc": {
+          "lower": -51.50324903323299,
+          "upper": -54.14956141773302
+        },
+        "ACPR_improvement_dB": {
+          "lower": 8.764365577521318,
+          "upper": 5.096068076638126
+        },
+        "source_and_level_eligible": true
+      },
+      {
+        "frame": 3,
+        "matched_samples": 15360,
+        "envelope_correlation": 0.9952028927423864,
+        "lag_ms": 1,
+        "occupied_level_change_dB": -0.12905147516041268,
+        "OFF_ACPR_dBc": {
+          "lower": -41.868020942418234,
+          "upper": -53.00199946079145
+        },
+        "ON_ACPR_dBc": {
+          "lower": -50.62867825254955,
+          "upper": -54.74666731687759
+        },
+        "ACPR_improvement_dB": {
+          "lower": 8.760657310131315,
+          "upper": 1.7446678560861386
+        },
+        "source_and_level_eligible": true
+      }
+    ],
+    "source_and_level_comparison_eligible": true,
+    "declared_ACPR_gate_passed": false,
+    "scope_limits": [
+      "Per-frame envelope alignment cannot establish absolute FPGA-to-process latency.",
+      "ADC clipping convention and adjacent-band noise floor are not calibrated.",
+      "Nominal power settings are not measured speech PEP."
+    ]
+  },
+  "single_click_UI_live_proven": true,
+  "prompt_Stop_live_cases_passed": 2,
+  "scope_limits": [
+    "Host subscriptions bracket Stop requests in owned READY; the native guardian private final-decision snapshot and exact branch taken were not captured.",
+    "The ON whole-run LP peak includes calibration tones and is not a measured speech PEP.",
+    "Four finite late speech frames per run do not establish sustained duty, all recovery cases, absolute packet latency or actual FLEX-6300 operation.",
+    "Output matching passed, but the upper adjacent band failed the6dB gate. This finite NumPy comparison does not complete speech, integrated analyzer or stock APD qualification.",
+    "All remaining P1-P10 shipping requirements and independent release gates remain open."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/speech-headroom-components.tar.gz",
+    "sha256": "4d32da735210a9b07ca946483c2bcef59a84988561bc1c9d1332890af0aa6768",
+    "bytes": 11060442,
+    "members": 139,
+    "all_members_verified": true
+  },
+  "evidence_sha256": "24bfe2de83158210a046ffdcabdeb151180f4ae331293946f1eb2e06b1dcdaa4"
+}
