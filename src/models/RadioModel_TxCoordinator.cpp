@@ -1,8 +1,9 @@
 #include "RadioModel.h"
-#include "HostCwTextKeyer.h"
+#include "HostCwTextEngine.h"
 #include "ModeVocabulary.h"
 #include "TxController.h"
 #include "core/LogManager.h"
+#include "core/SerialPortController.h"
 
 #include <QPointer>
 #include <QScopeGuard>
@@ -209,6 +210,20 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
                 receiver->endLocalTxActivity(intent);
             }
         }});
+}
+
+void RadioModel::connectSerialPttInput(SerialPortController* source)
+{
+    // Both edges go through the normal PTT paths so the footswitch gets the
+    // same tails as MOX: Quindar intro/outro, RADE end-of-over, TX off delay.
+    connect(source, &SerialPortController::externalPttChanged,
+            this, [this](bool active, const TxCoordinator::Request& input) {
+        if (active) {
+            (void)requestProducerPttOn(input, TransmitModel::PttSource::Mox);
+        } else {
+            requestProducerPttOff(input, TransmitModel::PttSource::Mox);
+        }
+    });
 }
 
 void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
@@ -937,7 +952,7 @@ void RadioModel::startWaitingHostCwx()
 {
     const QPointer<RadioModel> self(this);
     while (self && m_hostCwText) {
-        std::optional<HostCwTextKeyer::Waiting> next = m_hostCwText->takeNext();
+        std::optional<HostCwTextEngine::Waiting> next = m_hostCwText->takeNext();
         if (!next) {
             return;
         }
@@ -960,14 +975,14 @@ void RadioModel::hostCwTextEnded(const TxCoordinator::Request& sender, bool refu
     startWaitingHostCwx();
 }
 
-void RadioModel::createHostCwTextKeyer()
+void RadioModel::createHostCwTextEngine()
 {
     const RadioCapabilities caps = m_backend ? backendCapabilities() : RadioCapabilities{};
     if (m_hostCwText || !m_backend || !caps.hostCwKeyingControl || caps.hasRadioSideCwKeyer) {
         return;
     }
     const QPointer<RadioModel> self(this);
-    m_hostCwText = std::make_unique<HostCwTextKeyer>(this,
+    m_hostCwText = std::make_unique<HostCwTextEngine>(this,
         [self](const TxCoordinator::Request& sender, bool refused) {
             if (self) {
                 self->hostCwTextEnded(sender, refused);
@@ -1270,7 +1285,7 @@ void RadioModel::emergencyTransmitStop()
 void RadioModel::resetTxOperations()
 {
     // Host CW text keys up first, while the coordinator can still deliver it.
-    if (const std::unique_ptr<HostCwTextKeyer> host = std::move(m_hostCwText)) {
+    if (const std::unique_ptr<HostCwTextEngine> host = std::move(m_hostCwText)) {
         host->close();
     }
     // Even an idle coordinator must refuse new intent while the session dies.
@@ -1345,17 +1360,18 @@ void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, b
                 refused();
                 return;
             }
-            // Break-in off or MOX/PTT released: the backend would not raise MOX.
+            if (!m_transmitModel.admitsCwKeyEdge(true)) {
+                emitInterlockNotification(tr("CW text stopped: TUNE is active."),
+                                          QStringLiteral("cw-text-tuning"), tx->panId());
+                refused();
+                return;
+            }
+            // Break-in turned off, or MOX/PTT released, mid-message: the
+            // backend would not raise MOX, so the element would not go out.
             if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
                 emitInterlockNotification(
                     tr("CW text stopped: break-in is off and transmit is not keyed."),
                     QStringLiteral("cw-text-unkeyed"), tx->panId());
-                refused();
-                return;
-            }
-            if (!m_transmitModel.admitsCwKeyEdge(true)) {
-                emitInterlockNotification(tr("CW text stopped: TUNE is active."),
-                                          QStringLiteral("cw-text-tune"), tx->panId());
                 refused();
                 return;
             }

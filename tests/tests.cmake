@@ -360,7 +360,7 @@ set_tests_properties(nnr_model_publication_test PROPERTIES TIMEOUT 120)
 
 add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
     src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
-    src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
+    src/core/ClientComp.cpp src/core/ClientTube.cpp
     src/core/ClientPudu.cpp src/core/ClientPhaseRotator.cpp)
 target_include_directories(rx_client_effects_test PRIVATE src)
 add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
@@ -829,6 +829,12 @@ add_executable(backend_capability_revision_test tests/backend_capability_revisio
 target_include_directories(backend_capability_revision_test PRIVATE src tests)
 target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
+
+# Shared MAIN/SUB backend with injected CI-V and PCM; no sockets or radio.
+add_executable(icom_dual_receiver_test tests/icom_dual_receiver_test.cpp)
+target_include_directories(icom_dual_receiver_test PRIVATE src tests)
+target_link_libraries(icom_dual_receiver_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_dual_receiver_test COMMAND icom_dual_receiver_test)
 
 # #5347: injected Icom model profiles, no session/transport/device.
 add_executable(icom_panadapter_capacity_test tests/icom_panadapter_capacity_test.cpp)
@@ -1746,16 +1752,9 @@ add_test(NAME icom_power_clamp_model_test COMMAND icom_power_clamp_model_test)
 #   cmake --build build --target icom_live_probe
 #   ./build/icom_live_probe ic-705.local <user> <password>
 add_executable(icom_live_probe EXCLUDE_FROM_ALL
-    tests/icom_live_probe.cpp
-    src/core/TxCoordinator.cpp
-    src/core/backends/icom/IcomSession.cpp
-    src/core/backends/icom/IcomStream.cpp
-    src/core/backends/icom/IcomProtocol.cpp
-    src/core/backends/icom/CivCodec.cpp
-    src/core/backends/icom/IcomScope.cpp
-    src/core/backends/icom/IcomAudio.cpp)
+    tests/icom_live_probe.cpp)
 target_include_directories(icom_live_probe PRIVATE src)
-target_link_libraries(icom_live_probe PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(icom_live_probe PRIVATE aethercore Qt6::Core Qt6::Network)
 
 # IcomCIV live CI-V ADDRESS probe — also REQUIRES A REAL RADIO, also EXCLUDE_FROM_ALL.
 # Drives IcomCivBackend (not IcomSession) because the address resolution under
@@ -2351,6 +2350,18 @@ set_target_properties(client_eq_smoothing_test PROPERTIES AUTOMOC ON)
 add_test(NAME client_eq_smoothing_test COMMAND client_eq_smoothing_test)
 set_tests_properties(client_eq_smoothing_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
+
+# ClientFinalLimiter, the look-ahead brickwall at the end of the TX chain: no
+# sample above the ceiling at any look-ahead without the safety clip, the delay
+# and reported latency are the look-ahead, the gain ramps instead of stepping,
+# and a look-ahead or enable change fades the delay tap. Standalone DSP.
+add_executable(client_final_limiter_test
+    tests/client_final_limiter_test.cpp
+    src/core/ClientFinalLimiter.cpp
+)
+target_include_directories(client_final_limiter_test PRIVATE src)
+target_link_libraries(client_final_limiter_test PRIVATE Qt6::Core)
+add_test(NAME client_final_limiter_test COMMAND client_final_limiter_test)
 
 add_executable(client_comp_test
     tests/client_comp_test.cpp
@@ -5634,12 +5645,6 @@ add_executable(client_gate_test
 )
 target_include_directories(client_gate_test PRIVATE src)
 
-add_executable(client_deess_test
-    tests/client_deess_test.cpp
-    src/core/ClientDeEss.cpp
-)
-target_include_directories(client_deess_test PRIVATE src)
-
 add_executable(client_tube_test
     tests/client_tube_test.cpp
     src/core/ClientTube.cpp
@@ -5730,6 +5735,23 @@ add_executable(wsjtx_dial_tracker_test
 target_include_directories(wsjtx_dial_tracker_test PRIVATE src)
 target_link_libraries(wsjtx_dial_tracker_test PRIVATE Qt6::Core)
 add_test(NAME wsjtx_dial_tracker_test COMMAND wsjtx_dial_tracker_test)
+
+# SpotHub WSJT-X feed: Rx/Tx frequency overlay (#4526). Header-only and
+# Qt-Core-only, same lane as wsjtx_dial_tracker_test above — pins the dial+
+# offset resolution and the refuse-rather-than-guess fallback when Status's
+# later fields could not be read, AND (RFC #4526 review item 1) the actual
+# QDataStream byte parsing in parseWsjtxStatusBody() — field order/framing
+# for DX Call/Report/Tx Mode/Tx Enabled/Transmitting/Decoding/[Rx DF/Tx DF] —
+# via hand-built buffers using the same wsjtxReadQString/wsjtxReadBool
+# primitives WsjtxClient.cpp itself calls (WsjtxWireHelpers.h). Still does
+# NOT link WsjtxClient.cpp/LogManager/AppSettings — parseWsjtxStatusBody()
+# is exercised directly, header-only, same as the rest of this target.
+add_executable(wsjtx_status_freq_test
+    tests/wsjtx_status_freq_test.cpp
+)
+target_include_directories(wsjtx_status_freq_test PRIVATE src)
+target_link_libraries(wsjtx_status_freq_test PRIVATE Qt6::Core)
+add_test(NAME wsjtx_status_freq_test COMMAND wsjtx_status_freq_test)
 
 add_executable(n1mm_spot_client_test
     tests/n1mm_spot_client_test.cpp
@@ -7223,6 +7245,7 @@ add_executable(mqtt_radio_state_test
     src/core/MqttRadioState.cpp
     src/models/TransmitModel.cpp
     src/core/ClientQuindarTone.cpp
+    src/core/TxOffDelaySettings.cpp
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>
@@ -7841,6 +7864,15 @@ target_link_libraries(mon_vox_roads_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME mon_vox_roads_test COMMAND mon_vox_roads_test)
 
+# #7105: rigctl send_morse / stop_morse on a radio with no radio-side text
+# buffer key host-timed elements through RadioModel's per-edge CW gates; the
+# radio-side keyer still uses CWX. Injected backend, no socket, nothing keyed.
+add_executable(rigctl_host_cw_text_test tests/rigctl_host_cw_text_test.cpp)
+target_include_directories(rigctl_host_cw_text_test PRIVATE src tests)
+target_link_libraries(rigctl_host_cw_text_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME rigctl_host_cw_text_test COMMAND rigctl_host_cw_text_test)
+
 # #5775 / #5776: the receiver letters (slice tabs, CAT VFO targets) follow a
 # backend's capacity declared after connect. Injected backend, no socket.
 add_executable(receiver_slot_count_test tests/receiver_slot_count_test.cpp)
@@ -8065,10 +8097,24 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_rx_audio_test COMMAND tci_rx_audio_test)
 
+    add_executable(tci_host_iq_test tests/tci_host_iq_test.cpp)
+    target_include_directories(tci_host_iq_test PRIVATE src tests)
+    target_link_libraries(tci_host_iq_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_host_iq_test COMMAND tci_host_iq_test)
+
     add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
     target_include_directories(tci_trxmap_test PRIVATE src)
     target_link_libraries(tci_trxmap_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_trxmap_test COMMAND tci_trxmap_test)
+
+    # Socket-free: the tx_sensors gate (TciServer::txSensorsKeyed) against the
+    # real RadioModel, and the TX ownership reset on disconnect. No TciServer
+    # is started; no listener, client or radio.
+    add_executable(tci_tx_sensors_gate_test tests/tci_tx_sensors_gate_test.cpp)
+    target_include_directories(tci_tx_sensors_gate_test PRIVATE src tests)
+    target_link_libraries(tci_tx_sensors_gate_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_tx_sensors_gate_test COMMAND tci_tx_sensors_gate_test)
 
     add_executable(tci_automation_test tests/tci_automation_test.cpp)
     target_include_directories(tci_automation_test PRIVATE src tests)
@@ -8103,6 +8149,22 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
     set_tests_properties(tci_server_review_test PROPERTIES TIMEOUT 45)
+
+    # The opt-in extension set: enable, capability list, per-client gate.
+    # Socket-free; the transport is injected.
+    add_executable(tci_extension_set_test tests/tci_extension_set_test.cpp)
+    target_include_directories(tci_extension_set_test PRIVATE src tests)
+    target_link_libraries(tci_extension_set_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_extension_set_test COMMAND tci_extension_set_test)
+
+    # A client that never enables the set gets the same bytes as from a server
+    # without it. Socket-free; `--print-transcript` dumps them for a diff.
+    add_executable(tci_extension_zero_traffic_test tests/tci_extension_zero_traffic_test.cpp)
+    target_include_directories(tci_extension_zero_traffic_test PRIVATE src tests)
+    target_link_libraries(tci_extension_zero_traffic_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -8262,9 +8324,12 @@ target_include_directories(hl2_unkey_hold_test PRIVATE src)
 target_link_libraries(hl2_unkey_hold_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_unkey_hold_test COMMAND hl2_unkey_hold_test)
 
-# #5998: the HL2's own PTT/key input is an observation: transmit state and receive
-# mute, never a key. Socket-free; EP6 status frames are fed to the backend's own
-# MetisClient. One leg waits out the 2 s silence timeout.
+# #5998: the HL2's own PTT/key input mutes receive and shows transmit, and a
+# fresh press after a seen release keys the host through RadioModel's gated
+# producer path. A PTT held at stream start, after silence or a restart, or
+# carried by a rewound or duplicate EP6 packet, keys nothing. Socket-free; EP6
+# status frames and receiver-count restarts use the backend's own MetisClient
+# with injected sinks. Two legs wait out the 2 s silence timeout.
 add_executable(hl2_hardware_ptt_state_test tests/hl2_hardware_ptt_state_test.cpp)
 target_include_directories(hl2_hardware_ptt_state_test PRIVATE src tests)
 target_link_libraries(hl2_hardware_ptt_state_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -10094,6 +10159,25 @@ add_executable(hl2_tx_alc_test
 target_include_directories(hl2_tx_alc_test PRIVATE src)
 add_test(NAME hl2_tx_alc_test COMMAND hl2_tx_alc_test)
 
+# PureSignal's control loop, driven tick by tick, and the 0x0a/DDC facts it
+# relies on. Socket-free; also drives a real, unkeyed TXA channel offline.
+add_executable(hl2_puresignal_test
+    tests/hl2_puresignal_test.cpp
+)
+target_include_directories(hl2_puresignal_test PRIVATE src)
+target_link_libraries(hl2_puresignal_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_puresignal_test COMMAND hl2_puresignal_test)
+
+# Private disk profile, child-process restart, injected link edges and applet
+# error presentation. MetisClient is never started: no socket or peer.
+add_executable(hl2_puresignal_state_test tests/hl2_puresignal_state_test.cpp
+    src/gui/PureSignalApplet.cpp src/gui/DragValuePopup.cpp src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp ${THEME_TEST_RESOURCES})
+target_include_directories(hl2_puresignal_state_test PRIVATE src tests)
+target_link_libraries(hl2_puresignal_state_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME hl2_puresignal_state_test COMMAND hl2_puresignal_state_test)
+
+
 add_executable(hl2_dsp_readback_test
     tests/hl2_dsp_readback_test.cpp
 )
@@ -11003,10 +11087,10 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientGateCurveWidget.cpp
     src/gui/ClientTubeApplet.cpp
     src/gui/ClientTubeCurveWidget.cpp
-    src/gui/ClientDeEssApplet.cpp
-    src/gui/ClientDeEssCurveWidget.cpp
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
+    src/gui/StripTubePanel.cpp
+    src/gui/ClientLevelMeter.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
 target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)
@@ -11516,6 +11600,7 @@ set(AETHER_SETTINGS_CONSUMERS
     bandstack_cat_controls_test
     two_tone_tune_gate_test
     tx_output_metering_test
+    icom_dual_receiver_test
     update_controller_test
     update_installer_test
     update_stager_test
@@ -11547,13 +11632,17 @@ set(AETHER_SETTINGS_CONSUMERS
     squelch_level_scale_test
     hl2_pan_create_async_test
     hl2_session_memory_test
+    hl2_puresignal_state_test
     anan_backend_test
     anan_noise_blanker_readback_test
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_extension_set_test
+    tci_extension_zero_traffic_test
     tci_applet_test
     tci_rx_applet_test
+    tci_host_iq_test
     bandscope_trace_render_test
     decoder_audio_routing_test
     ax25_receive_model_test
@@ -11610,6 +11699,7 @@ set(AETHER_SETTINGS_CONSUMERS
     phone_mon_vox_availability_test
     dax_iq_rate_limits_test
     offline_health_registry_test
+    rigctl_host_cw_text_test
     tx_operation_integration_test
     flex_cw_controls_test
     tune_inhibit_restore_test

@@ -28,12 +28,12 @@
 #include "EqApplet.h"
 #include "AetherClockApplet.h"
 #include "WfmApplet.h"
+#include "PureSignalApplet.h"
 #include "MiniPanApplet.h"
 #include "WaveApplet.h"
 #include "ClientEqApplet.h"
 #include "ClientCompApplet.h"
 #include "ClientGateApplet.h"
-#include "ClientDeEssApplet.h"
 #include "ClientTubeApplet.h"
 #include "ClientPuduApplet.h"
 #include "ClientReverbApplet.h"
@@ -169,7 +169,7 @@ constexpr int kStackBottomMargin = 8;
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "WFM", "BAND", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
+    "PWR", "RX", "WFM", "BAND", "TUN", "AMP", "TX", "PS", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -779,6 +779,15 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_bandApplet = new BandApplet;
     m_appletOrder.append(makeEntry("BAND", "Band", m_bandApplet, false, m_drawer, m_drawerLayout, "BAND"));
 
+    // HL2 PureSignal: present only while a Hermes-Lite 2 backend is bound,
+    // with the same presentation gate as WFM.
+    m_pureSignalApplet = new PureSignalApplet;
+    m_appletOrder.append(makeEntry("PS", "PureSignal", m_pureSignalApplet, true,
+                                   m_drawer, m_drawerLayout));
+    markHardwareConditional("PS");
+    connect(m_pureSignalApplet, &PureSignalApplet::availabilityChanged,
+            this, &AppletPanel::setPureSignalAvailable);
+
     // Tuner / Amp entries use makeEntry like everything else;
     // MainWindow toggles tray-button visibility via setTunerVisible /
     // setAmpVisible once the hardware reports its presence.  Until
@@ -1033,9 +1042,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_clientEqRxApplet  = new ClientEqApplet(ClientEqApplet::Path::Rx);
     m_clientCompApplet   = new ClientCompApplet(ClientCompApplet::Side::Tx);
     m_clientCompRxApplet = new ClientCompApplet(ClientCompApplet::Side::Rx);
-    m_clientGateApplet   = new ClientGateApplet(ClientGateApplet::Side::Tx);
-    m_clientGateRxApplet = new ClientGateApplet(ClientGateApplet::Side::Rx);
-    m_clientDeEssApplet = new ClientDeEssApplet;
+    m_clientGateRxApplet = new ClientGateApplet;
     m_clientTubeApplet   = new ClientTubeApplet(ClientTubeApplet::Side::Tx);
     m_clientTubeRxApplet = new ClientTubeApplet(ClientTubeApplet::Side::Rx);
     m_clientPuduApplet   = new ClientPuduApplet(ClientPuduApplet::Side::Tx);
@@ -1066,11 +1073,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // pop-outable sub-containers since users commonly want them
     // floating while working on the chain.)
     if (txDsp) txDsp->insertChildWidget(-1, m_clientChainApplet);
-    makeChildContainer("gate",    "Aetherial TX Gate",       m_clientGateApplet,   -1);
     makeChildContainer("gate-rx", "Aetherial AGC-G",          m_clientGateRxApplet, -1);
     makeChildContainer("ceq",     "Aetherial TX EQ",          m_clientEqTxApplet,   -1);
     makeChildContainer("ceq-rx",  "Aetherial RX EQ",          m_clientEqRxApplet,   -1);
-    makeChildContainer("dess",    "Aetherial De-Esser",       m_clientDeEssApplet,  -1);
     makeChildContainer("cmp",     "Aetherial Compressor",     m_clientCompApplet,   -1);
     makeChildContainer("cmp-rx",  "Aetherial AGC-C",          m_clientCompRxApplet, -1);
     makeChildContainer("tube",    "Aetherial Mic-PreAmp",     m_clientTubeApplet,   -1);
@@ -1213,6 +1218,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // saved (or default) favorites layout to populate both strips.
     loadButtonLayout();
     setWfmAvailable(m_wfmApplet->isAvailable());
+    setPureSignalAvailable(m_pureSignalApplet->isAvailable());
     applyBarLayout();
 
     // Restore drawer open/closed state (default closed).  Signals blocked
@@ -1642,8 +1648,6 @@ void AppletPanel::setPooDooActiveSide(PooDooSide side)
     // — they hide entirely on RX and reappear on TX.
     static const QStringList kTxOnly{
         QStringLiteral("ceq"),
-        QStringLiteral("dess"),
-        QStringLiteral("gate"),
         QStringLiteral("cmp"),
         QStringLiteral("tube"),
         QStringLiteral("pudu"),
@@ -1827,12 +1831,22 @@ void AppletPanel::applyCapabilityVisibility(const QString& id,
 
 void AppletPanel::setWfmAvailable(bool available)
 {
+    setPresentationAvailable(QStringLiteral("WFM"), available);
+}
+
+void AppletPanel::setPureSignalAvailable(bool available)
+{
+    setPresentationAvailable(QStringLiteral("PS"), available);
+}
+
+void AppletPanel::setPresentationAvailable(const QString& id, bool available)
+{
     // Availability suppresses presentation, never workspace membership or the
     // requested open state. Generic capability hiding emits visibilityChanged
     // and would incorrectly mark this temporarily unavailable tile as closed
     // in the active workspace. The container/window gate also survives recall.
     for (BarButton& button : m_barButtons) {
-        if (button.id != QLatin1String("WFM")) {
+        if (button.id != id) {
             continue;
         }
         button.hardwareAvailable = available;
@@ -1843,7 +1857,7 @@ void AppletPanel::setWfmAvailable(bool available)
         }
         break;
     }
-    if (ContainerWidget* container = m_containerMgr->container(QStringLiteral("WFM"))) {
+    if (ContainerWidget* container = m_containerMgr->container(id)) {
         container->setPresentationAvailable(available);
     }
     applyBarLayout();
@@ -2096,9 +2110,9 @@ void AppletPanel::setTxDspChainOrder(
     // should have been hidden via stageEnabledChanged anyway).
     auto idFor = [](AudioEngine::TxChainStage s) -> QString {
         switch (s) {
-            case AudioEngine::TxChainStage::Gate:   return "gate";
+            case AudioEngine::TxChainStage::Gate:   return {};  // retired
             case AudioEngine::TxChainStage::Eq:     return "ceq";
-            case AudioEngine::TxChainStage::DeEss:  return "dess";
+            case AudioEngine::TxChainStage::DeEss:  return {};  // retired
             case AudioEngine::TxChainStage::Comp:   return "cmp";
             case AudioEngine::TxChainStage::Tube:   return "tube";
             case AudioEngine::TxChainStage::Enh:    return "pudu";

@@ -1,6 +1,6 @@
 // The host CW text engine in RadioModel (#7146): text sent through
 // requestProducerCwx / CwxModel on a radio with no text buffer is keyed by the
-// model's one HostCwTextKeyer. The HL2 fixture takes its capabilities from a
+// model's one HostCwTextEngine. The HL2 fixture takes its capabilities from a
 // real, unconnected Hl2Backend with canTransmit set. The real CwxLocalKeyer
 // worker times the text; every edge is recorded where RadioModel hands it to
 // IRadioBackend::setCwKeying(). Socket-free: nothing is opened, nothing keyed.
@@ -11,7 +11,7 @@
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "models/CwxModel.h"
-#include "models/HostCwTextKeyer.h"
+#include "models/HostCwTextEngine.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -238,7 +238,7 @@ void testHl2Shape()
           !caps.cwTextHasProgress && !caps.cwTextHasStoredMacros && !caps.cwTextSupportsLive);
     check("HL2 shape: per-segment speed modifiers", caps.cwTextSupportsSpeedModifiers);
     check("HL2 shape: the message cap is the engine's",
-          caps.cwTextMaxMessageChars == HostCwTextKeyer::kMaxMessageChars);
+          caps.cwTextMaxMessageChars == HostCwTextEngine::kMaxMessageChars);
 }
 
 void testTimingAndSpeedSource()
@@ -420,12 +420,12 @@ void testBreakInOffWithPttHeld()
 
 void testLengthBounds()
 {
-    const int maxMessage = HostCwTextKeyer::kMaxMessageChars;
+    const int maxMessage = HostCwTextEngine::kMaxMessageChars;
     const QString longest(maxMessage, QLatin1Char('E'));
     Fixture f(hl2Capabilities(true));
     Sender a(f.radio);
     check("bounds: 511 per message, 1024 pending",
-          maxMessage == 511 && HostCwTextKeyer::kMaxPendingChars == 1024);
+          maxMessage == 511 && HostCwTextEngine::kMaxPendingChars == 1024);
     check("bounds: 512 characters refused", !a.send(longest + QLatin1Char('E')));
     pumpFor(200);
     check("bounds: no edge for the refused message", f.edges.empty());
@@ -511,7 +511,7 @@ void testMidMessageRefusals()
     runMidMessageRefusal("TUNE raised",
         [](Fixture& f) { setTune(f, true); },
         [](Fixture& f) { setTune(f, false); },
-        QStringLiteral("cw-text-tune"));
+        QStringLiteral("cw-text-tuning"));
 }
 
 // Q2: another sender's text waits behind the playing message, never interleaved.

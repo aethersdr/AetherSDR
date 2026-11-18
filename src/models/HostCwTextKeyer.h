@@ -2,84 +2,63 @@
 
 #include "core/TxCoordinator.h"
 
-#include <QList>
 #include <QPointer>
 #include <QString>
 
-#include <functional>
 #include <memory>
-#include <optional>
-#include <vector>
 
 namespace AetherSDR {
 
 class CwxLocalKeyer;
 class RadioModel;
 
-// The host CW text engine, one per RadioModel on a hostCwKeyingControl backend.
-// It plays CwxModel's segments for one sender at a time; each element is its own
-// request under the sender's actor, through queueProducerCwKeyEdge's host-text
-// gates. Other senders' messages wait here. Model thread only.
+// CW text keyed by this host for a radio with no text buffer
+// (RadioModel::hasHostCwTextKeyer). CwxLocalKeyer times the elements on its
+// worker; every edge goes through RadioModel::queueProducerCwKeyEdge, so each
+// element passes the same per-edge transmit gates as a paddle. The producer is
+// this keyer's own, so stop() fences and releases only its elements. A
+// key-down refused at admission, with the TX slice out of CW, or with break-in
+// off and no MOX/PTT held, ends the message.
+// Construct anywhere; every other member function runs on the model's thread.
 class HostCwTextKeyer {
 public:
-    // Hamlib's bounds: one rigctld argument is MAXARGSZ = 511 characters
-    // (tests/rigctl_parse.c) and its send_morse queue HAMLIB_FIFO_SIZE = 1024
-    // (src/fifo.h). kMaxPendingChars covers the playing and the waiting text.
-    static constexpr int kMaxMessageChars = 511;
-    static constexpr int kMaxPendingChars = 1024;
-
-    struct Waiting {
-        TxCoordinator::Request sender;
-        QString text;   // the message, or the stored macro's text
-        int macroIndex{0};
-        bool live{false};
-    };
-    // ended(sender, refused): the run for `sender` is over, after its last key-up.
-    // refused: a key-down was refused, so the message did not go out whole.
-    using Ended = std::function<void(const TxCoordinator::Request&, bool)>;
-
-    HostCwTextKeyer(RadioModel* model, Ended ended);
+    HostCwTextKeyer(RadioModel* model, QString source);
     ~HostCwTextKeyer();
+
     HostCwTextKeyer(const HostCwTextKeyer&) = delete;
     HostCwTextKeyer& operator=(const HostCwTextKeyer&) = delete;
 
+    // Bounds on host-keyed text, from Hamlib: rigctld reads one command
+    // argument into MAXARGSZ = 511 characters (tests/rigctl_parse.c), and its
+    // own send_morse queue is HAMLIB_FIFO_SIZE = 1024 (src/fifo.h). No
+    // rigctld client sends more in one line, and Hamlib never holds more.
+    static constexpr int kMaxMessageChars = 511;
+    static constexpr int kMaxPendingChars = 1024;
+    // Whether `chars` more may be queued: at most kMaxMessageChars in one
+    // message, and at most kMaxPendingChars with the text already pending
+    // (queued, playing, or noted as handed to a queued send()).
     bool admitsLength(int chars) const;
-    int pendingChars() const;
-    bool playing() const { return m_run != nullptr; }
-    bool playingFor(const TxCoordinator::Request& sender) const;
+    // Text handed to a send() still waiting in the event queue; send() takes
+    // it off again, so a pipelined burst counts before it is delivered.
+    void noteQueued(int chars);
 
-    // Keys one segment for `sender`, appended to its run; `done` finishes when
-    // the run ends. False when another sender's run plays or no producer is free.
-    bool play(const TxCoordinator::Request& sender, const QString& text, int wpm,
-              TxCoordinator::Completion done);
-    // Queues a message behind the run; the same sender's messages stay together.
-    bool hold(Waiting message);
-    // The next waiting message that may start now: the front, when idle, or the
-    // playing sender's own. Invalid senders are dropped on the way.
-    std::optional<Waiting> takeNext();
-    void dropWaiting(const TxCoordinator::Request& sender);
-
-    // Ends `sender`'s run and drops its waiting text; keys up before returning.
-    void stop(const TxCoordinator::Request& sender);
-    // Ends the run and drops every waiting message.
-    void stopAll();
-    // stopAll(), and every later play() or hold() is refused.
+    // Queues text at the TransmitModel CW speed. False, with no edge, when
+    // RadioModel::hostCwTextRefusal() refuses, the text is past the bounds
+    // above, or no producer is available.
+    bool send(const QString& text);
+    // Drops pending text, fences queued elements and keys up now.
+    void stop();
+    // stop(), and every later send() is refused: the owner is going away.
     void close();
 
 private:
-    void endRun();
-    void drained(const std::weak_ptr<char>& run);
-    void refused(const std::weak_ptr<char>& run);
-
-    QPointer<RadioModel> m_model;
-    Ended m_ended;
-    TxCoordinator::Request m_sender;     // the playing sender's own request
-    TxCoordinator::Producer m_producer;  // this run's elements, under the sender's actor
+    QPointer<RadioModel> m_model;   // cleared before a dying model drops queued work
+    QString m_source;
+    TxCoordinator::Producer m_producer;
     TxCoordinator::Request m_input;
     std::unique_ptr<CwxLocalKeyer> m_keyer;
-    std::shared_ptr<char> m_run;         // this run's identity for worker callbacks
-    std::vector<TxCoordinator::Completion> m_done;
-    QList<Waiting> m_waiting;
+    std::shared_ptr<char> m_run;   // this run's identity for refusal callbacks
+    int m_queuedChars{0};          // noteQueued() text not yet through send()
     bool m_closed{false};
 };
 

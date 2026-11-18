@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include "DaxTxAudioPermit.h"
+#include "TciExtensionSet.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
 #include "TciAudioHeader.h"
@@ -9,6 +10,7 @@
 #include <QThread>
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
+#include "TciIqDecimator.h"
 #include "IcomTciUnkeySettle.h"
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
@@ -78,8 +80,10 @@ class TciServer : public QObject {
     friend class TciServerReviewTest;
     friend class TciSliceLifecycleTestAccess;
     friend class TciRxAudioTest;
+    friend class TciHostIqTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
+    friend class TciExtensionSetTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -157,6 +161,10 @@ public:
 
     // Wire slice signals for state change broadcasts
     void wireSlice(int trx, SliceModel* slice);
+
+    // A command group of the opt-in extension set joins here, with the
+    // capability that offers it. Enabled clients hear the new list at once.
+    bool registerExtensionGroup(TciExtensionSet::Group group);
     void wireSpotModel();
     void notifySpotClicked(int spotIndex, SliceModel* slice = nullptr);
     void rearmDaxForProfileLoad();
@@ -168,6 +176,9 @@ public slots:
     void onDaxPcmReady(int channel, const PcmFrame& frame);
     // IQ data from DAX IQ stream (big-endian float32 I/Q pairs)
     void onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
+    // IQ from a backend that has its own (HL2): native float32 I/Q pairs for
+    // one slice, centred on its pan. See IRadioBackend::sliceIqFrameReady.
+    void onSliceIqReady(int sliceId, const QByteArray& iqFloat32, int sampleRate);
     // Waterfall row from PanadapterStream — forwarded to spectrum_event subscribers
     void onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                              double lowMhz, double highMhz,
@@ -212,6 +223,11 @@ private slots:
 private:
     struct ClientState;
 
+    // tx_sensors goes out while this station's transmitter carries RF:
+    // MOX/PTT, tune, or a key the radio reports, and only while this station
+    // holds the transmitter.
+    static bool txSensorsKeyed(RadioModel& model);
+
     // Controller-side cleanup plus a one-way barrier that destroys worker
     // sockets on their owning thread. Never asks the worker to access a model.
     void stopIo();
@@ -235,6 +251,19 @@ private:
     void publishActiveTrx();
     SliceModel* sliceForPanId(const QString& panId) const;
     void broadcast(const QString& msg);
+    // The extension set's one gate: nothing reaches a client that has not
+    // enabled it. Every extension line goes through sendExtensionText().
+    void sendExtensionText(ClientState& client, const QString& msg);
+    void broadcastExtension(const QString& msg);
+    void advertiseExtensions(ClientState& client, bool onlyIfChanged);
+    // Sends the list, with every state line, to each enabled client that
+    // holds an older one. A group whose gate moves without capabilitiesChanged
+    // calls this when it moves. True when every enabled client (at least one)
+    // was behind and has now been sent it all, so a notice of the group's own
+    // for the same change would repeat it; the groups' `resent` hooks run then.
+    bool announceExtensionSet();
+    void handleExtensionEnable(TciClient* ws, const QString& cmd);
+    void handleExtensionCommand(TciClient* ws, const QString& cmd);
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
@@ -332,6 +361,8 @@ private:
         quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
+        bool         extensionsEnabled{false};  // sent aethersdr_ext_enable:true
+        QString      extensionsAdvertised;      // last aethersdr_ext: line sent
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
         // several skimmers over one WebSocket by sending iq_start for each
         // receiver; a single scalar silently replaced the previous receiver
@@ -372,7 +403,13 @@ private:
     void resetIqStreamBookkeeping();
     int  achievedIqSampleRate() const;
     int  effectiveIqSampleRate() const;
+    int  hostIqOutputRate() const;
     void announceEffectiveIqSampleRate();
+    // Host IQ (no DAX IQ plane): the backend's tap per slice, kept equal to
+    // the slices the subscribed receivers resolve to. keepSliceId is one being
+    // armed whose client has not recorded the receiver yet.
+    bool armHostIq(int trx);
+    void reconcileHostIqTaps(int keepSliceId = -1);
 
     void syncClient(const ClientState& client);
     void syncLineOutClient(const ClientState& client);
@@ -427,12 +464,19 @@ private:
     QHash<QString,int> m_iqPanChannel;       // panId → TCI-owned DAX IQ channel
     int                m_announcedIqSampleRate{48000};
     int                m_iqSampleRate{48000};// shared requested rate, all TCI receivers
+    QSet<int>          m_hostIqSlices;       // slices whose backend IQ tap TCI holds on
+    int                m_hostIqRate{0};      // rate of the last host IQ frame, 0 = none yet
+    // Host IQ arrives at the radio's rate (its pan span); each tapped slice
+    // is brought down to the requested m_iqSampleRate before it is sent.
+    QHash<int, TciIqDecimator> m_hostIqDecimators;   // sliceId → its decimator
+    std::vector<float> m_hostIqOut;                  // reused output buffer
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
     // #4567: stable sliceId→trx receiver bindings. Acquired on sliceAdded,
     // released 500 ms after a genuine slice close (recreates reclaim their
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
+    TciExtensionSet m_extensions;
     std::function<void(int, bool)> m_centerLockSet;
     std::function<bool(int)> m_centerLockQuery;
     // #6352: the newest removal per slice id. A close timer that finds a newer

@@ -3,12 +3,12 @@ title: "RTTY Operation"
 slug: "/rtty-operation"
 description: "RTTY (Radio Teletype) is a digital mode that encodes text as two alternating audio tones — a Mark tone and a Space tone."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2
 
 :::
 
@@ -24,11 +24,15 @@ The radio's default Mark tone is **RTTY Mark Default** in **Settings → Radio S
 
 The radio stores a global default (`rtty_mark_default`) that applies to all new RTTY sessions. AetherSDR reads this from the radio on connect.
 
+The mark belongs to the slice (the radio's `rtty_mark`). The decoder's **Mark** and **Mark** on the VFO's **DSP** tab show and set the same value.
+
 ### Shift
 
 The shift is the frequency difference between the Mark and Space tones. The standard amateur RTTY shift is **170 Hz**. Other shifts exist (for example 850 Hz for military/commercial) but are uncommon on the amateur bands.
 
-The shift is set per slice via `rtty_shift` in the radio's slice status.
+The shift belongs to the slice (the radio's `rtty_shift`). The decoder's **Shift** and **Shift** on the VFO's **DSP** tab show and set the same value, and the panadapter's space line sits that far below the mark line.
+
+Changing the shift leaves the receive filter as it is, so a filter narrower than the shift does not pass both tones. For a wide shift, choose a filter width wider than the shift, for example **1K** for an 850 Hz shift; AetherSDR centers it between the mark and space tones.
 
 ## Using RTTY
 
@@ -40,9 +44,9 @@ When you switch to RTTY mode, AetherSDR displays two dashed vertical lines on th
 
 When you tune to an RTTY signal, position the two dashed lines so that the Mark line sits on the higher-frequency tone and the Space line sits on the lower-frequency tone. When both tones fall on their respective lines, the signal is properly tuned and can be decoded.
 
-<img src="/img/screens/rtty-ms-lines.png" width="680" alt="Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode." />
+<img src="/img/screens/rtty-ms-lines.png" width="680" alt="Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode. The flag's DSP tab is open: noise-filter buttons, the AetherRX and AetherTX launchers, a Parameters row, and Mark 2125 and Shift 170, each between a left and a right arrow button." />
 
-*RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband.*
+*RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband. The VFO's DSP tab is open, showing Mark 2125 and Shift 170.*
 
 ```
 Panadapter view (RTTY mode):
@@ -66,11 +70,11 @@ The M/S lines appear only in **RTTY** mode. A DIGL slice shows the normal carrie
 
 When the selected slice is in **RTTY**, a decoder pane opens below the waterfall and shows the decoded text (Baudot/ITA2, with LTRS/FIGS shift tracking). Its controls are listed under [Decoder controls](#decoder-controls).
 
-The stats bar updates about twice a second with the mark and space levels, the SNR and **LOCKED** / **UNLOCK**. Mark, Shift, Baud, REV and Sens are remembered.
+The stats bar updates about twice a second with the mark and space levels, the SNR and **LOCKED** / **UNLOCK**. Baud, REV and Sens are remembered. Mark and Shift are not: they are the slice's mark and shift, which the radio holds, and a new slice starts at a 170 Hz shift.
 
-<img src="/img/screens/rtty-decoder-pane.png" width="1331" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
+<img src="/img/screens/rtty-decoder-pane.png" width="1226" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: 2125, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
 
-*The RTTY decoder pane under the waterfall.*
+*The RTTY decoder pane under the waterfall, with Sens raised to about 38.*
 
 #### Which audio is decoded
 
@@ -104,8 +108,8 @@ See [DAX Virtual Audio](./dax-virtual-audio.md) and [CAT Control](./cat-control.
 
 | Control | Options | What it does |
 |---|---|---|
-| **Mark** | **Auto**, 2125, 2210, 1700, 1275, 1000, 915, 850, 500 Hz | The Mark tone. **Auto** follows the slice's mark setting from the radio, live. |
-| **Shift** | 45, 50, 75, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz | Mark-to-space shift |
+| **Mark** | 500, 850, 915, 1000, 1275, 1700, **2125**, 2210 Hz | The slice's Mark tone, the same value as **Mark** on the VFO's **DSP** tab. A mark set there in 25 Hz steps (for example 2150 Hz) is listed as its own entry. |
+| **Shift** | 45, 50, 75, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz | The slice's mark-to-space shift, the same value as **Shift** on the VFO's **DSP** tab; the panadapter's space line follows it. A shift set there in 5 Hz steps (for example 175 Hz) is listed as its own entry. |
 | **Baud** | **45.45**, 50, 75, 100, 110, 150, 300 | Symbol rate |
 | **REV** | On / off | Reverse polarity — space above mark (inverted signal) |
 | **Sens** | 0–100 (default 0) | Display squelch: hides characters the decoder is not confident about, so noise between transmissions doesn't fill the pane. 0 shows everything; about 38 hides what the stats bar calls UNLOCK; 100 keeps only near-certain copy. Display only — nothing is retuned. |

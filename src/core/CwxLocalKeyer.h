@@ -42,6 +42,9 @@ public:
     // key-up when the queue has drained, never after stop(); lock-free receiver.
     void setOnDrained(std::function<void()> cb);
 
+    // True when the whole message can be keyed with this encoder.
+    static bool canEncode(const QString& text);
+
     // Append a transmission segment.  Spawns the worker thread on first use; if
     // a segment is already playing, the new text is queued and plays when the
     // current one finishes.

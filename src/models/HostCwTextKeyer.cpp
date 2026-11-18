@@ -4,183 +4,96 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
-#include <QMetaObject>
-
+#include <algorithm>
 #include <chrono>
+#include <functional>
 #include <utility>
 
 namespace AetherSDR {
 
-HostCwTextKeyer::HostCwTextKeyer(RadioModel* model, Ended ended)
+HostCwTextKeyer::HostCwTextKeyer(RadioModel* model, QString source)
     : m_model(model)
-    , m_ended(std::move(ended))
+    , m_source(std::move(source))
 {}
 
 HostCwTextKeyer::~HostCwTextKeyer()
 {
-    close();
-}
-
-int HostCwTextKeyer::pendingChars() const
-{
-    int n = m_keyer ? m_keyer->pendingChars() : 0;
-    for (const Waiting& message : m_waiting) {
-        n += static_cast<int>(message.text.size());
-    }
-    return n;
+    stop();
+    m_producer.invalidate();
 }
 
 bool HostCwTextKeyer::admitsLength(int chars) const
 {
-    return chars > 0 && chars <= kMaxMessageChars && pendingChars() + chars <= kMaxPendingChars;
+    const int pending = m_queuedChars + (m_keyer ? m_keyer->pendingChars() : 0);
+    return chars <= kMaxMessageChars && pending + chars <= kMaxPendingChars;
 }
 
-bool HostCwTextKeyer::playingFor(const TxCoordinator::Request& sender) const
+void HostCwTextKeyer::noteQueued(int chars)
 {
-    return m_run && m_sender.sameRequest(sender);
+    m_queuedChars += chars;
 }
 
-bool HostCwTextKeyer::play(const TxCoordinator::Request& sender, const QString& text, int wpm,
-                           TxCoordinator::Completion done)
+bool HostCwTextKeyer::send(const QString& text)
 {
-    if (m_closed || !m_model || text.isEmpty() || wpm <= 0 || (m_run && !m_sender.sameRequest(sender))) {
+    m_queuedChars = std::max(0, m_queuedChars - static_cast<int>(text.size()));
+    if (m_closed || !m_model || text.isEmpty() || !admitsLength(static_cast<int>(text.size()))
+        || m_model->hostCwTextRefusal() != RadioModel::HostCwTextRefusal::None) {
         return false;
     }
-    if (!m_run) {
-        m_producer = m_model->registerTxProducerFor(sender);
+    // A reconnect or stop() invalidates the input; elements derived from it
+    // can then no longer key, so the next send starts a fresh run.
+    if (!m_keyer || !m_input.valid()) {
+        m_keyer.reset();
+        if (!m_producer.valid()) {
+            m_producer = m_model->registerTxProducer();
+        }
         m_input = m_producer.request();
         if (!m_input.valid()) {
-            m_producer.invalidate();
-            m_producer = {};
-            m_input = {};
             return false;
         }
-        m_sender = sender;
-        m_run = std::make_shared<char>();
         m_keyer = std::make_unique<CwxLocalKeyer>();
-        const std::weak_ptr<char> run = m_run;
-        // Model thread. A live run token means `this` is alive: endRun() drops it before the keyer goes.
-        const std::function<void()> onRefused = [this, run] { if (!run.expired()) { refused(run); } };
-        RadioModel* model = m_model.data();
-        // Worker thread: derive() and the queued hops take no model state.
+        m_run = std::make_shared<char>();
+        // A refused key-down ends the message, once, and only for the run it
+        // belongs to: the token dies with stop(), so a stale refusal is inert.
+        // Runs on the model thread; `this` outlives every live token.
+        const std::function<void()> refused = [this, run = std::weak_ptr<char>(m_run)] {
+            if (run.lock()) {
+                stop();
+            }
+        };
+        // Worker thread: derive() and the queued hop take no model state.
         m_keyer->setOnKeyDownChange(
-            [model, input = m_input, onRefused, element = TxCoordinator::Request{}](
+            [model = m_model.data(), input = m_input, source = m_source, refused,
+             element = TxCoordinator::Request{}](
                 bool down, std::chrono::steady_clock::time_point when) mutable {
                 if (down) {
                     element = input.derive();
                 }
-                model->queueProducerCwKeyEdge(element, down, QStringLiteral("host-cw-text"), 0, 0, when,
-                                              /*hostTextGates=*/true,
-                                              down ? onRefused : std::function<void()>{});
+                model->queueProducerCwKeyEdge(element, down, source, 0, 0, when,
+                                              /*hostTextGates=*/true, down ? refused : std::function<void()>{});
             });
-        // Queued behind the run's last key-up, so the model sees that edge first.
-        m_keyer->setOnDrained([model, this, run] {
-            QMetaObject::invokeMethod(model, [this, run] { if (!run.expired()) { drained(run); } }, Qt::QueuedConnection);
-        });
     }
-    m_done.push_back(std::move(done));
-    m_keyer->start(text, wpm);
+    m_keyer->start(text, m_model->transmitModel().cwSpeed());
     return true;
 }
 
-bool HostCwTextKeyer::hold(Waiting message)
-{
-    if (m_closed || message.text.isEmpty()) {
-        return false;
-    }
-    int at = static_cast<int>(m_waiting.size());
-    for (int i = at - 1; i >= 0; --i) {
-        if (m_waiting.at(i).sender.sameRequest(message.sender)) {
-            at = i + 1;
-            break;
-        }
-    }
-    m_waiting.insert(at, std::move(message));
-    return true;
-}
-
-std::optional<HostCwTextKeyer::Waiting> HostCwTextKeyer::takeNext()
-{
-    while (!m_waiting.isEmpty()) {
-        if (!m_waiting.front().sender.valid()) {
-            m_waiting.removeFirst();
-            continue;
-        }
-        if (m_run && !m_sender.sameRequest(m_waiting.front().sender)) {
-            return std::nullopt;
-        }
-        return m_waiting.takeFirst();
-    }
-    return std::nullopt;
-}
-
-void HostCwTextKeyer::dropWaiting(const TxCoordinator::Request& sender)
-{
-    m_waiting.removeIf([&sender](const Waiting& message) { return message.sender.sameRequest(sender); });
-}
-
-void HostCwTextKeyer::endRun()
+void HostCwTextKeyer::stop()
 {
     // Fence first: an element the worker emits from here on derives from a
     // dead input and is refused at admission.
     m_producer.discardInputs();
     m_run.reset();
     m_input = {};
-    m_keyer.reset();   // joins the worker; its last key-up finds a closed request
+    m_keyer.reset();   // joins the worker; its final key-up finds a closed request
     if (m_model) {
         m_model->abortTxProducerInputs(m_producer, TransmitModel::PttSource::Mox);
-    }
-    m_producer.invalidate();
-    m_producer = {};
-    m_sender = {};
-    std::vector<TxCoordinator::Completion> done = std::exchange(m_done, {});
-    done.clear();   // the sender's Cwx deliveries finish now
-}
-
-void HostCwTextKeyer::drained(const std::weak_ptr<char>& run)
-{
-    if (!run.lock() || !m_keyer || m_keyer->pendingChars() > 0) {
-        return;
-    }
-    const TxCoordinator::Request sender = m_sender;
-    endRun();
-    if (m_ended) {
-        m_ended(sender, false);
-    }
-}
-
-void HostCwTextKeyer::refused(const std::weak_ptr<char>& run)
-{
-    if (!run.lock()) {
-        return;
-    }
-    const TxCoordinator::Request sender = m_sender;
-    endRun();
-    if (m_ended) {
-        m_ended(sender, true);
-    }
-}
-
-void HostCwTextKeyer::stop(const TxCoordinator::Request& sender)
-{
-    dropWaiting(sender);
-    if (playingFor(sender)) {
-        endRun();
-    }
-}
-
-void HostCwTextKeyer::stopAll()
-{
-    m_waiting.clear();
-    if (m_run) {
-        endRun();
     }
 }
 
 void HostCwTextKeyer::close()
 {
     m_closed = true;
-    stopAll();
+    stop();
 }
 
 } // namespace AetherSDR

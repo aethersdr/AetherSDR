@@ -60,6 +60,20 @@ void CwxLocalKeyer::setOnDrained(std::function<void()> cb)
     m_onDrained = std::move(cb);
 }
 
+bool CwxLocalKeyer::canEncode(const QString& text)
+{
+    if (text.trimmed().isEmpty()) {
+        return false;
+    }
+    const auto& table = morseTable();
+    for (const QChar ch : text.toUpper()) {
+        if (ch != QLatin1Char(' ') && !table.contains(ch)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void CwxLocalKeyer::start(const QString& text, int wpm)
 {
     if (text.isEmpty() || wpm <= 0) return;

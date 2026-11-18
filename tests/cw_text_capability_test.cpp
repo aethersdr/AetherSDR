@@ -1,12 +1,11 @@
 // "Can this radio send CW text?" (#7146 part 1): the hostCwKeyingControl record
 // and RadioModel::hasHostCwTextKeyer() / hasCwTextKeyer(). Pins what every
-// backend declares and that no text-CW surface has moved to the new check yet,
-// so a radio with no text buffer is still refused everywhere.
+// backend declares and that no text-CW surface has moved to hasCwTextKeyer() yet
+// (rigctld reaches the host keyer through hasHostCwTextKeyer(), #7106).
 // Socket-free: real backends are only constructed and asked for capabilities();
 // the model gets an injected stub backend. Nothing is opened or keyed.
 
 #include "TestSettingsProfile.h"
-#include "core/RigctlProtocol.h"
 #include "core/SmartCatProtocol.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/SliceDelta.h"
@@ -175,17 +174,12 @@ void testNoRecordNoText()
     check("no record, no buffer: hasCwTextKeyer() is false", !f.radio.hasCwTextKeyer());
 }
 
-// Part 1 moves no caller: on the HL2 every text surface still answers that the
-// radio has no text keyer, and nothing reaches the backend.
+// Part 1 moves no caller to hasCwTextKeyer(). rigctld send_morse reaches the
+// host keyer through hasHostCwTextKeyer() since #7106 (rigctl_host_cw_text_test);
+// SmartCAT KY still answers that the radio has no text keyer.
 void testNoSurfaceMovedYet()
 {
     Fixture f(hl2Capabilities(true), QStringLiteral("hl2"));
-    RigctlProtocol rigctl(&f.radio);
-    rigctl.setSliceIndex(0);
-    check("rigctld send_morse still answers RIG_ENAVAIL",
-          rigctl.handleLine(QStringLiteral("b TEST")).trimmed() == QLatin1String("RPRT -11"));
-    check("rigctld stop_morse still answers RIG_ENAVAIL",
-          rigctl.handleLine(QStringLiteral("\\stop_morse")).trimmed() == QLatin1String("RPRT -11"));
     SmartCatProtocol smartCat(&f.radio);
     check("SmartCAT KY set still answers ?;", smartCat.processCommand(QStringLiteral("KY TEST")) == QLatin1String("?;"));
     check("SmartCAT KY query still answers ?;", smartCat.processCommand(QStringLiteral("KY")) == QLatin1String("?;"));
