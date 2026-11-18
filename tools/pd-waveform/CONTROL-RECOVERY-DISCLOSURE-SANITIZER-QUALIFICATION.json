@@ -1,0 +1,65 @@
+{
+  "recorded_utc": "2026-11-18T13:19:45.977166+00:00",
+  "tested_implementation_commit": "106057ccf6c56bd26e4183386c9987117e2c314d",
+  "status": "scoped Linux installer implementation sanitizer qualification passed",
+  "production_ready": false,
+  "platform": "Linux host with Qt6.12 offscreen, injected transports and private test settings",
+  "sanitizers": [
+    "AddressSanitizer",
+    "UndefinedBehaviorSanitizer",
+    "LeakSanitizer"
+  ],
+  "instrumented_shared_TUs": [
+    "src/core/AetherPDPackage.cpp",
+    "src/core/AetherPDInstallationCoordinator.cpp",
+    "src/models/AetherPDInstallationModel.cpp"
+  ],
+  "instrumented_target_object_counts": {
+    "aetherpd_package_test": 2,
+    "aetherpd_installation_dialog_test": 8
+  },
+  "test_executables_passed": 2,
+  "tests": [
+    {
+      "target": "aetherpd_package_test",
+      "exit": 0,
+      "passed": true
+    },
+    {
+      "target": "aetherpd_installation_dialog_test",
+      "exit": 0,
+      "passed": true
+    }
+  ],
+  "instrumented_implementation_symbols_verified": {
+    "shared-0.o": {
+      "ASan": true,
+      "UBSan": true
+    },
+    "shared-1.o": {
+      "ASan": true,
+      "UBSan": true
+    },
+    "shared-2.o": {
+      "ASan": true,
+      "UBSan": true
+    }
+  },
+  "ASan_and_UBSan_dynamic_runtime_linkage_verified": true,
+  "leak_detection_remained_enabled": true,
+  "scope_limit": "Three selected shared implementation TUs and all selected target-owned TUs instrumented; other core/Qt/support dependencies remain uninstrumented. Not whole-application or on-radio sanitization.",
+  "native_platform_builds_still_separate_and_pending": true,
+  "radio_contacts": [],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "OS_keychain_writes": [],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-disclosure-sanitizer-components.tar.gz",
+    "bytes": 15240275,
+    "sha256": "45460d3491811f6fd8d67570d19a7f57ad608fe79fe3cd247e75c231e121e21a",
+    "members": 61,
+    "all_members_verified": true
+  },
+  "evidence": "CONTROL-RECOVERY-DISCLOSURE-SANITIZER-EVIDENCE.json.gz",
+  "evidence_sha256": "c36908e2b8fc257543ac81fb6c454a0934c6f14fed5890d1d4a94bc32261f942"
+}
