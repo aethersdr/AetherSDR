@@ -348,7 +348,15 @@ public:
     // pre-shaped tones that a voice chain would distort. DAX is never affected.
     void feedTciTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
     // Any thread.
-    void setTciTxVoiceDsp(bool on) { m_tciTxVoiceDsp.store(on, std::memory_order_release); }
+    // Every off-to-on switch is counted, so the audio thread resets the chain
+    // even when an off/on pair falls between two TCI blocks.
+    void setTciTxVoiceDsp(bool on)
+    {
+        if (on && !m_tciTxVoiceDsp.load(std::memory_order_acquire)) {
+            m_tciTxVoiceDspEnables.fetch_add(1, std::memory_order_acq_rel);
+        }
+        m_tciTxVoiceDsp.store(on, std::memory_order_release);
+    }
     bool tciTxVoiceDsp() const { return m_tciTxVoiceDsp.load(std::memory_order_acquire); }
     // Blocks the TCI voice chain has produced since construction (any thread).
     quint64 tciTxVoiceBlocks() const { return m_tciTxVoiceBlocks.load(std::memory_order_relaxed); }
@@ -1492,8 +1500,10 @@ private:
     std::unique_ptr<TxVoiceProcessor>   m_tciTxVoiceProcessor;
     std::atomic<bool> m_tciTxVoiceDsp{false};
     std::atomic<quint64> m_tciTxVoiceBlocks{0};
-    // Audio thread only: the processor is reset each time the option turns on.
-    bool m_tciTxVoiceDspWasOn{false};
+    // Off-to-on switches (any thread) and the count the audio thread last
+    // reset for (audio thread only): the processor is reset when they differ.
+    std::atomic<quint32> m_tciTxVoiceDspEnables{0};
+    quint32 m_tciTxVoiceDspSeenEnables{0};
     // Audio-thread only: prevents duplicate queued recovery work after the
     // impossible matched-egress frame-count mismatch.
     bool m_txVoiceEgressRecoveryQueued{false};

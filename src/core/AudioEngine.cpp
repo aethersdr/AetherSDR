@@ -1973,8 +1973,14 @@ AudioEngine::AudioEngine(QObject* parent)
     m_txVoiceProcessor->setProcessors(txProcessors);
     m_txVoiceProcessor->prepare(DEFAULT_SAMPLE_RATE, 16384);
     // TCI TX audio is always 24 kHz (TciIoWorker resamples to it), so this one
-    // is prepared once and never follows the capture device.
-    m_tciTxVoiceProcessor->setProcessors(txProcessors);
+    // is prepared once and never follows the capture device. It gets the
+    // voice stages only: the test tone and the Quindar tones are mic-path
+    // features, and sharing their one-shot state would let a TCI over
+    // consume or double them.
+    TxVoiceProcessor::Processors tciTxProcessors = txProcessors;
+    tciTxProcessors.testTone = nullptr;
+    tciTxProcessors.quindar = nullptr;
+    m_tciTxVoiceProcessor->setProcessors(tciTxProcessors);
     m_tciTxVoiceProcessor->prepare(DEFAULT_SAMPLE_RATE, 16384);
     m_wsprPumpTimer = new QTimer(this);
     m_wsprPumpTimer->setTimerType(Qt::PreciseTimer);
@@ -10552,7 +10558,6 @@ void AudioEngine::foldTciStereoToMono(QByteArray& interleavedStereoFloat32)
 void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::Context& context)
 {
     if (!m_tciTxVoiceDsp.load(std::memory_order_acquire) || inPcm.isEmpty()) {
-        m_tciTxVoiceDspWasOn = false;
         feedDaxTxAudio(inPcm, context);
         return;
     }
@@ -10560,10 +10565,11 @@ void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::C
     if (m_wsprBeacon && m_wsprBeacon->isActive()) {
         return;
     }
-    if (!m_tciTxVoiceDspWasOn) {
+    const quint32 enables = m_tciTxVoiceDspEnables.load(std::memory_order_acquire);
+    if (enables != m_tciTxVoiceDspSeenEnables) {
         // Resampler and stage state from before the switch belong to other audio.
         m_tciTxVoiceProcessor->reset();
-        m_tciTxVoiceDspWasOn = true;
+        m_tciTxVoiceDspSeenEnables = enables;
     }
 
     QByteArray block = inPcm;

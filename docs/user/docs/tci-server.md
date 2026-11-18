@@ -239,7 +239,8 @@ TCI transmit audio normally goes to the radio as the client sent it, which is wh
 
 - Off by default. Off, the transmit path is unchanged.
 - The stages, their order and their settings are the microphone's; there is no second chain to configure.
-- The PC mic gain and RNNoise are not applied, because the client sets its own level.
+- The PC mic gain and RNNoise are not applied inside the chain, because the client sets its own level. On a Hermes-Lite 2 the mic slider still scales the chain's output, as it does with this option off; if the compressor adds makeup gain, lower the slider.
+- The TX test tone and the Quindar tones belong to the microphone path and are not added to TCI audio.
 - Left and right are folded to mono before the chain.
 - DAX transmit audio never passes through it.
 - It changes only the audio. When and how the radio keys does not change.
