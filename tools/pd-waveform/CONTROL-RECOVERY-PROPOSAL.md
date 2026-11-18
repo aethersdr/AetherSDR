@@ -1,10 +1,15 @@
 # Bounded control-service recovery proposal
 
-This is an offline draft on `draft/aetherpd-control-recovery-20261118`, based
-on `14a9c1f1e23698727aaba152ce115294829d401a`. It is not installed, selected
-by the runtime builder, or merged into the qualified feature branch. The
-operator's choice between automatic control recovery and explicit recovery
-remains pending. This proposal does not resolve the whole-radio lockup.
+The operator selected bounded automatic control recovery. The authenticated
+candidate from implementation `453ba2175` is installed on the FLEX-8600 and
+has passed receive-only idle and active-session control-crash recovery. See the
+[installed qualification](./CONTROL-RECOVERY-INSTALLED-QUALIFICATION.json).
+The shipping catalogue and production release have not been promoted. Full RF,
+reboot, minimum-platform and release qualification remain open.
+
+The separate IPv6 preload's startup override is disabled with exact rollback
+preserved. The running firmware still maps that library until the coordinated
+cold start; the original whole-radio lockup's cause remains unproven.
 
 ## Fixed policy
 
@@ -98,7 +103,8 @@ enabled, complete ARMv7/ARM64 releases and upgrade distributions, and an ARM64
 first-install distribution, reproduce byte for byte from two source/output
 paths and compiler caches. The development signing seed remains in RAM/pipes.
 These artifacts use the retained development publisher, not a shipping trust
-catalogue, and have not been installed.
+catalogue. The ARM64 upgrade is installed for receive-only qualification; the
+ARMv7 upgrade and ARM64 first-install delivery remain offline-qualified only.
 
 The real native verifier admits both the previous and candidate releases and
 the matching worker. The older verifier refuses the optional policy. The
@@ -121,10 +127,12 @@ no supported 6000 first-install adapter or ordinary 6000 installation claim in
 this delivery proof. The workstation lifecycle fixture's capability refusals,
 the operator's policy choice, and installed qualification remain open.
 
-Before promotion, resolve the operator's recovery choice, independently review
-the authority and compatibility changes, qualify the exact loaded policy and
-ordinary-user receive-only crash/restart on the 8600, verify explicit Stop and
-rate-limit exhaustion, then complete the installed update/rollback and actual
-6300 checks. RF and automated reboots remain held while the separate whole-radio
-hang and firmware-baseline decision remain unresolved. No RF, radio reboot,
-radio service changes or persistent installation occurred for this proposal.
+Before promotion, independently review the authority and compatibility changes,
+qualify intentional service-stop suppression and rate-limit exhaustion, and
+complete installed rollback, cold/software-reboot and actual 6300 checks.
+Receive-only control recovery and explicit DAX IQ restart are proven on the
+installed development candidate. The corrected stopped-frontend audit requires
+only exact capability-free frontend roles, ordinary scheduling, no packet FDs,
+and retired DSP/capture/ARP state. RF and software-reboot tests remain held;
+physical cold-start coordination is pending. The original offline reports
+retain their earlier scope and negative evidence.

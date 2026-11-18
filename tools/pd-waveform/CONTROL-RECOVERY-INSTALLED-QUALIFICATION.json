@@ -1,0 +1,110 @@
+{
+  "recorded_utc": "2026-11-18T12:26:02.267140+00:00",
+  "status": "installed receive-only recovery qualified on8600; coordinated stock-baseline cold start pending",
+  "operator_policy_approved": true,
+  "installed": true,
+  "production_ready": false,
+  "runtime_implementation_commit": "453ba2175f1e015c6fe867a3b7aa6255ff7defa1",
+  "offline_delivery_evidence_commit": "1a867cf68c2102523b06bd8b77a89dfb7d84fd38",
+  "selected_release_blake2b_256": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+  "desktop_source_head": "14a9c1f1e23698727aaba152ce115294829d401a",
+  "desktop_engine_implementation_commit": "75ab268527293f30e74acee221759adce42087b5",
+  "desktop_pid_at_observation": 1504462,
+  "desktop_binary_sha256": "c0725b476b67de6a76793ae3551c3b2da730621061ed1428a8f73227ee54c300",
+  "normal_GUI_update": {
+    "committed": true,
+    "elapsed_s": 88.82250979199307,
+    "diagnostics_used_for_delivery": false,
+    "temporary_installer_cleanup_confirmed_by_UI": true,
+    "existing_authenticated_owner_remained_usable": true
+  },
+  "loaded_policy": {
+    "Restart": "on-failure",
+    "RestartUSec": "5s",
+    "StartLimitIntervalUSec": "1min",
+    "StartLimitBurst": 3,
+    "StartLimitAction": "none"
+  },
+  "idle_fault": {
+    "automatic_restart_observed_s": 5.359636390989181,
+    "manual_control_start_commands": [],
+    "no_correction_session_created": true
+  },
+  "active_session_fault": {
+    "automatic_restart_observed_s": 5.288279970001895,
+    "all13original_owned_processes_retired_s": 1.140411161002703,
+    "manual_control_start_commands": [],
+    "no_correction_session_recreated": true,
+    "owned_ARP_and_journal_retired": true,
+    "fresh_explicit_Start_and_IQ_after_fault": true
+  },
+  "receive_proof": {
+    "FDX_enabled": false,
+    "transport": "local_dax_iq",
+    "channel": 4,
+    "complex_samples_per_capture": 16384,
+    "sample_rate_hz": 48000,
+    "raw_bytes_per_capture": 131072,
+    "captures": 3,
+    "first_ready_s": 2.2476269240141846,
+    "all_samples_finite_and_not_all_zero": true,
+    "final_Stop_confirmed": true
+  },
+  "stopped_frontend_contract": {
+    "observed_roles": [
+      "flex-tailnet-shim",
+      "pd-boot",
+      "flex-tailnet-shim"
+    ],
+    "all_UID78666_GID20_capability_free_NNP1": true,
+    "ordinary_main_thread_scheduling": true,
+    "no_packet_socket_FDs": true,
+    "DSP_and_capture_helpers_absent": true,
+    "ARP_absent_and_journal_empty": true,
+    "explanation": "Stop retains the capability-free private channel for cleanup status; explicit successor/revocation closes it. The original one-process audit assumption was incorrect."
+  },
+  "baseline_staging": {
+    "stock_command_selected_for_next_firmware_start": true,
+    "running_preload_still_mapped_at_pre_cold_snapshot": true,
+    "override_original_sha256": "c11c2457b2dc6528987ad2713113f14adeedd32b56191cff6322126f986ebf16",
+    "rollback_path": "/etc/systemd/system/smartsdr.service.d/.aetherpd-preload-rollback-20261118/90-nereus-ipv6.conf",
+    "firmware_pid_unchanged": 1143,
+    "firmware_start_ticks_unchanged": 2509,
+    "boot_id_unchanged": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "launcher_library_and_vendor_unit_unchanged": true,
+    "enabled_AetherPD_boot_link_verified": true,
+    "cold_activation_confirmed": false
+  },
+  "negative_evidence": [
+    "Desktop rebuild first refused because the default ccache directory was read-only; a project-local compiler cache passed.",
+    "First desktop restart preflight refused stock APD enabled before any app close; receive-only installation then preserved it. The normal APD button disabled it before explicit AetherPD Start and it was left disabled.",
+    "Initial read-only firmware start-tick field used whitespace splitting and is invalid for a comm containing spaces; no signal used it. Staging and fault guards use correct post-comm parsing and verify2509.",
+    "Initial pre-cold audit required one process after Stop and refused the retained two-process frontend. Its receipt is preserved; corrected audit checks exact roles/hashes/cgroups, zero privileges, no packet FDs, no DSP/capture and retired ARP."
+  ],
+  "RF_commands": [],
+  "reboot_commands": [],
+  "firmware_signals": [],
+  "temporary_test_bridge": {
+    "used_for_baseline_maintenance_and_fault_injection_only": true,
+    "all_completed_native_job_containers_and_staging_removed": true,
+    "helper_listener_closed_at_final_snapshot": true,
+    "ordinary_update_and_Start_Stop_did_not_use_it": true
+  },
+  "timing_scope": "Native monotonic time from PID-fd signal to observed systemd active state and local API TCP readiness. Start readiness is separate. Neither measures FPGA-to-process packet latency.",
+  "remaining": [
+    "Operator-coordinated cold start: verify stock firmware process, preload absent, new package/owner persistence, automatic control startup and ordinary local DAX IQ.",
+    "Bounded live shutdown trace and software-reboot qualification on stock baseline; original whole-radio lockup cause remains unproven.",
+    "Intentional service-stop suppression, rate-limit exhaustion and installed rollback/fresh first-install qualification for this policy.",
+    "Final candidate keyed fault, unexplained alignment/cold-start, speech/duty, integrated analyzer and stockAPD RF comparison gates.",
+    "Actual6300 first-install privilege entry, UI/kernel/manager/disk/CPU/RF qualification and independent shipping review/catalogue."
+  ],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/approved-recovery-adoption-components.tar.gz",
+    "bytes": 201577,
+    "sha256": "a7c7625291cda8256844681ada9fa2f40acfecf883fbff914a745a1f2020b12e",
+    "members": 70,
+    "all_members_verified": true
+  },
+  "evidence": "CONTROL-RECOVERY-INSTALLED-EVIDENCE.json.gz",
+  "evidence_sha256": "fa673f34ec2588d75e77b7918047def757621335886e1963906c32303760395f"
+}

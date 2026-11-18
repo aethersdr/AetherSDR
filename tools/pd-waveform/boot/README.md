@@ -1,8 +1,10 @@
 # Authenticated AetherPD boot payload (development)
 
-The optional [bounded control-recovery proposal](../CONTROL-RECOVERY-PROPOSAL.md)
-is an isolated offline draft. Existing runtime builds retain manual control
-recovery; the new policy is not enabled or qualified on a radio.
+The [bounded control-recovery implementation](../CONTROL-RECOVERY-PROPOSAL.md)
+has an operator-selected development candidate installed on the8600 with
+receive-only automatic crash recovery and explicit DAX IQ restart qualified.
+Production catalogue, RF, reboot and actual6000 qualification remain open.
+Generic unit/release builders retain their explicit compatibility options.
 
 Independent ARM64 first installation has receive-only FLEX-8600 qualification.
 It uses an explicit fresh plan and creates a new local identity without copying
