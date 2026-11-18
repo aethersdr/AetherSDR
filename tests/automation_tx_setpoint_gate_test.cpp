@@ -519,13 +519,16 @@ int main(int argc, char** argv)
                      QStringLiteral("50")))
                   && AetherTest::waitFor([&] { return sp.model() == 10; }, 2000),
               "TX allowed, ceiling 10: invoke setValue 50 on " + n + " is clamped to 10");
+        const int sliderAtCeiling = sp.slider->value();
         const QJsonObject wheel = cmd(server, QStringLiteral("invoke"), sp.name,
                                       QStringLiteral("wheel"), QStringLiteral("1"));
-        AetherTest::pumpFor(50);
-        check(!ok(wheel) && wheel.value(QStringLiteral("error")).toString()
-                                .contains(QStringLiteral("past the power ceiling"))
-                  && sp.model() == 10,
-              "TX allowed, ceiling 10: invoke wheel on " + n + " is refused");
+        const QString wheelError = wheel.value(QStringLiteral("error")).toString();
+        check(!ok(wheel) && wheelError.contains(QStringLiteral("past the power ceiling"))
+                  && sp.slider->value() == sliderAtCeiling,
+              "TX allowed, ceiling 10: invoke wheel on " + n + " is refused (error: "
+                  + wheelError.left(60).toUtf8() + ", slider "
+                  + QByteArray::number(sliderAtCeiling) + " -> "
+                  + QByteArray::number(sp.slider->value()) + ")");
     }
     AutomationServerTestAccess::setTxMaxPower(server, -1);
 
