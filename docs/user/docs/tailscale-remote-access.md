@@ -760,9 +760,16 @@ revoked legacy sign-in token.
 Matching builds on the same computer coordinate versioned keychain changes.
 A stale legacy sign-in rejection or completed disconnect cannot delete a
 credential another matching instance saved later, including an identical token.
-Finish **Remote Access** setup in one instance before starting it in another,
-and close other builds first: keychain coordination does not serialize pending
-radio-enrollment requests between instances. Existing unversioned tokens remain
+Matching instances for the same OS user also allow one sign-in setup per radio
+at a time. The request keeps its reservation until the credential-save result,
+even if its window closes. A competing attempt reports that setup is busy or
+the local lock is unavailable; it sends no sign-in request and does not retry
+automatically. Let setup finish, then try again. Each admitted attempt reloads
+the current credential before sending. A managed reply that changes the
+installation or owner token is rejected while the saved credential is kept.
+Other computers and older builds do not share this coordination. Close other
+builds, and finish setup before installing or updating the service.
+Existing unversioned tokens remain
 readable; a legacy rejection may clear the window's sign-in state while keeping
 that saved credential when its version cannot be verified.
 Loads of persistent credentials read the keychain again. Pending or failed

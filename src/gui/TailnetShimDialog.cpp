@@ -894,7 +894,7 @@ void TailnetShimDialog::join()
     }
     setBusy(true, tr("Joining the tailnet…"));
     provision(key);
-    // The key leaves this process in the request above and is kept nowhere.
+    // Clear the entry; only the application-owned setup request retains it.
     m_keyEdit->clear();
 }
 
@@ -920,6 +920,15 @@ void TailnetShimDialog::provision(const QString& authKey)
         showError(tr("Update the managed AetherPD service before signing in."));
         return;
     }
+    m_autoSignInTried = true;
+    const std::shared_ptr<void> lease = m_provisioningAuthority(m_radioSerial);
+    if (!lease) {
+        m_signingIn = false;
+        setBusy(false);
+        showError(tr("Remote access setup is already in progress, or its local lock is unavailable. "
+                     "Let the setup finish before trying again."));
+        return;
+    }
     m_messageLabel->hide();
     hideSignIn();
     m_client.retirePendingReplies();
@@ -928,24 +937,8 @@ void TailnetShimDialog::provision(const QString& authKey)
     transaction->setRadioAddress(m_apiAddress);
     const QPointer<TailnetShimDialog> window(this);
     const QString serial = m_radioSerial;
-    connect(transaction, &TailnetShimClient::provisioned, qApp,
-            [transaction, window, serial, generation](const TailnetShimProvisionReply& reply) {
-        // A token the keychain refuses is kept for this session only; the
-        // log says why. The window doesn't: there is nothing to act on.
-        TailnetShimTokenStore::save(serial, reply.adminToken, qApp,
-                                    [](bool persisted, const QString& error) {
-            if (!persisted) {
-                qWarning("Remote access: the new admin token was not saved to the keychain: %s",
-                         qPrintable(error));
-            }
-        });
-        if (window && window->m_client.replyGeneration() == generation) {
-            window->onProvisioned(reply);
-        }
-        transaction->deleteLater();
-    });
     connect(transaction, &TailnetShimClient::requestFailed, qApp,
-            [transaction, window, generation](const QString& operation, const QString& message,
+            [transaction, window, generation, lease](const QString& operation, const QString& message,
                                   bool unauthorized, const QByteArray& credential) {
         if (window && window->m_client.replyGeneration() == generation) {
             window->onRequestFailed(operation, message, unauthorized, credential);
@@ -955,10 +948,54 @@ void TailnetShimDialog::provision(const QString& authKey)
     // An older container still keeps a Who may connect list: rejoining
     // passes it through rather than silently widening access. 0.5.0
     // ignores it.
-    transaction->provision(authKey, m_hostnameEdit->text().trimmed(),
-                           m_status ? m_status->allow : QStringList{},
-                           tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
-                           m_shareDiscoveredCheck->isChecked(), m_adminToken);
+    const std::function<bool()> sessionCurrent = m_originalSessionCurrent;
+    const QString installation = m_status->installationId;
+    const QString hostname = m_hostnameEdit->text().trimmed();
+    const QStringList allow = m_status->allow;
+    const QStringList routes = tailnetshim::splitAllowList(m_extraDevicesEdit->text());
+    const bool shareDiscovered = m_shareDiscoveredCheck->isChecked();
+    TailnetShimTokenStore::load(serial, transaction,
+        [transaction, window, serial, generation, lease, sessionCurrent, installation,
+         authKey, hostname, allow, routes, shareDiscovered](const QString& token) {
+        if (!sessionCurrent() || (window && window->m_client.replyGeneration() != generation)) {
+            transaction->deleteLater();
+            return;
+        }
+        if (window) {
+            window->m_adminToken = token;
+            window->m_credentialRevision = TailnetShimTokenStore::revision(serial);
+        }
+        if (!installation.isEmpty() && token.isEmpty()) {
+            emit transaction->requestFailed(QStringLiteral("provision"),
+                tr("The managed owner credential could not be loaded. No sign-in was requested."), false, {});
+            return;
+        }
+        connect(transaction, &TailnetShimClient::provisioned, qApp,
+            [transaction, window, serial, generation, lease, installation, token](const TailnetShimProvisionReply& reply) {
+            if (reply.status.installationId != installation
+                || (!installation.isEmpty() && reply.adminToken != token)) {
+                emit transaction->requestFailed(QStringLiteral("provision"),
+                    tr("Remote access returned a different installation or owner credential. "
+                       "The saved credential was kept."), false, {});
+                return;
+            }
+            // The lease survives the network reply and a closed window until
+            // the backend save completes. Other instances cannot rotate a
+            // token while an earlier provisioning reply is still being saved.
+            TailnetShimTokenStore::save(serial, reply.adminToken, qApp,
+                [lease](bool persisted, const QString& error) {
+                if (!persisted) {
+                    qWarning("Remote access: the new admin token was not saved to the keychain: %s",
+                             qPrintable(error));
+                }
+            });
+            if (window && window->m_client.replyGeneration() == generation) {
+                window->onProvisioned(reply);
+            }
+            transaction->deleteLater();
+        });
+        transaction->provision(authKey, hostname, allow, routes, shareDiscovered, token);
+    });
 }
 
 void TailnetShimDialog::onProvisioned(const TailnetShimProvisionReply& reply)

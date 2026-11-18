@@ -9,6 +9,7 @@
 #include <QStringList>
 
 #include <optional>
+#include <memory>
 #include <utility>
 
 class QNetworkReply;
@@ -145,6 +146,10 @@ public:
     explicit TailnetShimClient(QObject* parent = nullptr, QNetworkAccessManager* network = nullptr);
     // The injected transport must outlive this client.
     TailnetShimClient(QNetworkAccessManager& network, QObject* parent = nullptr);
+
+    // Same-user setup admission across windows/processes, independent of the
+    // credential-store lease. Retain through the request and its token save.
+    static std::shared_ptr<void> acquireProvisioningLease(const QString& radioSerial);
 
     void setRadioAddress(const QHostAddress& address) { m_address = address; }
     // Retire earlier observations when a control changes remote identity,

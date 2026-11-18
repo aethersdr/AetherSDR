@@ -1,0 +1,180 @@
+{
+  "created_utc": "2026-11-18T01:06:51.965516+00:00",
+  "base_commit": "7502ee2e7faea1776f1e86c2690c90c94dd3ca8c",
+  "exact_source_sha256": {
+    "src/core/TailnetShimClient.cpp": "c180ce7e80b455132b137b3e02299a0cf5979042742b5ae71264e3a7de27ed62",
+    "src/core/TailnetShimClient.h": "3bd46ece07fc9545935943523ee1f8f6396d53e4d097c50a533ac133c2b94cb2",
+    "src/gui/TailnetShimDialog.cpp": "282cd9f2c403fe1ef69248a9120fbd72ea1aee3dcc30d312ed11198dc5662ba9",
+    "src/gui/TailnetShimDialog.h": "56d0c14a334671e38a100f02171e49747b39b77fded8c2bd962d4bcdca675261",
+    "tests/tailnet_shim_dialog_test.cpp": "94ce1bf45525cb29e200d33c041da785344395c21aba02b19ae6f08ad87b92d5",
+    "tests/tests.cmake": "26bdfcbaca5509f2ae819d452cb2d14a56ed35a42fb262bf4e740d86109df4f2",
+    "docs/user/docs/tailscale-remote-access.md": "263968283b9d99d4686677ad14d8331fb175db4a7eefae0768d0e4afca858d65"
+  },
+  "qualified_source_overlay_sha256": "b70583abbeebc43a713936e5ee629a77d5ce6aa895d0d8c01c12d2421c0df005",
+  "production_ready": false,
+  "running_desktop_contains_fix": false,
+  "qualified_claim": "On this Linux host, cooperating same-UID Remote Access windows/processes admit one provisioning setup per radio, retain authority through the issued-token save result, and reload credentials before sending. Actual cross-process locks and OS keychain were exercised with injected network replies only.",
+  "original_failures": [
+    "At base 7502ee2e7, two production windows could send overlapping provision requests; the new before test failed. The shim existing race-tested regression confirms that an unfinished legacy QR sign-in can be restarted with a different token.",
+    "At the intermediate admission implementation, a delayed claimable/error status restarted setup after a busy manual-key refusal. The added test failed before marking the attempt tried. The first needs_login vector did not meet automatic-sign-in eligibility and correctly did not reproduce this case."
+  ],
+  "implementation": {
+    "admission": "Nonblocking shared per-serial QLockFile authority via the existing validated UID namespace. Distinct from the credential-store transaction lock; no lock is taken on the radio.",
+    "lifetime": "Application-owned request and save completion retain admission after the window closes or the HTTP reply finishes. Busy/unavailable admission reports refusal before starting a provision request; no request is queued for automatic retry.",
+    "freshness": "Reload the keychain under setup admission before sending. Original-session retirement or a newer window operation during that load prevents the request.",
+    "managed_reply": "Refuse an unexpected installation ID or changed owner token before saving. The previously saved credential remains.",
+    "automatic_restart": "Mark an explicit setup attempt as tried before admission so a delayed public status cannot silently turn a busy refusal into QR provisioning.",
+    "bounds": "No empty/over-512-byte serial; existing bounded keychain admission and HTTP transfer limits. No new thread, dependency, GUI/core include or on-radio privilege."
+  },
+  "verification": {
+    "full_linux_AetherSDR_build": "passed; final-build.log",
+    "registered_CTests": "3/3 passed; final-test.log. Window test injects admission and transport; no OS keychain or process-lock files in that default test.",
+    "server_contract": "Existing TestANeverCompletedSignInCanBeStartedOverWithoutTheToken passed under go test -race, socket-free, no real tailnet. Initial sandbox cache setup failure retained separately.",
+    "real_process_cases": {
+      "normal": 7,
+      "sanitized": 7,
+      "names": [
+        "live_request",
+        "closed_window",
+        "pending_backend",
+        "explicit_retry",
+        "failed_request",
+        "different_radio",
+        "caller_crash"
+      ],
+      "all_disposable_entries_and_lockfiles_absent": true,
+      "all_recorded_fixture_children_terminal": true,
+      "network": "Injected QNetworkAccessManager replies through the production window/client; no HTTP server, radio, Tailscale or external network request.",
+      "backend": "Actual QtKeychain 0.18.0 / GNOME Keyring 51.1; Qt 6.12.0; Linux x86_64.",
+      "sanitizer_scope": "ASan/UBSan/LSan on the harness and changed window, client, token-store and persistence translation units. Unmodified linked application/Qt libraries are not asserted to be fully instrumented.",
+      "caller_crash_scope": "SIGKILL of a fixture caller before delivery of its injected reply; does not prove completion or recovery of a real remote operation after a crash."
+    },
+    "mutations": [
+      {
+        "mutation": "bypass_setup_authority",
+        "compile_and_link_exit": 0,
+        "test_exit": 1,
+        "evidence": "socket-free production window test",
+        "failures": [
+          "FAIL: a second window cannot provision before the first issued credential is saved",
+          "FAIL: a pending credential-save result still holds setup admission",
+          "FAIL: releasing setup authority never automatically retries a refused request",
+          "FAIL: unavailable setup authority refuses before a network request or credential mutation",
+          "FAIL: a delayed public status cannot automatically restart a setup refused as busy"
+        ],
+        "binary_sha256": "b0f1593df488bcbf00ee59a9783e7b1bb4727385a0bbf86c196fc72d1fd3ad4b"
+      },
+      {
+        "mutation": "ignore_fresh_credential",
+        "compile_and_link_exit": 0,
+        "test_exit": 1,
+        "evidence": "socket-free production window test",
+        "failures": [
+          "FAIL: explicit setup retry rereads the latest credential before sending the request"
+        ],
+        "binary_sha256": "0cb9ed4bec9fdfe01b47483dc55b4ae16e3cddac8125f35a4fee081b17ba521c"
+      },
+      {
+        "mutation": "ignore_reply_identity",
+        "compile_and_link_exit": 0,
+        "test_exit": 1,
+        "evidence": "socket-free production window test",
+        "failures": [
+          "FAIL: a managed provision reply cannot change the installation or replace its owner credential",
+          "FAIL: a managed provision reply cannot change the installation or replace its owner credential"
+        ],
+        "binary_sha256": "6200092661df80ba20cb339f92d8cc4b3c87f1426b0c818d334a2ec6b5d33fd7"
+      },
+      {
+        "mutation": "ignore_original_session",
+        "compile_and_link_exit": 0,
+        "test_exit": 1,
+        "evidence": "socket-free production window test",
+        "failures": [
+          "FAIL: retiring the original session during the credential reload prevents provisioning"
+        ],
+        "binary_sha256": "844fcbc37b36c8ae8d41d7af3a2708aaec33c944a38f3a4a76c925b13c24890a"
+      },
+      {
+        "mutation": "drop_save_lease",
+        "compile_and_link_exit": 0,
+        "test_exit": 1,
+        "evidence": "real OS-keychain backend held after network reply",
+        "failures": [
+          "AssertionError: {'mode': 'try', 'identifier': 'aetherpd-enrollment-fixture-e550955c-5dcd-4d01-92ee-2a5fe69f4d46', 'expected_exit': 4, 'exit': 76, 'output': '', 'error': 'AppSettings: created new settings store with defaults'}"
+        ],
+        "binary_sha256": "a3f5f4651d9b454f1b0eba5040e7cdd50be64f2db3219def1ddf91ccfdf4d4b2"
+      },
+      {
+        "mutation": "allow_automatic_restart",
+        "compile_and_link_exit": 0,
+        "test_exit": 1,
+        "evidence": "socket-free production window test",
+        "failures": [
+          "FAIL: a delayed public status cannot automatically restart a setup refused as busy"
+        ],
+        "binary_sha256": "2dc11c2d8523c0f91c67e8a564b693fe1d5d9b035f3a64e790b5ad37bc1843b0"
+      }
+    ],
+    "backend_lifetime_mutation": "Removing the save callback lease lets the competing fixture pass setup admission while the backend entry is held. It fails expected immediate refusal; all disposable entries/locks were cleaned. The fake session-store unit alone is not claimed to prove this interval.",
+    "docs": [
+      {
+        "step": "docs-install",
+        "exit": 0
+      },
+      {
+        "step": "docs-build",
+        "exit": 0
+      }
+    ],
+    "static_checks": [
+      {
+        "name": "registration",
+        "exit": 0
+      },
+      {
+        "name": "frozen-gate",
+        "exit": 0
+      },
+      {
+        "name": "generated-reference",
+        "exit": 0
+      },
+      {
+        "name": "log-rules",
+        "exit": 0
+      },
+      {
+        "name": "diff-check",
+        "exit": 0
+      }
+    ],
+    "initial_harness_corrections": [
+      "A synthetic session-retirement vector initially replaced the predicate function instead of changing its captured session state; corrected test uses shared mutable state.",
+      "Initial isolated GUI mutation compile lacked src/gui include path; corrected before behavioral mutation results.",
+      "The first delayed-status vector used needs_login with a held token, so automatic sign-in was ineligible. The error/claimable vector reproduced the actual restart."
+    ]
+  },
+  "remaining_scope": [
+    "Actual Windows/macOS OS lock/keychain qualification and final-source platform builds; previous Intel CI success was source 239931ebf only.",
+    "Other computers, other OS users and older/noncooperating writers do not share this lease.",
+    "Installer/update and unrelated credential writers do not acquire the setup lease. Keep service install/update exclusive of Remote Access setup; epoch-aware overlap handling remains unqualified.",
+    "Managed sign-out/cancel and sharing are not serialized behind provisioning; existing operation/session fences remain and cancellation must stay available.",
+    "Real tailnet join/cancel/expiry/recovery, backend outages, full application shutdown and remote-operation crash ambiguity remain broader P4 qualification work.",
+    "No desktop deployment, radio changes, RF, reboot or firmware changes in this qualification. Whole-radio hang recovery/baseline steering and actual 6300 hardware remain external gates.",
+    "All remaining P1-P10 alignment, final installed graph, packaging, repeated RF/stock APD, minimum-platform and independent release gates still apply."
+  ],
+  "radio_actions": [],
+  "real_radio_credential_mutations": [],
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/enrollment-admission-components.tar.gz",
+    "bytes": 364416865,
+    "sha256": "a41997c56575031cb663393c3c4264ebdaa56d4b9bc0b3dcfb204ced66fdaec1",
+    "verified_members": 131,
+    "scope": "Diagnostic full Linux fixture executables with debug data, source, fixtures, raw receipts, negative evidence and license files; not an on-radio distribution package or signed/reproducible release claim."
+  },
+  "detailed_evidence": {
+    "path": "tools/pd-waveform/ENROLLMENT-ADMISSION-EVIDENCE.json.gz",
+    "sha256": "040dafc60601d6c7e80fd33ec37faf962a0e0e799d5e2e63c531eb13e21e2e87"
+  }
+}

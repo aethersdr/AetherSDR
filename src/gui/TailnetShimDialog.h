@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QtTypes>
 #include <functional>
+#include <memory>
 #include "core/TailnetShimClient.h"
 
 class QCheckBox;
@@ -88,6 +89,7 @@ private:
     std::function<bool()> m_originalSessionCurrent;
     TailnetShimClient m_client;
     QNetworkAccessManager* m_transactionNetwork{nullptr};
+    std::function<std::shared_ptr<void>(const QString&)> m_provisioningAuthority{TailnetShimClient::acquireProvisioningLease};
     QTimer* m_pollTimer{nullptr};
 
     QString m_radioSerial;

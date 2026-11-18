@@ -7,6 +7,8 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QEvent>
+#include <QHash>
 #include <QLabel>
 #include <QPushButton>
 #include <QTimer>
@@ -19,6 +21,16 @@ class TailnetShimDialogTestAccess {
 public:
     static void prepare(TailnetShimDialog& dialog, const QString& token, bool managed)
     {
+        settle();
+        // Storage and setup admission are injected; this default test never
+        // creates a process lock or accesses the OS keychain.
+        dialog.m_provisioningAuthority = [](const QString& serial) -> std::shared_ptr<void> {
+            static QHash<QString, std::weak_ptr<void>> leases;
+            if (!leases.value(serial).expired()) { return {}; }
+            const std::shared_ptr<void> lease = std::make_shared<int>(0);
+            leases.insert(serial, lease);
+            return lease;
+        };
         // The null-model constructor never subscribes or reads credentials.
         dialog.m_lanReachable = true;
         dialog.m_apiAddress = QHostAddress(QStringLiteral("192.0.2.1"));
@@ -64,8 +76,38 @@ public:
     }
     static void beginProvision(TailnetShimDialog& dialog)
     {
+        beginProvisionUnpumped(dialog);
+        settle();
+    }
+    static void beginProvisionUnpumped(TailnetShimDialog& dialog)
+    {
         dialog.m_autoSignInTried = true;
         dialog.signInWithQr();
+    }
+    static void settle()
+    {
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+    static void refuseAuthority(TailnetShimDialog& dialog)
+    {
+        dialog.m_provisioningAuthority = [](const QString&) -> std::shared_ptr<void> { return {}; };
+    }
+    static void beginKeyWhileUnavailable(TailnetShimDialog& dialog, const std::shared_ptr<bool>& available)
+    {
+        dialog.m_autoSignInTried = false;
+        dialog.m_provisioningAuthority = [available](const QString&) -> std::shared_ptr<void> {
+            return *available ? std::make_shared<int>(0) : std::shared_ptr<void>{};
+        };
+        dialog.provision(QStringLiteral("tskey-auth-fixture"));
+    }
+    static void beginThenRetire(TailnetShimDialog& dialog)
+    {
+        const std::shared_ptr<bool> current = std::make_shared<bool>(true);
+        dialog.m_originalSessionCurrent = [current] { return *current; };
+        dialog.signInWithQr();
+        *current = false;
+        settle();
     }
     static bool signOut(TailnetShimDialog& dialog)
     {
@@ -353,6 +395,88 @@ int main(int argc, char** argv)
                         && newNetwork.sent.empty(),
                     signOut ? "old window sign-out cannot delete another window's replacement credential"
                             : "old window login401 cannot delete another window's replacement credential");
+    }
+    {
+        AetherPDTest::Network firstNetwork;
+        AetherPDTest::Network secondNetwork;
+        TailnetShimDialog first(nullptr, false, nullptr, &firstNetwork);
+        TailnetShimDialog second(nullptr, false, nullptr, &secondNetwork);
+        Access::prepare(first, QStringLiteral("initial-test-token"), false);
+        Access::prepare(second, QStringLiteral("initial-test-token"), false);
+        Access::beginProvision(first);
+        const QPointer<AetherPDTest::Reply> firstReply = firstNetwork.last;
+        Access::beginProvision(second);
+        ok &= check(firstReply && secondNetwork.sent.empty(),
+                    "a second window cannot provision before the first issued credential is saved");
+        if (secondNetwork.last) {
+            secondNetwork.last->complete(200, R"({"admin_token":"newer-test-token","status":{"version":"0.5.0","provisioned":true,"state":"needs_login","claimable":true}})");
+        }
+        firstReply->complete(200, R"({"admin_token":"earlier-test-token","status":{"version":"0.5.0","provisioned":true,"state":"needs_login","claimable":true}})");
+        // The no-keychain completion is queued: setup remains owned until it
+        // answers even though the network reply has already been delivered.
+        Access::beginProvisionUnpumped(second);
+        ok &= check(secondNetwork.sent.empty(), "a pending credential-save result still holds setup admission");
+        Access::settle();
+        ok &= check(secondNetwork.sent.empty(), "releasing setup authority never automatically retries a refused request");
+        Access::beginProvision(second);
+        ok &= check(secondNetwork.last && secondNetwork.last->request().rawHeader("Authorization") == "Bearer earlier-test-token",
+                    "explicit setup retry rereads the latest credential before sending the request");
+        secondNetwork.last->complete(200, R"({"admin_token":"newer-test-token","status":{"version":"0.5.0","provisioned":true,"state":"needs_login","claimable":true}})");
+        ok &= check(savedToken() == QStringLiteral("newer-test-token"), "the later admitted provisioning token remains current");
+    }
+    for (bool changedInstallation : {false, true}) {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("owner-test-token"), true);
+        Access::beginProvision(dialog);
+        QByteArray status = pending;
+        if (changedInstallation) { status.replace(QByteArray(64, 'a'), QByteArray(64, 'b')); }
+        const QByteArray response = QByteArray(R"({"admin_token":")")
+            + (changedInstallation ? "owner-test-token" : "different-test-token") + R"(","status":)" + status + '}';
+        network.last->complete(200, response);
+        ok &= check(Access::token(dialog) == QStringLiteral("owner-test-token")
+                        && savedToken() == QStringLiteral("owner-test-token")
+                        && Access::message(dialog).contains(QStringLiteral("saved credential was kept")),
+                    "a managed provision reply cannot change the installation or replace its owner credential");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("owner-test-token"), true);
+        Access::refuseAuthority(dialog);
+        Access::beginProvision(dialog);
+        ok &= check(network.sent.empty() && !Access::busy(dialog) && !Access::signingIn(dialog)
+                        && savedToken() == QStringLiteral("owner-test-token")
+                        && Access::message(dialog).contains(QStringLiteral("local lock is unavailable")),
+                    "unavailable setup authority refuses before a network request or credential mutation");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("owner-test-token"), true);
+        Access::beginThenRetire(dialog);
+        ok &= check(network.sent.empty() && savedToken() == QStringLiteral("owner-test-token"),
+                    "retiring the original session during the credential reload prevents provisioning");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimDialog dialog(nullptr, false, nullptr, &network);
+        Access::prepare(dialog, QStringLiteral("initial-test-token"), false);
+        Access::beginStatus(dialog);
+        const QPointer<AetherPDTest::Reply> status = network.last;
+        const std::shared_ptr<bool> available = std::make_shared<bool>(false);
+        Access::beginKeyWhileUnavailable(dialog, available);
+        *available = true;
+        status->complete(200, R"({"version":"0.5.0","provisioned":true,"state":"error","claimable":true})");
+        Access::settle();
+        bool provisionSent = false;
+        for (const auto& sent : network.sent) {
+            provisionSent |= sent.request.url().path() == QStringLiteral("/v1/provision");
+        }
+        ok &= check(!provisionSent, "a delayed public status cannot automatically restart a setup refused as busy");
+        if (provisionSent) {
+            network.last->complete(401, R"({"error":"fixture rejection"})");
+        }
     }
     return ok ? 0 : 1;
 }

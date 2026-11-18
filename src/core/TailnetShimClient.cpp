@@ -1,6 +1,7 @@
 #include "TailnetShimClient.h"
 
 #include "TailnetShimRelease.h"
+#include "TailnetShimCredentialPersistence.h"
 
 #include <QJsonArray>
 #include <QCryptographicHash>
@@ -309,6 +310,13 @@ TailnetShimClient::TailnetShimClient(QObject* parent, QNetworkAccessManager* net
 TailnetShimClient::TailnetShimClient(QNetworkAccessManager& network, QObject* parent)
     : TailnetShimClient(parent, &network)
 {}
+
+std::shared_ptr<void> TailnetShimClient::acquireProvisioningLease(const QString& radioSerial)
+{
+    const QString serial = radioSerial.trimmed();
+    if (serial.isEmpty() || serial.toUtf8().size() > 512) { return {}; }
+    return tailnetshim::CredentialPersistence::systemAuthority()(QStringLiteral("TailnetShim/Provision/") + serial);
+}
 
 void TailnetShimClient::retirePendingReplies()
 {
