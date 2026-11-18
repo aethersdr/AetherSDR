@@ -303,7 +303,7 @@ public:
     static constexpr int KeyInjectNotConsumed = 3;  // delivered, no momentary handler claimed it
     static constexpr int KeyInjectTxOk        = 4;  // keysTx press delivered and consumed
     static constexpr int KeyInjectUnbound     = 5;  // known action id with no key binding
-    static constexpr int KeyInjectTxDriveBlocked = 6;  // setsTxDrive PRESS with allowTx false
+    static constexpr int KeyInjectTxDriveBlocked = 6;  // allowTx false: setsTxDrive PRESS, or a lease key on a drive slider
     Q_INVOKABLE int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx);
     int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,
                                     const std::shared_ptr<TxController>& controller);

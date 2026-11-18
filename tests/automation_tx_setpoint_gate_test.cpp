@@ -1,5 +1,5 @@
 // Without TX permission the bridge refuses to change RF power or Tune power on
-// every surface, as `transmit rfpower|tunepower` refuses (#5851). Reading stays
+// every bridge surface, as `transmit rfpower|tunepower` refuses (#5851). Reading stays
 // open, other setpoints stay free, and with permission every surface works.
 // No radio, no socket, no transmission: the real TxApplet on a bare RadioModel.
 
@@ -7,11 +7,13 @@
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
 #include "core/TxKeyingMarker.h"
+#include "gui/SliderLeaseTxGate.h"
 #include "gui/TxApplet.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
 #include <QApplication>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -225,6 +227,50 @@ int main(int argc, char** argv)
                      QStringLiteral("rf_power_down"))),
               "keyevent: the release is delivered");
         server.setKeyEventAutomationHandler({});
+    }
+
+    // ── An unbound key through the slider keyboard lease (#5851) ───────────
+    // eventFilter's lease sets the focused slider from arrows, Page and
+    // Home/End whatever they are bound to; the bridge refuses those presses on
+    // a drive slider. Real TxApplet sliders, the predicate the injection calls.
+    {
+        const int leaseKeys[] = {Qt::Key_Left, Qt::Key_Right, Qt::Key_Up, Qt::Key_Down,
+                                 Qt::Key_PageUp, Qt::Key_PageDown, Qt::Key_Home, Qt::Key_End};
+        for (const Setpoint& sp : setpoints) {
+            bool refused = true;
+            bool allowed = true;
+            for (const int k : leaseKeys) {
+                refused = refused && bridgeKeyMovesTxSetpoint(sp.slider, k, false);
+                allowed = allowed && !bridgeKeyMovesTxSetpoint(sp.slider, k, true);
+            }
+            check(refused, "keyevent lease: arrows, Page and Home/End on a leased "
+                               + sp.name.toUtf8() + " are refused without TX permission");
+            check(allowed, "keyevent lease: with TX permission they reach " + sp.name.toUtf8());
+            check(!bridgeKeyMovesTxSetpoint(sp.slider, Qt::Key_M, false)
+                      && !bridgeKeyMovesTxSetpoint(sp.slider, Qt::Key_Return, false),
+                  "keyevent lease: a key the lease does not apply is not refused on "
+                      + sp.name.toUtf8());
+        }
+        QWidget marked;
+        markTxSetpoint(&marked);
+        QSlider inner(&marked);
+        QSlider plain;
+        check(bridgeKeyMovesTxSetpoint(&inner, Qt::Key_End, false),
+              "keyevent lease: a slider inside a marked drive control is refused");
+        check(!bridgeKeyMovesTxSetpoint(&plain, Qt::Key_End, false)
+                  && !bridgeKeyMovesTxSetpoint(nullptr, Qt::Key_End, false),
+              "keyevent lease: an unmarked slider, or no lease, is not refused");
+
+        // MainWindow cannot be built here without binding its discovery socket,
+        // so the wiring is pinned as text: the check runs before the key is sent.
+        QFile src(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Shortcuts.cpp"));
+        const QString text = src.open(QIODevice::ReadOnly) ? QString::fromUtf8(src.readAll()) : QString();
+        const qsizetype fn = text.indexOf(QStringLiteral(
+            "int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,\n"));
+        const qsizetype gate = text.indexOf(QStringLiteral("bridgeKeyMovesTxSetpoint("), fn);
+        const qsizetype send = text.indexOf(QStringLiteral("QApplication::sendEvent(this, &ev);"), fn);
+        check(fn >= 0 && gate > fn && send > gate,
+              "keyevent lease: injectKeyEventForAutomation checks the lease before it sends the key");
     }
 
     // ── TX permission: the same calls reach TransmitModel ───────────────────

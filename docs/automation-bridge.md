@@ -751,7 +751,9 @@ popup at a time and only while it is open; an empty combo is refused up front
 > is checked again on every `move` and `end`: once permission is withdrawn, the
 > next phase releases it where it is and is refused. The `rf_power_up` /
 > `rf_power_down` shortcuts are refused the same way through `shortcut` and
-> `keyevent`. Reading them stays open, and
+> `keyevent`, and so is a `keyevent` press of an arrow, PageUp/PageDown or
+> Home/End key while one of the two sliders holds the keyboard lease, bound or
+> not. Reading them stays open, and
 > `controls scrub` (which only re-asserts the current value) is not gated. Other
 > setpoints like `VOX level` or `Microphone gain` are not blocked.
 >

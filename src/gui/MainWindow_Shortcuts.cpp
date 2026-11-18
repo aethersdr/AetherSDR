@@ -7,6 +7,7 @@
 #include "core/TxKeyingMarker.h"
 #include "TxInputKeyEvent.h"
 #include "TxKeyActivationGuard.h"
+#include "SliderLeaseTxGate.h"
 #include "PttHoldKeyStep.h"
 #include "ShortcutRefusalNotice.h"
 #include "TwoToneTuneGate.h"
@@ -2075,6 +2076,12 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
         return KeyInjectTxBlocked;
     // Drive (RF power) also gates the press only; a release moves nothing.
     if (press && a && ShortcutManager::bridgeRefusesTxDrive(*a, allowTx))
+        return KeyInjectTxDriveBlocked;
+    // Any key the slider lease would apply to a focused drive slider, bound or not.
+    QWidget* focus = QApplication::focusWidget();
+    const bool leased = qobject_cast<QAbstractSlider*>(focus)
+        && m_sliderShortcutLease.data() == focus && s_sliderShortcutLeaseActive;
+    if (press && bridgeKeyMovesTxSetpoint(leased ? focus : nullptr, seq[0].key(), allowTx))
         return KeyInjectTxDriveBlocked;
 
     if (keysTx && a->handler) {

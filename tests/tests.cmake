@@ -11314,6 +11314,9 @@ add_executable(automation_tx_setpoint_gate_test
     src/gui/FramelessWindowTitleBar.cpp
 )
 target_include_directories(automation_tx_setpoint_gate_test PRIVATE src tests)
+# The source root lets it read the MainWindow key-injection wiring it cannot construct.
+target_compile_definitions(automation_tx_setpoint_gate_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(automation_tx_setpoint_gate_test PRIVATE
     aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
 )
