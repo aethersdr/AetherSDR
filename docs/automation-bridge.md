@@ -747,7 +747,9 @@ popup at a time and only while it is open; an empty combo is refused up front
 > they set how hard the next transmission drives an amplifier or transverter,
 > so without TX permission `invoke`, `clickAt`, `doubleClick`, `drag`,
 > `dragAt`, `wheel` and `gesture` on them are refused, exactly as
-> `transmit rfpower|tunepower` is (#5851). Reading them stays open, and
+> `transmit rfpower|tunepower` is (#5851). A `gesture` begun with permission
+> is checked again on every `move` and `end`: once permission is withdrawn, the
+> next phase releases it where it is and is refused. Reading them stays open, and
 > `controls scrub` (which only re-asserts the current value) is not gated. Other
 > setpoints like `VOX level` or `Microphone gain` are not blocked.
 >

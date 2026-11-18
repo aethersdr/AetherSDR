@@ -15,7 +15,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocalSocket>
 #include <QSlider>
+#include <QStyle>
+#include <QStyleOptionSlider>
 
 #include <cstdio>
 #include <functional>
@@ -26,6 +29,12 @@ public:
     static QJsonObject request(AutomationServer& server, const QJsonObject& object)
     {
         return server.handleLine(QJsonDocument(object).toJson(QJsonDocument::Compact), nullptr);
+    }
+    // `gesture` needs an owner identity; an inert socket, never connected.
+    static QJsonObject requestAs(AutomationServer& server, const QJsonObject& object,
+                                 QLocalSocket* identity)
+    {
+        return server.handleLine(QJsonDocument(object).toJson(QJsonDocument::Compact), identity);
     }
 };
 } // namespace AetherSDR
@@ -192,6 +201,55 @@ int main(int argc, char** argv)
         const QString h = QString::number(sp.slider->height() / 2);
         check(ok(cmd(server, QStringLiteral("clickAt"), sp.name, {}, w + QLatin1Char(' ') + h)),
               "TX allowed: clickAt on " + n + " is accepted");
+    }
+
+    // ── A gesture begun with permission stops when permission is withdrawn ──
+    {
+        QLocalSocket owner;
+        auto gesture = [&](const QString& action, const QString& target, const QString& value) {
+            QJsonObject o{{QStringLiteral("cmd"), QStringLiteral("gesture")},
+                          {QStringLiteral("action"), action}};
+            if (!target.isEmpty()) { o[QStringLiteral("target")] = target; }
+            if (!value.isEmpty()) { o[QStringLiteral("value")] = value; }
+            return AutomationServerTestAccess::requestAs(server, o, &owner);
+        };
+        QSlider* rf = setpoints.first().slider;
+        check(ok(cmd(server, QStringLiteral("invoke"), QStringLiteral("RF power"),
+                     QStringLiteral("setValue"), QStringLiteral("50")))
+                  && AetherTest::waitFor([&] { return tx.rfPower() == 50; }, 2000),
+              "gesture: RF power starts at 50 with the handle centred");
+        // Press on the handle itself: a groove press pages and auto-repeats.
+        QStyleOptionSlider opt;
+        opt.initFrom(rf);
+        opt.orientation = rf->orientation();
+        opt.minimum = rf->minimum();
+        opt.maximum = rf->maximum();
+        opt.sliderPosition = rf->sliderPosition();
+        opt.sliderValue = rf->value();
+        opt.subControls = QStyle::SC_All;
+        const QPoint handle = rf->style()->subControlRect(
+            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, rf).center();
+        const QJsonObject begin = gesture(QStringLiteral("begin"), QStringLiteral("RF power"),
+            QString::number(handle.x()) + QLatin1Char(' ') + QString::number(handle.y()));
+        // Read synchronously, with no event-loop turn: a move lands on the
+        // slider inside the request, and a held press left idle stops tracking.
+        const QJsonObject move = gesture(QStringLiteral("move"), {}, QStringLiteral("20 0"));
+        const int moved = tx.rfPower();
+        check(ok(begin) && ok(move) && moved > 50 && rf->value() == moved,
+              "gesture: with TX permission, begin and move drag RF power up");
+
+        // Offsets are from the press point: -60 would drag RF power well below 50.
+        server.setTxAllowed(false);
+        const QJsonObject after = gesture(QStringLiteral("move"), {}, QStringLiteral("-60 0"));
+        check(!ok(after) && after.value(QStringLiteral("error")).toString()
+                                .contains(QStringLiteral("sets transmit drive")),
+              "gesture: after permission is withdrawn, move is refused as transmit drive");
+        check(tx.rfPower() == moved && rf->value() == moved,
+              "gesture: after permission is withdrawn, RF power stays at "
+                  + QByteArray::number(moved) + " (now " + QByteArray::number(tx.rfPower()) + ")");
+        const QJsonObject status = gesture(QStringLiteral("status"), {}, {});
+        check(ok(status) && !status.value(QStringLiteral("active")).toBool(),
+              "gesture: the refused move ended the bridge gesture");
     }
     server.setTxAllowed(false);
 

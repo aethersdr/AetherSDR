@@ -10772,6 +10772,16 @@ QJsonObject AutomationServer::doGesture(const QString& action,
         return err(QStringLiteral("gesture ") + normalizedAction + QLatin1Char(' ')
                    + offsetError + QStringLiteral("; gesture released"));
     }
+    // A drive setpoint is re-checked on every phase: permission withdrawn after
+    // begin releases the gesture where it is and refuses the step (#5851).
+    if (const QWidget* setpoint = m_txAllowed ? nullptr
+                                              : txSetpointInChain(m_pointerGesture.widget)) {
+        const QString name = setpoint->accessibleName();
+        qCWarning(lcAutomation).noquote()
+            << "BLOCKED transmit-setpoint gesture" << normalizedAction << "on" << name;
+        cancelGesture(sock, QStringLiteral("TX permission withdrawn during gesture"));
+        return err(txSetpointBlockedError(name));
+    }
     m_pointerGesture.offset = offset;
 
     if (normalizedAction == QLatin1String("move") || hasFinalOffset) {
