@@ -1,0 +1,120 @@
+{
+  "recorded_utc": "2026-11-18T21:23:48.517935+00:00",
+  "production_ready": false,
+  "status": "Signed diagnostic delivery reproduced both architectures; ordinary8600 GUI upgrade committed; speech Stop failure reproduced and localized to lifetime unkey guardian ownership mismatch",
+  "implementation_source_commit": "ddcda2b66e0ca078fb34d2b41d429d812ba9fccd",
+  "installed_radio_release": "e066dc80f1ccbbe0f8408f8a077aa78f27b700fcedbebf6eebc252a41cc94878",
+  "previous_release": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+  "only_changed_payload_component": "flex-tailnet-shim",
+  "DSP_and_privileged_helpers_unchanged": true,
+  "signed_deliveries": {
+    "source_commit": "ddcda2b66e0ca078fb34d2b41d429d812ba9fccd",
+    "source_manifest_sha256": "502e6b10a8f2294dde2b260a484a6c77b6ef5a75a255759baeecd6e8173d43ab",
+    "archive": {
+      "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/cleanup-diagnostic-artifacts-ddcda2b66/diagnostic-deliveries-and-public-source.tar.gz",
+      "bytes": 133362668,
+      "sha256": "194955ce5968d7c80e3667d9177c87d21348b579354abd72b4fe3bc3945fdd7f",
+      "members": 8319,
+      "all_member_digests_verified": true
+    },
+    "complete_public_runtime_source_members": 8262,
+    "complete_runtime_and_delivery_reproducibility_both_architectures": true,
+    "component_comparison": {
+      "arm64": {
+        "only_changed_payload_component": [
+          "flex-tailnet-shim"
+        ],
+        "all_DSP_and_privileged_helper_hashes_unchanged": true,
+        "release_blake2b_256": "e066dc80f1ccbbe0f8408f8a077aa78f27b700fcedbebf6eebc252a41cc94878",
+        "release_bytes": 9080646,
+        "native_boot_loader_sha256": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7"
+      },
+      "armv7": {
+        "only_changed_payload_component": [
+          "flex-tailnet-shim"
+        ],
+        "all_DSP_and_privileged_helper_hashes_unchanged": true,
+        "release_blake2b_256": "45d0e540ff6bae5dff30e0ff908c369b3269faf1bdbb2d65c5156b4128fe494b",
+        "release_bytes": 9410011,
+        "native_boot_loader_sha256": "f7d5f70c726c50bd4437fbedc6d9ac393a97ffb8a3d7adc254e0e80ce1c60467"
+      }
+    },
+    "binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/speech-source62/bin/AetherSDR",
+        "bytes": 833339120,
+        "sha256": "e003e7f397d1e8b63b3b214e6bb3c988924e2c1d16ae78abf84b5dd2860536ce",
+        "durable_path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/cleanup-diagnostic-artifacts-ddcda2b66/binaries/AetherSDR"
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/speech-source62/bin/aetherd",
+        "bytes": 413563344,
+        "sha256": "48a238de0454ba326e72a84a3921b56a0cbf36f39c37530abc0df6690b5443e3",
+        "durable_path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/cleanup-diagnostic-artifacts-ddcda2b66/binaries/aetherd"
+      }
+    },
+    "native_floor_hardware_qualified": false,
+    "production_ready": false,
+    "scope": "Offline signed diagnostic builds/delivery and desktop package/dialog tests. Installation and any subsequent live cleanup evidence are recorded separately."
+  },
+  "ordinary_GUI_update_passed": true,
+  "update_approval_clicks": 1,
+  "temporary_installer_cleanup_confirmed_by_GUI": true,
+  "saved_owner_credential_still_authenticates": true,
+  "read_only_status_initial_reader_note": "The first combined read command rejected the documented initial503 unavailable status after a successful installation read; the subsequent read-only collector preserved both responses. No update was retried.",
+  "new_desktop": {
+    "pid": 2058984,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "e003e7f397d1e8b63b3b214e6bb3c988924e2c1d16ae78abf84b5dd2860536ce",
+    "source_commit": "ddcda2b66e0ca078fb34d2b41d429d812ba9fccd",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "receive_only12s_four_capture_Stop_passed": true,
+  "new_RF_keys": 1,
+  "RF_frequency_MHz": 7.15,
+  "nominal_power_W": 5,
+  "GUI_unkey_seconds": 12.032478697015904,
+  "FDX": false,
+  "feedback": "local_dax_iq",
+  "normal_input_speech_frames": 4,
+  "corrected_speech_tested": false,
+  "RF_qualification_passed": false,
+  "cleanup_status": "cleanup_unconfirmed",
+  "localized_failure": "owned unkey guardian exited: exit status4",
+  "exact_helper_exit_path": "tools/pd-waveform/guardian/unkey_guard.c: unkey_ownership_mismatch; no unkey command sent by that final cleanup path",
+  "independent_guard_ended_and_LP_zero": true,
+  "temporary_audio_route_removed": true,
+  "capture_and_fixed_ARP_absent_in_snapshot": true,
+  "current_control_PID": 4421,
+  "control_NRestarts": 0,
+  "firmware_PID_unchanged": 1087,
+  "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+  "radio_reboots": 0,
+  "root_bridge_used_for_install_or_RF": false,
+  "fixed_postfailure_readonly_snapshot_transport_retired": true,
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "RF_hold": true,
+  "next_step": "Record interlock updates through unkey and sessionStop, correlate the native guardian final ownership decision and add an exact regression before changing ownership or completion policy. Existing raw READY/owner0 snapshot taken later cannot identify the earlier final state.",
+  "scope_limits": [
+    "This is diagnostic delivery and failure localization, not a cleanup fix. Two ordinary-input speech baselines on two releases produced four frames each and ended cleanup_unconfirmed; neither is a passed speech qualification or correction comparison.",
+    "The new receive-only12s session and independent meter/unkey preflights passed. That does not close the failure after normal PTT operation.",
+    "Exit4 is the fixed lifetime-unkey ownership-mismatch path. Exact interlock mode/source/owner at its final decision is not retained yet. A later read-only observer saw READY/owner0; it must not be substituted for that missing instant.",
+    "Complete signed ARMv7/ARM64 runtimes and upgrade distributions reproduced across distinct paths/caches on the same host/toolchains. ARM64 first-install delivery also reproduced offline. No actual6300 kernel, disk high-water, privileged entry or RF qualification occurred.",
+    "The ordinary GUI committed the update and confirmed temporary installer cleanup while the saved owner credential continued to authenticate. No physical power cycle or software reboot was performed; persistence of the diagnostic release is not newly qualified.",
+    "Linux desktop/daemon and two package/dialog tests passed. Existing source62 Windows/macOS build evidence remains under its original source/scope; no new native runtime or Store/signing/publication claim is made.",
+    "The fixed postfailure read-only root snapshot was retired. It found cap0 status frontends, no DSP/capture or ARP residue, unchanged firmware and zero spontaneous control restarts after the planned update. No privileged repair or error suppression was performed.",
+    "Full P1-P10 work remains: exact cleanup cause/fix, historical alignment/cold-bypass and reboot hang, final speech/duty/fault/RF/stockAPD qualification, catalogue/publisher, actual6300 and independent release review."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-diagnostic-live-components.tar.gz",
+    "bytes": 1866935,
+    "sha256": "c97760c7385f53e9f82943b00a8389c618ccb23bc2d4a1006b101ca4b9f5c4b4",
+    "members": 85,
+    "all_members_verified": true
+  },
+  "evidence": "CLEANUP-DIAGNOSTIC-LIVE-EVIDENCE.json.gz",
+  "evidence_sha256": "aee40c0f80fb6dd11102861902ed1ffe02284fd098b3bcdcec49973018a4bf77"
+}
