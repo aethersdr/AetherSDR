@@ -1,6 +1,7 @@
 #pragma once
 #include "core/backends/ModelControlRequest.h"
 #include <array>
+#include <optional>
 #include <QPointer>
 
 #include <QObject>
@@ -346,6 +347,17 @@ public:
     void setTxModeGetter(TxModeGetter getter);
     using PttPreflight = std::function<QString(PttSource)>;
     void setPttPreflight(PttPreflight preflight);
+    // Phone-mode PTT release holds the unkey this long so the speech tail
+    // still airs. 0 = off. Clamped to TxOffDelaySettings' range. Applies only
+    // to releases routed through requestPttOff() (not CAT/DAX producers, which
+    // release directly); hardware PTT wired to the radio unkeys at the radio.
+    void setTxOffDelayMs(int ms);
+    [[nodiscard]] int txOffDelayMs() const { return m_txOffDelayMs; }
+    [[nodiscard]] bool txOffDelayPending() const { return m_txOffDelayTimer != nullptr; }
+    // PC mic only: true once the audio window has passed in a longer hold.
+    [[nodiscard]] bool txOffDelayMicMuted() const { return m_txOffDelayMicMuted; }
+    // The radio reported it is no longer transmitting: end a pending hold now.
+    void expireTxOffDelayNow();
     // TUNE admission (#5422). RadioModel returns a non-empty message while a
     // client CW source is keying (key edge down, paddle held, CWX in flight);
     // startTune()/startTwoToneTune() are then refused and pttBlocked() carries
@@ -405,6 +417,8 @@ public:
 
     // ── Mic / monitor / processor commands ────────────────────────────────
     void setMicSelection(const QString& input);
+    quint64 micSelectionIntentRevision() const
+    { return m_controlIntentRevisions[static_cast<size_t>(TransmitControlRequest::Field::MicInput)]; }
     void setMicLevel(int level);
     void setMicAcc(bool on);
     void setSpeechProcessorEnable(bool on);
@@ -476,6 +490,9 @@ public:
     // Receive-only engines acknowledge pitch after their DSP bank is adopted.
     void setReceiveCwPitchConfirmation(bool confirmed) { m_confirmReceiveCwPitch = confirmed; }
     bool confirmsReceiveCwPitch() const { return m_confirmReceiveCwPitch; }
+    // The pitch last carried by an applied delta this session (a backend report
+    // or a restored state); the local setter never sets it. Empty after reset.
+    std::optional<int> reportedCwPitch() const { return m_reportedCwPitch; }
     void setCwBreakIn(bool on);
     void setCwDelay(int ms);
     void setCwSidetone(bool on);
@@ -498,6 +515,7 @@ public:
     void setHoldBreakInDelay(bool on);
 
 signals:
+    void txOffDelayMicMuteChanged(bool muted);
     void stateChanged();
     // The answer to requestVoxEnable(): which request, what it asked for, and
     // whether the radio applied it. current is false when a VOX change was
@@ -649,6 +667,11 @@ private:
     bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
     bool tuneAdmitted();   // #5422: false (pttBlocked emitted, toggle resynced) while CW is keyed
     void cancelPendingQuindarOff();
+    void cancelPendingTxOffDelay();
+    bool txOffDelayApplies() const;
+    void cancelTxOffDelayMicTimer();
+    void setTxOffDelayMicMuted(bool muted);
+    void continuePttOff(const PttRelease& release);
     void dispatchMoxOff(const PttRelease& release);
     PttRelease capturePttRelease(PttRelease release);
 
@@ -660,6 +683,12 @@ private:
     KeyingAdmission          m_keyingAdmission;
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};
+    int                      m_txOffDelayMs{0};
+    // Non-null exactly while a held release is waiting; invalidatePttRelease()
+    // clears it, so a re-key, reset or stop always drops the pending unkey.
+    QTimer*                  m_txOffDelayTimer{nullptr};
+    QTimer*                  m_txOffDelayMicTimer{nullptr};
+    bool                     m_txOffDelayMicMuted{false};
     PttOffHook               m_pttOffHook;
     std::shared_ptr<std::atomic<bool>> m_pttReleaseFence;
     std::function<void()> m_pttReleaseAbandoned;
@@ -722,6 +751,7 @@ private:
     // CW state
     int  m_cwSpeed{20};       // 5–100 WPM
     bool    m_confirmReceiveCwPitch{false};
+    std::optional<int> m_reportedCwPitch;
     int  m_cwPitch{600};      // 100–6000 Hz
     bool m_cwBreakIn{false};
     int  m_cwDelay{500};      // 0–2000 ms

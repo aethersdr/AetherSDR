@@ -22,6 +22,10 @@ struct TransmitDelta {
     std::optional<int>     tunePower;        // clamped 0..100
     std::optional<bool>    tune;
     std::optional<bool>    mox;
+    // The radio's own PTT/key input on its own, for a backend that declares
+    // RadioCapabilities::radioPttObservation (HL2: EP6 ptt_resp). mox is that
+    // ORed with the host key; this lets the model tell the two apart.
+    std::optional<bool>    radioPtt;
     std::optional<double>  transmitFreq;     // MHz
     std::optional<int>     maxPowerLevel;    // unclamped
     std::optional<QString> tuneMode;

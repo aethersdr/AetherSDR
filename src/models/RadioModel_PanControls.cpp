@@ -19,6 +19,7 @@ struct RadioModel::PendingPanCreation {
     QString id;
     QPointer<QTimer> deadline;
     bool notified{false};
+    bool native{false};
 };
 
 void RadioModel::retireDisplayResource(const QString& id)
@@ -37,12 +38,20 @@ void RadioModel::settlePanCreations()
     const auto pending = m_pendingPanCreations;
     for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
         const std::shared_ptr<PendingPanCreation> request = it.value();
+        if (request->native && request->id.isEmpty()) {
+            for (PanadapterModel* candidate : panadapters()) {
+                if (request->existing.contains(candidate->panId())
+                    || !candidate->ownedByClient(clientHandle())) { continue; }
+                request->id = candidate->panId();
+                break;
+            }
+        }
         PanadapterModel* pan = request->id.isEmpty() ? nullptr : panadapter(request->id);
         const bool ended = !controlSessionCurrent(request->session);
         const bool uncertain = request->historyEpoch != m_displayHistoryEpoch
             || (!request->id.isEmpty() && (request->existing.contains(request->id)
                 || request->retirements.value(request->id) != m_displayRetirements.value(request->id)));
-        const bool published = pan && pan->ownedByClient(clientHandle());
+        const bool published = pan && pan->lifecyclePublished() && !m_displayInventoryUncertain && pan->ownedByClient(clientHandle());
         if (m_pendingPanCreations.value(it.key()) != request) { continue; }
         if (!ended && (uncertain || (!request->owner && !published))) {
             if (!request->notified) {
@@ -76,7 +85,7 @@ void RadioModel::settlePanCreations()
 ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreationCompletion& completion,
                                                bool initializeDisplay)
 {
-    if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    if (m_displayInventoryUncertain || QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
     settlePanCreations();
     if (!alive) { return ReceiveDispatch::Unsupported; }
@@ -85,25 +94,13 @@ ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreati
     const auto control = backendCapabilities().panLifecycleControl;
     if (!m_backend || !controlSessionCurrent(session) || !control
         || !control->supports(PanLifecycleAction::Create)) { return ReceiveDispatch::Unsupported; }
-    if (control->creation == PanLifecycleControl::Creation::Native) {
-        QSet<QString> before;
-        for (PanadapterModel* pan : panadapters()) { before.insert(pan->panId()); }
-        const ReceiveDispatch result = m_backend->requestPanLifecycle({PanLifecycleAction::Create, {}, {}});
-        if (!alive || !owner || !controlSessionCurrent(session)) { return result; }
-        PanadapterModel* created = nullptr;
-        for (PanadapterModel* pan : panadapters()) {
-            if (!before.contains(pan->panId())) {
-                if (created) { created = nullptr; break; }
-                created = pan;
-            }
-        }
-        if (completion) {
-            completion({created ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Refused,
-                        created ? 0 : -1, {}}, created);
-        }
-        return result;
-    }
     const int limit = std::min(maxPanadapters(), 64);
+    // Native creation has no receipt naming the allocated pane. Serialize it
+    // so one delayed publication cannot complete two callers' requests.
+    if (control->creation == PanLifecycleControl::Creation::Native
+        && std::ranges::any_of(m_pendingPanCreations, [](const auto& request) { return request->native; })) {
+        return ReceiveDispatch::Unsupported;
+    }
     if (m_panadapters.size() + m_pendingPanCreations.size() >= limit) {
         emit panadapterLimitReached(maxPanadapters(), m_model);
         return ReceiveDispatch::Unsupported;
@@ -113,8 +110,12 @@ ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreati
     request->owner = owner;
     request->retirements = m_displayRetirements;
     request->historyEpoch = m_displayHistoryEpoch;
+    request->native = control->creation == PanLifecycleControl::Creation::Native;
     for (PanadapterModel* pan : m_panadapters) { request->existing.insert(pan->panId()); }
-    for (auto it = m_stalePanadapters.cbegin(); it != m_stalePanadapters.cend(); ++it) { request->existing.insert(it.key()); }
+    if (!request->native) {
+        for (auto it = m_stalePanadapters.cbegin(); it != m_stalePanadapters.cend(); ++it) { request->existing.insert(it.key()); }
+    }
+    initializeDisplay = initializeDisplay && !request->native;
     request->completion = [alive, owner, session, initializeDisplay, completion](const RadioControlReply& reply, PanadapterModel* pan) {
         const QPointer<PanadapterModel> original(pan);
         const quint64 revision = original ? original->ownershipRevision() : 0;
@@ -167,6 +168,8 @@ ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreati
             if (!alive) { return; }
             const auto request = alive->m_pendingPanCreations.value(ticket);
             if (!request) { return; }
+            if (request->native && reply.result.kind == RadioControlReply::Kind::Accepted
+                && reply.panId.isEmpty()) { alive->settlePanCreations(); return; }
             if (reply.result.kind != RadioControlReply::Kind::Accepted && reply.panId.isEmpty()
                 && reply.result.kind != RadioControlReply::Kind::Cancelled && reply.result.code > 0) {
                 alive->m_pendingPanCreations.remove(ticket);
@@ -196,7 +199,7 @@ ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreati
 ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDisplayRequest& request,
     const RadioControlCompletion& completion, bool announce)
 {
-    if (QThread::currentThread() != thread() || !request.valid() || !pan
+    if (m_displayInventoryUncertain || QThread::currentThread() != thread() || !request.valid() || !pan
         || panadapter(pan->panId()) != pan || !m_backend) { return ReceiveDispatch::Unsupported; }
     const RadioControlSession session = controlSession();
     const QPointer<RadioModel> alive(this);
@@ -213,7 +216,7 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
     const RadioControlFence current = [alive, original, session, revision, request, intent,
                                       waterfallId, waterfallRetired, historyEpoch,
                                       colorIntent, blackIntent, autoBlackIntent] {
-        if (!(alive && original && alive->controlSessionCurrent(session)
+        if (!(alive && original && !alive->m_displayInventoryUncertain && alive->controlSessionCurrent(session)
             && alive->panadapter(original->panId()) == original
             && (request.targetsWaterfall() ? original->controlRevision() : original->ownershipRevision()) == revision
             && original->ownedByClient(alive->clientHandle())
@@ -226,13 +229,12 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
                 || original->displayIntentRevision(PanDisplayField::WaterfallAutoBlack) != autoBlackIntent)) { return false; }
         if (alive->m_displayHistoryEpoch != historyEpoch
             || alive->m_displayRetirements.value(waterfallId) != waterfallRetired) { return false; }
-        const auto observed = alive->m_radioDisplayWaterfalls.constFind(waterfallId);
-        return observed == alive->m_radioDisplayWaterfalls.cend()
-            || ((observed->clientHandle == 0 || observed->clientHandle == alive->clientHandle())
-                && (observed->parentPanId.isEmpty() || observed->parentPanId == original->panId()));
+        return alive->displayWaterfallOwned(waterfallId, original->panId());
     };
+    PanDisplayRequest guarded = request;
+    if (request.field == PanDisplayField::DaxIqChannel) { guarded.guard = pan->beginIqBinding(); }
     const ReceiveDispatch result = control && control->supports(request.field) && current()
-        ? m_backend->requestPanDisplay(backendPanIdFor(pan->panId()), waterfallId, request, completion, current)
+        ? m_backend->requestPanDisplay(backendPanIdFor(pan->panId()), waterfallId, guarded, completion, current)
         : ReceiveDispatch::Unsupported;
     if (alive && controlSessionCurrent(session) && announce) {
         reportReceiveDispatch(result, QStringLiteral("pan display"));
@@ -267,7 +269,7 @@ void RadioModel::requestPanRfGainInfo(PanadapterModel* pan)
     const RadioControlSession session = controlSession();
     const quint64 revision = pan->ownershipRevision();
     const RadioControlFence current = [alive, original, session, revision] {
-        return alive && original && alive->controlSessionCurrent(session)
+        return alive && original && !alive->m_displayInventoryUncertain && alive->controlSessionCurrent(session)
             && alive->panadapter(original->panId()) == original && original->ownershipRevision() == revision;
     };
     m_backend->requestPanLifecycle({PanLifecycleAction::RfGainInfo, backendPanIdFor(pan->panId()), {}},

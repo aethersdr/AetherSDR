@@ -1,5 +1,6 @@
 // Socket-free production bridge/model/backend/audio paths. Inject decoded
 // statuses and command replies; no firmware peer, device, listener or RF.
+#include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
 #include "core/AudioEngine.h"
@@ -53,6 +54,8 @@ public:
         model.refreshDaxTxOwnershipGuards();
     }
     static void reopenTransmit(RadioModel& model) { model.m_txSessionClosing = false; }
+    static void interrupt(RadioModel& model)
+    { model.interruptDaxTxOwnership(QStringLiteral("test interrupt")); }
 };
 class AudioEngineRatesTestAccess {
 public:
@@ -102,7 +105,7 @@ struct Fixture {
             [this](const QByteArray&, const TxCoordinator::Context&, const DaxTxAudioPermit& permit) {
                 packets.push_back(permit);
             });
-        model.handleSliceStatusForTest(0, {{QStringLiteral("in_use"), QStringLiteral("1")},
+        applyFlexSliceStatus(model, 0, {{QStringLiteral("in_use"), QStringLiteral("1")},
             {QStringLiteral("client_handle"), QStringLiteral("0x12345678")},
             {QStringLiteral("tx"), QStringLiteral("1")}, {QStringLiteral("mode"), QStringLiteral("USB")},
             {QStringLiteral("RF_frequency"), QStringLiteral("14.200000")}});
@@ -321,6 +324,7 @@ void exactInputAndKeyFences()
     std::vector<TxCoordinator::Command> keys;
     f.backend->setTxCommandSink([&](const QString&, const TxCoordinator::Command& command) {
         keys.push_back(command);
+        return true;
     });
     const bool keyed = f.model.setProducerTransmit(child, true, TransmitModel::PttSource::Dax);
     check(keyed && !keys.empty() && keys.front().permitsDispatch(TxCoordinator::monotonicMs()),
@@ -346,6 +350,7 @@ void exactInputAndKeyFences()
     std::vector<TxCoordinator::Command> directKeys;
     direct.backend->setTxCommandSink([&](const QString&, const TxCoordinator::Command& command) {
         directKeys.push_back(command);
+        return true;
     });
     check(direct.model.setProducerTransmit(directInput, true, TransmitModel::PttSource::Dax),
           "a directly admitted original DAX request uses the production keying path");
@@ -479,6 +484,30 @@ void creationAndBusy()
 }
 }
 
+// An interrupt that lands while the take is still being published, before
+// anything is written, leaves nothing for the radio to report on.
+void interruptBeforeDispatch()
+{
+    Fixture f;
+    f.stream(false);
+    bool armed = true;
+    QObject::connect(&f.model, &RadioModel::daxTxOwnershipChanged, &f.model, [&] {
+        if (armed && f.snapshot().value("pending").toBool() && f.writes.empty()) {
+            armed = false;
+            DaxTxOwnershipTestAccess::interrupt(f.model);
+        }
+    });
+    f.action(QStringLiteral("take"));
+    check(!armed && f.writes.empty() && !f.snapshot().value("pending").toBool(),
+          "an interrupt during publication stops the take before any write");
+    check(!f.snapshot().value("uncertain").toBool(),
+          "an interrupt with nothing written does not wait for radio status");
+    check(f.action(QStringLiteral("take")).value("ok").toBool() && f.writes.size() == 1
+          && f.writes[0].command == QLatin1String("stream set 0x4a000001 tx=1"),
+          "a new take after an unwritten interrupt dispatches without fresh status");
+    DaxTxOwnershipTestAccess::timeout(f.model);
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("dax-tx-ownership-test"));
@@ -488,5 +517,6 @@ int main(int argc, char** argv)
     ordering(false); ordering(true);
     failuresAndClients(); mediaAndSourceFlags(); lifecycle(); creationAndBusy();
     exactInputAndKeyFences(); cancellationAndMalformedStatus(); createOrderingAndGuardRefresh();
+    interruptBeforeDispatch();
     return failures ? 1 : 0;
 }

@@ -33,6 +33,7 @@
 #include <QPushButton>
 #include <QTextEdit>
 #include <QTextCharFormat>
+#include <QTextDocument>
 #include <QWindow>
 #include <QGuiApplication>
 #include <QClipboard>
@@ -45,6 +46,38 @@
 namespace AetherSDR {
 
 namespace {
+// The Sens slider's 0-100 as a cost threshold: text whose cost is at or above
+// it is hidden.  0 maps to 1.0 and 100 to 0.1.
+float cwSensCostThreshold(int sens) { return 1.0f - (sens / 100.0f) * 0.9f; }
+
+// fldigi's standard RTTY shifts and mark tones, the RTTY decoder's Shift and
+// Mark lists, in ascending order.
+constexpr int kRttyShiftPresetsHz[] = {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850};
+constexpr int kRttyMarkPresetsHz[] = {500, 850, 915, 1000, 1275, 1700, 2125, 2210};
+
+// Selects hz in a combo listing presets in ascending order, without emitting.
+// A value off the list gets its own entry in numeric order, replacing any
+// earlier one.
+template <std::size_t N>
+void showSliceValue(QComboBox* combo, const int (&presets)[N], int hz)
+{
+    const auto isPreset = [&presets](int v) {
+        return std::find(std::begin(presets), std::end(presets), v) != std::end(presets);
+    };
+    const QSignalBlocker block(combo);
+    for (int i = combo->count() - 1; i >= 0; --i) {
+        const int v = combo->itemData(i).toInt();
+        if (v != hz && !isPreset(v)) { combo->removeItem(i); }
+    }
+    int idx = combo->findData(hz);
+    if (idx < 0) {
+        idx = 0;
+        while (idx < combo->count() && combo->itemData(idx).toInt() < hz) { ++idx; }
+        combo->insertItem(idx, QString::number(hz), hz);
+    }
+    combo->setCurrentIndex(idx);
+}
+
 void setDecoderInputHint(QLabel* label, const QString& hint, const QString& reason,
                          const QString& accessibleName)
 {
@@ -190,18 +223,22 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
     m_cwSensSlider->setValue(savedSens);
     m_cwSensSlider->setFixedWidth(60);
+    m_cwSensSlider->setAccessibleName(tr("CW decode sensitivity"));
     applyPrimarySliderStyle(m_cwSensSlider);
-    m_cwCostThreshold = 1.0f - (savedSens / 100.0f) * 0.9f;
+    // The slider clamps a hand-edited value; the threshold reads it back.
+    m_cwCostThreshold = cwSensCostThreshold(m_cwSensSlider->value());
     connectSliderSetting(m_cwSensSlider,
         [this](int v) {
-            // Map 0-100 slider to 1.0-0.1 cost threshold (inverted: higher sens = lower threshold)
-            m_cwCostThreshold = 1.0f - (v / 100.0f) * 0.9f;
+            m_cwSensUnsaved = true;
+#ifdef HAVE_CW_RX_BACKENDS
+            if (m_cwSensBackend != QLatin1String("ggmorse")) {
+                m_cwNeuralCostThreshold = cwSensCostThreshold(v);
+                return;
+            }
+#endif
+            m_cwCostThreshold = cwSensCostThreshold(v);
         },
-        [](int v) {
-            auto& settings = AppSettings::instance();
-            settings.setValue("CwDecoderSensitivity", QString::number(v));
-            settings.save();
-        });
+        [this](int v) { saveCwSens(v); });
     cwBar->addWidget(m_cwSensSlider);
 
 #ifdef HAVE_CW_RX_BACKENDS
@@ -400,29 +437,19 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     rttyBar->addWidget(markLabel);
 
     m_rttyMarkCombo = new QComboBox;
+    m_rttyMarkCombo->setObjectName(QStringLiteral("rttyMarkCombo"));
     m_rttyMarkCombo->setStyleSheet(comboStyle);
     m_rttyMarkCombo->setFixedWidth(68);
-    m_rttyMarkCombo->setToolTip("Mark (idle) tone audio frequency");
-    // fldigi standard mark frequencies
-    m_rttyMarkCombo->addItem("Auto",  0);
-    m_rttyMarkCombo->addItem("2125",  2125);
-    m_rttyMarkCombo->addItem("2210",  2210);
-    m_rttyMarkCombo->addItem("1700",  1700);
-    m_rttyMarkCombo->addItem("1275",  1275);
-    m_rttyMarkCombo->addItem("1000",  1000);
-    m_rttyMarkCombo->addItem("915",   915);
-    m_rttyMarkCombo->addItem("850",   850);
-    m_rttyMarkCombo->addItem("500",   500);
-    {
-        const int saved = AppSettings::instance().value("RttyDecoderMarkHz", "0").toInt();
-        const int idx   = m_rttyMarkCombo->findData(saved);
-        m_rttyMarkCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    m_rttyMarkCombo->setToolTip("Mark (idle) tone. Sets the slice's RTTY mark on the radio.");
+    m_rttyMarkCombo->setAccessibleName(QStringLiteral("RTTY decoder mark"));
+    for (int hz : kRttyMarkPresetsHz) {
+        m_rttyMarkCombo->addItem(QString::number(hz), hz);
     }
+    // The slice owns the mark; MainWindow shows its value here once the
+    // decoder runs, and a choice here is sent to the slice.
+    m_rttyMarkCombo->setCurrentIndex(m_rttyMarkCombo->findData(2125));
     connect(m_rttyMarkCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-        const int hz = m_rttyMarkCombo->currentData().toInt();
-        AppSettings::instance().setValue("RttyDecoderMarkHz", QString::number(hz));
-        AppSettings::instance().save();
-        emit rttyMarkHzChanged(hz);
+        emit rttyMarkHzChanged(m_rttyMarkCombo->currentData().toInt());
     });
     rttyBar->addWidget(m_rttyMarkCombo);
 
@@ -433,22 +460,19 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     rttyBar->addWidget(shiftLabel);
 
     m_rttyShiftCombo = new QComboBox;
+    m_rttyShiftCombo->setObjectName(QStringLiteral("rttyShiftCombo"));
     m_rttyShiftCombo->setStyleSheet(comboStyle);
     m_rttyShiftCombo->setFixedWidth(52);
-    m_rttyShiftCombo->setToolTip("Mark-to-space frequency shift");
-    // fldigi standard shifts
-    for (int hz : {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850})
+    m_rttyShiftCombo->setToolTip("Mark-to-space shift. Sets the slice's RTTY shift on the radio.");
+    m_rttyShiftCombo->setAccessibleName(QStringLiteral("RTTY decoder shift"));
+    for (int hz : kRttyShiftPresetsHz) {
         m_rttyShiftCombo->addItem(QString::number(hz), hz);
-    {
-        const int saved = AppSettings::instance().value("RttyDecoderShiftHz", "170").toInt();
-        const int idx   = m_rttyShiftCombo->findData(saved);
-        m_rttyShiftCombo->setCurrentIndex(idx >= 0 ? idx : m_rttyShiftCombo->findData(170));
     }
+    // The slice owns the shift; MainWindow shows its value here once the
+    // decoder runs, and a choice here is sent to the slice.
+    m_rttyShiftCombo->setCurrentIndex(m_rttyShiftCombo->findData(170));
     connect(m_rttyShiftCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-        const int hz = m_rttyShiftCombo->currentData().toInt();
-        AppSettings::instance().setValue("RttyDecoderShiftHz", QString::number(hz));
-        AppSettings::instance().save();
-        emit rttyShiftHzChanged(hz);
+        emit rttyShiftHzChanged(m_rttyShiftCombo->currentData().toInt());
     });
     rttyBar->addWidget(m_rttyShiftCombo);
 
@@ -853,6 +877,18 @@ QString PanadapterApplet::cwCostColor(float cost)
     return QStringLiteral("#ff4040");
 }
 
+void PanadapterApplet::saveCwSens(int value)
+{
+    m_cwSensUnsaved = false;
+    if (m_cwSensBackend != QLatin1String("ggmorse")) {
+        CwDecodeSettings::setSensitivity(m_cwSensBackend, value);
+        return;
+    }
+    auto& settings = AppSettings::instance();
+    settings.setValue("CwDecoderSensitivity", QString::number(value));
+    settings.save();
+}
+
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
 #ifdef HAVE_CW_RX_BACKENDS
@@ -900,11 +936,12 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
     const QString unavailableReason = tuning ? QString{}
         : tr("%1 does not support manual decoder tuning.")
               .arg(m_cwEngineCombo->currentText());
+    // Sens works with every decoder, each on its own saved value.
+    showCwSensFor(key);
     // A description with no name gives a screen reader nothing to anchor it to
     // (docs/a11y.md; #4896), so name them here rather than only explaining why
     // they are unavailable.
-    const std::array<std::pair<QWidget*, QString>, 5> tuningControls{{
-        {m_cwSensSlider, tr("CW decode sensitivity")},
+    const std::array<std::pair<QWidget*, QString>, 4> tuningControls{{
         {m_lockPitchBtn, tr("Lock CW pitch estimate")},
         {m_lockSpeedBtn, tr("Lock CW speed estimate")},
         {m_pitchRangeSlider, tr("CW pitch search range")},
@@ -922,6 +959,25 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
         : QString{});
     if (selected) { m_cwStatsLabel->setText(status); }
 }
+void PanadapterApplet::showCwSensFor(const QString& backend)
+{
+    if (backend == m_cwSensBackend) { return; }
+    // An unsaved slider change belongs to the decoder being left.  Its
+    // debounced save reads the slider when it fires, which by then holds the
+    // incoming decoder's value.
+    if (m_cwSensUnsaved) { saveCwSens(m_cwSensSlider->value()); }
+    m_cwSensBackend = backend;
+    const bool ggmorse = backend == QLatin1String("ggmorse");
+    const int sens = ggmorse
+        ? AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt()
+        : CwDecodeSettings::sensitivity(backend);
+    const QSignalBlocker blocker(m_cwSensSlider);
+    m_cwSensSlider->setValue(sens);
+    // Read back the clamped value: a hand-edited ggmorse key can be out of span.
+    const float threshold = cwSensCostThreshold(m_cwSensSlider->value());
+    if (ggmorse) { m_cwCostThreshold = threshold; }
+    else { m_cwNeuralCostThreshold = threshold; }
+}
 void PanadapterApplet::appendUnscoredCwText(const QString& text)
 {
     QString clean = text;
@@ -935,14 +991,27 @@ void PanadapterApplet::appendUnscoredCwText(const QString& text)
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
     // For a backend that reports no per-letter score.
+
+    emit cwRxTextDisplayed(clean);
 }
 void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
 {
-    // The cost is 1 - the backend's own per-letter posterior. It picks the
-    // color (ggmorse's four bands, as theme tokens) and is never compared
-    // with the Sens threshold, which is on ggmorse's scale.
+    // The cost is 1 - the backend's own posterior (DeepFist per letter, DeepCW
+    // per chunk). It picks the color (ggmorse's four bands, as theme tokens),
+    // and text at or above this decoder's own Sens threshold is not shown.
+    // Text that is only a space is always shown, so hidden DeepFist letters
+    // never join two words, and a hidden DeepCW chunk that held a space
+    // leaves one (CwDecodeSettings::shownNeuralText).
     QString clean = text;
     clean.replace('\n', ' ');
+    const QTextDocument* doc = m_cwText->document();
+    // After a TX burst the insert below adds a separator space anyway.
+    const bool paneEndsInSpace = doc->isEmpty() || m_lastCwTextSource == CwTextSource::Tx
+        || doc->characterAt(doc->characterCount() - 2).isSpace();
+    const QString shown = CwDecodeSettings::shownNeuralText(
+        clean, cost, m_cwNeuralCostThreshold, paneEndsInSpace);
+    if (shown.isEmpty() && !clean.isEmpty()) { return; }
+    clean = shown;
     m_cwText->moveCursor(QTextCursor::End);
     if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
     m_lastCwTextSource = CwTextSource::Rx;
@@ -955,6 +1024,8 @@ void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
     QTextCursor cursor = m_cwText->textCursor();
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
+
+    emit cwRxTextDisplayed(clean);
 }
 #endif
 
@@ -1168,14 +1239,16 @@ void PanadapterApplet::setRttyPanelVisible(bool visible)
     m_rttyPanel->setVisible(visible);
 }
 
-int PanadapterApplet::rttyMarkHz() const
+void PanadapterApplet::setRttyMarkHz(int hz)
 {
-    return m_rttyMarkCombo->currentData().toInt();
+    if (hz < 0) { return; }
+    showSliceValue(m_rttyMarkCombo, kRttyMarkPresetsHz, hz);
 }
 
-int PanadapterApplet::rttyShiftHz() const
+void PanadapterApplet::setRttyShiftHz(int hz)
 {
-    return m_rttyShiftCombo->currentData().toInt();
+    if (hz < 0) { return; }
+    showSliceValue(m_rttyShiftCombo, kRttyShiftPresetsHz, hz);
 }
 
 float PanadapterApplet::rttyBaud() const

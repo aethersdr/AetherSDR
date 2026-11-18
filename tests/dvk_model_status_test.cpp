@@ -1,3 +1,5 @@
+#include "FlexTransmitServiceStatusTestSupport.h"
+#include "FlexSetupStatusTestSupport.h"
 // #6244 — DvkModel against the SmartSDR API wiki (TCPIP-dvk) and lines
 // captured from a FLEX-8600 on fw 4.2.20. Status lines go through the real
 // CommandParser, so quoted names with spaces are covered end to end.
@@ -31,7 +33,7 @@ void report(const char* label, bool ok)
 void feed(DvkModel& model, const QString& line)
 {
     const ParsedMessage msg = CommandParser::parseLine(line);
-    model.applyStatus(msg.object, msg.kvs);
+    applyDvkStatus(model, msg.object, msg.kvs);
 }
 
 QString nameOf(const DvkModel& model, int id)
@@ -55,13 +57,13 @@ int durationOf(const DvkModel& model, int id)
 }
 
 struct Sent {
-    QStringList commands;
+    QList<DvkRequest> commands;
 };
 
 void capture(DvkModel& model, Sent& sent)
 {
-    QObject::connect(&model, &DvkModel::replyCommandReady, &model,
-                     [&sent](const QString& cmd, const QString&, int) {
+    QObject::connect(&model, &DvkModel::controlRequested, &model,
+                     [&sent](const DvkRequest& cmd, quint64) {
         sent.commands << cmd;
     });
 }
@@ -198,18 +200,21 @@ int main(int argc, char* argv[])
         model.previewStop(3);
         model.playbackStop(3);
         report("stop verbs carry no id",
-               sent.commands == QStringList{QStringLiteral("dvk rec_stop"),
-                                            QStringLiteral("dvk preview_stop"),
-                                            QStringLiteral("dvk playback_stop")});
+               sent.commands == QList<DvkRequest>{{DvkRequest::Operation::RecordStop, -1, {}},
+                    {DvkRequest::Operation::PreviewStop, -1, {}},
+                    {DvkRequest::Operation::PlaybackStop, -1, {}}});
     }
     {
         DvkModel model;
+        quint64 requestId = 0;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+            [&](const DvkRequest&, quint64 token) { requestId = token; });
         Sent sent;
         capture(model, sent);
         model.clear(7);
-        model.handleCommandResponse(QStringLiteral("clear"), 7, 0u, QString());
+        model.handleControlReply(requestId, {TransmitServiceReply::Outcome::Accepted, 0u, {}});
         report("clear sends only the clear; the radio's name stands (fw 4.2.20 keeps it)",
-               sent.commands == QStringList{QStringLiteral("dvk clear id=7")});
+               sent.commands == QList<DvkRequest>{{DvkRequest::Operation::Clear, 7, {}}});
     }
     {
         DvkModel model;
@@ -217,7 +222,7 @@ int main(int argc, char* argv[])
         capture(model, sent);
         model.setName(2, QStringLiteral("  CQ | \"DX\"   'test'  "));
         report("set_name strips quote and pipe characters and collapses spaces",
-               sent.commands == QStringList{QStringLiteral("dvk set_name name=\"CQ DX test\" id=2")});
+               sent.commands == QList<DvkRequest>{{DvkRequest::Operation::Name, 2, QStringLiteral("CQ DX test")}});
         sent.commands.clear();
         model.setName(2, QStringLiteral("|\"'"));
         report("a name that sanitizes to empty sends nothing", sent.commands.isEmpty());
@@ -235,21 +240,26 @@ int main(int argc, char* argv[])
     // ── One operation at a time, before the radio echoes it (#6244 item 6) ──
     {
         DvkModel model;
+        quint64 requestId = 0;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+            [&](const DvkRequest&, quint64 token) { requestId = token; });
         feed(model, QStringLiteral("S1|dvk status=idle enabled=1"));
         report("idle admits a start", model.canStartOperation());
         model.previewStart(1);
         report("a sent start blocks the next one before any echo",
                !model.canStartOperation() && model.pendingOperation() == DvkModel::Preview);
         feed(model, QStringLiteral("S1|dvk status=preview id=1 enabled=1"));
-        model.handleCommandResponse(QStringLiteral("preview_start"), 1, 0u, QString());
-        report("the reply settles the pending start; the status still blocks",
-               model.pendingOperation() == DvkModel::Unknown && !model.canStartOperation());
+        model.handleControlReply(requestId, {TransmitServiceReply::Outcome::Accepted, 0u, {}});
+        report("acceptance does not retire the observed active operation",
+               model.pendingOperation() == DvkModel::Preview && !model.canStartOperation());
         feed(model, QStringLiteral("S0|dvk status=idle enabled=1"));
         report("idle again admits a start", model.canStartOperation());
 
         model.recStart(2);
-        model.handleCommandResponse(QStringLiteral("rec_start"), 2, 0x50004001u, QString());
-        report("a refused start releases admission", model.canStartOperation());
+        model.handleControlReply(requestId, {TransmitServiceReply::Outcome::Rejected, 0x50004001u, {}});
+        report("a refused start retires pending intent but keeps the license refusal",
+               model.pendingOperation() == DvkModel::Unknown && model.licenseRefused());
+        model.clearRefusal();
 
         model.setTransferActive(true);
         report("a running WAV transfer blocks a start", !model.canStartOperation());
@@ -270,10 +280,10 @@ int main(int argc, char* argv[])
         // Review #6247: STOP before the echo names the slot it stops.
         DvkModel model;
         int stopId = 0;
-        QObject::connect(&model, &DvkModel::replyCommandReady, &model,
-                         [&stopId](const QString&, const QString& verb, int id) {
-            if (verb == QLatin1String("rec_stop")) {
-                stopId = id;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+                         [&stopId](const DvkRequest& request, quint64) {
+            if (request.operation == DvkRequest::Operation::RecordStop) {
+                stopId = request.slot;
             }
         });
         model.recStart(4);
@@ -287,16 +297,14 @@ int main(int argc, char* argv[])
         using Kvs = QMap<QString, QString>;  // Q_ARG cannot take the comma
         const auto status = [&radio](const QString& name, const QString& enabled) {
             const Kvs kvs{{QStringLiteral("name"), name}, {QStringLiteral("enabled"), enabled}};
-            QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
-                                      Q_ARG(QString, QStringLiteral("license feature")),
-                                      Q_ARG(Kvs, kvs));
+            FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("license feature"), kvs);
         };
         radio.dvkModel().noteRefusal(0x50004001u);
         report("a refusal reaches RadioModel's entitlement input", radio.dvkLicenseRefused());
         status(QStringLiteral("digital_voice_keyer"), QStringLiteral("0"));
         report("a not-licensed status keeps the refusal", radio.dvkLicenseRefused());
         status(QStringLiteral("some_other_feature"), QStringLiteral("1"));
-        report("another feature's licence does not clear it", radio.dvkLicenseRefused());
+        report("another feature's license does not clear it", radio.dvkLicenseRefused());
         status(QStringLiteral("digital_voice_keyer"), QStringLiteral("1"));
         report("the radio reporting DVK licensed clears the refusal", !radio.dvkLicenseRefused());
     }
@@ -317,6 +325,9 @@ int main(int argc, char* argv[])
     // ── 50004001 is the license signal ──────────────────────────────────────
     {
         DvkModel model;
+        quint64 requestId = 0;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+            [&](const DvkRequest&, quint64 token) { requestId = token; });
         int refusedSignals = 0;
         bool lastRefused = false;
         QObject::connect(&model, &DvkModel::licenseRefusedChanged, &model,
@@ -327,17 +338,80 @@ int main(int argc, char* argv[])
             failedMessage = message;
         });
 
-        model.handleCommandResponse(QStringLiteral("rec_start"), 1, 0x50004001u, QString());
+        model.recStart(1);
+        model.handleControlReply(requestId, {TransmitServiceReply::Outcome::Rejected, 0x50004001u, {}});
         report("50004001 marks the DVK as refused", model.licenseRefused() && lastRefused);
         report("50004001 names the subscription",
                failedMessage.contains(QStringLiteral("SmartSDR+")));
-        model.handleCommandResponse(QStringLiteral("rec_start"), 1, 0x50004001u, QString());
+        model.handleControlReply(requestId, {TransmitServiceReply::Outcome::Rejected, 0x50004001u, {}});
         report("a repeat refusal does not re-signal", refusedSignals == 1);
 
         model.reset();
         report("reset clears the refusal and the slots",
                !model.licenseRefused() && !lastRefused && refusedSignals == 2
                    && model.recordings().isEmpty() && model.status() == DvkModel::Unknown);
+    }
+    // ── 50000015 on a core verb: this firmware has no DVK API (#7156) ───────
+    {
+        DvkModel model;
+        quint64 requestId = 0;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+            [&](const DvkRequest&, quint64 token) { requestId = token; });
+        // Each command must really reach the radio, or the reply below would
+        // answer nothing and the check would pass vacuously.
+        bool allSent = true;
+        const auto unknownCommand = [&] {
+            allSent = allSent && requestId != 0;
+            model.handleControlReply(requestId,
+                {TransmitServiceReply::Outcome::Rejected, 0x50000015u, {}});
+            requestId = 0;
+        };
+        int unsupportedSignals = 0;
+        bool lastUnsupported = false;
+        QObject::connect(&model, &DvkModel::unsupportedChanged, &model,
+                         [&](bool unsupported) { ++unsupportedSignals; lastUnsupported = unsupported; });
+        QString failedMessage;
+        QObject::connect(&model, &DvkModel::commandFailed, &model,
+                         [&](const QString&, int, uint, const QString& message) {
+            failedMessage = message;
+        });
+
+        model.clear(1);
+        unknownCommand();
+        model.setName(1, QStringLiteral("CQ"));
+        unknownCommand();
+        model.noteRefusal(0x50000015u);   // the WAV transfer path
+        report("50000015 on a newer verb or a transfer does not mark the DVK absent",
+               allSent && !model.unsupported() && unsupportedSignals == 0);
+
+        model.recStart(1);
+        unknownCommand();
+        report("50000015 on rec_start marks the firmware as having no DVK",
+               allSent && model.unsupported() && lastUnsupported && unsupportedSignals == 1);
+        report("50000015 is not read as a license refusal", !model.licenseRefused());
+        report("50000015 has a readable message",
+               failedMessage.contains(QStringLiteral("firmware")));
+        model.playbackStart(2);
+        unknownCommand();
+        report("a repeat does not re-signal", allSent && unsupportedSignals == 1);
+
+        model.clearRefusal();   // what a license status reporting DVK licensed does
+        report("a license status does not restore a missing DVK API", model.unsupported());
+
+        model.reset();
+        report("reset (disconnect) clears it for the next session",
+               !model.unsupported() && !lastUnsupported && unsupportedSignals == 2);
+    }
+    {
+        DvkModel model;
+        quint64 requestId = 0;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+            [&](const DvkRequest&, quint64 token) { requestId = token; });
+        model.previewStart(1);
+        model.handleControlReply(requestId,
+            {TransmitServiceReply::Outcome::Rejected, 0x50004001u, {}});
+        report("50004001 stays a license refusal, not a missing API",
+               requestId != 0 && model.licenseRefused() && !model.unsupported());
     }
     {
         report("busy file server has a readable message",

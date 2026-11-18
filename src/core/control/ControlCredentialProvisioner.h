@@ -4,6 +4,8 @@
 
 #include <QPointer>
 
+#include <optional>
+
 namespace AetherSDR::control {
 
 // Explicit, offline operator actions only; never called by startup restoration
@@ -17,6 +19,7 @@ public:
     struct Descriptor {
         QString id;
         ControlCredentials::Role role;
+        QString name;   // remote roles only
     };
     struct Result {
         Error error{Error::Storage};
@@ -26,8 +29,13 @@ public:
     using Callback = std::function<void(Result)>;
     explicit ControlCredentialProvisioner(ControlCredentialVault& vault, QObject* parent = nullptr);
     void run(Operation operation, const QString& removeId, Callback completed);
+    // Adds a record the caller generated (a paired remote client), with the
+    // same read-modify-write-readback as run().
+    void add(const ControlCredentials::Record& record, Callback completed);
 
 private:
+    void start(Operation operation, const QString& removeId,
+               std::optional<ControlCredentials::Record> prepared, Callback completed);
     void finish(Result result);
     QPointer<ControlCredentialVault> m_vault;
     Callback m_completed;

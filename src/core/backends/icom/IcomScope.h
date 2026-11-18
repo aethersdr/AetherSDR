@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -142,6 +143,11 @@ struct ScopeCalibration {
 // works over one transport is the thing that makes adding the other expensive.
 class ScopeDecoder {
 public:
+    struct Rejection {
+        enum class Kind { Size, Mode } kind;
+        std::size_t expected;
+        std::size_t received;
+    };
     explicit ScopeDecoder(ScopeGeometry geom = {}) : m_geom(geom) {}
 
     // Feed one CI-V frame. Returns a complete sweep when this frame finished
@@ -151,12 +157,16 @@ public:
 
     void reset() noexcept;
     [[nodiscard]] const ScopeGeometry& geometry() const noexcept { return m_geom; }
+    // Diagnostic for the most recent feed; absent for incomplete/ignored frames.
+    [[nodiscard]] const std::optional<Rejection>& rejection() const noexcept { return m_rejection; }
 
 private:
+    std::optional<Rejection> m_rejection;
     ScopeGeometry m_geom;
     ScopeFrame m_partial;
     bool m_assembling = false;
     int  m_expectedDivision = 0;
+    int  m_totalDivisions = 0;
 };
 
 // ---------------------------------------------------------------------------

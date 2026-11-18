@@ -122,8 +122,17 @@ int provisionCredentials(const CredentialOptions& options, control::ControlCrede
         return 1;
     }
     for (const auto& record : result.records) {
-        QTextStream(stdout) << "credentialId=" << record.id << " role="
-            << (record.role == control::ControlCredentials::Role::GrantAdmin ? "grant-admin" : "client") << '\n';
+        using Role = control::ControlCredentials::Role;
+        const char* role = record.role == Role::GrantAdmin ? "grant-admin"
+            : record.role == Role::RemoteObserve ? "remote-observe"
+            : record.role == Role::RemoteControl ? "remote-control" : "client";
+        QTextStream out(stdout);
+        out << "credentialId=" << record.id << " role=" << role;
+        if (!record.name.isEmpty()) {
+            // Client-chosen text: quoted, so it cannot pass for another field.
+            out << " name=\"" << QString(record.name).replace(u'"', u'\'') << '"';
+        }
+        out << '\n';
     }
     return 0;
 }

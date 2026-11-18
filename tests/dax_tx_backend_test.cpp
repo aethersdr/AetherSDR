@@ -77,7 +77,7 @@ struct Fixture {
 
     void status(quint32 id = kStream, quint32 owner = kOurs, bool tx = false)
     {
-        backend.decodeDaxTxStatus(QStringLiteral("stream 0x%1").arg(id, 0, 16),
+        backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x%1").arg(id, 0, 16),
             {{QStringLiteral("type"), QStringLiteral("dax_tx")},
              {QStringLiteral("client_handle"), QStringLiteral("0x%1").arg(owner, 0, 16)},
              {QStringLiteral("tx"), tx ? QStringLiteral("1") : QStringLiteral("0")}});
@@ -105,13 +105,13 @@ void exactCommandsAndObservations()
     check(f.observations.size() == 1 && f.observations.back().tx == false,
         "ACK before status does not invent selected state");
 
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("tx"), QStringLiteral("1")}});
     Outcome release;
     check(f.request(release, false) == ReceiveDispatch::Dispatched
         && f.commands.back() == QStringLiteral("stream set 0x4a000001 tx=0"),
         "release encodes only the exact client-stream yield command");
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("tx"), QStringLiteral("0")}});
     f.replies[1](0, {});
     check(release.calls == 1 && release.accepted && f.observations.size() == 3
@@ -130,10 +130,10 @@ void exactCommandsAndObservations()
 void strictObjectsAndDeltas()
 {
     Fixture f;
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("tx"), QStringLiteral("1")}});
     check(f.observations.empty(), "a typeless unknown stream cannot establish DAX identity");
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
         {{QStringLiteral("type"), QStringLiteral("dax_rx")},
          {QStringLiteral("client_handle"), QStringLiteral("0x12345678")},
          {QStringLiteral("tx"), QStringLiteral("1")}});
@@ -143,7 +143,7 @@ void strictObjectsAndDeltas()
             QStringLiteral("stream -1"), QStringLiteral("stream +1"),
             QStringLiteral("stream 0x4a000001 suffix"), QStringLiteral("stream 0x4a000001\n"),
             QStringLiteral("stream 0x4a00000g"), QStringLiteral("tx_audio_stream 0x")}) {
-        f.backend.decodeDaxTxStatus(object,
+        f.backend.statusIngress()->decodeDaxTxStatus(object,
             {{QStringLiteral("type"), QStringLiteral("dax_tx")},
              {QStringLiteral("client_handle"), QStringLiteral("0x12345678")},
              {QStringLiteral("tx"), QStringLiteral("1")}});
@@ -151,19 +151,19 @@ void strictObjectsAndDeltas()
     check(f.observations.empty() && f.commands.isEmpty(),
         "malformed, zero and overflowing stream identities emit no observation or command");
 
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 1241513985"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 1241513985"),
         {{QStringLiteral("type"), QStringLiteral("dax_tx")},
          {QStringLiteral("client_handle"), QStringLiteral("305419896")},
          {QStringLiteral("tx"), QStringLiteral("0")}});
     check(f.observations.size() == 1 && f.observations.back().streamId == kStream
         && f.observations.back().clientHandle == kOurs && f.observations.back().tx == false,
         "published decimal stream and client identities are accepted");
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0X4A000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0X4A000001"),
                               {{QStringLiteral("tx"), QStringLiteral("1")}});
     check(f.observations.size() == 2 && !f.observations.back().clientHandle
         && f.observations.back().tx == true,
         "known modern stream accepts a strict tx-only delta without inventing an owner field");
-    f.backend.decodeDaxTxStatus(QStringLiteral("tx_audio_stream 4a000002"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("tx_audio_stream 4a000002"),
         {{QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(f.observations.size() == 3 && f.observations.back().streamId == kStream + 1
         && !f.observations.back().tx,
@@ -191,10 +191,10 @@ void identityAndMalformedFields()
     check(f.request(unidentified) == ReceiveDispatch::Unsupported && unidentified.calls == 1,
         "an unknown local client handle cannot select a stream");
     f.handle = kOurs;
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000003"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000003"),
         {{QStringLiteral("type"), QStringLiteral("dax_tx")},
          {QStringLiteral("tx"), QStringLiteral("1")}});
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000003"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000003"),
         {{QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     Outcome missingOwner;
     check(f.request(missingOwner, true, kStream + 2) == ReceiveDispatch::Unsupported,
@@ -202,32 +202,32 @@ void identityAndMalformedFields()
 
     for (const QString& value : {QString(), QStringLiteral("true"), QStringLiteral("01"),
             QStringLiteral("-1"), QStringLiteral("2"), QStringLiteral("1 ")}) {
-        f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+        f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                                   {{QStringLiteral("tx"), value}});
         Outcome malformed;
         check(f.observations.back().invalidTx && !f.observations.back().tx
             && f.request(malformed) == ReceiveDispatch::Unsupported,
             "malformed explicit tx revokes the cached observation instead of becoming false");
     }
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("tx"), QStringLiteral("0")}});
     for (const QString& owner : {QString(), QStringLiteral("0"), QStringLiteral("0x0"),
             QStringLiteral("0x100000000"), QStringLiteral("4294967296"),
             QStringLiteral("0x12345678junk"), QStringLiteral("+305419896"),
             QStringLiteral(" 0x12345678")}) {
-        f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+        f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
             {{QStringLiteral("client_handle"), owner}, {QStringLiteral("tx"), QStringLiteral("1")}});
         Outcome malformed;
         check(f.observations.back().invalidOwner && !f.observations.back().clientHandle
             && f.request(malformed) == ReceiveDispatch::Unsupported,
             "malformed explicit owner never preserves prior local authority");
     }
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     Outcome ownerOnly;
     check(f.request(ownerOnly) == ReceiveDispatch::Unsupported,
         "owner recovery cannot inherit a tx bit received with invalid ownership");
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("tx"), QStringLiteral("0")}});
     Outcome recovered;
     check(f.request(recovered) == ReceiveDispatch::Dispatched,
@@ -248,10 +248,10 @@ void retirementAndStaleReplies()
 
     Outcome removed;
     f.request(removed);
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001 removed"), {});
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001 removed"), {});
     check(f.observations.back().removed, "modern removal is emitted");
     const std::size_t retiredObservations = f.observations.size();
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("tx"), QStringLiteral("1")}});
     check(f.observations.size() == retiredObservations,
         "a partial delta cannot revive a retired stream's type or authority");
@@ -262,7 +262,7 @@ void retirementAndStaleReplies()
 
     Outcome invalidTx;
     f.request(invalidTx);
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("tx"), QStringLiteral("invalid")}});
     f.status();
     f.replies[2](0, {});
@@ -284,18 +284,18 @@ void retirementAndStaleReplies()
     check(changedClient.calls == 1 && !changedClient.accepted,
         "reply cannot be accepted under a different current local client identity");
 
-    f.backend.decodeDaxTxStatus(QStringLiteral("tx_audio_stream 0x4a000002 removed"), {});
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("tx_audio_stream 0x4a000002 removed"), {});
     check(f.observations.back().removed && f.observations.back().streamId == kStream + 1,
         "unknown legacy removal is emitted for pending-create tombstone fencing");
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000003"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000003"),
                               {{QStringLiteral("in_use"), QStringLiteral("0")}});
     check(f.observations.back().removed && f.observations.back().streamId == kStream + 2,
         "unknown in_use=0 removal is emitted");
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000004"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000004"),
                               {{QStringLiteral("removed"), QString()}});
     check(f.observations.back().removed && f.observations.back().streamId == kStream + 3,
         "unknown bare removed-key status is emitted");
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001"),
                               {{QStringLiteral("type"), QStringLiteral("remote_audio_tx")}});
     check(f.observations.back().removed,
         "a numeric ID reclassified as another stream type retires DAX authority");
@@ -350,7 +350,7 @@ void sinkAndLifetimeBoundaries()
     {
         auto backend = std::make_unique<FlexBackend>();
         backend->setDaxTxClientHandleProvider([] { return kOurs; });
-        backend->decodeDaxTxStatus(QStringLiteral("tx_audio_stream 0x4a000001"),
+        backend->statusIngress()->decodeDaxTxStatus(QStringLiteral("tx_audio_stream 0x4a000001"),
             {{QStringLiteral("client_handle"), QStringLiteral("0x12345678")},
              {QStringLiteral("tx"), QStringLiteral("0")}});
         backend->setDaxTxCommandSink([&late](const QString&, FlexBackend::CommandReply reply,
@@ -400,7 +400,7 @@ void terminalWriteGuards()
         "the guarded sink receives a live copy of the original request guard");
     // Simulate the model's removal handler revoking a request while its command
     // is still queued, then the terminal writer consulting the captured copy.
-    f.backend.decodeDaxTxStatus(QStringLiteral("stream 0x4a000001 removed"), {});
+    f.backend.statusIngress()->decodeDaxTxStatus(QStringLiteral("stream 0x4a000001 removed"), {});
     original.revoke();
     int terminalWrites = 0;
     if (f.guards[0].permits()) {

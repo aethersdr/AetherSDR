@@ -159,8 +159,12 @@ Radios that expose these controls keep their normal behavior.
 
 Hover the Level, Compression or ALC gauge for its exact value. In CW modes the
 applet switches to keyer controls, including the APF toggle and level.
+**Speed** sets CW keying speed in WPM: move the slider, or type a value and
+press **Enter** or leave the value field to apply it. The field follows the
+radio's supported range.
 **Pitch** sits directly below **Speed**: use its slider or enter a frequency
 in Hz in the value field. Pitch follows the radio's supported range and step.
+Status refreshes preserve an unfinished speed or pitch entry.
 **Breakin**, **Iambic**, and **Hold Delay** share a separate row.
 **Hold Delay** re-sends your break-in delay after CW speed changes made here;
 it does not cover speed changes made at the radio or by another client.
@@ -253,6 +257,35 @@ is also active. VOX reconciliation requires VOX to be enabled.
 Another client's transmission does not open your local TX audio gate.
 These status reports do not start a transmission or send a PTT command.
 
+### TX off delay
+
+**TX Off Delay (ms):** in the **Timings (in ms)** group of
+**Settings → Radio Setup... → Transmit** keeps the radio transmitting for that
+many milliseconds after you release PTT, so the end of your last word is not
+cut off. Enter 0 to 2000 (2 seconds); 0 turns it off and is the default. AetherSDR stores
+the value on this computer, not on the radio.
+
+- It applies in voice modes only (USB, LSB, AM, FM, NFM). CW, digital modes,
+  DAX, CAT-keyed and WSPR transmissions unkey at once.
+- It applies to PTT that AetherSDR handles: **MOX**, keyboard PTT, a
+  footswitch on a computer serial port (CTS, DSR or DCD set to PTT input), the
+  RC-28 PTT button, and TCI hardware PTT such as a Stream Deck. A footswitch or
+  mic PTT wired to the radio's RCA PTT jack, ACC connector or mic jack unkeys
+  at the radio and is not delayed. To use the delay with a footswitch, connect
+  it to a computer serial port instead.
+- Pressing PTT again during the delay continues the same transmission.
+- The radio stays keyed, and **MOX** stays lit, until the delay ends. What
+  happens to your microphone depends on the mic source:
+  - With the **PC** mic source, your mic stays live for the first 300 ms after
+    release, and the rest of the delay is silent.
+  - With a mic on the radio (**MIC**, **BAL**, **LINE** or **ACC**), AetherSDR
+    cannot mute it. **Your mic stays live for the whole delay, and anything you
+    say during it goes on the air.** Keep the delay short with these mics; a few
+    hundred milliseconds is usually enough to keep your last word.
+- Pressing **TUNE** during the delay does nothing; wait for the delay to end, then press it again.
+- Disconnecting, or anything that stops transmit, ends the delay at once.
+- With **QUIN** on, the delay runs first and the outro tone follows it.
+
 ### Transmit timer
 
 While you transmit, a green `M:SS` timer (`H:MM:SS` after an hour) appears in
@@ -266,10 +299,10 @@ The audio controls stay in place as the timer appears and fades. In minimal mode
 
 ## Using AetherTX (Aetherial Audio)
 
-The client-side transmit voice chain — gate with RN2, EQ, split-band
-de-esser, compressor with Drive/Phase, tube, AetherVoice exciter, reverb and
-the final output stage with brickwall limiter, DC block, test tone and
-Quindar tones — lives in the **AetherTX** window, **Tools → AetherTX...**
+The client-side transmit voice chain — RN2 microphone denoising, Tube, EQ,
+Compressor with Drive/Phase, AetherVoice Exciter, Reverb, and Final Output —
+lives in the **AetherTX** window, **Tools → AetherTX...** Final Output includes
+the brickwall limiter, DC block, test tone, and Quindar tones.
 AetherTX needs a computer microphone (Mic source **PC**).
 
 See [Aetherial Audio](./aetherial-audio.md) for the stage reference and profiles.

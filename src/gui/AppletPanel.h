@@ -2,6 +2,7 @@
 
 #include "core/AudioEngine.h"
 #include "core/backends/RadioCapabilities.h"
+#include "AppletRailMetrics.h"
 
 #include <QWidget>
 #include <QMap>
@@ -27,6 +28,7 @@ namespace AetherSDR {
 
 class SliceModel;
 class RxApplet;
+class BandApplet;
 class SMeterWidget;
 class CrossNeedleMeterApplet;
 class CrossNeedleMeterWidget;
@@ -50,11 +52,11 @@ class EqApplet;
 class WaveApplet;
 class AetherClockApplet;
 class WfmApplet;
+class PureSignalApplet;
 class MiniPanApplet;
 class ClientEqApplet;
 class ClientCompApplet;
 class ClientGateApplet;
-class ClientDeEssApplet;
 class ClientTubeApplet;
 class ClientPuduApplet;
 class ClientReverbApplet;
@@ -87,6 +89,10 @@ class AppletPanel : public QWidget {
 public:
     explicit AppletPanel(QWidget* parent = nullptr);
 
+    static constexpr int kRailWidth      = AppletRailMetrics::kRailWidth;
+    static constexpr int kRailScrollBarW = AppletRailMetrics::kRailScrollBarW;
+    static constexpr int kStackedApplet  = AppletRailMetrics::kStackedApplet;
+
     void setSlice(SliceModel* slice);
     void setAntennaList(const QStringList& ants);
     void setMaxSlices(int maxSlices);
@@ -94,6 +100,7 @@ public:
     void updateSliceButtons(const QList<SliceModel*>& slices, int activeSliceId);
 
     RxApplet*     rxApplet()      { return m_rxApplet; }
+    BandApplet*   bandApplet()    { return m_bandApplet; }
     SMeterWidget* sMeterWidget()  { return m_sMeter; }
     CrossNeedleMeterWidget* crossNeedleMeterWidget() const;
     void setMeterTxValues(float forwardWatts, float swr);
@@ -126,6 +133,7 @@ public:
     WaveApplet*     waveApplet() const { return m_waveApplet; }
     AetherClockApplet* aetherClockApplet() const { return m_aetherClockApplet; }
     WfmApplet* wfmApplet() const { return m_wfmApplet; }
+    PureSignalApplet* pureSignalApplet() const { return m_pureSignalApplet; }
     MiniPanApplet*  miniPanApplet() const { return m_miniPanApplet; }
     // Phase 7.1: each side has its own CEQ applet — clientEqTxApplet()
     // is the original "ceq" tile bound to TX, clientEqRxApplet() is
@@ -140,12 +148,9 @@ public:
     ClientCompApplet* clientCompApplet()   { return m_clientCompApplet; }
     ClientCompApplet* clientCompTxApplet() { return m_clientCompApplet; }
     ClientCompApplet* clientCompRxApplet() { return m_clientCompRxApplet; }
-    // Phase 7.2: GATE-TX retains the legacy accessor name; GATE-RX is
-    // the new sibling tile bound to AudioEngine::clientGateRx().
-    ClientGateApplet* clientGateApplet()   { return m_clientGateApplet; }
-    ClientGateApplet* clientGateTxApplet() { return m_clientGateApplet; }
+    // AetherRX's gate tile, bound to AudioEngine::clientGateRx(). AetherTX
+    // has no gate tile (RN2 replaces the TX gate).
     ClientGateApplet* clientGateRxApplet() { return m_clientGateRxApplet; }
-    ClientDeEssApplet* clientDeEssApplet() { return m_clientDeEssApplet; }
     // Phase 7.4: TUBE-TX retains the legacy accessor; TUBE-RX is the new
     // sibling tile bound to AudioEngine::clientTubeRx().
     ClientTubeApplet* clientTubeApplet()   { return m_clientTubeApplet; }
@@ -405,6 +410,10 @@ private:
                                    bool available);
     void markHardwareConditional(const QString& id);
     void setWfmAvailable(bool available);
+    void setPureSignalAvailable(bool available);
+    // Shared by the two above: presentation follows availability, the
+    // workspace's open/closed choice is left alone.
+    void setPresentationAvailable(const QString& id, bool available);
     void persistVuMeterSettings() const;
     void showStandardMeterContextMenu(QWidget* source, const QPoint& position);
     static const int kFavoriteCount = 5;
@@ -425,6 +434,7 @@ private:
     QString          m_vuPeakDecayRate{QStringLiteral("Medium")};
     QString          m_vuFaceTheme{QStringLiteral("aether-default")};
     RxApplet*    m_rxApplet{nullptr};
+    BandApplet*  m_bandApplet{nullptr};
     TunerApplet* m_tunerApplet{nullptr};
     AmpApplet*   m_ampApplet{nullptr};
     DemoApplet*  m_demoApplet{nullptr};
@@ -451,14 +461,13 @@ private:
     WaveApplet*    m_waveApplet{nullptr};
     AetherClockApplet* m_aetherClockApplet{nullptr};
     WfmApplet* m_wfmApplet{nullptr};
+    PureSignalApplet* m_pureSignalApplet{nullptr};
     MiniPanApplet* m_miniPanApplet{nullptr};
     ClientEqApplet* m_clientEqTxApplet{nullptr};
     ClientEqApplet* m_clientEqRxApplet{nullptr};
     ClientCompApplet* m_clientCompApplet{nullptr};
     ClientCompApplet* m_clientCompRxApplet{nullptr};
-    ClientGateApplet* m_clientGateApplet{nullptr};
     ClientGateApplet* m_clientGateRxApplet{nullptr};
-    ClientDeEssApplet* m_clientDeEssApplet{nullptr};
     ClientTubeApplet* m_clientTubeApplet{nullptr};
     ClientTubeApplet* m_clientTubeRxApplet{nullptr};
     ClientPuduApplet* m_clientPuduApplet{nullptr};

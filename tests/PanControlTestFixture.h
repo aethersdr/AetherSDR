@@ -3,6 +3,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
+#include "FlexDisplayStatusTestSupport.h"
 
 #include <QDateTime>
 #include <QStringList>
@@ -22,12 +23,27 @@ public:
     }
     static void release(RadioModel& radio) { radio.m_connection = nullptr; }
     static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& values)
-    { radio.onStatusReceived(object, values); }
+    { radio.handleStatusForTest(object, values); }
     static int pending(const RadioModel& radio) { return radio.m_pendingPanCreations.size(); }
     static int history(const RadioModel& radio) { return radio.m_displayRetirements.size(); }
     static void retire(RadioModel& radio, const QString& id) { radio.retireDisplayResource(id); }
     static void settle(RadioModel& radio) { radio.settlePanCreations(); }
     static void newSession(RadioModel& radio) { ++radio.m_sessionGeneration; radio.settlePanCreations(); }
+    static void resetAudio(RadioModel& radio) { radio.resetAudioControls(); }
+    static int pendingAudio(const RadioModel& radio) { return radio.m_audioPending.size(); }
+    static void audioTransport(RadioModel& radio, RadioConnection& connection, FlexBackend& backend,
+                               std::function<void(quint32, const QString&)> writer)
+    {
+        connection.m_commandSinkForTest = std::move(writer);
+        backend.setAudioCommandSink(radio.audioCommandSink());
+    }
+    static void acceptGuiRegistration(RadioModel& radio)
+    {
+        radio.m_guiClientRegistrationState.begin();
+        radio.m_guiClientRegistrationState.complete(0, {});
+    }
+    static void startRx(RadioModel& radio) { radio.createRxAudioStream(); }
+    static void stopRx(RadioModel& radio) { radio.removeRxAudioStream(); }
     static void hold(RadioModel& radio) { radio.m_profileLoadRadioStateWriteHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 60000; }
     static void flush(RadioModel& radio)
     { radio.m_profileLoadRadioStateWriteHoldUntilMs = 0; radio.flushPendingProfileLoadPanWrites(); }
@@ -47,6 +63,15 @@ public:
         setSetupCommandSink([this](const QString& command, const RadioControlCompletion& completion) {
             if (!admit) { return false; }
             writes.push_back({command, completion});
+            const auto callback = onWrite;
+            if (callback) { callback(command); }
+            return true;
+        });
+        setAudioCommandSink([this](const QString& command, CommandReply reply, const AudioControlGuard& guard) {
+            if (!admit || !guard.permits()) { return false; }
+            writes.push_back({command, [reply](const RadioControlReply& result) {
+                if (reply) { reply(result.code, result.message); }
+            }});
             const auto callback = onWrite;
             if (callback) { callback(command); }
             return true;
@@ -75,15 +100,7 @@ struct PanControlFixture {
         backend = owned.get();
         radio.setBackendForTest(std::move(owned), QStringLiteral("flex"), backend->panStream());
         TxOperationIntegrationTestAccess::identity(radio, identity, backend);
-        // Injection installs universal receivers. Forward the existing Flex
-        // display extension as setupBackend does for a production session.
-        QObject::connect(backend, &IRadioBackend::extensionStatus, &radio,
-            [this](const QString& ns, const QString& kind, const QVariantMap& fields) {
-                PanadapterModel* pan = radio.panadapter(fields.value(QStringLiteral("panId")).toString());
-                if (pan && ns == QLatin1String("flex") && kind == QLatin1String("panState")) {
-                    pan->applyStateExtension(fields);
-                }
-            });
+
     }
     ~PanControlFixture() { TxOperationIntegrationTestAccess::release(radio); }
     void status(const QString& object, const QMap<QString, QString>& values)

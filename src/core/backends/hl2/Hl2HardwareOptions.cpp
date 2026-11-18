@@ -47,19 +47,33 @@ int intField(const QJsonObject& doc, const char* key, int defaultValue)
 }
 }  // namespace
 
-Hl2HardwareOptions Hl2HardwareOptions::load(const RadioSettingsScope& scope)
+Hl2HardwareOptions Hl2HardwareOptions::load(const RadioSettingsScope& scope,
+                                            std::optional<Codec>* storedCodec,
+                                            std::optional<FilterBoard>* storedFilterBoard)
 {
     Hl2HardwareOptions opts;      // every default already correct
+    if (storedCodec) {
+        storedCodec->reset();
+    }
+    if (storedFilterBoard) {
+        storedFilterBoard->reset();
+    }
     if (!scope.isValid())
         return opts;
     const QJsonObject doc = scope.feature(QLatin1String(kFeature));
     if (doc.isEmpty())
         return opts;
     opts.codec = clampCodec(intField(doc, kFieldCodec, static_cast<int>(opts.codec)));
+    if (storedCodec && doc.contains(QLatin1String(kFieldCodec))) {
+        *storedCodec = opts.codec;
+    }
     opts.ditherBit   = boolField(doc, kFieldDither, opts.ditherBit);
     opts.randomBit   = boolField(doc, kFieldRandom, opts.randomBit);
     opts.filterBoard = clampFilterBoard(
         intField(doc, kFieldFilterBoard, static_cast<int>(opts.filterBoard)));
+    if (storedFilterBoard && doc.contains(QLatin1String(kFieldFilterBoard))) {
+        *storedFilterBoard = opts.filterBoard;
+    }
     opts.n2adrHpf    = boolField(doc, kFieldN2adrHpf, opts.n2adrHpf);
     opts.cl1RefClock = boolField(doc, kFieldCl1, opts.cl1RefClock);
     opts.atuGateware = boolField(doc, kFieldAtu, opts.atuGateware);
@@ -69,7 +83,8 @@ Hl2HardwareOptions Hl2HardwareOptions::load(const RadioSettingsScope& scope)
 }
 
 void Hl2HardwareOptions::save(const RadioSettingsScope& scope,
-                              const Hl2HardwareOptions& opts)
+                              const Hl2HardwareOptions& opts, bool writeCodec,
+                              bool writeFilterBoard)
 {
     if (!scope.isValid())
         return;
@@ -84,10 +99,14 @@ void Hl2HardwareOptions::save(const RadioSettingsScope& scope,
         qWarning("Hl2HardwareOptions: refusing to overwrite unreadable or newer hardware options");
         return;
     }
-    doc[QLatin1String(kFieldCodec)]       = static_cast<int>(opts.codec);
+    if (writeCodec) {
+        doc[QLatin1String(kFieldCodec)] = static_cast<int>(opts.codec);
+    }
     doc[QLatin1String(kFieldDither)]      = opts.ditherBit;
     doc[QLatin1String(kFieldRandom)]      = opts.randomBit;
-    doc[QLatin1String(kFieldFilterBoard)] = static_cast<int>(opts.filterBoard);
+    if (writeFilterBoard) {
+        doc[QLatin1String(kFieldFilterBoard)] = static_cast<int>(opts.filterBoard);
+    }
     doc[QLatin1String(kFieldN2adrHpf)]    = opts.n2adrHpf;
     doc[QLatin1String(kFieldCl1)]         = opts.cl1RefClock;
     doc[QLatin1String(kFieldAtu)]         = opts.atuGateware;

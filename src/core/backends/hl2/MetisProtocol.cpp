@@ -156,6 +156,14 @@ Cc ccRxGain(int db) noexcept
     return {kC0AdcGain, 0x00, 0x00, 0x00, static_cast<std::uint8_t>(0x40 | code)};
 }
 
+Cc ccGain(int db, bool pureSignal) noexcept
+{
+    Cc b = ccRxGain(db);
+    if (pureSignal)
+        b[2] |= kGainPureSignal;
+    return b;
+}
+
 Cc ccAdcAssign() noexcept
 {
     // RX1..RX7 -> ADC0, TX attenuation 0. All-zero payload is the correct value
@@ -206,6 +214,12 @@ Cc ccTxDrive(int level, bool paEnable, bool atuTune) noexcept
     const auto c2 = static_cast<std::uint8_t>((paEnable ? 0x08 : 0x00)
                                             | (atuTune ? 0x10 : 0x00));
     return {kC0TxDrive, static_cast<std::uint8_t>(level), c2, 0x00, 0x00};
+}
+
+Cc ccTxDriveForRoute(TxRoute route, int level, bool txAllowed, bool atuTune) noexcept
+{
+    const int applied = txAllowed ? level : 0;
+    return ccTxDrive(applied, route == TxRoute::Ant && applied > 0, atuTune);
 }
 
 Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept
@@ -595,6 +609,73 @@ std::string gatewareVersionText(const DiscoveryReply& reply)
     if (reply.gatewareMinor)
         text += '.' + std::to_string(*reply.gatewareMinor);
     return text;
+}
+
+namespace {
+
+// gatewareVersionText()'s "major[.minor]", split once for both readers so the
+// two cannot drift in what they accept. nullopt unless every part present is
+// one to three digits; a part's range is the reader's to check.
+struct VersionTextParts {
+    std::string_view major;
+    std::optional<std::string_view> minor;
+};
+
+std::optional<VersionTextParts> splitVersionText(std::string_view text) noexcept
+{
+    const auto isDigits = [](std::string_view part) {
+        return !part.empty() && part.size() <= 3
+            && std::all_of(part.begin(), part.end(),
+                           [](char c) { return c >= '0' && c <= '9'; });
+    };
+    const std::size_t dot = text.find('.');
+    VersionTextParts parts{text.substr(0, dot), std::nullopt};
+    if (dot != std::string_view::npos) {
+        parts.minor = text.substr(dot + 1);
+    }
+    if (!isDigits(parts.major) || (parts.minor && !isDigits(*parts.minor))) {
+        return std::nullopt;
+    }
+    return parts;
+}
+
+// One to three digits, already checked, as a byte. nullopt above 255.
+std::optional<std::uint8_t> versionPartByte(std::string_view digits) noexcept
+{
+    int value = 0;
+    for (const char c : digits) {
+        value = value * 10 + (c - '0');
+    }
+    if (value > 0xFF) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint8_t>(value);
+}
+
+}  // namespace
+
+std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) noexcept
+{
+    const auto parts = splitVersionText(text);
+    if (!parts || !parts->minor) {
+        return std::nullopt;
+    }
+    return versionPartByte(*parts->minor);
+}
+
+std::optional<std::uint8_t> gatewareMajorFromVersionText(std::string_view text) noexcept
+{
+    const auto parts = splitVersionText(text);
+    if (!parts) {
+        return std::nullopt;
+    }
+    return versionPartByte(parts->major);
+}
+
+std::string gatewareVersionLabel(const DiscoveryReply& reply)
+{
+    const char* name = gatewareBoardName(boardForGatewareMinor(reply.gatewareMinor));
+    return name ? std::string(name) + " gateware" : std::string("Gateware");
 }
 
 std::array<std::uint8_t, kUsbPacketSize> ep2Packet(std::uint32_t seq, const Cc& a, const Cc& b) noexcept

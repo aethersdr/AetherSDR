@@ -354,6 +354,7 @@ private:
     void layoutDisplayPanel();
     void buildDisplayPanel();
     void toggleMemoryPanel();
+    void layoutMemoryPanel();
     void buildMemoryPanel();
     void hideAllSubPanels();
     void showBandPanelAt(const QPoint& pos);

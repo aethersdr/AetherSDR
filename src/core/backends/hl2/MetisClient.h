@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <complex>
+#include <optional>
 #include <span>
 #include <cstdint>
 #include <deque>
@@ -17,6 +18,7 @@
 
 #include "core/backends/hl2/Hl2ControlRequest.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 class QUdpSocket;
@@ -58,6 +60,10 @@ public:
         // a board for more receivers than it has is a configuration the
         // gateware cannot honour, and it does not report the refusal.
         int boardMaxRx = 0;
+        // PureSignal (HL2): the wire runs at least four
+        // receivers, DDC2 and DDC3 follow the TX NCO, and the 0x0a bank carries
+        // the PS bit. effectiveNumRx() applies the floor; see setPureSignal().
+        bool pureSignal = false;
         // J16 open-collector filter selection (MetisProtocol kOc* bits). Rides
         // the config register, so it is part of the same Params the config
         // register is rebuilt from — see setSampleRate() for why a field that
@@ -99,6 +105,10 @@ public:
         // the operator from one radio to the next. Empty when the serial is
         // not known yet, which the latch treats as "do not act".
         QString radioSerial;
+
+        // The transmit output (#4954). Authoritative at start(): the session's
+        // first route bank and whether 0x09 joins the rotation follow from it.
+        TxRoute txRoute = TxRoute::Ant;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -185,6 +195,14 @@ public:
     // and marshals these across; they are Q_INVOKABLE so it can.
     Q_INVOKABLE bool start(const Params& params);   // bind, send start + priming C&C, begin ingest
     Q_INVOKABLE void stop();                        // send stop, close socket
+    // As stop(), but sends the radio nothing: another host has it, and a
+    // metis-stop from us would halt that host's stream (the gateware decodes
+    // RUNSTOP from any host). If the stream was ours after all, the gateware's
+    // own watchdog halts it once our EP2 stops.
+    Q_INVOKABLE void abandon();
+    // Tests: the silence-recovery busy probe's answer, without a socket.
+    void answerSilenceProbeForTest(std::optional<bool> streaming) { onSilenceProbeAnswer(streaming); }
+    [[nodiscard]] bool silenceProbeAskingForTest() const noexcept { return m_silenceProbeAsking; }
     // Safe from any thread: Hl2Backend reads it to refuse a key while stopped.
     [[nodiscard]] bool isRunning() const noexcept { return m_running.load(); }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
@@ -208,6 +226,21 @@ public:
     // keep their frequencies, new ones start on RX1's.
     Q_INVOKABLE void setReceiverCount(int count);
     Q_INVOKABLE void setLnaGainDb(int db);
+    // PureSignal on the wire. On: at least four receivers (a hard-edge restart
+    // like setReceiverCount() if that changes the count), DDC2 and DDC3 on the
+    // TX frequency, and the PS bit in every 0x0a bank. While keyed the 0x0a bank
+    // carries setPureSignalTxGainDb() instead of the receive gain, and each key
+    // edge queues the bank at once so the feedback gain switches with T/R. The
+    // caller owns availability: a board with fewer than four DDCs streams
+    // nothing on the missing ones, so Hl2Backend never asks for it there.
+    void setPureSignal(bool enabled, quint64 generation);
+    // AD9866 gain during a PureSignal transmission, dB (-12..+48). The
+    // controller works in attenuation, att = 19 - dB (Hl2PsGain).
+    Q_INVOKABLE void setPureSignalTxGainDb(int db);
+    [[nodiscard]] bool pureSignal() const noexcept { return m_params.pureSignal; }
+    [[nodiscard]] int pureSignalTxGainDb() const noexcept { return m_psTxGainDb; }
+    // The 0x0a bank as the round robin sends it right now. Public for tests.
+    [[nodiscard]] Cc currentGainBank() const noexcept;
     // Select the companion filter board's band filter (MetisProtocol kOc* bits).
     // Latched into the config register, which rides bank A of every EP2 frame, so the
     // relays follow within one frame (~2.6 ms at 48 kHz). Not also queued as a
@@ -359,13 +392,21 @@ public:
 
     // Key / unkey. A key is refused unless enableTransmit(true) was called and the
     // session is streaming (start() until stop()); stop() drops a held key.
-    void setMox(bool keyed, const TxCoordinator::Operation& operation);
+    // Returns true when a key under a new operation ran the previous over's
+    // skipped cleanup (#7216): the caller then resets the modulator too.
+    bool setMox(bool keyed, const TxCoordinator::Operation& operation);
     // Only the backend's explicit CW break-in path uses CW holds to sustain
     // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
-    void setCwMox(bool keyed, const TxCoordinator::Operation& operation);
+    bool setCwMox(bool keyed, const TxCoordinator::Operation& operation);
     [[nodiscard]] bool isKeyed() const noexcept { return m_mox; }
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);
+    // Route and drive as ONE 0x09 bank, so a key right after the change cannot go
+    // out at the old level on the new route. `route` is a TxRoute as int (queued
+    // invoke). Refused while keyed, under radio PTT or inside the unkey tail; a
+    // refusal is answered by txRouteRefused() and changes nothing.
+    Q_INVOKABLE void setTxRoute(int route, int level);
+    [[nodiscard]] TxRoute txRoute() const noexcept { return m_txRoute; }
 
     // Software CW for a PC/USB/MIDI keyer. The carrier is generated in the EP2
     // packet builder so its envelope is sample-paced by the radio's fixed
@@ -410,6 +451,10 @@ public:
     [[nodiscard]] std::uint64_t txUnderflowPackets() const noexcept { return m_txUnderflowPackets; }
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
+    // Backlog dropped once when a mid-over starvation ends with the queue above the
+    // prime target plus kTxTrimMarginSamples: latency returns to the primed depth.
+    [[nodiscard]] std::uint64_t txTrimSamples() const noexcept { return m_txTrimSamples; }
+    [[nodiscard]] std::uint64_t txTrimEvents() const noexcept { return m_txTrimEvents; }
     // Empty-queue keyed silence at the head of the most recent over that
     // carried queued IQ, in EP2 samples: txUnderflowSamples from MOX-on to the
     // first queued sample. Logged at that moment under lcHl2Tx. Same THREAD
@@ -476,7 +521,14 @@ signals:
     // gateware 74), the PTT/key jack or the internal keyer. Host MOX never raises
     // it. An observation, per edge and unthrottled; false is also emitted when the
     // stream ends or goes silent with the bit set.
-    void radioPttChanged(bool keyed);
+    //
+    // keyRequest is true only on a rising edge that follows a released level
+    // seen on the wire since the last stream restart or silence. A PTT that is
+    // already held when the stream starts or resumes is shown (keyed) but is not
+    // an operator action, so it must not key the host.
+    void radioPttChanged(bool keyed, bool keyRequest);
+    // setTxRoute() refused; `actual` is the route still in force (TxRoute as int).
+    void txRouteRefused(int actual);
     // One accepted bandscope block: 2048 contiguous converter samples merged from the
     // four in-phase EP4 packets the gate kept (never per packet). Uncalibrated and
     // pre-DDC, on the AD9866's own scale: nothing downstream may treat these as
@@ -551,6 +603,9 @@ private:
     void onRadioPttEdge(bool keyed);
     // No stream, no observation: drop a PTT the radio last reported, with its edge.
     void clearRadioPtt();
+    // Whether this EP6 packet's ptt_resp may move the PTT: true only for a packet
+    // ahead of every one already believed (modulo 2^32). Advances the fence.
+    bool acceptPttSequence(std::uint32_t seq);
     void bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
                            std::span<const std::uint8_t> bytes);
     // Begin one arming cycle: raise wide_spectrum, clear the accumulator, arm
@@ -726,6 +781,18 @@ private:
     // and by setReceiverCount(), which restarts the stream by its own route and
     // must not have its EP6 credited to this one.
     bool m_silenceRecoveryArmed = false;
+    // Silence recovery asks the radio first, from THIS session's socket: a
+    // re-sent run to an HL2 another host is running would take it back. While
+    // running, the gateware sends replies to its stream host, so an answer here
+    // means the radio is idle or still ours (re-sending run is safe), and no
+    // answer means another host has it or the link is gone (abandon).
+    void stopSession(bool sendStopPacket);
+    void beginSilenceProbe();
+    void onSilenceProbeAnswer(std::optional<bool> streaming);
+    QTimer* m_silenceProbeTimer = nullptr;
+    bool m_silenceProbeAsking = false;
+    bool m_silenceProbeCleared = false;   // the radio answered this socket
+    static constexpr int kSilenceProbeMs = 500;
     // Stage 1's only observable is a datagram on m_socket; with no injectable sink
     // beside feedDatagram(), its test uses a fake Metis radio (socket exception, #5254).
     // Free-running and never restarted: the RQST/ACK floor differences it, so it must
@@ -749,6 +816,13 @@ private:
     // array of banks rather than one bank with a varying payload.
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
+    // PureSignal feedback gain while keyed (see setPureSignalTxGainDb()). The
+    // lowest gain by default: auto-attenuate raises it from the safe side.
+    int m_psTxGainDb = -12;
+    // DDC2 and DDC3 onto the TX NCO when PureSignal is on. Idempotent.
+    void applyPureSignalNcos();
+    // setReceiverCount()'s body once the new count is in m_params.
+    void relayoutReceivers(int before);
     // Queue (or re-queue) the twenty-four VersaClock banks, and remove any
     // still waiting. Private because the ORDER and the replace-don't-append
     // rule are part of the contract and a caller outside this class cannot
@@ -793,6 +867,22 @@ private:
     bool    m_cl1BankOnBuiltPacket = false;
 
     Cc m_ccTxDrive{};
+    // 0x09 from its parts; the one builder every site uses (gate applied inside).
+    [[nodiscard]] Cc txDriveBank() const noexcept;
+    [[nodiscard]] bool txRouteChangeBlocked() const noexcept;
+    // start()'s share of the above: route from m_params, drive 0, rotation flag.
+    void resetTxDriveForSession();
+    // The drive as last commanded, already gated at that time and clamped.
+    int m_txDriveLevel = 0;
+    TxRoute m_txRoute = TxRoute::Ant;
+    // 0x09 has no readback and is otherwise a one-shot, so once a session's route
+    // has left ANT the bank rides the round robin until the session ends: a lost
+    // bank, or the change back, is re-sent within one rotation.
+    bool m_txRouteInRotation = false;
+    // The radio radiates 40-54 ms past the MOX-off frame (measured, one unit) and
+    // the route bit moves the RF switch. Below Hl2Backend::kTxTailHoldMs (70), so
+    // a change the backend accepts after its own hold is not refused here.
+    static constexpr int kTxRouteUnkeyHoldMs = 60;
     // The ATU tune request's standing state, held because it shares 0x09 with
     // the drive level: setTxDriveLevel() has to re-assert it or a drive change
     // mid-tune would drop the request.
@@ -814,17 +904,27 @@ private:
     // empty when each block is due and any lateness is keyed zeros mid-over.
     // Armed on the keyed edge and on every abandon; the keyed queued-IQ arm then
     // sends silence until the target is queued. Margin = target - one block:
-    // two blocks (42.67 ms) cover every over measured; that is also the latency.
-    static constexpr std::size_t kTxPrimeBlockSamples = 1024;   // Hl2TxDsp block at 48 kHz; hl2_tx_gate_test pins it
-    static constexpr std::size_t kTxPrimeMarginBlocks = 2;
+    // 42.67 ms covers every over measured, whatever the block; that is also the latency.
+    // Hl2TxDsp's default block, at the EP2 rate: derived, so it follows the block.
+    static constexpr std::size_t kTxPrimeBlockSamples =
+        static_cast<std::size_t>(Hl2TxDsp::Config{}.dspBlockSize)
+        * static_cast<std::size_t>(Hl2TxDsp::Config{}.outputSampleRateHz
+                                   / Hl2TxDsp::Config{}.inputSampleRateHz);
+    static constexpr std::size_t kTxPrimeMarginSamples = 2048;  // 42.67 ms at 48 kHz
     static constexpr std::size_t kTxPrimeTargetSamples =
-        (kTxPrimeMarginBlocks + 1) * kTxPrimeBlockSamples;
+        kTxPrimeMarginSamples + kTxPrimeBlockSamples;
     // Deadline in packets: twice the margin's arrival time. A stopped producer is let go.
     static constexpr std::uint64_t kTxPrimeMaxHoldPackets =
-        (2 * kTxPrimeMarginBlocks * kTxPrimeBlockSamples)
-            / static_cast<std::size_t>(kTxSamplesPerPacket);
+        (2 * kTxPrimeMarginSamples) / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
+    // Depth above the target that is still steady state: a producer delivers up
+    // to 2048 samples (42.67 ms) at once, whatever the DSP block: a TCI client's
+    // 2048-sample mono TX_AUDIO frame. More than that after a mid-over starvation
+    // is a backlog, trimmed once to the target (trimTxIqAfterUnderflow()).
+    static constexpr std::size_t kTxTrimMarginSamples = 2048;
+    static_assert(kTxPrimeTargetSamples + kTxTrimMarginSamples < kTxQueueMax,
+                  "the trim threshold must sit below the overflow bound");
     std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally
     std::uint64_t m_txIqPrimeHeldPackets = 0;   // this hold, for the deadline
     std::uint64_t m_txPrimeHoldPackets = 0;     // process total
@@ -840,6 +940,8 @@ private:
     std::uint64_t m_txUnderflowPackets = 0;
     std::uint64_t m_txUnderflowSamples = 0;
     std::uint64_t m_txOverflowSamples = 0;
+    std::uint64_t m_txTrimSamples = 0;
+    std::uint64_t m_txTrimEvents = 0;
     // Length of the starvation currently in progress, in packets and in
     // substituted silent samples, so ONE log line describes the whole EPISODE
     // instead of one line per EP2 frame at 380 frames/second. Reported and
@@ -857,7 +959,12 @@ private:
         (static_cast<std::uint64_t>(kEp2AudioRateHz) / 10u)
             / static_cast<std::uint64_t>(kTxSamplesPerPacket);
     std::uint64_t m_txUnderflowRunQuietPackets = 0;
-    void reportTxUnderflowRun();
+    void reportTxUnderflowRun();   // also disarms the trim
+    // Set by a short packet once the prime has let go, so neither the key-down
+    // underflow nor a re-primed context arms it; abandonTxIq() disarms it. Acted
+    // on once, when the episode ends quietly.
+    bool m_txIqTrimArmed = false;
+    void trimTxIqAfterUnderflow();
     // Key-down report (#6052): armed on MOX's rising edge with the underflow and
     // prime-hold totals, reported once on the first keyed packet carrying queued
     // IQ. The differences are the silence this queue put at the head of the over
@@ -875,10 +982,13 @@ private:
     bool m_cwKeyDown = false;
     double m_cwEnvelope = 0.0;  // 0..1 raised-cosine ramp position
     bool m_mox = false;         // requested key state, only honoured if m_txAllowed
+    // Empty once the first OFF frame after an unkey is written (sendControlPacket).
     TxCoordinator::Operation m_moxOperation;
     TxCoordinator::Operation m_cwOperation;
     TxCoordinator::Operation m_toneOperation;
-    void setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
+    bool setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
+    // Set by an accepted key, cleared by flushTxIq(): the over's cleanup is owed.
+    bool m_overFlushOwed = false;
 
     std::uint32_t m_txSeq = 0;           // outgoing EP2 sequence
     unsigned m_roundRobin = 0;
@@ -889,6 +999,8 @@ private:
     friend struct MetisClientTestAccess; // socket-free transport-state injection
     std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> m_packetSinkForTest;
     std::function<qint64(const std::array<std::uint8_t, 64>&)> m_commandSinkForTest;
+    // Replaces the socket in start(), which then returns this (hl2_persist_*_test).
+    std::function<bool(const Params&)> m_startTransportForTest;
     std::deque<Cc> m_oneShot;           // which register pair to send next
     // The single RQST slot. Drained AFTER m_oneShot, never before: a one-shot is
     // a write the operator asked for, and letting a read-back overtake it would
@@ -1008,6 +1120,20 @@ private:
     // 384 kHz this path runs ~10 000 times a second.
     std::vector<std::vector<std::complex<float>>> m_blocks;
     Hl2Telemetry m_telemetry;                   // accumulated across RADDR cycles
+    // A frame with ptt_resp clear has been seen since start(), stop() or
+    // silence. Cleared in clearRadioPtt(), set only by a real frame: a synthetic
+    // release at link loss must not arm the next press (see radioPttChanged).
+    bool m_radioPttArmed = false;
+    // The newest EP6 sequence number whose ptt_resp was believed. A rewound or
+    // duplicate packet behind it keeps its IQ and telemetry but not its PTT level.
+    // Reset with the stream (clearRadioPtt(), a receiver-count restart).
+    std::uint32_t m_pttFenceSeq = 0;
+    bool m_havePttFence = false;
+    // Consecutive packets behind the fence. Reordering on a LAN is a few packets;
+    // this many in a row is a stream that restarted without a reset, ~0.17 s at
+    // the slowest EP6 rate (381 packets/s at 48 kHz, one receiver).
+    int m_pttStaleRun = 0;
+    static constexpr int kPttStaleRunRestart = 64;
     // Telemetry rides the C&C bytes of every EP6 frame, so it parses ~3000x/s at
     // 384 kHz. The meters only need ~10 Hz; rate-limit the cross-thread emit so
     // publishTelemetry() does not flood the GUI thread. (#4449 review)
@@ -1019,6 +1145,8 @@ private:
     // rate exists: downstream sees a ~10 Hz emit of a bit cycling up to ~190 times/s.
     int m_adcWindowSamples = 0;
     int m_adcWindowOverload = 0;
+    quint64 m_psGeneration = 0;
+    quint64 m_psAdcWindowGeneration = 0;
     // Forward-power maximum for the same window; see
     // Hl2Telemetry::forwardPowerPeakRaw for why the last value is not enough.
     ForwardPowerWindow m_fwdWindow;

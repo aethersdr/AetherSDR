@@ -128,6 +128,8 @@ public:
         update();
     }
 
+    const QString& label() const { return m_label; }
+
     void setLabel(const QString& label) {
         if (m_label == label) return;
         m_label = label;
@@ -258,6 +260,17 @@ public:
         update();
     }
 
+    void setExtraZone(float start, const QColor& color) {
+        m_extraZoneStart = start;
+        m_extraZoneColor = color;
+        update();
+    }
+
+    void setPeakAtEdgesEnabled(bool enabled) {
+        m_peakAtEdges = enabled;
+        update();
+    }
+
     // Optional scale strokes: labeled ticks are major, empty labels are minor.
     // An invalid colour preserves the label-only scale used by other applets.
     void setTickMarkColor(const QColor& color) {
@@ -274,6 +287,14 @@ public:
         const qreal clamped = qBound(0.5, scale, 4.0);
         if (qFuzzyCompare(m_metricScale, clamped)) return;
         m_metricScale = clamped;
+        update();
+    }
+
+    void setTickLabelCollisionAvoidanceEnabled(bool enabled) {
+        if (m_avoidTickLabelCollisions == enabled) {
+            return;
+        }
+        m_avoidTickLabelCollisions = enabled;
         update();
     }
 
@@ -449,6 +470,14 @@ protected:
                         p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, m_cautionColor);
                 }
 
+                if (m_extraZoneColor.isValid()) {
+                    int extraX = static_cast<int>(((m_extraZoneStart - m_min) / (m_max - m_min)) * barW);
+                    int extraW = qMin(fillW, redX) - extraX;
+                    if (extraW > 0) {
+                        p.fillRect(barX + extraX + 1, barY + 1, extraW, barH - 2, m_extraZoneColor);
+                    }
+                }
+
                 // Red portion (above red zone)
                 if (fillW > redX) {
                     int rw = fillW - redX;
@@ -465,6 +494,9 @@ protected:
             // the bar's own gradient, especially while it is decaying.
             // Reversed mode reads the peak as the lowest value (most
             // compression) but draws the same marker.
+            if (m_peakAtEdges && m_peakValue > m_min) {
+                peakX = qBound(barX + 1, peakX, barX + barW - 2);
+            }
             if (peakX > barX && peakX < barX + barW - 1) {
                 p.setPen(QPen(QColor(0xff, 0xff, 0xff), kPeakMarkerW));
                 p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
@@ -475,20 +507,35 @@ protected:
         QFont tickFont = font();
         tickFont.setPixelSize(qMax(6, qRound(9 * m_metricScale)));
         p.setFont(tickFont);
-
-        for (const auto& tick : m_ticks) {
+        const QFontMetrics fm(tickFont);
+        auto labelLeft = [&](const Tick& tick) {
+            const int tx = barX + static_cast<int>((tick.value - m_min) / (m_max - m_min) * barW);
+            const int tw = fm.horizontalAdvance(tick.label);
+            return qBound(2, tx - tw / 2, w - tw - 4);
+        };
+        int lastLabel = m_ticks.size() - 1;
+        while (lastLabel >= 0 && m_ticks[lastLabel].label.isEmpty()) {
+            --lastLabel;
+        }
+        const int lastLeft = lastLabel >= 0 ? labelLeft(m_ticks[lastLabel]) : w;
+        int previousRight = -2;
+        for (int i = 0; i < m_ticks.size(); ++i) {
+            const auto& tick = m_ticks[i];
             float tf = (tick.value - m_min) / (m_max - m_min);
             int tx = barX + static_cast<int>(tf * barW);
             QColor tickColor = (tick.value >= m_redStart) ? QColor(0xcc, 0x33, 0x33)
                              : (tick.value >= m_yellowStart) ? m_cautionColor
                              : QColor(0xc8, 0xd8, 0xe8);
             p.setPen(tickColor);
-            const QFontMetrics fm(tickFont);
-            int tw = fm.horizontalAdvance(tick.label);
-            // Center label on tick position, clamp to widget bounds
-            // Leave a small right margin so the last tick isn't flush to the edge
-            int lx = qBound(2, tx - tw / 2, w - tw - 4);
-            p.drawText(lx, qRound(10 * m_metricScale), tick.label);
+            const int tw = fm.horizontalAdvance(tick.label);
+            const int lx = labelLeft(tick);
+            // Reserve the final label first, then fit intermediate labels from left to right.
+            if (!tick.label.isEmpty()
+                    && (!m_avoidTickLabelCollisions || i == lastLabel
+                        || (lx >= previousRight + 2 && lx + tw + 2 <= lastLeft))) {
+                p.drawText(lx, qRound(10 * m_metricScale), tick.label);
+                previousRight = lx + tw;
+            }
             if (m_tickMarkColor.isValid()) {
                 const int length = qMax(2, qRound((tick.label.isEmpty() ? 3 : 7) * m_metricScale));
                 const int x = qBound(barX + 1, tx, barX + barW - 2);
@@ -727,13 +774,17 @@ private:
     qint64 m_nowMs{0};          // monotonic tick clock for the window
     float m_peakValue{0.0f};
     bool  m_peakEnabled{false};
+    bool  m_peakAtEdges{false};
     bool  m_reversed{false};
     bool  m_fillFromRight{false};
+    bool  m_avoidTickLabelCollisions{false};
     qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
     QColor m_tickMarkColor;
     QColor m_cautionColor{0x99, 0x88, 0x00};
+    float m_extraZoneStart{0.0f};
+    QColor m_extraZoneColor;
 
     // Hover value readout state (see setHoverValuePopupEnabled).
     //

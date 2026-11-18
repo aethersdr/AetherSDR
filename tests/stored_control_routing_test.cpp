@@ -23,15 +23,7 @@ class StoredControlTestAccess {
 public:
     static void memory(RadioModel& model, const MemoryDelta& delta) { model.applyMemoryChanges(delta); }
     static void profile(RadioModel& model, const ProfileDelta& delta) { model.applyProfileChanges(delta); }
-    static void message(RadioModel& model, const QString& line)
-    {
-        model.handleMessageReceived(CommandParser::parseLine(line), model.m_gpsSessionGeneration);
-    }
-    static void status(RadioModel& model, const QString& line)
-    {
-        const ParsedMessage msg = CommandParser::parseLine(line);
-        model.onStatusReceived(msg.object, msg.kvs);
-    }
+    static void line(RadioModel& model, const QString& text) { model.handleLineForTest(text); }
     static void capabilitiesChanged(RadioModel& model) { model.refreshCwProfilesOnCapabilityChange(); }
     static bool flush(RadioModel& model) { return model.m_localMemories.flush(); }
 };
@@ -173,6 +165,28 @@ void encoders()
         update.patch = {}; update.patch.rxFilterHigh = edge;
         check(!update.valid(), "out-of-envelope high filter remains refused");
     }
+    // MEASURED (#7093, FLEX-8400 firmware 4.3.16.42034): `slice set` keeps a
+    // Mark of 0-4000 Hz and a Shift of 0-2000 Hz and refuses one step past each.
+    // `memory set` accepted a Mark of 0, 15, 25, 75 and 4000 and a Shift of 2000,
+    // and refused a Shift of 2005 (#7264); no memory Mark above 4000 was sent.
+    // The edges pinned here (4001, 2001) are the app's ruled range (#7093,
+    // MemoryFields::kRtty*), not radio readings.
+    for (const int mark : {0, 75, 4000}) {
+        update.patch = {}; update.patch.rttyMark = mark;
+        check(update.valid(), "RTTY mark inside 0-4000 Hz is storable");
+    }
+    for (const int mark : {-1, 4001}) {
+        update.patch = {}; update.patch.rttyMark = mark;
+        check(!update.valid(), "RTTY mark outside 0-4000 Hz remains refused");
+    }
+    for (const int shift : {0, 2000}) {
+        update.patch = {}; update.patch.rttyShift = shift;
+        check(update.valid(), "RTTY shift inside 0-2000 Hz is storable");
+    }
+    for (const int shift : {-1, 2001}) {
+        update.patch = {}; update.patch.rttyShift = shift;
+        check(!update.valid(), "RTTY shift outside 0-2000 Hz remains refused");
+    }
 }
 void cwProfileState()
 {
@@ -198,16 +212,16 @@ void cwProfileRawStatus()
 {
     RadioModel model;
     check(model.rebuildBackendForTest(QStringLiteral("flex")), "raw CW status test installs the Flex decoder");
-    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw list=Default^Default Casual^Default Contest"));
-    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw current=Default Contest"));
-    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw unsaved_changes_cw=1"));
+    StoredControlTestAccess::line(model, QStringLiteral("S0|profile cw list=Default^Default Casual^Default Contest"));
+    StoredControlTestAccess::line(model, QStringLiteral("S0|profile cw current=Default Contest"));
+    StoredControlTestAccess::line(model, QStringLiteral("S0|profile cw unsaved_changes_cw=1"));
     const TransmitModel& tx = model.transmitModel();
     check(tx.cwProfileList() == QStringList{QStringLiteral("Default"), QStringLiteral("Default Casual"),
                                             QStringLiteral("Default Contest")},
           "raw CW list keeps names with spaces");
     check(tx.activeCwProfile() == QStringLiteral("Default Contest") && tx.cwProfileUnsaved(),
           "raw CW current and unsaved flag reach the transmit model");
-    StoredControlTestAccess::status(model, QStringLiteral("S0|profile unsaved_changes_cw=0"));
+    StoredControlTestAccess::line(model, QStringLiteral("S0|profile unsaved_changes_cw=0"));
     check(!tx.cwProfileUnsaved(), "space-free unsaved flag clears through the kv path");
 }
 void cwProfileLateCapability()

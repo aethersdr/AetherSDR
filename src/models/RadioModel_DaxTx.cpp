@@ -267,14 +267,23 @@ void RadioModel::refreshDaxTxOwnershipGuards()
     if (self && session == m_daxTxSession) { emit daxTxOwnershipChanged(); }
 }
 
+// Uncertainty is a write the radio has not reported on yet: a dispatched
+// selection or a pending create. Ending an intent before either leaves the
+// observed state exact, and only fresh status could clear the flag otherwise.
+bool RadioModel::daxTxOwnershipWritten() const
+{
+    return (m_daxTxOwnershipIntent && m_daxTxOwnershipIntent->dispatched) || m_daxTxCreatePending;
+}
+
 void RadioModel::interruptDaxTxOwnership(const QString& reason)
 {
     if (!m_daxTxOwnershipIntent) { return; }
+    const bool written = daxTxOwnershipWritten();
     m_daxTxOwnershipIntent->guard.revoke();
     m_daxTxCreateGuard.revoke();
     ++m_daxTxCreateTicket;
     m_daxTxCreatePending = false;
-    m_daxTxUncertain = true;
+    m_daxTxUncertain = m_daxTxUncertain || written;
     finishDaxTxOwnership(false, reason);
 }
 
@@ -568,12 +577,13 @@ void RadioModel::expireDaxTxOwnership(quint64 ticket)
     const QPointer<RadioModel> self(this);
     const quint64 session = m_daxTxSession;
     const TxCoordinator::Request wsprInput = m_wsprTxInput;
+    const bool written = daxTxOwnershipWritten();
     m_daxTxOwnershipIntent->guard.revoke();
     m_daxTxCreateGuard.revoke();
     ++m_daxTxCreateTicket;
     m_daxTxCreatePending = false;
     m_daxTxOwnershipIntent.reset();
-    m_daxTxUncertain = true;
+    m_daxTxUncertain = m_daxTxUncertain || written;
     m_wsprTxReleaseWhenReady = false;
     m_daxTxOutcome = QStringLiteral("timed-out");
     m_daxTxError = tr("DAX TX stream selection was not confirmed. No retry or rollback was sent.");
@@ -592,15 +602,18 @@ void RadioModel::releaseWsprDaxTxOwnership()
     if (m_daxTxOwnershipIntent) {
         // Sink admission can precede the actual network write. Cancellation
         // revokes that exact queued mutation even when the sink accepted it.
+        const bool written = daxTxOwnershipWritten();
         m_daxTxOwnershipIntent->guard.revoke();
         m_daxTxCreateGuard.revoke();
         ++m_daxTxCreateTicket;
         ++m_daxTxTicket;
         m_daxTxCreatePending = false;
         m_daxTxOwnershipIntent.reset();
-        m_daxTxUncertain = true;
-        m_daxTxOutcome = QStringLiteral("unknown");
-        m_daxTxError = tr("The beacon ended before ownership settled. Waiting for fresh radio status.");
+        if (written) {
+            m_daxTxUncertain = true;
+            m_daxTxOutcome = QStringLiteral("unknown");
+            m_daxTxError = tr("The beacon ended before ownership settled. Waiting for fresh radio status.");
+        }
     }
     finishWsprDaxTxRelease();
     if (self && session == m_daxTxSession) { publishDaxTxOwnership(); }

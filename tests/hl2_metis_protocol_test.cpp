@@ -294,6 +294,62 @@ int main()
         const auto cut = parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x15));
         check(cut && !cut->gatewareMinor && gatewareVersionText(*cut) == "74",
               "a reply ending before 0x15 shows the major version alone");
+        reply[0x15] = 52;
+        check(gatewareVersionLabel(*parseDiscoveryReply(reply)) == "SQUARE SDR 2 gateware",
+              "minor 52 labels the version with the board's name");
+        reply[0x15] = 3;
+        check(gatewareVersionLabel(*parseDiscoveryReply(reply)) == "Gateware",
+              "stock minor 3 keeps the plain label");
+        check(gatewareVersionLabel(*cut) == "Gateware", "no minor keeps the plain label");
+        // The connect path recovers the minor from the version text.
+        check(gatewareMinorFromVersionText("75.52") == std::optional<std::uint8_t>(52),
+              "\"75.52\" -> minor 52");
+        check(!gatewareMinorFromVersionText("74"), "\"74\" -> no minor");
+        check(!gatewareMinorFromVersionText(""), "empty version -> no minor");
+        check(!gatewareMinorFromVersionText("74.256"), "minor above 255 rejected");
+        check(!gatewareMinorFromVersionText("74."), "empty minor rejected");
+        check(!gatewareMinorFromVersionText("74.5x"), "non-digit minor rejected");
+        check(!gatewareMinorFromVersionText("4.2.20.41343"), "a Flex version is not a minor");
+        bool roundTrips = true;
+        for (int m = 0; m <= 0xFF; ++m) {
+            reply[0x15] = static_cast<std::uint8_t>(m);
+            const auto parsed = parseDiscoveryReply(reply);
+            roundTrips = roundTrips
+                && gatewareMinorFromVersionText(gatewareVersionText(*parsed)) == parsed->gatewareMinor;
+        }
+        check(roundTrips, "every minor 0..255 round-trips through the version text");
+        // The support tier's inputs (#7311): the major and a stable board id,
+        // neither of which is the display label.
+        check(gatewareMajorFromVersionText("74.3") == std::optional<std::uint8_t>(74),
+              "\"74.3\" -> major 74");
+        check(gatewareMajorFromVersionText("74") == std::optional<std::uint8_t>(74),
+              "\"74\" -> major 74");
+        check(gatewareMajorFromVersionText("75.52") == std::optional<std::uint8_t>(75),
+              "\"75.52\" -> major 75");
+        check(!gatewareMajorFromVersionText(""), "empty version -> no major");
+        check(!gatewareMajorFromVersionText("256.3"), "major above 255 rejected");
+        check(!gatewareMajorFromVersionText("74x"), "non-digit major rejected");
+        check(!gatewareMajorFromVersionText("74.5x"), "malformed minor rejects the major too");
+        check(!gatewareMajorFromVersionText("4.2.20.41343"), "a Flex version is not a major");
+        bool majorsRoundTrip = true;
+        for (int v = 0; v <= 0xFF; ++v) {
+            reply[0x09] = static_cast<std::uint8_t>(v);
+            const auto parsed = parseDiscoveryReply(reply);
+            majorsRoundTrip = majorsRoundTrip
+                && gatewareMajorFromVersionText(gatewareVersionText(*parsed))
+                       == std::optional<std::uint8_t>(parsed->gatewareVersion);
+        }
+        reply[0x09] = 74;
+        check(majorsRoundTrip, "every major 0..255 round-trips through the version text");
+        check(std::string(boardIdFor(GatewareBoard::Unknown)) == "hl2",
+              "a board that does not name itself is \"hl2\"");
+        check(std::string(boardIdFor(GatewareBoard::SquareSdr2)) == "square-sdr-2",
+              "SQUARE SDR 2 is \"square-sdr-2\"");
+        check(std::string(boardIdFor(GatewareBoard::Square3)) == "square-3",
+              "SQUARE 3 is \"square-3\"");
+        check(std::string(boardIdFor(boardForGatewareMinor(3))) == "hl2"
+                  && std::string(boardIdFor(boardForGatewareMinor(std::nullopt))) == "hl2",
+              "stock minor 3 and no minor both map to \"hl2\"");
         std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
     }
@@ -808,6 +864,51 @@ int main()
             w.clear();
             check(!w.peak.has_value() && w.samples == 0,
                   "clear() leaves no stale peak for the next window");
+        }
+
+        // Reverse power: the same window keeps the loudest non-ACK RADDR 2
+        // DATA[31:16]. Bias (DATA[15:0]), RADDR 1 and an ACK's echo are not it,
+        // and it does not count toward the forward denominator.
+        {
+            ForwardPowerWindow w;
+            check(!w.reversePeak.has_value(), "an empty window has no reverse peak");
+            w.observe(*parseEp6Response(frame(0x10, (40u << 16) | 900u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (220u << 16) | 5u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3000u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x02 << 1), 0xFFFF0000u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (60u << 16) | 900u).data()));
+            check(w.reversePeak.value_or(-1) == 220,
+                  "reverse peak is the loudest RADDR 2 upper word, not the last (60)");
+            check(w.peak.value_or(-1) == 3000 && w.samples == 1,
+                  "RADDR 2 leaves the forward peak and its count alone");
+            w.clear();
+            check(!w.reversePeak.has_value(), "clear() drops the reverse peak too");
+        }
+
+        // Keyed SWR gate: the key-on windows are dropped, a steady carrier
+        // then passes, a speech pause is dropped, and the next syllable passes.
+        {
+            KeyedSwrGate g;
+            for (int i = 0; i < KeyedSwrGate::kKeyOnWindows; ++i)
+                check(!g.accept(2000), "a key-on window is dropped");
+            check(g.accept(2000), "the window after the key-on windows passes");
+            for (int i = 0; i < 20; ++i)
+                g.accept(2000);
+            check(g.accept(1990), "a steady carrier keeps passing");
+            check(!g.accept(800), "a pause window well below the envelope is dropped");
+            check(!g.accept(700), "the pause stays dropped while the envelope remembers");
+            check(g.accept(1900), "the next syllable passes again");
+            g.reset();
+            check(!g.accept(400), "reset() starts a new over with its key-on windows");
+            g.accept(400);
+            check(g.accept(400), "and a quieter over then passes on its own envelope");
+            KeyedSwrGate slow;
+            for (int i = 0; i <= KeyedSwrGate::kKeyOnWindows; ++i)
+                slow.accept(2000);
+            bool passedAgain = false;
+            for (int i = 0; i < 30 && !passedAgain; ++i)
+                passedAgain = slow.accept(1000);
+            check(passedAgain, "a lasting lower level passes once the envelope has decayed");
         }
 
         // A RADDR-1 response whose temperature word is 0 is not a measurement:

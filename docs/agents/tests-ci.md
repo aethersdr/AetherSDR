@@ -27,7 +27,10 @@ A test that touches `AppSettings` also needs its target name in the
 per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`) of tests
 kept on the macOS and Windows jobs because the claim each pins is about that
 platform's toolchain (Apple Metal, MSVC portability); the Linux job runs no
-tests, and the list does not grow. Every test declared in `tests.cmake` that
+tests, and the list does not grow. Pull-request CI does not compile tests either:
+Linux and macOS build `aether_non_test_targets` plus the macOS gate tests, so
+**build your test target locally before pushing**. A test that no longer
+compiles passes every PR check and fails `main` after the merge. Every test declared in `tests.cmake` that
 the default configure builds runs unfiltered on every push to `main`
 (`full-suite.yml`) and twice weekly under the sanitizers (`sanitizers.yml`). (A test
 behind a default-OFF option runs in neither unless that lane passes the
