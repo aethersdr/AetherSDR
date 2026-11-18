@@ -141,9 +141,11 @@ The Windows installer workflow produces this automatically:
    alongside the other Windows-Installer artifacts. Maintainers therefore get
    the same AetherSDR and Qt PDB set for local WinDbg/Visual Studio debugging
    without unpacking a `.msixupload`. On a tag, the same set plus the waveform
-   helper's PDB is also attached to the release as
+   helper's PDB is also published as
    `AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz`, which does not expire
-   ([debugging-crashes.md](debugging-crashes.md)).
+   ([debugging-crashes.md](debugging-crashes.md)). From v26.11.4 it is at
+   `https://updates.aethersdr.com/releases/vX.Y.Z/`; through v26.11.3 it is
+   attached to the GitHub release.
 
 The Qt-provided PDBs are packaged unchanged. `windeployqt` selects them from
 the same exact Qt installation that supplied the deployed DLLs; `pdbcopy` is
@@ -154,8 +156,8 @@ that third-party Qt symbols were indexed, so confirm the first qualifying
 Health report for this package version resolves Qt function names rather than
 only `Qt6*.dll+offset`.
 
-Submitting the `.msixupload` to Partner Center (manually today, or via the
-automated draft-staging flow below) is the only "publish" step needed —
+Submitting the `.msixupload` to Partner Center through the
+automated production flow below is the only "publish" step needed —
 Partner Center decodes future crash stacks against the bundled `.appxsym`
 automatically, with no further action required.
 
@@ -173,9 +175,12 @@ works cross-platform against the same PDB:
    privately, for a crash a minidump cannot explain. Store Partner Center TSVs
    are unsymbolized — request the `.dmp`.
 2. **Get the matching PDBs** — they must be from the *exact* build that crashed
-   or the debug-ids won't match. For a release, download its symbol archive:
-   `gh release download vX.Y.Z -R aethersdr/AetherSDR -p '*-Windows-x64-symbols.tar.xz'`
-   and extract it with `tar -xJf`. For a branch build, or a release older than
+   or the debug-ids won't match. For a release, download its symbol archive.
+   From v26.11.4:
+   `curl -O https://updates.aethersdr.com/releases/vX.Y.Z/AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz`;
+   through v26.11.3:
+   `gh release download vX.Y.Z -R aethersdr/AetherSDR -p '*-Windows-x64-symbols.tar.xz'`.
+   Extract it with `tar -xJf`. For a branch build, or a release older than
    those archives, pull the `Windows-Symbols` artifact from that
    `windows-installer.yml` run within its 90 days:
    `gh run download <run-id> -R aethersdr/AetherSDR -n Windows-Symbols`.
@@ -234,42 +239,39 @@ the checked-in defaults when set:
 If the identity variables are unset, CI now uses the checked-in Partner Center
 identity defaults from `store-identity.ps1`.
 
-## Automated Store Submission (weekly release cycle) — WIRED
+## Automated Store Submission (weekly release cycle)
 
-> Status: **wired, dormant until credentials are set.** The `Windows Installer`
-> workflow now stages a **draft** Store submission on every `v*` tag push, but
-> the step is a no-op until the maintainer completes the one-time Entra /
-> Partner Center setup below and sets the `AETHERSDR_STORE_PRODUCT_ID`
-> repository variable. Until then the workflow behaves exactly as before
-> (builds the `.msixupload`, attaches it to the release).
+Set the GitHub Actions secret **`AETHERSDR_STORE_AUTO_PUBLISH` to `true` once**
+to enable full production publication for future release tags. The existing
+Store credentials and `AETHERSDR_STORE_PRODUCT_ID` remain in use. There is no
+flight setup, per-release checkbox, manual upload, or Partner Center release
+button in this production flow.
 
-On a `v*` tag push the workflow:
+On an upstream `v*` tag push, the Windows Installer workflow builds the package
+and runs **Publish Microsoft Store production** in the existing `release`
+environment. `invoke-store-production.ps1` reads the arming secret there and
+passes `-Commit -CommitProduction` to `publish-store.ps1` when it is exactly
+`true`. If the secret is unset or disabled, the upload remains draft-only. An
+armed run that finds no `.msixupload` fails rather than finishing green with
+nothing submitted.
 
-1. Builds `AetherSDR.exe`, runs `windeployqt`, packages the MSIX, and creates
-   the `.msixupload` (existing steps).
-2. The pinned `microsoft/microsoft-store-apppublisher` action puts the pinned
-   `msstore` CLI v0.4.2 on PATH and the workflow logs `msstore --version`.
-3. `msstore reconfigure` authenticates from the four GitHub secrets.
-4. `packaging/windows/publish-store.ps1` finds the `.msixupload` and runs
-   `msstore publish <pkg>.msixupload -id <ProductId> --uploadTimeout 300
-   --noCommit` — staging a **draft**. `--noCommit` is the safety gate that keeps
-   it out of certification. A maintainer reviews the pending submission in
-   Partner Center and clicks **Submit to Store** to start certification. **CI
-   never publishes to the live channel on its own.**
+The armed path makes one call with the pinned Microsoft Store CLI v0.4.2:
 
-Guard rails (all three must pass before Partner Center is touched):
+```powershell
+msstore publish <package>.msixupload -id <ProductId> --uploadTimeout 300
+```
 
-- The step runs only on a `push` event for a `refs/tags/v*` ref. Manual
-  dispatches, including those targeting a tag, never attach release assets or
-  stage a production Store draft.
-- The step is skipped unless the `AETHERSDR_STORE_PRODUCT_ID` **repository
-  variable** is set — so the feature is dormant until you opt in.
-- The publication plan requires the upstream `aethersdr/AetherSDR` repository;
-  forks cannot select production publication even if they configure secrets.
+There is no `--noCommit`, separate metadata update, version readback, or ingestion
+polling. Microsoft handles package validation, submission processing,
+certification and publication using the app's existing Store configuration.
+The CLI's exit status determines success or failure.
 
-If the MSIX packaging step (which is `continue-on-error`) produced no
-`.msixupload`, `publish-store.ps1` warns and exits 0 rather than turning an
-otherwise-successful release red.
+Production jobs share one concurrency group, so an active upload is never
+cancelled. GitHub keeps only one pending run per group, though: if two tags
+queue behind a running upload, the newer one replaces the older, which then has
+to be re-run by hand.
+The existing routing limits production to upstream release tag pushes with the
+configured product ID; manual dispatches and forks do not publish production.
 
 The upload timeout is deliberately explicit, and stays that way — but it is no
 longer a bug workaround. `msstore` CLI v0.4.0 and v0.4.1 had a regression where
@@ -300,7 +302,7 @@ The `msstore` GitHub Actions path is currently supported for **free products
 only**, which AetherSDR is. The app must already be published and live in the
 Store — done via the manual `.msixupload`. **TL;DR:** create an Entra app
 registration, give it the **Manager** role in Partner Center, then store four
-secrets + one variable in GitHub.
+credential secrets + one product variable in GitHub, plus the arming secret below.
 
 0. **Individual accounts: create a free Entra tenant first.** An individual
    (personal-MSA) Partner Center account has no Entra/Azure AD tenant by
@@ -337,13 +339,14 @@ secrets + one variable in GitHub.
      `SELLER_ID`.
    - Variable: `AETHERSDR_STORE_PRODUCT_ID` (the Store product ID). **Leaving
      this unset keeps the whole Store-submission step disabled** — set it last,
-     once the four secrets are in place, to switch the automation on.
+     once the four secrets are in place, to enable Store uploads.
+   - Secret: `AETHERSDR_STORE_AUTO_PUBLISH=true` arms full production commit and
+     automatic publication. Set it at repository scope or in `release`; an
+     environment secret overrides the repository secret.
 
-4. **First run.** Cut a release (or re-tag) so a `v*` tag pushes. Watch the
-   *Stage Microsoft Store submission (draft)* step in the **Windows Installer**
-   workflow, then confirm a new **draft** submission appears in Partner Center.
-   Click **Submit to Store** there to start certification for the first
-   automated build; later you can promote to fully automatic (see below).
+4. **First run.** Push the next release tag. **Publish Microsoft Store package**
+   uploads and commits the binary directly. Microsoft handles the remaining
+   submission process.
 
 ### Version discipline
 
@@ -383,13 +386,18 @@ by hand pass an explicit `-Version YY.M.BUILD.0` that is higher than the last
 accepted package. The app's CalVer, portable ZIP, Inno installer and release
 tags are unchanged by MSIX packaging.
 
-### Promoting to fully automatic later
+### Production arming switch
 
-Production certification requires **both** `-Commit` and `-CommitProduction`
-when invoking `publish-store.ps1`. `-Commit` alone is accepted only with a
-nonempty explicit `-FlightId`; a missing flight ID fails before invoking the
-CLI. `-CommitProduction` is rejected with a flight or without `-Commit`.
-The production tag workflow passes neither switch and keeps the draft gate.
+The single operational switch is the Actions secret
+`AETHERSDR_STORE_AUTO_PUBLISH=true`. It supplies both `-Commit` and
+`-CommitProduction` automatically; no operator needs to pass these flags for a
+release. Removing the secret or setting it to `false` restores draft uploads.
+Secrets are write-only, so the switch's state can't be read in the GitHub UI.
+The publish step's `Mode : COMMIT` or `Mode : DRAFT` line is the readback.
+GitHub also masks a secret's value in the job log, so any literal `true` that
+step prints appears as `***`.
+The publisher retains its existing explicit production/flight distinction:
+`-Commit` alone requires a flight, while production uses both switches.
 
 ### Manually triggered developer package flight
 
@@ -401,7 +409,7 @@ no schedule and creates no Git tag or GitHub Release.
 
 The manual flight path is isolated from production:
 
-- production tag submissions retain `--noCommit` and remain drafts;
+- production publication is controlled independently by `AETHERSDR_STORE_AUTO_PUBLISH`;
 - the flight job runs only for an explicit `workflow_dispatch` request in the
   upstream `aethersdr/AetherSDR` repository;
 - `AETHERSDR_STORE_FLIGHT_ID` is required and validated before building, then
@@ -432,13 +440,13 @@ fails the step loudly rather than publishing anywhere, but budget for it —
 along with credentials and certification — on the first attempt.
 
 The flight uses the development MSIX sequence described under **Version discipline**
-above. Production uses its source release version, remains a draft, and requires
-maintainer action for certification.
+above. Production uses its source release version and the independent automatic
+publication switch described above.
 
 The socket-free regression suite is `tests/windows_store_policy_test.ps1`:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows_store_policy_test.ps1
+pwsh -NoProfile -File tests\windows_store_policy_test.ps1
 ```
 
 It exercises the actual build-plan script with tag/branch dispatches and the

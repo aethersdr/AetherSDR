@@ -28,14 +28,14 @@ Each page is one Markdown file in [`docs/user/docs/`](https://github.com/aethers
 title: "Page Title"
 slug: "/page-title"
 description: "One sentence: what this is. Search results and link previews show it."
-status: "Experimental"
-applies_to: ["Hermes-Lite 2"]
+status: "Experimental, receive-only"
+applies_to: ["ANAN-G2"]
 platforms: ["Linux", "macOS", "Windows"]
 ---
 
 :::info[Status]
 
-**Status:** Experimental · **Applies to:** Hermes-Lite 2 · **Platforms:** Linux, macOS, Windows
+**Status:** Experimental, receive-only · **Applies to:** ANAN-G2 · **Platforms:** Linux, macOS, Windows
 
 :::
 
@@ -67,7 +67,7 @@ The page title comes from the `title` front matter; don't repeat it as a `#` hea
 Include the status fields and the matching `:::info[Status]` callout when support differs by radio or platform, or when the feature is not fully supported. Leave both out of pages that apply everywhere. The front matter is the machine-readable copy and the callout is what readers see, so keep them in step.
 
 - **`status`** is one of: **Supported** · **Early** · **Experimental** · **Experimental, receive-only** · **Off by default**. These match the README's hardware tiers.
-- **Mixed support:** when a page covers families at different tiers, **`status`** gives the tier of the best-supported family (usually FlexRadio), and **`applies_to`** marks every other family with its own tier in brackets, for example `["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)"]`.
+- **Mixed support:** when a page covers families at different tiers, **`status`** gives the tier of the best-supported family (usually FlexRadio), and **`applies_to`** marks every other family with its own tier in brackets, for example `["FlexRadio", "ANAN-G2 (experimental, receive-only)", "Networked Icom (early; IC-7300MK2 supported)"]`.
 - **`applies_to`** lists the radio families the page covers: FlexRadio, Hermes-Lite 2, Networked Icom, ANAN-G2, RTL-SDR, KiwiSDR/Web-888, Demo. Use `["All radios"]` when it has no limits.
 - **`platforms`** is included only when something is platform-limited. For example, MNR is macOS only, and BNR is Linux and Windows.
 

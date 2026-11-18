@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR::icom {
 namespace {
 
 constexpr float kInt16Scale = 32768.0f;
+constexpr int kMaxRxConcealPackets = 64;
 
 std::int16_t toInt16(float v) noexcept
 {
@@ -214,19 +216,76 @@ std::size_t TxPacketizer::padToFrame()
 
 std::vector<float> RxAssembler::accept(std::span<const std::uint8_t> payload)
 {
-    return decodeAudio(m_codec, payload);
+    if (m_codec != AudioCodec::Lpcm2ch16) { return decodeAudio(m_codec, payload); }
+    // A UDP payload boundary need not be a stereo-frame boundary. Retain
+    // incomplete frames so one packet cannot swap MAIN and SUB thereafter.
+    std::vector<std::uint8_t> bytes = std::move(m_partialFrame);
+    bytes.insert(bytes.end(), payload.begin(), payload.end());
+    const std::size_t complete = bytes.size() - bytes.size() % 4;
+    m_partialFrame.assign(bytes.begin() + complete, bytes.end());
+    return decodeAudio(m_codec, std::span<const std::uint8_t>(bytes).first(complete));
 }
 
-std::vector<float> RxAssembler::concealLoss(int packets, int sampleRateHz) const
+std::vector<float> RxAssembler::concealLoss(int packets, int sampleRateHz)
 {
-    if (packets <= 0 || sampleRateHz <= 0)
+    m_partialFrame.clear();
+    if (packets <= 0 || sampleRateHz <= 0 || sampleRateHz > static_cast<int>(kAudioRateHz)
+        || m_codec == AudioCodec::Lpcm2ch16)
         return {};
     // 10 ms per packet is the AVERAGE across the unequal pair, and averaging is
     // exactly the right use of it here: we are filling a hole whose true length
     // we cannot know, and silence of approximately the right duration keeps the
     // stream's timing from walking.
     const std::size_t perPacket = static_cast<std::size_t>(sampleRateHz) / 100;
-    return std::vector<float>(perPacket * static_cast<std::size_t>(packets), 0.0f);
+    return std::vector<float>(perPacket * static_cast<std::size_t>(std::min(packets, kMaxRxConcealPackets))
+        * codecChannels(m_codec), 0.0f);
+}
+
+std::vector<std::vector<float>> RxAssembler::concealBefore(
+    std::span<const std::uint8_t> payload, std::uint16_t mediaSequence)
+{
+    if (m_codec != AudioCodec::Lpcm2ch16) { return {}; }
+    std::vector<std::vector<float>> silence;
+    const bool ready = m_consecutiveFragments >= 6
+        && std::ranges::count(m_fragmentBytes, 1364) == 2
+        && std::ranges::count(m_fragmentBytes, 1112) == 1;
+    if (m_mediaSequence) {
+        const auto distance = static_cast<std::uint16_t>(mediaSequence - *m_mediaSequence);
+        if (distance == 0 || distance > kMaxRxConcealPackets) {
+            // A restart/unknown discontinuity withdraws the learned geometry.
+            m_fragmentBytes = {};
+            m_consecutiveFragments = 0;
+            m_fragmentPhase = 0;
+            m_partialFrame.clear();
+        } else {
+            const int target = (m_fragmentPhase + distance) % 3;
+            if (ready && m_fragmentBytes[target] == payload.size()) {
+                for (int offset = 1; offset < distance; ++offset) {
+                    const auto bytes = m_fragmentBytes[(m_fragmentPhase + offset) % 3];
+                    silence.emplace_back(bytes / sizeof(std::int16_t), 0.0f);
+                }
+            } else if (distance != 1) {
+                m_fragmentBytes = {};
+                m_consecutiveFragments = 0;
+            }
+            if (distance != 1) { m_partialFrame.clear(); }
+            m_fragmentPhase = target;
+        }
+    }
+    m_mediaSequence = mediaSequence;
+    if (payload.size() != 1364 && payload.size() != 1112) {
+        m_fragmentBytes = {};
+        m_consecutiveFragments = 0;
+    } else {
+        auto& size = m_fragmentBytes[m_fragmentPhase];
+        if (size && size != payload.size()) {
+            m_fragmentBytes = {};
+            m_consecutiveFragments = 0;
+        }
+        m_fragmentBytes[m_fragmentPhase] = payload.size();
+        ++m_consecutiveFragments;
+    }
+    return silence;
 }
 
 }  // namespace AetherSDR::icom

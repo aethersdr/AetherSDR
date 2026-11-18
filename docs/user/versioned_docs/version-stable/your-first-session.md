@@ -156,9 +156,9 @@ See [Panadapter Controls](./panadapter-controls.md) and [Themes and Theme Editor
 
 *The Save Memory dialog, opened with Add Memory on the Memory panel.*
 
-<img src="/img/screens/first-session-saved-status.png" width="520" alt="The left end of the status bar reading Saved &quot;My first memory&quot; to memories." />
+<img src="/img/screens/first-session-saved-status.png" width="520" alt="A Saved &quot;My first memory&quot; to memories notice above the visible status-bar controls." />
 
-*After Save, the status bar confirms the memory.*
+*After Save, a small notice confirms the memory above the status bar.*
 
 1. In the same button column, click **Memory**, then **Add Memory**.
 

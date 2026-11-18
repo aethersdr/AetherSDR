@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "core/LogManager.h"
 
 #include <QPointer>
 #include <QThread>
@@ -91,6 +92,23 @@ ReceiveDispatch RadioModel::requestSessionControl(const SessionControlRequest& r
         reply({{RadioControlReply::Kind::Cancelled, -1, QStringLiteral("Session operation not dispatched")}});
     }
     return dispatched;
+}
+
+void RadioModel::subscribeDvk()
+{
+    // FlexBackend reports a DVK for every Flex, but firmware before the DVK
+    // API (3.9) refuses this subscription, and nothing else says so: it sends
+    // no dvk or license status (#7156). Only the radio's own answer counts; a
+    // timeout or an ended session keeps the fail-open default.
+    requestSessionControl(SessionControlRequest::subscription(SessionTopic::Dvk),
+                          [this](const SessionControlReply& reply) {
+        if (reply.result.kind == RadioControlReply::Kind::Refused && reply.result.code != 0) {
+            qCInfo(lcProtocol).noquote() << "RadioModel: sub dvk all refused with"
+                << QStringLiteral("0x%1").arg(static_cast<uint>(reply.result.code), 0, 16)
+                << "- this firmware has no DVK";
+            m_dvkModel.noteUnsupported();
+        }
+    });
 }
 
 void RadioModel::requestStartupSetup(const RadioSetupRequest& request)
