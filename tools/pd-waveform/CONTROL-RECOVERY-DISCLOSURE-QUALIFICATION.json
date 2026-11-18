@@ -1,0 +1,147 @@
+{
+  "recorded_utc": "2026-11-18T13:00:11.177744+00:00",
+  "source_commit": "106057ccf6c56bd26e4183386c9987117e2c314d",
+  "status": "Linux component qualified; native Windows/macOS builds pending",
+  "production_ready": false,
+  "behavior": "Install/update/saved-attempt previews disclose signed control-service recovery. Exact complete fixed units recognize bounded5s/3starts60s or legacy manual recovery; unknown signed primary definitions are rejected before upload.",
+  "metadata_not_caller_supplied": true,
+  "unchanged_legacy_manual_entries_checked_both_architectures": true,
+  "signed_altered_or_misleading_policies_rejected": 6,
+  "preview_cases": {
+    "policies": [
+      "manual",
+      "bounded"
+    ],
+    "modes": [
+      "update",
+      "first installation",
+      "saved first-install attempt"
+    ],
+    "requires_explicit_approval": true,
+    "no_credential_write_or_upload_during_preview": true
+  },
+  "full_Linux_desktop_and_daemon_built": true,
+  "full_linux_result": {
+    "source_commit": "106057ccf6c56bd26e4183386c9987117e2c314d",
+    "full_desktop_and_daemon_built": true,
+    "CTest_targets": 6,
+    "CTest_passed": true,
+    "new_binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-disclosure/bin/AetherSDR",
+        "sha256": "3038ba59c6d344211e2d93b7cb7124838d36f25d0724a7b739ae24d2571cd586",
+        "bytes": 833277480
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-disclosure/bin/aetherd",
+        "sha256": "cb2dfbba9b4cada600cc17c9f0a148adbf1631bfd0aa5872119a41cf32a82cee",
+        "bytes": 413508408
+      }
+    },
+    "retained_original_desktop_sha256": "c0725b476b67de6a76793ae3551c3b2da730621061ed1428a8f73227ee54c300",
+    "new_desktop_launched": false,
+    "radio_actions": []
+  },
+  "new_desktop_launched": false,
+  "mutation_recipe_configuration": "Mutation checks ran before final CMAKE_RUNTIME_OUTPUT_DIRECTORY relocation. Reproduce with default executable output paths; final full build uses the isolated bin directory so the active desktop binary stays intact.",
+  "linux_CTest_executables_passed": [
+    "aetherpd_package_test",
+    "aetherpd_package_download_test",
+    "aetherpd_installation_read_test",
+    "aetherpd_installation_journal_test",
+    "aetherpd_installation_coordinator_test",
+    "aetherpd_installation_dialog_test"
+  ],
+  "fault_mutations_detected": 2,
+  "sources_restored_and_all6_tests_passed": true,
+  "actual_packaged_distribution_checks": [
+    {
+      "arch": "armv7",
+      "kind": "upgrade",
+      "control_recovery": 2,
+      "corrupt_key_and_source_cases_rejected": 10,
+      "firmware": "4.2.18.41174",
+      "plan_bytes": 352,
+      "profile": 2,
+      "radio_actions": false
+    },
+    {
+      "arch": "arm64",
+      "kind": "upgrade",
+      "control_recovery": 2,
+      "corrupt_key_and_source_cases_rejected": 10,
+      "firmware": "4.3.16.42034",
+      "plan_bytes": 352,
+      "profile": 1,
+      "radio_actions": false
+    },
+    {
+      "arch": "arm64",
+      "kind": "first-install",
+      "control_recovery": 2,
+      "corrupt_and_wrong_key_cases_rejected": 9,
+      "firmware": "4.3.16.42034",
+      "native_archive_bytes": 9152907,
+      "plan_bytes": 308,
+      "profile": 1,
+      "radio_actions": false
+    }
+  ],
+  "actual_corrupt_file_key_and_binding_refusals": 29,
+  "static_checks_passed": 6,
+  "user_docs_npm_ci_and_build_passed": true,
+  "negative_evidence": [
+    "Initial build request named a nonexistent aetherpd_release_catalogue_test target. Ninja refused before compilation; corrected target list built and passed."
+  ],
+  "native_platform_builds_pending": [
+    {
+      "id": 44308017639,
+      "name": "Windows Installer",
+      "head_sha": "106057ccf6c56bd26e4183386c9987117e2c314d",
+      "head_branch": "feat/aetherpd-shim-integration",
+      "status": "in_progress",
+      "conclusion": null,
+      "created_at": "2026-11-18T12:52:04Z",
+      "updated_at": "2026-11-18T12:52:08Z",
+      "html_url": "https://github.com/aethersdr/AetherSDR/actions/runs/44308017639",
+      "event": "workflow_dispatch",
+      "run_attempt": 1
+    },
+    {
+      "id": 44308022731,
+      "name": "macOS DMG",
+      "head_sha": "106057ccf6c56bd26e4183386c9987117e2c314d",
+      "head_branch": "feat/aetherpd-shim-integration",
+      "status": "queued",
+      "conclusion": null,
+      "created_at": "2026-11-18T12:52:06Z",
+      "updated_at": "2026-11-18T12:52:06Z",
+      "html_url": "https://github.com/aethersdr/AetherSDR/actions/runs/44308022731",
+      "event": "workflow_dispatch",
+      "run_attempt": 1
+    }
+  ],
+  "native_test_and_OS_keychain_prior_scopes": "Prior87 native credential/window cases remain recorded at75ab268; they were not rerun and are not relabeled as106 evidence. These new branch workflows compile/package the application, not the new selected CTests.",
+  "live_desktop_unchanged": {
+    "binary_sha256": "c0725b476b67de6a76793ae3551c3b2da730621061ed1428a8f73227ee54c300",
+    "compiled_source_head": "14a9c1f1e23698727aaba152ce115294829d401a",
+    "engine_implementation_commit": "75ab268527293f30e74acee221759adce42087b5",
+    "new_disclosure_not_yet_driven_in_live_operator_window": true
+  },
+  "installed_radio_release_unchanged": "622912412103e09d2e21bdd7dcb352187733ee877669c82e0f23c29a0b9a69e0",
+  "runtime_implementation_unchanged": "453ba2175f1e015c6fe867a3b7aa6255ff7defa1",
+  "physical_cold_cycle_confirmation_pending": true,
+  "RF_commands": [],
+  "radio_contacts": [],
+  "reboot_commands": [],
+  "independent_review_pending": true,
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/control-recovery-disclosure-components.tar.gz",
+    "bytes": 91142,
+    "sha256": "d2110e4ebf2bc01ed53b5c4a2d984d473f60a7df3a5ddcc63e16db7280bcaa12",
+    "members": 48,
+    "all_members_verified": true
+  },
+  "evidence": "CONTROL-RECOVERY-DISCLOSURE-EVIDENCE.json.gz",
+  "evidence_sha256": "d4a7c7220cfd6176f55b1dfaa9f04eb1ed305bd4c934339a95cab5af60c93277"
+}
