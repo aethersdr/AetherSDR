@@ -46,8 +46,10 @@ struct MemoryPatch {
             // filters is still constrained by the receiving backend.
             && (!rxFilterLow || (*rxFilterLow >= -kMaxStoredFilterEdgeHz && *rxFilterLow <= kMaxStoredFilterEdgeHz))
             && (!rxFilterHigh || (*rxFilterHigh >= -kMaxStoredFilterEdgeHz && *rxFilterHigh <= kMaxStoredFilterEdgeHz))
-            && (!rttyMark || (*rttyMark >= 100 && *rttyMark <= 4000))
-            && (!rttyShift || (*rttyShift >= 0 && *rttyShift <= 4000))
+            && (!rttyMark || (*rttyMark >= MemoryFields::kRttyMarkMinHz
+                              && *rttyMark <= MemoryFields::kRttyMarkMaxHz))
+            && (!rttyShift || (*rttyShift >= MemoryFields::kRttyShiftMinHz
+                               && *rttyShift <= MemoryFields::kRttyShiftMaxHz))
             && (!diglOffset || (*diglOffset >= -12000 && *diglOffset <= 12000))
             && (!diguOffset || (*diguOffset >= -12000 && *diguOffset <= 12000));
     }

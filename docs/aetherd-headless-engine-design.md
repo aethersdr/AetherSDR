@@ -471,7 +471,8 @@ backends (§5.5) are reachable either way; only the UI boundary differs.
 > **Amended 2026-11-13 (maintainer ruling):** receive-only remote clients come
 > ahead of the data plane: a WebSocket listener with scoped credentials and
 > pairing ([`aetherd-remote-clients.md`](aetherd-remote-clients.md)), then a
-> desktop client backend. Transmit over the network still waits for Stage 4.
+> desktop client backend ([`aetherd-remote-backend.md`](aetherd-remote-backend.md)).
+> Transmit over the network still waits for Stage 4.
 
 1. **Extract `libaethercore`.** Split the monolith into an engine library +
    thin gui shell. **Rehearsed 2026-07-04** — the split configures, builds,
@@ -694,7 +695,8 @@ or grant keying authority. Native RX and host EQ retain their local routes;
 sample formats, resamplers and DSP scheduling are unchanged. DAX/IQ status
 decoding above the seam and the remaining command-plane sites are still M4 work.
 The desktop adapter has not landed; UI code still consumes models directly, and that
-remains correct. New resource fields belong in the adapter and the versioned
+remains correct. The remote-engine backend ([`aetherd-remote-backend.md`](aetherd-remote-backend.md))
+is not that adapter: it is a radio family whose "radio" is a remote aetherd. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.
 

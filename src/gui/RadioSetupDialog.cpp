@@ -28,6 +28,7 @@
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
 #include "core/NetworkSettings.h"
+#include "core/TxOffDelaySettings.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
 #include "KiwiPublicReceiverPicker.h"
@@ -1697,13 +1698,12 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
             tr("Not supported by this radio"));
     }
     if (m_ipDhcpButton) {
-        const bool canConfigure = caps.hasClientNetworkConfig;
+        const QString tip = ipConfigUnavailableReason(
+            caps.hasClientNetworkConfig, m_model->isRemoteForIpConfiguration());
+        const bool canConfigure = tip.isEmpty();
         const QString sessionKey = connected
             ? QStringLiteral("%1:%2").arg(m_model->family(), m_model->serial())
             : QString();
-        const QString tip = canConfigure
-            ? QString()
-            : tr("Changing the radio's IP configuration is not supported by this radio.");
         const bool isStatic = m_model->hasStaticIp();
         applyIpConfigPresentation(
             m_ipConfigPresentation, sessionKey, canConfigure, isStatic,
@@ -2629,15 +2629,17 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     btnRow->setSpacing(4);
 
     const bool isStatic = m_model->hasStaticIp();
-    const bool canConfigure = m_model->backendCapabilities().hasClientNetworkConfig;
-    const QString unavailableTip = tr("Changing the radio's IP configuration is not supported by this radio.");
+    const QString unavailableTip = ipConfigUnavailableReason(
+        m_model->backendCapabilities().hasClientNetworkConfig, m_model->isRemoteForIpConfiguration());
+    const bool canConfigure = unavailableTip.isEmpty();
 
     auto* dhcpBtn = new QPushButton("DHCP");
     m_ipDhcpButton = dhcpBtn;
     dhcpBtn->setCheckable(true);
     dhcpBtn->setChecked(!isStatic);
     dhcpBtn->setEnabled(canConfigure);
-    dhcpBtn->setToolTip(canConfigure ? QString() : unavailableTip);
+    dhcpBtn->setToolTip(unavailableTip);
+    dhcpBtn->setAccessibleDescription(unavailableTip);
     setButtonRole(dhcpBtn, ButtonRole::Select);
     btnRow->addWidget(dhcpBtn);
 
@@ -2646,7 +2648,8 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     staticBtn->setCheckable(true);
     staticBtn->setChecked(isStatic);
     staticBtn->setEnabled(canConfigure);
-    staticBtn->setToolTip(dhcpBtn->toolTip());
+    staticBtn->setToolTip(unavailableTip);
+    staticBtn->setAccessibleDescription(unavailableTip);
     setButtonRole(staticBtn, ButtonRole::Select);
     btnRow->addWidget(staticBtn);
 
@@ -2677,8 +2680,12 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     m_staticGatewayEdit = staticGw;
     staticGw->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticGw, 3, 1);
-    for (QLineEdit* edit : {staticIp, staticMask, staticGw})
+    for (QLineEdit* edit : {staticIp, staticMask, staticGw}) {
         edit->setFixedWidth(180);
+        // A dimmed field says why; validateInputs owns the tips otherwise.
+        edit->setToolTip(unavailableTip);
+        edit->setAccessibleDescription(unavailableTip);
+    }
 
     gvbox->addLayout(fieldsGrid);
     for (auto* lbl : group->findChildren<QLabel*>())
@@ -2691,7 +2698,7 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
         : QString();
     m_ipConfigPresentation.canConfigure = canConfigure;
     applyBtn->setEnabled(false);
-    applyBtn->setToolTip(canConfigure ? QString() : unavailableTip);
+    applyBtn->setToolTip(unavailableTip);
     applyBtn->setAccessibleDescription(applyBtn->toolTip());
     fieldsGrid->addWidget(applyBtn, 4, 1, Qt::AlignLeft);
 
@@ -2749,6 +2756,13 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
             [this, dhcpBtn, staticIp, staticMask, staticGw, applyBtn, validateInputs] {
         validateInputs(false);
         if (!applyBtn->isEnabled()) { return; }
+        // Re-check the gate at the write: a session's Tailscale transport is
+        // learned at GUI-client registration, after the dialog may have gated.
+        if (!ipConfigUnavailableReason(m_model->backendCapabilities().hasClientNetworkConfig,
+                                       m_model->isRemoteForIpConfiguration()).isEmpty()) {
+            applyBtn->setEnabled(false);
+            return;
+        }
         if (dhcpBtn->isChecked()) {
             m_model->requestRadioSetup({SetupField::Dhcp, std::monostate{}});
             qDebug() << "RadioSetupDialog: network set to DHCP";
@@ -2929,6 +2943,47 @@ QWidget* RadioSetupDialog::buildTxTab()
 
         auto* tx3Edit = addTimingField(3, 0, "RCA TX3:", tx.tx3Delay());
         connectTimingField(tx3Edit, SetupField::Tx3DelayMs);
+
+        // Client-side, so deliberately not in timingEdits: it never depends on
+        // the radio accepting setup fields and stays enabled while disconnected.
+        {
+            auto* lbl = new QLabel(tr("TX Off Delay (ms):"));
+            applyLabelStyle(lbl);
+            grid->addWidget(lbl, 2, 2);
+            auto* edit = new QLineEdit(QString::number(tx.txOffDelayMs()));
+            edit->setFixedWidth(60);
+            edit->setAccessibleName(tr("TX Off Delay (milliseconds)"));
+            const QString tip = tr(
+                "Keeps transmitting this many ms (0-%1) after you release PTT in "
+                "voice modes, so the end of your last word is not cut off. 0 = off.\n"
+                "With the PC mic, your mic stays live for the first %2 ms and the rest "
+                "of the delay is silent.\n"
+                "With a mic on the radio (MIC, BAL, LINE, ACC), AetherSDR cannot mute it: "
+                "your mic stays live for the whole delay, and anything you say during it "
+                "goes on the air.\n"
+                "Applies to PTT handled by AetherSDR: MOX, keyboard, serial-port "
+                "footswitch, RC-28 and TCI hardware PTT. A footswitch or mic PTT wired to the radio "
+                "unkeys at the radio and cannot be delayed from here.\n"
+                "Stored on this computer, not on the radio.")
+                .arg(TxOffDelaySettings::kMaxMs)
+                .arg(TxOffDelaySettings::kAudioWindowMs);
+            edit->setToolTip(tip);
+            edit->setAccessibleDescription(tip);
+            grid->addWidget(edit, 2, 3);
+            connect(edit, &QLineEdit::editingFinished, this, [this, edit] {
+                bool valid = false;
+                const int parsed = edit->text().toInt(&valid);
+                TransmitModel& model = m_model->transmitModel();
+                if (!valid) {
+                    edit->setText(QString::number(model.txOffDelayMs()));
+                    return;
+                }
+                const int ms = TxOffDelaySettings::clampMs(parsed);
+                edit->setText(QString::number(ms));
+                model.setTxOffDelayMs(ms);
+                TxOffDelaySettings::setDelayMs(ms);
+            });
+        }
 
         // TX Band Settings button
         bandSetBtn = new QPushButton("TX Band Settings");

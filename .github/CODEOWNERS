@@ -35,7 +35,7 @@
 #         Deliberately narrow: a path belongs here only if a wrong
 #         change to it alters who decides things or what gets signed.
 # Tier 2 — @aethersdr/infrastructure (currently: @ten9876, @jensenpat,
-#         @rfoust).
+#         @rfoust, @NF0T).
 #         Project infrastructure: CI/CD configuration — the ROUTINE
 #         workflow definitions (.github/workflows/ except the sensitive
 #         ones carved to Tier 1), dependabot, docker, issue templates —
@@ -61,7 +61,7 @@
 #         Narrower owner set than Tier 3 because infrastructure changes
 #         need deeper repo context than routine source review.
 # Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T,
-#         @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton).
+#         @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton, @w5jwp).
 #         AetherSDR source code and anything else not enumerated
 #         above (src/ — including the whole of MainWindow —
 #         third_party/, hal-plugin/, resources/, packaging/,
@@ -311,6 +311,17 @@ docs/VERIFYING-RELEASES.md   @aethersdr/maintainers
 tools/build_update_manifest.py           @aethersdr/maintainers
 tools/publish_update_manifest.py         @aethersdr/maintainers
 packaging/update-signing.pub             @aethersdr/maintainers
+
+# Release Offload (RFC #6964) runs in update-signing with the same upload
+# credential and a release-write token, and deletes release assets once its
+# copies check out: the workflow and the tool it runs. Inside that job the
+# tool also imports build_update_manifest.py and publish_update_manifest.py
+# (gated above: keep them gated while this workflow runs them) and
+# release_manual_signing.py, which sign-release.yml also runs in the job that
+# holds the GPG release key, so it is carved back here.
+.github/workflows/release-offload.yml    @aethersdr/maintainers
+tools/offload_release_assets.py          @aethersdr/maintainers
+tools/release_manual_signing.py          @aethersdr/maintainers
 
 # NOTE: the AI-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md,
 # .github/copilot-instructions.md, .claude/commands/) and the two release

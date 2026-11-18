@@ -23,7 +23,7 @@ Building from source: the `ENABLE_RTL` option is on by default and takes effect 
 ## Setup
 
 1. Plug in the dongle.
-2. Open **File → Connect to Radio...** → **On This Network**. Supported dongles on USB are listed with the network radios.
+2. Open **File → Connect to Radio...** → **Nearby radios**. Supported dongles on USB are listed with the network radios.
 3. Select the dongle and click **Connect Selected Radio**.
 
 The radio tab shows **Connected** with a green status dot once the USB connection is established. Amber indicates discovery; a USB receiver does not need a network heartbeat to show its connected state.
