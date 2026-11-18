@@ -5242,6 +5242,23 @@ if(AETHER_NATIVE_CREDENTIAL_QUALIFICATION)
             --receipt-directory ${CMAKE_BINARY_DIR}
             --allow-disposable-keychain-writes)
     set_tests_properties(native_credential_qualification PROPERTIES TIMEOUT 600)
+    # Actual window/client and backend; HTTP is injected, no peer socket or radio.
+    add_executable(native_enrollment_probe
+        tests/native_enrollment_probe.cpp
+        src/gui/TailnetShimDialog.cpp src/gui/QrCodeImage.cpp
+        src/gui/CanonMessageBox.cpp src/gui/CanonWindow.cpp
+        src/gui/ModemChrome.cpp src/gui/DragValuePopup.cpp src/gui/FramelessResizer.cpp
+        ${THEME_TEST_RESOURCES})
+    target_include_directories(native_enrollment_probe PRIVATE src tests)
+    target_link_libraries(native_enrollment_probe PRIVATE aethercore aether_qrcodegen Qt6::Widgets Qt6::Network)
+    add_dependencies(native_enrollment_probe native_credential_probe)
+    add_test(NAME native_enrollment_qualification
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/qualify_native_enrollment.py
+            --binary $<TARGET_FILE:native_enrollment_probe>
+            --credential-binary $<TARGET_FILE:native_credential_probe>
+            --receipt-directory ${CMAKE_BINARY_DIR}
+            --allow-disposable-keychain-writes)
+    set_tests_properties(native_enrollment_qualification PROPERTIES TIMEOUT 600)
 endif()
 
 # Injected OS-keychain adapter and lease: no sockets, real credentials or files.
@@ -11597,6 +11614,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    native_enrollment_probe
     aetherpd_measurement_settings_test
     aetherpd_installation_journal_test
     aetherpd_installation_coordinator_test

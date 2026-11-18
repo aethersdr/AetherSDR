@@ -64,6 +64,22 @@ not request signing, release publication or a Store flight. These are backend
 transaction checks; native app UI lifetime, installed radio recovery and RF
 qualification remain separate gates.
 
+The same opt-in also builds `native_enrollment_probe`. Run its
+`native_enrollment_qualification` CTest, or use
+`tools/qualify_native_enrollment.py --binary build/native_enrollment_probe
+--credential-binary build/native_credential_probe --receipt-directory build
+--allow-disposable-keychain-writes`. It constructs the production Remote Access
+window and client with injected HTTP, a private settings database, real
+keychain entries and the production process-lock location. Fourteen legacy
+and managed-owner cases check closing/crashing a caller, pending storage,
+competing instances and explicit retry. The storage holder runs in the
+separate core probe so the lock must also span different application names
+and settings profiles. macOS uses Cocoa; other platforms use offscreen Qt.
+Only disposable credential entries are written. This controlled window test
+does not establish ordinary live-radio operation or complete application UI
+qualification. The native manual workflows preserve its receipt separately
+after building the app; default lanes still do not run it.
+
 ---
 
 ## Shared issue workflows

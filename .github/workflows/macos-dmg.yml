@@ -480,6 +480,25 @@ jobs:
             build/AetherSDR.app/Contents/MacOS/AetherSDR \
             build/AetherSDR.app/Contents/MacOS/aether-dv-waveform
 
+      - name: Qualify native setup window lifetime (explicit opt-in)
+        if: github.event_name == 'workflow_dispatch' && inputs.qualify_credentials
+        run: |
+          set -euo pipefail
+          cmake --build build --target native_enrollment_probe -j2
+          python3 tools/qualify_native_enrollment.py \
+            --binary build/native_enrollment_probe \
+            --credential-binary build/native_credential_probe \
+            --receipt build/native-enrollment-result.json \
+            --allow-disposable-keychain-writes
+
+      - name: Preserve native setup window result
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.qualify_credentials
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-enrollment-macos-${{ matrix.label }}
+          path: build/native-enrollment-result.json
+          if-no-files-found: error
+
       - name: Bundle DFNR model
         run: |
           if [ -f third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz ]; then

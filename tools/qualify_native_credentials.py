@@ -29,13 +29,13 @@ def atomic_json(path, value):
 
 
 class Child:
-    def __init__(self, binary, mode, identifier, value, directory, env):
+    def __init__(self, binary, mode, identifier, value, directory, env, extra_args=()):
         self.mailbox = directory / (uuid.uuid4().hex + ".command")
         self.output = []
         self.errors = []
         self.lines = queue.Queue()
         self.process = subprocess.Popen(
-            [str(binary), mode, identifier, value, str(self.mailbox)],
+            [str(binary), mode, identifier, value, *extra_args, str(self.mailbox)],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace", env=env,
         )

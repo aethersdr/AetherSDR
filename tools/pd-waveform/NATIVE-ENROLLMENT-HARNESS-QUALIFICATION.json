@@ -1,0 +1,93 @@
+{
+  "updated_utc": "2026-11-18T05:24:32.805283+00:00",
+  "base_commit": "f22b34adfce394c21c48c88ecf308a0875481613",
+  "production_ready": false,
+  "native_Windows_window_lifecycle_qualified": false,
+  "native_macOS_window_lifecycle_qualified": false,
+  "finding": "Portable opt-in Remote Access window/client qualification now covers actual keychain persistence and same-user admission across processes, including a separate headless storage holder. Production implementations unchanged.",
+  "scope": {
+    "transport": "Injected HTTP; no socket peer, real radio or Tailscale requests.",
+    "credentials": "Unique disposable primary/version keys only; initial absence required, insecure fallback disabled.",
+    "settings": "Private database and legacy migration directory; production generic-cache lock location retained; no HOME or QStandardPaths test-mode override.",
+    "cases": "Seven lifetime/admission/recovery cases each for legacy token rotation and managed immutable-owner sign-in.",
+    "event_loop": "QApplication: Cocoa on Mac, offscreen elsewhere. Windows-safe atomic command mailbox.",
+    "default_opt_in": "AETHER_NATIVE_CREDENTIAL_QUALIFICATION=OFF; neither native CTest runs in default/frozen lanes."
+  },
+  "validation": {
+    "Linux_host_cases_passed": 14,
+    "pinned_QtKeychain_016_cases_passed": 14,
+    "pinned_ASan_UBSan_cases_passed": 14,
+    "all_56_case_fixtures_cleaned": true,
+    "mutation_failed_cases": [
+      {
+        "kind": "live_request",
+        "managed": false
+      },
+      {
+        "kind": "closed_window",
+        "managed": false
+      },
+      {
+        "kind": "pending_backend",
+        "managed": false
+      },
+      {
+        "kind": "explicit_retry",
+        "managed": false
+      },
+      {
+        "kind": "failed_request",
+        "managed": false
+      },
+      {
+        "kind": "different_radio",
+        "managed": false
+      },
+      {
+        "kind": "caller_crash",
+        "managed": false
+      },
+      {
+        "kind": "pending_backend",
+        "managed": true
+      }
+    ],
+    "mutation_result": "Removing persistence-completion ownership of the setup lease fails both pending-backend cases and additionally exposes lost legacy saves before process exit.",
+    "mutation_verifier_note": "Expected exactly two failed cases; the shortened lease additionally exposed lost legacy saves before process exit.",
+    "sanitizer_scope": "Recompiled fixture, production window, client, token store and persistence TUs; remaining Qt/core dependencies are not instrumented.",
+    "source_production_files_changed": false,
+    "registration_and_frozen_gate_checks_passed": true,
+    "added_workflow_scripts_parsed": true,
+    "docs_npm_ci_and_build_passed": true,
+    "generated_reference_check_passed": true,
+    "log_rule_check": "767 checks pass,12pre-existing moved citations unaffected."
+  },
+  "artifact_archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-enrollment-harness-components.tar.gz",
+    "bytes": 243863,
+    "sha256": "a6f20c76f798abde29b1981051c4146cac2e80f2abbb6af00391b5ffc4f8d313",
+    "verified_members": 53
+  },
+  "source_sha256": {
+    "tests/native_enrollment_probe.cpp": "3406b843f20cd3fb621ab19815f27a25227bfaf450c1f982d0ae48ea51049c56",
+    "tools/qualify_native_enrollment.py": "cab216c31115043f1e1ace5301c2b7e46a3c8b098fef30aea7f41c83f79835a4",
+    "tools/qualify_native_credentials.py": "049f251c14d37ab88604bd3011c3ffdbad3ed531f2b624d2276dcc6216dc07f5",
+    "tests/tests.cmake": "26c96f5ac44b94bce8c88b5258d707fb5c1ca6565766d99bb2a24a2bed48ac2d",
+    ".github/workflows/macos-dmg.yml": "aff8382f275585f54c0323a82670bd0de3e75044ae83bb230994fc2d60b6f33a",
+    ".github/workflows/windows-installer.yml": "772bdeaf744cad272b9321e81b3691a7976dbb15076676fb01b9768bdfe4ee13",
+    "docs/DEVELOPER-GUIDE.md": "60dbebb2344d2c85a3431491015ed4c694307798278103651ab48384f91b6d44",
+    "src/gui/TailnetShimDialog.cpp": "282cd9f2c403fe1ef69248a9120fbd72ea1aee3dcc30d312ed11198dc5662ba9",
+    "src/core/TailnetShimClient.cpp": "c180ce7e80b455132b137b3e02299a0cf5979042742b5ae71264e3a7de27ed62",
+    "src/core/TailnetShimTokenStore.cpp": "d675078a8d39c89aa6d5e6e0bb12c3defeecc0282a25da6308b2f11eba7b642f",
+    "src/core/TailnetShimCredentialPersistence.cpp": "bcb127f865e61be959263e49ab4dd8c64895579b24908bd327330f7979418bba"
+  },
+  "compressed_evidence_sha256": "00cffdf90ed502aec50dcbf4efd672d58212a714af20020d383814a85227e270",
+  "remaining_scope": [
+    "Native Windows/macOS window fixture execution pending; Linux results do not qualify them.",
+    "Controlled injected-HTTP windows do not establish ordinary live-radio workflow, installation/recovery, RF, reboot or actual6300 operation.",
+    "Full original P1-P10 release requirements remain open; control-service recovery and firmware-baseline decisions pending."
+  ],
+  "radio_actions": [],
+  "RF_commands": [],
+  "reboot_commands": []
+}

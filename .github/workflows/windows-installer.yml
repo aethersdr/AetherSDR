@@ -437,6 +437,27 @@ jobs:
         # check-windows). Narrowing removes that risk too.
         run: cmake --build build -j 2 --target AetherSDR aether-dv-waveform AetherSDRUpdater
 
+      - name: Qualify native setup window lifetime (explicit opt-in)
+        if: github.event_name == 'workflow_dispatch' && inputs.qualify_credentials
+        run: |
+          cmake --build build --target native_enrollment_probe -j 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "$env:GITHUB_WORKSPACE\third_party\qtkeychain\bin;$env:PATH"
+          python tools/qualify_native_enrollment.py `
+            --binary build/native_enrollment_probe.exe `
+            --credential-binary build/native_credential_probe.exe `
+            --receipt build/native-enrollment-result.json `
+            --allow-disposable-keychain-writes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Preserve native setup window result
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.qualify_credentials
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-enrollment-windows
+          path: build/native-enrollment-result.json
+          if-no-files-found: error
+
       - name: Deploy Qt
         run: |
           mkdir deploy
