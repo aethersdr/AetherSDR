@@ -6,6 +6,7 @@
 #include <QOperatingSystemVersion>
 #include <QPoint>
 #include <QRect>
+#include <QSize>
 #include <QString>
 #include <QWidget>
 #include <QWindow>
@@ -240,6 +241,35 @@ inline QRect savedNativeClientRect(const QJsonObject& doc, const QString& role, 
         n[i] = int(d);
     }
     return QRect(n[0], n[1], n[2], n[3]);  // invalid when empty
+}
+
+// Windows 11 keeps the resize border non-client under ExpandedClientAreaHint
+// and reports it as zero through safeAreaMargins(), so content laid out to the
+// client rect is drawn under it and lost (#7077). The band has to be derived
+// instead. Pure in its inputs so the Windows branch is testable on any host:
+// `bandDevicePx` is SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI and
+// `dpr` the window's devicePixelRatio, because the band is in device pixels
+// and a layout margin is in logical ones. Rounds up: a margin one device pixel
+// short still clips. The top is left to the caption's own row.
+inline QMargins nonClientBandInsets(int bandDevicePx, qreal dpr)
+{
+    if (bandDevicePx <= 0 || dpr <= 0.0) {
+        return {};
+    }
+    const int band = qCeil(bandDevicePx / dpr);
+    return QMargins(band, 0, band, band);
+}
+
+// The frameless size grip is pinned to the bottom-right corner, which under
+// the band inset (nonClientBandInsets()) is the corner of the contents rect,
+// not of the window. Pure in its inputs for the same reason: the Windows-only
+// path is the only one where the margins are non-zero, and this way a host
+// without that chrome can still prove the arithmetic. The 1 px keeps the
+// grip's own edge off the boundary, as it was before the inset existed.
+inline QPoint sizeGripOrigin(const QSize& windowSize, int gripSize, const QMargins& margins)
+{
+    return QPoint(windowSize.width() - margins.right() - gripSize - 1,
+                  windowSize.height() - margins.bottom() - gripSize - 1);
 }
 
 inline QMargins contentInsets(const QWidget* window)

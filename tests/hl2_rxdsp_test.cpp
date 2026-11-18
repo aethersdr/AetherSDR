@@ -162,6 +162,52 @@ int main(int argc, char** argv)
               "S-meter follows a 40 dB signal drop (audio-RMS meter would not)");
     }
 
+    // The IQ tap exports the spectrum convention without changing RX audio.
+    {
+        Hl2RxDsp tapDsp;
+        std::string tapError;
+        const bool tapConfigured = tapDsp.configure(cfg, &tapError);
+        check(tapConfigured, tapError.empty() ? "tap DSP configures" : tapError.c_str());
+        std::vector<std::vector<float>> runs;
+        int tapAudioCount = 0;
+        QObject::connect(&tapDsp, &Hl2RxDsp::iqReady, &tapDsp,
+                         [&](const std::vector<float>& iq) { runs.push_back(iq); });
+        QObject::connect(&tapDsp, &Hl2RxDsp::audioReady, &tapDsp,
+                         [&](const std::vector<float>&) { ++tapAudioCount; });
+        const auto feed = [&] {
+            for (std::size_t off = 0; off < s.size(); off += kEp6BlockSamples) {
+                const std::size_t n = std::min<std::size_t>(kEp6BlockSamples, s.size() - off);
+                const auto sub = s.subspan(off, n);
+                tapDsp.processIqBlock(std::vector<std::complex<float>>(sub.begin(), sub.end()));
+            }
+        };
+        feed();
+        check(runs.empty(), "IQ tap off by default: no iqReady");
+        const int audioBeforeTap = tapAudioCount;
+        tapDsp.setIqTap(true);
+        feed();
+        check(!runs.empty(), "IQ tap on: iqReady fires");
+        check(tapAudioCount > audioBeforeTap, "RX audio continues while IQ is tapped");
+        for (const std::vector<float>& run : runs) {
+            check(run.size() >= 2 * Hl2RxDsp::kIqTapPairs
+                      && run.size() < 2 * (Hl2RxDsp::kIqTapPairs + kEp6BlockSamples),
+                  "IQ tap batches are bounded at the 2048-pair threshold");
+        }
+        if (!runs.empty()) {
+            const std::vector<float>& run = runs.front();
+            double cross = 0.0;
+            for (std::size_t n = 1; 2 * n + 1 < run.size(); ++n) {
+                cross += double(run[2 * (n - 1)]) * run[2 * n + 1]
+                       - double(run[2 * (n - 1) + 1]) * run[2 * n];
+            }
+            check(cross > 0.0, "IQ tap is spectrum-handed: above centre is positive frequency");
+        }
+        tapDsp.setIqTap(false);
+        const std::size_t runsBeforeStop = runs.size();
+        feed();
+        check(runs.size() == runsBeforeStop, "IQ tap off: no further iqReady");
+    }
+
     // ---- mode change doesn't break the pipeline ----
     const int before = audioCount;
     dsp.setMode(WdspChannel::Mode::Am);

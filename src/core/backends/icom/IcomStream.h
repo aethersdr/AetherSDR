@@ -142,7 +142,10 @@ private:
     void handleRetransmitRequest(std::span<const std::uint8_t> pkt);
     void deliver(const QByteArray& packet);
     void queueForReorder(quint16 seq, const QByteArray& packet);
-    void drainReorder();
+    void queueForReorderAt(quint16 seq, const QByteArray& packet, qint64 nowMs);
+    void drainReorder(qint64 nowMs);
+    void requestMissing(quint16 first, int count);
+    void onReorderTickAt(qint64 nowMs, bool force = false);
     void retain(quint16 seq, const std::vector<std::uint8_t>& packet,
                 const std::optional<TxCoordinator::Context>& context = {},
                 const std::optional<TxCoordinator::Command>& command = {});
@@ -217,9 +220,11 @@ private:
 
     // Reorder buffer (Serial and Audio only).
     QMap<quint16, QByteArray> m_reorder;
+    QMap<quint16, qint64> m_reorderArrivals;
     quint16 m_lastDelivered = 0;
     bool m_haveDelivered = false;
-    QElapsedTimer m_headWait;      // how long the head of a gap has been waiting
+    qint64 m_headSinceMs = -1;
+    quint16 m_waitingFor = 0;
     bool m_gapPending = false;
 
     QElapsedTimer m_pingSentAt;

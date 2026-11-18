@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <QObject>
 #include <QTcpSocket>
 #include <QElapsedTimer>
@@ -25,6 +26,7 @@ public:
     explicit TgxlConnection(QObject* parent = nullptr);
 
     bool isConnected() const { return m_connected; }
+    std::optional<bool> isThreeWay() const { return m_threeWay; }
     bool isConnecting() const { return !m_connected && m_socket.state() != QAbstractSocket::UnconnectedState; }
     bool isAuthBlocked() const { return m_authBlocked; }
     QString version() const { return m_version; }
@@ -93,6 +95,7 @@ signals:
     void authBlockCleared();
     void stateUpdated(const QMap<QString, QString>& kvs);
     void statusUpdated(const QMap<QString, QString>& kvs);
+    void variantChanged(bool threeWay);
     // Operator-facing alert from the tuner ("LOW RF POWER" when a tune is
     // asked for with too little drive to measure). Empty text means the
     // tuner has cleared it, which it does on its own a few seconds later.
@@ -114,6 +117,7 @@ private:
     friend struct PeripheralConnectionTestAccess;
     // Inject transport initiation in socket-free lifecycle tests.
     std::function<void(const QString&, quint16)> m_connectTransport;
+    std::function<void(const QByteArray&)> m_commandWriter;
     void applyPollRateFor(const QMap<QString, QString>& kvs);
     Q_INVOKABLE void processLine(const QString& line); // injected-frame test seam
     Q_INVOKABLE void processBytes(const QByteArray& bytes); // injected transport test seam
@@ -143,6 +147,8 @@ private:
     QByteArray m_readBuf;
     quint32    m_seq{0};
     bool       m_connected{false};
+    std::optional<bool> m_threeWay;
+    std::optional<quint32> m_infoSeq;
     bool       m_gotVersion{false};
     bool       m_authPending{false};
     bool       m_waitingForAuthCode{false};

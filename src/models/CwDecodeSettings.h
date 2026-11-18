@@ -116,6 +116,41 @@ public:
     static void setPitchRange(int low, int high) { writeRange("pitchLow", "pitchHigh", low, high); }
     static void setSpeedRange(int low, int high) { writeRange("speedLow", "speedHigh", low, high); }
 
+    // Sens (0-100) of a neural CW decoder, one value per backend key because
+    // each model's confidence is on its own scale.  0, which hides nothing,
+    // when none is saved.  ggmorse's Sens stays in the flat
+    // CwDecoderSensitivity key.
+    static int sensitivity(const QString& backend)
+    {
+        const QJsonValue saved = readObj().value("sensitivity").toObject().value(backend);
+        return saved.isDouble() ? std::clamp(saved.toInt(), 0, 100) : 0;
+    }
+    static void setSensitivity(const QString& backend, int value)
+    {
+        QJsonObject o = readObj();
+        QJsonObject perBackend = o.value("sensitivity").toObject();
+        const int clamped = std::clamp(value, 0, 100);
+        if (perBackend.value(backend).toInt(-1) == clamped) return;
+        perBackend[backend] = clamped;
+        o["sensitivity"] = perBackend;
+        ensureToggles(o);
+        write(o);
+    }
+
+    // What the pane shows of a neural decoder's text at Sens threshold
+    // `threshold`: the text itself when its cost is below the threshold (a
+    // NaN cost included) or it is only spaces.  Hidden text that held a space
+    // leaves one space, so the words on either side of a hidden DeepCW chunk
+    // stay apart, unless the pane already ends in one.  Otherwise nothing.
+    static QString shownNeuralText(const QString& text, float cost, float threshold,
+                                   bool paneEndsInSpace)
+    {
+        if (!(cost >= threshold) || text.trimmed().isEmpty()) return text;
+        const bool heldSpace = std::any_of(text.cbegin(), text.cend(),
+                                           [](QChar c) { return c.isSpace(); });
+        return heldSpace && !paneEndsInSpace ? QStringLiteral(" ") : QString{};
+    }
+
     // The pitch range centred on the CW pitch: 300 Hz wide, shifted to stay
     // inside the slider span (a pitch beyond the span gets the edge window).
     static constexpr int kPitchHalfWidth = CwDecoder::kPitchHalfWidthHz;
