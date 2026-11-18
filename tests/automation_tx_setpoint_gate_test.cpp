@@ -3,11 +3,13 @@
 // open, other setpoints stay free, and with permission every surface works.
 // No radio, no socket, no transmission: the real TxApplet on a bare RadioModel.
 
+#include "RadioSetupControlFixture.h"
 #include "TestEventLoop.h"
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
 #include "core/TxKeyingMarker.h"
 #include "gui/SliderLeaseTxGate.h"
+#include "gui/TxBandDialog.h"
 #include "gui/TxApplet.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -17,6 +19,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLineEdit>
 #include <QLocalSocket>
 #include <QMainWindow>
 #include <QSlider>
@@ -298,6 +301,57 @@ int main(int argc, char** argv)
               "TX not allowed: tci send drive/tune_drive reads are not refused");
     } else {
         std::printf("[SKIP] tci send drive gate: TCI not built (HAVE_WEBSOCKETS off)\n");
+    }
+
+    // ── TX Band Settings per-band power edits (#5851) ──────────────────────
+    // The radio restores a band's RF/Tune power on QSY into it, so these edits
+    // set drive: setText plus a focus change commits through editingFinished.
+    {
+        RadioModel bandRadio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(bandRadio);
+        RadioSetupControlTestAccess::band(bandRadio, 9);
+        TxBandDialog dialog(&bandRadio);
+        dialog.show();
+        AetherTest::waitFor([&] { return dialog.isVisible(); }, 2000);
+        const QString names[] = {QStringLiteral("RF power percent, band 20m"),
+                                 QStringLiteral("Tune power percent, band 20m")};
+        for (const QString& name : names) {
+            const QByteArray n = name.toUtf8();
+            QLineEdit* edit = nullptr;
+            for (auto* e : dialog.findChildren<QLineEdit*>()) {
+                if (e->accessibleName() == name) { edit = e; }
+            }
+            if (!edit) {
+                check(false, "TxBandDialog has the " + n + " edit");
+                continue;
+            }
+            check(isTxSetpointControl(edit), n + " is marked a TX setpoint");
+            const QString before = edit->text();
+            const QJsonObject set = cmd(server, QStringLiteral("invoke"), name,
+                                        QStringLiteral("setText"), QStringLiteral("100"));
+            check(!ok(set) && set.value(QStringLiteral("error")).toString()
+                                  .contains(QStringLiteral("sets transmit drive")),
+                  "TX not allowed: invoke setText on " + n + " is refused as transmit drive");
+            check(!ok(cmd(server, QStringLiteral("clickAt"), name, {}, QStringLiteral("5 5"))),
+                  "TX not allowed: clickAt on " + n + " is refused");
+            AetherTest::pumpFor(50);
+            check(edit->text() == before && backend->commands.isEmpty(),
+                  "TX not allowed: " + n + " is unchanged and nothing reached the radio");
+        }
+        server.setTxAllowed(true);
+        backend->commands.clear();
+        QLineEdit* rf = nullptr;
+        for (auto* e : dialog.findChildren<QLineEdit*>()) {
+            if (e->accessibleName() == names[0]) { rf = e; }
+        }
+        check(rf && ok(cmd(server, QStringLiteral("invoke"), names[0], QStringLiteral("setText"),
+                           QStringLiteral("41")))
+                  && rf->text() == QStringLiteral("41"),
+              "TX allowed: invoke setText on the band RF power edit is accepted");
+        if (rf) { emit rf->editingFinished(); }
+        check(backend->commands == QStringList{QStringLiteral("transmit bandset 9 rfpower=41")},
+              "TX allowed: the committed edit is sent as the band's RF power");
+        server.setTxAllowed(false);
     }
 
     // ── TX permission: the same calls reach TransmitModel ───────────────────

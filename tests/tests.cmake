@@ -11304,14 +11304,19 @@ set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Without TX permission the bridge refuses to change RF/Tune power on every
-# surface, as `transmit rfpower` does (#5851). Real TxApplet, offscreen, no radio.
+# surface, as `transmit rfpower` does (#5851). Real TxApplet and TxBandDialog,
+# offscreen, no radio.
 add_executable(automation_tx_setpoint_gate_test
     tests/automation_tx_setpoint_gate_test.cpp
     src/gui/TxApplet.cpp
+    src/gui/TxBandDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/AtuPreTuneDialog.cpp
     src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(automation_tx_setpoint_gate_test PRIVATE src tests)
 # The source root lets it read the MainWindow key-injection wiring it cannot construct.
