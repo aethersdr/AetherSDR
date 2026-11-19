@@ -205,7 +205,7 @@ void RadioModel::noteTxTimeoutHold(const TxCoordinator::Request& request)
         // press is a new key-down, never a held one.
         return;
     }
-    m_txTimeout.noteHold(request.producerKey(), [request] { return request.producerValid(); });
+    m_txTimeout.noteHold(request.producerKey(), request.producerAlive());
 }
 
 void RadioModel::noteTxTimeoutRelease(const TxCoordinator::Request& request)

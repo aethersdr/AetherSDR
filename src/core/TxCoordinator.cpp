@@ -325,9 +325,17 @@ quintptr TxCoordinator::Request::producerKey() const
     return m_state ? reinterpret_cast<quintptr>(m_state->producer.m_state.get()) : 0;
 }
 
-bool TxCoordinator::Request::producerValid() const
+std::function<bool()> TxCoordinator::Request::producerAlive() const
 {
-    return m_state && m_state->producer.valid();
+    std::weak_ptr<ProducerState> producer;
+    if (m_state) {
+        producer = m_state->producer.m_state;
+    }
+    return [producer] {
+        Producer alive;
+        alive.m_state = producer.lock();
+        return alive.valid();
+    };
 }
 
 bool TxCoordinator::Request::valid() const

@@ -54,6 +54,7 @@ public:
     }
     static bool armed(const RadioModel& radio) { return radio.m_txTimeout.armed(); }
     static int holders(const RadioModel& radio) { return radio.m_txTimeout.holderCount(); }
+    static void prune(RadioModel& radio) { (void)radio.m_txTimeout.refreshLatch(); }
     // emitInterlockNotification() drops a repeat of the last key within 5 s.
     static void clearNoticeDedup(RadioModel& radio) { radio.m_lastInterlockNotificationKey.clear(); }
 };
@@ -513,6 +514,28 @@ int main(int argc, char** argv)
         Access::clearNoticeDedup(radio);
         report("fresh_ptt_admitted_after_finished_host_cw_text_and_time_out",
                Access::admit(radio, ptt.request()));
+    }
+
+    // A hold is the producer's, not the request's: noting one keeps no request
+    // alive, so a finished CW element's work can still end under MOX.
+    {
+        RadioModel radio;
+        const TxCoordinator::Producer paddle = radio.registerTxProducer();
+        TxCoordinator::Request::Weak element;
+        {
+            const TxCoordinator::Request request = paddle.request();
+            element = request.weak();
+            Access::hold(radio, request);
+        }
+        const bool requestGone = !element.lock().valid();
+        Access::prune(radio);
+        const bool producerHolds = Access::holders(radio) == 1;
+        paddle.invalidate();
+        Access::prune(radio);
+        report("hold_keeps_the_producer_not_its_request",
+               requestGone && producerHolds && Access::holders(radio) == 0,
+               "gone=" + std::to_string(requestGone) + " held=" + std::to_string(producerHolds)
+                   + " after=" + std::to_string(Access::holders(radio)));
     }
 
     // Defaults and the Flex second layer, through the model getter.
