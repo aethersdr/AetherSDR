@@ -231,6 +231,11 @@ cannot recycle the consumed operation's evidence. Repeated unkeys replace only
 the pending sequence; they cannot extend the first cleanup deadline. Partial
 or helper-triggered idle, missing replies and timeout never restore readiness.
 
+Retiring a desktop input producer after qualified release sends no additional
+unkey for that completed operation. This avoids withdrawing readiness while a
+new caller is being constructed. An unconfirmed tail still receives its original
+cleanup; an explicit operator Stop still uses the write/reply/fresh-idle barrier.
+
 `RadioConnection` constructs the wire session on its existing worker thread.
 The session observes raw lines before presentation parsing, uses that
 transport's connection generation, and records complete writes from the common

@@ -1459,12 +1459,14 @@ void desktopModelWireHandoff()
         f.backend->stopWriter = {};
         f.backend->independentReady = {};
     });
-    f.radio.setTransmit(true);
+    const auto controller = std::make_shared<TxController>(&f.radio);
+    const TxController::Input input = controller->capture(TxController::Activity::Mox);
+    check(input.start(), "scoped desktop PTT starts before explicit Cancel and producer retirement");
     const TxCoordinator::Operation desktop = f.radio.transmitOperation();
     feed(u"R101|0|");
     feed(u"S0|interlock tx_client_handle=0x12345678 state=PTT_REQUESTED reason= source=SW tx_allowed=1");
     feed(u"S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason= source=SW tx_allowed=1");
-    f.radio.setTransmit(false);
+    input.stop();
     check(writes == QStringList{"xmit 1", "xmit 0"} && f.coordinator.hasOwnership(),
           "normal model PTT records its own off edge without an extra stop or early handoff");
     feed(u"R102|0|");
@@ -1476,13 +1478,16 @@ void desktopModelWireHandoff()
     TxOperationIntegrationTestAccess::stopEvidence(f.radio, proof);
     check(desktop.hasConfirmedStop() && !f.coordinator.hasOwnership() && writes.size() == 2,
           "model confirms original desktop operation without reconnecting or another RF command");
-    f.radio.setTransmit(false);
+    f.radio.cancelLocalTransmit();
     check(writes == QStringList{"xmit 1", "xmit 0", "xmit 0"} && !f.radio.independentTxReady(),
           "explicit extra model Stop withdraws the real wire's readiness after confirmed release");
     feed(u"R104|0|");
     feed(u"S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1");
     check(f.radio.independentTxReady() && desktop.hasConfirmedStop() && !f.coordinator.hasOwnership(),
           "fresh acknowledged cleanup restores production model readiness without another ownership certificate");
+    controller->invalidate();
+    check(writes.size() == 3 && f.radio.independentTxReady(),
+          "retiring the canceled producer after confirmed release emits no redundant off or readiness gap");
     const auto admitted = f.grants.acquire(f.a, f.ga.grant, 1, TxCoordinator::Activity::Mox);
     check(admitted.accepted() && writes.size() == 3,
           "fresh independent analyzer admission follows confirmed desktop release without automatic keying");

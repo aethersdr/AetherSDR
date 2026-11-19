@@ -590,6 +590,8 @@ ADC headroom or calibrated output power.
    software-PTT cycle can release that ownership after its matching command
    replies and the radio's owner-clear report arrive. An additional Stop waits
    for its own acknowledgment and fresh idle readback before measurement is ready.
+   Closing an input controller after confirmed release does not send another Stop
+   for the completed transmission.
    Missing or contradictory
    readback, or a cycle combined with CW, TUNE or ATU, keeps preparation blocked;
    stop AetherPD and reconnect before preparing an analyzer run.

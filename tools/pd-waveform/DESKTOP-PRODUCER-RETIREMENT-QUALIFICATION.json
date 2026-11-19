@@ -1,0 +1,67 @@
+{
+  "recorded_utc": "2026-11-19T01:40:48.439815+00:00",
+  "source_parent": "f90b4e8a1bc835a6f83c1cf70c764f7c1cb31512",
+  "production_ready": false,
+  "status": "Live extra Stop has matching ACK and fresh idle, but first independent analyzer start was refused without RF. Causal regression reproduces redundant unkey when the bridge retires the canceled producer. The repair passes eight affected tests and a full Linux desktop/daemon build; repaired producer path not yet deployed.",
+  "root_cause": "Global Cancel invalidates captured inputs. At the next key intent the bridge retires its old controller. abortProducerPtt retried cleanup of the already-confirmed operation, withdrawing wire readiness immediately before independent admission.",
+  "repair": "Automatic producer retirement closes only unconfirmed tails. Qualified release ends that producer operation. Explicit operator Stop still writes unkey and waits for its exact acknowledgment and fresh original-connection idle.",
+  "before_failures": [
+    "retiring the canceled producer after confirmed release emits no redundant off or readiness gap",
+    "fresh independent analyzer admission follows confirmed desktop release without automatic keying"
+  ],
+  "affected_tests_passed": 8,
+  "static_checks_passed": 7,
+  "docs_build_passed": true,
+  "new_sanitizer_run": false,
+  "build": {
+    "passed": true,
+    "affected_tests_passed": 8,
+    "source_parent": "f90b4e8a1bc835a6f83c1cf70c764f7c1cb31512",
+    "binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-producer-retirement/bin/AetherSDR",
+        "bytes": 833354648,
+        "sha256": "d7a80aacee76fc25c5f75f11b1dbcafebe9f4ce727bf682ec3fef7b0ce84128f"
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-producer-retirement/bin/aetherd",
+        "bytes": 413578824,
+        "sha256": "2972a1e6d6da1691553f63ebf0d47bee88ab14462085a8cde4567afef81a24b8"
+      }
+    },
+    "radio_actions": []
+  },
+  "build_source_base": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+  "build_source_patch_sha256": "1f06e6e015c064cb96a73021d560aceb0f33f29c4484610f72ce10ce56e8c73f",
+  "live_prior_candidate": {
+    "desktop_implementation_commit": "2a6dce4d51a6f57cd53609c611f97cee16fc0736",
+    "pid": 2367827,
+    "binary_sha256": "f727c50e92f5107fa3c725ffe50c3cd47c3275015fa7280f04dac030923cf0a7",
+    "extra_Stop_write_sequence": 229,
+    "normal_off_sequence": 226,
+    "extra_Stop_ACK_success": true,
+    "later_original_connection_unowned_READY": true,
+    "new_stop_token_observed": false,
+    "silent_PTT_keys": 1,
+    "LP_peak_W": 0.0,
+    "measurement_GUI_key_requests": 1,
+    "measurement_observed_RF": false,
+    "session_stopped": true,
+    "repaired_producer_path_live_qualified": false
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-producer-retirement-components.tar.gz",
+    "bytes": 1081519,
+    "sha256": "88f8f200b16490b5fb00d84ee9650d9929baf072ea1c23912c6655bbc8f0a192",
+    "members": 160,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Normal and extra Stop wire evidence is live; no ownership token was directly inspected during that sequence. The final post-refusal read-only debugger snapshots show tracker Idle/FailureNone/readiness true and no active/unconfirmed/stopping coordinator operation.",
+    "One prekey script refusal retained an incorrect10W assertion for a5W limit; it issued zero keys. Its attempted disabled Stop error is preserved; native session Stop and independent guard succeeded. A separate explicit GUI measurement request was refused by the real admission gate and emitted no RF. Neither is a successful RF capture.",
+    "A sandboxed regression run deadlocked in unrelated Qt/PulseAudio startup before the new test. Its symbolized stack and termination are retained. The same before-fix host run fails the two causal assertions; all eight repaired host tests pass.",
+    "Same-user ptrace attachment was denied by Linux policy. Fixed read-only host-sudo debugger recipes inspected only our idle desktop or test, then detached. No ptrace policy, inferior memory, radio privilege, firmware or RF state was changed.",
+    "Existing wire sanitizer and mutation evidence remains attributed to2a; no new sanitizer coverage is claimed for the producer change. Native538 builds/tests predate this fix.",
+    "Actual6300, sustained/raw speech, alignment/cold bypass, final graph/recovery and stock workflow/comparison, latest native packaging and independent release gates remain open. No root radio bridge, reboot, AetherTX or processing-settings restoration."
+  ]
+}

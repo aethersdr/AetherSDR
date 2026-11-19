@@ -235,9 +235,10 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
         return;
     }
     const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
-    if (operation.permitsCleanup() && !m_txCoordinator.hasOtherIntents(operation, {})) {
-        // Retry only this operation's one-way stop after a late radio edge.
-        // A new contributor or connection can never inherit this cleanup.
+    if (operation.permitsCleanup() && !operation.hasConfirmedStop()
+        && !m_txCoordinator.hasOtherIntents(operation, {})) {
+        // Retiring a producer may close its unconfirmed radio tail. Qualified
+        // release has already ended that operation; later RF is not its work.
         requestTransmitStop(operation);
     }
 }
