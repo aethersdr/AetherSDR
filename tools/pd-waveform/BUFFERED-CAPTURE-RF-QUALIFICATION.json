@@ -1,0 +1,788 @@
+{
+  "recorded_utc": "2026-11-19T05:36:20.164634+00:00",
+  "production_ready": false,
+  "source_parent": "1d1de33421091a1e05c62b869b23d778e40829a8",
+  "status": "One bounded5W diagnostic transmission produced correction and real on-radio fit CPU/wall timing, paired samples and TX trace. Normal unkey/Stop, fixed capture retrieval/removal and observed worker cleanup passed. Captured successful data produces usable host replay; earlier failed cold-start cause remains unproven.",
+  "installed_release": "e4107da729d7caff8cb6dce504fe7c1f9761ec8399a1904ecd54cc60e614b5a9",
+  "installed": true,
+  "shipping_candidate": false,
+  "new_positive_GUI_key_requests": 1,
+  "new_observed_TX_intervals": 1,
+  "source_arm_actions": 1,
+  "automatic_RF_retry": false,
+  "automatic_source_rearm": false,
+  "fault_injected": false,
+  "AetherTX_launched": false,
+  "radio_reboots": [],
+  "processing_settings_restored": false,
+  "bench": {
+    "frequency_MHz": 7.15,
+    "antenna": "ANT1 dummy load/sampler to RXA",
+    "nominal_W": 5,
+    "configured_max_W": 10,
+    "FDX": false,
+    "stock_APD": false,
+    "feedback": "local_dax_iq",
+    "channel": 4,
+    "LP_peak_W": 3.61,
+    "LP_max_SWR_during_RF": 1.08,
+    "independent_guard_passed": true,
+    "native_cutoff_ms": 9000,
+    "measurement_timeout_ms": 10000
+  },
+  "correction": {
+    "observations": 14,
+    "observed_first_to_last_ms": 1496.543636,
+    "no_alignment_resets_or_transport_faults_or_input_limiting_in_status_samples": true,
+    "radio_fit_timings": [
+      {
+        "sequence": 0,
+        "wall_ms": 1645.247511,
+        "CPU_ms": 1462.34806,
+        "begin_after_key_ms": 4351.633863,
+        "end_after_key_ms": 5996.881374,
+        "completed_before_source_end": true,
+        "accepted_by_calc": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "sequence": 1,
+        "wall_ms": 1886.067831,
+        "CPU_ms": 1588.541116,
+        "begin_after_key_ms": 6464.564509,
+        "end_after_key_ms": 8350.63234,
+        "completed_before_source_end": false,
+        "accepted_by_calc": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "only_first_fit_observed_applied": true,
+    "analyzer_result": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 corrected\nTransmit authorization timeout 10 s\nDAX IQ stream 0x20000000 \u00b7 IQ Ch 4 \u00b7 pan 0x40000000 \u00b7 GUI 0x422b5da0 \u00b7 captured tone offsets 710.0/1900.0 Hz\n4 averages \u00b7 tone imbalance 0.25 dB\nIMD: dBc per tone / fundamental-derived PEP\nIMD3 lower: -43.9 / -50.0\nIMD3 upper: -54.2 / -60.2\nIMD5 lower: -57.3 / -63.3\nIMD5 upper: -61.6 / -67.6\nIMD7 lower: -71.9 / -77.9\nIMD7 upper: -62.6 / -68.7\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+    "matched_OFF_baseline_in_this_case": false
+  },
+  "analysis": {
+    "radio_fit_timings": [
+      {
+        "sequence": 0,
+        "wall_ms": 1645.247511,
+        "CPU_ms": 1462.34806,
+        "begin_after_key_ms": 4351.633863,
+        "end_after_key_ms": 5996.881374,
+        "completed_before_source_end": true,
+        "accepted_by_calc": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "sequence": 1,
+        "wall_ms": 1886.067831,
+        "CPU_ms": 1588.541116,
+        "begin_after_key_ms": 6464.564509,
+        "end_after_key_ms": 8350.63234,
+        "completed_before_source_end": false,
+        "accepted_by_calc": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "radio_key_to_source_end_ms": 7694.507924,
+    "observed_correcting_span_ms": 1496.543636,
+    "source_end": "1795066174.836 bounded source ended: reason=interlock_ineligible mono_ns=46973812483464 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=7424 generated=184576 iq_frames=35316 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=937271 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=422b5da0 slice=0 correction=1 native_apd=0 iq_valid_ns=46973808471831",
+    "TX_trace_timing": {
+      "TX_input_kernel_receive_age_ms": {
+        "count": 1443,
+        "min": 0.035111,
+        "p50": 0.055611,
+        "p99": 0.122573,
+        "max": 0.22385
+      },
+      "TX_handler_before_send_ms": {
+        "count": 1443,
+        "min": 0.024297,
+        "p50": 0.087795,
+        "p99": 0.192517,
+        "max": 0.230961
+      },
+      "TX_send_call_ms": {
+        "count": 1443,
+        "min": 0.014871,
+        "p50": 0.029222,
+        "p99": 0.092277,
+        "max": 0.115832
+      }
+    },
+    "pairs": {
+      "lab-unmatched.f32le": {
+        "pairs": 184320,
+        "seconds_at_24000": 7.68,
+        "sha256": "2e6e45687c244d36f4cbc3d9fde6945cc5c8cf8f872f3034e5a6af3f50d5e5ee",
+        "all_finite": true,
+        "component_absolute_peak": [
+          0.699999988079071,
+          0.6995155215263367,
+          38722.8671875,
+          38742.50390625
+        ]
+      },
+      "lab-aligned.f32le": {
+        "pairs": 134899,
+        "seconds_at_24000": 5.620791666666666,
+        "sha256": "15a39c3930a05f4c569b1380ddb9e6d6ebbcbb51145af64118729a52a0b082b5",
+        "all_finite": true,
+        "component_absolute_peak": [
+          0.803214967250824,
+          0.6974544525146484,
+          45015.26171875,
+          38706.1171875
+        ]
+      }
+    },
+    "host_replay": [
+      {
+        "event": "EQ",
+        "train_start_pair": 12019,
+        "train_pairs": 24064,
+        "residual_dB": -29.636309316,
+        "exact_radio_training_window_proven": false
+      },
+      {
+        "event": "state",
+        "pair": 36083,
+        "state": 0,
+        "solution": false,
+        "fits": 0,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 36211,
+        "state": 1,
+        "solution": false,
+        "fits": 0,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 36339,
+        "state": 2,
+        "solution": false,
+        "fits": 0,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 38899,
+        "state": 3,
+        "solution": false,
+        "fits": 0,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 39027,
+        "state": 4,
+        "solution": false,
+        "fits": 0,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 53235,
+        "state": 5,
+        "solution": false,
+        "fits": 0,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 53363,
+        "state": 6,
+        "solution": false,
+        "fits": 0,
+        "packed_flags": 0
+      },
+      {
+        "event": "host_fit",
+        "accepted": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "wall_ms": 208.034288,
+        "CPU_ms": 207.657776
+      },
+      {
+        "event": "state",
+        "pair": 78579,
+        "state": 7,
+        "solution": true,
+        "fits": 1,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 78707,
+        "state": 3,
+        "solution": true,
+        "fits": 1,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 78835,
+        "state": 4,
+        "solution": true,
+        "fits": 1,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 85363,
+        "state": 5,
+        "solution": true,
+        "fits": 1,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 85491,
+        "state": 6,
+        "solution": true,
+        "fits": 1,
+        "packed_flags": 0
+      },
+      {
+        "event": "host_fit",
+        "accepted": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "wall_ms": 196.44739,
+        "CPU_ms": 196.135473
+      },
+      {
+        "event": "state",
+        "pair": 109043,
+        "state": 7,
+        "solution": true,
+        "fits": 2,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 109171,
+        "state": 3,
+        "solution": true,
+        "fits": 2,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 109299,
+        "state": 4,
+        "solution": true,
+        "fits": 2,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 117875,
+        "state": 5,
+        "solution": true,
+        "fits": 2,
+        "packed_flags": 0
+      },
+      {
+        "event": "state",
+        "pair": 118003,
+        "state": 6,
+        "solution": true,
+        "fits": 2,
+        "packed_flags": 0
+      },
+      {
+        "event": "end",
+        "solution": true,
+        "fits": 2,
+        "packed_flags": 0
+      },
+      {
+        "event": "host_fit",
+        "accepted": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "wall_ms": 197.684642,
+        "CPU_ms": 197.403153
+      }
+    ],
+    "scope": "Successful finite diagnostic run only. Host EQ window approximate; second hardware fit and final host fit finish after source/end observation. TX trace ages are not FPGA-to-DAX-IQ latency or physical feedback delay."
+  },
+  "capture_completion": {
+    "event": "complete",
+    "pid": 16277,
+    "unmatched_bytes": 2949120,
+    "aligned_bytes": 2158384,
+    "trace_bytes": 211289,
+    "fit_records": 2,
+    "fit_records_dropped": 0,
+    "deferred_flushes": 0,
+    "deferred_closes": 1,
+    "unowned_READY": true
+  },
+  "download": {
+    "passed": true,
+    "phase": "keyed",
+    "completion": {
+      "event": "complete",
+      "pid": 16277,
+      "unmatched_bytes": 2949120,
+      "aligned_bytes": 2158384,
+      "trace_bytes": 211289,
+      "fit_records": 2,
+      "fit_records_dropped": 0,
+      "deferred_flushes": 0,
+      "deferred_closes": 1,
+      "unowned_READY": true
+    },
+    "files": {
+      "lab-unmatched.f32le": {
+        "bytes": 2949120,
+        "sha256": "2e6e45687c244d36f4cbc3d9fde6945cc5c8cf8f872f3034e5a6af3f50d5e5ee"
+      },
+      "lab-aligned.f32le": {
+        "bytes": 2158384,
+        "sha256": "15a39c3930a05f4c569b1380ddb9e6d6ebbcbb51145af64118729a52a0b082b5"
+      },
+      "lab-tx.csv": {
+        "bytes": 211289,
+        "sha256": "2b93b9747dd8faee580176252890596107e85651527e354df5601e4834e34f33"
+      },
+      "lab-fit.jsonl": {
+        "bytes": 552,
+        "sha256": "ec83106bdd13ed817faa634aa014aee14132d01050e217a45011bdc5440987f5"
+      }
+    },
+    "file_operator": {
+      "UID": [
+        "78666",
+        "78666",
+        "78666",
+        "78666"
+      ],
+      "GID": [
+        "20",
+        "20",
+        "20",
+        "20"
+      ],
+      "NNP": "1",
+      "caps": {
+        "CapEff": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapInh": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      }
+    },
+    "radio_files_removed": false,
+    "local_files_fsynced_and_verified": true,
+    "RF_commands": []
+  },
+  "post_Stop_audit": {
+    "passed": true,
+    "original_observed_worker_PIDs_absent_including_zombies": [
+      16268,
+      16269,
+      16270,
+      16273,
+      16275,
+      16276,
+      16277,
+      16285,
+      16287,
+      16289
+    ],
+    "remaining_control_processes": [
+      {
+        "pid": 15550,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 4581356,
+        "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+        "packet_fds": [],
+        "role": "control/status frontend"
+      },
+      {
+        "pid": 16259,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 4684253,
+        "sha256": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7",
+        "packet_fds": [],
+        "role": "unprivileged control manager"
+      },
+      {
+        "pid": 16267,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 4684277,
+        "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+        "packet_fds": [],
+        "role": "control/status frontend"
+      }
+    ],
+    "ARP_absent": true,
+    "journal_bytes": 0,
+    "capture_files_absent": true,
+    "accept_local": "0",
+    "temporary_install_paths_absent": true,
+    "private_session_sockets_absent": true,
+    "all_temporary_lab_jobs_and_carriers_retired": true
+  },
+  "journal_scope_correction": {
+    "post_keyed_audit_journal_unit": "aetherpd-start@102-15550-78666.service",
+    "meaning": "The cleanup audit PID/hash/network checks concern the keyed cohort, but its journal subsection queried the previous receive-only unit. That subsection is not keyed evidence.",
+    "separate_exact_keyed_journal_job_passed": true,
+    "correct_unit": "aetherpd-start@103-15550-78666.service",
+    "correct_journal_evidence": "keyed-journal-result.json"
+  },
+  "final_idle": {
+    "state": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 22.78125,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x422b5da0",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "native": {
+      "available": false,
+      "state": "stopped"
+    },
+    "whoami": {
+      "agentName": "Automation",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-native-durability",
+      "ok": true,
+      "pid": 2651239,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-native-durability",
+      "station": "Automation",
+      "txAllowed": true,
+      "version": "26.11.3"
+    }
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/buffered-capture-keyed-components.tar.gz",
+    "bytes": 14572639,
+    "sha256": "e40c8c25b4f6fd652910eabaad3d222600eb60b02cfe3943dc64a75d3a2c60a4",
+    "members": 122,
+    "all_members_verified": true
+  },
+  "replay_binary": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/cold-bypass-capture-candidate/replay-captured-pairs",
+    "bytes": 188832,
+    "sha256": "26a82fc5958e2b757e5293336a0ac2b22824fba19b83c2265b3feba7d0dbef4c"
+  },
+  "scope_limits": [
+    "This successful finite RF run does not reproduce or attribute the earlier all-bypass failure or natural128sample alignment slip. No automatic repeat was attempted and no acceptance/readiness thresholds or source duration were changed.",
+    "Two radio calc calls pass all five checks; the second finishes after unkey. Numerical calc acceptance is not publication or RF application. Only the first model was observed correcting.",
+    "Host replay uses actual float32 aligned samples, current EQ/core and an approximate training window with accelerated pacing. It reproduces a usable model and rounded EQ residual, not exact radio scheduling, sample boundaries, publication timing or the missing failed-run pairs.",
+    "Trace contains TX input kernel queue/handler/send timings, not hardware FPGA timestamps or a DAX IQ per-packet latency distribution. The alignment coordinate1798.470 is not a calibrated physical latency. Raw IQ scale/absolute ADC headroom remain uncalibrated; LP basis remains meter-configured-forward-or-net unknown.",
+    "Capture timing instrumentation, logging and allocation overhead remain possible. Main thread RR1 and math nice10 are observed policies, not a guarantee against starvation or acceptable actual6300 CPU/disk behavior.",
+    "Cleanup proves absence of the observed original workers outside retained controls and no executable-matched active resource workers. It does not retrospectively strengthen historical name-only zombie checks or prove arbitrary unobserved descendants absent.",
+    "FullP1-P10 remains active: cold/natural128 causes, remaining final-process graph cases, sustained/repeated/raw speech, final matched integrated stock comparison, actual6300 hardware, final native delivery/publisher/disk and independent release gates remain required."
+  ],
+  "next_step": "Use captured successful pairs as a reference to isolate the earlier poor-EQ/phase cold-start failure, profile the actual fitting computation and determine how to qualify its CPU cost on the6300. A separate deliberately specified experiment may be warranted after this evidence is analyzed; do not automatically key until passing. Preserve all remaining P1-P10 gates."
+}
