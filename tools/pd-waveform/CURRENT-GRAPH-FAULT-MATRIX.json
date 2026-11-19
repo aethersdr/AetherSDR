@@ -1,8 +1,8 @@
 {
-  "recorded_utc": "2026-11-19T04:38:52.860812+00:00",
+  "recorded_utc": "2026-11-19T05:25:05.530748+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
-  "current_runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "current_runtime_release": "e4107da729d7caff8cb6dce504fe7c1f9761ec8399a1904ecd54cc60e614b5a9",
   "current_desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
   "cases": [
     {
@@ -101,9 +101,10 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Prepare a source-closed managed diagnostic candidate with complete rejection flags, bounded fit-worker timing and exact unmatched/aligned sample evidence. If existing RAW/DUMP/trace hooks are enabled in a fixed bench-only wrapper, buffer/prefault their entire bounded output before keying and flush only after radio release to avoid introducing filesystem stalls; validate fixed volatile paths, no caller-selected environment or persistent privilege, ownership, cleanup and buffer behavior before any separate guarded RF case. Do not relax fitting/readiness thresholds or extend/rearm the bounded source.",
-    "state": "diagnostic_packing_fixed_offline_not_installed",
-    "authority_constraint": "No shipping general root/capture endpoint. Exact bounded samples and fit timing are missing for live causal replay; fixed volatile capture instrumentation must be qualified before any separately dispatched guarded RF case. No automatic RF retry/rearm or software reboot."
+    "purpose": "Dispatch one separately guarded 5W diagnostic RF case through the current attested AetherSDR bridge with no automatic retry or calibration rearm; record unmatched/aligned samples and actual WDSP fit wall/CPU timing, then unkey, normal Stop, verify download, exact-hash cleanup and original-worker absence. Both correction and bypass are diagnostic outcomes, not automatic fault-test passes.",
+    "state": "diagnostic_candidate_installed_receive_only_qualified_no_new_RF",
+    "evidence": "BUFFERED-CAPTURE-CANDIDATE-QUALIFICATION.json",
+    "authority_constraint": "Existing operator-authorized bounded RF, GUI keying only, independent LP/coherent directional guard and native cutoff. No automatic retry/rearm or software reboot; no shipping general root/capture endpoint."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
@@ -111,5 +112,6 @@
     "P8 integrated stock APD workflow and final matched comparison",
     "Actual FLEX6300 teammate hardware and disk qualification",
     "Final native candidate packaging, production publisher/catalogue and independent release review"
-  ]
+  ],
+  "runtime_scope_note": "Current installed runtime is bench-only buffered diagnostic e410. Earlier fault rows remain scoped to their recorded runtimeab and desktop implementation; they are not requalification of e410."
 }
