@@ -11399,9 +11399,9 @@ add_executable(automation_tx_setpoint_gate_test
     tests/automation_tx_setpoint_gate_test.cpp
     src/gui/TxApplet.cpp
     src/gui/AtuPreTuneDialog.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
 )
 target_include_directories(automation_tx_setpoint_gate_test PRIVATE src tests)
 target_link_libraries(automation_tx_setpoint_gate_test PRIVATE
