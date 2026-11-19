@@ -1,8 +1,8 @@
 name: CI
 
 # ── THE TEST GATE IN THIS FILE IS FROZEN ─────────────────────────────────────
-# This workflow does not run the test suite, and on pull requests it does
-# not build it either: Linux builds aether_non_test_targets (declared in
+# This workflow does not run the test suite, and it does not build it
+# either, on pull requests or main: Linux builds aether_non_test_targets (declared in
 # tests/tests.cmake), macOS builds that plus its gate tests, and Windows
 # lists its targets explicitly. The Linux `build` job runs NO tests; the only
 # `ctest -R` steps are the ones listed in .github/ci-test-gate.txt, kept on
@@ -169,7 +169,16 @@ jobs:
       # refs/tags is transient and cache-cleanup.yml's sweep reclaims it.
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
-      CCACHE_MAXSIZE: 1500M
+      #
+      # 1500M -> 750M (2026-11-19), when this job stopped building tests on
+      # main and full-suite.yml took over the test tree with its own
+      # ccache-linux-full- entry (~1.9 GiB at its 2000M cap). Tests were 80%
+      # of this job's compiles, so its objects now need roughly a fifth of the
+      # old window; 750M leaves about 2x headroom, unmeasured. Check "ccache
+      # stats" after the change and raise it if Cleanups climbs and hits fall.
+      # Floor with that entry: 0.75 + 1.9 (full) + 1.0 (Windows) + 0.95
+      # (macOS at 1G) + 0.94 (canary) + 1.8 (deps) = ~7.3 GiB.
+      CCACHE_MAXSIZE: 750M
 
     steps:
       - name: Free runner disk
@@ -308,16 +317,16 @@ jobs:
           }
           grep "GPU spectrum rendering enabled" configure.log
 
-      # PRs build aether_non_test_targets (tests/tests.cmake): the root-directory
+      # Builds aether_non_test_targets (tests/tests.cmake): the root-directory
       # apps, tools and libraries, without anything from tests/tests.cmake.
-      # This job runs none of those tests, and they were about two thirds of
-      # its build time. Pushes to main still build `all`, because
-      # full-suite.yml restores the ccache this job saves from main. So a PR
-      # that breaks only a test's compile merges green, then turns this job
-      # and full-suite.yml red on main, and the ccache (saved only from a
-      # green main build) stays frozen until the test is fixed. Fix forward.
+      # This job runs none of those tests, and on main they were 80% of its
+      # compiles (3,604 of 4,516 on 2026-11-18), so a header change taken by
+      # many tests cost 25-45 min here. full-suite.yml compiles the test tree on
+      # every main push anyway, and saves its own cache for it
+      # (ccache-linux-full-). A PR that breaks only a test's compile still
+      # merges green and turns full-suite.yml red on main. Fix forward.
       - name: Build
-        run: cmake --build build -j$(nproc) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets' || '' }}
+        run: cmake --build build -j$(nproc) --target aether_non_test_targets
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
@@ -1120,7 +1129,9 @@ jobs:
         uses: hendrikmuhs/ccache-action@dbeefd73e8e2ffc1bbc412570072735eb4db3607
         with:
           key: ccache-macos-ci
-          max-size: 500M
+          # 1G from 500M (2026-11-19): at 500M every main build evicted 60-200
+          # times and missed 40-100 more objects than Linux on the same commit.
+          max-size: 1G
           # Same save-on-main split as the Linux and Windows jobs, expressed
           # through this action's own `save` input rather than a restore/save
           # pair. Restore stays on (default) so PRs read main's entry.
@@ -1134,7 +1145,7 @@ jobs:
           # step runs, and the action saves from its own post-job hook, so there
           # is no `success()` half — a failed main build here still writes an
           # entry. Tolerated rather than worked around: the cost is a sparser
-          # cache until the next green main run, not a wrong one, and at 500M on
+          # cache until the next green main run, not a wrong one, and at 1G on
           # the lighter macOS configuration that is the smallest of the three.
           save: ${{ github.ref == 'refs/heads/main' }}
 
@@ -1185,13 +1196,14 @@ jobs:
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
 
-      # PRs build aether_non_test_targets plus the two gate tests run
-      # below; same reasoning as the Linux job's Build step. Main builds `all`
-      # so the ccache it saves stays warm for test sources. A gate test added
+      # Builds aether_non_test_targets plus the two gate tests run below, on
+      # PRs and main alike; same reasoning as the Linux job's Build step. Main
+      # used to build `all`, which compiled every test on macOS for no test run
+      # and overflowed the ccache (60-200 evictions a build). A gate test added
       # to a ctest -R step here must also join this --target list: its PR
       # otherwise fails at ctest with "Could not find executable".
       - name: Build
-        run: cmake --build build -j$(sysctl -n hw.ncpu) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test' || '' }}
+        run: cmake --build build -j$(sysctl -n hw.ncpu) --target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test
 
       - name: Run macOS MNR regression test
         run: ctest --test-dir build -R '^mac_nr_filter_test$' --no-tests=error --output-on-failure
