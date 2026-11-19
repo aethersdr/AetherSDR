@@ -602,11 +602,14 @@ void AetherPDDialog::renderInstallation()
     if (preview) {
         displayed = preview->plan;
         detail = tr("Radio: %1\nFirmware: %2\n\nChanges on approval:\n"
+            "• The installer temporarily receives full administrative (root) control of your radio to update the verified AetherPD payload and fixed services.\n"
             "• Verify and replace the AetherPD payload and service.\n"
             "• Install fixed boot and local-session helpers for reboot and IQ setup.\n"
+            "• Use a local network entry to deliver IQ feedback to AetherPD. AetherPD removes entries it owns during normal session cleanup.\n"
             "• Clear obsolete failed AetherPD session records only after verifying they are empty.\n"
             "• Restart the shim while retaining its Remote Access identity.\n"
             "• Retire temporary delivery and upgrade workers. Fixed boot/session helpers remain installed.\n"
+            "• A future radio firmware (SmartSDR) update may stop AetherPD from working or require it to be reinstalled.\n"
             "The update does not transmit or arm calibration.\n\n"
             "Temporary executables: pd-accept, pd-carrier, pd-send, pd-deliver, signed upgrade worker, pd-update.\n"
             "Permanent helper: pd-boot.\n"
@@ -619,12 +622,14 @@ void AetherPDDialog::renderInstallation()
         if (preview->firstInstallation) {
             detail = tr("Radio: %1\nFirmware: %2\n\nFirst installation — changes on approval:\n"
                 "• Save a new radio credential in the system keychain before uploading.\n"
-                "• Temporarily use host-root authority to install the verified AetherPD payload and fixed helpers.\n"
+                "• The installer temporarily receives full administrative (root) control of your radio to install the verified AetherPD payload and fixed services.\n"
                 "• Create a new local identity; no predecessor credential or Tailnet enrollment is used.\n"
                 "• Install fixed boot and local-session helpers for reboot, local IQ capture and scheduling.\n"
+                "• Use a local network entry to deliver IQ feedback to AetherPD. AetherPD removes entries it owns during normal session cleanup.\n"
                 "• Clear obsolete failed AetherPD session records only after verifying they are empty.\n"
                 "• Run the shim and AetherPD without host-root authority.\n"
                 "• Remove temporary installation components. Fixed boot/session helpers remain installed.\n"
+                "• A future radio firmware (SmartSDR) update may stop AetherPD from working or require it to be reinstalled.\n"
                 "Installation does not transmit or arm calibration.\n\n"
                 "Temporary executables: pd-first-request, pd-accept, pd-carrier, pd-send, pd-deliver, signed installation worker, pd-update.\n"
                 "Permanent helper: pd-boot.\n"
@@ -675,10 +680,12 @@ void AetherPDDialog::renderInstallation()
             "The saved keychain credential, identity and package names are reused. "
             "The previous attempt may already be running; an unconfirmed status is not proof of absence. "
             "An existing carrier prevents delivery. A verified installer with retry support can retry a failed transaction only under this exact plan.\n\n"
-            "On approval: re-upload the verified native requester and carrier for this plan. The signed worker temporarily uses host-root authority "
-            "to complete or reconcile only this matching transaction, then retires. Fixed pd-boot and boot/session service units "
+            "On approval: re-upload the verified native requester and carrier for this plan. The signed worker temporarily receives full administrative (root) control of your radio. "
+            "It completes or reconciles this matching transaction, then retires. Fixed pd-boot and boot/session service units "
             "remain for reboot and IQ setup; the shim and AetherPD run without host-root authority. "
-            "No different identity or transmission is requested. A conflicting carrier is not removed to force a retry.\n\n")
+            "No different identity or transmission is requested. A conflicting carrier is not removed to force a retry.\n\n"
+            "• Use a local network entry to deliver IQ feedback to AetherPD. AetherPD removes entries it owns during normal session cleanup.\n"
+            "• A future radio firmware (SmartSDR) update may stop AetherPD from working or require it to be reinstalled.\n\n")
             + tr("Radio: %1\nFirmware: %2\nLocal hostname: %3\nRelease (BLAKE2b-256): %4\nPublisher key (Ed25519): %5\n"
                  "Attempt (BLAKE2b-256): %6\nTemporary native package: %7\nTemporary carrier: %8\nCarrier archive (SHA-256): %9")
                 .arg(preview->serial, preview->firmware, preview->hostname, preview->candidateDigest,

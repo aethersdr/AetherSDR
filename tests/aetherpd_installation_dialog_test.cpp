@@ -140,6 +140,10 @@ private slots:
             QVERIFY(f.preview().contains("does not automatically restart")); QVERIFY(!f.preview().contains("5-second delay"));
         }
         QVERIFY(f.preview().contains("Start AetherPD"));
+        QVERIFY(f.preview().contains("full administrative (root) control of your radio"));
+        QVERIFY(f.preview().contains("local network entry to deliver IQ feedback to AetherPD"));
+        QVERIFY(f.preview().contains("removes entries it owns during normal session cleanup"));
+        QVERIFY(f.preview().contains("A future radio firmware (SmartSDR) update may stop AetherPD from working or require it to be reinstalled"));
         QCOMPARE(f.loads, 0); QCOMPARE(f.writes, 0); QVERIFY(!f.job); QVERIFY(f.network.sent.empty());
     }
     void setupBusyKeepsTheReviewedPlanAndAllowsExplicitRetry()
@@ -249,7 +253,7 @@ private slots:
         QVERIFY(f.model().prepareFirstPackage(*package, "fixture-radio", f.radio.controlSession()));
         QTRY_COMPARE(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval);
         QVERIFY(f.preview().contains("First installation"));
-        QVERIFY(f.preview().contains("host-root authority"));
+        QVERIFY(f.preview().contains("full administrative (root) control of your radio"));
         QVERIFY(f.preview().contains("Fixed boot/session helpers remain installed"));
         QVERIFY(!f.preview().contains("retaining its Remote Access identity"));
         QCOMPARE(f.loads, 0); QCOMPARE(f.writes, 0); QVERIFY(f.network.sent.empty());

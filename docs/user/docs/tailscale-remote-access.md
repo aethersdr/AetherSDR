@@ -833,6 +833,14 @@ Recovery does not recreate a correction session, transmit or arm calibration:
 start a new session explicitly with **Start AetherPD**. This policy also appears
 when preparing a first installation or a saved installation attempt.
 
+The approval previews for first installation, updates and saved attempts disclose
+that the installer temporarily receives full administrative (root) control of
+your radio. The verified payload and fixed boot/session helpers remain installed;
+the shim and AetherPD run without host-root authority. AetherPD uses a local
+network entry to deliver IQ feedback and removes entries it owns during normal
+session cleanup. A future radio firmware (SmartSDR) update may stop AetherPD from
+working or require it to be reinstalled.
+
 - **Approve update** approves exactly the displayed plan, then loads the saved
   radio credential. Catalogue updates recheck the installed release before
   starting installation. A changed owner credential, changed predecessor or
@@ -873,7 +881,7 @@ The control also stays dimmed while a saved installation needs checking or its
 record cannot be read. Preparation downloads the catalogue's pinned HTTPS files,
 or verifies the development build's local package, and creates a
 plan without writing credentials or uploading. The plan identifies itself as
-**First installation** and lists the temporary host-root installation step, new
+**First installation** and lists the full administrative installation access, new
 local identity and fixed helpers that remain installed. **Approve first
 installation** saves the new credential persistently in the system keychain
 before the first upload. If that save fails or times out,
