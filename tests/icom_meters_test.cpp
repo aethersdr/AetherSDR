@@ -706,15 +706,22 @@ static void testModeList()
     check(mk2 && modeListFor(*mk2).empty(), "including the verified IC-7300MK2");
     check(modeListFor(unknownModel()).empty(), "and nor does an unknown radio");
 
-    // The IC-9700 now has its own list, read from its own guide -- which is the
-    // provenance rule being SATISFIED, not waived. The proof that it was not
-    // borrowed is that it differs where the radios differ.
+    // The IC-9700's list comes from its own guide, so it differs from the
+    // IC-705's where the radios differ.
     const IcomModel* ic9700 = modelForId(0xA2);
     check(ic9700 != nullptr, "the IC-9700 is in the table");
     if (!ic9700)
         return;
     const auto n9700 = modeListFor(*ic9700);
     check(!n9700.empty(), "the IC-9700 publishes a mode list");
+
+    // The exact list, in combo order. The checks below reject a wrong entry
+    // but cannot see a missing one.
+    static constexpr std::string_view kExpected9700[] = {
+        "USB", "LSB", "CW", "CWL", "AM", "FM", "DFM", "DIGU", "DIGL"};
+    check(std::equal(n9700.begin(), n9700.end(),
+                     std::begin(kExpected9700), std::end(kExpected9700)),
+          "the IC-9700 publishes exactly its nine round-trip modes, in order");
 
     // THE load-bearing assertion. The IC-9700 starts at 144 MHz and its 0x06
     // table has no WFM entry; the IC-705's does. If this ever passes, somebody
