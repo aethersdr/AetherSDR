@@ -1,4 +1,5 @@
 #include "SpectrumWidget.h"
+#include "models/DiversityPairPolicy.h"
 #include "SpectrumTraceBins.h"
 #include "SpectrumChromeGeometry.h"
 #include "SpectrumSquelchLogic.h"
@@ -242,23 +243,22 @@ bool overlayIsDiversityPairCandidate(const SpectrumWidget::SliceOverlay& overlay
 bool overlaysAreAttachedDiversityPair(const SpectrumWidget::SliceOverlay* active,
                                       const SpectrumWidget::SliceOverlay& overlay)
 {
-    if (!active || active->sliceId == overlay.sliceId
-        || !active->diversity || !overlay.diversity) {
+    if (!active || active->sliceId == overlay.sliceId) {
         return false;
     }
-
-    const bool parentChildPair =
-        (active->diversityParent && overlay.diversityChild)
-        || (active->diversityChild && overlay.diversityParent);
-    if (parentChildPair) {
-        return true;
-    }
-
-    if (active->diversityIndex >= 0 && overlay.diversityIndex >= 0) {
-        return active->diversityIndex != overlay.diversityIndex;
-    }
-
-    return true;
+    // Every overlay here is on this widget's pan, so the shared rule's
+    // partner index decides, with the role test before the index arrives.
+    auto view = [](const SpectrumWidget::SliceOverlay& o) {
+        DiversityPairPolicy::SliceView v;
+        v.sliceId = o.sliceId;
+        v.diversity = o.diversity;
+        v.parent = o.diversityParent;
+        v.child = o.diversityChild;
+        v.diversityIndex = o.diversityIndex;
+        v.panId = QStringLiteral("this-pan");
+        return v;
+    };
+    return DiversityPairPolicy::isSamePair(view(*active), view(overlay));
 }
 
 int diversityOrderKeyForVfo(const VfoPos& vfo)
@@ -270,7 +270,6 @@ int diversityOrderKeyForVfo(const VfoPos& vfo)
     return VfoWidget::diversityPairOrderKey(
         vfo.overlay->diversityParent,
         vfo.overlay->diversityChild,
-        vfo.overlay->diversityIndex,
         vfo.sliceId);
 }
 
@@ -337,12 +336,9 @@ void assignDiversityPairDirections(const QVector<VfoPos>& vfos,
         return vfos[lhs].sliceId < vfos[rhs].sliceId;
     });
 
-    // After the sort, index 0 is the parent / master slice (the one DIV was
-    // enabled on, which SmartSDR tags "DIV") when the radio reports the
-    // diversity_parent / diversity_index metadata; absent that, diversityOrder-
-    // KeyForVfo falls back to slice ID and index 0 is the lower-numbered slice.
-    // diversityPairFlagDir locks index 0 RIGHT to match SmartSDR's layout and
-    // index 1 LEFT; see its comment for the fallback case.
+    // After the sort, position 0 is the DIV parent when the radio reports
+    // diversity_parent, else the lower slice ID. diversityPairFlagDir locks
+    // it RIGHT to match SmartSDR and position 1 LEFT.
     dirMap[vfos[diversityIndices[0]].sliceId] =
         VfoWidget::diversityPairFlagDir(0);
     dirMap[vfos[diversityIndices[1]].sliceId] =

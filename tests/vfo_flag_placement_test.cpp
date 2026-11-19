@@ -157,15 +157,18 @@ int main()
     report("lock-left geometry stays left at left edge",
            lockedAtLeftEdge.rect.x() == -190 && lockedAtLeftEdge.onLeft);
 
-    report("diversity index 0 orders before index 1",
-           VfoWidget::diversityPairOrderKey(false, false, 0, 5)
-               < VfoWidget::diversityPairOrderKey(false, false, 1, 4));
-    report("diversity parent orders before child without index",
-           VfoWidget::diversityPairOrderKey(true, false, -1, 5)
-               < VfoWidget::diversityPairOrderKey(false, true, -1, 4));
+    // FLEX-8600 capture (#7448): parent A is slice 0 with diversity_index=3,
+    // child D is slice 3 with diversity_index=0. The parent must still sort
+    // first, because the index is a partner pointer, not an order.
+    report("diversity parent orders before child (captured indexes)",
+           VfoWidget::diversityPairOrderKey(true, false, 0)
+               < VfoWidget::diversityPairOrderKey(false, true, 3));
+    report("diversity parent orders before lower-id child",
+           VfoWidget::diversityPairOrderKey(true, false, 5)
+               < VfoWidget::diversityPairOrderKey(false, true, 4));
     report("diversity unknown role orders by stable slice id",
-           VfoWidget::diversityPairOrderKey(false, false, -1, 3)
-               < VfoWidget::diversityPairOrderKey(false, false, -1, 4));
+           VfoWidget::diversityPairOrderKey(false, false, 3)
+               < VfoWidget::diversityPairOrderKey(false, false, 4));
 
     expectDir("diversity order index 0 flag locks right",
               VfoWidget::diversityPairFlagDir(0), VfoWidget::LockRight);
@@ -178,8 +181,8 @@ int main()
     // lands RIGHT and the child LEFT — the parent-goes-right guarantee the old
     // inline literal left untested.
     {
-        const int parentKey = VfoWidget::diversityPairOrderKey(true, false, -1, 7);
-        const int childKey = VfoWidget::diversityPairOrderKey(false, true, -1, 2);
+        const int parentKey = VfoWidget::diversityPairOrderKey(true, false, 7);
+        const int childKey = VfoWidget::diversityPairOrderKey(false, true, 2);
         const bool parentFirst = parentKey <= childKey;
         report("diversity reported parent lands on the right",
                VfoWidget::diversityPairFlagDir(parentFirst ? 0 : 1)
@@ -193,8 +196,8 @@ int main()
     // just the lower-numbered slice. The pair still splits to opposite sides —
     // all the pre-metadata path ever promised.
     {
-        const int loKey = VfoWidget::diversityPairOrderKey(false, false, -1, 3);
-        const int hiKey = VfoWidget::diversityPairOrderKey(false, false, -1, 9);
+        const int loKey = VfoWidget::diversityPairOrderKey(false, false, 3);
+        const int hiKey = VfoWidget::diversityPairOrderKey(false, false, 9);
         const bool loFirst = loKey <= hiKey;
         report("diversity metadata-absent pair still splits opposite",
                VfoWidget::diversityPairFlagDir(loFirst ? 0 : 1)

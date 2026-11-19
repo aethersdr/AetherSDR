@@ -1104,21 +1104,19 @@ SliceModel* MainWindow::kiwiSdrDisplaySliceForPan(const QString& panId) const
         }
     }
 
-    SliceModel* indexedDiversitySlice = nullptr;
+    // diversity_index is the partner's slice index, not an order (#7448), so
+    // prefer the diversity parent and fall back to candidate order.
+    SliceModel* diversityParent = nullptr;
     for (SliceModel* slice : candidates) {
         if (!slice->diversity()) {
             return slice;
         }
-        if (!indexedDiversitySlice
-            || (slice->diversityIndex() >= 0
-                && (indexedDiversitySlice->diversityIndex() < 0
-                    || slice->diversityIndex()
-                           < indexedDiversitySlice->diversityIndex()))) {
-            indexedDiversitySlice = slice;
+        if (!diversityParent && slice->isDiversityParent()) {
+            diversityParent = slice;
         }
     }
 
-    return indexedDiversitySlice ? indexedDiversitySlice : candidates.first();
+    return diversityParent ? diversityParent : candidates.first();
 }
 
 QString MainWindow::kiwiSdrProfileForPan(const QString& panId) const
