@@ -11,15 +11,15 @@ name: Docs
 #
 # Publishing the site is a release-time job (#6556). When an app release (a
 # v* tag, not a pre-release) is published, the PDF is attached to it as
-# AetherSDR-Manual-<tag>.pdf with a detached signature (.pdf.asc) made with
-# the release key, and then the site is built from the tag and deployed to
-# Cloudflare Pages at https://docs.aethersdr.com. A merge to main deploys
-# nothing, so Next (/next/) shows main as of the last deploy.
+# AetherSDR-Manual-<tag>.pdf (sign-release.yml lists it in SHA256SUMS.txt,
+# whose .asc is its signature), and then the site is built from the tag and
+# deployed to Cloudflare Pages at https://docs.aethersdr.com. A merge to main
+# deploys nothing, so Next (/next/) shows main as of the last deploy.
 #
 # The PDF is not uploaded to Pages, which refuses any file over 25 MiB (the
 # manual passed that on 2026-10-17). The app and the site link to
 # https://docs.aethersdr.com/AetherSDR-Manual.pdf; the deploy writes a
-# _redirects entry sending that URL to the signed PDF on the release.
+# _redirects entry sending that URL to the PDF on the release.
 #
 # Only the highest app release version deploys, so a backport release gets
 # its PDF but leaves the site as it is.
@@ -140,8 +140,8 @@ jobs:
           retention-days: 14
 
   # A published release gets the manual for its tag. The tag's own code
-  # renders it here, with a read-only token and no secrets; sign-release-pdf
-  # below signs and attaches the finished file in a job that runs none of it.
+  # renders it here, with a read-only token and no secrets; attach-release-pdf
+  # below attaches the finished file in a job that runs none of it.
   release-pdf:
     name: Render PDF manual for release
     if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
@@ -204,16 +204,18 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Signed with the release key, as sign-release.yml signs the binaries.
-  # The PDF is not in SHA256SUMS.txt; its .asc is its own check. This job
-  # checks out nothing and runs no repository code.
-  sign-release-pdf:
+  # sign-release.yml lists the PDF in SHA256SUMS.txt, so SHA256SUMS.txt.asc
+  # is its signature. This job checks out nothing and runs no repository code.
+  attach-release-pdf:
     name: Attach PDF manual to release
     needs: release-pdf
     if: ${{ needs.release-pdf.outputs.present == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: release
+    # No environment gate (maintainer ruling on #6964): this job holds no
+    # signing key. Its token is contents: write, used only for the one
+    # `gh release upload` below. Sign Release Artifacts re-signs after it
+    # when the signed SHA256SUMS.txt doesn't cover the PDF it attached.
     permissions:
       contents: write
     env:
@@ -222,7 +224,7 @@ jobs:
       - name: Check the tag
         run: |
           if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
-            echo "::error::Not a release tag; refusing to sign."
+            echo "::error::Not a release tag; refusing to attach."
             exit 1
           fi
 
@@ -244,51 +246,13 @@ jobs:
             exit 1
           fi
 
-      - name: Import GPG key
-        env:
-          # A keyring of its own, removed at the end of the job.
-          GNUPGHOME: ${{ runner.temp }}/gnupg
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        run: |
-          install -d -m 700 "$GNUPGHOME"
-          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
-          KEY_FP=$(gpg --list-secret-keys --with-colons | grep fpr | head -1 | cut -d: -f10)
-          echo "${KEY_FP}:6:" | gpg --import-ownertrust
-
-      - name: Sign PDF manual (detached .asc)
-        env:
-          GNUPGHOME: ${{ runner.temp }}/gnupg
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        working-directory: ${{ runner.temp }}/manual
-        run: |
-          printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
-            --passphrase-fd 0 \
-            --detach-sign --armor "AetherSDR-Manual-${TAG}.pdf"
-          echo "Signed: AetherSDR-Manual-${TAG}.pdf -> AetherSDR-Manual-${TAG}.pdf.asc"
-
-      - name: Verify the signature
-        working-directory: ${{ runner.temp }}/manual
-        env:
-          GNUPGHOME: ${{ runner.temp }}/gnupg
-        run: gpg --batch --verify "AetherSDR-Manual-${TAG}.pdf.asc" "AetherSDR-Manual-${TAG}.pdf"
-
-      # One upload, so the PDF and its signature carry the same timestamp.
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$TAG" \
             "${RUNNER_TEMP}/manual/AetherSDR-Manual-${TAG}.pdf" \
-            "${RUNNER_TEMP}/manual/AetherSDR-Manual-${TAG}.pdf.asc" \
             --clobber --repo "$GITHUB_REPOSITORY"
-
-      - name: Remove the signing keyring
-        if: ${{ always() }}
-        env:
-          GNUPGHOME: ${{ runner.temp }}/gnupg
-        run: |
-          gpgconf --kill gpg-agent || true
-          rm -rf "$GNUPGHOME"
 
   # Deploying the site is three jobs, so that no job both runs repository
   # code and holds the Cloudflare token: resolve-target picks a reviewed
@@ -296,23 +260,23 @@ jobs:
   # result under the cloudflare-pages environment without checking anything
   # out.
   #
-  # A release deploys its own tag, after sign-release-pdf has attached the
+  # A release deploys its own tag, after attach-release-pdf has attached the
   # PDF, so the redirect never points at a missing file; a release that is
   # not the highest app release version (a backport) gets its PDF but
   # deploys nothing, so the site never moves back. A manual run deploys the
   # highest app release, or `ref`, which may only be `main` or a published
   # app release tag: any other branch or tag is refused, so a manual run
   # cannot publish unreviewed code. The PDF link always names a release,
-  # because a run from main has no signed PDF of its own.
+  # because a run from main has no released PDF of its own.
   resolve-target:
     name: Resolve what to deploy
-    needs: sign-release-pdf
+    needs: attach-release-pdf
     if: >-
       ${{ !cancelled()
           && ((github.event_name == 'workflow_dispatch'
-               && needs.sign-release-pdf.result == 'skipped')
+               && needs.attach-release-pdf.result == 'skipped')
               || (github.event_name == 'release'
-                  && needs.sign-release-pdf.result == 'success'
+                  && needs.attach-release-pdf.result == 'success'
                   && startsWith(github.event.release.tag_name, 'v')
                   && !github.event.release.prerelease)) }}
     runs-on: ubuntu-latest

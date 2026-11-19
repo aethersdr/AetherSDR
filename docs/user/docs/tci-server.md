@@ -128,6 +128,10 @@ slice.
 
 Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz within the connected model’s [DAX IQ limits](./dax-iq-streaming.md#limits) (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`. Requests outside an identified model’s supported `iq_samplerate` rates leave the rate unchanged and return the current rate. A valid rate negotiated before model identification is remembered without starting IQ streams; it is applied within the model’s limits once the model is known. A retained 192 kHz subscription uses 96 kHz on a model limited to 96 kHz, then returns to 192 kHz when a capable model is connected.
 
+### IQ on a Hermes-Lite 2
+
+On a Hermes-Lite 2 there is no DAX IQ: the IQ comes straight from the receiver chain in AetherSDR. `iq_samplerate` accepts 24, 48, 96 or 192 kHz, and a client that does not ask gets 48 kHz. When the HL2 runs at a higher rate, the IQ is decimated to the requested rate; when it runs lower, the IQ stays at the radio’s rate and that is the rate in the frame header. Changing `iq_samplerate` while IQ is running gives a short transient in the stream. When the network cannot keep up (a 192 kHz stream is about 1.5 MB/s), IQ frames are dropped instead of the connection being closed, so a skimmer on a slow link sees gaps rather than a disconnect.
+
 ### JTDX
 
 JTDX has TCI support but is no longer maintained and can crash with some TCI servers. WSJT-X is recommended instead.
@@ -294,7 +298,7 @@ Notes:
 
 ```
 rx_sensors_enable:true;    # S-meter updates
-tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting
+tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting or tuning
 ```
 
 RX sensors broadcast each receiver's S-meter in dBm:
@@ -303,7 +307,9 @@ RX sensors broadcast each receiver's S-meter in dBm:
 rx_channel_sensors:0,0,-97.3;
 ```
 
-TX sensors broadcast during transmit, including ALC.
+TX sensors broadcast during transmit and tune, including ALC. They follow this
+station's own transmission only: on a multiFLEX radio, another station's
+transmission sends none.
 
 The SWR field is the same trusted SWR the S-meter shows. A reading taken
 without measurable forward power, for example in a speech pause, does not
@@ -321,6 +327,35 @@ cw_keyer_speed:25;                # speed
 keyer:0,true;                     # key down
 keyer:0,false;                    # key up
 ```
+
+### AetherSDR extension set
+
+AetherSDR offers its own TCI commands as one opt-in set. A client that does not
+ask for it receives exactly the same traffic as without it. To turn it on for
+one connection, the client sends:
+
+```
+aethersdr_ext_enable:true;
+```
+
+The server answers with the set's version and the items this radio offers,
+then the current state of the offered items. An item sends as many state lines
+as it needs, and may send none:
+
+```
+aethersdr_ext:1;
+```
+
+- Every command of the set starts with `aethersdr_`. Before the enable, the
+  server ignores them without a reply, like any unknown command.
+- The list holds only what the connected radio can do, and an enabled client
+  gets a new `aethersdr_ext:` line, followed again by the state lines, when
+  that changes. A command for an item not in the list is ignored.
+- The enable is per connection. `aethersdr_ext_enable:false;` stops all
+  extension traffic to that client, and so does disconnecting.
+- No commands are in the set yet, so the list is empty.
+- The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
+  `rx_ctun_ex`) work without the enable, as before.
 
 ## Known issues
 

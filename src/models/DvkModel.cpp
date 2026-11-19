@@ -148,7 +148,16 @@ void DvkModel::handleControlReply(quint64 requestId, const TransmitServiceReply&
         emit operationSettled(requestId);
     }
     if (!alive) { return; }
-    if (reply.outcome == Outcome::Rejected) { noteRefusal(reply.code); }
+    if (reply.outcome == Outcome::Rejected) {
+        noteRefusal(reply.code);
+        // Every DVK firmware has the record, playback and preview commands, so
+        // an unknown-command answer to one of them means there is no DVK API.
+        // Clear, remove and name are left out: a release lacking only one of
+        // them must not take the whole keyer down for the session.
+        if (alive && reply.code == kUnknownCommand && (command.starts() || command.stops())) {
+            noteUnsupported();
+        }
+    }
     if (alive) {
         emit commandFailed(operationName(command.operation), command.slot, reply.code,
             reply.outcome == Outcome::Rejected ? dvkErrorString(reply.code) : reply.detail);
@@ -211,12 +220,23 @@ void DvkModel::noteRefusal(uint code)
     }
 }
 
+void DvkModel::noteUnsupported()
+{
+    if (!m_unsupported) {
+        m_unsupported = true;
+        emit unsupportedChanged(true);
+    }
+}
+
 QString DvkModel::dvkErrorString(uint code)
 {
-    // Labels come from the SmartSDR API wiki (TCPIP-dvk) and FlexLib. Codes
-    // documented in neither render as bare hex so the user can report them.
+    // Labels come from the SmartSDR API wiki (TCPIP-dvk) and FlexLib, except
+    // 50000015, which neither documents: it is what radios answer an unknown
+    // command with (also PgxlConnection.h). Other undocumented codes render as
+    // bare hex so the user can report them.
     switch (code) {
     case kNotLicensed:  return QStringLiteral("DVK is not licensed on this radio (SmartSDR+)");
+    case kUnknownCommand: return QStringLiteral("this radio's firmware does not support the command");
     case 0x50001000u:   return QStringLiteral("radio could not parse the command");
     case 0xE2000000u:   return QStringLiteral("no such slot, or an upload is already pending");
     case 0x50000053u:   return QStringLiteral("radio file server busy, try again in a moment");
@@ -321,6 +341,7 @@ void DvkModel::reset()
 {
     ++m_transferRevision;
     const bool wasRefused = m_licenseRefused;
+    const bool wasUnsupported = m_unsupported;
     m_requests.clear();
     m_startRequest = 0;
     m_startObserved = false;
@@ -329,6 +350,7 @@ void DvkModel::reset()
     m_activeId = -1;
     m_enabled = false;
     m_licenseRefused = false;
+    m_unsupported = false;
     m_pending = Unknown;
     m_pendingId = -1;
     // m_transferActive belongs to DvkWavTransfer, which clears it when its own
@@ -340,6 +362,9 @@ void DvkModel::reset()
     }
     if (wasRefused) {
         emit licenseRefusedChanged(false);
+    }
+    if (wasUnsupported) {
+        emit unsupportedChanged(false);
     }
     emit admissionChanged();
 }

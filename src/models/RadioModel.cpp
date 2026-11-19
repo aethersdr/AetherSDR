@@ -8,6 +8,8 @@
 #include <QPointer>
 #include <QScopeGuard>
 #include "core/AudioCompressionPolicy.h"
+#include "core/RemoteSession.h"
+#include "core/TailscaleInterface.h"
 #include "core/NetworkMtuPolicy.h"
 #include "core/TailnetAddress.h"
 #include "core/GuiClientIdentityPolicy.h"
@@ -49,6 +51,7 @@
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
 #include "TransmitInhibitPolicy.h"
+#include "ModeVocabulary.h"
 #include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
@@ -2098,6 +2101,9 @@ void RadioModel::teardownBackend()
     settlePanCreations();
     ++m_receiveControlGeneration;
     m_backendObservedTransmit = false;   // an observation dies with its backend
+    m_radioPttKeyed = false;             // and so does the key that followed it
+    m_radioPttInput = {};
+    m_radioPttProducer = {};
     m_tgxlTune.reset();
     m_tgxlConfirmTimer.stop();
     if (m_backend) {
@@ -2298,6 +2304,7 @@ void reconcileInterlockTx(TransmitModel& transmit, bool& audioGate, bool& cwxAct
 {
     if (!keepLocalTx) {
         transmit.setTransmitting(false);
+        transmit.expireTxOffDelayNow();
         if (audioGate) {
             audioGate = false;
             publishAudioGate(false);
@@ -2313,6 +2320,7 @@ void reconcileInterlockTx(TransmitModel& transmit, bool& audioGate, bool& cwxAct
             state.contains(QStringLiteral("REQUESTED")) || state.contains(QStringLiteral("DELAY"));
         if (!transitioningToTx) {
             transmit.setTransmitting(false);
+            transmit.expireTxOffDelayNow();
             cwxActive = false;
         }
         if (!transitioningToTx && audioGate) {
@@ -2974,6 +2982,10 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(&m_dvkModel, &DvkModel::licenseRefusedChanged, this,
             [this](bool) { emit licenseFeaturesChanged(); });
+    // A firmware without the DVK API changes hasVoiceKeyer(); the same pass
+    // that follows the entitlement re-reads it (#7156).
+    connect(&m_dvkModel, &DvkModel::unsupportedChanged, this,
+            [this](bool) { emit licenseFeaturesChanged(); });
     connect(&m_dvkModel, &DvkModel::controlRequested, this, &RadioModel::dispatchDvk, Qt::DirectConnection);
     connect(&m_dvkModel, &DvkModel::operationSettled, this, [this](quint64 requestId) {
         if (m_dvkTxRequest == requestId) {
@@ -3499,6 +3511,13 @@ void RadioModel::wireBackendPcm()
             return;
         }
         emit backendSliceAudioFrameReady(sliceId, frame);
+    });
+    connect(m_backend.get(), &IRadioBackend::sliceIqFrameReady, this,
+            [this, generation](int sliceId, const QByteArray& iq, int sampleRate) {
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
+        emit backendSliceIqFrameReady(sliceId, iq, sampleRate);
     });
 }
 
@@ -4234,6 +4253,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     cancelRadioWake();
     releaseWanStatus();
     m_wanConn = nullptr;  // LAN mode
+    m_sessionOverTailscale = false;
     resetRadioObservations();
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
@@ -4407,6 +4427,7 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
         m_wanConn->disconnect(this);
 
     m_wanConn = wan;
+    m_sessionOverTailscale = false;
     resetRadioObservations();
     const QPointer<RadioModel> setupOwner(this);
     const quint64 setupGeneration = m_setupObservationGeneration + 1;
@@ -4821,6 +4842,11 @@ RadioCapabilities RadioModel::backendCapabilities() const
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
 }
 
+bool RadioModel::setBackendSliceIqTap(int sliceId, bool on)
+{
+    return m_backend && m_backend->setSliceIqTap(sliceId, on);
+}
+
 // Client-owned receive state; radio-owned requests stay on the backend route.
 
 bool RadioModel::applyClientOwnedSliceStep(int sliceId, int hz)
@@ -5028,6 +5054,47 @@ bool RadioModel::hasRadioSideCwKeyer() const
     return backendCapabilities().hasRadioSideCwKeyer;
 }
 
+bool RadioModel::hasHostCwTextKeyer() const
+{
+    if (!m_backend || !isConnected()) {
+        return false;
+    }
+    const RadioCapabilities caps = backendCapabilities();
+    return !caps.hasRadioSideCwKeyer && caps.hostCwKeyingControl.has_value() && caps.canTransmit;
+}
+
+RadioModel::HostCwTextRefusal RadioModel::hostCwTextRefusal() const
+{
+    if (!hasHostCwTextKeyer()) {
+        return HostCwTextRefusal::Unsupported;
+    }
+    const SliceModel* tx = txSlice();
+    if (!tx) {
+        return HostCwTextRefusal::NoTxSlice;
+    }
+    // Text from a logger keys only a CW slice; a paddle's edge in SSB is the
+    // operator's own act and is not gated here.
+    if (!AetherSDR::isCwMode(tx->mode())) {
+        return HostCwTextRefusal::NotCwMode;
+    }
+    if (AetherSDR::modeIsReceiveOnly(backendCapabilities(), tx->mode())) {
+        return HostCwTextRefusal::ReceiveOnlyMode;
+    }
+    if (!transmitInhibitMessageForSlice(tx).isEmpty()) {
+        return HostCwTextRefusal::Inhibited;
+    }
+    // Every key-down would be refused while TUNE is active (admitsCwKeyEdge).
+    if (!m_transmitModel.admitsCwxSend()) {
+        return HostCwTextRefusal::Tuning;
+    }
+    // Break-in off: the backend keys CW only under an MOX/PTT already held
+    // (Hl2Backend::setCwKeying), so without one the text would not go out.
+    if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
+        return HostCwTextRefusal::BreakInOffUnkeyed;
+    }
+    return HostCwTextRefusal::None;
+}
+
 bool RadioModel::hasCwTextProgress() const
 {
     if (!m_backend || !isConnected()) {
@@ -5083,7 +5150,8 @@ bool RadioModel::hasVoiceKeyer() const
     if (!m_backend || !isConnected()) {
         return true;   // nothing attached — assume present, see the header
     }
-    return backendCapabilities().hasVoiceKeyer;
+    // The family has one, but this firmware may predate its API (#7156).
+    return backendCapabilities().hasVoiceKeyer && !m_dvkModel.unsupported();
 }
 
 bool RadioModel::hasDaxStreams() const
@@ -5383,8 +5451,16 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
         m_backendObservedTransmit = *delta.mox && m_backend
             && m_backend->capabilities().radioPttObservation.has_value();
         publishBackendTransmitEdge(*delta.mox);
+        // The host still keys through a hold, so a false here means the radio
+        // really left TX. Same reconciliation as the Flex interlock path.
+        if (!*delta.mox) {
+            m_transmitModel.expireTxOffDelayNow();
+        }
     }
     m_transmitModel.applyChanges(delta);
+    if (delta.radioPtt) {
+        followRadioPtt(*delta.radioPtt);
+    }
     if (delta.atuStatusRaw && operation.sameOperation(m_txOperation)
         && atuEpoch == m_atuCommandEpoch
         && atuIntent.pending()) {
@@ -5396,6 +5472,45 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     }
     if (delta.cwSpeed && !usesFlexCommandPlane()) {
         m_cwxModel.adoptSpeed(*delta.cwSpeed);
+    }
+}
+
+// A host-modulated radio's own PTT press is a host key through the gated
+// producer path, so every transmit preflight applies. Only
+// what this path keyed is released here; a key the host already held owns its
+// own release. CW keys itself.
+void RadioModel::followRadioPtt(bool down)
+{
+    if (!down) {
+        if (m_radioPttKeyed) {
+            m_radioPttKeyed = false;
+            const TxCoordinator::Request input = m_radioPttInput;
+            m_radioPttInput = {};
+            (void)setProducerTransmit(input, false, TransmitModel::PttSource::Footswitch);
+        }
+        return;
+    }
+    if (m_radioPttKeyed || !m_backend
+        || !m_backend->capabilities().radioPttObservation.has_value()
+        || m_txRequested || m_transmitModel.isTransmitting()
+        || m_transmitModel.isTuning()) {
+        return;
+    }
+    const SliceModel* ts = txSlice();
+    const QString mode = (ts ? ts->mode() : m_transmitModel.txSliceMode()).trimmed().toUpper();
+    if (mode.startsWith(QStringLiteral("CW"))) {
+        return;
+    }
+    if (!m_radioPttProducer.valid()) {
+        m_radioPttProducer = registerTxProducer(m_backend.get());
+    }
+    if (!m_radioPttProducer.valid()) {
+        return;
+    }
+    const TxCoordinator::Request input = m_radioPttProducer.request();
+    if (setProducerTransmit(input, true, TransmitModel::PttSource::Footswitch)) {
+        m_radioPttInput = input;
+        m_radioPttKeyed = true;
     }
 }
 
@@ -8033,8 +8148,12 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         // the connection's local address is written on its own thread, and
         // this reply is ordered after the socket connected, so reading it now
         // is safe where reading it later from Radio Setup would not be.
-        m_pathOverTailnet = reachedOverTailnet(
-            radioAddress(), m_connection ? m_connection->localAddress() : QHostAddress());
+        const QHostAddress localAddress =
+            m_connection ? m_connection->localAddress() : QHostAddress();
+        m_pathOverTailnet = reachedOverTailnet(radioAddress(), localAddress);
+        // IP Configuration's gate wants the transport, not the address range:
+        // the interface this end is bound to (core/TailscaleInterface.h).
+        m_sessionOverTailscale = !isWan() && connectionOverTailscale(localAddress);
         const int mtu = networkMtuParam();
         requestStartupSetup({RadioSetupField::NetworkMtu, mtu});
         // Enable keepalive (matches FlexLib behavior) — ping timer starts in startNetworkMonitor()
@@ -8304,7 +8423,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::DaxIq));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Radio));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Codec));
-            requestSessionControl(SessionControlRequest::subscription(SessionTopic::Dvk));
+            subscribeDvk();
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Navtex));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::UsbCable));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Spot));
@@ -8675,8 +8794,17 @@ void RadioModel::onDisconnected()
         emit txAudioGateChanged(false);
     }
     m_backendObservedTransmit = false;
+    m_radioPttKeyed = false;
+    m_radioPttInput = {};
     m_radioTransmitting = false;
     emit radioTransmittingChanged(false);
+    // Transmitter ownership belonged to the session that ended. Left stale, a
+    // multiFLEX disconnect while another station held TX would keep
+    // txOwnedByUs() false into the next session, and only the Flex interlock
+    // ever rewrites it: an HL2 or demo session would never send TCI
+    // tx_sensors. A Flex reconnect re-reads the owner from the next interlock.
+    m_txClientHandle = 0;
+    m_txOwnedByUs = true;
     if (m_profileDatabaseImporting) {
         m_profileDatabaseImporting = false;
         emit profileDatabaseImportingChanged(false);
@@ -9411,7 +9539,18 @@ void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
 
 bool RadioModel::usesRemoteNetworkThresholds() const
 {
-    return m_wanConn != nullptr || m_lastInfo.isRouted;
+    return isRemoteSession();
+}
+
+bool RadioModel::isRemoteSession() const
+{
+    return isRemoteRadioSession(isWan(), m_lastInfo);
+}
+
+bool RadioModel::isRemoteForIpConfiguration() const
+{
+    return AetherSDR::isRemoteForIpConfiguration(isWan(), m_lastInfo.isRouted,
+                                                 m_sessionOverTailscale);
 }
 
 QString RadioModel::networkQuality() const
@@ -11952,7 +12091,7 @@ QString RadioModel::gpsNtpServerAddress() const
     if (!m_automationGpsNtpServerAddress.isEmpty()) {
         return m_automationGpsNtpServerAddress;
     }
-    if (!capabilities().hasNtpServer || isWan() || m_lastInfo.isRouted
+    if (!capabilities().hasNtpServer || isRemoteSession()
         || m_lastInfo.address.isNull()) {
         return {};
     }
