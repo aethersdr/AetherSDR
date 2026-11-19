@@ -174,6 +174,12 @@ outstanding. The endpoint's offline checks are
 recorded in `../pd-waveform/MANAGED-OWNER-KEY-SERVER-QUALIFICATION.json`; they do
 not qualify a shipping credential-rotation workflow. Desktop component evidence
 is in `../pd-waveform/MANAGED-OWNER-KEY-CREDENTIAL-QUALIFICATION.json`.
+The desktop wire helper requires the exact installation ID and SHA-256 of the
+saved candidate in a strict 200 receipt. Duplicate/unknown fields, trailing data,
+responses over 512 bytes, redirects, transport errors and retired observations
+cannot confirm replacement. It sends no automatic retry and performs no
+credential-store mutation. Its separate component report is
+`../pd-waveform/MANAGED-OWNER-KEY-WIRE-QUALIFICATION.json`.
 
 ### AetherPD status (development)
 

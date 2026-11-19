@@ -5439,6 +5439,7 @@ set_tests_properties(aetherpd_dialog_test PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_
 
 add_executable(tailnet_shim_client_test
     tests/tailnet_shim_client_test.cpp
+    src/core/AetherPDProtocol.cpp
     src/core/TailnetShimClient.cpp
     src/core/TailnetShimCredentialPersistence.cpp
     src/core/TailnetShimTokenStore.cpp   # built without HAVE_KEYCHAIN: the session store

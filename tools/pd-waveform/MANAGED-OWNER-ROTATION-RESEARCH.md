@@ -8,6 +8,9 @@ The [credential component report](./MANAGED-OWNER-KEY-CREDENTIAL-QUALIFICATION.j
 records conditional promotion, an installation-scoped candidate slot, injected
 failure tests and real Linux keychain checks. It does not qualify the complete
 client transaction or the new code on macOS/Windows.
+The [wire component report](./MANAGED-OWNER-KEY-WIRE-QUALIFICATION.json) covers
+strict receipt binding and injected transport failures. Remaining controller
+invariants are saved in [the implementation notes](./MANAGED-OWNER-ROTATION-NEXT.json).
 
 [The original draft](./MANAGED-OWNER-ROTATION-DRAFT.json) is preserved verbatim.
 It describes a two-phase server transaction; it is not an approved shipping design.

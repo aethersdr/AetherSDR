@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AetherPDProtocol.h"
+
 #include <QByteArray>
 #include <QHostAddress>
 #include <QNetworkAccessManager>
@@ -52,6 +54,7 @@ struct TailnetShimStatus {
     QString hostname;
     QString installationId;
     int managedOwnerVersion{0};
+    int ownerKeyVersion{0};
     QString tailnetIp;
     QString dnsName;
     QStringList allow;
@@ -109,6 +112,7 @@ bool updateAvailable(const QString& installed, const QString& pinned);
 // Legacy containers need no managed contract. Installed local control must
 // explicitly support owner-preserving enrollment before any sign-in request.
 bool supportsManagedEnrollment(const TailnetShimStatus& status);
+bool supportsOwnerKeyReplacement(const TailnetShimStatus& status);
 // Whether the Remote Access window should start the QR sign-in without being
 // asked: the radio belongs to no tailnet (never provisioned, or a QR sign-in
 // abandoned with its token or failed here), the container can, nothing is in
@@ -164,13 +168,17 @@ public:
                    bool shareDiscovered, const QString& adminToken);
     void setSharing(const QStringList& routes, bool shareDiscovered, const QString& adminToken);
     void signOut(const QString& adminToken);
+    // Explicit request or confirmation of the exact previously saved candidate.
+    // No retries or credential-store mutations are performed by this transport.
+    bool replaceOwnerKey(const QString& installationId, const QString& savedCandidate, const QString& adminToken);
 
 signals:
     void statusReceived(const AetherSDR::TailnetShimStatus& status);
     void signedOut(const AetherSDR::TailnetShimStatus& status);
     void provisioned(const AetherSDR::TailnetShimProvisionReply& reply);
     void loginReceived(const AetherSDR::TailnetShimLogin& login);
-    // operation is "status", "login", "provision", "sharing" or "signout". unauthorized
+    void ownerKeyConfirmed(const AetherSDR::aetherpd::OwnerKeyReceipt& receipt);
+    // operation is "status", "login", "provision", "sharing", "signout" or "owner-key". unauthorized
     // is true when the shim refused the admin token.
     void requestFailed(const QString& operation, const QString& message, bool unauthorized,
                        const QByteArray& credentialFingerprint);
@@ -178,13 +186,15 @@ signals:
 private:
     QNetworkReply* send(const QString& method, const QString& path,
                         const QByteArray& body, const QString& adminToken);
-    void handle(QNetworkReply* reply, const QString& operation);
+    void handle(QNetworkReply* reply, const QString& operation,
+                std::optional<aetherpd::OwnerKeyReceipt> expectedOwner = std::nullopt);
 
     QNetworkAccessManager m_nam;
     QNetworkAccessManager* m_network{&m_nam};
     QHostAddress m_address;
     QPointer<QNetworkReply> m_statusReply;   // the status request in flight, if any
     QPointer<QNetworkReply> m_loginReply;    // the login request in flight, if any
+    QPointer<QNetworkReply> m_ownerKeyReply;
     quint64 m_replyGeneration{0};
 };
 

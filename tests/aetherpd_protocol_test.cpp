@@ -1,6 +1,7 @@
 #include "core/AetherPDProtocol.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -398,9 +399,43 @@ void batchProtocol()
     }
 }
 
+void ownerKeyProtocol()
+{
+    const QString installation(64, u'c'), candidate(64, u'b');
+    const QByteArray hash = QCryptographicHash::hash(candidate.toLatin1(), QCryptographicHash::Sha256);
+    const std::optional<QByteArray> body = ownerKeyBody(installation, candidate);
+    check(body.has_value(), "valid owner replacement body rejected");
+    const QJsonObject request = QJsonDocument::fromJson(*body).object();
+    check(request.size() == 2 && request.value("installation_id").toString() == installation
+        && request.value("new_token").toString() == candidate, "owner request changed identity or credential");
+    for (const QString& invalid : {QString{}, QString(64, u'0'), QString(63, u'b'), QString(64, u'B'), QString(64, u'g')}) {
+        check(!ownerKeyBody(invalid, candidate) && !ownerKeyBody(installation, invalid), "invalid owner identity or candidate encoded");
+    }
+    const QJsonObject value{{"state", "owner_key_current"}, {"installation_id", installation},
+        {"owner_key_sha256", QString::fromLatin1(hash.toHex())}};
+    const QByteArray valid = encode(value);
+    const std::optional<OwnerKeyReceipt> receipt = parseOwnerKeyReceipt(valid);
+    check(receipt && receipt->installationId == installation && receipt->tokenSha256 == hash,
+          "owner receipt lost exact installation or key commitment");
+    for (const auto& [key, replacement] : std::array<std::pair<const char*, QJsonValue>, 9>{{
+        {"state", "accepted"}, {"state", false}, {"installation_id", "wrong"}, {"installation_id", QJsonValue()},
+        {"owner_key_sha256", QString(64, u'0')}, {"owner_key_sha256", QString(64, u'A')},
+        {"owner_key_sha256", 1}, {"owner_key_sha256", QString(65, u'a')}, {"extra", "ignored"}}}) {
+        QJsonObject bad = value;
+        bad[key] = replacement;
+        check(!parseOwnerKeyReceipt(encode(bad)), "invalid owner receipt accepted");
+    }
+    for (const QByteArray& invalid : {QByteArray{}, QByteArray("null"), valid + "{}", valid + QByteArray(513, ' '),
+        QByteArray(valid).insert(1, "\"state\":\"accepted\","),
+        QByteArray(valid).insert(1, "\"st\\u0061te\":\"accepted\",")}) {
+        check(!parseOwnerKeyReceipt(invalid), "duplicate/trailing/oversized owner receipt accepted");
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    ownerKeyProtocol();
     diagnosticProtocol();
     configuredTones();
     feedbackBindingProtocol();

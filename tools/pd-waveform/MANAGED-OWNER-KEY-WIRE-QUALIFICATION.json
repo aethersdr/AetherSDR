@@ -1,0 +1,138 @@
+{
+  "status": "offline wire component passed; no complete transaction controller, operator UI or on-radio rotation qualification",
+  "baseline_source": "81be1bf0efadc31c25317d7aec3d35343ef0342b",
+  "checks": {
+    "status": "wire component only; durable controller/UI/live qualification outstanding",
+    "radio_changes": false,
+    "reports": [
+      {
+        "name": "protocol",
+        "compile_exit": 0,
+        "test_exit": 0,
+        "sanitized": false,
+        "mutant": false,
+        "binary_sha256": "7a628698cab1022ecc2b8001ecf26f9160698c824978c96374295d9dcdd758be",
+        "source_sha256": {
+          "tests/aetherpd_protocol_test.cpp": "17091f71557c4a79440357a816f09274706dff4a12cbce36422655ee46cb4336",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69"
+        }
+      },
+      {
+        "name": "client",
+        "compile_exit": 0,
+        "test_exit": 0,
+        "sanitized": false,
+        "mutant": false,
+        "binary_sha256": "7c8286459a9351fa63b23c75238b26cc0634928dbc334768bd9ab45a290e7f86",
+        "source_sha256": {
+          "tests/tailnet_shim_client_test.cpp": "868e4cf7f00a362e2cfbf24c3ee8f2a18dca1c43f237f8c89875477d89cd1570",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "src/core/TailnetShimClient.cpp": "a8db787e3d832324ceadf4787b592bc713061c3182a2ac69a30a0a917876f3a8",
+          "src/core/TailnetShimCredentialPersistence.cpp": "b5f9e075c69a3a2670ee41e93be82977ddc4df586bdc7cdf728f416dd2184d1c",
+          "src/core/TailnetShimTokenStore.cpp": "e4d3ac57aa5aee58dee4c8f95fd228b89e0931aea6310be859d0238f8526fa63",
+          "src/core/TailnetShimDownloader.cpp": "69530d607a2ff3fe10c2be9616dac7d02b82831341258a9199c7601cb66ae9c8",
+          "src/core/TailnetLinkTelemetry.cpp": "5b488bc8530b528cd48e55ecc71e3e0168481f961c1cf72e6433a3e4d807a74e",
+          "owner-key-wire-final/client/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7",
+          "owner-key-wire-final/client/moc_TailnetShimDownloader.cpp": "39bb2e2d780ee2fe9e0eae5d5c1a7e2cf32cc912e0381e0823af19c312e53a90",
+          "owner-key-wire-final/client/moc_TailnetLinkTelemetry.cpp": "d0bdfe91f07e3ddbb3fed0fb1bc3958a296d613cfb76698987792d74fe0ee873"
+        }
+      },
+      {
+        "name": "client-sanitized",
+        "compile_exit": 0,
+        "test_exit": 0,
+        "sanitized": true,
+        "mutant": false,
+        "binary_sha256": "6182babd61b6db18ba5b1aebe60f79c8fe0de8e5d431dd1f060eef0ec48ed22c",
+        "source_sha256": {
+          "tests/tailnet_shim_client_test.cpp": "868e4cf7f00a362e2cfbf24c3ee8f2a18dca1c43f237f8c89875477d89cd1570",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "src/core/TailnetShimClient.cpp": "a8db787e3d832324ceadf4787b592bc713061c3182a2ac69a30a0a917876f3a8",
+          "src/core/TailnetShimCredentialPersistence.cpp": "b5f9e075c69a3a2670ee41e93be82977ddc4df586bdc7cdf728f416dd2184d1c",
+          "src/core/TailnetShimTokenStore.cpp": "e4d3ac57aa5aee58dee4c8f95fd228b89e0931aea6310be859d0238f8526fa63",
+          "src/core/TailnetShimDownloader.cpp": "69530d607a2ff3fe10c2be9616dac7d02b82831341258a9199c7601cb66ae9c8",
+          "src/core/TailnetLinkTelemetry.cpp": "5b488bc8530b528cd48e55ecc71e3e0168481f961c1cf72e6433a3e4d807a74e",
+          "owner-key-wire-final/client-sanitized/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7",
+          "owner-key-wire-final/client-sanitized/moc_TailnetShimDownloader.cpp": "39bb2e2d780ee2fe9e0eae5d5c1a7e2cf32cc912e0381e0823af19c312e53a90",
+          "owner-key-wire-final/client-sanitized/moc_TailnetLinkTelemetry.cpp": "d0bdfe91f07e3ddbb3fed0fb1bc3958a296d613cfb76698987792d74fe0ee873"
+        }
+      },
+      {
+        "name": "mutant-unbound-receipt",
+        "compile_exit": 0,
+        "test_exit": 1,
+        "sanitized": false,
+        "mutant": true,
+        "binary_sha256": "9b7a435f2a91207a3294f22c0db95c5b1a86eead880b04fcfaef665b1eb4c86b",
+        "source_sha256": {
+          "tests/tailnet_shim_client_test.cpp": "868e4cf7f00a362e2cfbf24c3ee8f2a18dca1c43f237f8c89875477d89cd1570",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "owner-key-wire-final/mutant-unbound-receipt/TailnetShimClient.cpp": "7cb2a12a429a0e9bd2e482bf88ecd91dc7f8318663d0dd3816a2ef9e2b3ccf40",
+          "src/core/TailnetShimCredentialPersistence.cpp": "b5f9e075c69a3a2670ee41e93be82977ddc4df586bdc7cdf728f416dd2184d1c",
+          "src/core/TailnetShimTokenStore.cpp": "e4d3ac57aa5aee58dee4c8f95fd228b89e0931aea6310be859d0238f8526fa63",
+          "src/core/TailnetShimDownloader.cpp": "69530d607a2ff3fe10c2be9616dac7d02b82831341258a9199c7601cb66ae9c8",
+          "src/core/TailnetLinkTelemetry.cpp": "5b488bc8530b528cd48e55ecc71e3e0168481f961c1cf72e6433a3e4d807a74e",
+          "owner-key-wire-final/mutant-unbound-receipt/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7",
+          "owner-key-wire-final/mutant-unbound-receipt/moc_TailnetShimDownloader.cpp": "39bb2e2d780ee2fe9e0eae5d5c1a7e2cf32cc912e0381e0823af19c312e53a90",
+          "owner-key-wire-final/mutant-unbound-receipt/moc_TailnetLinkTelemetry.cpp": "d0bdfe91f07e3ddbb3fed0fb1bc3958a296d613cfb76698987792d74fe0ee873"
+        }
+      },
+      {
+        "name": "mutant-error-200",
+        "compile_exit": 0,
+        "test_exit": 1,
+        "sanitized": false,
+        "mutant": true,
+        "binary_sha256": "c6cb0cc4b97050943202e52a2de49371aee3958da933bbb1210fd0f15909d826",
+        "source_sha256": {
+          "tests/tailnet_shim_client_test.cpp": "868e4cf7f00a362e2cfbf24c3ee8f2a18dca1c43f237f8c89875477d89cd1570",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "owner-key-wire-final/mutant-error-200/TailnetShimClient.cpp": "aa1ff56b0c05ceb0a60aa9c976b4767305ed83a872d08094e2642b39f8d3a5db",
+          "src/core/TailnetShimCredentialPersistence.cpp": "b5f9e075c69a3a2670ee41e93be82977ddc4df586bdc7cdf728f416dd2184d1c",
+          "src/core/TailnetShimTokenStore.cpp": "e4d3ac57aa5aee58dee4c8f95fd228b89e0931aea6310be859d0238f8526fa63",
+          "src/core/TailnetShimDownloader.cpp": "69530d607a2ff3fe10c2be9616dac7d02b82831341258a9199c7601cb66ae9c8",
+          "src/core/TailnetLinkTelemetry.cpp": "5b488bc8530b528cd48e55ecc71e3e0168481f961c1cf72e6433a3e4d807a74e",
+          "owner-key-wire-final/mutant-error-200/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7",
+          "owner-key-wire-final/mutant-error-200/moc_TailnetShimDownloader.cpp": "39bb2e2d780ee2fe9e0eae5d5c1a7e2cf32cc912e0381e0823af19c312e53a90",
+          "owner-key-wire-final/mutant-error-200/moc_TailnetLinkTelemetry.cpp": "d0bdfe91f07e3ddbb3fed0fb1bc3958a296d613cfb76698987792d74fe0ee873"
+        }
+      }
+    ]
+  },
+  "source_sha256": {
+    "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+    "src/core/AetherPDProtocol.h": "79c06f061448195bf7000410c5dddd065740843451b14ff456fad0ed7c0608fd",
+    "src/core/TailnetShimClient.cpp": "a8db787e3d832324ceadf4787b592bc713061c3182a2ac69a30a0a917876f3a8",
+    "src/core/TailnetShimClient.h": "c5fd8dbd8cae50f3a21512788e53d96ebbe3734f61bb3364aab91cdd7a0b2f2d",
+    "tests/aetherpd_protocol_test.cpp": "17091f71557c4a79440357a816f09274706dff4a12cbce36422655ee46cb4336",
+    "tests/tailnet_shim_client_test.cpp": "868e4cf7f00a362e2cfbf24c3ee8f2a18dca1c43f237f8c89875477d89cd1570",
+    "tests/tests.cmake": "83fb30a2ca181477248c47998efb5650d929bbf57b3f71e2be44a34d65efb153"
+  },
+  "evidence": {
+    "path": "MANAGED-OWNER-KEY-WIRE-EVIDENCE.json.gz",
+    "sha256": "818dce3035cc9db4b29f81e75b5480c8f6b83c8e130e2fcca5c3332bb5f95b56",
+    "members": 81
+  },
+  "covered": [
+    "fixed identity/body encoding and exact installation/hash receipt binding",
+    "duplicate and escaped-equivalent duplicate/unknown/trailing/oversized reply rejection",
+    "literal LAN address and bounded owner-header validation",
+    "manual redirect policy, transport error withHTTP200, lost reply,401 and202 refusal",
+    "one pending mutation, retired callbacks and no automatic retry",
+    "advertised managed owner-key contract parsing and missing/mistyped/fractional/future version refusal",
+    "full existing protocol/client test executables and client ASan/UBSan/LeakSanitizer",
+    "two deliberate unsafe receipt variants compiled and rejected"
+  ],
+  "remaining": [
+    "complete durable candidate/server/promotion coordinator and original-session guards",
+    "explicit confirmed-candidate adoption when active slot is absent",
+    "operator UI and ordinary workflow",
+    "new macOS/Windows qualification",
+    "packaged receive-only FLEX8600 owner rotation/revocation/receipt-loss audit",
+    "all other unfinished P1-P10 requirements"
+  ],
+  "radio_changes": false,
+  "real_keychain_writes_in_this_wire_step": false,
+  "RF_or_source_arms": 0,
+  "production_ready": false
+}

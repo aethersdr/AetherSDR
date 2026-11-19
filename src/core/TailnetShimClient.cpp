@@ -2,12 +2,14 @@
 
 #include "TailnetShimRelease.h"
 #include "TailnetShimCredentialPersistence.h"
+#include "AetherPDTransportPolicy.h"
 
 #include <QJsonArray>
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
+#include <QNetworkProxy>
 #include <QNetworkRequest>
 #include <QRegularExpression>
 #include <QUrl>
@@ -79,6 +81,7 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
         }
     }
     st.managedOwnerVersion = o.value(QStringLiteral("managed_owner_version")).toInt();
+    st.ownerKeyVersion = o.value(QStringLiteral("owner_key_version")).toInt();
     st.tailnetIp = field(o, QStringLiteral("tailnet_ip"));
     st.dnsName = field(o, QStringLiteral("dns_name"));
     st.allow = fieldList(o, QStringLiteral("allow"));
@@ -212,6 +215,12 @@ bool supportsManagedEnrollment(const TailnetShimStatus& st)
     return st.installationId.isEmpty() || st.managedOwnerVersion == 1;
 }
 
+bool supportsOwnerKeyReplacement(const TailnetShimStatus& st)
+{
+    return !st.installationId.isEmpty() && st.provisioned && !st.claimable
+        && st.managedOwnerVersion == 1 && st.ownerKeyVersion == 1;
+}
+
 bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,
                          bool busy, bool lanReachable, bool alreadyTried)
 {
@@ -301,6 +310,7 @@ TailnetShimClient::TailnetShimClient(QObject* parent, QNetworkAccessManager* net
     : QObject(parent)
     , m_network(network ? network : &m_nam)
 {
+    m_nam.setProxy(QNetworkProxy::NoProxy);
     m_nam.setTransferTimeout(kTransferTimeoutMs);
     // The API never redirects; following one would carry the admin token
     // in its Authorization header to wherever it pointed.
@@ -323,10 +333,13 @@ void TailnetShimClient::retirePendingReplies()
     ++m_replyGeneration;
     const QPointer<QNetworkReply> status = m_statusReply;
     const QPointer<QNetworkReply> login = m_loginReply;
+    const QPointer<QNetworkReply> ownerKey = m_ownerKeyReply;
     m_statusReply.clear();
     m_loginReply.clear();
+    m_ownerKeyReply.clear();
     if (status) { status->abort(); }
     if (login) { login->abort(); }
+    if (ownerKey) { ownerKey->abort(); }
 }
 
 QNetworkReply* TailnetShimClient::send(const QString& method, const QString& path,
@@ -354,24 +367,38 @@ QNetworkReply* TailnetShimClient::send(const QString& method, const QString& pat
     return m_network->post(req, body);
 }
 
-void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
+void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation,
+                              std::optional<aetherpd::OwnerKeyReceipt> expectedOwner)
 {
     const QByteArray authorization = reply->request().rawHeader("Authorization");
     const QByteArray credential = authorization.isEmpty() ? QByteArray{}
         : QCryptographicHash::hash(authorization, QCryptographicHash::Sha256);
     const quint64 generation = m_replyGeneration;
-    connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64) {
-        if (received > kMaxReplyBytes) {
+    const qint64 limit = expectedOwner ? 512 : kMaxReplyBytes;
+    if (expectedOwner) { reply->setReadBufferSize(limit + 1); }
+    connect(reply, &QNetworkReply::downloadProgress, reply, [reply, limit](qint64 received, qint64) {
+        if (received > limit) {
             reply->abort();
         }
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, operation, credential, generation] {
+    if (expectedOwner) {
+        connect(reply, &QIODevice::readyRead, reply, [reply, limit] {
+            if (reply->bytesAvailable() > limit) { reply->abort(); }
+        });
+        connect(reply, &QNetworkReply::metaDataChanged, reply, [reply, limit] {
+            bool valid = false;
+            const qint64 size = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong(&valid);
+            if (valid && size > limit) { reply->abort(); }
+        });
+    }
+    connect(reply, &QNetworkReply::finished, this, [this, reply, operation, credential, generation, expectedOwner] {
         if (reply == m_statusReply) {
             m_statusReply = nullptr;
         }
         if (reply == m_loginReply) {
             m_loginReply = nullptr;
         }
+        if (reply == m_ownerKeyReply) { m_ownerKeyReply = nullptr; }
         reply->deleteLater();
         if (generation != m_replyGeneration) {
             return;
@@ -392,6 +419,17 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
                 message = tr("Remote access on the radio returned HTTP %1.").arg(code);
             }
             emit requestFailed(operation, message, code == 401, credential);
+            return;
+        }
+        if (operation == QLatin1String("owner-key")) {
+            const std::optional<aetherpd::OwnerKeyReceipt> receipt = code == 200 && reply->error() == QNetworkReply::NoError
+                ? aetherpd::parseOwnerKeyReceipt(body) : std::nullopt;
+            if (!receipt || !expectedOwner || *receipt != *expectedOwner) {
+                emit requestFailed(operation, tr("The radio did not confirm the exact saved owner credential. Keep both credentials."),
+                                   false, credential);
+                return;
+            }
+            emit ownerKeyConfirmed(*receipt);
             return;
         }
         if (operation == QLatin1String("provision")) {
@@ -469,6 +507,19 @@ void TailnetShimClient::signOut(const QString& adminToken)
     retirePendingReplies();
     handle(send(QStringLiteral("POST"), QStringLiteral("/v1/signout"), {}, adminToken),
            QStringLiteral("signout"));
+}
+
+bool TailnetShimClient::replaceOwnerKey(const QString& installationId, const QString& savedCandidate,
+                                       const QString& adminToken)
+{
+    const std::optional<QByteArray> body = aetherpd::ownerKeyBody(installationId, savedCandidate);
+    if (!body || m_ownerKeyReply || !aetherpd::validAdminToken(adminToken) || !aetherpd::lanAddress(m_address)) { return false; }
+    retirePendingReplies();
+    const aetherpd::OwnerKeyReceipt expected{installationId,
+        QCryptographicHash::hash(savedCandidate.toLatin1(), QCryptographicHash::Sha256)};
+    m_ownerKeyReply = send(QStringLiteral("POST"), QStringLiteral("/v1/owner-key"), *body, adminToken);
+    handle(m_ownerKeyReply, QStringLiteral("owner-key"), expected);
+    return true;
 }
 
 }  // namespace AetherSDR

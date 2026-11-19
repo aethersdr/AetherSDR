@@ -1,0 +1,45 @@
+{
+  "status": "Implementation notes for the remaining controller; not implemented or UI-approved",
+  "completed_source": "81be1bf0efadc31c25317d7aec3d35343ef0342b",
+  "new_wire_work": "Fixed request/receipt parser and transport have been implemented separately; the transaction coordinator is still missing.",
+  "admission": [
+    "Explicit operator begin or resume only; no mutating request on status, reconnect, timer or automatic retry.",
+    "Hold the existing per-radio provisioning lease through candidate persistence, HTTP, active-key promotion and candidate retirement.",
+    "Pin original radio control session, literal LAN address, radio serial and managed installation ID. Refuse stale sessions before network mutation.",
+    "Require the known managed owner contract and owner_key_version1; do not reuse legacy Reset or change sign-out ownership semantics."
+  ],
+  "candidate": [
+    "Use CSPRNG-generated nonzero64lowerhex; namespace the independent slot by serial/installation ID.",
+    "Load an existing candidate before generating another. A pending proposal must never be overwritten with a fresh key.",
+    "Require successful persistent save plus actual keychain read-back before any server mutation. Build-level keychain availability alone does not prove durability.",
+    "Expose a narrow TokenStore current-durable predicate (exact token/revision, no session override, committed16byte version,32byte selection).",
+    "If a saved candidate has an interrupted sidecar, repair that exact observed candidate with conditional same-value replacement, then read it back. Never use a blind save to repair it."
+  ],
+  "server": [
+    "Initial begin can submit the saved candidate once with the known current owner bearer.",
+    "An explicit resume first confirms using the same saved candidate as both body and bearer. That request can succeed only when it is already the current owner.",
+    "If confirmation401 arrives and an old owner is retained, any replay must be bounded to the exact saved candidate and the operator resume intent; never generate a replacement or retry on a timer.",
+    "Only a fresh strict200 receipt matching installation and SHA256(candidate) authorizes local promotion. Lost reply, malformed receipt, transport error or ambiguous outcome retains both credentials.",
+    "Old-key success during an in-flight request is not proof of rollback. A concurrent different owner may win; do not overwrite its local credential or claim ownership."
+  ],
+  "promotion": [
+    "Use replaceIfCurrent against the active token/revision and exact backend selection; retain candidate if the result is uncertain or local state changed.",
+    "A lost promotion reply or process crash may leave a whole old or whole new primary with an unfinished sidecar; fresh exact observation plus matching radio confirmation must recover conditionally.",
+    "The existing replaceIfCurrent deliberately refuses a missing active entry. If a previously saved candidate is confirmed by the radio, add a SEPARATE explicit conditional-create/adoption path under the backend lease, refusing any competing primary or unknown metadata. Do not remove the existing missing-entry guard.",
+    "Retire the independent candidate only after durable active-key adoption, using its exact token/revision and conditional removal. Cleanup uncertainty must be reported truthfully."
+  ],
+  "lifetime": [
+    "Window closure or process death must not lose the sole replacement: candidate storage precedes remote mutation.",
+    "A stale callback may not mutate another radio session or overwrite a newer OS credential. Keep the lease alive through actual backend completion.",
+    "No source arm, Start, receive restoration, RF, root privilege or tailnet sign-out is a side effect of this operation."
+  ],
+  "remaining_tests": [
+    "Injected storage/network ordering and every uncertain persistence/reply boundary",
+    "Canceled/deleted/retired callers, same-address reconnect and late receipt/version fences",
+    "Explicit resume with old/current candidate and with an absent active slot",
+    "No automatic mutating retry, no first-use reset, no candidate deletion before durable promotion",
+    "Real Linux/macOS/Windows OS-keychain coordinator checks and ordinary operator UI",
+    "Packaged receive-only FLEX8600 rotation/revocation/receipt-loss/cleanup proof"
+  ],
+  "other_goal_scope": "FullP1-P10 remains active, including actual6000 adapter/hardware, natural128/cold cause, remaining process faults, repeated/raw/extended RF, final stock comparison and independent release review."
+}

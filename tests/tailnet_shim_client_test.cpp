@@ -36,6 +36,116 @@ bool expect(bool condition, const char* message)
     return condition;
 }
 
+bool ownerKeyTransport()
+{
+    using namespace AetherSDR;
+    bool ok = true;
+    const QString installation(64, u'c');
+    const QString candidate(64, u'b');
+    const QString owner(64, u'a');
+    const QByteArray hash = QCryptographicHash::hash(candidate.toLatin1(), QCryptographicHash::Sha256);
+    const QJsonObject receipt{{"state", "owner_key_current"}, {"installation_id", installation},
+        {"owner_key_sha256", QString::fromLatin1(hash.toHex())}};
+    const QByteArray valid = QJsonDocument(receipt).toJson(QJsonDocument::Compact);
+    for (const QString& scenario : {QStringLiteral("valid"), QStringLiteral("wrong-installation"), QStringLiteral("wrong-hash"),
+            QStringLiteral("duplicate"), QStringLiteral("escaped-duplicate"), QStringLiteral("unknown-field"),
+            QStringLiteral("wrong-state"), QStringLiteral("trailing"), QStringLiteral("unauthorized"),
+            QStringLiteral("redirect"), QStringLiteral("accepted-only"), QStringLiteral("lost-reply"),
+            QStringLiteral("transport-error-with-200"), QStringLiteral("oversized"), QStringLiteral("announced-oversize"),
+            QStringLiteral("retired")}) {
+        AetherPDTest::Network network;
+        TailnetShimClient client(network);
+        client.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.200")));
+        int confirmations = 0, failures = 0;
+        QObject::connect(&client, &TailnetShimClient::ownerKeyConfirmed, &client,
+            [&](const aetherpd::OwnerKeyReceipt& result) {
+                ok &= expect(result.installationId == installation && result.tokenSha256 == hash,
+                             "owner confirmation preserves exact installation and candidate commitment");
+                ++confirmations;
+            });
+        QObject::connect(&client, &TailnetShimClient::requestFailed, &client,
+            [&](const QString& operation, const QString&, bool, const QByteArray& credential) {
+                ok &= expect(operation == QStringLiteral("owner-key") && credential == tailnetshim::credentialFingerprint(owner),
+                             "owner failure identifies its own operation and bearer fingerprint");
+                ++failures;
+            });
+        ok &= expect(client.replaceOwnerKey(installation, candidate, owner), "valid owner replacement is admitted locally");
+        ok &= expect(!client.replaceOwnerKey(installation, QString(64, u'd'), owner) && network.sent.size() == 1,
+                     "a pending owner request cannot stack another mutation");
+        const auto& sent = network.sent.front();
+        const QJsonObject body = QJsonDocument::fromJson(sent.body).object();
+        ok &= expect(sent.method == QNetworkAccessManager::PostOperation
+                     && sent.request.url().path() == QStringLiteral("/v1/owner-key")
+                     && sent.request.url().port() == 48992 && sent.request.url().query().isEmpty()
+                     && sent.request.rawHeader("Authorization") == "Bearer " + owner.toLatin1()
+                     && sent.request.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt() == QNetworkRequest::ManualRedirectPolicy
+                     && body.size() == 2 && body.value("installation_id").toString() == installation
+                     && body.value("new_token").toString() == candidate,
+                     "replacement sends only the fixed body and current owner bearer to the LAN endpoint");
+        QJsonObject changed = receipt;
+        QByteArray raw = valid;
+        int code = 200;
+        QNetworkReply::NetworkError error = QNetworkReply::NoError;
+        if (scenario == u"wrong-installation") { changed["installation_id"] = QString(64, u'd'); }
+        if (scenario == u"wrong-hash") { changed["owner_key_sha256"] = QString(64, u'd'); }
+        if (scenario == u"unknown-field") { changed["extra"] = true; }
+        if (scenario == u"wrong-state") { changed["state"] = QStringLiteral("accepted"); }
+        if (changed != receipt) { raw = QJsonDocument(changed).toJson(QJsonDocument::Compact); }
+        if (scenario == u"duplicate") { raw.insert(1, "\"state\":\"accepted\","); }
+        if (scenario == u"escaped-duplicate") { raw.insert(1, "\"st\\u0061te\":\"accepted\","); }
+        if (scenario == u"trailing") { raw += "{}"; }
+        if (scenario == u"unauthorized") { code = 401; }
+        if (scenario == u"redirect") { code = 302; }
+        if (scenario == u"accepted-only") { code = 202; }
+        if (scenario == u"lost-reply") { code = 0; error = QNetworkReply::RemoteHostClosedError; }
+        if (scenario == u"transport-error-with-200") { error = QNetworkReply::RemoteHostClosedError; }
+        if (scenario == u"oversized") { network.last->feed(QByteArray(513, ' ')); }
+        else if (scenario == u"announced-oversize") { network.last->announceLength(513); }
+        else if (scenario == u"retired") {
+            client.retirePendingReplies();
+            ok &= expect(network.last->aborted, "retiring owner observation abandons its transport");
+            network.last->complete(200, valid);
+        } else { network.last->complete(code, raw, error); }
+        ok &= expect(confirmations == (scenario == u"valid" ? 1 : 0)
+                     && failures == (scenario == u"valid" || scenario == u"retired" ? 0 : 1)
+                     && network.sent.size() == 1,
+                     "only a current exact receipt confirms; refusals and lost replies never retry");
+    }
+    {
+        AetherPDTest::Network network;
+        TailnetShimClient client(network);
+        client.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.200")));
+        ok &= expect(!client.replaceOwnerKey({}, candidate, owner)
+                     && !client.replaceOwnerKey(installation, QString(64, u'0'), owner)
+                     && !client.replaceOwnerKey(installation, candidate.toUpper(), owner)
+                     && !client.replaceOwnerKey(installation, candidate, QStringLiteral("invalid\r\nheader")),
+                     "invalid owner identities and header bytes refuse before transport");
+        client.setRadioAddress(QHostAddress(QStringLiteral("8.8.8.8")));
+        ok &= expect(!client.replaceOwnerKey(installation, candidate, owner) && network.sent.empty(),
+                     "owner replacement is restricted to a literal LAN target");
+    }
+    TailnetShimStatus status;
+    status.provisioned = true; status.installationId = installation;
+    status.managedOwnerVersion = 1; status.ownerKeyVersion = 1;
+    ok &= expect(tailnetshim::supportsOwnerKeyReplacement(status), "managed owner-key version1 is supported");
+    status.ownerKeyVersion = 2;
+    ok &= expect(!tailnetshim::supportsOwnerKeyReplacement(status), "unknown owner-key contract is refused");
+    status.ownerKeyVersion = 1; status.claimable = true;
+    ok &= expect(!tailnetshim::supportsOwnerKeyReplacement(status), "claimable state cannot authorize managed replacement");
+    QJsonObject advertised{{"version", "0.5.0"}, {"state", "local"}, {"provisioned", true}, {"claimable", false},
+        {"installation_id", installation}, {"managed_owner_version", 1}, {"owner_key_version", 1}};
+    const auto parsed = tailnetshim::parseStatus(QJsonDocument(advertised).toJson());
+    ok &= expect(parsed && parsed->ownerKeyVersion == 1 && tailnetshim::supportsOwnerKeyReplacement(*parsed),
+                 "server-advertised owner contract reaches the client capability guard");
+    for (const QJsonValue& version : {QJsonValue(), QJsonValue("1"), QJsonValue(1.5), QJsonValue(2)}) {
+        advertised["owner_key_version"] = version;
+        const auto unsupported = tailnetshim::parseStatus(QJsonDocument(advertised).toJson());
+        ok &= expect(unsupported && !tailnetshim::supportsOwnerKeyReplacement(*unsupported),
+                     "missing, mistyped, fractional or future owner contracts do not enable replacement");
+    }
+    return ok;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -43,6 +153,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     using namespace AetherSDR;
     bool ok = true;
+    ok &= ownerKeyTransport();
 
     // A delayed rejection must identify the credential sent, even if another
     // request has since used its replacement. No peer or sockets are involved.

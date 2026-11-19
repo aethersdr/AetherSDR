@@ -195,6 +195,15 @@ std::optional<QByteArray> installationAttempt(const QByteArray& plan, const QByt
 std::optional<InstallationObservation> parseInstallationObservation(const QByteArray& json);
 InstallationMatch matchInstallation(const InstallationPlan& plan, const InstallationObservation& observed);
 
+struct OwnerKeyReceipt {
+    QString installationId;
+    QByteArray tokenSha256;
+    bool operator==(const OwnerKeyReceipt&) const = default;
+};
+// The candidate must already be saved separately before this mutation is sent.
+std::optional<QByteArray> ownerKeyBody(const QString& installationId, const QString& candidate);
+std::optional<OwnerKeyReceipt> parseOwnerKeyReceipt(const QByteArray& json);
+
 // Start carries the current GUI identity and optional exact IQ selection. Configured measurement carries
 // only a bounded spacing; neither request grants transmitter authority.
 // Acknowledgments never establish observed registration or correction state.

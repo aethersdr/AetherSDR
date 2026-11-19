@@ -843,4 +843,23 @@ InstallationMatch matchInstallation(const InstallationPlan& plan, const Installa
     return observed.committed ? InstallationMatch::Committed : InstallationMatch::RolledBack;
 }
 
+std::optional<QByteArray> ownerKeyBody(const QString& installationId, const QString& candidate)
+{
+    if (!installationHex(installationId) || !installationHex(candidate)) { return std::nullopt; }
+    return QJsonDocument(QJsonObject{{"installation_id", installationId}, {"new_token", candidate}}).toJson(QJsonDocument::Compact);
+}
+
+std::optional<OwnerKeyReceipt> parseOwnerKeyReceipt(const QByteArray& json)
+{
+    if (json.size() > 512) { return std::nullopt; }
+    const std::optional<QJsonObject> parsed = object(json);
+    if (!parsed || parsed->size() != 3) { return std::nullopt; }
+    const QJsonObject& value = *parsed;
+    const QString installation = value.value(QStringLiteral("installation_id")).toString();
+    const QString hash = value.value(QStringLiteral("owner_key_sha256")).toString();
+    if (value.value(QStringLiteral("state")).toString() != QLatin1String("owner_key_current")
+        || !installationHex(installation) || !installationHex(hash)) { return std::nullopt; }
+    return OwnerKeyReceipt{installation, QByteArray::fromHex(hash.toLatin1())};
+}
+
 } // namespace AetherSDR::aetherpd
