@@ -181,6 +181,12 @@ certificate. Neither can the stop reply, nor an idle sample received before it.
 A helper-triggered idle snapshot cannot substitute for step 3. The five-second
 budget starts at the first stop request or independent UNKEY_REQUESTED,
 whichever arrives first. No later request, acknowledgment or idle renews it.
+Once the original connection has reported owned READY, helper subscriptions
+may repeat that same complete owned-READY state during receive recovery.
+These snapshots are ignored without advancing release or renewing its deadline.
+They cannot replace a missing original owned READY, stop acknowledgment or
+post-acknowledgment owner-clear. A different owner, source, inhibit or incomplete
+snapshot still invalidates the active attempt.
 Contradictory input, a new TX interval, missing transitions, ownership changes,
 partial writes, malformed replies and disconnect still invalidate the attempt.
 A superseding stop token cannot inherit an earlier write or acknowledgment.

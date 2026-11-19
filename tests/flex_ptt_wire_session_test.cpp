@@ -46,6 +46,64 @@ struct Harness {
     void stopReadback() { feed(u"R102|0|"); feed(kUnkey); feed(kReadyOwned); feed(kIdle); }
 };
 
+void dspDeathHelperSnapshotRecovery()
+{
+    constexpr QStringView snapshot = u"S87654321|interlock tx_client_handle=0x12345678 state=READY reason= source= tx_allowed=1 amplifier=";
+    for (int stage = 0; stage < 7; ++stage) {
+        Harness h;
+        h.key(); h.keyReadback(); h.feed(kUnkey); h.feed(kReadyOwned);
+        if (stage >= 3) { h.feed(kIdle); }
+        if (stage >= 1) { h.cancel(); h.stopWire(); }
+        if (stage == 2 || stage >= 5) { h.feed(u"R102|0|"); }
+        if (stage == 6) { h.feed(kIdle); }
+        // FLEX-8600 4.3.16 receive-guardian subscriptions broadcast the
+        // original owner's READY while its stop exchange is still pending.
+        h.feed(snapshot);
+        if (stage < 6) {
+            check(!h.evidence.valid(h.now), "helper-owned READY cannot supply release evidence");
+        }
+        if (stage == 0) { h.cancel(); h.stopWire(); }
+        if (stage != 2 && stage < 5) { h.feed(u"R102|0|"); }
+        if (stage != 6) {
+            check(!h.evidence.valid(h.now), "stop ACK still requires original owner-clear");
+            h.feed(kIdle);
+        }
+        check(h.evidence.valid(h.now), "original ACK and owner-clear survive receive-guardian snapshot");
+        check(h.coordinator.confirmStopped(h.evidence.request), "snapshot preserves the exact original stop certificate");
+        check(h.commands == QStringList{"xmit 1", "xmit 0"}, "snapshot recovery adds no keying commands");
+    }
+    Harness normal;
+    normal.key(); normal.keyReadback(); normal.cancel(); normal.stopWire();
+    normal.feed(u"R102|0|"); normal.feed(kUnkey); normal.feed(kReadyOwned);
+    normal.feed(snapshot);
+    check(!normal.evidence.valid(normal.now), "normal release snapshot cannot substitute for owner-clear");
+    normal.feed(kIdle);
+    check(normal.evidence.valid(normal.now), "normal release also tolerates an already-observed READY snapshot");
+
+    Harness missingReady;
+    missingReady.key(); missingReady.keyReadback(); missingReady.feed(kUnkey);
+    missingReady.feed(snapshot); missingReady.cancel(); missingReady.stopWire();
+    missingReady.feed(u"R102|0|"); missingReady.feed(kIdle);
+    check(!missingReady.evidence.valid(missingReady.now), "helper snapshot cannot replace missing original owned READY");
+    Harness missingReply;
+    missingReply.key(); missingReply.keyReadback(); missingReply.feed(kUnkey); missingReply.feed(kReadyOwned);
+    missingReply.cancel(); missingReply.stopWire(); missingReply.feed(snapshot); missingReply.feed(kIdle);
+    check(!missingReply.evidence.valid(missingReply.now), "helper snapshot cannot replace missing stop ACK");
+
+    for (QStringView contradiction : {
+             u"S87654321|interlock tx_client_handle=0x87654321 state=READY reason= source= tx_allowed=1",
+             u"S87654321|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason= source=SW tx_allowed=1",
+             u"S87654321|interlock tx_client_handle=0x12345678 state=READY reason= source=MIC tx_allowed=1",
+             u"S87654321|interlock tx_client_handle=0x12345678 state=READY reason=FAULT source= tx_allowed=1",
+             u"S87654321|interlock tx_client_handle=0x12345678 state=READY reason= source= tx_allowed=0",
+             u"S87654321|interlock tx_client_handle=0x12345678 state=READY reason= source="}) {
+        Harness h;
+        h.key(); h.keyReadback(); h.feed(kUnkey); h.feed(kReadyOwned);
+        h.cancel(); h.stopWire(); h.feed(contradiction); h.feed(u"R102|0|"); h.feed(kIdle);
+        check(!h.evidence.valid(h.now), "contradictory or incomplete helper snapshots still fail closed");
+    }
+}
+
 void noDispatch()
 {
     Harness h;
@@ -554,6 +612,7 @@ int main(int argc, char** argv)
     acknowledgedStopRemainsReady();
     protocolEligibility();
     protocolLossRetainsStop();
+    dspDeathHelperSnapshotRecovery();
     noDispatch();
     rapidReleaseAndHandoff();
     helperSubscriptionsDuringRelease();

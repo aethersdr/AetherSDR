@@ -682,6 +682,9 @@ ADC headroom or calibrated output power.
 6. Results appear only after confirmed release of the original transmission.
    Background helper connections do not complete that confirmation; AetherSDR
    waits for the original transmission's stop sequence from the radio.
+   During receive recovery, a helper can repeat an owned-READY status that the
+   original connection has already reported. That duplicate does not interrupt
+   the pending confirmation or count as new release evidence.
    A radio ownership update while the key command is awaiting acknowledgment
    does not complete or cancel the measurement; the acknowledged transmit and
    stop transitions are still required.

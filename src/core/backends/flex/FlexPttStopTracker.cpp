@@ -381,10 +381,17 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
         return;
     }
     if (envelopeHandle != 0 && envelopeHandle != m_clientHandle) {
-        // Helper subscriptions broadcast global idle (FLEX-8600 4.3.16).
-        // Ignore that snapshot; only the original transition sequence can
-        // confirm release. Other foreign-origin state still fails closed.
-        if (idle) { return; }
+        const bool ownedReadyObserved = m_phase == Phase::AwaitOwnerClear
+            || m_phase == Phase::AwaitExternalOwnerClear || m_phase == Phase::ExternalReleased
+            || m_phase == Phase::AwaitRecoveryStopWrite || m_phase == Phase::AwaitRecoveryStopReply
+            || m_phase == Phase::AwaitRecoveryIdle || m_phase == Phase::AwaitStopBinding
+            || m_phase == Phase::Confirmed;
+        // FLEX-8600 4.3.16 helper subscriptions also broadcast owned READY
+        // during receive recovery. Ignore a repeat only after the original
+        // connection observed it; the snapshot never advances release proof.
+        const bool repeatedOwnedReady = ownedReadyObserved && state == u"READY"
+            && source.isEmpty() && handle == m_clientHandle && allowed == u"1" && reason.isEmpty();
+        if (idle || repeatedOwnedReady) { return; }
         fail(Failure::Ownership);
         return;
     }
