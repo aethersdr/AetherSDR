@@ -284,8 +284,9 @@ private:
     QStringList antennaStateLines(bool tx) const;
     QString antennaLine(AntennaLine kind, int trx) const;
     // Keyed, for the extension set's refusals: a transmit operation still
-    // held, the radio transmitting, TransmitModel transmitting, tuning or in
-    // MOX, or a TCI key held. Unlike ReceiveControlGuard::checkTransmit() it
+    // held (a finished over awaiting stop evidence is not, once fresh RX is
+    // seen: RadioModel::transmitIdleForSelection()), the radio transmitting,
+    // TransmitModel transmitting, tuning or in MOX, or a TCI key held. Unlike ReceiveControlGuard::checkTransmit() it
     // has no radio-confirmed idle term: in the HL2 transmit tail the backend
     // refuses (requestTxRoute).
     bool extensionKeyed() const;
