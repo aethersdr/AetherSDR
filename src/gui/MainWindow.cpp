@@ -163,6 +163,7 @@
 #include "ThemeEditorDialog.h"
 #include "WhatsNewDialog.h"
 #include "models/SliceModel.h"
+#include "models/DiversityPairPolicy.h"
 #include "models/MeterModel.h"
 #include "models/BandDefs.h"
 #include "models/BandPlanManager.h"
@@ -568,45 +569,19 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 bool MainWindow::isSameDiversityReceivePair(const SliceModel* slice,
                                             const SliceModel* other)
 {
-    if (!slice || !other || slice == other
-        || !slice->diversity() || !other->diversity()) {
+    if (!slice || !other || slice == other)
         return false;
-    }
-
-    // The radio names each diversity slice's partner: diversity_index is the
-    // slice index of the paired slice (FlexLib Slice.cs, and confirmed on a
-    // FLEX-8600 with two pairs up: slice 0 index=3, slice 3 index=0, slice 1
-    // index=2, slice 2 index=1). When both slices carry a usable index, it
-    // decides. That also separates two pairs on the same pan. The junk value
-    // seen with diversity=0 never gets here (rejected above).
-    const int sliceIndex = slice->diversityIndex();
-    const int otherIndex = other->diversityIndex();
-    auto usableIndex = [](int index) { return index >= 0 && index < 64; };
-    if (usableIndex(sliceIndex) && usableIndex(otherIndex)) {
-        return sliceIndex == other->sliceId() && otherIndex == slice->sliceId();
-    }
-
-    // Fallback while an index is not known yet: a diversity parent and its
-    // child share one panadapter. With two
-    // diversity pairs on two pans (two SCUs, each pair on its own pan), the
-    // parent of one pair and the child of the other also satisfy the
-    // parent/child role test, so the role test alone couples the pans:
-    // tuning one slice drags the other pair along (#4891). Only treat a
-    // parent/child match as a pair when both slices are on the same pan.
-    // If either pan id is not known yet, keep the previous role-only answer.
-    const bool slicePanKnown = !slice->panId().isEmpty();
-    const bool otherPanKnown = !other->panId().isEmpty();
-    const bool samePan = slicePanKnown && otherPanKnown
-        && slice->panId() == other->panId();
-
-    const bool parentChildPair =
-        (slice->isDiversityParent() && other->isDiversityChild())
-        || (slice->isDiversityChild() && other->isDiversityParent());
-    if (parentChildPair) {
-        return samePan || !slicePanKnown || !otherPanKnown;
-    }
-
-    return samePan;
+    auto view = [](const SliceModel* s) {
+        DiversityPairPolicy::SliceView v;
+        v.sliceId = s->sliceId();
+        v.diversity = s->diversity();
+        v.parent = s->isDiversityParent();
+        v.child = s->isDiversityChild();
+        v.diversityIndex = s->diversityIndex();
+        v.panId = s->panId();
+        return v;
+    };
+    return DiversityPairPolicy::isSamePair(view(slice), view(other));
 }
 
 // ─── Shortcut guard (file-scope for use as std::function<bool()>) ───────────
