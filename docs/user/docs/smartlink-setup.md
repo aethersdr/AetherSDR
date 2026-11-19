@@ -55,6 +55,28 @@ Account discovery uses one account at a time. Switching clears the previous acco
 
 On a slow or metered connection, tick **Use low bandwidth mode** under *Connection options for slower links* before connecting, and consider Opus audio compression — see [Low Bandwidth Connections](./low-bandwidth-connections.md).
 
+## Headless startup
+
+The experimental `aetherd` engine can make one explicitly selected SmartLink connection using an account already saved in this computer's operating-system keychain. Sign in through the desktop application first, then close its radio connection.
+
+Run the daemon as the same operating-system user, with access to that user's unlocked keychain. On Windows, launch it from your signed-in desktop session. An SSH or service session may be unable to decrypt the saved credential even when it uses the same username; SmartLink startup then fails without connecting.
+
+List the saved account identifiers without reading their credentials:
+
+```sh
+aetherd --list-smartlink-accounts
+```
+
+Select an account identifier from that output and the radio's serial number:
+
+```sh
+aetherd --allow-local-control --smartlink-account ACCOUNT_ID --smartlink-radio RADIO_SERIAL
+```
+
+Startup reserves the engine connection while authentication, discovery and connection are in progress. It connects only to that account's matching radio. A failed or disconnected headless session requires a new explicit startup; it does not automatically reconnect or disconnect other radio users. The existing control service can observe and control the connected receiver. SmartLink startup does not enable transmit grants or add a SmartLink route to the public discovery catalogue.
+
+The daemon uses the same certificate pins as the desktop application. If a certificate changes, the headless connection fails. Review the change in the desktop application before retrying. Disconnecting a radio leaves the account signed in; signing out remains a separate action.
+
 ## Certificate pinning
 
 AetherSDR pins each SmartLink radio's TLS certificate on first use, to protect you from a man-in-the-middle.
@@ -78,7 +100,7 @@ Forget a pin only when you have deliberately changed a radio's certificate.
 
 ### Security
 
-- Sign-in uses FlexRadio's identity provider, and all SmartLink connections use TLS with certificate pinning (above).
+- Sign-in and broker discovery use certificate-validated HTTPS/TLS. The radio's command connection uses TLS with certificate pinning (above); audio, spectrum and other streaming data use a separate UDP connection.
 - Your password is not stored. The SmartLink **refresh token** is saved in the operating system's keychain, so AetherSDR signs you in automatically on the next launch. Builds without keychain support keep it for the current session only. See [Settings and Backups](./settings-and-backups.md).
 - Logs redact email addresses, tokens, IP addresses and serial numbers — see [Support and Logging](./support-and-logging.md).
 

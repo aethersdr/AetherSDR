@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/backends/RemoteRadioAccount.h"
+#include "SmartLinkCredentials.h"
+
 #include <QObject>
 #include <QList>
 #include <QSslSocket>
@@ -14,27 +17,6 @@ class QNetworkReply;
 
 namespace AetherSDR {
 
-// Information about a radio discovered via SmartLink (WAN).
-struct WanRadioInfo {
-    QString serial;
-    QString nickname;
-    QString callsign;
-    QString model;
-    QString status;         // "Available", "In Use", etc.
-    QString publicIp;
-    int     publicTlsPort{-1};
-    int     publicUdpPort{-1};
-    bool    upnpSupported{false};
-    bool    requiresHolePunch{false};
-    int     licensedClients{1};
-    QString maxLicensedVersion;
-    QString guiClientPrograms;
-    QString guiClientStations;
-    QString guiClientHandles;
-    QString guiClientIps;
-    QString guiClientHosts;
-};
-
 // SmartLink client — manages the TLS connection to smartlink.flexradio.com
 // and Auth0 authentication for remote radio access.
 //
@@ -44,7 +26,7 @@ struct WanRadioInfo {
 //   connect(&client, &SmartLinkClient::radioListReceived, ...);
 //   client.login("user@example.com", "password");
 //
-class SmartLinkClient : public QObject {
+class SmartLinkClient : public QObject, public RemoteRadioAccount {
     Q_OBJECT
 
 public:
@@ -72,10 +54,10 @@ public:
     bool accountLocked() const { return m_accountLocked; }
     static bool persistentStoreAvailable();
 
-    // Request connection to a specific radio (by serial).
-    // holePunchPort is the local UDP port we've bound for VITA-49 reception;
-    // the SmartLink server tells the radio to send UDP to our public IP:port.
-    void requestConnect(const QString& serial, quint16 holePunchPort = 0);
+    quint64 beginConnection(const QString& serial, quint16 localPort,
+        const QList<quint32>& disconnectHandles, Ready ready, Failed failed) override;
+    void cancelConnection(quint64 lease) override;
+
     // Ask the SmartLink server to force-disconnect specific GUI clients.
     void disconnectRadioClients(const QString& serial, const QList<quint32>& handles);
     // Disconnect from SmartLink server
@@ -101,7 +83,6 @@ signals:
     void serverConnected();
     void serverDisconnected();
     void radioListReceived(const QList<WanRadioInfo>& radios);
-    void connectReady(const QString& wanHandle, const QString& serial);
     void testConnectionResult(const QString& serial, bool upnpTcp, bool upnpUdp,
                               bool fwdTcp, bool fwdUdp, bool holePunch);
 
@@ -117,6 +98,10 @@ private:
     void forgetRefreshToken(const QString& id);
     friend struct SmartLinkClientTestAccess;
     void connectToServer();
+    void requestConnect(const QString& serial, quint16 holePunchPort);
+    void sendPendingConnection();
+    void failPendingConnection(const QString& message);
+    void retireBroker();
     void resetAuthentication();
     void finishRefreshReply(QNetworkReply* reply, quint64 generation);
     void parseMessage(const QString& msg);
@@ -133,6 +118,16 @@ private:
     static constexpr int         SMARTLINK_PORT  = 443;
 
     QNetworkAccessManager m_nam;
+    SmartLinkCredentials m_credentials;
+    quint64 m_nextLease{0};
+    quint64 m_lease{0};
+    bool m_connectSent{false};
+    QString m_connectSerial;
+    quint16 m_connectPort{0};
+    QList<quint32> m_disconnectHandles;
+    Ready m_ready;
+    Failed m_failed;
+    QTimer m_connectDeadline;
     QString m_accountId{QStringLiteral("legacy")};
     quint64 m_authGeneration{0};
     QPointer<QNetworkReply> m_authReply;

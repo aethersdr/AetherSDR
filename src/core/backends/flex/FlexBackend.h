@@ -3,6 +3,8 @@
 #include <functional>
 #include "FlexCwControls.h"
 #include "FlexStatusIngress.h"
+#include "FlexCommandSession.h"
+#include <QPointer>
 #include <optional>
 
 #include <QMap>
@@ -22,7 +24,8 @@ namespace AetherSDR {
 class FirmwareStager;
 
 class RadioConnection;
-class WanConnection;
+class FlexLanSession;
+class FlexWanSession;
 class PanadapterStream;
 class FlexReceiveData;
 
@@ -30,13 +33,14 @@ class FlexReceiveData;
 // Owns the RadioConnection and PanadapterStream and their two worker threads:
 // created panStream thread first, connection thread second, and torn down in
 // the #502 order (BlockingQueued stop → deleteLater → thread quit/wait).
-// RadioModel holds non-owning pointers via connection()/panStream() and keeps
-// the command/WAN orchestration and sub-models. Core verbs build SmartSDR
-// command strings and emit them through the model-provided command sink.
+// Owns LAN command dispatch and replies. WAN keeps its transport ownership
+// while borrowing the same ledger implementation. Models supply typed policy
+// and observe replies; they do not install production wire writers.
 class FlexBackendTestAccess;
 
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
+    friend class FlexWanSessionTestAccess;
     friend class FlexReceiveDataTestAccess;
 
 public:
@@ -56,55 +60,59 @@ public:
     // queued hop on the owner's thread, fenced by route and epoch, in wire
     // order. It lives on this thread, not a worker's.
     FlexStatusIngress* statusIngress() { return &m_statusIngress; }
+    FlexCommandSession& commandSession();
+    void setCommandSessionForTest(FlexCommandSession* session) { initializeCommands(); m_commandsForTest = session; }
+    void setRadioStateWriteHold(qint64 untilUtcMs) override { m_profileWriteHoldUtcMs = untilUtcMs; }
 
-    // Core verbs share RadioModel's guarded command funnel and wire-write path.
+    // Test-only encoding/transport injection. Production routes are installed
+    // internally and share the session's sequence allocator and reply ledger.
     using CommandReply = std::function<void(int, const QString&)>;
     using AudioCommandSink = std::function<bool(const QString&, CommandReply, const AudioControlGuard&)>;
-    void setAudioCommandSink(AudioCommandSink sink);
-    void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
+    void setAudioCommandSinkForTest(AudioCommandSink sink);
+    void setCommandSinkForTest(std::function<bool(const QString&, CommandReply)> sink);
     // Encoding-only observers cannot dispatch requests that need a radio reply.
-    void setCommandSink(std::function<void(const QString&)> sink);
-    void setDaxTxClientHandleProvider(std::function<quint32()> provider);
+    void setCommandSinkForTest(std::function<void(const QString&)> sink);
+    void setDaxTxClientHandleProviderForTest(std::function<quint32()> provider);
     // The writer must recheck this guard immediately before writing LAN/WAN
     // text; the generic command sink cannot dispatch an ownership mutation.
-    void setDaxTxCommandSink(
+    void setDaxTxCommandSinkForTest(
         std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> sink);
     // The same funnel for a write whose caller waits on the radio's answer
     // (TransmitControlRequest::answerTicket). The sink reports the reply code;
     // with none installed, such a request goes out unanswered.
     using AnsweredCommandSink =
         std::function<void(const QString&, std::function<void(bool applied)>)>;
-    void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
+    void setAnsweredCommandSinkForTest(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
     using SessionCommandSink = std::function<bool(const QString&, const SessionCommandGuard&,
                                                    const RadioControlCompletion&)>;
-    void setSessionCommandSink(SessionCommandSink sink) { m_sessionSink = std::move(sink); }
+    void setSessionCommandSinkForTest(SessionCommandSink sink) { m_sessionSink = std::move(sink); }
     ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
         const SessionCommandGuard& guard, const SessionControlCompletion& completion = {}) override;
-    void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    void setSetupCommandSinkForTest(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
     // Transverter and USB cable writes carry the entity they were aimed at, so
     // the final write can refuse one that was removed or replaced meanwhile.
     using SetupEntitySink = std::function<bool(const QString&, const RadioSetupCompletion&,
                                                const std::shared_ptr<SetupStatusLifetime>&)>;
-    void setSetupEntityCommandSink(SetupEntitySink sink) { m_setupEntitySink = std::move(sink); }
+    void setSetupEntityCommandSinkForTest(SetupEntitySink sink) { m_setupEntitySink = std::move(sink); }
     using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&,
                                                     const RadioControlCompletion&)>;
-    void setTransferCommandSink(TransferCommandSink sink) { m_transferSink = std::move(sink); }
+    void setTransferCommandSinkForTest(TransferCommandSink sink) { m_transferSink = std::move(sink); }
     ReceiveDispatch requestWaveform(const WaveformRequest&, const RadioControlCompletion&,
         const FileTransferGuard&, const RadioControlFence&) override;
     ReceiveDispatch requestFileTransfer(const FileTransferRequest&, const FileTransferCompletion&,
         const FileTransferGuard&, const RadioControlFence&) override;
     using AdministrationCommandSink = std::function<bool(const QString&,
         const RadioControlCompletion&, const RadioControlFence&, const std::function<void()>&)>;
-    void setAdministrationCommandSink(AdministrationCommandSink sink)
+    void setAdministrationCommandSinkForTest(AdministrationCommandSink sink)
     { m_administrationSink = std::move(sink); }
     ReceiveDispatch requestRadioReboot(const RadioControlCompletion& completion,
         const RadioControlFence& current, const std::function<void()>& written) override;
     ReceiveDispatch requestCwAutoTune(int sliceId, CwAutoTuneAction action,
         const RadioControlCompletion& completion, const RadioControlFence& current) override;
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
-    void setCwControlSink(FlexCwControls::ControlSink sink);
+    void setCwControlSinkForTest(FlexCwControls::ControlSink sink);
     ReceiveDispatch requestCwControl(const CwControlRequest& request,
         const TxCoordinator::Command& command) override;
     void prepareCwTransport(quint32 handle, const RadioControlFence& current) override;
@@ -114,27 +122,24 @@ public:
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
-    void setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink);
+    void setTxCommandSinkForTest(std::function<bool(const QString&, const TxCoordinator::Command&)> sink);
     using RepliedTxSink = std::function<bool(const QString&, const TxCoordinator::Command&, CommandReply)>;
-    void setRepliedTxSink(RepliedTxSink sink) { m_repliedTxSink = std::move(sink); }
+    void setRepliedTxSinkForTest(RepliedTxSink sink) { m_repliedTxSink = std::move(sink); }
     using ServiceCommandSink = std::function<bool(const QString&, const RadioControlFence&, CommandReply)>;
-    void setServiceCommandSink(ServiceCommandSink sink) { m_serviceCommandSink = std::move(sink); }
+    void setServiceCommandSinkForTest(ServiceCommandSink sink) { m_serviceCommandSink = std::move(sink); }
     // Queue admission and radio reply are separate. Replies run on the owner
     // thread; current is an immutable worker-safe fence at the terminal writer.
     using CwxCommandSink = std::function<bool(const QString&, const TxCoordinator::Command&,
                                              const RadioControlFence&, CommandReply)>;
-    void setCwxCommandSink(CwxCommandSink sink) { m_cwxSink = std::move(sink); }
+    void setCwxCommandSinkForTest(CwxCommandSink sink) { m_cwxSink = std::move(sink); }
     // Operator configuration has a session/edit fence, never a TX generation.
     using CwxConfigurationSink = std::function<bool(const QString&, const RadioControlFence&)>;
-    void setCwxConfigurationSink(CwxConfigurationSink sink) { m_cwxConfigurationSink = std::move(sink); }
+    void setCwxConfigurationSinkForTest(CwxConfigurationSink sink) { m_cwxConfigurationSink = std::move(sink); }
     ReceiveDispatch requestCwTextControl(const CwTextRequest& request,
         const TxCoordinator::Command& command, const RadioControlFence& current,
         const CwTextCompletion& completion = {}) override;
-    // Slice verbs (setSliceFrequency/Mode/Filter) route through THIS sink, which
-    // RadioModel wires to its TX-inhibit-guarded sendSliceCommand — so keeping
-    // the encode's TX safety above the seam (RFC §6). Falls back to the generic
-    // sink if unset. (aetherd RFC 2.3 encode template.)
-    void setSliceCommandSink(std::function<void(const QString&)> sink);
+    // Encoding-only slice injection; production uses the common command route.
+    void setSliceCommandSinkForTest(std::function<void(const QString&)> sink);
     // Live model-string source for capabilities(). Call on the main thread,
     // where RadioModel lives — capabilities() is not thread-safe (no off-thread
     // caller exists yet; this documents the assumption).
@@ -143,7 +148,7 @@ public:
     void refreshFirmwareCapabilities();
     void setAutoAgcThresholdLicenseProvider(std::function<bool()> provider);
     void setDspResetLicenseProvider(std::function<std::optional<bool>()> provider);
-    void setIndependentTxSequenceProvider(std::function<quint32()> sequence);
+    void setIndependentTxSequenceProviderForTest(std::function<quint32()> sequence);
     IndependentTxControl independentTxControl() const override;
     bool independentTxReady() const override;
     void stopIndependentTx(const TxCoordinator::Operation& operation,
@@ -163,6 +168,11 @@ public:
     void retireReceiveData() override;
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
+    void disconnectRadio(const RadioDisconnectRequest& request) override;
+    std::optional<ConnectionSession> connectionSession() const override;
+    bool connectionClosing() const override;
+    void decideConnectionCertificate(quint64 attempt, bool accept) override;
+    ReceiveTransportResult startReceiveTransport(bool rebind = false) override;
     bool isConnected() const override;
     ReceiveDispatch requestRadioNickname(const QString& nickname,
                                          NicknameCompletion completion = {}) override;
@@ -279,6 +289,17 @@ signals:
     void interlockStatusObserved(const AetherSDR::InterlockStatusDelta& delta);
 
 private:
+    void initializeCommands();
+    bool dispatchCommand(const QString& command, const FlexCommandSession::Options& options,
+                         FlexCommandSession::Completion completion);
+    bool dispatchControl(const QString& command, const RadioControlCompletion& completion,
+                         const FlexCommandSession::Options& options = {},
+                         RadioControlReply::Kind refusal = RadioControlReply::Kind::Failed);
+    bool dispatchWire(const QString& command, CommandReply reply = {},
+                      const FlexCommandSession::Options& options = {});
+    bool m_wanMode{false};
+    QPointer<FlexCommandSession> m_commandsForTest;
+    qint64 m_profileWriteHoldUtcMs{0};
     SetupEntitySink m_setupEntitySink;
     quint64 m_radioModelRevision{0};
     void send(const QString& cmd);
@@ -292,6 +313,8 @@ private:
     ReceiveTelemetry m_receiveTelemetry;
     std::unique_ptr<FlexCwControls> m_cwControls;
     FlexStatusIngress m_statusIngress;
+    std::unique_ptr<FlexLanSession> m_lanSession;
+    std::unique_ptr<FlexWanSession> m_wanSession;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread

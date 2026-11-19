@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 #include "FlexSetupStatusTestSupport.h"
 #include "RadioSetupControlFixture.h"
 #include "TestSettingsProfile.h"
@@ -299,6 +300,7 @@ void finalWriteFence()
     RadioModel radio;
     RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
     SessionControlTestAccess::begin(radio, *backend);
+    FlexCommandTestAccess::bind(radio, *backend);
     RadioConnection* connection = backend->connection();
     std::atomic_int writes{0};
     SessionControlTestAccess::installWriter(*connection, [&](quint32, const QString&) { ++writes; });
@@ -306,7 +308,8 @@ void finalWriteFence()
         QSemaphore entered, release;
         QMetaObject::invokeMethod(connection, [&] { entered.release(); release.tryAcquire(1, 5000); });
         check(entered.tryAcquire(1, 5000), "worker barrier entered");
-        check(FlexSetupStatusTestPeer::send(radio, identity), "configuration command admitted to the worker queue");
+        check(backend->requestTransverter({2, TransverterRequest::Field::RxOnly, true, 0.0, identity})
+            == ReceiveDispatch::Dispatched, "configuration command admitted to the worker queue");
         if (retire) { identity->retire(); }
         release.release();
         QMetaObject::invokeMethod(connection, [] {}, Qt::BlockingQueuedConnection);
@@ -372,23 +375,22 @@ void sessionSurvivesTransportError()
               "a LAN error that leaves the link up keeps setup status and entity authority");
     }
     {
-        WanConnection wan;
         RadioModel radio;
         installRadioSetupBackend(radio);
-        FlexSetupStatusTestPeer::connectWan(radio, &wan);
+        WanConnection& wan = FlexWanSessionTestAccess::connect(radio);
         emit wan.lineReceived(line("S1|usb_cable SN type=cat name=rig"), wan.lineEpoch());
         QCoreApplication::sendPostedEvents();
         check(radio.usbCableModel().cables().value("SN").name == "rig",
               "SmartLink setup status reaches the model through the ingress");
+        const auto lifetime = radio.usbCableModel().cables().value("SN").lifetime;
         QMetaObject::invokeMethod(&wan, "onSocketError", Qt::DirectConnection,
                                   Q_ARG(QAbstractSocket::SocketError, QAbstractSocket::SocketTimeoutError));
         FlexSetupStatusTestPeer::connectionError(radio);
         emit wan.lineReceived(line("S1|usb_cable SN name=rig2"), wan.lineEpoch());
         QCoreApplication::sendPostedEvents();
-        check(radio.usbCableModel().cables().value("SN").name == "rig2"
-            && radio.usbCableModel().cables().value("SN").lifetime->current(),
-              "a SmartLink socket error keeps setup status and entity authority");
-        FlexSetupStatusTestPeer::releaseWan(radio);
+        check(!radio.isWan() && !lifetime->current() && radio.usbCableModel().cables().isEmpty(),
+              "a fatal SmartLink socket error retires setup status and entity authority");
+        FlexWanSessionTestAccess::finish(radio);
     }
 }
 }

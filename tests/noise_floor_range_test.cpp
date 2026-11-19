@@ -70,7 +70,7 @@ void flexDeclarationAndEncoding()
     QStringList commands;
     flex.setModelProvider([&] { return model; });
     flex.setFirmwareVersionProvider([&] { return firmware; });
-    flex.setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+    flex.setSetupCommandSinkForTest([&](const QString& command, const RadioSetupCompletion&) {
         commands.append(command);
         return true;
     });

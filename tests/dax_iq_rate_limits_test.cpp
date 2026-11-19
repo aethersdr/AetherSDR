@@ -221,7 +221,7 @@ public:
     RateBackend()
     {
         setModelProvider([this] { return model; });
-        setAudioCommandSink([this](const QString& command, CommandReply reply, const AudioControlGuard& guard) {
+        setAudioCommandSinkForTest([this](const QString& command, CommandReply reply, const AudioControlGuard& guard) {
             if (!guard.permits()) { return false; }
             if (reply) { reply(0, command.startsWith(QStringLiteral("stream create"))
                 ? QStringLiteral("0x%1").arg(++nextId, 0, 16) : QString()); }

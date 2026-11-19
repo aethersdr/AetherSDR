@@ -58,8 +58,8 @@ struct Fixture {
     Fixture()
     {
         test::attachAllSeamSignals(affinity);
-        backend.setDaxTxClientHandleProvider([this] { return handle; });
-        backend.setDaxTxCommandSink([this](const QString& command, FlexBackend::CommandReply reply,
+        backend.setDaxTxClientHandleProviderForTest([this] { return handle; });
+        backend.setDaxTxCommandSinkForTest([this](const QString& command, FlexBackend::CommandReply reply,
                                           const DaxTxRequestGuard& guard) {
             commands.append(command);
             replies.push_back(std::move(reply));
@@ -305,14 +305,14 @@ void sinkAndLifetimeBoundaries()
 {
     Fixture f;
     f.status();
-    f.backend.setDaxTxCommandSink({});
+    f.backend.setDaxTxCommandSinkForTest({});
     Outcome absent;
     check(f.request(absent) == ReceiveDispatch::Unsupported && absent.calls == 1
         && !absent.accepted && !absent.reason.isEmpty(),
         "missing command transport reports immediate refusal");
 
     FlexBackend::CommandReply late;
-    f.backend.setDaxTxCommandSink([&late](const QString&, FlexBackend::CommandReply reply,
+    f.backend.setDaxTxCommandSinkForTest([&late](const QString&, FlexBackend::CommandReply reply,
                                        const DaxTxRequestGuard&) {
         late = reply;
         reply(0, {});
@@ -325,7 +325,7 @@ void sinkAndLifetimeBoundaries()
     late(0, {});
     check(declined.calls == 1, "late reply after dispatch refusal cannot complete twice");
 
-    f.backend.setDaxTxCommandSink([](const QString&, FlexBackend::CommandReply reply,
+    f.backend.setDaxTxCommandSinkForTest([](const QString&, FlexBackend::CommandReply reply,
                                     const DaxTxRequestGuard&) {
         reply(0, {});
         reply(0, {});
@@ -335,9 +335,9 @@ void sinkAndLifetimeBoundaries()
     check(f.request(synchronous) == ReceiveDispatch::Dispatched && synchronous.calls == 1
         && synchronous.accepted, "synchronous duplicate replies complete a dispatched request once");
 
-    f.backend.setDaxTxCommandSink({});
+    f.backend.setDaxTxCommandSinkForTest({});
     bool genericSinkCalled = false;
-    f.backend.setCommandSink([&genericSinkCalled](const QString&, FlexBackend::CommandReply) {
+    f.backend.setCommandSinkForTest([&genericSinkCalled](const QString&, FlexBackend::CommandReply) {
         genericSinkCalled = true;
         return true;
     });
@@ -349,11 +349,11 @@ void sinkAndLifetimeBoundaries()
     Outcome destroyed;
     {
         auto backend = std::make_unique<FlexBackend>();
-        backend->setDaxTxClientHandleProvider([] { return kOurs; });
+        backend->setDaxTxClientHandleProviderForTest([] { return kOurs; });
         backend->statusIngress()->decodeDaxTxStatus(QStringLiteral("tx_audio_stream 0x4a000001"),
             {{QStringLiteral("client_handle"), QStringLiteral("0x12345678")},
              {QStringLiteral("tx"), QStringLiteral("0")}});
-        backend->setDaxTxCommandSink([&late](const QString&, FlexBackend::CommandReply reply,
+        backend->setDaxTxCommandSinkForTest([&late](const QString&, FlexBackend::CommandReply reply,
                                            const DaxTxRequestGuard&) {
             late = std::move(reply);
             return true;

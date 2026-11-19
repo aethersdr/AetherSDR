@@ -779,6 +779,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/SmartLinkAccountModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Engine-owned SmartLink account model: the UI consumes account and discovery snapshots and typed connection requests. Credential jobs, broker transport and certificate storage stay behind the model; SmartLink remains a Flex-specific service.",
+  "split": "Core: account state, discovered-radio snapshots and typed connection requests. Flex: SmartLink authentication, broker discovery and certificate pin management are implemented in the backend.",
+  "confidence": "high"
+ },
  "core/backends/flex/SmartLinkClient.h": {
   "tag": "vendor(flex)",
   "note": "SmartLink WAN client: FlexRadio Auth0 login + TLS to smartlink.flexradio.com, WAN radio list/hole-punch.",
@@ -1127,9 +1133,9 @@
   "split": "Core: center/bandwidth, dBm range, antenna list, RF gain, WNB, fps/waterfall cadence. Flex ext: daxiqChannel, clientHandle, VITA-49 stream IDs, loopA/B, preamp string, applyPanStatus/applyWaterfallStatus kv parsing of SmartSDR status.",
   "confidence": "high"
  },
- "models/ProfileLoadCommand.h": {
-  "tag": "vendor(flex)",
-  "note": "Parses SmartSDR 'profile global/tx/mic load' wire command + recall-hold timing/suppression sentinels; Flex-only",
+ "models/ProfileLoadPolicy.h": {
+  "tag": "universal",
+  "note": "Profile recall timing and topology classification shared by engine policy and presentation; wire classification is private to the Flex backend",
   "split": "",
   "confidence": "high"
  },

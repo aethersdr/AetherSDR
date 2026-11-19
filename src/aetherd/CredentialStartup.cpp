@@ -24,7 +24,8 @@ bool credentialDispatcherRequested(int argc, const char* const argv[])
             ++i;
             continue;
         }
-        if (argument == "--initialize-credentials"
+        if (argument == "--smartlink-account" || argument.starts_with("--smartlink-account=")
+            || argument == "--initialize-credentials"
             || argument == "--credential-authority"
             || argument.starts_with("--credential-authority=")) {
             return true;

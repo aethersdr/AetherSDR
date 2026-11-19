@@ -7991,9 +7991,26 @@ target_include_directories(flex_lan_bind_address_test PRIVATE src)
 target_link_libraries(flex_lan_bind_address_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME flex_lan_bind_address_test COMMAND flex_lan_bind_address_test)
 
-# aetherd RFC step 2.2b regression guard: FlexBackend ctor/dtor thread ownership
-# + #502 teardown ordering. FlexBackend pulls RadioConnection/PanadapterStream
-# and their deep deps, so link the engine library rather than list sources.
+# Socket-free production LAN lifecycle, cancellation and Demo integration.
+add_executable(flex_wan_session_test tests/flex_wan_session_test.cpp)
+target_include_directories(flex_wan_session_test PRIVATE src tests)
+target_link_libraries(flex_wan_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_wan_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_wan_session_test COMMAND flex_wan_session_test)
+set_tests_properties(flex_wan_session_test PROPERTIES TIMEOUT 30)
+add_executable(flex_lan_session_test tests/flex_lan_session_test.cpp)
+add_executable(flex_command_session_test tests/flex_command_session_test.cpp)
+target_include_directories(flex_command_session_test PRIVATE src)
+target_link_libraries(flex_command_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_command_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_command_session_test COMMAND flex_command_session_test)
+set_tests_properties(flex_command_session_test PROPERTIES TIMEOUT 30)
+target_include_directories(flex_lan_session_test PRIVATE src tests)
+target_link_libraries(flex_lan_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_lan_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_lan_session_test COMMAND flex_lan_session_test)
+set_tests_properties(flex_lan_session_test PROPERTIES TIMEOUT 45)
+
 # Session boundary parser regression: in-memory QTcpSocket subclass only;
 # no descriptor, listener, network peer, or radio is opened.
 add_executable(radio_connection_session_test tests/radio_connection_session_test.cpp)
@@ -11579,6 +11596,9 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    flex_wan_session_test
+    flex_command_session_test
+    flex_lan_session_test
     flex_receive_path_test
     flex_setup_observation_test
     session_control_test

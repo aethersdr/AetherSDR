@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 #include "FlexRadioStatusTestSupport.h"
 #include "core/backends/sim/SimBackend.h"
 #include "TestSettingsProfile.h"
@@ -39,6 +40,30 @@ struct Fixture {
 class FlexRadioObservationTest : public QObject {
     Q_OBJECT
 private slots:
+    void certificateDecisionCannotCrossAttemptsOrBackendReplacement_data()
+    {
+        QTest::addColumn<bool>("replaceBackend");
+        QTest::newRow("new-attempt") << false;
+        QTest::newRow("new-backend") << true;
+    }
+    void certificateDecisionCannotCrossAttemptsOrBackendReplacement()
+    {
+        QFETCH(bool, replaceBackend);
+        RadioModel model;
+        FlexWanSessionTestAccess::connect(model);
+        const quint64 old = FlexWanSessionTestAccess::requestCertificate(model);
+        model.disconnectFromRadio();
+        if (replaceBackend) { FlexWanSessionTestAccess::replaceBackend(model); }
+        FlexWanSessionTestAccess::connect(model);
+        const quint64 current = FlexWanSessionTestAccess::requestCertificate(model);
+        QVERIFY(current != old);
+        model.acceptPresentedWanCert(old);
+        model.rejectPresentedWanCert(old);
+        QVERIFY(FlexWanSessionTestAccess::certificatePending(model));
+        model.rejectPresentedWanCert(current);
+        QVERIFY(!FlexWanSessionTestAccess::certificatePending(model));
+    }
+
     void partialAndInvalidFields()
     {
         const auto value = decodeFlexRadioStatus(QStringLiteral("radio"), {
@@ -231,8 +256,7 @@ private slots:
     void smartLinkStatusRoutesThroughTheIngress()
     {
         Fixture f;
-        WanConnection wan;
-        f.model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4993);
+        WanConnection& wan = FlexWanSessionTestAccess::connect(f.model);
         emit wan.lineReceived(CommandParser::parseLine(QStringLiteral("S00000042|radio nickname=remote")), wan.lineEpoch());
         emit wan.lineReceived(CommandParser::parseLine(QStringLiteral("S00000042|radio oscillator state=gpsdo setting=auto locked=1")),
                               wan.lineEpoch());
@@ -263,13 +287,13 @@ private slots:
     void queuedWanCallbackRejectsDestroyedTransport()
     {
         Fixture f;
-        auto wan = std::make_unique<WanConnection>();
-        f.model.connectViaWan(wan.get(), QString(), 0);
+        WanConnection& wan = FlexWanSessionTestAccess::connect(f.model);
         QSignalSpy changed(&f.model, &RadioModel::infoChanged);
-        std::thread producer([&wan] { emit wan->versionReceived(QStringLiteral("4.3.16")); });
+        std::thread producer([&wan] { emit wan.versionReceived(QStringLiteral("4.3.16")); });
         producer.join();
-        wan.reset();
-        QCoreApplication::sendPostedEvents(&f.model, QEvent::MetaCall);
+        f.model.rebuildBackendForTest(QStringLiteral("sim"));
+        changed.clear();
+        QCoreApplication::sendPostedEvents();
         QVERIFY(!f.model.isWan());
         QCOMPARE(changed.count(), 0);
     }

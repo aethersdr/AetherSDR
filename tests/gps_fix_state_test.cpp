@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 // Published FlexLib API 4.3.16 Radio.cs GPSFixState/ParseGPSFixState is the
 // wire authority. All delivery is injected: no peer, socket bind, or radio.
 #include "TestSettingsProfile.h"
@@ -139,7 +140,6 @@ int main(int argc, char** argv)
     check(!decode(decoder, QStringLiteral("fix#=3D#tracked=8")).fixState,
           "malformed field leaves fix absent");
 
-    WanConnection wan;
     RadioModel model;
     QSignalSpy reports(&model, &RadioModel::gpsStatusChanged);
     QSignalSpy timeSettings(&model, &RadioModel::gpsTimeSettingsChanged);
@@ -232,14 +232,14 @@ int main(int argc, char** argv)
     check(transport->connects == 2, "both LAN session attempts used the injected transport");
     deliver(model, fullReport());
     reports.clear();
-    model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4992);
+    FlexWanSessionTestAccess::connect(model);
     checkCleared(model);
     check(reports.count() == 1, "new WAN session publishes GPS reset before any status");
 
     // A real Flex decoder on the model proves a fresh raw subscription survives
     // the epoch transition. No transport is connected or opened.
     check(model.rebuildBackendForTest(QStringLiteral("flex")), "raw-message test installs Flex decoder");
-    model.connectViaWan(&wan, QStringLiteral("192.0.2.3"), 4992);
+    WanConnection& wan = FlexWanSessionTestAccess::connect(model);
     // WAN source stays unopened. Only its real line route through the status
     // ingress is exercised, including a repeated session with the same objects.
     QSignalSpy profiles(&model, &RadioModel::globalProfilesChanged);
@@ -252,7 +252,7 @@ int main(int argc, char** argv)
     });
     queuedWanReport.join();
     check(profiles.isEmpty(), "raw profile delivery is queued before the next WAN session");
-    model.connectViaWan(&wan, QStringLiteral("192.0.2.2"), 4992);
+    FlexWanSessionTestAccess::connect(model);
     reports.clear();
     QCoreApplication::sendPostedEvents();
     checkCleared(model);

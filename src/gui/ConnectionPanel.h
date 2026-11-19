@@ -2,7 +2,8 @@
 
 #include "CanonWindow.h"
 #include "core/RadioDiscovery.h"
-#include "core/backends/flex/SmartLinkClient.h"
+#include "models/SmartLinkAccountModel.h"
+#include <QPointer>
 #include "core/IConnectionAutomation.h"
 
 #include <QWidget>
@@ -137,7 +138,7 @@ public slots:
     void removeDemoRadio();
 
     // SmartLink
-    void setSmartLinkClient(SmartLinkClient* client);
+    void setSmartLinkAccountModel(SmartLinkAccountModel* client);
     QJsonObject workspaceSnapshot() const;
     bool applyWorkspaceOperator();
     // Operator switches re-point TX audio, so they wait while transmitting.
@@ -391,7 +392,7 @@ private:
     bool m_connected{false};
 
     // SmartLink UI
-    SmartLinkClient* m_smartLink{nullptr};
+    SmartLinkAccountModel* m_smartLink{nullptr};
     QWidget*     m_loginForm{nullptr};
     QLineEdit*   m_emailEdit{nullptr};
     QLineEdit*   m_passwordEdit{nullptr};

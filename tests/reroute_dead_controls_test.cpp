@@ -213,7 +213,7 @@ struct FlexWire {
     explicit FlexWire(Fixture& f)
     {
         f.backend->flex = std::make_unique<FlexBackend>();
-        f.backend->flex->setSliceCommandSink(
+        f.backend->flex->setSliceCommandSinkForTest(
             [this](const QString& c) { lines.append(c); });
         QObject::connect(f.slice, &SliceModel::commandReady,
                          [this](const QString& c) { lines.append(c); });

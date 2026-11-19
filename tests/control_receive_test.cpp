@@ -517,7 +517,7 @@ void productionCapabilityContracts()
     }
     check(!unsafeFlexFilter, "pitch/preset/shift-dependent Flex filters are not guessed");
     QStringList flexCommands;
-    flex.setSliceCommandSink([&](const QString& command) { flexCommands.append(command); });
+    flex.setSliceCommandSinkForTest([&](const QString& command) { flexCommands.append(command); });
     flex.setSliceMode(0, "LSB");
     flex.setSliceFilter(0, -2800, -100);
     check(flexCommands == QStringList{"slice set 0 mode=LSB", "filt 0 -2800 -100"},

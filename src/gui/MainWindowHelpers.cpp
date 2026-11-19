@@ -3,7 +3,7 @@
 #include "SpectrumPreviewLogic.h"
 #include "SpectrumWidget.h"
 #include "core/RadioDiscovery.h"
-#include "core/backends/flex/SmartLinkClient.h"
+#include "models/SmartLinkAccountModel.h"
 #include "models/BandSettings.h"
 #include "models/MemoryEntry.h"
 #include "models/RadioModel.h"

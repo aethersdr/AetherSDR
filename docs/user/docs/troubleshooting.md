@@ -55,6 +55,15 @@ The radio is not registered with SmartLink, or port forwarding is not set up.
 2. Forward TCP 4994 and UDP 4993 to the radio.
 3. See [SmartLink Setup](./smartlink-setup.md).
 
+### A radio operation reports an unknown result
+
+A command was written, but the connection ended or its reply timed out before
+AetherSDR could confirm the result. The radio may already have applied it.
+
+1. Reconnect if needed and check the radio's current state.
+2. Repeat the operation only if it is still needed. AetherSDR does not replay
+   commands from the previous connection automatically.
+
 ### SmartLink stops with a certificate mismatch warning
 
 The radio's certificate does not match the one AetherSDR pinned.

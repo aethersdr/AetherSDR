@@ -912,6 +912,9 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexReceiveData.cpp
     src/core/backends/flex/FlexBackend_ReceiveData.cpp
     src/core/backends/flex/FlexDisplayStatus.cpp
+    src/core/backends/flex/FlexLanSession.cpp
+    src/core/backends/flex/FlexCommandSession.cpp
+    src/core/backends/flex/FlexBackend_Commands.cpp
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexRadioStatus.cpp
     src/core/backends/flex/FlexCwControls.cpp
@@ -939,6 +942,10 @@ set(CORE_SOURCES
     src/core/backends/flex/CommandParser.cpp    # SmartSDR wire line parse/build
     src/core/backends/flex/PanadapterStream.cpp # SmartSDR VITA-49 UDP receiver (DAX/IQ)
     src/core/backends/flex/VitaDscpMarker.cpp
+    src/core/backends/flex/SmartLinkCredentials.cpp
+    src/core/backends/flex/FlexWanSession.cpp
+    src/models/SmartLinkAccountModel.h
+    src/core/backends/flex/SmartLinkAccountModel.cpp
     src/core/backends/flex/SmartLinkClient.cpp  # SmartLink WAN auth + radio list
     src/core/backends/flex/WanConnection.cpp    # SmartLink TLS transport (#5554 §2.6)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)

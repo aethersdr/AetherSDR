@@ -6,8 +6,10 @@
 #include "models/RadioModel.h"
 
 #include <QHostAddress>
+#include <QPointer>
 #include <QThread>
 #include <QTimer>
+#include <QRegularExpression>
 
 namespace AetherSDR::control {
 namespace {
@@ -21,6 +23,19 @@ public:
         connect(&m_timeout, &QTimer::timeout, this, [this] {
             m_error = QStringLiteral("engine.timeout");
             disconnectRadio();
+        });
+        connect(&m_radio->smartLinkAccounts(), &SmartLinkAccountModel::radioListReceived,
+                this, [this] { startRemoteIfDiscovered(); });
+        connect(&m_radio->smartLinkAccounts(), &SmartLinkAccountModel::authFailed,
+                this, [this] {
+            if (m_remoteSerial.isEmpty() || m_state != State::Connecting) { return; }
+            m_error = QStringLiteral("engine.authentication_failed");
+            disconnectRadio();
+        });
+        connect(m_radio, &RadioModel::certFingerprintMismatch, this,
+                [this](quint64 attempt, const QString&, const QString&, const QString&) {
+            // No prompt or automatic pin replacement in a headless process.
+            m_radio->rejectPresentedWanCert(attempt);
         });
         connect(m_radio, &RadioModel::connectionStateChanged, this, [this](bool connected) {
             if (connected && m_state == State::Connecting) {
@@ -49,6 +64,8 @@ public:
 
     ~ModelRadioConnectionTarget() override
     {
+        m_timeout.stop();
+        QObject::disconnect(&m_radio->smartLinkAccounts(), nullptr, this, nullptr);
         QObject::disconnect(m_radio, nullptr, this, nullptr);
         if (m_state != State::Idle) {
             m_radio->disconnectFromRadio();
@@ -91,8 +108,32 @@ public:
         info.port = radio.port;
         m_error.clear();
         setState(State::Connecting);
-        m_timeout.start();
+        m_timeout.start(30000);
         m_radio->connectToRadio(info);
+    }
+
+    bool connectConfiguredRemote(const QString& account, const QString& serial) override
+    {
+        static const QRegularExpression accountId(QStringLiteral("^(legacy|[a-f0-9]{64})$"));
+        static const QRegularExpression radioId(QStringLiteral("^[A-Za-z0-9_.:-]{1,128}$"));
+        SmartLinkAccountModel& accounts = m_radio->smartLinkAccounts();
+        if (m_state != State::Idle || m_radio->isConnected() || m_radio->isConnectAttemptInFlight()
+            || accounts.accountLocked() || !accountId.match(account).hasMatch()
+            || !radioId.match(serial).hasMatch()) { return false; }
+        m_error.clear();
+        m_remoteSerial = serial;
+        m_remoteAccount = account;
+        const QPointer<ModelRadioConnectionTarget> alive(this);
+        setState(State::Connecting);
+        if (!alive || m_state != State::Connecting || m_remoteAccount != account
+            || m_remoteSerial != serial) { return true; }
+        m_timeout.start(45000);
+        accounts.setAccountId(account);
+        if (!alive || m_state != State::Connecting || m_remoteAccount != account
+            || m_remoteSerial != serial) { return true; }
+        accounts.tryAutoLogin();
+        if (alive) { startRemoteIfDiscovered(); }
+        return true;
     }
 
     void disconnectRadio() override
@@ -101,11 +142,29 @@ public:
             return;
         }
         m_timeout.stop();
+        m_remoteSerial.clear();
+        m_remoteAccount.clear();
         setState(State::Disconnecting);
         scheduleTeardown();
     }
 
 private:
+    void startRemoteIfDiscovered()
+    {
+        if (m_state != State::Connecting || m_remoteSerial.isEmpty()
+            || m_radio->isConnected() || m_radio->isConnectAttemptInFlight()) { return; }
+        SmartLinkAccountModel& accounts = m_radio->smartLinkAccounts();
+        if (!accounts.isConnected() || !accounts.isAuthenticated() || accounts.accountId() != m_remoteAccount) { return; }
+        for (const WanRadioInfo& radio : accounts.radios()) {
+            if (radio.serial != m_remoteSerial) { continue; }
+            if (!m_radio->connectViaSmartLink(m_remoteSerial)) {
+                m_error = QStringLiteral("engine.failed");
+                disconnectRadio();
+            }
+            return;
+        }
+    }
+
     void setState(State state)
     {
         m_state = state;
@@ -147,6 +206,8 @@ private:
     RadioModel* m_radio;
     State m_state{State::Idle};
     QString m_error;
+    QString m_remoteSerial;
+    QString m_remoteAccount;
     QTimer m_timeout;
     bool m_teardownQueued{false};
     bool m_settlementQueued{false};

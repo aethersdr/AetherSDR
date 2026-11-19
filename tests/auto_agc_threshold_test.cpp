@@ -97,7 +97,7 @@ void wireAndParser()
     QStringList commands;
     flex.setFirmwareVersionProvider([&] { return firmware; });
     flex.setAutoAgcThresholdLicenseProvider([&] { return licensed; });
-    flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
+    flex.setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
     for (const QString& version : {QString(), QStringLiteral("4.2.20"), QStringLiteral("4.3.15"),
                                   QStringLiteral("4.3.16beta"), QStringLiteral("4.3.16.42034junk")}) {
         firmware = version;
@@ -213,10 +213,13 @@ void staleManualCurve()
     calibrator.setSlice(s);
     calibrator.setSettleMs(1);
     QObject::connect(s, &SliceModel::agcThresholdChanged, &calibrator, &AgcTCalibrator::onValueChanged);
+    QSignalSpy points(&calibrator, &AgcTCalibrator::pointAdded);
     for (const int value : {20, 50, 80}) {
+        const qsizetype expectedPoints = points.size() + 1;
         calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);
         calibrator.onValueChanged(value);
-        QTest::qWait(140);
+        check(QTest::qWaitFor([&] { return points.size() == expectedPoints; }, 1000),
+              "manual calibration records each settled value before the next input");
     }
     check(calibrator.hasRecommendation() && calibrator.curve().size() == 3,
           "manual calibration establishes a real curve and recommendation");
@@ -262,8 +265,7 @@ void calibrationAuthorityTransitions()
     calibrator.setSlice(s);
     calibrator.onAudioLevel(0.2f);
     calibrator.onValueChanged(40);
-    QTest::qWait(140);
-    check(calibrator.curve().size() == 1,
+    check(QTest::qWaitFor([&] { return calibrator.curve().size() == 1; }, 1000),
           "explicit rebind of a reclaimed slice permits fresh manual recording");
 }
 

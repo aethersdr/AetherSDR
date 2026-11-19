@@ -22,22 +22,11 @@ public:
         observation->statusEpoch = model.m_observationEpoch;
         model.applySetupObservation(*observation);
     }
-    template<typename Model>
-    static bool send(Model& model, const std::shared_ptr<SetupStatusLifetime>& identity)
-    { return model.sendSetupEntityCommand(QStringLiteral("xvtr set 2 rx_only=1"), {}, identity); }
     template<typename Model> static void reset(Model& model) { model.resetSetupObservations(); }
     template<typename Model> static void refreshLicense(Model& model, const QDateTime& now)
     { model.refreshLicenseSubscription(now); }
     template<typename Model> static void connectionError(Model& model)
     { model.onConnectionError(QStringLiteral("timeout")); }
-    // A SmartLink session over the model's ingress, bound as the WAN connect binds it.
-    template<typename Model, typename Wan> static void connectWan(Model& model, Wan* wan)
-    {
-        model.m_wanConn = wan;
-        model.openObservationSession(model.m_statusEpoch = model.m_statusIngress->bindLive(wan));
-        model.m_connectedStatusEpoch = model.m_statusEpoch;
-    }
-    template<typename Model> static void releaseWan(Model& model) { model.releaseWanStatus(); model.m_wanConn = nullptr; }
 };
 
 inline void applyCableStatus(UsbCableModel& model, const QString& serial, const QMap<QString, QString>& fields)

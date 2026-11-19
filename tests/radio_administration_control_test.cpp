@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Production dispatch and inert transports; no sockets, firmware peer or RF.
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
@@ -26,12 +27,9 @@ public:
         connection.m_commandSinkForTest = record;
     }
     static void nextTransport(RadioConnection& connection) { ++connection.m_sessionGeneration; }
-    static bool dispatch(RadioModel& radio, const QString& command, const RadioControlCompletion& reply,
-        const RadioControlFence& current, const std::function<void()>& written)
-    { return radio.dispatchAdministrationCommand(command, reply, current, written); }
     static void reply(RadioModel& radio, quint32 sequence, int code = 0)
     {
-        const auto callback = radio.m_pendingCallbacks.value(sequence);
+        const auto callback = FlexCommandTestAccess::reply(FlexCommandTestAccess::session(radio), sequence);
         if (callback) { callback(code, code ? QStringLiteral("rejected") : QString()); }
     }
     static void observe(RadioModel& radio, bool remote, bool multi)
@@ -63,18 +61,19 @@ public:
         WanConnection wan;
         bool erasedBeforeCallback = false;
         int completions = 0;
+        FlexCommandTestAccess::prepareWan(wan);
         const quint64 generation = wan.commandSessionGeneration();
-        wan.m_pendingCallbacks.insert(10, [&](int, const QString&) {
+        FlexCommandTestAccess::insertReply(wan, 10, [&](int, const QString&) {
             ++completions;
-            erasedBeforeCallback = !wan.m_pendingCallbacks.contains(10);
+            erasedBeforeCallback = !FlexCommandTestAccess::contains(wan.commands(), 10);
             wan.forgetSessionReply(10, generation);
             // Completion may enqueue another request and invalidate hash iterators.
-            wan.m_pendingCallbacks.insert(11, [](int, const QString&) {});
+            FlexCommandTestAccess::insertReply(wan, 11, [](int, const QString&) {});
         });
         wan.processLine(QByteArrayLiteral("R10|0|"));
         wan.processLine(QByteArrayLiteral("R10|0|"));
         QCoreApplication::sendPostedEvents(&wan);   // replies answer after queued status
-        return erasedBeforeCallback && completions == 1 && wan.m_pendingCallbacks.contains(11);
+        return erasedBeforeCallback && completions == 1 && FlexCommandTestAccess::contains(wan.commands(), 11);
     }
     static bool rebooting(const RadioModel& radio) { return radio.m_rebootInProgress; }
     static void expire(RadioModel& radio)
@@ -115,13 +114,7 @@ struct Fixture {
             writes.append(command);
         });
         RadioAdministrationTestAccess::transport(radio, &connection);
-        backend->setAdministrationCommandSink([this](const QString& command,
-            const RadioControlCompletion& reply, const RadioControlFence& current,
-            const std::function<void()>& written) {
-            return RadioAdministrationTestAccess::dispatch(radio, command, reply, current, written);
-        });
-        QObject::connect(&connection, &RadioConnection::administrationCommandWritten, &radio,
-            [this](quint64 ticket, bool written) { RadioAdministrationTestAccess::receipt(radio, ticket, written); });
+        FlexCommandTestAccess::bind(radio, *backend);
     }
     ~Fixture()
     {

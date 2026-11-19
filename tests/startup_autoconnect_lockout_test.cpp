@@ -55,6 +55,9 @@ struct ConnectionPanelStartupTestAccess {
 // A client that already holds a SmartLink session, as MainWindow hands one over
 // after a remembered sign-in. Only the two fields are set: nothing logs in or
 // opens the TLS socket.
+struct SmartLinkAccountModelTestAccess {
+    static SmartLinkClient& client(SmartLinkAccountModel& model) { return *model.m_client; }
+};
 struct SmartLinkClientTestAccess {
     static void signIn(SmartLinkClient& client, const QString& callsign) {
         client.m_authenticated = true;
@@ -326,14 +329,14 @@ void checkSignedInClientReplacesHint()
 {
     ConnectionPanel panel;
     const QString before = ConnectionPanelSmartLinkTestAccess::accountLine(panel);
-    SmartLinkClient client;
-    SmartLinkClientTestAccess::signIn(client, QStringLiteral("TEST"));
-    panel.setSmartLinkClient(&client);
+    SmartLinkAccountModel client;
+    SmartLinkClientTestAccess::signIn(SmartLinkAccountModelTestAccess::client(client), QStringLiteral("TEST"));
+    panel.setSmartLinkAccountModel(&client);
     const QString after = ConnectionPanelSmartLinkTestAccess::accountLine(panel);
     report("signed-in SmartLink client replaces the sign-in hint",
            after != before && after.contains(QStringLiteral("TEST")),
            after.toStdString());
-    panel.setSmartLinkClient(nullptr);
+    panel.setSmartLinkAccountModel(nullptr);
 }
 
 }  // namespace

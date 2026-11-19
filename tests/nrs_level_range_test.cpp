@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 #include "FlexSliceStatusTestSupport.h"
 // Firmware identity, operator requests and passive NRS readback through the
 // production model/backend/widget bindings. No peer, socket dial or radio.
@@ -132,7 +133,7 @@ struct Fixture {
             return false;
         }
         RadioConnectionSessionTestAccess::connected(*backend->connection(), true);
-        backend->setSliceCommandSink([this](const QString& command) {
+        backend->setSliceCommandSinkForTest([this](const QString& command) {
             commands.append(command);
         });
         RadioNicknameTestAccess::firmware(radio, version);
@@ -145,7 +146,7 @@ struct Fixture {
     {
         // The recorder cannot outlive its captured storage during teardown.
         if (backend) {
-            backend->setSliceCommandSink({});
+            backend->setSliceCommandSinkForTest({});
             RadioConnectionSessionTestAccess::connected(*backend->connection(), false);
         }
     }
@@ -502,29 +503,28 @@ private slots:
     {
         // The WAN socket stays inert: connectViaWan only attaches an already
         // constructed transport; WanConnection::connectToRadio is never called.
-        WanConnection wan;
         Fixture f;
         const QString lanVersion = QStringLiteral("4.3.16.42034");
         QVERIFY(f.init(lanVersion));
-        f.radio.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 0);
+        WanConnection& wan = FlexWanSessionTestAccess::connect(f.radio);
         QVERIFY(f.radio.softwareVersion().isEmpty());
         RadioNicknameTestAccess::protocol(f.radio);
         QVERIFY(f.radio.softwareVersion().isEmpty());
         QCOMPARE(f.backend->capabilities().nrsLevelControl->levelMaximum, 100);
         RadioNicknameTestAccess::firmware(f.radio, QStringLiteral("4.2.20.41343"));
         QCOMPARE(f.radio.softwareVersion(), QStringLiteral("4.2.20.41343"));
-        QCOMPARE(f.radio.lastRadioInfo().version, lanVersion);
+        QVERIFY(f.radio.lastRadioInfo().version.isEmpty());
         QCOMPARE(f.backend->capabilities().nrsLevelControl->levelMaximum, 100);
         QVERIFY(f.commands.isEmpty());
         QVERIFY(wan.isSocketIdle());
         RadioConnectionSessionTestAccess::connected(*f.backend->connection(), false);
-        WanConnectionTestAccess::connected(wan, true);
+        FlexWanSessionTestAccess::connected(f.radio, true);
         RadioNicknameTestAccess::firmware(f.radio, QStringLiteral("4.3.16.42034"));
         QCOMPARE(f.radio.slice(0)->nrsLevelMaximum(), 50);
-        QCOMPARE(f.radio.lastRadioInfo().version, lanVersion);
+        QVERIFY(f.radio.lastRadioInfo().version.isEmpty());
         QVERIFY(f.commands.isEmpty());
         QVERIFY(wan.isSocketIdle());
-        WanConnectionTestAccess::connected(wan, false);
+        FlexWanSessionTestAccess::connected(f.radio, false);
     }
 
     void autoReconnectBeforeFirmwareInfo()

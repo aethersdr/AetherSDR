@@ -959,6 +959,12 @@ QString AppSettings::loadNotice() const
     return m_loadNotice;
 }
 
+bool AppSettings::storeReadable() const
+{
+    QReadLocker locker(&m_lock);
+    return m_loadState == LoadState::ReadyToSave || m_loadState == LoadState::ReadOnly;
+}
+
 QString AppSettings::takeSessionCredential(const QString& keychainKey)
 {
     QWriteLocker locker(&m_lock);

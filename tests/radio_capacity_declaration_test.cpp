@@ -25,11 +25,12 @@
 // The parser half (that max_* is read and the adjacent available_* is not) lives
 // in radio_discovery_test, which already has friend access to the parser.
 //
-// No socket is bound or listened on, and no radio peer exists. connectToRadio()
-// does reach RadioConnection on its worker thread, so every RadioInfo below
-// carries TEST-NET-1 (RFC 5737, guaranteed unroutable) rather than a default
-// null address — the same precaution as demo_backend_swap_test.cpp:74. The
-// connect can then only fail, which is all these cases need.
+// An inert transport suppresses all outbound dials. Capacity observations and
+// disconnect/reconnect transitions still run through the production model.
+
+#include "TestSettingsProfile.h"
+#include "core/backends/flex/RadioConnection.h"
+#include <QThread>
 
 #include "core/RadioDiscovery.h"
 #include "models/ModelCapabilities.h"
@@ -44,6 +45,30 @@
 
 using namespace AetherSDR;
 
+namespace AetherSDR {
+class RadioConnectionSessionTestAccess {
+public:
+    class NoDialSocket final : public QTcpSocket {
+    public:
+        explicit NoDialSocket(QObject* parent) : QTcpSocket(parent) {}
+        void connectToHost(const QString&, quint16, OpenMode = ReadWrite,
+                           NetworkLayerProtocol = AnyIPProtocol) override {}
+    };
+    static void install(RadioConnection& wire)
+    {
+        QMetaObject::invokeMethod(&wire, [&wire] {
+            wire.m_socket->disconnect(&wire);
+            wire.m_socket->deleteLater();
+            wire.m_socket = new NoDialSocket(&wire);
+        }, Qt::BlockingQueuedConnection);
+    }
+};
+}
+class CapacityModel final : public RadioModel {
+public:
+    CapacityModel() { RadioConnectionSessionTestAccess::install(*connection()); }
+};
+
 static int g_failures = 0;
 static void check(bool ok, const char* what)
 {
@@ -53,6 +78,8 @@ static void check(bool ok, const char* what)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("radio-capacity-declaration"));
+    if (!profile.isValid()) { return 1; }
     QCoreApplication app(argc, argv);
 
     // ---- the declared capacity beats the model table ----
@@ -60,7 +87,7 @@ int main(int argc, char** argv)
         // A FLEX-6700 is 8 in the FlexLib-sourced table. This one declares 3 —
         // the shape a reduced licence produces, and a value the table can never
         // express. Every assertion here fails if the table is consulted first.
-        RadioModel m;
+        CapacityModel m;
         RadioInfo info;
         info.model = QStringLiteral("FLEX-6700");
         info.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
@@ -90,7 +117,7 @@ int main(int argc, char** argv)
     // ---- pan and slice capacity are independent ----
     {
         // Nothing guarantees the two stay equal; the old code assumed they did.
-        RadioModel m;
+        CapacityModel m;
         RadioInfo info;
         info.model = QStringLiteral("FLEX-6700");
         info.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
@@ -103,7 +130,7 @@ int main(int argc, char** argv)
 
     // ---- no declaration falls back to the table ----
     {
-        RadioModel m;
+        CapacityModel m;
         RadioInfo info;
         info.model = QStringLiteral("FLEX-6700");
         info.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1   // maxSlices/maxPanadapters stay 0
@@ -114,7 +141,7 @@ int main(int argc, char** argv)
 
     // ---- a radio swap does not inherit the previous radio's capacity ----
     {
-        RadioModel m;
+        CapacityModel m;
         RadioInfo big;
         big.model = QStringLiteral("FLEX-6700");
         big.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
@@ -127,7 +154,7 @@ int main(int argc, char** argv)
         // The previous radio's 8 must not survive into a 2-panadapter radio.
         RadioInfo byIp;
         byIp.model = QStringLiteral("FLEX-6400");
-        byIp.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
+        byIp.address = QHostAddress(QStringLiteral("192.0.2.3"));   // TEST-NET-1
         m.connectToRadio(byIp);
         check(m.maxPanadapters() == capabilitiesFor(QStringLiteral("FLEX-6400")).maxSlices,
               "a connect that declares nothing falls back to the new radio's "
@@ -147,7 +174,7 @@ int main(int argc, char** argv)
     // the model-table correction that used to repair it, so a leftover 8 would
     // offer creates a FLEX-6400 must refuse.
     {
-        RadioModel m;
+        CapacityModel m;
         RadioInfo big;
         big.model = QStringLiteral("FLEX-6700");
         big.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
@@ -156,16 +183,16 @@ int main(int argc, char** argv)
         m.connectToRadio(big);
         check(m.maxPanadapters() == 8, "first radio declares 8");
 
-        // Drop the session the way every disconnect does. onDisconnected() is a
-        // private slot, so it is invoked by name rather than reached through a
-        // socket — the point is the state transition, not the transport.
-        QMetaObject::invokeMethod(&m, "onDisconnected", Qt::DirectConnection);
+        // Retire the attempt through the backend owner so reconnect can admit
+        // a replacement and the model receives the normal disconnect edge.
+        m.forceDisconnect();
         check(m.maxPanadapters() == capabilitiesFor(QString()).maxSlices,
               "the declaration does not survive the disconnect");
 
         // A smaller radio arrives on a path that never calls connectToRadio():
         // its model lands on the status plane instead. The model table must be
         // allowed to answer again.
+        FlexRadioStatusTestPeer::beginConnect(m);
         observeRadioStatus(m, QStringLiteral("radio"),
                               {{QStringLiteral("model"), QStringLiteral("FLEX-6400")}});
         check(m.maxPanadapters() == capabilitiesFor(QStringLiteral("FLEX-6400")).maxSlices,
@@ -186,7 +213,7 @@ int main(int argc, char** argv)
     // Driven through the timer's own restore rather than a synthetic setter, so
     // the case fails if that restore is removed.
     {
-        RadioModel m;
+        CapacityModel m;
         RadioInfo licensed;
         licensed.model = QStringLiteral("FLEX-6700");          // table says 8
         licensed.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
@@ -197,7 +224,7 @@ int main(int argc, char** argv)
               "the licensed capacity is in effect");
 
         // The link drops. The declaration is cleared, as it must be.
-        QMetaObject::invokeMethod(&m, "onDisconnected", Qt::DirectConnection);
+        m.forceDisconnect();
         check(m.maxPanadapters() != 3,
               "the declaration is cleared on the way down");
 
@@ -216,7 +243,7 @@ int main(int argc, char** argv)
     // restore runs before the transport is chosen, so a Flex RadioInfo reaches
     // it without the HL2 backend and its UDP socket.
     {
-        RadioModel m;
+        CapacityModel m;
         RadioInfo labelled;
         labelled.model = QStringLiteral("FLEX-6700");
         labelled.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
@@ -226,7 +253,7 @@ int main(int argc, char** argv)
         check(m.versionLabel() == QStringLiteral("Gateware"),
               "the version label is in effect");
 
-        QMetaObject::invokeMethod(&m, "onDisconnected", Qt::DirectConnection);
+        m.forceDisconnect();
         check(m.versionLabel().isEmpty(),
               "the version label is cleared on the way down");
 

@@ -1,4 +1,6 @@
 #include "WanConnection.h"
+#include <QPointer>
+#include <QSignalBlocker>
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 #include <QCryptographicHash>
@@ -113,7 +115,28 @@ void forgetAllPinnedCerts()
 WanConnection::WanConnection(QObject* parent)
     : QObject(parent)
 {
-    connect(&m_socket, &QSslSocket::connected,    this, &WanConnection::onTlsConnected);
+    m_commands.setWriter([this](const FlexCommandSession::Write& write) {
+        const auto result = write.run([&] {
+            if (!m_connected || write.epoch != m_sessionGeneration) {
+                return FlexCommandSession::WriteResult::NotWritten;
+            }
+            const QByteArray data = CommandParser::buildCommand(write.sequence, write.command);
+            if (write.command.startsWith(QStringLiteral("ping"))) {
+                m_lastPingSeq = write.sequence;
+                m_pingStopwatch.restart();
+            } else {
+                qCDebug(lcSmartLink) << "WAN TX:" << data.trimmed();
+            }
+            const qint64 written = m_socket.write(data);
+            m_socket.flush();
+            return written == data.size() ? FlexCommandSession::WriteResult::Written
+                : written <= 0 ? FlexCommandSession::WriteResult::NotWritten
+                               : FlexCommandSession::WriteResult::Unknown;
+        });
+        m_commands.writeFinished(write.epoch, write.sequence, result);
+        return true;
+    });
+    connect(&m_socket, &QSslSocket::encrypted,    this, &WanConnection::onTlsConnected);
     connect(&m_socket, &QSslSocket::disconnected, this, &WanConnection::onTlsDisconnected);
     connect(&m_socket, &QSslSocket::readyRead,    this, &WanConnection::onReadyRead);
     connect(&m_socket, &QSslSocket::sslErrors,    this, &WanConnection::onSslErrors);
@@ -126,7 +149,10 @@ WanConnection::WanConnection(QObject* parent)
 
 WanConnection::~WanConnection()
 {
-    disconnectFromRadio();
+    m_commands.invalidate();
+    m_heartbeat.stop();
+    m_socket.blockSignals(true);
+    m_socket.abort();
 }
 
 // ─── Connection ──────────────────────────────────────────────────────────────
@@ -134,18 +160,18 @@ WanConnection::~WanConnection()
 void WanConnection::resetSessionState()
 {
     ++m_sessionGeneration;
-    // This object outlives every TLS session (a by-value MainWindow member), so
+    // This object outlives every TLS session (owned by FlexWanSession), so
     // reset per session: otherwise a partial line from the dead link prefixes the
     // next session's first line and stale handle/sequence/callbacks answer into the
     // live one. Mirrors RadioConnection::resetSessionState() and FlexLib's
     // TcpCommandCommunication.Disconnect() (FlexLib_API_v4.1.5.39794
-    // TcpCommandCommunication.cs:249). Pending callbacks are dropped, not answered.
+    // TcpCommandCommunication.cs:249). Retire replies only after transport state
+    // is invalid, so a completion cannot write through the old session.
     m_readBuffer.clear();
-    m_pendingCallbacks.clear();
-    m_seqCounter = 1;
     m_handle     = 0;
     m_connected  = false;
     m_validated  = false;
+    m_commands.begin(m_sessionGeneration);
 }
 
 void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
@@ -156,7 +182,10 @@ void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
         return;
     }
 
+    const QPointer<WanConnection> alive(this);
+    const quint64 generation = m_sessionGeneration + 1;
     resetSessionState();
+    if (!alive || m_sessionGeneration != generation) { return; }
     m_wanHandle = wanHandle;
     m_host      = host;
     m_expectedFingerprintHex = loadStoredFingerprint(host);
@@ -178,64 +207,72 @@ void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
 
 void WanConnection::disconnectFromRadio()
 {
+    const QPointer<WanConnection> alive(this);
+    const quint64 generation = m_sessionGeneration;
+    m_commands.invalidate();
     m_heartbeat.stop();
+    m_awaitingCertDecision = false;
+    m_presentedFingerprintHex.clear();
     if (m_socket.state() != QAbstractSocket::UnconnectedState) {
         // Send disconnect marker (FlexLib sends 0x04)
         m_socket.write("\x04");
         m_socket.disconnectFromHost();
     }
-    resetSessionState();
-    m_awaitingCertDecision   = false;
+    // A synchronous disconnected signal can retire this session and its
+    // callback can start a replacement. Never reset that replacement here.
+    if (alive && m_sessionGeneration == generation) { resetSessionState(); }
+}
+
+void WanConnection::abortConnection()
+{
+    {
+        const QSignalBlocker blocker(&m_socket);
+        m_heartbeat.stop();
+        m_socket.abort();
+    }
+    m_awaitingCertDecision = false;
     m_presentedFingerprintHex.clear();
+    const QPointer<WanConnection> alive(this);
+    const quint64 generation = m_sessionGeneration + 1;
+    resetSessionState();
+    if (alive && m_sessionGeneration == generation) {
+        m_commands.retire(QStringLiteral("Connection closed."));
+    }
 }
 
 // ─── Command dispatch ────────────────────────────────────────────────────────
 
+namespace {
+FlexCommandSession::Completion wanReply(WanConnection::ResponseCallback callback)
+{
+    if (!callback) { return {}; }
+    return [callback = std::move(callback)](const FlexCommandSession::Reply& reply) {
+        callback(reply.kind == FlexCommandSession::ReplyKind::NotDispatched ? 0x50000063 : reply.code,
+                 reply.body);
+    };
+}
+}
+
 quint32 WanConnection::sendSessionCommand(const QString& command, quint64 generation,
-                                          const SessionCommandGuard& guard, ResponseCallback callback)
+    const SessionCommandGuard& guard, ResponseCallback callback)
 {
     if (!sessionWriteAdmitted(generation, guard)) { return 0; }
-    return sendCommand(command, std::move(callback));
+    FlexCommandSession::Options options;
+    options.guard = guard;
+    options.guarded = true;
+    return m_commands.submit(command, options, wanReply(std::move(callback)));
 }
 
 quint32 WanConnection::sendAdministrationCommand(const QString& command, quint64 generation,
     const SessionCommandGuard& guard, ResponseCallback callback)
 {
-    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
-    const quint32 seq = m_seqCounter.fetch_add(1);
-    if (callback) { m_pendingCallbacks.insert(seq, std::move(callback)); }
-    const QByteArray data = CommandParser::buildCommand(seq, command);
-    qCDebug(lcSmartLink) << "WAN TX:" << data.trimmed();
-    const qint64 written = m_socket.write(data);
-    m_socket.flush();
-    if (written != data.size()) {
-        m_pendingCallbacks.remove(seq);
-        return 0;
-    }
-    return seq;
+    return sendSessionCommand(command, generation, guard, std::move(callback));
 }
 
 quint32 WanConnection::sendCommand(const QString& command, ResponseCallback callback)
 {
-    if (!m_connected) {
-        qCWarning(lcSmartLink) << "WanConnection::sendCommand: not connected";
-        return 0;
-    }
-
-    const quint32 seq = m_seqCounter.fetch_add(1);
-    if (callback)
-        m_pendingCallbacks.insert(seq, std::move(callback));
-
-    const QByteArray data = CommandParser::buildCommand(seq, command);
-    if (command.startsWith("ping")) {
-        m_lastPingSeq = seq;
-        m_pingStopwatch.restart();
-    } else {
-        qCDebug(lcSmartLink) << "WAN TX:" << data.trimmed();
-    }
-    m_socket.write(data);
-    m_socket.flush();  // push SSL plaintext buffer to OS TCP buffer immediately (#rade-shutdown)
-    return seq;
+    if (!m_connected) { return 0; }
+    return m_commands.submit(command, {}, wanReply(std::move(callback)));
 }
 
 // ─── TLS Socket Callbacks ────────────────────────────────────────────────────
@@ -289,7 +326,12 @@ void WanConnection::sendWanValidate()
 {
     // Send wan validate as a proper command (C<seq>|wan validate handle=...)
     // FlexLib uses SendCommand() for this, not raw write.
-    const quint32 seq = m_seqCounter.fetch_add(1);
+    const quint32 seq = m_commands.allocateSequence();
+    if (!seq) {
+        qCWarning(lcSmartLink) << "WanConnection: command sequence exhausted before validation";
+        disconnectFromRadio();
+        return;
+    }
     const QByteArray data = CommandParser::buildCommand(
         seq, QString("wan validate handle=%1").arg(m_wanHandle));
     qCDebug(lcSmartLink) << "WAN TX: C" << seq << "|wan validate handle=***REDACTED***";
@@ -342,8 +384,10 @@ void WanConnection::onTlsDisconnected()
     // Radio-initiated drop. This path previously cleared only m_connected, so a
     // truncated line, the dead handle and any in-flight callbacks all survived
     // into the next SmartLink session. (#5653 review)
+    const QPointer<WanConnection> alive(this);
+    const quint64 generation = m_sessionGeneration + 1;
     resetSessionState();
-    emit disconnected();
+    if (alive && m_sessionGeneration == generation) { emit disconnected(); }
 }
 
 void WanConnection::onSslErrors(const QList<QSslError>& errors)
@@ -459,12 +503,7 @@ void WanConnection::processLine(const QString& line)
                                          sequence = msg.sequence, code = msg.resultCode,
                                          body = msg.object] {
             if (generation != m_sessionGeneration) { return; }
-            auto it = m_pendingCallbacks.find(sequence);
-            if (it == m_pendingCallbacks.end()) { return; }
-            // A completion may retire this session or alter the callback map.
-            const ResponseCallback callback = std::move(it.value());
-            m_pendingCallbacks.erase(it);
-            callback(code, body);
+            m_commands.answer(generation, sequence, code, body);
         }, Qt::QueuedConnection);
         break;
     }

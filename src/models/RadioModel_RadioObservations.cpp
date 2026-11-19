@@ -136,7 +136,7 @@ void RadioModel::applyRadioObservation(const RadioStatusObservation& observation
         if (!report.program) { client.program = QStringLiteral("Unknown"); }
         if (!report.station) { client.station = client.program; }
     }
-    if (client.source.isEmpty() && m_wanConn) { client.source = QStringLiteral("SmartLink"); }
+    if (client.source.isEmpty() && m_wanSession) { client.source = QStringLiteral("SmartLink"); }
     if (newConnection || !m_clientLifecycles.contains(handle)) {
         m_clientLifecycles[handle] = ++m_clientLifecycleRevision;
     }

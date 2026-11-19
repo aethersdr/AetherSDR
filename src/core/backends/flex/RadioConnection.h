@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CommandParser.h"
+#include "FlexCommandSession.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IndependentTxControl.h"
 #include "core/backends/SessionCommandGuard.h"
@@ -69,10 +70,11 @@ public slots:
     // Send sequenced teardown commands, wait for radio responses, then close.
     void gracefulDisconnect(quint32 handle,
                             const QString& rxStreamId,
-                            quint32 streamRemoveSeq);
-    // Write a pre-sequenced command to the socket. Called from RadioModel
-    // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
+                            quint32 streamRemoveSeq,
+                            quint32 keepaliveStopSeq);
+    // Transport-thread writes use the backend session's sequence allocator.
     void writeCommand(quint32 seq, const QString& command);
+    FlexCommandSession::WriteResult dispatchCommand(quint32 seq, const QString& command);
     quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
     // The status epoch lines are tagged with (FlexStatusIngress). Set on this
     // thread just before a session's connect, so every line of that session
@@ -138,6 +140,7 @@ private:
     void processLine(const QString& line);
     void setState(ConnectionState s);
     bool writeSocketCommand(quint32 seq, const QString& command);
+    FlexCommandSession::WriteResult writeSocketCommandResult(quint32 seq, const QString& command);
     std::unique_ptr<FlexPttWireSession> m_independentPtt;
     QTimer* m_independentPttTimer{nullptr};
     void updateIndependentPttTimer();

@@ -388,7 +388,7 @@ void reentrantCalibrationAndLocalSettings()
     RadioModel radio;
     RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
     QStringList writes;
-    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion& reply) {
+    backend->setSetupCommandSinkForTest([&](const QString& command, const RadioSetupCompletion& reply) {
         writes.append(command);
         if (writes.size() == 1) { RadioSetupControlTestAccess::replaceConnectionGeneration(radio); }
         if (reply) { reply({RadioSetupReply::Kind::Accepted}); }
@@ -470,31 +470,37 @@ void productionSinkAndLocalReceipts()
     RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
     QStringList writes;
     std::vector<RadioConnection::ResponseCallback> responses;
-    const auto sink = RadioSetupControlTestAccess::productionSetupSink(radio,
-        [&](const QString& command, RadioConnection::ResponseCallback reply) {
-            writes.append(command); responses.push_back(reply); return true;
-        });
+    FlexCommandTestAccess::record(*backend, [&](const QString& command, FlexCommandTestAccess::Reply reply) {
+        writes.append(command); responses.push_back(std::move(reply));
+    });
     int completions = 0;
     RadioSetupReply last{RadioSetupReply::Kind::Refused};
     const RadioSetupCompletion completed = [&](const RadioSetupReply& reply) { ++completions; last = reply; };
-    check(sink("test", completed), "production sink reaches its injected lower writer");
+    const RadioSetupRequest request{RadioSetupField::ShowTxInWaterfall, true};
+    check(radio.requestRadioSetup(request, &radio, completed) == ReceiveDispatch::Dispatched,
+          "production typed setup reaches its injected lower writer");
     responses.back()(0, "accepted");
     check(completions == 1 && last.kind == RadioSetupReply::Kind::Accepted && last.message == "accepted",
-          "production sink maps a zero radio code to acceptance");
+          "production dispatch maps a zero radio code to acceptance");
+    responses.back()(17, "duplicate");
+    check(completions == 1, "a duplicate reply cannot complete setup twice");
+    radio.requestRadioSetup(request, &radio, completed);
     responses.back()(17, "failed");
     check(completions == 2 && last.kind == RadioSetupReply::Kind::Failed && last.code == 17 && last.message == "failed",
-          "production sink retains negative response codes and bodies");
+          "production dispatch retains negative response codes and bodies");
+    const qsizetype written = writes.size();
     RadioSetupControlTestAccess::closing(radio, true);
-    check(!sink("closing", completed), "production sink refuses closing sessions");
+    check(radio.requestRadioSetup(request, &radio, completed) != ReceiveDispatch::Dispatched,
+          "typed setup refuses closing sessions");
     RadioSetupControlTestAccess::closing(radio, false);
-    RadioSetupControlTestAccess::expiring(radio, true);
-    check(!sink("expiring", completed), "production sink refuses callback-drain writes");
-    RadioSetupControlTestAccess::expiring(radio, false);
+    backend->commandSession().retire("session ended");
+    check(radio.requestRadioSetup(request, &radio, completed) != ReceiveDispatch::Dispatched,
+          "production dispatch refuses a retired command session");
     backend->live = false;
-    check(!sink("disconnected", completed), "production sink refuses disconnected writes");
-    backend->live = true;
+    check(radio.requestRadioSetup(request, &radio, completed) != ReceiveDispatch::Dispatched,
+          "typed setup refuses disconnected writes");
+    check(writes.size() == written, "refused setup never reaches the writer");
     backend = installRadioSetupBackend(radio);
-    check(!sink("replaced", completed) && writes == QStringList{"test"}, "production sink refuses retired backend generations before reaching the writer");
 
     backend->accept = false;
     QSignalSpy dropped(&radio, &RadioModel::commandDropped);

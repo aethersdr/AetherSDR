@@ -151,9 +151,9 @@ private slots:
         RadioModel radio;
         auto owned = std::make_unique<ConnectedOtrspBackend>();
         ConnectedOtrspBackend* backend = owned.get();
-        backend->setSliceCommandSink([&](const QString& command) { commands.append(command); });
-        backend->setCommandSink([&](const QString& command) { commands.append(command); });
-        backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+        backend->setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
+        backend->setCommandSinkForTest([&](const QString& command) { commands.append(command); });
+        backend->setSetupCommandSinkForTest([&](const QString& command, const RadioSetupCompletion&) {
             commands.append(command);
             return true;
         });

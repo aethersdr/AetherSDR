@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Socket-free display notice coverage: local rendering is not a dropped radio
 // command. Declared backend support, not the presence of an unrelated command
 // plane, selects radio writes. GUI ordering is inspected separately as text.
@@ -41,7 +42,7 @@ public:
         radio.m_sessionWireGeneration = connection.commandSessionGeneration();
     }
     static void encoder(FlexBackend& backend, RadioModel& radio)
-    { backend.setSetupCommandSink(radio.setupCommandSink()); }
+    { FlexCommandTestAccess::bind(radio, backend); }
     static void releaseCommandPlane(RadioModel& radio) { radio.m_connection = nullptr; }
 };
 } // namespace AetherSDR
@@ -203,10 +204,9 @@ void absoluteRowsWithoutCommandPlane()
     check(caps.panBinsAbsolute(), "hl2: premise, the backend declares absolute-dB rows");
     check(f.hasTwoPanes(), "hl2: premise, two panes with distinct waterfall ids");
 
-    // The alarm is alive in this fixture: the same text, sent raw, is reported.
-    f.radio.sendCommand(gainText(f.wf0, 60));
-    check(f.dropped == QStringList{gainText(f.wf0, 60)},
-          "hl2: control, raw gain text is still reported as dropped");
+    // An unsupported typed radio intent still exercises the drop notice.
+    f.radio.requestPanControl(f.radio.panadapter(f.pan0), {PanControlField::ReceiveAntenna, QStringLiteral("ANT1")});
+    check(!f.dropped.isEmpty(), "hl2: unsupported typed control is reported as dropped");
     f.dropped.clear();
 
     check(clientDrawsColourGain(caps, true), "hl2 WtrFall Gain, auto black: the client draws it");
@@ -339,7 +339,9 @@ void commandPlaneGetsTheWireText()
     QStringList written;
     {
         Fixture f(flexCapabilities());
-        TxOperationIntegrationTestAccess::encoder(encoder, f.radio);
+        FlexCommandTestAccess::record(encoder, [&written](const QString& command, FlexCommandTestAccess::Reply) {
+            written.append(command);
+        });
         f.backend->display = [&encoder](const QString& pan, const QString& waterfall,
             const PanDisplayRequest& request, const RadioControlCompletion& completion, const RadioControlFence& current) {
             return encoder.requestPanDisplay(pan, waterfall, request, completion, current);

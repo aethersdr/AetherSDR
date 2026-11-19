@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Production encoder/scheduler with inert transport capture. No sockets or peer.
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
@@ -20,14 +21,14 @@ public:
     {
         WanConnection wan;
         bool called = false;
-        wan.m_pendingCallbacks.insert(7, [&wan, &called](int, const QString&) {
+        FlexCommandTestAccess::insertReply(wan, 7, [&wan, &called](int, const QString&) {
             called = true;
             wan.forgetSessionReply(7, wan.commandSessionGeneration());
-            wan.m_pendingCallbacks.clear();
+            wan.commands().retire(QStringLiteral("completed"));
         });
         wan.processLine(QStringLiteral("R7|0|accepted"));
         QCoreApplication::sendPostedEvents(&wan);   // replies answer after queued status
-        return called && wan.m_pendingCallbacks.isEmpty();
+        return called && wan.commands().pendingCount() == 0;
     }
 };
 class FlexCwControlsTestAccess {

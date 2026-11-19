@@ -25,6 +25,9 @@ public:
     [[nodiscard]] virtual bool supports(const DiscoveredRadio& radio) const = 0;
     virtual void connectRadio(const DiscoveredRadio& radio) = 0;
     virtual void disconnectRadio() = 0;
+    // Local startup intent only. This is deliberately absent from radio.connect
+    // and the public catalogue; account identity comes from trusted host config.
+    virtual bool connectConfiguredRemote(const QString&, const QString&) { return false; }
 
 signals:
     void stateChanged();

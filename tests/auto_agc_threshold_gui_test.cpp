@@ -99,7 +99,7 @@ public:
     {
         flexEncoder.setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
         flexEncoder.setAutoAgcThresholdLicenseProvider([] { return true; });
-        flexEncoder.setSliceCommandSink([this](const QString& command) {
+        flexEncoder.setSliceCommandSinkForTest([this](const QString& command) {
             wireCommands.append(command);
         });
     }

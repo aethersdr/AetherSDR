@@ -60,7 +60,7 @@ struct RadioModelWakeTestAccess
     static void clearRetryTarget(RadioModel& radio) { radio.m_lastInfo.address = QHostAddress(); }
     static bool hasTransportOrRetry(const RadioModel& radio)
     {
-        return radio.m_backend || radio.m_connection || radio.m_wanConn
+        return radio.m_backend || radio.m_connection || radio.m_wanSession
             || radio.m_reconnectTimer.isActive();
     }
 };
