@@ -7318,13 +7318,13 @@ add_test(NAME microham_trio_model_test COMMAND microham_trio_model_test)
 add_executable(microham_trio_peripherals_test
     tests/microham_trio_peripherals_test.cpp
     tests/fakes/PeripheralAuthStoreFake.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -7332,10 +7332,10 @@ add_executable(microham_trio_peripherals_test
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/AntennaGeniusApplet.cpp
     src/gui/ShackSwitchApplet.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h)
 target_include_directories(microham_trio_peripherals_test PRIVATE tests/fakes src tests)
