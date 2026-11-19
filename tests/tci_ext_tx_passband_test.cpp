@@ -384,6 +384,42 @@ void serverBehaviour()
           "a disconnected radio is not offered it");
 }
 
+// "Allowed while transmitting" (tci-server.md): a set while the radio holds TX
+// ownership, and after the over while ownership is still unconfirmed, changes
+// TransmitModel. Guards this group against a shared keyed gate.
+void setsWhileKeyedAndAfterTheOver()
+{
+    RadioModel model;
+    auto owner = std::make_unique<FilterBackend>();
+    owner->caps.hasTxFilterControls = true;
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    TransmitModel& tx = model.transmitModel();
+    tx.setTxFilter(100, 2900);
+    TciServer server(&model);
+    Wire a;
+    TciTxPassbandExtensionTest::attach(server, a.client, model);
+    settle();
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+
+    model.setTransmit(true);
+    const bool keyed = model.transmitOwnershipPending();
+    check(keyed, "keyed: the radio holds TX ownership");
+    a.send("aethersdr_tx_filter_band:0,300,2400;");
+    settle();
+    check(keyed && passbandIs(tx, 300, 2400)
+              && bandLines(a.take()) == one("aethersdr_tx_filter_band:0,300,2400;"),
+          "a set while keyed changes TransmitModel and is answered");
+
+    model.setTransmit(false);
+    std::printf("      after the over: ownership pending=%d\n", model.transmitOwnershipPending());
+    a.send("aethersdr_tx_filter_band:0,200,2700;");
+    settle();
+    check(passbandIs(tx, 200, 2700)
+              && bandLines(a.take()) == one("aethersdr_tx_filter_band:0,200,2700;"),
+          "a set after the over changes TransmitModel and is answered");
+}
+
 // The notice's limiter starts only after a line went out: a change nobody was
 // enabled to hear leaves the next one free to go at once, and a change right
 // after a send waits for the window. One processEvents() runs the posted send
@@ -567,6 +603,7 @@ int main(int argc, char** argv)
     offeredPerBackend();
     normalisation();
     serverBehaviour();
+    setsWhileKeyedAndAfterTheOver();
     noticeArmsOnlyAfterASend();
     txMove();
     txMoveSplit(true);
