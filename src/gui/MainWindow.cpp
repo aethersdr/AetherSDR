@@ -573,7 +573,21 @@ bool MainWindow::isSameDiversityReceivePair(const SliceModel* slice,
         return false;
     }
 
-    // A diversity parent and its child share one panadapter. With two
+    // The radio names each diversity slice's partner: diversity_index is the
+    // slice index of the paired slice (FlexLib Slice.cs, and confirmed on a
+    // FLEX-8600 with two pairs up: slice 0 index=3, slice 3 index=0, slice 1
+    // index=2, slice 2 index=1). When both slices carry a usable index, it
+    // decides. That also separates two pairs on the same pan. The junk value
+    // seen with diversity=0 never gets here (rejected above).
+    const int sliceIndex = slice->diversityIndex();
+    const int otherIndex = other->diversityIndex();
+    auto usableIndex = [](int index) { return index >= 0 && index < 64; };
+    if (usableIndex(sliceIndex) && usableIndex(otherIndex)) {
+        return sliceIndex == other->sliceId() && otherIndex == slice->sliceId();
+    }
+
+    // Fallback while an index is not known yet: a diversity parent and its
+    // child share one panadapter. With two
     // diversity pairs on two pans (two SCUs, each pair on its own pan), the
     // parent of one pair and the child of the other also satisfy the
     // parent/child role test, so the role test alone couples the pans:
