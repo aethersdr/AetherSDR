@@ -118,7 +118,13 @@ new workers retired, no fixed ARP entry and an empty journal. The overall run
 still fails its unchanged-GUI-maximum assertion: the client can replace the
 radio's configured limit with a slice's PA rating. The separate
 [model regression](./REPORTED-POWER-LIMIT-QUALIFICATION.json) reproduces that
-overwrite and verifies a host fix; the running desktop has not received it.
+overwrite and verifies a host fix. The later
+[corrected-desktop receive-only test](./REPORTED-LIMIT-DESKTOP-LIVE-QUALIFICATION.json)
+keeps the reported limit at 10 through 27 GUI observations while fresh radio
+reports distinguish that limit from a 100 W PA rating. Two fresh local IQ
+captures and normal Stop/exact cleanup pass on the adopted desktop. This does
+not change the original failed result or qualify RF, repeated foreign-entry
+faults, other platforms or the complete production workflow.
 
 The [fixed capture constructor](./capture/README.md) builds the packet socket
 inside the same trusted executable as its strict ring worker. Its current

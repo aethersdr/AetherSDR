@@ -1,0 +1,100 @@
+{
+  "recorded_utc": "2026-11-19T18:44:12.603208+00:00",
+  "production_ready": false,
+  "passed_one_receive_only_case": true,
+  "status": "Corrected d184/d0d5 desktop reconnected once using the existing profile/credential. Real subscriptions expose configured transmit limit10 and owned-slice PA rating100; all27GUI observations remain10 before Start, during localDAXIQ and after Stop. Two freshIQ captures and normalStop/exact all10worker/noARP/journal0 cleanup pass. Earlier failed successor stays false.",
+  "desktop_instance": {
+    "pid": 3928085,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "d0d51e718fef9b886861440fecdf22add29051ab48273ba558e00facb19d8dae",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "source_patch_sha256": "9556549d4ead16207f28d6fa1b984c93e0a1b2b0777b47b8dec42064792dd9cf",
+    "desktop_implementation": "d1845419e52b0d082274e3958d602b3eeb8ee7fc",
+    "development_native_origin": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0,
+    "warning_implementation": "56e046118d64369f146e24b3a3b5ae536f7e4df7"
+  },
+  "desktop_build": {
+    "passed": true,
+    "base_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "feature_parent": "d1845419e52b0d082274e3958d602b3eeb8ee7fc",
+    "changed_desktop_sources": {
+      "src/gui/AetherPDDialog.cpp": "e7d40a81d4abd85eba2032311fa232beee9920e5a58e39839821db026c07081b",
+      "src/models/RadioModel_SliceObservations.cpp": "42a23258857cba73347f653693cd30d4d5b8419ef0cd7eb1798c0770f4fc8027",
+      "tests/aetherpd_installation_dialog_test.cpp": "c6422779fcd4a8a63c57136597d78cef9333de7a6b8f05fd065b53e9a1c5da72",
+      "tests/flex_slice_observation_test.cpp": "5d026adb6790c2dd9fd8a0bdba65d99db4a1a9ef0b8e971db815385a1fe379d8"
+    },
+    "source_patch_sha256": "9556549d4ead16207f28d6fa1b984c93e0a1b2b0777b47b8dec42064792dd9cf",
+    "base_source_archive_sha256": "f1f976916d7000376d50daffa7337b1bd2878900d29b90771080f23e5efae47e",
+    "untracked_source": {
+      "tools/pd-waveform/fit_rejection_test.c": "dc7958ee74eff45b3d8efebc11eb7875828a2d033b335ba3bbe72a1fe3bc8f23",
+      "tools/pd-waveform/lowess_window_test.c": "bec187dd653273bd4cdfb20a709bbe89781b8339a203c502f75dd55255221665"
+    },
+    "binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/reported-power-limit/desktop-candidate/bin/AetherSDR",
+        "bytes": 833358464,
+        "sha256": "d0d51e718fef9b886861440fecdf22add29051ab48273ba558e00facb19d8dae"
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/reported-power-limit/desktop-candidate/bin/aetherd",
+        "bytes": 413586640,
+        "sha256": "7d2ccd227e7ae852669edd007aa1d7f25b4247cc2cd0cfae58feb5dfee544c14"
+      }
+    },
+    "runtime_release_unchanged": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+    "development_selection": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/distributions/short/arm64/selection.json",
+    "previous_binaries_preserved": true,
+    "new_desktop_launched": false,
+    "live_model_fix_qualified": false,
+    "radio_updated": false,
+    "RF_commands": []
+  },
+  "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "FDX": false,
+  "ordinary_GUI_Start_actions": 1,
+  "source_arm_actions": 0,
+  "RF_commands": [],
+  "model_observations": 27,
+  "GUI_maximum_values": [
+    10
+  ],
+  "real_configured_limit": 10,
+  "real_owned_slice_PA_rating": 100,
+  "subscription_phases": [
+    "before_Start",
+    "active_IQ",
+    "after_Stop"
+  ],
+  "fresh_IQ_captures": 2,
+  "capture_bytes_each": 131072,
+  "capture_SHA256": [
+    "9e5524ca7babfc964c9846ce19c6cd880395c009f623e4a71f811eb016e229f8",
+    "025ca86c50ef118a07bb960701116ac7c7d37354caf42e64229e8fb090f87c18"
+  ],
+  "normal_Stop_passed": true,
+  "cleanup": {
+    "original_session_workers_absent": 10,
+    "ordinary_unprivileged_controls_remaining": 3,
+    "ARP_absent": true,
+    "journal_bytes": 0,
+    "packet_FDs_closed": true,
+    "four_diagnostic_files_preserved_hash_checked_removed": true,
+    "temporary_diagnostic_helpers_removed": true
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/reported-limit-desktop-live-components.tar.gz",
+    "bytes": 78866,
+    "sha256": "f6697ce3bafbd7816d6d56966f4c3f52f33d5fe9f27cc81899558c491f8a6f8b",
+    "members": 48,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "One receive-only8600 real-status/ordinary IQ cycle; no RF, calibration, native installation/update, radio reboot or processing-settings restoration.",
+    "The new GUI does not repeat the original active foreign-entry injection. Its separate configured-limit fix is live-qualified; the original overall successor result remains failed and the separately verified native resource reconciliation retains its scope.",
+    "No new Windows/macOS, sustained/repeated RF, managed owner-loss recovery, actual6300/Linux2.6 or final production qualification is claimed. FullP1-P10 remains active.",
+    "Existing broad diagnostic bridge was used only for fixed audit/read/file cleanup jobs; all temporary jobs/carriers retired. This is not shipping-bootstrap qualification."
+  ]
+}
