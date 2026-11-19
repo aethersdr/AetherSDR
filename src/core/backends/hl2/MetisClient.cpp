@@ -863,8 +863,8 @@ void MetisClient::setPureSignal(bool enabled, quint64 generation)
         relayoutReceivers(before);
     else
         applyPureSignalNcos();
-    queueOneShotIfRunning(currentGainBank());
-    applyTxLnaGain();
+    // The 0x0a and 0x0e order depends on the direction: applyTxLnaGain().
+    applyTxLnaGain(/*alsoGainBank=*/true);
 }
 
 void MetisClient::setPureSignalTxGainDb(int db)
@@ -1108,14 +1108,24 @@ void MetisClient::setLnaGainDb(int db)
     applyTxLnaGain();
 }
 
-void MetisClient::applyTxLnaGain()
+void MetisClient::applyTxLnaGain(bool alsoGainBank)
 {
     const Cc bank = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
-    if (bank == m_ccTxLnaGain)
+    if (bank == m_ccTxLnaGain) {
+        if (alsoGainBank)
+            queueOneShotIfRunning(currentGainBank());
         return;
+    }
     m_ccTxLnaGain = bank;
     // Ahead of the rotation, so a key straight after a gain change finds it.
+    // Releasing [15] makes ad9866.v load rx_gain at once, even keyed, so the
+    // new 0x0a must already be there; engaging it must land before 0x0a.
+    const bool releasing = (bank[3] & 0x80) == 0;
+    if (releasing)
+        queueOneShotIfRunning(currentGainBank());
     queueOneShotIfRunning(bank);
+    if (!releasing && alsoGainBank)
+        queueOneShotIfRunning(currentGainBank());
 }
 
 void MetisClient::setBandFilter(int ocFilterByte)

@@ -825,8 +825,10 @@ private:
     int m_psTxGainDb = -12;
     // DDC2 and DDC3 onto the TX NCO when PureSignal is on. Idempotent.
     void applyPureSignalNcos();
-    // Rebuild m_ccTxLnaGain; queue it once when it changed. Idempotent.
-    void applyTxLnaGain();
+    // Rebuild m_ccTxLnaGain; queue it once when it changed, with 0x0a ahead of
+    // it when [15] is released and behind it (alsoGainBank) when it engages.
+    // alsoGainBank queues 0x0a even when 0x0e is unchanged. Idempotent.
+    void applyTxLnaGain(bool alsoGainBank = false);
     // setReceiverCount()'s body once the new count is in m_params.
     void relayoutReceivers(int before);
     // Queue (or re-queue) the twenty-four VersaClock banks, and remove any

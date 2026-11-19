@@ -29,6 +29,7 @@
 #include <QString>
 #include <QThread>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -226,6 +227,76 @@ void testEdges(TxTestAuthority& authority)
     c.setMox(false, authority.operation);
     run(c, g, 8, false);
     check(g.appliedDb() == 5, "unkey: 5 dB, the receive gain");
+}
+
+// Every keyed packet after a gain change, not only the state eight packets on:
+// across each rotation phase, for one and four receivers, in both directions.
+void testKeyedChangePerPacket(TxTestAuthority& authority)
+{
+    std::printf("\n  a gain change while keyed, packet by packet\n");
+    struct Step { int from; int to; const char* what; };
+    const Step steps[] = {
+        {40, 4, "40 -> 4 dB keyed: never above +8 dB on any packet"},
+        {30, 4, "30 -> 4 dB keyed: never above +8 dB on any packet"},
+        {5, 30, "5 -> 30 dB keyed: never above +8 dB on any packet"},
+        {5, 48, "5 -> 48 dB keyed: never above +8 dB on any packet"},
+    };
+    for (const Step& s : steps) {
+        int worst = -99;
+        for (const int numRx : {1, 4}) {
+            for (int phase = 0; phase < 6; ++phase) {
+                MetisClient c;
+                c.setReceiverCount(numRx);
+                c.setLnaGainDb(s.from);
+                C::setStreaming(c);
+                c.enableTransmit(true);
+                GatewareGain g;
+                run(c, g, 8, false);
+                c.setMox(true, authority.operation);
+                run(c, g, 8 + phase, true);
+                c.setLnaGainDb(s.to);
+                for (int i = 0; i < 16; ++i) {
+                    run(c, g, 1, true);
+                    worst = std::max(worst, g.appliedDb());
+                }
+                c.setMox(false, authority.operation);
+            }
+        }
+        if (worst > kRxGainDuringTxCapDb) {
+            std::printf("    worst keyed gain: %d dB\n", worst);
+        }
+        check(worst <= kRxGainDuringTxCapDb, s.what);
+    }
+
+    // PureSignal dropping out while keyed (refreshPureSignalAvailability): the
+    // cap must land before a 0x0a that now carries the 48 dB receive gain.
+    int worst = -99;
+    for (const int numRx : {1, 4}) {
+        for (int phase = 0; phase < 6; ++phase) {
+            MetisClient c;
+            c.setReceiverCount(numRx);
+            c.setLnaGainDb(48);
+            c.setPureSignalTxGainDb(0);
+            C::setStreaming(c);
+            c.enableTransmit(true);
+            c.setPureSignal(true, 1);
+            GatewareGain g;
+            run(c, g, 8, false);
+            c.setMox(true, authority.operation);
+            run(c, g, 8 + phase, true);
+            c.setPureSignal(false, 1);
+            for (int i = 0; i < 16; ++i) {
+                run(c, g, 1, true);
+                worst = std::max(worst, g.appliedDb());
+            }
+            c.setMox(false, authority.operation);
+        }
+    }
+    if (worst > kRxGainDuringTxCapDb) {
+        std::printf("    worst keyed gain: %d dB\n", worst);
+    }
+    check(worst <= kRxGainDuringTxCapDb,
+          "PureSignal off while keyed at 48 dB: never above +8 dB on any packet");
 }
 
 void testOneShot()
@@ -457,6 +528,7 @@ int main(int argc, char** argv)
 
     testEncoding();
     testEdges(authority);
+    testKeyedChangePerPacket(authority);
     testOneShot();
     testBelowCapIsToday();
     testTxPathUnchanged(authority);
