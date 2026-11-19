@@ -51,7 +51,6 @@
 #include <QAction>
 #include <QMouseEvent>
 #include <QMenuBar>
-#include <QOperatingSystemVersion>
 #include <QPoint>
 #include <QPointer>
 #include <QRect>
@@ -148,18 +147,7 @@ int main(int argc, char** argv)
               "Linux frameless draws the bar's caption buttons");
     }
 
-    // ── Windows 10 whole-window client area (#6266) ──
     {
-        using OSV = QOperatingSystemVersion;
-        const Qt::WindowFlags expanded = WindowChrome::chromeFlags({}, true, QStringLiteral("windows"));
-        const Qt::WindowFlags system = WindowChrome::chromeFlags({}, false, QStringLiteral("windows"));
-        const OSV win10(OSV::Windows, 10, 0, 19045);
-        check(WindowChrome::claimsWholeWindowAsClient(expanded, win10),
-              "Windows 10 under the expanded chrome claims the whole window as client");
-        check(!WindowChrome::claimsWholeWindowAsClient(expanded, OSV(OSV::Windows, 10, 0, 22000)),
-              "Windows 11's first build keeps Qt's non-client border");
-        check(!WindowChrome::claimsWholeWindowAsClient(system, win10),
-              "Frameless Window off keeps the system frame on Windows 10");
         // With the whole window as client the frame is zero, so restoring a
         // client rect sets the window to exactly that rect (#6303 over #6266).
         const QRect whole(157, 44, 1115, 348);
@@ -170,11 +158,7 @@ int main(int argc, char** argv)
 
     // ── The non-client resize band, which Qt reports as zero (#7077) ──
     {
-        // Windows 11 keeps the band non-client under ExpandedClientAreaHint
-        // and safeAreaMargins() returns zero on left/right/bottom, so content
-        // laid out to the client rect is drawn under it. The band is derived
-        // from SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI; these
-        // are the figures measured on Windows 11 build 26300.
+        // An 8-device-pixel resize band at 100%, measured on Windows 11.
         const QMargins at100 = WindowChrome::nonClientBandInsets(8, 1.0);
         check(at100 == QMargins(8, 0, 8, 8),
               "a 8 px band at dpr 1.0 insets left, right and bottom by 8");

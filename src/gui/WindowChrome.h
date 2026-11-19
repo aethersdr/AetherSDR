@@ -3,7 +3,6 @@
 #include <QGuiApplication>
 #include <QJsonObject>
 #include <QMargins>
-#include <QOperatingSystemVersion>
 #include <QPoint>
 #include <QRect>
 #include <QSize>
@@ -75,15 +74,6 @@ inline bool usesNativeCaption(Qt::WindowFlags flags, const QString& platform)
 inline bool usesNativeCaption(const QWidget* window)
 {
     return usesNativeCaption(window->windowFlags(), QGuiApplication::platformName());
-}
-
-// Windows 10 only: Qt's expanded client area leaves a resize border on the
-// left, right and bottom as non-client, which Windows 10 paints as a light
-// strip (#6266), so MainWindow::nativeEvent claims the whole window as client
-// area. Windows 11 draws that border invisibly and keeps Qt's answer.
-inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags, const QOperatingSystemVersion& os)
-{
-    return flags.testFlag(Qt::ExpandedClientAreaHint) && os < QOperatingSystemVersion::Windows11;
 }
 
 // Windows expanded client area: the part of the window a point is on, for the
@@ -243,14 +233,9 @@ inline QRect savedNativeClientRect(const QJsonObject& doc, const QString& role, 
     return QRect(n[0], n[1], n[2], n[3]);  // invalid when empty
 }
 
-// Windows 11 keeps the resize border non-client under ExpandedClientAreaHint
-// and reports it as zero through safeAreaMargins(), so content laid out to the
-// client rect is drawn under it and lost (#7077). The band has to be derived
-// instead. Pure in its inputs so the Windows branch is testable on any host:
-// `bandDevicePx` is SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI and
-// `dpr` the window's devicePixelRatio, because the band is in device pixels
-// and a layout margin is in logical ones. Rounds up: a margin one device pixel
-// short still clips. The top is left to the caption's own row.
+// Windows 11's native resize band is in device pixels. Round up when
+// reserving logical space for controls so a fractional scale cannot clip
+// the last pixel (#7077). The caption occupies the top edge.
 inline QMargins nonClientBandInsets(int bandDevicePx, qreal dpr)
 {
     if (bandDevicePx <= 0 || dpr <= 0.0) {

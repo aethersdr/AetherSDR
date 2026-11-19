@@ -3912,18 +3912,13 @@ void MainWindow::restoreNativeClientRect(const QString& role)
 
 void MainWindow::applyNonClientBandInsets()
 {
-    // The band is only lost under the expanded client area: with native chrome
-    // the frame is outside the window rect entirely, and on Windows 10
-    // nativeEvent's WM_NCCALCSIZE branch already claims it back.
-    //
-    // Maximized is excluded: Windows pushes the band off-screen, so the client
-    // rect already covers the work area and an inset would leave a dead strip.
+    // Keep controls inside the visible resize frame on restored Windows 11
+    // windows. Maximized and fullscreen clients already fit the screen.
     QMargins insets;
 #ifdef Q_OS_WIN
     if (windowFlags().testFlag(Qt::ExpandedClientAreaHint) && !isFullScreen()
         && !isMaximized()
-        && !WindowChrome::claimsWholeWindowAsClient(windowFlags(),
-                                                    QOperatingSystemVersion::current())) {
+        && QOperatingSystemVersion::current() >= QOperatingSystemVersion::Windows11) {
         if (const HWND hwnd = reinterpret_cast<HWND>(winId())) {
             const UINT dpi = GetDpiForWindow(hwnd);
             const int band = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
@@ -4041,11 +4036,11 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
             WindowChrome::expandedFrameHit(point, rect, borderX, borderY, captionHeight));
         return true;
     }
-    // The whole window is client area, inset only while maximized so nothing
+    // Claim the resize band so Windows cannot paint a light strip between
+    // the DWM border and the client. Inset only while maximized so nothing
     // sits past the screen edge; the WM_NCHITTEST above keeps the edges resizable.
     if (msg && result && msg->message == WM_NCCALCSIZE && msg->wParam
-        && WindowChrome::claimsWholeWindowAsClient(windowFlags(),
-                                                   QOperatingSystemVersion::current())) {
+        && windowFlags().testFlag(Qt::ExpandedClientAreaHint)) {
         if (IsZoomed(msg->hwnd) && !isFullScreen()) {
             const UINT dpi = GetDpiForWindow(msg->hwnd);
             const int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
