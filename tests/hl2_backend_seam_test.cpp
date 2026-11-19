@@ -25,6 +25,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -102,6 +103,18 @@ struct Hl2TxGateTestAccess {
             b.m_swrGate.accept(0);
     }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
+    static quint64 setPureSignal(Hl2Backend& b, bool on)
+    {
+        return b.setPureSignalEnabled(on) ? b.m_psGeneration : 0;
+    }
+    static QVariantMap pureSignalFields(const Hl2Backend& b) { return b.pureSignalFields(); }
+    static void deliverPureSignalStatus(Hl2Backend& b, const Hl2PureSignalStatus& status)
+    {
+        QMetaObject::invokeMethod(b.m_pureSignal, [controller = b.m_pureSignal, status] {
+            emit controller->statusChanged(status);
+        }, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
+    }
     // Streaming as telemetryLinkState() judges it, with no socket: connected, and
     // the EP6 counter "just advanced" (hl2LinkStateFor() consults only those two
     // while connected; the held-by-other branch needs disconnected). Nothing in
@@ -919,6 +932,112 @@ static KeyOnReplay replayKeyOn(std::span<const Hl2KeyOnRaddr1> rows, int phaseMs
     return out;
 }
 
+#if AETHER_HL2_TX_TXA
+static void pureSignalOverloadAcrossQueuedDelivery()
+{
+    using MetisAccess = hl2::MetisClientTestAccess;
+    Hl2Backend backend;
+    Access::fakeStreamingLink(backend, true);
+    const quint64 generation = Access::setPureSignal(backend, true);
+    const auto feedbackLimit = [&] {
+        return Access::pureSignalFields(backend).value(QStringLiteral("feedbackLimit")).toInt();
+    };
+    hl2::MetisClient metis;
+    metis.enableTransmit(true);
+    MetisAccess::setStreaming(metis);
+    metis.setPureSignal(true, generation);
+    hl2::Hl2Telemetry window;
+    QObject::connect(&metis, &hl2::MetisClient::telemetryUpdated,
+                     [&](const hl2::Hl2Telemetry& t) { window = t; });
+    std::uint8_t sequence = 0;
+    const auto sample = [&](bool overload, bool closeWindow) {
+        std::array<std::uint8_t, hl2::kUsbPacketSize> packet{};
+        packet[0] = 0xEF; packet[1] = 0xFE; packet[2] = 0x01; packet[3] = 0x06;
+        packet[7] = sequence++;
+        packet[8] = packet[9] = packet[10] = 0x7F;
+        packet[12] = overload ? 0x03 : 0x02; // TX permitted, ADC overload in bit 24
+        if (closeWindow) {
+            MetisAccess::dueEmit(metis);
+        } else {
+            MetisAccess::holdEmit(metis);
+        }
+        MetisAccess::feedDatagram(metis, packet);
+    };
+    const TxTestAuthority tx;
+
+    sample(true, false); // still receiving
+    metis.setMox(true, tx.operation);
+    Access::setKeyedFlag(backend, true);
+    sample(false, true); // first window straddles key-down
+    check(window.adcOverloadSamples == 1 && window.psAdcGeneration == 0,
+          "PureSignal: a pre-key overload is counted but cannot be attributed to feedback");
+    Access::publish(backend, window);
+    check(feedbackLimit() == 0, "PureSignal: delivery after key-down cannot turn RX overload red");
+
+    sample(true, true);
+    const hl2::Hl2Telemetry keyedOverload = window;
+    check(keyedOverload.psAdcGeneration == generation,
+          "PureSignal: a whole keyed ADC window carries the enable cycle");
+    metis.setMox(false, tx.operation);
+    Access::setKeyedFlag(backend, false);
+    Access::publish(backend, keyedOverload);
+    check(feedbackLimit() == 2, "PureSignal: overload acquired while keyed can arrive after unkey");
+
+    sample(false, true);
+    Access::publish(backend, window);
+    check(feedbackLimit() == 2, "PureSignal: a receive window does not clear the warning");
+    Access::setPureSignal(backend, false);
+    const quint64 enabledAgain = Access::setPureSignal(backend, true);
+    check(feedbackLimit() == 0, "PureSignal: off/on clears overload before the next telemetry tick");
+    Access::publish(backend, keyedOverload);
+    check(feedbackLimit() == 0, "PureSignal: a queued window from before off/on stays retired");
+
+    metis.setPureSignal(true, enabledAgain);
+    metis.setMox(true, tx.operation);
+    sample(false, true);
+    sample(true, true);
+    Access::publish(backend, window);
+    check(feedbackLimit() == 2, "PureSignal: the new enable cycle can report overload");
+    sample(false, true);
+    check(window.adcSamples > 0 && window.adcOverloadSamples == 0,
+          "PureSignal: a clean window contains fresh ADC observations");
+    Access::publish(backend, window);
+    check(feedbackLimit() == 0, "PureSignal: a clean keyed window clears the warning");
+}
+
+static void pureSignalAttenuationReply()
+{
+    Hl2Backend backend;
+    Access::fakeStreamingLink(backend, true);
+    const quint64 generation = Access::setPureSignal(backend, true);
+    hl2::Hl2PureSignalStatus measured;
+    measured.generation = generation;
+    measured.enabled = true;
+    measured.attenuationDb = 31;
+    measured.feedbackLimit = 1;
+    Access::deliverPureSignalStatus(backend, measured);
+
+    QSignalSpy replies(&backend, &IRadioBackend::extensionResult);
+    const auto request = [&](const char* name, const QVariant& argument = {}) {
+        backend.invokeExtension(QStringLiteral("hl2"), QString::fromLatin1(name), 1, argument);
+        return replies.takeLast().at(1).toMap();
+    };
+    const auto limit = [](const QVariantMap& fields) {
+        return fields.value(QStringLiteral("feedbackLimit")).toInt();
+    };
+    check(limit(request("puresignal.autoatt", false)) == 1,
+          "PureSignal: a measurement at the same attenuation can remain visible");
+    const QVariantMap moved = request("puresignal.att", 30);
+    check(moved.value(QStringLiteral("attenuationDb")).toInt() == 30 && limit(moved) == 0,
+          "PureSignal: manual attenuation reply cannot carry the previous setting's limit");
+    Access::setPureSignal(backend, false);
+    Access::setPureSignal(backend, true);
+    Access::deliverPureSignalStatus(backend, measured);
+    check(limit(request("puresignal.att", 31)) == 0,
+          "PureSignal: queued calibration work from an earlier enable cycle stays retired");
+}
+#endif
+
 // TX:FWDPWR at key-on, replayed from recorded RADDR-1 words (Hl2KeyOnRaddr1Fixture.h)
 // at ten phases of the publish window. No transmitter, no radio: replayKeyOn
 // sets only the backend's keyed flag, which selects the window-peak branch.
@@ -1119,6 +1238,10 @@ int main(int argc, char** argv)
     swrKeyOnWindowsEveryOver();
     forwardPowerSkippedHealthRow();
     swrGateHealthRows();
+#if AETHER_HL2_TX_TXA
+    pureSignalOverloadAcrossQueuedDelivery();
+    pureSignalAttenuationReply();
+#endif
     forwardPowerKeyOnReplay();
     panAveragingSeam();
     restoredDiguTxPassband();
