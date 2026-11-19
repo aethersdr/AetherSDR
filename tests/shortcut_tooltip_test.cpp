@@ -154,6 +154,59 @@ private slots:
         QCOMPARE(mox->toolTip(), QStringLiteral("(T) ") + kVoxReason);
         QCOMPARE(mox->accessibleDescription(), QStringLiteral("(T) ") + kVoxReason);
     }
+
+    void focusReReadsARewrittenDescription()
+    {
+        Rig rig(true);
+        QPushButton* mox = rig.button("mox_toggle", kMoxText);
+        rig.tips->refresh();
+        mox->setAccessibleDescription(kTuneText);   // no event reaches the filter
+        QFocusEvent in(QEvent::FocusIn, Qt::TabFocusReason);
+        QCoreApplication::sendEvent(mox, &in);
+        QCOMPARE(mox->accessibleDescription(), kTuneText + QStringLiteral(" (T)"));
+    }
+
+    void tooltipEventReReadsARewrittenDescription()
+    {
+        Rig rig(true);
+        QPushButton* mox = rig.button("mox_toggle", kMoxText);
+        rig.tips->refresh();
+        mox->setAccessibleDescription(kTuneText);
+        QHelpEvent help(QEvent::ToolTip, QPoint(1, 1), mox->mapToGlobal(QPoint(1, 1)));
+        QCoreApplication::sendEvent(mox, &help);
+        QCOMPARE(mox->toolTip(), kTuneText + QStringLiteral(" (T)"));
+    }
+
+    void aDisabledParentDoesNotMakeTheControlUnavailable()
+    {
+        Rig rig(true);
+        QPushButton* mox = rig.button("mox_toggle", kMoxText);
+        rig.tips->refresh();
+        rig.root.setEnabled(false);
+        QCoreApplication::processEvents();
+        QCOMPARE(mox->accessibleDescription(), kMoxText + QStringLiteral(" (T)"));
+    }
+
+    void aControlWithNoTextsStillNamesItsKey()
+    {
+        Rig rig(true);
+        QPushButton* atu = rig.button("mox_toggle", QString());
+        rig.tips->refresh();
+        QCOMPARE(atu->toolTip(), QStringLiteral("(T)"));
+        QCOMPARE(atu->accessibleDescription(), QStringLiteral("(T)"));
+    }
+
+    // No owner disables a marked control without writing a reason today;
+    // this pins the order for one that does.
+    void disablingWithoutATextChangeMovesTheKeyFirst()
+    {
+        Rig rig(true);
+        QPushButton* mox = rig.button("mox_toggle", kMoxText);
+        rig.tips->refresh();
+        mox->setEnabled(false);
+        QCoreApplication::processEvents();
+        QCOMPARE(mox->accessibleDescription(), QStringLiteral("(T) ") + kMoxText);
+    }
 };
 
 int main(int argc, char** argv)
