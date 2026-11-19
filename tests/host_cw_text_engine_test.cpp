@@ -650,6 +650,44 @@ void testWaitingRefusedAtItsTurn()
     check("turn: and does not key later", f.edges.size() == before);
 }
 
+// #7338: the station key objection is asked once per message, at its Cwx
+// admission, as for radio-side CWX; never per element, and again for a
+// message that waited for its turn.
+void testKeyObjectionOncePerMessage()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    Sender b(f.radio);
+    QObject owner;
+    QString objection = QStringLiteral("station objects");
+    f.radio.addKeyObjection(&owner, [&objection] { return objection; });
+    int notices = 0;
+    int dropped = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         notices += key.startsWith(QLatin1String("key-objection:")) ? 1 : 0;
+                         dropped += key == QLatin1String("cw-text-queued-dropped") ? 1 : 0;
+                     });
+    f.radio.transmitModel().setCwSpeed(30);
+    check("objection: a message is refused", !a.send(QStringLiteral("E")));
+    pumpFor(200);
+    check("objection: no edge, one notice", f.edges.empty() && notices == 1);
+    objection.clear();
+    check("objection: lifted, a message is accepted", a.send(QStringLiteral("TEST TEST")));
+    check("objection: B waits behind it", b.send(QStringLiteral("E")));
+    check("objection: the first key-down arrives", pumpUntil([&] { return !f.edges.empty(); }, 2000));
+    objection = QStringLiteral("station objects");
+    const bool ran = pumpUntil([&] { return f.edges.size() >= 24; }, 5000);
+    check("objection: raised mid-message, every element still keys (not asked per element)",
+          ran && f.edges.size() == 24 && alternates(f.edges));
+    pumpFor(300);
+    check("objection: B is asked at its turn and refused, nothing more keys",
+          f.edges.size() == 24 && dropped == 1);
+    check("objection: the next message is asked again and refused", !a.send(QStringLiteral("E")));
+    pumpFor(200);
+    check("objection: no edge for it", f.edges.size() == 24);
+}
+
 // A route-less CwxModel::send() has no sender request to key under: refused, as today.
 void testRoutelessSendRefused()
 {
@@ -709,6 +747,7 @@ int main(int argc, char** argv)
     testClearAll();
     testPaddleTakesOver();
     testWaitingRefusedAtItsTurn();
+    testKeyObjectionOncePerMessage();
     testRoutelessSendRefused();
     testRadioSideKeyerUnchanged();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
