@@ -112,6 +112,14 @@ all ten session workers. Its fixture removes its own entry; the unchanged
 64-byte ownership journal remains. Ordinary successor reconciliation is
 prepared but unexecuted at the operator's pause, so this case is incomplete.
 
+The later [reconciliation scope](./RADIO-FOREIGN-ARP-RECONCILIATION-QUALIFICATION.json)
+verifies two fresh IQ frames after an explicit successor, normal Stop, all ten
+new workers retired, no fixed ARP entry and an empty journal. The overall run
+still fails its unchanged-GUI-maximum assertion: the client can replace the
+radio's configured limit with a slice's PA rating. The separate
+[model regression](./REPORTED-POWER-LIMIT-QUALIFICATION.json) reproduces that
+overwrite and verifies a host fix; the running desktop has not received it.
+
 The [fixed capture constructor](./capture/README.md) builds the packet socket
 inside the same trusted executable as its strict ring worker. Its current
 profile is FLEX-8600 only; ARMv7 compilation does not establish a FLEX-6000

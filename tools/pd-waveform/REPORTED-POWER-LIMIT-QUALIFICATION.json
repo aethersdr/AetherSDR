@@ -1,0 +1,57 @@
+{
+  "recorded_utc": "2026-11-19T18:31:25.721205+00:00",
+  "production_ready": false,
+  "host_regression_passed": true,
+  "deployed_to_running_GUI": false,
+  "status": "Live8600 wire reports max_power_level10 followed by slice max_internal_pa_power100; the existing model can overwrite the configured limit with that PA rating. Four injected-ingress regressions fail against original source. A narrow guard preserves a reported limit and later real limit changes;21existing suite cases pass. No new radio or RF action for the fix.",
+  "fix": "Require !haveMaxPowerLevel before using an existing per-slice PA-rating fallback. No reported configured limit is overwritten; no new command, capability, family branch or default is introduced.",
+  "authority": {
+    "FlexLib_Radio_cs_SHA256": "5cc53b508645de15500f3b579c144f79b1ef4f7c00b637b45b4c3329002dbb36",
+    "FlexLib_Slice_cs_SHA256": "c8ae252d862c1cd52ed3cf5d91e0195d40d747203b0fa102b019cdaf7e2e25d5",
+    "separate_properties": [
+      "MaxPowerLevel",
+      "MaxInternalPaPowerWatts"
+    ],
+    "source_note": "FlexLib Radio ParseTransmitStatus stores max_power_level separately from max_internal_pa_power. Slice MaxInternalPaPowerWatts reports the physical PA rating."
+  },
+  "model_source_before_SHA256": "b9667e177c10cd0b505121e056dece3959df6d577eed8a5066f4291b84116611",
+  "model_source_after_SHA256": "42a23258857cba73347f653693cd30d4d5b8419ef0cd7eb1798c0770f4fc8027",
+  "regression_source_SHA256": "5d026adb6790c2dd9fd8a0bdba65d99db4a1a9ef0b8e971db815385a1fe379d8",
+  "regression": {
+    "limits": [
+      0,
+      10,
+      25,
+      100
+    ],
+    "original_failures": 4,
+    "fixed_full_suite_passes": 21,
+    "fixed_failures": 0,
+    "uses_injected_production_status_ingress": true,
+    "new_socket_or_fake_peer": false
+  },
+  "static_head_checks_passed": [
+    "engine boundary",
+    "touchpoint manifest",
+    "capability records",
+    "command plane"
+  ],
+  "user_docs_build_passed": true,
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/reported-power-limit-components.tar.gz",
+    "bytes": 18781,
+    "sha256": "8b45b3037daabbec7b3fa2b8a7369cc85000da134df53dba01cc072895ff62a7",
+    "members": 25,
+    "all_members_verified": true
+  },
+  "negative_evidence_retained": [
+    "Initial isolated test link failed because the existing build had no empty AUTOMOC object for this target. That preparation failure is preserved. Separate before/after builds compile the real changed model/test and link with existing core objects; original4failure and fixed21pass results are not inferred from that linker failure.",
+    "Original live successor overall result remains false on100to10 GUImaximum equality. The separately verified resource recovery/cleanup does not erase this outcome."
+  ],
+  "scope_limits": [
+    "Host-only model fix; the existing e519GUI remains unchanged and no fixed live-desktop qualification is claimed.",
+    "No new app/native full packaging, Windows/macOS run, RF, source arm, software reboot or installation was performed.",
+    "This fixes a configured-limit overwrite, not the historical natural128sample/cold bypass or remaining completeP1-P10 production gates."
+  ],
+  "RF_commands": []
+}

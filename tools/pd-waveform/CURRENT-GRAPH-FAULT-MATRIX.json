@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T16:55:39.654764+00:00",
+  "recorded_utc": "2026-11-19T18:30:38.693800+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
@@ -126,28 +126,38 @@
     },
     {
       "case": "Foreign fixed-entry conflicts, replacement and ownership-preserving cleanup",
-      "state": "local_kernel_preexisting_radio_and_active_preservation_retirement_scopes_passed_active_successor_pending",
+      "state": "resource_reconciliation_scope_passed_overall_successor_GUI_limit_assertion_failed_model_fix_host_only",
       "evidence": [
         "FOREIGN-ARP-KERNEL-COMPONENT-QUALIFICATION.json",
         "RADIO-FOREIGN-ARP-PREEXISTING-QUALIFICATION.json",
-        "RADIO-FOREIGN-ARP-ACTIVE-PARTIAL-QUALIFICATION.json"
+        "RADIO-FOREIGN-ARP-ACTIVE-PARTIAL-QUALIFICATION.json",
+        "RADIO-FOREIGN-ARP-RECONCILIATION-QUALIFICATION.json"
       ],
-      "limits": "Eight local kernel component cases; one installed8600 preexisting conflict refusal/preservation plus freshIQ successor; one active receive-only replacement survives Stop and all10 workers retire. Fixture removes its own replacement;64byte journal stays unchanged. Active-case successor/reconciliation prepared but not executed at operator pause. Concurrent CAS, Linux2.6 and keyed foreign-entry scope remain open."
+      "limits": "Eight local kernel cases; installed8600 preexisting conflict plus freshIQ successor; one active receive-only replacement preservation/Stop/all10worker retirement and resumed same-boot successor reconciliation/twofreshIQ/normalStop/journal0/all10newworkers gone. Earlier partial and failed successor remain preserved. Host model fix passes21cases; live fixed-GUI scope pending. Concurrent CAS, Linux2.6 and keyed foreign-entry scope remain open."
     },
     {
       "case": "Managed local sign-out retires active unarmed local DAX IQ session and preserves local owner",
       "state": "one_current_graph_receive_only_case_and_explicit_fresh_GUI_successor_passed",
       "evidence": "MANAGED-AUTHORITY-RECEIVE-QUALIFICATION.json",
       "limits": "One local-only case with no saved tailnet identity, no RF/source arm. One primary/all12 old session processes gone before any GUI Stop, unchanged owner hash and installation/effective sharing, then one explicit fresh GUI Start with2freshIQ frames and normal Stop/all10 workers gone. Initial wrong-three-control audit retained. Does not qualify token revocation, lost-owner recovery/rotation, joined tailnet or RF."
+    },
+    {
+      "case": "Slice PA rating overwrites already-reported configured transmit maximum",
+      "state": "live_wire_and_four_original_failures_causal_guard_fix_passes21_host_cases_live_fix_pending",
+      "evidence": [
+        "REPORTED-POWER-LIMIT-QUALIFICATION.json",
+        "RADIO-FOREIGN-ARP-RECONCILIATION-QUALIFICATION.json"
+      ],
+      "limits": "Radio max_power_level10 followed by slice max_internal_pa_power100 can publish GUI100; renewed transmit status restores10. Original receive successor fails its model-maximum invariant and remains false; independent resource reconciliation passes. Narrow model guard is host-tested, not deployed or full-platform-qualified."
     }
   ],
   "next_available_case": {
-    "state": "paused_by_operator_no_RF_authorization",
-    "purpose": "No new test until operator resumes. Next prepared receive-only step is ordinary GUI successor/reconciliation after active foreign replacement.",
+    "state": "active_client_limit_fix_live_scope_pending_no_RF_authorized",
+    "purpose": "Continue fullP1-P10 remaining installation, credential and final-graph qualification. Active foreign resource reconciliation scope verified, overall successor failed on GUImaximum invariant; live qualification of the separately fixed model remains pending.",
     "evidence": [
       "DSP-API-LOSS-FIXED-DESKTOP-QUALIFICATION.json"
     ],
-    "authority_constraint": "Goal paused. Radio last observed unkeyed in USB with cleanup_unconfirmed; no fixedARP entry or session workers remain, and the64byte ownership journal is retained. No automatic RF/source rearm or software reboot."
+    "authority_constraint": "No automatic RF/source rearm or software reboot. Latest successor stopped in USB with noARP, journal0 and all session workers retired. RFsetting5 unchanged; GUImaximum100to10 invariant failed. Retained wire reports configured limit10 and PA rating100; no limit/key write in retained GUI ring. Model fix is host-only."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",

@@ -1,0 +1,122 @@
+{
+  "recorded_utc": "2026-11-19T18:30:38.693800+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "goal_status": "active",
+  "passed_preservation_and_retirement_scope": true,
+  "full_case_complete": false,
+  "status": "One installed8600 receive-only active foreign replacement survives GUI Stop; all10 workers retire while the journal remains unchanged. After operator resume and fresh same-boot audit, one ordinary GUI successor reconciles the retained journal, captures2fresh localDAXIQ frames and stops normally; final audit confirms all10 new workers gone, noARP and journal0. Overall successor result remains false on the GUImaximum invariant; model fix is host-only. No RF or source arm.",
+  "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "desktop": {
+    "pid": 3233869,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+    "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+    "development_native_origin": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "FDX": false,
+  "RF_commands": [],
+  "source_arm_actions": 0,
+  "GUI_Start_actions": 1,
+  "GUI_Stop_actions": 1,
+  "baseline_local_DAX_IQ": {
+    "bytes": 131072,
+    "SHA256": "29a6caec57898c2a7badc8da5732e068996c94081bcefb5c1c1383dcb9fa5ac1",
+    "channel": 4
+  },
+  "foreign_tuple": {
+    "mac": "02:aa:bb:cc:dd:ee",
+    "family": 1,
+    "flags": 6
+  },
+  "fixture_mutations": [
+    {
+      "action": "replace_verified_owned_neighbor_with_test_neighbor",
+      "IP": "172.30.2.1",
+      "interface": "eth0.10",
+      "MAC": "02:aa:bb:cc:dd:ee",
+      "uid": 65534
+    },
+    {
+      "action": "remove_own_test_neighbor",
+      "IP": "172.30.2.1",
+      "interface": "eth0.10",
+      "MAC": "02:aa:bb:cc:dd:ee",
+      "uid": 65534
+    }
+  ],
+  "fixture_mutation_UID": 65534,
+  "fixture_only_effective_capability": "NET_ADMIN",
+  "fixture_final_capabilities_zero": true,
+  "foreign_tuple_preserved_through_Stop": true,
+  "observed_session_workers_absent": 10,
+  "ordinary_unprivileged_controls_remaining": 3,
+  "terminal_status": {
+    "body": {
+      "available": false,
+      "state": "cleanup_unconfirmed"
+    },
+    "complete": true,
+    "http_status": 200
+  },
+  "ARP_absent_after_fixture_cleanup": true,
+  "journal_retained_bytes": 64,
+  "journal_SHA256": "2fdde4552683f382c211b78ba1371323dda5f5e5a45261346683a8305f1902f9",
+  "all_four_diagnostic_files_preserved_verified_and_removed": true,
+  "temporary_diagnostic_helpers_removed": true,
+  "ordinary_GUI_successor": {
+    "prepared": true,
+    "executed": true,
+    "qualified_resource_reconciliation_scope": true,
+    "overall_run_passed": false,
+    "explicit_Start_actions": 1,
+    "fresh_DSP_PID": 32562,
+    "prior_DSP_PID": 31878,
+    "capture_count": 2,
+    "capture_bytes_each": 131072,
+    "normal_Stop_passed": true,
+    "session_workers_absent": 10,
+    "ordinary_unprivileged_controls_remaining": 3,
+    "final_ARP_absent": true,
+    "final_journal_bytes": 0
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/radio-foreign-arp-reconciliation-components.tar.gz",
+    "bytes": 140516,
+    "sha256": "d481f553ff1a18ee7cd04490e63fdf1fbc77ff1739651ed0d87e95f67188bcad",
+    "members": 101,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Resource reconciliation is independently verified, but the overall successor run remains failed on the GUImaximum invariant. No full-case, fixed-live-GUI, fullP5 or production pass is claimed. No RF/source arm occurred.",
+    "Controlled serialized replacement is not an atomic compare/delete proof against unrelated concurrent administrators. Linux2.6/actual6300 and keyed foreign-entry coverage remain unqualified.",
+    "The foreign Stop terminal cleanup_unconfirmed and unchanged64byte journal remain in the original receipts. Only the later explicit successful successor/normalStop clears the journal; no laboratory journal repair or service restart was performed.",
+    "Existing broad diagnostic bootstrap was used for fixed audits and fixture. All temporary jobs/carriers retired; fixture mutated the fixed tuple only after UID65534/NET_ADMIN-only drop and finally dropped all capabilities. This does not qualify that broad bridge as a shipping installer.",
+    "The GUI is the existing e519/276e instance. Later56e046118 warning text was separately compiled and GUI-fixture tested but not deployed into this running instance. No software reboot, new app instance, AetherTX or processing-settings restore occurred.",
+    "All remaining fullP1-P10 actual6000 installation/hardware, credential recovery, natural128/cold cause, repeated/raw/extended RF, final stock comparison and production distribution/review gates remain open. Prior single5W authorization consumed; no automatic RF/source rearm."
+  ],
+  "passed_resource_reconciliation_scope": true,
+  "overall_successor_run_passed": false,
+  "successor_capture_SHA256": [
+    "c170da154e6bb835011103d65affe306b138275be270d892d706b5705bec1cdf",
+    "175d7d8dbc753dba66fbd2ff32e446e8a4b3cdfa35f0a2af40cac1da07154a59"
+  ],
+  "power_observations": {
+    "GUI_maximum_before": 100,
+    "GUI_maximum_after": 10,
+    "RF_setting_before_and_after": 5,
+    "recorded_limit_or_positive_key_writes": 0,
+    "RF_commands": []
+  },
+  "original_partial_report_preserved": "RADIO-FOREIGN-ARP-ACTIVE-PARTIAL-QUALIFICATION.json",
+  "negative_evidence_retained": [
+    "Initial shared RF fixture read-only preflight rejected GUImaximum100 versus required10 before any Start. A separate receive-only command allowlist was used; original RF fixture and product guards unchanged.",
+    "The ordinary successor captures2freshIQ frames and stops successfully, but its overall result remains false because the GUImaximum invariant changes100to10. Raw wire distinguishes radio max_power_level10 from slice max_internal_pa_power100; the existing client overwrites the reported limit from the PA rating. No configured-limit or positive-key write exists in the retained GUI ring. This is an observed client-model defect, not proof that radio configuration changed.",
+    "A separate host regression reproduces that overwrite in4cases and its narrow model guard fix passes21full-suite cases. The fix is not deployed in the existing e519GUI, so no live fixed-desktop pass is claimed."
+  ]
+}

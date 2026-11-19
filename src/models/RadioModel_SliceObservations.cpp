@@ -202,7 +202,8 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
         emit slotOccupancyChanged(id);
         if (!currentSlice()) { return; }
     }
-    if (observation.internalPaPower
+    // A slice's PA rating cannot replace a reported transmit power limit.
+    if (!m_transmitModel.haveMaxPowerLevel() && observation.internalPaPower
         && *observation.internalPaPower > m_transmitModel.maxPowerLevel()) {
         m_transmitModel.setMaxPowerLevel(*observation.internalPaPower);
         if (!currentSlice()) { return; }

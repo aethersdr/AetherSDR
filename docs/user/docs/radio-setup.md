@@ -122,6 +122,9 @@ The table shows the current TX profile's values and follows the radio while it's
 | **Receive** | Frequency offset (GPSDO detection, manual calibration) and the 10 MHz reference source |
 | **Filters** | Voice, CW and Digital filter sharpness (Low Latency ↔ Sharp Filters) with Auto buttons, and **Use Low Latency Filters for Digital Modes** |
 
+On FlexRadio, **Max Power** follows the radio's reported transmit limit. A slice's
+PA power rating does not replace a limit already reported by the radio.
+
 ### CONTROLLERS & HARDWARE
 
 | Page | What it covers |

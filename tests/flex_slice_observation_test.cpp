@@ -6,6 +6,7 @@
 #include "core/backends/flex/WanConnection.h"
 #include "core/control/RadioResourceAdapter.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QCoreApplication>
 #include <QEvent>
@@ -63,6 +64,35 @@ struct Fixture {
 class FlexSliceObservationTest final : public QObject {
     Q_OBJECT
 private slots:
+    void slicePaRatingPreservesReportedTransmitLimit_data()
+    {
+        QTest::addColumn<int>("limit");
+        for (const int limit : {0, 10, 25, 100}) {
+            QTest::newRow(qPrintable(QString::number(limit))) << limit;
+        }
+    }
+
+    void slicePaRatingPreservesReportedTransmitLimit()
+    {
+        QFETCH(int, limit);
+        Fixture f;
+        f.report(0, kPresent);
+        f.radio.handleStatusForTest(QStringLiteral("transmit"),
+            {{QStringLiteral("max_power_level"), QString::number(limit)}});
+        QCOMPARE(f.radio.transmitModel().maxPowerLevel(), limit);
+        QVERIFY(f.radio.transmitModel().haveMaxPowerLevel());
+
+        f.report(0, {{QStringLiteral("max_internal_pa_power"), QStringLiteral("100")}});
+        QCOMPARE(f.radio.transmitModel().maxPowerLevel(), limit);
+
+        const int changedLimit = limit == 25 ? 10 : 25;
+        f.radio.handleStatusForTest(QStringLiteral("transmit"),
+            {{QStringLiteral("max_power_level"), QString::number(changedLimit)}});
+        QCOMPARE(f.radio.transmitModel().maxPowerLevel(), changedLimit);
+        f.report(0, {{QStringLiteral("max_internal_pa_power"), QStringLiteral("100")}});
+        QCOMPARE(f.radio.transmitModel().maxPowerLevel(), changedLimit);
+    }
+
     void parserRejectsMalformedIdentityAndPreservesAbsence()
     {
         for (const QString& object : {QStringLiteral("slice -1"), QStringLiteral("slice 2147483648"),
