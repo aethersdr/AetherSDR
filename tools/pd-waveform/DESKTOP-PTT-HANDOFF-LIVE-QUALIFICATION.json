@@ -1,0 +1,55 @@
+{
+  "recorded_utc": "2026-11-19T00:20:58.921262+00:00",
+  "status": "One live silent desktop software-PTT cycle released the handoff barrier; source arm was accepted and receive-only analyzer preparation completed on the same desktop without reconnecting.",
+  "implementation_commit": "f5777d5ea936603af41e9ad84aff6cbacbe0f81d",
+  "instance": {
+    "pid": 2304417,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "360fc9ae16cd6ff973ad263f3de040ef6b6da621818331700222296a9ea903c9",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0,
+    "source_patch_sha256": "6352f76b605acb05d1763ff285d4cf8dc7fe4e07a500f55ff39ec8b28ae005dc"
+  },
+  "installed_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "source_arm_enabled_after_PTT": true,
+  "analyzer_receive_check_ready_without_reconnect": true,
+  "positive_GUI_key_actions": 1,
+  "requested_PTT_seconds": 1.0,
+  "LP_peak_W": 0.0,
+  "nominal_power_setting_W": 5,
+  "configured_maximum_W": 10,
+  "FDX": false,
+  "excitation": "Silent temporary PC-mic route; this was ownership qualification, not an RF linearity test.",
+  "feedback": {
+    "channel": 4,
+    "failed": false,
+    "gui_handle": 1578599844,
+    "pan": 1073741824,
+    "transport": "local_dax_iq",
+    "valid": true
+  },
+  "radio_idle_and_owned_sessions_stopped": true,
+  "independent_guard_passed": true,
+  "native_independent_cutoff_ms": 14000,
+  "desktop_reconnects_during_test": 0,
+  "root_bridge_used": false,
+  "radio_reboots": 0,
+  "AetherTX_launched": false,
+  "recipe_failure_preserved": "The first receive-only step correctly stayed disabled because its forward-power limit was zero. The original job remains failed. A separate receive-only follow-up supplied5W and passed; no PTT retry or reconnect was performed.",
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-handoff-live-components.tar.gz",
+    "bytes": 168855,
+    "sha256": "f2bd0612c4fb068353860b8c623f2b0c0e6ef716fedb16516f5a8ce5e861ee4a",
+    "members": 45,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "One normal software-PTT cycle only; no RF linearity or endurance result is claimed here.",
+    "Mixed CW/TUNE/ATU, repeated or ambiguous writes and missing complete evidence retain their handoff barriers.",
+    "No original-socket raw command trace was emitted by desktop logging; live GUI source-arm admission and source readback plus the retained observer/guard records support this workflow proof. Exact receipt/token mechanics are covered by the socket-free composition tests.",
+    "No new radio installation, reboot, native-platform runtime qualification or full P1-P10 completion."
+  ],
+  "production_ready": false
+}
