@@ -187,6 +187,12 @@ public:
             server.m_io->dispatchText(socket.id());
         }
     }
+    // The I/O worker captures the next text's request but holds it from the
+    // model, as a busy event loop would.
+    static void holdNativeTciText(TciServer& server, TciClient& socket)
+    {
+        server.m_io->m_clients[socket.id()].textInFlight = true;
+    }
     static TxCoordinator::Request tciClientRequest(TciServer& server, TciClient& socket)
     { return server.clientStateFor(&socket)->pttRequest; }
     static TxCoordinator::Context tciMedia(const TciServer& server) { return server.m_tciTxContext; }
@@ -3058,6 +3064,45 @@ void txTimeoutLatchThroughProducers()
         AetherTest::pumpFor(1400);
         check(f.commands.contains("mox:on"), "TOT/TCI native: and the next trx true keys");
         send("trx:0,false;");
+    }
+    {
+        // oz457 on HL2 (4 of 11 expiries re-keyed): a repeat trx true captured
+        // on the I/O path just before the stop is invalidated by it, refused
+        // before admission and retired through retireTrxRequest(). That
+        // teardown is not a release, so the client's next repeat is refused.
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        const auto send = [&](const char* text) {
+            TxOperationIntegrationTestAccess::nativeTciText(server, socket, QString::fromLatin1(text));
+            drain();
+            AetherTest::pumpFor(20);
+        };
+        send("trx:0,true;");
+        check(f.commands.contains("mox:on"), "TOT/TCI captured: the client keys through the IO path");
+        TxOperationIntegrationTestAccess::holdNativeTciText(server, socket);
+        TxOperationIntegrationTestAccess::nativeTciText(server, socket, QStringLiteral("trx:0,true;"));
+        check(TxOperationIntegrationTestAccess::queuedNativeTciRequest(server, socket).valid(),
+              "TOT/TCI captured: the repeat is captured on the IO path, not yet promoted");
+        expire(f, now);
+        check(f.radio.txTimeoutLatched()
+                  && !TxOperationIntegrationTestAccess::queuedNativeTciRequest(server, socket).valid(),
+              "TOT/TCI captured: the time-out stop latches and invalidates the captured repeat");
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::releaseNativeTciText(server, socket, false);
+        drain();
+        AetherTest::pumpFor(1400);   // the refusal barrier ends and drains
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI captured: the stale repeat is refused and its retirement is not a release");
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI captured: the client's next repeated trx true is still refused");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(), "TOT/TCI captured: the client's trx false releases");
     }
 #endif
     {
