@@ -1,0 +1,94 @@
+{
+  "recorded_utc": "2026-11-19T16:55:39.654764+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "goal_status": "paused",
+  "passed_preservation_and_retirement_scope": true,
+  "full_case_complete": false,
+  "status": "One installed8600 receive-only active-session foreign-neighbor replacement survives explicit GUI Stop. All10 session workers retire; fixture removes only its own replacement; unchanged64byte ownership journal remains. Fresh ordinary successor/reconciliation is prepared but unexecuted because the operator paused work.",
+  "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "desktop": {
+    "pid": 3233869,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+    "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+    "development_native_origin": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "FDX": false,
+  "RF_commands": [],
+  "source_arm_actions": 0,
+  "GUI_Start_actions": 1,
+  "GUI_Stop_actions": 1,
+  "baseline_local_DAX_IQ": {
+    "bytes": 131072,
+    "SHA256": "29a6caec57898c2a7badc8da5732e068996c94081bcefb5c1c1383dcb9fa5ac1",
+    "channel": 4
+  },
+  "foreign_tuple": {
+    "mac": "02:aa:bb:cc:dd:ee",
+    "family": 1,
+    "flags": 6
+  },
+  "fixture_mutations": [
+    {
+      "action": "replace_verified_owned_neighbor_with_test_neighbor",
+      "IP": "172.30.2.1",
+      "interface": "eth0.10",
+      "MAC": "02:aa:bb:cc:dd:ee",
+      "uid": 65534
+    },
+    {
+      "action": "remove_own_test_neighbor",
+      "IP": "172.30.2.1",
+      "interface": "eth0.10",
+      "MAC": "02:aa:bb:cc:dd:ee",
+      "uid": 65534
+    }
+  ],
+  "fixture_mutation_UID": 65534,
+  "fixture_only_effective_capability": "NET_ADMIN",
+  "fixture_final_capabilities_zero": true,
+  "foreign_tuple_preserved_through_Stop": true,
+  "observed_session_workers_absent": 10,
+  "ordinary_unprivileged_controls_remaining": 3,
+  "terminal_status": {
+    "body": {
+      "available": false,
+      "state": "cleanup_unconfirmed"
+    },
+    "complete": true,
+    "http_status": 200
+  },
+  "ARP_absent_after_fixture_cleanup": true,
+  "journal_retained_bytes": 64,
+  "journal_SHA256": "2fdde4552683f382c211b78ba1371323dda5f5e5a45261346683a8305f1902f9",
+  "all_four_diagnostic_files_preserved_verified_and_removed": true,
+  "temporary_diagnostic_helpers_removed": true,
+  "ordinary_GUI_successor": {
+    "prepared": true,
+    "executed": false,
+    "qualified": false,
+    "script": "recover-active-successor.py",
+    "reason": "Operator pause"
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/radio-foreign-arp-active-partial-components.tar.gz",
+    "bytes": 61629,
+    "sha256": "c25563b85366981bf020361ebe9187da4af2630db022c7e8a7329d6645f3e6ce",
+    "members": 53,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "One receive-only ownership-preservation/retirement scope only. Retained-journal reconciliation, successor IQ and final journal clearing remain untested in this case. No full-case or production pass is claimed.",
+    "Replacement is a serialized controlled fixture. It does not establish atomic compare/delete against unrelated concurrent administrators, Linux2.6 behavior, or keyed foreign-entry faults.",
+    "cleanup_unconfirmed is the observed product status and is preserved. The retained64byte journal is intentional evidence, not an active privileged process or packet socket.",
+    "Existing broad diagnostic bootstrap was used for bounded fixture and fixed read/cleanup jobs. Fixture drops to UID65534/NET_ADMIN alone before replacement and drops all capabilities after cleanup. This is not shipping-installer qualification.",
+    "Prepared recovery scripts are archived as unexecuted. No further GUI Start, RF, source arm, reboot, persistent installation or processing-settings restore was performed after the pause.",
+    "The complete P1-P10 objective remains unfinished and paused. Actual6300 adapter/hardware, cold/alignment cause, remaining fault/credential coverage, repeated RF/final stock comparison and production release gates remain open."
+  ]
+}

@@ -103,8 +103,14 @@ After the bounded fixture removes its own entry, an explicit GUI successor
 captures two fresh local DAX IQ frames with FDX off and stops cleanly. The
 [qualification](./RADIO-FOREIGN-ARP-PREEXISTING-QUALIFICATION.json) preserves
 the constructor's conservative exit9 and the audit's incorrect exit8
-expectation. Active-session replacement, unrelated concurrent writes,
+expectation. Full active-session replacement/recovery, unrelated concurrent writes,
 Linux2.6 and keyed foreign-entry behavior remain unqualified.
+
+A separate [partial active-session test](./RADIO-FOREIGN-ARP-ACTIVE-PARTIAL-QUALIFICATION.json)
+verifies receive-only replacement preservation through Stop and retirement of
+all ten session workers. Its fixture removes its own entry; the unchanged
+64-byte ownership journal remains. Ordinary successor reconciliation is
+prepared but unexecuted at the operator's pause, so this case is incomplete.
 
 The [fixed capture constructor](./capture/README.md) builds the packet socket
 inside the same trusted executable as its strict ring worker. Its current
