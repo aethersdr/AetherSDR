@@ -126,6 +126,15 @@ captures and normal Stop/exact cleanup pass on the adopted desktop. This does
 not change the original failed result or qualify RF, repeated foreign-entry
 faults, other platforms or the complete production workflow.
 
+A fresh [corrected-desktop foreign-entry case](./RADIO-FOREIGN-ARP-FIXED-DESKTOP-QUALIFICATION.json)
+passes the complete receive-only replacement, preservation and recovery sequence.
+Stop preserves the replacement and ownership journal; after the fixture removes
+its own entry, an explicit successor captures two fresh IQ frames and clears the
+journal on normal Stop. Both sessions' ten workers retire, and every recorded
+model observation retains the configured limit of 10. The original failed run
+remains unchanged. Concurrent external writes, keyed foreign-entry behavior,
+Linux2.6 and complete production qualification remain open.
+
 The [fixed capture constructor](./capture/README.md) builds the packet socket
 inside the same trusted executable as its strict ring worker. Its current
 profile is FLEX-8600 only; ARMv7 compilation does not establish a FLEX-6000

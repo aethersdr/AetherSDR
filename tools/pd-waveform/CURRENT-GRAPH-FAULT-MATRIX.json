@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T18:44:12.603208+00:00",
+  "recorded_utc": "2026-11-19T19:00:46.826130+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
@@ -126,14 +126,14 @@
     },
     {
       "case": "Foreign fixed-entry conflicts, replacement and ownership-preserving cleanup",
-      "state": "resource_reconciliation_scope_passed_overall_successor_GUI_limit_assertion_failed_model_fix_host_only",
+      "state": "preexisting_and_corrected_desktop_active_foreign_entry_receive_only_full_case_passed",
       "evidence": [
         "FOREIGN-ARP-KERNEL-COMPONENT-QUALIFICATION.json",
         "RADIO-FOREIGN-ARP-PREEXISTING-QUALIFICATION.json",
-        "RADIO-FOREIGN-ARP-ACTIVE-PARTIAL-QUALIFICATION.json",
-        "RADIO-FOREIGN-ARP-RECONCILIATION-QUALIFICATION.json"
+        "RADIO-FOREIGN-ARP-RECONCILIATION-QUALIFICATION.json",
+        "RADIO-FOREIGN-ARP-FIXED-DESKTOP-QUALIFICATION.json"
       ],
-      "limits": "Eight local kernel cases; installed8600 preexisting conflict plus freshIQ successor; one active receive-only replacement preservation/Stop/all10worker retirement and resumed same-boot successor reconciliation/twofreshIQ/normalStop/journal0/all10newworkers gone. Earlier partial and failed successor remain preserved. Host model fix passes21cases; live fixed-GUI scope pending. Concurrent CAS, Linux2.6 and keyed foreign-entry scope remain open."
+      "limits": "One fresh corrected-d0d5GUI active receive-only replacement survives Stop; all10workers retire with journal64 preserved. Explicit fresh successor captures2IQ frames, preserves configured limit10/RFsetting5, then Stop/all10newworkers/noARP/journal0 pass. Original e519maximum assertion failure retained. Concurrent CAS, Linux2.6, keyed foreign-entry and fullP5 remain open."
     },
     {
       "case": "Managed local sign-out retires active unarmed local DAX IQ session and preserves local owner",
@@ -152,12 +152,12 @@
     }
   ],
   "next_available_case": {
-    "state": "paused_by_operator_no_RF_authorization",
-    "purpose": "Wait for operator instruction. Corrected desktop is adopted and its receive-only real-status/IQ cycle passes; no further test is started.",
+    "state": "active_no_further_RF_authorized",
+    "purpose": "Continue fullP1-P10 provisioning, credential and remaining final-graph qualification. The corrected-desktop active foreign-entry receive-only case is complete within its stated scope.",
     "evidence": [
       "DSP-API-LOSS-FIXED-DESKTOP-QUALIFICATION.json"
     ],
-    "authority_constraint": "Goal paused. Latest observed radio state USB/idle, configured limit10, RFsetting5, noARP, journal0 and all session workers retired. No automatic RF/source rearm or software reboot."
+    "authority_constraint": "No automatic RF/source rearm or software reboot. Latest state USB/idle, configured limit10, RFsetting5, noARP/journal0/all session workers retired."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
