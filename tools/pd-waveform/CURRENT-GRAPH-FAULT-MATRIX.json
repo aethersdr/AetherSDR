@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T10:57:17.000947+00:00",
+  "recorded_utc": "2026-11-19T11:08:39.544015+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
@@ -120,6 +120,12 @@
       "state": "physical_unkey_exit7_explicit_USB_recovery_and_cleanup_passed_OVERALL_DESKTOP_COMPLETION_FAILED",
       "evidence": "DSP-API-LOSS-RELEASE-QUALIFICATION.json",
       "limits": "One5W source/key,408ms observed corrected plateau,447ms host fault request to idle; no fault IMD/fit data. Old desktop rejects RECEIVE after owned UNKEY/READY. Release-only causal fix passes433checks and registered wire tests, builds separately; live completion remains unqualified."
+    },
+    {
+      "case": "Foreign fixed-entry conflicts, replacement and ownership-preserving cleanup",
+      "state": "eight_real_local_kernel_component_cases_passed_on_radio_final_graph_and_concurrent_CAS_scope_remain_open",
+      "evidence": "FOREIGN-ARP-KERNEL-COMPONENT-QUALIFICATION.json",
+      "limits": "Unchanged production C source on isolated x86_64 local kernel; zero radio/RF actions. Unsafe delete mutant rejected. Does not establish ARM ELF, final radio graph, Linux2.6 or atomicity against unrelated concurrent writes."
     }
   ],
   "next_available_case": {

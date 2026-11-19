@@ -1,0 +1,132 @@
+{
+  "recorded_utc": "2026-11-19T11:08:39.544015+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "status": "Eight real local-Linux kernel component cases pass for unchanged fixed ARP helper source, including foreign preexisting/replacement retention, cleanup refusal and restart admission, keeper death, and both-owner crash recovery. Unsafe foreign-delete mutant is rejected. This does not qualify the on-radio final graph, Linux2.6 or concurrent administrator writes between lookup and deletion.",
+  "source_parent": "fadffdd08cc6d78bfb01e52a53f7c823f7973f2f",
+  "production_source_sha256": "01449a254b6ee06deb520448a7a31692f8c1eebeab627d6ac77a59d93558be5a",
+  "same_source_as_installed83d6": true,
+  "production_source_modified": false,
+  "host_kernel": {
+    "system": "Linux",
+    "release": "7.3.4-arch1-2",
+    "machine": "x86_64"
+  },
+  "isolation": {
+    "parent": {
+      "user": "user:[4026531837]",
+      "net": "net:[4026531833]",
+      "mnt": "mnt:[4026531832]",
+      "pid": "pid:[4026531836]"
+    },
+    "child": {
+      "user": "user:[4026533610]",
+      "net": "net:[4026533613]",
+      "mnt": "mnt:[4026533611]",
+      "pid": "pid:[4026533612]"
+    },
+    "initial_interfaces": [
+      "lo"
+    ],
+    "initial_main_routes": [],
+    "host_root_used": false,
+    "uid_map": "         0       1000          1\n         1     100000      65536\n",
+    "gid_map": "         0       1000          1\n         1     100000      65536\n"
+  },
+  "cases": [
+    {
+      "name": "owned entry and journal removed on lifetime EOF",
+      "passed": true
+    },
+    {
+      "name": "matching preexisting borrowed entry survives normal cleanup",
+      "passed": true,
+      "effective_caps": 0
+    },
+    {
+      "name": "foreign preexisting entry refuses setup without modification",
+      "passed": true
+    },
+    {
+      "name": "foreign replacement survives both cleanup owners and successor refusal",
+      "passed": true,
+      "journal_retained": true
+    },
+    {
+      "name": "changed interface MAC refuses cleanup and retains journal",
+      "passed": true
+    },
+    {
+      "name": "already removed owned entry clears only its journal",
+      "passed": true
+    },
+    {
+      "name": "keeper SIGKILL triggers watcher which preserves foreign replacement",
+      "passed": true,
+      "journal_retained": true
+    },
+    {
+      "name": "both-owner SIGKILL preserves matching intent for ordinary successor cleanup",
+      "passed": true
+    }
+  ],
+  "cases_passed": 8,
+  "privilege_observations": {
+    "keeper_uid_and_gid": 65534,
+    "owned_cleanup_effective_and_permitted_caps": "CAP_NET_ADMIN only",
+    "borrowed_matching_entry_effective_and_permitted_caps": "none",
+    "keeper_bounding_inheritable_ambient_caps": "none",
+    "watcher_capabilities_separately_sampled": false,
+    "host_root_used": false
+  },
+  "mutation": {
+    "unsafe_mutant_rejected": true,
+    "cases_passed_before_rejection": 3,
+    "expected_cleanup_exit": 7,
+    "unsafe_mutant_actual_cleanup_exit": 0,
+    "production_source_changed": false,
+    "change": "Separate mutant removes only restore() refusal for a nonmatching neighbor; production binary/source remain unchanged."
+  },
+  "original_fixture_failure": {
+    "preserved": true,
+    "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/arp-foreign-namespace/result.json",
+    "cases_passed": 4,
+    "overall_passed": false,
+    "cause": "Real Linux purges neighbors when interface MAC changes; the first fixture incorrectly assumed retention. Corrected fixture establishes a replacement after the MAC change and confirms helper refusal with retained intent. Each keeper also receives its own process group for one-syscall both-owner death."
+  },
+  "host_binaries": {
+    "unchanged_helper": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/arp-foreign-namespace/pd-fixed-arp-host",
+      "bytes": 896088,
+      "sha256": "6a3631188a18544b4f42e09fd2345abba552bb61acf688fd13c1d29f297a5746"
+    },
+    "unsafe_mutant": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/arp-foreign-namespace/unsafe-foreign-delete-mutant/pd-fixed-arp-host",
+      "bytes": 896096,
+      "sha256": "15f255d22480ce42754f6e0eba24f50f79ea4a4c1a7c288f79770e2255c10ac5"
+    }
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/foreign-ARP-kernel-namespace-components.tar.gz",
+    "bytes": 23352,
+    "sha256": "57710219a136ddead60d413de7fd8fa95944c1a19b9931f662c8b4136b7b8896",
+    "members": 27,
+    "all_members_verified": true
+  },
+  "new_positive_GUI_key_requests": 0,
+  "new_observed_TX_intervals": 0,
+  "source_arm_actions": 0,
+  "radio_access": [],
+  "radio_updates": [],
+  "radio_reboots": [],
+  "scope_limits": [
+    "Actual ioctl/kernel neighbors and process death are exercised on the local x86_64 Linux kernel in user/net/mount/PID namespaces. The compiled C source matches current83d6; it is not the ARM64 or ARMv7 ELF and is not executing on either radio.",
+    "The namespace begins with loopback only, no main route and mapped subordinate IDs. It contains one dummyeth0.10 and a private chroot/tmpfs journal/proc mount. No real NIC, remote socket, radio, RF or host-root operation is used.",
+    "The initial fixture failure remains false; its kernel-behavior correction changes no production code or admission policy.",
+    "The existing read/check/delete sequence is not an atomic compare-and-swap against an unrelated administrator write. These cases replace state before cleanup, not in the lookup/delete interval. Arbitrary concurrent administrator changes remain outside the proved scope.",
+    "The on-radio final process graph, GUI terminal state and explicit recovery under a conflicting ARP replacement remain separate open P5 qualification. The pending one5W DSP API-loss follow-up has not been dispatched or approved by this local test.",
+    "Actual6300 profile, Linux2.6 kernel, one-core scheduling, disk and RF qualification remain open; no8600 hard-coded profile is silently applied to6300.",
+    "Full P1-P10, unresolved natural128/cold bypass, other fault/credential/stale-cache scopes, repeated/raw/extended RF, final integrated stock comparison and independent release gates remain active."
+  ],
+  "next_step": "Retain this component proof and its rejected mutant. After pending operator-approved DSP API-loss completion proof and cleanup, separately plan receive-only final-graph foreign replacement/refusal/reconciliation qualification; preserve all foreign state and do not treat this local namespace result as radio qualification."
+}
