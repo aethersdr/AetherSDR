@@ -395,7 +395,8 @@ aethersdr_hl2_ioboard_status;                   # read the IO board, once
   sent as `aethersdr_hl2_filter_board:<board>,<hpf>;` to every client that
   enabled the set. A change made on the page wins over a client's set that
   had not been applied yet. With the setting on, a set that changes nothing gets no
-  answer.
+  answer, unless it asked for an HPF the board does not use; then it gets the
+  setting that stands.
 - **IO board status.** Read from the N2ADR IO board when asked, and answered
   only to the client that asked:
   `aethersdr_hl2_ioboard_status:<pins>,<receiving>,<in1>,<in2>,<in3>,<in4>,<in5>,<tuner>,<fault>,<firmware>;`
