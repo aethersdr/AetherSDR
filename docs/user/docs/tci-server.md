@@ -393,7 +393,8 @@ aethersdr_hl2_ioboard_status;                   # read the IO board, once
   shows the reason. It is also refused before the radio has an identity to
   save the setting against. Every change, from the page or another client, is
   sent as `aethersdr_hl2_filter_board:<board>,<hpf>;` to every client that
-  enabled the set. With the setting on, a set that changes nothing gets no
+  enabled the set. A change made on the page wins over a client's set that
+  had not been applied yet. With the setting on, a set that changes nothing gets no
   answer.
 - **IO board status.** Read from the N2ADR IO board when asked, and answered
   only to the client that asked:

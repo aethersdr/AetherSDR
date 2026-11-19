@@ -4185,8 +4185,10 @@ void TciServer::flushHl2Set()
                         refused = true;
                     }
                 });
+        m_hl2OwnSetInFlight = true;
         m_model->invokeBackendExtension(QString::fromLatin1(TciHl2Extension::kToken),
                                         QStringLiteral("hw.set"), id, request);
+        m_hl2OwnSetInFlight = false;
     }
     if (refused) {
         answerRefused(QStringLiteral("TCI: the HL2 filter board cannot change while the "
@@ -4238,6 +4240,13 @@ void TciServer::onHl2ExtensionStatus(const QString& ns, const QString& kind,
     const QPair<int, bool> filter = hl2FilterOf(fields);
     const bool moved = !m_hl2LastFilter || *m_hl2LastFilter != filter;
     m_hl2LastFilter = filter;
+    if (moved && !m_hl2OwnSetInFlight && m_hl2SetPending) {
+        // The board moved elsewhere (the setup page) after a TCI set was held:
+        // the operator's change is newer, so the held set is dropped. The
+        // notice below tells the client what stands.
+        m_hl2SetPending.reset();
+        m_hl2SetRequester = nullptr;
+    }
     if (moved) {
         queueHl2FilterNotice();
     }

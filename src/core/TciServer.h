@@ -556,6 +556,9 @@ private:
     std::optional<QVariantMap> m_hl2SetPending;
     QPointer<TciClient> m_hl2SetRequester;
     QSet<QString>     m_hl2RefusalWarned;
+    // True only inside flushHl2Set()'s own hw.set, whose status is not a
+    // change from elsewhere.
+    bool              m_hl2OwnSetInFlight{false};
     // Receive gain group notices: the trxs whose range or gain line is due.
     QSet<int> m_rxGainRangeDue;
     QSet<int> m_rxGainDue;
