@@ -6161,6 +6161,14 @@ void Hl2Backend::finishTxTail()
     }
     m_txTailPending = false;
     applyBandFilter("unkey");
+    // The average dropped at the host's unkey edge was reseeded from tail
+    // frames still at the keyed 0x0e gain; start it again on the receive gain.
+    if (!m_radioPtt
+        && hl2::rxGainDuringTxShortfallDb(lnaEffectiveDb(), m_psEnabled) != 0) {
+        for (const auto& r : m_rx) {
+            dropPanAverage(r);
+        }
+    }
     if (m_rfDriveOwed && !m_tuning) {
         m_rfDriveOwed = false;
         applyDrive(operatorDrivePercent());

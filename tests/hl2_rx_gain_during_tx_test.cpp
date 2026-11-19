@@ -89,6 +89,12 @@ struct Hl2RxGainDuringTxTestAccess {
         b.m_radioPtt = radioPtt;
         b.publishTransmitState();
     }
+    // The radio's TX tail ends: the gateware is back on the receive gain.
+    static void tailEnds(Hl2Backend& b)
+    {
+        b.m_txTailPending = true;
+        b.finishTxTail();
+    }
 };
 
 }  // namespace AetherSDR::hl2
@@ -510,6 +516,25 @@ void testEdgeDropsAverage()
     Access::edge(b, false, false);
     check(Access::drops(b) == n, "PureSignal on (zero shortfall): no drop");
     Access::setPsEnabled(b, false);
+
+    // The unkey drop is reseeded from tail frames still at the keyed gain.
+    n = Access::drops(b);
+    Access::edge(b, true, false);
+    Access::edge(b, false, false);
+    Access::tailEnds(b);
+    check(Access::drops(b) == n + 3, "48 dB, end of the TX tail: dropped once more");
+    n = Access::drops(b);
+    Access::edge(b, true, false);
+    Access::edge(b, false, true);
+    Access::tailEnds(b);
+    check(Access::drops(b) == n + 1, "tail ends under radio PTT: still keyed, no drop");
+    Access::edge(b, false, false);
+    Access::setBaseline(b, 5);
+    n = Access::drops(b);
+    Access::edge(b, true, false);
+    Access::edge(b, false, false);
+    Access::tailEnds(b);
+    check(Access::drops(b) == n, "5 dB (zero shortfall): the tail end keeps the average");
     Access::releaseReceiver(b);
 }
 
