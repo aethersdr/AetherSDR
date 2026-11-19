@@ -724,7 +724,9 @@ private:
         int  anfLevel = 50;
         // NR/ANF still to be published once, like nbEchoPending: SliceModel
         // emits nrChanged/anfChanged for every echo that carries them.
-        bool dspEchoPending = false;
+        bool dspEchoPending = false;   // seed, restore, re-announce: both
+        bool nrEchoPending = false;    // one NR request: echo NR alone
+        bool anfEchoPending = false;   // one ANF request: echo ANF alone
         int  agcOffLevel = 10;
 
         // The operator's panadapter averaging, held for the same reason: a

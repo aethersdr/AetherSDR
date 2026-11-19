@@ -4040,8 +4040,10 @@ void Hl2Backend::setSliceChannelNoiseFilter(int sliceId, const SliceDspRequest& 
     if (!r) {
         return;
     }
-    // Per receiver, like the APF. Only the named field moves; the receiver's
-    // copy of the other half is what the chain runs.
+    // Per receiver, like the APF. Only the named stage moves, and only it is
+    // re-sent and echoed: SetRXAANRVals and SetRXAANFVals flush the LMS taps,
+    // so re-sending the other one would make it re-converge, and an echo of the
+    // other one moves the VFO's level slider onto it.
     const bool nr = request.feature == SliceDspRequest::Feature::Nr;
     bool& on = nr ? r->nrOn : r->anfOn;
     int& level = nr ? r->nrLevel : r->anfLevel;
@@ -4050,8 +4052,12 @@ void Hl2Backend::setSliceChannelNoiseFilter(int sliceId, const SliceDspRequest& 
     } else {
         level = qBound(0, request.level, 100);
     }
-    pushChannelNoiseFilters(*r);
-    r->dspEchoPending = true;
+    if (r->dsp) {
+        QMetaObject::invokeMethod(r->dsp, nr ? "setNoiseReduction" : "setAutoNotch",
+            Qt::QueuedConnection, Q_ARG(bool, on), Q_ARG(int, level));
+        requestDspChainsPublish();
+    }
+    (nr ? r->nrEchoPending : r->anfEchoPending) = true;
     emitSliceState(ddc);
     notifyOperatingStateChanged();
 }
@@ -9800,16 +9806,18 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     d.agcOffLevel = r->agcOffLevel;
     d.apf = r->apfOn;
     d.apfLevel = r->apfLevel;
-    // The channel NR/ANF pair only when changed, restored or re-announced,
-    // like the blanker: applyChanges() emits nrChanged/anfChanged unguarded,
-    // and the VFO's level slider follows each one.
-    if (r->dspEchoPending) {
+    // The channel NR/ANF only when changed, restored or re-announced, like the
+    // blanker: applyChanges() emits nrChanged/anfChanged unguarded, and the
+    // VFO's level slider follows each one. A request echoes its own stage only.
+    if (r->dspEchoPending || r->nrEchoPending) {
         d.nr = r->nrOn;
         d.nrLevel = r->nrLevel;
+    }
+    if (r->dspEchoPending || r->anfEchoPending) {
         d.anf = r->anfOn;
         d.anfLevel = r->anfLevel;
-        r->dspEchoPending = false;
     }
+    r->dspEchoPending = r->nrEchoPending = r->anfEchoPending = false;
     // The squelch pair the receiver holds and has pushed to its chain, so the
     // SQL control shows the receiver's state. Safe to echo:
     // SliceModel::applyChanges() does not emit squelchCommandIssued.
