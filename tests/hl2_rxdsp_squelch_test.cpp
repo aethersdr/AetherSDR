@@ -232,8 +232,8 @@ int main(int argc, char** argv)
     }
 
     // 8. The gate readback (#6552 option C): FM noise alone at level 100
-    //    reads Closed, squelch off reads Unavailable, and the backend declares
-    //    the gate in FM only.
+    //    reads Closed, a muted receiver and squelch off read Unavailable, and
+    //    the backend declares the gate in FM only.
     {
         Hl2RxDsp::Config fm = cfg;
         fm.mode = WdspChannel::Mode::Fm;
@@ -260,6 +260,13 @@ int main(int argc, char** argv)
         }
         check(!seen.empty() && seen.back() == AetherSDR::SquelchGateState::Closed,
               "FM noise alone at level 100 reports the gate Closed");
+        gateDsp.setAudioMuted(true);
+        for (int b = 0; b < 200; ++b) {
+            gateDsp.processIqBlock(noiseBlock());
+        }
+        check(!seen.empty() && seen.back() == AetherSDR::SquelchGateState::Unavailable,
+              "a muted receiver reports no gate");
+        gateDsp.setAudioMuted(false);
         gateDsp.setSquelch(false, 100, 0.0);
         for (int b = 0; b < 20; ++b) {
             gateDsp.processIqBlock(noiseBlock());
