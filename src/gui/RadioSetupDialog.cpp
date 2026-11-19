@@ -4712,7 +4712,8 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             return false;
         // Its own decade: 0x01 and 0x03..0x06 are taken (BandscopeDialog, hw.get,
         // calibration, calibration set, SupportBundle).
-        constexpr quint64 kCwLeadRequestIdBase = 0x0700000000000000ull;
+        // 0x07 is TCI's HL2 extension, 0x09 the IO board read: 0x08 is this one's.
+        constexpr quint64 kCwLeadRequestIdBase = 0x0800000000000000ull;
         static quint64 nextCwLeadId = kCwLeadRequestIdBase;
         const quint64 requestId = nextCwLeadId++;
         auto* guard = new QObject(this);
