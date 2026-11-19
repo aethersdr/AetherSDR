@@ -494,7 +494,8 @@ public:
         return cwxEncoder->requestCwTextControl(request, command, current, completion);
     }
     IndependentTxControl independentTxControl() const override { return {1}; }
-    bool independentTxReady() const override { return connected; }
+    std::function<bool()> independentReady;
+    bool independentTxReady() const override { return independentReady ? independentReady() : connected; }
     void stopIndependentTx(const TxCoordinator::Operation& operation,
                            const TxCoordinator::StopRequest& request) override
     {
@@ -1433,6 +1434,7 @@ void desktopModelWireHandoff()
         writes.append(text);
         return true;
     }, [&](const TxStopEvidence& evidence) { proof = evidence; });
+    f.backend->independentReady = [&] { return wire.ready(); };
     const auto feed = [&](QStringView line) { wire.observe(line, TxCoordinator::monotonicMs()); };
     wire.reset(1, 0x12345678);
     feed(u"S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1");
@@ -1455,6 +1457,7 @@ void desktopModelWireHandoff()
     const auto detach = qScopeGuard([&] {
         f.backend->keyingWriter = {};
         f.backend->stopWriter = {};
+        f.backend->independentReady = {};
     });
     f.radio.setTransmit(true);
     const TxCoordinator::Operation desktop = f.radio.transmitOperation();
@@ -1473,8 +1476,15 @@ void desktopModelWireHandoff()
     TxOperationIntegrationTestAccess::stopEvidence(f.radio, proof);
     check(desktop.hasConfirmedStop() && !f.coordinator.hasOwnership() && writes.size() == 2,
           "model confirms original desktop operation without reconnecting or another RF command");
+    f.radio.setTransmit(false);
+    check(writes == QStringList{"xmit 1", "xmit 0", "xmit 0"} && !f.radio.independentTxReady(),
+          "explicit extra model Stop withdraws the real wire's readiness after confirmed release");
+    feed(u"R104|0|");
+    feed(u"S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1");
+    check(f.radio.independentTxReady() && desktop.hasConfirmedStop() && !f.coordinator.hasOwnership(),
+          "fresh acknowledged cleanup restores production model readiness without another ownership certificate");
     const auto admitted = f.grants.acquire(f.a, f.ga.grant, 1, TxCoordinator::Activity::Mox);
-    check(admitted.accepted() && writes.size() == 2,
+    check(admitted.accepted() && writes.size() == 3,
           "fresh independent analyzer admission follows confirmed desktop release without automatic keying");
 }
 

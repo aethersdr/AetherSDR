@@ -1,0 +1,85 @@
+{
+  "recorded_utc": "2026-11-19T01:11:58.932739+00:00",
+  "status": "Redundant desktop Stop after confirmed release was reproduced; the repaired terminal-write/ACK/fresh-idle readiness barrier passes component tests, mutations and wire sanitizers. Live qualification pending.",
+  "production_ready": false,
+  "source_parent": "44ddb7663957c4caf6f11215eeeb8cedd4a0060a",
+  "root_cause": "A desktop off after its original operation was confirmed tried to start that retired lifecycle again. The tracker rejected it and permanently withdrew independent readiness, even after fresh complete idle.",
+  "repair": "Recognize only an explicit cleanup of the same already-confirmed desktop operation. Withdraw readiness before its terminal write; require that exact full off write, matching success reply and later complete original-connection unowned idle. Never create another stop certificate or renew the first pending-cleanup deadline.",
+  "before": {
+    "test_exit": 1,
+    "failure": "fresh complete idle after extra Stop restores readiness without reconnect or another key"
+  },
+  "affected_tests_passed": 8,
+  "mutations_and_sanitizers": {
+    "mutation_tests": [
+      {
+        "mutation": "idle-before-ACK",
+        "build_exit": 0,
+        "test_exit": 1,
+        "observed_failures": [
+          "[FAIL] idle before the extra Stop acknowledgment cannot restore readiness",
+          "[FAIL] fresh complete idle after extra Stop restores readiness without reconnect or another key"
+        ],
+        "changed_file_sha256": "a3063f4fdc9e0d5e08db67bc05925d22a27749b18aedd0fec40f40f9d1292ae1"
+      },
+      {
+        "mutation": "renew-cleanup-deadline",
+        "build_exit": 0,
+        "test_exit": 1,
+        "observed_failures": [
+          "[FAIL] repeated extra Stop cannot renew the first cleanup deadline or infer idle on expiry"
+        ],
+        "changed_file_sha256": "2d6be4143f5f828512bf322830265c9b8d025951be44e54ea6c7bdbe889ed66a"
+      }
+    ],
+    "restored_ASan_UBSan_LSan_wire_test_passed": true,
+    "production_files_mutated": false,
+    "radio_actions": [],
+    "production_ready": false
+  },
+  "build": {
+    "passed": true,
+    "affected_tests_passed": 8,
+    "source_parent": "44ddb7663957c4caf6f11215eeeb8cedd4a0060a",
+    "binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-cleanup-readiness/bin/AetherSDR",
+        "bytes": 833354632,
+        "sha256": "f727c50e92f5107fa3c725ffe50c3cd47c3275015fa7280f04dac030923cf0a7"
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-cleanup-readiness/bin/aetherd",
+        "bytes": 413578800,
+        "sha256": "9e96690e8d8ca863e03fd6ef30cb078b5578b5b515da410b4d5a79dbc4a26e93"
+      }
+    },
+    "radio_actions": []
+  },
+  "build_source_base": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+  "build_source_patch_sha256": "66cc83d0557e971b3e1274b33034203a2528b9e0c0338d24184a8ab47b7cd8ff",
+  "source_files_sha256": {
+    "docs/aetherd-flex-ptt-stop-evidence.md": "db49855b4ced9564785186d70371d5c8108e20362d5f19ea78817f1cd6d0045e",
+    "docs/user/docs/tailscale-remote-access.md": "b0dfed101e25cab8b37134113773d8b13e616974d6fba61138692e84c4ea8805",
+    "src/core/backends/flex/FlexPttStopTracker.cpp": "642d35d9fcb17cfc2baaf387a8f9b249525f503375744d86d8360c84f08950cf",
+    "src/core/backends/flex/FlexPttStopTracker.h": "d1c509232ce9f784c2d36a0d0f7eca4167f95d8311366e60611fdbeac9babc85",
+    "src/core/backends/flex/FlexPttWireSession.cpp": "6e8a2796de33130c260327628ef19d21c902a72251ca2565301bf0c9fe7f2db5",
+    "tests/flex_ptt_wire_session_test.cpp": "6b5558468ba43b772231da7fcf191f61ea63c3d43028c78edeb5ff38455a5a56",
+    "tests/tx_operation_integration_test.cpp": "b3d42ec6d64f14e34bad02ddf73e6168695c98eaf946166c13d56db213ef9bdd"
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-cleanup-readiness-components.tar.gz",
+    "bytes": 135324,
+    "sha256": "17ddebc3b8e89c3aeb6d4379700e85437ee45ac91861b68056c6df26e8a854be",
+    "members": 44,
+    "all_members_verified": true
+  },
+  "radio_actions": [],
+  "new_RF_keys": 0,
+  "installed_release_changed": false,
+  "scope_limits": [
+    "New desktop and daemon were built into a separate directory; neither was launched. The live bench desktop still runs the earlierf5777d5ea candidate.",
+    "Earlier10W correction and silent handoff evidence retain their original source/binary identities; they do not qualify this extra-Stop repair live.",
+    "Native Windows/macOS app/window jobs at538fc85d5 predate this additional repair; credential persistence code remains unchanged.",
+    "Qualify the additional Stop and subsequent independent measurement using the existing bridge/readiness surface where possible, then continue P3/P5/P7/P8, actual6300 and release gates."
+  ]
+}

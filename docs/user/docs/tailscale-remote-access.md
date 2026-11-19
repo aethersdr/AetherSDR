@@ -588,7 +588,9 @@ ADC headroom or calibrated output power.
    work to finish and a fresh receive report. This does not release transmit
    ownership for the analyzer. On a supported local Flex connection, a complete
    software-PTT cycle can release that ownership after its matching command
-   replies and the radio's owner-clear report arrive. Missing or contradictory
+   replies and the radio's owner-clear report arrive. An additional Stop waits
+   for its own acknowledgment and fresh idle readback before measurement is ready.
+   Missing or contradictory
    readback, or a cycle combined with CW, TUNE or ATU, keeps preparation blocked;
    stop AetherPD and reconnect before preparing an analyzer run.
    The analyzer does not remember or restore this radio setting.

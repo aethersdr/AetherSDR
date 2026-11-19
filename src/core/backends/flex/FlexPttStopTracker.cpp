@@ -184,6 +184,31 @@ bool FlexPttStopTracker::bindDesktopStop(const TxCoordinator::Operation& operati
     return true;
 }
 
+bool FlexPttStopTracker::confirmedCleanup(const TxCoordinator::Operation& operation,
+                                          quint32 sequence, qint64 nowMs)
+{
+    if (!advanceClock(nowMs)) {
+        return false;
+    }
+    const bool pending = m_phase == Phase::AwaitCleanupWrite
+        || m_phase == Phase::AwaitCleanupReply || m_phase == Phase::AwaitCleanupIdle;
+    if (operation.independent() || !operation.hasConfirmedStop() || !operation.permitsCleanup()
+        || (m_phase != Phase::Idle && m_phase != Phase::AwaitIdle && !pending)
+        || m_operation.permitsCleanup() || sequence <= m_keySequence || sequence <= m_stopSequence) {
+        return false;
+    }
+    m_stop = {};
+    m_desktopStop = false;
+    m_stopWritten = false;
+    m_stopReplied = false;
+    m_stopSequence = sequence;
+    if (!pending) {
+        m_deadlineMs = nowMs + kTransitionTimeoutMs;
+    }
+    m_phase = Phase::AwaitCleanupWrite;
+    return true;
+}
+
 bool FlexPttStopTracker::startStop(const TxCoordinator::Operation& operation,
                                   const TxCoordinator::StopRequest& request,
                                   quint32 stopSequence, qint64 nowMs, bool desktop)
@@ -228,6 +253,8 @@ void FlexPttStopTracker::commandWritten(Stamp stamp, quint32 sequence, bool keyi
     }
     if (!fullWrite || sequence == 0) {
         fail(Failure::Write);
+    } else if (m_phase == Phase::AwaitCleanupWrite && !keying && sequence == m_stopSequence) {
+        m_phase = Phase::AwaitCleanupReply;
     } else if (!m_operation.permitsCleanup()) {
         fail(Failure::Identity);
     } else if (m_phase == Phase::AwaitKeyWrite && keying && sequence == m_keySequence) {
@@ -263,6 +290,8 @@ void FlexPttStopTracker::response(QStringView body)
         fail(Failure::Reply);
     } else if (sequence == m_keySequence && m_phase == Phase::AwaitKeyReply) {
         m_phase = Phase::AwaitPttRequested;
+    } else if (sequence == m_stopSequence && m_phase == Phase::AwaitCleanupReply) {
+        m_phase = Phase::AwaitCleanupIdle;
     } else if (sequence == m_stopSequence && m_stopWritten && !m_stopReplied
                && stopRecorded()) {
         m_stopReplied = true;
@@ -331,6 +360,15 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
     }
     const bool idle = present == 31 && state == u"READY" && source.isEmpty() && handle == 0
         && allowed == u"1" && reason.isEmpty();
+    if (m_phase == Phase::AwaitCleanupWrite || m_phase == Phase::AwaitCleanupReply
+        || m_phase == Phase::AwaitCleanupIdle) {
+        if (m_phase == Phase::AwaitCleanupIdle && idle
+            && (envelopeHandle == 0 || envelopeHandle == m_clientHandle)) {
+            m_phase = Phase::Idle;
+            m_deadlineMs = 0;
+        }
+        return;
+    }
     if (m_phase == Phase::AwaitIdle || m_phase == Phase::Idle) {
         // FlexLib 4.2.18 ParseInterlockStatus consumes deltas. Before arming,
         // a partial sample withdraws readiness, but a later complete idle can

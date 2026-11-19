@@ -224,6 +224,13 @@ The coordinator still checks the exact stop token and entered-writer barrier.
 These are implementation and socket-free test claims; qualification on the
 installed radio and ordinary desktop remains a separate gate.
 
+An additional operator unkey after confirmed release withdraws readiness until
+its own full terminal write, successful reply and a fresh complete unowned
+idle report on the original connection. It creates no stop certificate and
+cannot recycle the consumed operation's evidence. Repeated unkeys replace only
+the pending sequence; they cannot extend the first cleanup deadline. Partial
+or helper-triggered idle, missing replies and timeout never restore readiness.
+
 `RadioConnection` constructs the wire session on its existing worker thread.
 The session observes raw lines before presentation parsing, uses that
 transport's connection generation, and records complete writes from the common

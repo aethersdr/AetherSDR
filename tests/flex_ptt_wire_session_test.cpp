@@ -506,6 +506,46 @@ void desktopReleaseRefusals()
     check(!lateContradiction.evidence.valid(lateContradiction.now),
           "contradiction before desktop token binding invalidates the recorded release sequence");
 }
+
+void desktopCleanupAfterConfirmedRelease()
+{
+    DesktopHarness h;
+    h.key(); h.edge(false, h.operation); (void)h.bind();
+    h.feed(u"R102|0|"); h.feed(kUnkey); h.feed(kReadyOwned); h.feed(kIdle);
+    check(h.coordinator.confirmStopped(h.evidence.request), "initial desktop release is qualified");
+    h.wire.poll(++h.now);
+    check(h.wire.ready(), "consumed desktop release permits initial analyzer readiness");
+    {
+        const auto dispatch = h.operation.beginDispatch(h.now, false);
+        check(bool(dispatch), "explicit Stop retains only the confirmed operation's cleanup authority");
+        h.wire.desktopPtt(103, {h.operation, false}, h.now);
+    }
+    check(!h.wire.ready() && !h.evidence.valid(h.now) && h.operation.hasConfirmedStop(),
+          "additional Stop withdraws readiness without manufacturing another stop certificate");
+    h.feed(kIdle);
+    check(!h.wire.ready(), "idle before the extra Stop acknowledgment cannot restore readiness");
+    h.feed(u"R103|0|");
+    h.feed(u"S87654321|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1");
+    check(!h.wire.ready(), "helper-triggered idle cannot finish the extra Stop readiness barrier");
+    h.feed(u"S0|interlock tx_allowed=1");
+    check(!h.wire.ready(), "extra Stop acknowledgment and partial idle cannot restore readiness");
+    h.feed(kIdle);
+    check(h.wire.ready() && !h.evidence.valid(h.now) && !h.coordinator.hasOwnership()
+          && h.commands == QStringList{"xmit 1", "xmit 0", "xmit 0"},
+          "fresh complete idle after extra Stop restores readiness without reconnect or another key");
+
+    DesktopHarness repeated;
+    repeated.key(); repeated.edge(false, repeated.operation); (void)repeated.bind();
+    repeated.feed(u"R102|0|"); repeated.feed(kUnkey); repeated.feed(kReadyOwned); repeated.feed(kIdle);
+    check(repeated.coordinator.confirmStopped(repeated.evidence.request), "second fixture confirms original release");
+    repeated.wire.desktopPtt(103, {repeated.operation, false}, repeated.now);
+    repeated.now += 4000;
+    repeated.wire.desktopPtt(104, {repeated.operation, false}, repeated.now);
+    repeated.now += 1000;
+    repeated.feed(u"R104|0|"); repeated.feed(kIdle);
+    check(!repeated.wire.ready() && !repeated.evidence.valid(repeated.now),
+          "repeated extra Stop cannot renew the first cleanup deadline or infer idle on expiry");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -523,5 +563,6 @@ int main(int argc, char** argv)
     partialAndStale();
     desktopReleaseBinding();
     desktopReleaseRefusals();
+    desktopCleanupAfterConfirmedRelease();
     return failures ? 1 : 0;
 }

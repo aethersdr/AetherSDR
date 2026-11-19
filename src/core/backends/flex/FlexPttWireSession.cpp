@@ -177,7 +177,12 @@ void FlexPttWireSession::desktopPtt(quint32 sequence, const TxCoordinator::Comma
         return;
     }
     bool tracked = false;
-    if (command.keying) {
+    if (!command.keying && m_operation.sameOperation(command.operation)
+        && command.operation.hasConfirmedStop()) {
+        invalidateEvidence();
+        m_localStop = {};
+        tracked = m_tracker.confirmedCleanup(command.operation, sequence, now);
+    } else if (command.keying) {
         if (!m_operation.sameOperation(command.operation) && !m_operation.permitsCleanup()) {
             invalidateEvidence();
             m_operation = command.operation;
@@ -193,6 +198,8 @@ void FlexPttWireSession::desktopPtt(quint32 sequence, const TxCoordinator::Comma
     }
     if (!tracked) {
         otherCommand(command.keying ? QStringLiteral("xmit 1") : QStringLiteral("xmit 0"), now);
+    } else {
+        m_ready.store(false, std::memory_order_release);
     }
     // Caller retains its entered Dispatch across this terminal writer. A
     // missing idle history must not change ordinary desktop PTT semantics.

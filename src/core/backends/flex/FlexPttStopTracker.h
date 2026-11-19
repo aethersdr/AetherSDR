@@ -23,6 +23,7 @@ public:
         AwaitStopReply, AwaitUnkey, AwaitReady, AwaitOwnerClear,
         AwaitExternalReady, AwaitExternalOwnerClear, ExternalReleased,
         AwaitRecoveryStopWrite, AwaitRecoveryStopReply, AwaitRecoveryIdle,
+        AwaitCleanupWrite, AwaitCleanupReply, AwaitCleanupIdle,
         AwaitStopBinding, Confirmed, Failed
     };
     enum class Failure {
@@ -53,6 +54,10 @@ public:
                                   quint32 stopSequence, qint64 nowMs);
     [[nodiscard]] bool bindDesktopStop(const TxCoordinator::Operation& operation,
                                       const TxCoordinator::StopRequest& request, qint64 nowMs);
+    // An explicit extra unkey after confirmed release creates no ownership
+    // proof. Readiness waits for its own full write, ACK and fresh idle only.
+    [[nodiscard]] bool confirmedCleanup(const TxCoordinator::Operation& operation,
+                                        quint32 sequence, qint64 nowMs);
     // Only a full terminal write of the exact PTT command may report success.
     // Sequence zero is reserved. Unexpected TX writes poison this attempt;
     // ordinary non-TX commands are not inputs to this method.
