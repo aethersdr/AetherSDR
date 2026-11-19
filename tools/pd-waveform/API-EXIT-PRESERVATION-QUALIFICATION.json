@@ -1,0 +1,273 @@
+{
+  "recorded_utc": "2026-11-19T09:51:37.036681+00:00",
+  "source_parent": "4e35d3538b9e6e6ec4c1f2e53d49a74b1db10bb7",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "status": "Host-only bench diagnostic finalizer now preserves native API-exit7 while discarding unconfirmed capture buffers. Causal old-wrapper exit2 is preserved; ten host cases pass, including zero-byte discard, safe completion and original bounds/identity/path refusals. This overlay is not ARM-built, installed or radio-qualified.",
+  "installed_runtime_unchanged": "aa5649cc48ebebb49909bb3c80fad5d4083cdad156013da9624ede5335a5d039",
+  "bench_diagnostic_only": true,
+  "shipping_source_changes": [],
+  "privileged_helper_source_changes": [],
+  "RF_or_numerical_acceptance_changes": [],
+  "radio_installs": [],
+  "radio_reboots": [],
+  "new_positive_GUI_key_requests": 0,
+  "source_arm_actions": 0,
+  "automatic_RF_retry": false,
+  "automatic_calibration_rearm": false,
+  "causal_before": {
+    "passed": false,
+    "expected_native_API_failure_exit": 7,
+    "observed_wrapper_exit": 2,
+    "files": {
+      "lab-unmatched.f32le": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "lab-aligned.f32le": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "lab-tx.csv": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "lab-fit.jsonl": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "radio_commands": [],
+    "sockets_created": false,
+    "privilege_changes": []
+  },
+  "host_tests": {
+    "passed": true,
+    "cases": [
+      {
+        "case": "maximum-buffers",
+        "exit": 0,
+        "files": {
+          "lab-unmatched.f32le": {
+            "bytes": 3456000,
+            "sha256": "325633deedc9146b605228b3c352bda441e9a4103d5919c4e10c0ac328a5c1f3"
+          },
+          "lab-aligned.f32le": {
+            "bytes": 3456000,
+            "sha256": "325633deedc9146b605228b3c352bda441e9a4103d5919c4e10c0ac328a5c1f3"
+          },
+          "lab-tx.csv": {
+            "bytes": 1050624,
+            "sha256": "74595c6db3397830789c1a7727a48bda3c49a661e2ebc5ab4d08f42f2b706778"
+          },
+          "lab-fit.jsonl": {
+            "bytes": 11269,
+            "sha256": "e6849badd84acd47136e5eb5ee4c5a2408c783b2ee5e3e20b153ab8410231017"
+          }
+        }
+      },
+      {
+        "case": "no-idle-proof",
+        "exit": 2,
+        "files": {
+          "lab-unmatched.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-aligned.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-tx.csv": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-fit.jsonl": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "api-loss-no-idle-proof",
+        "exit": 7,
+        "files": {
+          "lab-unmatched.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-aligned.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-tx.csv": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-fit.jsonl": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "other-error-no-idle-proof",
+        "exit": 2,
+        "files": {
+          "lab-unmatched.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-aligned.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-tx.csv": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-fit.jsonl": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "api-loss-complete-idle",
+        "exit": 7,
+        "files": {
+          "lab-unmatched.f32le": {
+            "bytes": 3456000,
+            "sha256": "325633deedc9146b605228b3c352bda441e9a4103d5919c4e10c0ac328a5c1f3"
+          },
+          "lab-aligned.f32le": {
+            "bytes": 3456000,
+            "sha256": "325633deedc9146b605228b3c352bda441e9a4103d5919c4e10c0ac328a5c1f3"
+          },
+          "lab-tx.csv": {
+            "bytes": 1050624,
+            "sha256": "74595c6db3397830789c1a7727a48bda3c49a661e2ebc5ab4d08f42f2b706778"
+          },
+          "lab-fit.jsonl": {
+            "bytes": 11269,
+            "sha256": "c443abef638900c06ffc2b2845ccedb82c084b64d11fcff8ceed44e5e8e0bd9c"
+          }
+        }
+      },
+      {
+        "case": "existing-file",
+        "exit": 2,
+        "files": {
+          "lab-unmatched.f32le": {
+            "bytes": 16,
+            "sha256": "ba36307f75a60bfc18e438f23c7dcee15378bb9abf544af10110d1722f2c7c95"
+          }
+        }
+      },
+      {
+        "case": "symlink-file",
+        "exit": 2,
+        "files": {}
+      },
+      {
+        "case": "wrong-directory-mode",
+        "exit": 2,
+        "files": {}
+      },
+      {
+        "case": "symlink-directory",
+        "exit": 2,
+        "files": {}
+      },
+      {
+        "case": "identity",
+        "exit": 2,
+        "files": {}
+      }
+    ],
+    "buffer_bytes_per_native_process": 9336832,
+    "source_sha256": "87a8b0398ea068568511cf1db9f8d192487dbc04daf01bb8606e4b8813885006",
+    "file_sizes_zero_until_complete_idle": true,
+    "unknown_idle_exit_discards_without_flush": true,
+    "radio_commands": [],
+    "sockets_created": false,
+    "privilege_changes": [],
+    "actual_radio_qualified": false,
+    "API_exit7_preserved_without_idle_proof": true,
+    "generic_unconfirmed_idle_remains_exit2": true,
+    "all_original_refusals_retained": true
+  },
+  "overlay": {
+    "source_commit": "4e35d3538b9e6e6ec4c1f2e53d49a74b1db10bb7",
+    "files": {
+      "tools/pd-waveform/pd_waveform.c": {
+        "original_sha256": "a2208c8db78035fbce2d40c3b3915657c4b1107272b92d54de63bab6e757c637",
+        "instrumented_sha256": "78054c2efd4b480cfc46a1a472abfd86ae558cc13c23ec8019052858f078481d"
+      },
+      "tools/pd-waveform/vendor/calcc.c": {
+        "original_sha256": "8c31a5738f65544e37870030fca737772676d2e808de5356313ec00eecc209d0",
+        "instrumented_sha256": "b174887d3030f3bc5bf134aafae6f147a2860b22031ce3b7db69b77a4a602983"
+      },
+      "tools/pd-waveform/pd_lab_capture.h": {
+        "original_sha256": null,
+        "instrumented_sha256": "87a8b0398ea068568511cf1db9f8d192487dbc04daf01bb8606e4b8813885006"
+      },
+      "tools/pd-waveform/pd_lab_entry.c": {
+        "original_sha256": null,
+        "instrumented_sha256": "d753d162592ae6e88a190800e547329c62cef9e06a76d62c6611f83bc1914f7e"
+      }
+    },
+    "installed": false,
+    "shipping_source_changed": false,
+    "numerical_acceptance_or_RF_source_duration_changed": false,
+    "data_bounds": {
+      "unmatched_bytes": 3456000,
+      "aligned_bytes": 3456000,
+      "TX_trace_records": 2048,
+      "TX_trace_bytes": 2097152,
+      "fit_records": 64,
+      "fit_file_bytes": 65536,
+      "buffer_reserve_per_file": 65536
+    },
+    "fixed_directory": "/run/aetherpd/primary",
+    "RF_commands": [],
+    "prior_installed_release": "aa5649cc48ebebb49909bb3c80fad5d4083cdad156013da9624ede5335a5d039",
+    "API_exit7_preserved_without_idle_proof": true,
+    "generic_unconfirmed_idle_exit2_retained": true,
+    "unsafe_capture_flush_added": false,
+    "actual_radio_API_exit_preservation_qualified": false
+  },
+  "behavior": "If the native main returned7 and no complete unowned READY exists, _Exit(7) directly without new writes or capture flush/close. Other unconfirmed-idle results still fail2; confirmed idle retains bounded capture completion and the original result.",
+  "host_binaries": {
+    "buffer-test-before-fix": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/buffer-test-before-fix",
+      "bytes": 1437592,
+      "sha256": "2f304971cb1f4e78ea9683722bfa629c97762332982b1f0a39a9500fa1a632fa"
+    },
+    "buffer-test": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/buffer-test",
+      "bytes": 1437848,
+      "sha256": "766c8a6df4f12e9dfc27b9d1b89490583cc9e5439187e041cfd8df24b0281eca"
+    },
+    "production-identity-test": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/production-identity-test",
+      "bytes": 1443592,
+      "sha256": "a74bea831afd901b05dba81858cbbae80a5db31905fc25033986649a2755239c"
+    }
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/API-exit-preservation-host-components.tar.gz",
+    "bytes": 72755,
+    "sha256": "a4d3aa3412b9d1ce775ae965c1b752b4c54bb7011ecf376805aebc5bfb37890c",
+    "members": 48,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "This fixes a diagnostic classification gap demonstrated by the host fixture. All three prior receive-only native API-loss cases retained7; it is not claimed to have caused either older product restore refusal.",
+    "The positive host fixture compiles the explicit PD_LAB_HOST_TEST identity bypass; the separate binary without that macro still rejects the ordinary host identity before files. No radio, socket or privilege-changing operation occurs in these tests.",
+    "All ten host cases pass, including maximum pair/trace/fit bounds, no-idle discard, API7 with/without idle, generic error discard, foreign file, symlink file/directory, mode and production-identity refusals. They do not prove actual keyed native exit ordering or hardware unkey.",
+    "The patch changes only the bench overlay header. Go, DSP mathematical code, ownership/restore/RF admission, source duration and fixed privileged helpers remain unchanged.",
+    "ARMv7/ARM64 reproducibility, ordinary installation, exact receive-only validation and a separately prepared bounded keyed fault remain required before qualification. No production, actual6300 or full P1-P10 completion claim."
+  ],
+  "next_step": "Reproduce the exact API-exit-preserving diagnostic runtime for ARMv7/ARM64 with unchanged Go/fixed helpers, preserve complete source/artifacts and upgrade normally from aa56. Validate the exact new runtime receive-only first. Then separately prepare and dispatch one bounded keyed DSP API-loss case through the pinned GUI with independent unkey/power guards and explicit receive recovery, without RF retry/rearm or software reboot."
+}
