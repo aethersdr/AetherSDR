@@ -526,6 +526,9 @@ struct Hl2Telemetry {
     int adcSamples = 0;
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
+    // Enable cycle that covered this whole keyed ADC window, or zero when the
+    // window cannot be attributed to PureSignal feedback.
+    std::uint64_t psAdcGeneration = 0;
 
     // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] over responses
     // that carry a measurement (ForwardPowerWindow::observe skips the rest; the

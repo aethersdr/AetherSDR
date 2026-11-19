@@ -14,7 +14,8 @@
 namespace AetherSDR {
 
 // Local Morse keyer: dit/dah events from CWX text for the sidetone, at the same
-// WPM as the radio's keyer (informational; the radio makes the on-air CW).
+// WPM as the radio's keyer (informational; the radio makes the on-air CW), or,
+// through HostCwTextKeyer, the host-keyed elements on a radio with no text buffer.
 // The schedule runs on a worker thread waiting on absolute steady_clock deadlines
 // via an interruptible condition_variable, not a QTimer, whose event-loop
 // coalescing clips elements (#3623), as IambicKeyer does.
@@ -38,6 +39,9 @@ public:
     // be lock-free.
     void setOnKeyDownChange(KeyDownCallback cb);
 
+    // True when the whole message can be keyed with this encoder.
+    static bool canEncode(const QString& text);
+
     // Append a transmission segment.  Spawns the worker thread on first use; if
     // a segment is already playing, the new text is queued and plays when the
     // current one finishes.
@@ -54,6 +58,10 @@ public:
     // scheduleNext()). Route through m_mu if ever promoted to a live
     // cross-thread query. (#3623 review)
     bool isIdle() const { return m_elements.isEmpty() && !m_running; }
+
+    // Characters not yet fully keyed: every queued segment plus the whole of
+    // the one playing, until it ends or is stopped. Thread-safe.
+    int pendingChars() const;
 
 protected:
     // Test seam: a subclass constructed with spawnWorker=false drives the
@@ -105,6 +113,7 @@ private:
     mutable std::mutex      m_mu;
     std::condition_variable m_cv;
     QQueue<Pending>         m_queue;
+    int                     m_playingChars{0};   // guarded by m_mu
     std::atomic<bool>       m_workerStarted{false};
     std::atomic<bool>       m_abort{false};
     std::atomic<bool>       m_shutdown{false};

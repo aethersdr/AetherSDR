@@ -7847,6 +7847,15 @@ target_link_libraries(mon_vox_roads_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME mon_vox_roads_test COMMAND mon_vox_roads_test)
 
+# #7105: rigctl send_morse / stop_morse on a radio with no radio-side text
+# buffer key host-timed elements through RadioModel's per-edge CW gates; the
+# radio-side keyer still uses CWX. Injected backend, no socket, nothing keyed.
+add_executable(rigctl_host_cw_text_test tests/rigctl_host_cw_text_test.cpp)
+target_include_directories(rigctl_host_cw_text_test PRIVATE src tests)
+target_link_libraries(rigctl_host_cw_text_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME rigctl_host_cw_text_test COMMAND rigctl_host_cw_text_test)
+
 # #5775 / #5776: the receiver letters (slice tabs, CAT VFO targets) follow a
 # backend's capacity declared after connect. Injected backend, no socket.
 add_executable(receiver_slot_count_test tests/receiver_slot_count_test.cpp)
@@ -8123,6 +8132,22 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
     set_tests_properties(tci_server_review_test PROPERTIES TIMEOUT 45)
+
+    # The opt-in extension set: enable, capability list, per-client gate.
+    # Socket-free; the transport is injected.
+    add_executable(tci_extension_set_test tests/tci_extension_set_test.cpp)
+    target_include_directories(tci_extension_set_test PRIVATE src tests)
+    target_link_libraries(tci_extension_set_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_extension_set_test COMMAND tci_extension_set_test)
+
+    # A client that never enables the set gets the same bytes as from a server
+    # without it. Socket-free; `--print-transcript` dumps them for a diff.
+    add_executable(tci_extension_zero_traffic_test tests/tci_extension_zero_traffic_test.cpp)
+    target_include_directories(tci_extension_zero_traffic_test PRIVATE src tests)
+    target_link_libraries(tci_extension_zero_traffic_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -11604,6 +11629,8 @@ set(AETHER_SETTINGS_CONSUMERS
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_extension_set_test
+    tci_extension_zero_traffic_test
     tci_applet_test
     tci_rx_applet_test
     tci_host_iq_test
@@ -11663,6 +11690,7 @@ set(AETHER_SETTINGS_CONSUMERS
     phone_mon_vox_availability_test
     dax_iq_rate_limits_test
     offline_health_registry_test
+    rigctl_host_cw_text_test
     tx_operation_integration_test
     flex_cw_controls_test
     tune_inhibit_restore_test
