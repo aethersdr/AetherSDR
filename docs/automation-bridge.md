@@ -742,7 +742,8 @@ popup at a time and only while it is open; an empty combo is refused up front
 > false-blocked **RX-only** buttons like **"Tune Now"** (net/spot retune) and VOX
 > toggles, and the genuine keying TUNE/ATU buttons all carry `markTxKeying()`
 > anyway, so the marker still covers them (#3918). The **drive setpoints**
-> `RF power` and `Tune power` carry a second marker, `markTxSetpoint()`
+> `RF power`, `Tune power` and the TX Band Settings per-band RF/Tune power
+> edits carry a second marker, `markTxSetpoint()`
 > (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`): they never key, but
 > they set how hard the next transmission drives an amplifier or transverter,
 > so without TX permission `invoke`, `clickAt`, `doubleClick`, `drag`,
