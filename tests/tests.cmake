@@ -103,15 +103,11 @@ add_library(aether_test_async_log_writer OBJECT src/core/AsyncLogWriter.cpp)
 target_include_directories(aether_test_async_log_writer PRIVATE src)
 target_link_libraries(aether_test_async_log_writer PRIVATE Qt6::Core)
 
-# ── Shared GUI and theme objects for widget tests ────────────────────────────
-# The widget, theme and resource sources that GUI tests list most, compiled
-# once each. One object per source, so a test links exactly the objects it
-# names. Unlike the three above, any test may take these, including one that
-# links aethercore or aetherdesktop_support: the objects are the ones the test
-# would otherwise compile. Only sources whose includes read no feature define
-# (HAVE_*, AETHER_*) belong here, since the object is built without the test's
-# defines; ControlAvailabilityRegistry.cpp reads HAVE_DBUS and HAVE_PIPEWIRE
-# through its headers, so it stays listed per test.
+# Shared GUI and theme objects: one per source, so a test links exactly what it
+# names, and any test may take them, even one linking aethercore. Only sources
+# whose includes read no feature define (HAVE_*, AETHER_*) belong here, since
+# they build without the test's defines; ControlAvailabilityRegistry.cpp reads
+# HAVE_DBUS/HAVE_PIPEWIRE through its headers and stays per test.
 function(aether_add_test_gui_object name source)
     add_library(${name} OBJECT ${source})
     target_include_directories(${name} PRIVATE src)
