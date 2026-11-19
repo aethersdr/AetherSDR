@@ -2943,6 +2943,9 @@ RadioModel::RadioModel(QObject* parent)
     m_cwxModel.setMacroTemplateStore({
         [this](int idx) { return CwxMacroTemplateSettings::load(settingsScope(), idx); },
         [this](int idx, const QString& typed) {
+            // Disconnected edits are drafts. settingsScope() can still name
+            // the last radio after disconnect.
+            if (!isConnected() || m_txSessionClosing || m_expiringPendingCallbacks) { return; }
             CwxMacroTemplateSettings::save(settingsScope(), idx, typed);
         },
     });

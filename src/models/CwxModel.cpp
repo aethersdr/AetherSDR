@@ -483,10 +483,11 @@ void CwxModel::saveMacro(int idx, const QString& text)
 {
     if (idx < 0 || idx >= 12) return;
     m_macros[idx] = text;   // keep the raw +/- and {CALL} text for our own client-side expansion
-    if (m_macroTemplates.save) {
+    const CwTextRequest request{CwTextRequest::Field::SaveMacro, idx, portableMacroText(text)};
+    if (m_macroTemplates.save && request.valid()) {
         m_macroTemplates.save(idx, hasCallPlaceholder(text) ? text : QString());
     }
-    dispatchRequest({CwTextRequest::Field::SaveMacro, idx, portableMacroText(text)}, m_drainEpoch, -1);
+    dispatchRequest(request, m_drainEpoch, -1);
 }
 
 QString CwxModel::portableMacroText(const QString& typed) const

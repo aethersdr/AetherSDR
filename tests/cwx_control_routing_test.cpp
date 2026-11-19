@@ -563,6 +563,10 @@ void callMacrosAreKeptByTheApp()
     check(model.macro(0) == QLatin1String("+{CALL} DE W1AW K") && removals == 0,
           "the stored typed text is shown again once the slot equals its portable form");
 
+    model.saveMacro(0, QStringLiteral("CQ") + QChar(0x7f) + QStringLiteral("TEST"));
+    check(store.value(0) == QLatin1String("+{CALL} DE W1AW K") && removals == 0,
+          "a rejected macro edit leaves the stored template intact");
+
     model.saveMacro(0, QStringLiteral("{CALL} 5NN"));
     model.saveMacro(0, QStringLiteral("5NN TU"));
     check(!store.contains(0) && removals == 1, "editing {CALL} out of a macro removes its stored copy");
