@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T03:37:00.498744+00:00",
+  "recorded_utc": "2026-11-19T04:11:10.491753+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
@@ -50,11 +50,14 @@
     },
     {
       "case": "IQ broker and both ARP-owner deaths, simultaneous cleanup-owner failures",
-      "state": "current_IQ_broker_receive_and_keyed_passed_ARP_and_combined_pending",
+      "state": "current_IQ_broker_and_ARP_keeper_watcher_both_receive_and_keyed_passed",
       "earlier_evidence": "INSTALLED-RESOURCE-FAILURES-QUALIFICATION.json",
       "earlier_scope": "Earlier installed0d receive-only full resource retirement/restart is preserved; not current final keyed graph.",
-      "evidence": "CURRENT-IQ-BROKER-FAILURE-QUALIFICATION.json",
-      "limits": "One same-session broker kill with desktop paused after384.7ms corrected tones, radio unkey/analyzer release, clean resource audit and explicit same-connection USB recovery passes. Separate receive-only kill/recovery also passes. Both ARP-owner and combined failures remain pending; earlier installed0d evidence remains separately scoped."
+      "evidence": [
+        "CURRENT-IQ-BROKER-FAILURE-QUALIFICATION.json",
+        "CURRENT-ARP-OWNER-FAILURE-QUALIFICATION.json"
+      ],
+      "limits": "Current IQ broker separately passed receive/keyed. Each ARP owner and both together now pass receive-only and one5W corrected-tone fault with desktop paused. Six explicit USB successors pass; combined cases strand exactly ownedARP/journal then ordinary Start/Stop clears it, independently audited. Foreign replacement and other combined process/credential/API/startup cases remain open; no fullP5 claim."
     },
     {
       "case": "Primary/control failure, restart budget and physical recovery",
@@ -82,9 +85,9 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Inspect current fixed-ARP cleanup-owner topology and qualify each owner death plus combined failures and ordinary restart reconciliation, preserving foreign state.",
+    "purpose": "Inspect final API-loss and credential-revocation behavior and remaining startup/combined scopes; construct fixed bounded receive-only admission tests before separately dispatched keyed qualification.",
     "state": "not_executed_by_this_report",
-    "authority_constraint": "Fixed temporary injection on exactly pinned owned processes, with minimum sender privileges and independent RF/LP guards. No automatic RF key/rearm or shipping arbitrary endpoint."
+    "authority_constraint": "Minimize fixed lab injection privileges, pin exact owned resources, retain native bounded unkey/LP guards, and avoid global service/network changes. No automatic keying/rearm or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
