@@ -4694,7 +4694,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     ioReadBtn->setAccessibleName(QStringLiteral("Read IO board status"));
     auto* ioStatusLbl = new QLabel("Not read.");
     ioStatusLbl->setObjectName(QStringLiteral("hl2HwIoBoardStatus"));
-    ioStatusLbl->setAccessibleName(QStringLiteral("IO board status"));
+    ioStatusLbl->setAccessibleName(QStringLiteral("IO board status: Not read."));
     ioStatusLbl->setWordWrap(true);
     ioStatusLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
     setTone(ioStatusLbl, Tone::Value);
@@ -4707,6 +4707,9 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         if (!ioStatusGuard)
             return;
         ioStatusGuard->setText(text);
+        // A QLabel's accessible Name is its accessibleName when one is set, so
+        // the reading goes in the name or a screen reader never hears it.
+        ioStatusGuard->setAccessibleName(QStringLiteral("IO board status: %1").arg(text));
         setTone(ioStatusGuard, tone);
         QAccessibleEvent ev(ioStatusGuard.data(), QAccessible::NameChanged);
         QAccessible::updateAccessibility(&ev);

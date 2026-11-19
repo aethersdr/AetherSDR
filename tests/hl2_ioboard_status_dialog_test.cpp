@@ -6,7 +6,8 @@
 //   2. the button (mouse or keyboard) sends exactly one ioboard.status, and the
 //      reply's registers are shown in the status line;
 //   3. "No IO board answered." reads as no board, any other error as "Not read";
-//   4. the button is dimmed while a read is pending and while disconnected.
+//   4. the button is dimmed while a read is pending and while disconnected;
+//   5. a screen reader gets the reading itself, not only the line's label.
 //
 // No socket and no radio: an injected backend that declares the hl2
 // extension and answers ioboard.status with the shape Hl2Backend replies with.
@@ -17,6 +18,7 @@
 #include "gui/RadioSetupDialog.h"
 #include "models/RadioModel.h"
 
+#include <QAccessible>
 #include <QApplication>
 #include <QLabel>
 #include <QPushButton>
@@ -115,6 +117,13 @@ struct Page {
     QLabel* status{nullptr};
 };
 
+// What a screen reader announces for the status line.
+QString spokenName(QLabel* label)
+{
+    QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(label);
+    return iface ? iface->text(QAccessible::Name) : QString();
+}
+
 Page openPage(RadioSetupDialog& dialog)
 {
     dialog.show();
@@ -151,7 +160,7 @@ private slots:
         QCOMPARE(page.status->text(), QStringLiteral("Not read."));
         QVERIFY2(page.read->isEnabled(), "a connected HL2 can be read");
         QVERIFY2(!page.read->accessibleName().isEmpty(), "the button has an accessible name");
-        QVERIFY2(!page.status->accessibleName().isEmpty(), "the line has an accessible name");
+        QCOMPARE(spokenName(page.status), QStringLiteral("IO board status: Not read."));
         QCOMPARE(backend->reads, 0);
         QCOMPARE(backend->writes, 0);
     }
@@ -169,6 +178,8 @@ private slots:
                  QStringLiteral("Firmware major: 1\nEXTTR: high (receive)\n"
                                 "Inputs: In1 low, In2 high, In3 low, In4 low, In5 low\n"
                                 "Antenna tuner: tuning, asks for RF (0xee)\nFault: none"));
+        QVERIFY2(spokenName(page.status).contains(QStringLiteral("Firmware major: 1")),
+                 qPrintable(spokenName(page.status)));
         QVERIFY2(page.read->isEnabled(), "a finished read can be repeated");
         QCOMPARE(backend->writes, 0);
     }
@@ -196,6 +207,8 @@ private slots:
         page.read->click();
         QVERIFY2(page.status->text().startsWith(QStringLiteral("No IO board answered")),
                  qPrintable(page.status->text()));
+        QVERIFY2(spokenName(page.status).contains(QStringLiteral("No IO board answered")),
+                 qPrintable(spokenName(page.status)));
     }
 
     void otherErrorsAreNotAReading()
