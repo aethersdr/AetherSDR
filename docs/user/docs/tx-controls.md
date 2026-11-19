@@ -345,9 +345,12 @@ computer)** on the **Transmit** page of Radio Setup:
   the stop. The default is 10; **Off** turns the warning off.
 
 It is stored on this computer, for each radio. On a FlexRadio the radio's own
-**Timeout (sec):** applies as well, and the default here is never shorter than
-the radio's. On a radio without a timeout of its own, **Timeout (sec):** stays
-dimmed and this group is the time-out that applies.
+**Timeout (sec):** applies as well. Until this group has stored anything, its
+time-out follows the radio's and is never shorter than it. Once it has stored
+a value (any edit here, or leaving one of its boxes), the stored values apply,
+even if the radio's Timeout is raised later. On a radio without a timeout of
+its own, **Timeout (sec):** stays dimmed and this group is the time-out that
+applies.
 
 When it stops a transmission, a notification says **Transmit time-out:
 transmission stopped after N s**. Nothing transmits again until every PTT input
@@ -355,8 +358,11 @@ has been released, including a CAT or TCI program that keeps asking to
 transmit, and you key again. If the radio's own PTT input is still held, the
 notification says so. A CAT or TCI program sees the radio go back to receive.
 
-With break-in CW, each element is its own key-down, so the time-out bounds a
-key held down, not a whole over.
+With full break-in, where the radio returns to receive between elements, each
+element is its own key-down, so the time-out bounds a key held down, not a whole
+over. With semi break-in, where the hang time is longer than the gaps between
+characters, and with CWX, the voice keyer or NAVTEX, the radio stays keyed
+across the whole message, so a long message is cut at the time-out.
 
 ## Using AetherTX (Aetherial Audio)
 
