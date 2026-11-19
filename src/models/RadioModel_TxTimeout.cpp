@@ -132,7 +132,9 @@ void RadioModel::onTxTimeoutTransmitting(bool transmitting)
             m_txTimeout.setSettings(txTimeoutSettings());
         }
         m_txTimeout.setTransmitting(true, txTimeoutKeyingSource());
-        if (m_txTimeout.armed() && m_txTimeoutTimer) {
+        // Flex re-sends state=TRANSMITTING within an over; a restart on each
+        // would postpone the tick for as long as the status keeps coming.
+        if (m_txTimeout.armed() && m_txTimeoutTimer && !m_txTimeoutTimer->isActive()) {
             m_txTimeoutTimer->start();
         }
     } else {

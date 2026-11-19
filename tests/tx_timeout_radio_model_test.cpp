@@ -213,6 +213,30 @@ int main(int argc, char** argv)
         }
     }
 
+    // Repeated keyed status (Flex re-sends state=TRANSMITTING within an over)
+    // faster than the 250 ms tick must not restart it and starve the expiry.
+    {
+        RadioModel radio;
+        qint64 now = 5'000'000;
+        Access::setClock(radio, &now);
+        int expiries = 0;
+        QObject::connect(&radio, &RadioModel::txTimeoutExpired, &radio, [&expiries] { ++expiries; });
+        Access::radioKeyed(radio, true);
+        now += 200'000;
+        int repeats = 0;
+        QTimer repeat;
+        repeat.setInterval(50);
+        QObject::connect(&repeat, &QTimer::timeout, &radio, [&radio, &repeats] {
+            ++repeats;
+            Access::radioKeyed(radio, true);
+        });
+        repeat.start();
+        (void)pumpUntil([&expiries] { return expiries > 0; }, 1500);
+        repeat.stop();
+        report("repeated_keyed_status_does_not_starve_the_expiry", expiries == 1,
+               "expiries=" + std::to_string(expiries) + " repeats=" + std::to_string(repeats));
+    }
+
     // Not a tick early.
     {
         RadioModel radio;
