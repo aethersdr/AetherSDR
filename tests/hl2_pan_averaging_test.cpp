@@ -370,6 +370,45 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- 8. a rebuild while keyed keeps the DC estimates and the T/R state --
+    // A pan rate crossing rebuilds every receiver (applyPanBandwidth()), keyed
+    // or not. A fresh spectrum set to "transmitting" would sit in Armed and
+    // learn the keyed DC as receive DC (#7405 review, blocker 1).
+    {
+        Hl2RxDsp::Config cfg;
+        cfg.inputSampleRateHz = 48000;
+        cfg.audioSampleRateHz = 48000;
+        cfg.dspBlockSize = 1024;
+        cfg.fftSize = 256;
+        cfg.blockForOutput = true;
+        std::string err;
+        Hl2RxDsp dsp;
+        check(dsp.configure(cfg, &err), "configure");
+        auto feed = [&dsp](float scale, int blocks) {
+            for (long t = 0; t < blocks * kBlock; t += kBlock) {
+                auto b = toneBlock(37, 256, t);
+                for (auto& x : b) x *= scale;
+                dsp.processIqBlock(b);
+            }
+        };
+        feed(2e-3f, 40);                       // receive: a weak tone, ~-60 dBFS
+        dsp.setSpectrumTransmitting(true, 70);
+        check(dsp.spectrumDcKeyedApplied() && !dsp.spectrumDcTransmittingApplied(),
+              "rebuild control: a key arms the spectrum; receive DC until the keyed IQ arrives");
+        feed(1.0f, 40);                        // the keyed IQ, ~54 dB over receive
+        check(dsp.spectrumDcTransmittingApplied(), "rebuild control: the keyed IQ switches it to transmit");
+
+        cfg.inputSampleRateHz = 96000;         // the rate crossing, mid-key
+        cfg.fftSize = 512;
+        check(dsp.configure(cfg, &err), "reconfigure while keyed");
+        check(dsp.spectrumDcTransmittingApplied(),
+              "a rebuild while keyed keeps the transmit DC estimate in use");
+        feed(1.0f, 40);
+        check(dsp.spectrumDcTransmittingApplied(), "and the keyed IQ after it stays on it");
+        dsp.setSpectrumTransmitting(false, 0);
+        check(!dsp.spectrumDcKeyedApplied(), "the unkey after the rebuild returns to receive");
+    }
+
     if (g_failures == 0)
         std::printf("hl2_pan_averaging_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

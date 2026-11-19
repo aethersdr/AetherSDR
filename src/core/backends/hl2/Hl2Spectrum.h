@@ -51,6 +51,8 @@ public:
     {
         return m_dcState == DcState::Tx || m_dcState == DcState::Releasing;
     }
+    // A key has reached the T/R state: armed, transmitting or releasing.
+    [[nodiscard]] bool dcKeyed() const noexcept { return m_dcState != DcState::Rx; }
     static constexpr double kDcOnsetDb = 20.0;
     static constexpr int kDcOnsetRun = 64;
 

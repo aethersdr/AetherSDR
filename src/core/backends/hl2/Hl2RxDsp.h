@@ -239,6 +239,16 @@ public:
     {
         return m_spectrum && m_spectrum->logAverage();
     }
+    // The installed spectrum's T/R state: keyed (armed, transmitting or
+    // releasing), and whether its transmit DC estimate is the one in use.
+    [[nodiscard]] bool spectrumDcKeyedApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->dcKeyed();
+    }
+    [[nodiscard]] bool spectrumDcTransmittingApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->dcTransmitting();
+    }
 
     // Impulse noise blankers, the HL2's only ones (no firmware DSP), so NB is
     // shown even with hasRadioSideDsp = false; at most one of the two runs. Runs

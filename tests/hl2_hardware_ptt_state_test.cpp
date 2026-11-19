@@ -218,6 +218,16 @@ struct Hl2HardwarePttTestAccess {
                                   Qt::BlockingQueuedConnection);
         return on;
     }
+    // ...and whether it reached the installed Hl2Spectrum (armed, transmitting or
+    // releasing), not only Hl2RxDsp's cached flag.
+    static bool spectrumDcKeyed(Hl2Backend& backend)
+    {
+        bool on = false;
+        Hl2RxDsp* dsp = backend.m_rx[0].dsp;
+        QMetaObject::invokeMethod(dsp, [&on, dsp] { on = dsp->spectrumDcKeyedApplied(); },
+                                  Qt::BlockingQueuedConnection);
+        return on;
+    }
     static bool mixerGateClosed(const Hl2Backend& backend) { return backend.m_rxAudioMuted; }
     static bool holdArmed(const Hl2Backend& backend)
     {
@@ -321,6 +331,7 @@ void testRadioPttWithHostIdle()
     backend.setKeying(true, tx.operation, {});
     check(Access::hostMoxOnWire(backend), "control: a host key reaches MetisClient");
     check(Access::spectrumTransmitting(backend), "a host key moves the pan's DC removal to transmit");
+    check(Access::spectrumDcKeyed(backend), "and the edge reaches the installed Hl2Spectrum");
     backend.submitTxAudio(microphoneAudio, 24000, TxAudioSource::Microphone, tx.context);
     Access::drainTxAudio(backend);
     check(processedAudioBlocks == 1, "control: host keying sends microphone audio through the DSP");
@@ -329,6 +340,7 @@ void testRadioPttWithHostIdle()
     check(!Access::hostMoxOnWire(backend) && !Access::mixerGateClosed(backend),
           "control: the host is unkeyed and receiving again");
     check(!Access::spectrumTransmitting(backend), "a host unkey moves it back to receive");
+    check(!Access::spectrumDcKeyed(backend), "and the installed Hl2Spectrum is back in receive");
     MoxEdges edges(backend);
     const AetherSDR::hl2::Cc idleDrive = Access::driveBank(backend);
     backend.setTxPower(37);
@@ -346,6 +358,7 @@ void testRadioPttWithHostIdle()
     check(Access::mixerGateClosed(backend), "the mixer gate closes on radio PTT");
     check(Access::dspMuted(backend), "the demodulator is muted on radio PTT");
     check(Access::spectrumTransmitting(backend), "radio PTT moves the pan's DC removal to transmit");
+    check(Access::spectrumDcKeyed(backend), "and radio PTT reaches the installed Hl2Spectrum");
     check(!Access::hostMoxOnWire(backend), "the host does not assert MOX");
 
     const int blocksBeforeRadioAudio = processedAudioBlocks;
