@@ -5,14 +5,26 @@
 // the notification and keying source, the release latch on producer inputs,
 // and that the time-out never keys.
 
+#include "TestSettingsProfile.h"
+#include "core/backends/CwControlRequest.h"
+#include "core/backends/IRadioBackend.h"
+#include "core/backends/SliceDelta.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "models/HostCwTextKeyer.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "models/TxController.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QStringList>
+#include <QTimer>
 
 #include <cstdio>
+#include <functional>
+#include <memory>
 #include <string>
 
 namespace AetherSDR {
@@ -41,6 +53,7 @@ public:
         radio.noteTxTimeoutHold(request);
     }
     static bool armed(const RadioModel& radio) { return radio.m_txTimeout.armed(); }
+    static int holders(const RadioModel& radio) { return radio.m_txTimeout.holderCount(); }
     // emitInterlockNotification() drops a repeat of the last key within 5 s.
     static void clearNoticeDedup(RadioModel& radio) { radio.m_lastInterlockNotificationKey.clear(); }
 };
@@ -89,6 +102,56 @@ struct Recorder {
     }
 };
 
+// Takes every carrier edge, as a connected HL2 that granted TX does.
+class CwKeyingStub final : public IRadioBackend {
+public:
+    RadioCapabilities caps;
+    int* downs{nullptr};
+    bool* keyDown{nullptr};
+    RadioCapabilities capabilities() const override { return caps; }
+    bool isConnected() const override { return true; }
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override {}
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    void setKeying(bool, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override {}
+    ReceiveDispatch requestCwControl(const CwControlRequest& request,
+                                     const TxCoordinator::Command& command) override
+    {
+        if (request.kind == CwControlRequest::Kind::PttEnvelope) {
+            return IRadioBackend::requestCwControl(request, command);
+        }
+        if (!cwEdgeAdmitted(request, command, caps.canTransmit)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        *downs += request.down ? 1 : 0;
+        *keyDown = request.down;
+        return ReceiveDispatch::Dispatched;
+    }
+    QString sendCwText(const QString&, const TxCoordinator::Operation&,
+                       const TxCoordinator::Completion&) override { return {}; }
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+};
+
+bool pumpUntil(const std::function<bool()>& done, int ms)
+{
+    QElapsedTimer t;
+    t.start();
+    QEventLoop loop;
+    QTimer poll;
+    QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+        if (done() || t.elapsed() >= ms) {
+            loop.quit();
+        }
+    });
+    poll.start(1);
+    loop.exec();
+    return done();
+}
+
 // Keys the radio, runs the clock past the limit in 250 ms ticks.
 void runOver(RadioModel& radio, qint64& now, qint64 forMs)
 {
@@ -103,7 +166,11 @@ void runOver(RadioModel& radio, qint64& now, qint64 forMs)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("tx-timeout-radio-model"));
     QCoreApplication app(argc, argv);
+    if (!profile.isValid()) {
+        return 1;
+    }
 
     // Every keying path arms the one timer: what keyed the radio only names it.
     {
@@ -314,6 +381,105 @@ int main(int argc, char** argv)
         Access::radioKeyed(radio, false);
         report("latched_while_radio_keyed_cleared_when_idle",
                whileKeyed && !radio.txTimeoutLatched());
+    }
+
+    // Host CW text (rigctl send_morse on an HL2) is sent text, not a held
+    // input: a time-out mid-message ends the message, and once the radio is
+    // idle the latch clears and a fresh PTT is admitted. Both while an element
+    // is down and in the gap between two elements (no CW intent open).
+    for (const bool inGap : {false, true}) {
+        int downs = 0;
+        bool keyDown = false;
+        RadioModel radio;
+        qint64 now = 5'000'000;
+        Access::setClock(radio, &now);
+        radio.transmitModel().setCwBreakIn(true);
+        auto owned = std::make_unique<CwKeyingStub>();
+        {
+            hl2::Hl2Backend real;
+            owned->caps = real.capabilities();
+        }
+        owned->caps.canTransmit = true;
+        owned->downs = &downs;
+        owned->keyDown = &keyDown;
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        SliceDelta slice;
+        slice.frequency = 7.020;
+        slice.mode = QStringLiteral("CW");
+        slice.panId = QStringLiteral("0x40000000");
+        slice.txSlice = true;
+        radio.emitBackendSliceChangedForTest(0, slice);
+        int expiries = 0;
+        QObject::connect(&radio, &RadioModel::txTimeoutExpired, &radio, [&expiries] { ++expiries; });
+        HostCwTextKeyer keyer(&radio, QStringLiteral("rigctl"));
+        const bool sent = keyer.send(QStringLiteral("MMMMMMMMMM"));
+        const bool keyed = pumpUntil([&] { return downs >= 1 && keyDown != inGap; }, 3000);
+        runOver(radio, now, 180'000);
+        const bool expired = expiries == 1;
+        const int downsAtExpiry = downs;
+        (void)pumpUntil([] { return false; }, 600);   // the next element is refused
+        const bool ended = downs == downsAtExpiry && !keyDown;
+        Access::radioKeyed(radio, false);
+        Access::tick(radio);
+        const std::string detail = "sent=" + std::to_string(sent) + " keyed=" + std::to_string(keyed)
+            + " expired=" + std::to_string(expired) + " ended=" + std::to_string(ended)
+            + " latched=" + std::to_string(radio.txTimeoutLatched());
+        report(inGap ? "host_cw_text_time_out_between_elements_does_not_hold_the_latch"
+                     : "host_cw_text_time_out_mid_element_does_not_hold_the_latch",
+               sent && keyed && expired && ended && !radio.txTimeoutLatched(), detail);
+        const TxCoordinator::Producer ptt = radio.registerTxProducer();
+        Access::clearNoticeDedup(radio);
+        report(inGap ? "fresh_ptt_admitted_after_host_cw_text_time_out_between_elements"
+                     : "fresh_ptt_admitted_after_host_cw_text_time_out_mid_element",
+               Access::admit(radio, ptt.request()));
+    }
+
+    // Host CW text that ended normally earlier in the over holds nothing: a
+    // footswitch then runs the over into a time-out, and its release alone
+    // clears the latch once the radio is idle.
+    {
+        int downs = 0;
+        bool keyDown = false;
+        RadioModel radio;
+        qint64 now = 5'000'000;
+        Access::setClock(radio, &now);
+        radio.transmitModel().setCwBreakIn(true);
+        auto owned = std::make_unique<CwKeyingStub>();
+        {
+            hl2::Hl2Backend real;
+            owned->caps = real.capabilities();
+        }
+        owned->caps.canTransmit = true;
+        owned->downs = &downs;
+        owned->keyDown = &keyDown;
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        SliceDelta slice;
+        slice.frequency = 7.020;
+        slice.mode = QStringLiteral("CW");
+        slice.panId = QStringLiteral("0x40000000");
+        slice.txSlice = true;
+        radio.emitBackendSliceChangedForTest(0, slice);
+        Access::radioKeyed(radio, true);
+        HostCwTextKeyer keyer(&radio, QStringLiteral("rigctl"));
+        const bool sent = keyer.send(QStringLiteral("E"));
+        const bool done = pumpUntil([&] { return downs >= 1 && !keyDown; }, 3000);
+        (void)pumpUntil([] { return false; }, 300);
+        const TxCoordinator::Producer footswitch = radio.registerTxProducer();
+        const TxCoordinator::Request press = footswitch.request();
+        Access::hold(radio, press);
+        runOver(radio, now, 180'000);
+        const bool expired = radio.txTimeoutLatched();
+        radio.requestProducerPttOff(press, TransmitModel::PttSource::Mox);
+        Access::radioKeyed(radio, false);
+        Access::tick(radio);
+        const std::string detail = "sent=" + std::to_string(sent) + " done=" + std::to_string(done)
+            + " expired=" + std::to_string(expired) + " holders=" + std::to_string(Access::holders(radio));
+        report("finished_host_cw_text_does_not_hold_a_later_time_out",
+               sent && done && expired && !radio.txTimeoutLatched(), detail);
+        const TxCoordinator::Producer ptt = radio.registerTxProducer();
+        Access::clearNoticeDedup(radio);
+        report("fresh_ptt_admitted_after_finished_host_cw_text_and_time_out",
+               Access::admit(radio, ptt.request()));
     }
 
     // Defaults and the Flex second layer, through the model getter.
