@@ -2255,15 +2255,17 @@ testing behavior such as a delayed model/radio update arriving while
 `QAbstractSlider::isSliderDown()` is genuinely true.
 
 ```json
-→ {"cmd":"gesture","action":"begin","target":"RF power"}
+→ {"cmd":"gesture","action":"begin","target":"RxApplet/AF gain"}
 ← {"ok":true,"active":true,"sliderDown":true,"value":50,"leaseMs":60000}
 
 → {"cmd":"gesture","action":"move","value":"0 -30"}
 ← {"ok":true,"active":true,"sliderDown":true,"dx":0,"dy":-30}
 
 → {"cmd":"gesture","action":"end"}
-← {"ok":true,"active":false,"target":"RF power","dx":0,"dy":-30}
+← {"ok":true,"active":false,"target":"RxApplet/AF gain","dx":0,"dy":-30}
 ```
+
+A gesture on `RF power` or `Tune power` needs TX permission, as `transmit rfpower` does.
 
 Phases:
 
