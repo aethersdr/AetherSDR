@@ -42,6 +42,8 @@ void pd_core_reset(pd_core* c);
 int pd_core_correcting(const pd_core* c);
 // WDSP's calibration state (LRESET..LTURNON) and its fit-result flags.
 int pd_core_state(const pd_core* c);
+// One coherent WDSP snapshot: info[0] at bits0..7, info[6] at8..9,
+// magnitude info[1] at10..15, cosine info[2] at16..21, sine info[3] at22..27.
 int pd_core_fit_flags(const pd_core* c);
 // 1 while a new correction set waits for pd_core_correct() to cross-fade it
 // in. The calibration thread blocks until that happens, so the transmit path

@@ -53,10 +53,11 @@ Build from the repository root with Zig installed:
 python3 tools/pd-waveform/build.py --output build/aetherpd --arch both --host
 ```
 
-`--regression-tests` also builds five standalone DSP tests for both selected
+`--regression-tests` also builds six standalone DSP tests for both selected
 ARM targets and, with `--host`, the host. They cover dispatch/freshness fences,
 warm-model lifetime, phase settling, calibration amplitude coverage and EQ
-worker results. They are not installed in the waveform package. The Linux
+worker results, and real WDSP phase-fit rejection diagnostics. They are not
+installed in the waveform package. The Linux
 CTest graph registers these tests against the current core, plus a calibration
 dispatch test that checks retirement before output. Datagram I/O is injected;
 the tests create no sockets, radio connection or RF commands. ARM builds alone
@@ -256,6 +257,17 @@ terminate the process rather than continue without a valid lock; the independent
 guardians remain responsible for unkey and receive recovery. Desktop WDSP does
 not enable this option. Linux2.6 kernel PI support still requires actual6300
 qualification, including a contended mutex test.
+
+### Calibration fit evidence
+
+The periodic `calibration:` log's `fit flags` includes all five WDSP rejection
+fields in one coherent snapshot. Bits0–7 carry input/extrapolation flags,
+bits8–9 carry solution-change/top-bucket flags, and the six-bit fields starting
+at10,16,22 carry magnitude, cosine and sine fit reasons. In either phase field,
+bit4 reports the sine/cosine identity check. `rejected` counts stale-generation
+publication refusals separately. Zero stale-publication refusals do not imply
+that a nonlinear fit succeeded. These diagnostics change neither acceptance
+criteria nor calibration duration and do not identify the cause of a bad fit.
 
 ### Alignment failure evidence
 

@@ -1,0 +1,803 @@
+{
+  "recorded_utc": "2026-11-19T04:38:52.860812+00:00",
+  "production_ready": false,
+  "source_parent": "46c3119c84e69ae90a5b988a2884b66b9d5b4074",
+  "status": "Offline observation gap causally reproduced and fixed: pd_core_fit_flags omitted WDSP magnitude/cosine/sine rejection fields. Real noisy phase fits were rejected while the old wrapper returned zero. New snapshot includes all five fields and preserves existing low-bit assignments. This is a diagnostic fix, not a demonstrated repair or attribution of the radio cold-start bypass.",
+  "radio_actions": [],
+  "new_positive_GUI_key_requests": 0,
+  "new_observed_TX_intervals": 0,
+  "installed": false,
+  "installed_runtime_unchanged": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "current_radio_cold_start_bypass_evidence": "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json",
+  "source_files": {
+    "tests/tests.cmake": "f2eb3d226034b49d9c06e3a97d0c6689415df8ae639b82fcee40cd5a98702caf",
+    "tools/pd-waveform/pd_core.c": "79e673a282aea820927657445ecfc4611278bb0bf47c4e7768d0601eee636769",
+    "tools/pd-waveform/pd_core.h": "0f1fe82475835bde8968bc7393e6f500af13be984a707fa9e744e408bc002e0e",
+    "tools/pd-waveform/build.py": "0c7e6dd696a4983a4ea9f399dbf52a6091fdc2a9dfe0c19e5867ca1d40ff807b",
+    "tools/pd-waveform/README.md": "52a8cb0d8c53833f67d9c50f3608f8c454d16a673b78e5c3d0e75b529e03e1f0",
+    "tools/pd-waveform/fit_rejection_test.c": "dc7958ee74eff45b3d8efebc11eb7875828a2d033b335ba3bbe72a1fe3bc8f23"
+  },
+  "causal_evidence": {
+    "original_test_failed": true,
+    "restoring_original_implementation_failed_current_test": true,
+    "restored_fix_passed": true,
+    "real_WDSP_phase_rejection_fields": [
+      0,
+      0,
+      16,
+      16,
+      0
+    ],
+    "old_packed_flags": 0,
+    "new_packed_flags_hex": "0x4100000",
+    "noisy_fit_stays_bypassed": true,
+    "clean_fit_remains_usable": true,
+    "original_reported_rejected_count_meaning": "stale-generation publication refusal, not nonlinear fitting rejection",
+    "initial_build_environment_failure": "First local build could not write default ccache; the unbuilt test was not counted as regression evidence. New workspace cache and isolated output directories fixed the environment. Initial failed observation log is preserved."
+  },
+  "host_fit_timing_probe": {
+    "source": "Exact original core plus local-only calls immediately before/after existing calc(a); fitting logic/parameters unchanged.",
+    "pairs": "Synthetic710/1900Hz excitation, memoryless nonlinearity and four additive-noise levels; not actual captured radio pairs.",
+    "completed_fits": 8,
+    "fit_wall_ms_range": [
+      181.842544,
+      208.679721
+    ],
+    "fit_CPU_ms_range": [
+      181.646913,
+      208.440474
+    ],
+    "rules_out_radio_scheduling_or_fitting_latency": false,
+    "results": {
+      "scope": "synthetic host-only sensitivity probe; not a replay of the radio failure",
+      "cases": [
+        {
+          "noise": "0",
+          "exit": 0,
+          "rows": [
+            {
+              "event": "state",
+              "sample_time_s": 0.005333,
+              "wall_ms": 0.008221,
+              "state": 0,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.010667,
+              "wall_ms": 1.225047,
+              "state": 1,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.016,
+              "wall_ms": 2.324225,
+              "state": 2,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.122667,
+              "wall_ms": 24.621696,
+              "state": 3,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.128,
+              "wall_ms": 25.746328,
+              "state": 4,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.421333,
+              "wall_ms": 85.215598,
+              "state": 5,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.426667,
+              "wall_ms": 86.309556,
+              "state": 6,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "fit",
+              "wall_ms": 183.872082,
+              "CPU_ms": 183.474269,
+              "accepted_by_calc": true,
+              "flags": [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.365333,
+              "wall_ms": 274.461665,
+              "state": 7,
+              "fits": 1,
+              "solution": true
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.370667,
+              "wall_ms": 275.522735,
+              "state": 3,
+              "fits": 1,
+              "solution": true
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.376,
+              "wall_ms": 276.585856,
+              "state": 4,
+              "fits": 1,
+              "solution": true
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.669333,
+              "wall_ms": 335.842404,
+              "state": 5,
+              "fits": 1,
+              "solution": true
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.674667,
+              "wall_ms": 336.955986,
+              "state": 6,
+              "fits": 1,
+              "solution": true
+            },
+            {
+              "event": "fit",
+              "wall_ms": 181.842544,
+              "CPU_ms": 181.646913,
+              "accepted_by_calc": true,
+              "flags": [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "event": "end",
+              "noise": 0.0,
+              "fit_calls_completed": 2,
+              "fits": 1,
+              "flags": 0,
+              "solution": true,
+              "max_state": 7,
+              "wall_ms": 520.763148,
+              "sample_time_s": 2.581333
+            }
+          ]
+        },
+        {
+          "noise": "0.03",
+          "exit": 0,
+          "rows": [
+            {
+              "event": "state",
+              "sample_time_s": 0.005333,
+              "wall_ms": 0.007609,
+              "state": 0,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.010667,
+              "wall_ms": 1.132785,
+              "state": 1,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.016,
+              "wall_ms": 2.204943,
+              "state": 2,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.122667,
+              "wall_ms": 24.305274,
+              "state": 3,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.128,
+              "wall_ms": 25.370998,
+              "state": 4,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.421333,
+              "wall_ms": 85.358733,
+              "state": 5,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.426667,
+              "wall_ms": 86.458929,
+              "state": 6,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "fit",
+              "wall_ms": 199.099061,
+              "CPU_ms": 198.790191,
+              "accepted_by_calc": false,
+              "flags": [
+                0,
+                0,
+                16,
+                16,
+                0
+              ]
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.424,
+              "wall_ms": 287.972292,
+              "state": 3,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.429333,
+              "wall_ms": 289.055525,
+              "state": 4,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.722667,
+              "wall_ms": 348.559938,
+              "state": 5,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.728,
+              "wall_ms": 349.664908,
+              "state": 6,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "fit",
+              "wall_ms": 199.662762,
+              "CPU_ms": 199.419761,
+              "accepted_by_calc": false,
+              "flags": [
+                0,
+                0,
+                16,
+                16,
+                0
+              ]
+            },
+            {
+              "event": "end",
+              "noise": 0.03,
+              "fit_calls_completed": 2,
+              "fits": 2,
+              "flags": 0,
+              "solution": false,
+              "max_state": 6,
+              "wall_ms": 551.261266,
+              "sample_time_s": 2.725333
+            }
+          ]
+        },
+        {
+          "noise": "0.1",
+          "exit": 0,
+          "rows": [
+            {
+              "event": "state",
+              "sample_time_s": 0.005333,
+              "wall_ms": 0.007618,
+              "state": 0,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.010667,
+              "wall_ms": 1.072565,
+              "state": 1,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.016,
+              "wall_ms": 2.164098,
+              "state": 2,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.122667,
+              "wall_ms": 23.516551,
+              "state": 3,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.128,
+              "wall_ms": 24.623361,
+              "state": 4,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.421333,
+              "wall_ms": 84.092813,
+              "state": 5,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.426667,
+              "wall_ms": 85.155745,
+              "state": 6,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "fit",
+              "wall_ms": 204.243992,
+              "CPU_ms": 203.942864,
+              "accepted_by_calc": false,
+              "flags": [
+                0,
+                0,
+                16,
+                16,
+                0
+              ]
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.450667,
+              "wall_ms": 291.329403,
+              "state": 3,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.456,
+              "wall_ms": 292.390582,
+              "state": 4,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.749333,
+              "wall_ms": 351.997676,
+              "state": 5,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.754667,
+              "wall_ms": 353.059775,
+              "state": 6,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "fit",
+              "wall_ms": 204.512303,
+              "CPU_ms": 204.294932,
+              "accepted_by_calc": false,
+              "flags": [
+                0,
+                0,
+                16,
+                16,
+                0
+              ]
+            },
+            {
+              "event": "end",
+              "noise": 0.1,
+              "fit_calls_completed": 2,
+              "fits": 2,
+              "flags": 0,
+              "solution": false,
+              "max_state": 6,
+              "wall_ms": 557.982921,
+              "sample_time_s": 2.773333
+            }
+          ]
+        },
+        {
+          "noise": "0.35",
+          "exit": 0,
+          "rows": [
+            {
+              "event": "state",
+              "sample_time_s": 0.005333,
+              "wall_ms": 0.009047,
+              "state": 0,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.010667,
+              "wall_ms": 1.218226,
+              "state": 1,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.016,
+              "wall_ms": 2.280463,
+              "state": 2,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.122667,
+              "wall_ms": 24.522494,
+              "state": 3,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.128,
+              "wall_ms": 25.669268,
+              "state": 4,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.421333,
+              "wall_ms": 86.870359,
+              "state": 5,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 0.426667,
+              "wall_ms": 88.107654,
+              "state": 6,
+              "fits": 0,
+              "solution": false
+            },
+            {
+              "event": "fit",
+              "wall_ms": 208.679721,
+              "CPU_ms": 208.440474,
+              "accepted_by_calc": false,
+              "flags": [
+                0,
+                0,
+                16,
+                16,
+                0
+              ]
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.461333,
+              "wall_ms": 298.955498,
+              "state": 3,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.466667,
+              "wall_ms": 300.014459,
+              "state": 4,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.76,
+              "wall_ms": 359.633197,
+              "state": 5,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "state",
+              "sample_time_s": 1.765333,
+              "wall_ms": 360.690308,
+              "state": 6,
+              "fits": 1,
+              "solution": false
+            },
+            {
+              "event": "fit",
+              "wall_ms": 199.897394,
+              "CPU_ms": 199.69533,
+              "accepted_by_calc": false,
+              "flags": [
+                0,
+                0,
+                16,
+                16,
+                0
+              ]
+            },
+            {
+              "event": "end",
+              "noise": 0.35,
+              "fit_calls_completed": 2,
+              "fits": 2,
+              "flags": 0,
+              "solution": false,
+              "max_state": 6,
+              "wall_ms": 560.857674,
+              "sample_time_s": 2.757333
+            }
+          ]
+        }
+      ],
+      "RF_commands": []
+    }
+  },
+  "regressions": {
+    "Linux_CTest_targets_passed": 7,
+    "portable_host_targets_passed": 6,
+    "causal_mutation_detected": true,
+    "test_registration_passed": true,
+    "frozen_gate_unchanged": true,
+    "docs_install_and_build_passed": true
+  },
+  "portable_artifacts": {
+    "artifacts": {
+      "AetherPD.ssdr_waveform": {
+        "bytes": 329283,
+        "sha256": "365d3f6ae6563ea49dc397e3d2a57e14830b48641c5d6264d7dcfd543efd8743"
+      },
+      "aether-pd-host": {
+        "bytes": 317920,
+        "sha256": "eb11bf8783eb9878e4ab6487150bd00ea5c129eec3118fd7449b56359538e720",
+        "ELF_machine": 62
+      },
+      "dispatch_deadline-test-arm64": {
+        "bytes": 259320,
+        "sha256": "067df71c5bdfd0bcfb3d8d6fc5ca55816a3503cb226ad24c70d865c73b44fd7f",
+        "ELF_machine": 183
+      },
+      "dispatch_deadline-test-armv7": {
+        "bytes": 246188,
+        "sha256": "94349389f596174cbf3e80c749b5e5782230159f2fa6ab1887b7e13be5cc6761",
+        "ELF_machine": 40
+      },
+      "dispatch_deadline-test-host": {
+        "bytes": 288784,
+        "sha256": "20aefc4a0d3ed4b48ad5b2595e254a98e22c954854831bfab78b5f75d55d4e0a",
+        "ELF_machine": 62
+      },
+      "eq_phase_startup-test-arm64": {
+        "bytes": 193208,
+        "sha256": "06bc9d3209a5169063486e98b0a508a17892a729b323152af6cd764682ffe744",
+        "ELF_machine": 183
+      },
+      "eq_phase_startup-test-armv7": {
+        "bytes": 177836,
+        "sha256": "b64df767daa7427f11942526ce119c1ae9309d3627685bb886bdcf3cdc77559b",
+        "ELF_machine": 40
+      },
+      "eq_phase_startup-test-host": {
+        "bytes": 218256,
+        "sha256": "dca89fc6545604d014dca9b69620e5f39ff7f04bff571124e3ec147a829b0f00",
+        "ELF_machine": 62
+      },
+      "eq_worker-test-arm64": {
+        "bytes": 70504,
+        "sha256": "3645af96b3722600ffdac7c131350973b6c4950790c28aadec2254b201e74e67",
+        "ELF_machine": 183
+      },
+      "eq_worker-test-armv7": {
+        "bytes": 61232,
+        "sha256": "5e7594fd86a6d43b62159c2690678270f5397ed15f73f0fcf15a96a370dfe512",
+        "ELF_machine": 40
+      },
+      "eq_worker-test-host": {
+        "bytes": 68384,
+        "sha256": "caf0609f74faa96f227874969e08f0b194288ee2aff07eef518c2f61bd8290df",
+        "ELF_machine": 62
+      },
+      "fit_rejection-test-arm64": {
+        "bytes": 158808,
+        "sha256": "f0342e80108f39145c900636425f163226405b917f98b76cb0f147607f59cfb2",
+        "ELF_machine": 183
+      },
+      "fit_rejection-test-armv7": {
+        "bytes": 143252,
+        "sha256": "6eb056322c80b7c99defc360888699e6e920d4931a72e5135ba8bf5f96edbc43",
+        "ELF_machine": 40
+      },
+      "fit_rejection-test-host": {
+        "bytes": 177512,
+        "sha256": "c749afb2c84133e413f58adb6ba6acb6cfdb7ab2858a0bd64eb4fd1f4019f100",
+        "ELF_machine": 62
+      },
+      "recovery_collection-test-arm64": {
+        "bytes": 161712,
+        "sha256": "50f69fedda6af6d6508752cf33c2adf3d21a1a21ad3651791e9ebb253f0d3b50",
+        "ELF_machine": 183
+      },
+      "recovery_collection-test-armv7": {
+        "bytes": 145836,
+        "sha256": "6b32490e5be4b72f74e2217061898e0ff796465e9f975021cb912ec666517de9",
+        "ELF_machine": 40
+      },
+      "recovery_collection-test-host": {
+        "bytes": 180304,
+        "sha256": "9f37ec18d3098a58398c2efd5206414400a3c3e22ebf724038cfdbd8216ac2a9",
+        "ELF_machine": 62
+      },
+      "warm_core-test-arm64": {
+        "bytes": 158416,
+        "sha256": "ff1ae51609b1cd4054e0a7e12817e4c63e820233d4b873d3d9d5a4a5407ea4e0",
+        "ELF_machine": 183
+      },
+      "warm_core-test-armv7": {
+        "bytes": 141028,
+        "sha256": "41d31c17f78276202e34a85c32ba5f98c93359be236a5202be99b75c879e71cd",
+        "ELF_machine": 40
+      },
+      "warm_core-test-host": {
+        "bytes": 179176,
+        "sha256": "43d07d09cbba8170452fc9dd5f7e87dedd10c7e130d07337bcf7fb6a7bff105e",
+        "ELF_machine": 62
+      }
+    },
+    "host_results": [
+      {
+        "test": "recovery_collection",
+        "exit": 0,
+        "sha256": "9f37ec18d3098a58398c2efd5206414400a3c3e22ebf724038cfdbd8216ac2a9"
+      },
+      {
+        "test": "eq_phase_startup",
+        "exit": 0,
+        "sha256": "dca89fc6545604d014dca9b69620e5f39ff7f04bff571124e3ec147a829b0f00"
+      },
+      {
+        "test": "warm_core",
+        "exit": 0,
+        "sha256": "43d07d09cbba8170452fc9dd5f7e87dedd10c7e130d07337bcf7fb6a7bff105e"
+      },
+      {
+        "test": "eq_worker",
+        "exit": 0,
+        "sha256": "caf0609f74faa96f227874969e08f0b194288ee2aff07eef518c2f61bd8290df"
+      },
+      {
+        "test": "dispatch_deadline",
+        "exit": 0,
+        "sha256": "20aefc4a0d3ed4b48ad5b2595e254a98e22c954854831bfab78b5f75d55d4e0a"
+      },
+      {
+        "test": "fit_rejection",
+        "exit": 0,
+        "sha256": "c749afb2c84133e413f58adb6ba6acb6cfdb7ab2858a0bd64eb4fd1f4019f100"
+      }
+    ],
+    "ARM_execution_qualified": false,
+    "managed_installation_package": false,
+    "RF_commands": []
+  },
+  "repeated_component_build": {
+    "passed": true,
+    "same_source_path": true,
+    "separate_temporary_compiler_caches": true,
+    "ARMv7_ARM64_legacy_package_byte_identical": true,
+    "host_native_byte_identical": true,
+    "package_members": {
+      "AetherPD/AetherPD.cfg": "25ab8f778d94af5b3b0096a67db82a0cee25770bbea45f3f00dcbab095814135",
+      "AetherPD/launch.sh": "968dcac5a533f59f81ee8de9ba79c93be7b61873dc5345721f27b6f6f1960984",
+      "AetherPD/aether-pd-armv7": "cbcad786658e94f3fedad68e391f8f9d40815891bd8ca2761d6dad2a885fab67",
+      "AetherPD/aether-pd-arm64": "9ef28d3b8650d359ca3931809e007d7290140c5dd83abd91cd1a3887ad7956b3",
+      "AetherPD/LICENSES": "7fcf73c02199b14d55a1a71f7b0ca482a0b7219f74014613e8c064e8c52068f6",
+      "AetherPD/LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    "managed_runtime_reproduced": false,
+    "installed": false
+  },
+  "live_evidence_comparison": {
+    "scope": "Historical/current installed runtimeab observations only; no new radio action in this investigation",
+    "observations": [
+      {
+        "case": "current all-bypass",
+        "records": [
+          "1795061899.098 alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=42696069932529 submitted_ns=42697820737333 started_ns=42697820772073 completed_ns=42698065926076 consumed_ns=42698074320543 delay=1768.950 envelope=0.891177 phase=0.941976 offset_hz=-0.022969 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+          "1795061900.912 transmit path fitted: 31 taps, -9.7 dB of the feedback left unexplained"
+        ]
+      },
+      {
+        "case": "keyed-keeper",
+        "records": [
+          "1795060729.472 alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=41526442596259 submitted_ns=41528193651707 started_ns=41528193709485 completed_ns=41528433041954 consumed_ns=41528447700146 delay=1799.970 envelope=0.997334 phase=0.999135 offset_hz=-0.024470 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+          "1795060731.349 transmit path fitted: 31 taps, -28.8 dB of the feedback left unexplained"
+        ]
+      },
+      {
+        "case": "keyed-watcher",
+        "records": [
+          "1795060900.581 alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=41697533697139 submitted_ns=41699282754862 started_ns=41699282846824 completed_ns=41699553618521 consumed_ns=41699557400934 delay=1754.970 envelope=0.997342 phase=0.999140 offset_hz=-0.024684 noise_left=47360 samples_left=143360 tone_sent_ns=0 guard_ns=500000000",
+          "1795060902.459 transmit path fitted: 31 taps, -29.3 dB of the feedback left unexplained"
+        ]
+      },
+      {
+        "case": "keyed-both",
+        "records": [
+          "1795061257.762 alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=42054752773439 submitted_ns=42056503982565 started_ns=42056504038065 completed_ns=42056737054831 consumed_ns=42056738314432 delay=1773.970 envelope=0.997337 phase=0.999137 offset_hz=-0.024452 noise_left=48384 samples_left=144384 tone_sent_ns=0 guard_ns=500000000",
+          "1795061259.573 transmit path fitted: 31 taps, -28.3 dB of the feedback left unexplained"
+        ]
+      }
+    ],
+    "RF_commands": []
+  },
+  "next_step": "Prepare a source-closed managed diagnostic candidate with complete rejection flags, bounded fit-worker timing and exact unmatched/aligned sample evidence. If existing RAW/DUMP/trace hooks are enabled in a fixed bench-only wrapper, buffer/prefault their entire bounded output before keying and flush only after radio release to avoid introducing filesystem stalls; validate fixed volatile paths, no caller-selected environment or persistent privilege, ownership, cleanup and buffer behavior before any separate guarded RF case. Do not relax fitting/readiness thresholds or extend/rearm the bounded source.",
+  "scope_limits": [
+    "The hardware cold-start bypass remains unresolved. A poor live EQ residual and unreported phase rejection are consistent observations, not proof that the synthetic rejection is the live cause. The original failed run has no captured raw acquisition/aligned pairs or actual fit-worker start/completion times.",
+    "Synthetic host fitting times must not be extrapolated to FPGA-to-process latency, radio fitting duration, Cortex-A8 throughput or successful FLEX6300 support. No RF, root bridge, installer, service restart or radio reboot was used in this investigation.",
+    "ARMv7/ARM64 executables and six regressions per architecture compiled; they were not executed on ARM hardware or QEMU here. Six portable host tests executed. Actual6300 Linux2.6/resource/network/feedback and release qualification remain required.",
+    "The repeat proves byte-identical standalone legacy waveform package and host native output on the same source path with independent temporary compiler caches. It is not a reproduced complete managed runtime/installer or production publisher/catalogue qualification. The legacy package was not installed.",
+    "Only diagnostic packing, its regression/build registration and contributor documentation changed. No WDSP acceptance, alignment/coherence threshold, calibration source duration, signal route, thread, privileged helper or automatic transmit/rearm behavior changed. Current desktop binary and installed radio runtime remain unchanged.",
+    "FullP1-P10 including original natural128sample, cold-start cause, remaining keyed API/credential/partial-start/combined/stall-expiry scopes, extended/raw/repeated speech, final stock workflow, final native packages, actual6300 and independent release gates remains open."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/cold-bypass-diagnostics-components.tar.gz",
+    "bytes": 38143,
+    "sha256": "bcb7e5d05fa46e3c8b511428cda249a30f44a965abb06b7f5c5a406fa89acf2b",
+    "members": 36,
+    "all_members_verified": true
+  }
+}

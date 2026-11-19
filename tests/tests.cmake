@@ -477,6 +477,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(pd_eq_worker_test tools/pd-waveform/eq_worker_test.c)
     target_link_libraries(pd_eq_worker_test PRIVATE aether_pd_test_core)
     add_test(NAME pd_eq_worker_test COMMAND pd_eq_worker_test)
+    add_executable(pd_fit_rejection_test tools/pd-waveform/fit_rejection_test.c)
+    target_link_libraries(pd_fit_rejection_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_fit_rejection_test COMMAND pd_fit_rejection_test)
+    set_tests_properties(pd_fit_rejection_test PROPERTIES TIMEOUT 60)
     add_executable(pd_dispatch_deadline_test
         tools/pd-waveform/dispatch_deadline_test.c
         tools/pd-waveform/warm_seed_curve.c)

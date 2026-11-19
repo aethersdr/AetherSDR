@@ -297,7 +297,15 @@ static int info_at(int i)
 
 int pd_core_correcting(const pd_core* c) { return pd_core_current_solution(c) && info_at(14); }
 int pd_core_state(const pd_core* c) { (void)c; return info_at(15); }
-int pd_core_fit_flags(const pd_core* c) { (void)c; return info_at(0) | (info_at(6) << 8); }
+int pd_core_fit_flags(const pd_core* c)
+{
+    (void)c;
+    int info[16];
+    GetPSInfo(PD_CHANNEL, info);
+    return (info[0] & 0xff) | ((info[6] & 0x3) << 8) |
+        ((info[1] & 0x3f) << 10) | ((info[2] & 0x3f) << 16) |
+        ((info[3] & 0x3f) << 22);
+}
 int pd_core_swap_pending(const pd_core* c)
 {
     (void)c;

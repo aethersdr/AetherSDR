@@ -66,7 +66,7 @@ def zig_cc(target, out, cache, static=True, entry_source=None, extra_cflags=(),
 
 
 def zig_regression_tests(target, output, cache, arch):
-    for name in ('recovery_collection', 'eq_phase_startup', 'warm_core', 'eq_worker', 'dispatch_deadline'):
+    for name in ('recovery_collection', 'eq_phase_startup', 'warm_core', 'eq_worker', 'dispatch_deadline', 'fit_rejection'):
         zig_cc(target, output / f'{name}-test-{arch}', cache,
                entry_source=HERE / f'{name}_test.c', extra_cflags=('-UNDEBUG', *WDSP_INC),
                extra_sources=(HERE / 'warm_seed_curve.c',) if name == 'dispatch_deadline' else (),

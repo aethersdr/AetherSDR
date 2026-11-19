@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T04:23:58.826012+00:00",
+  "recorded_utc": "2026-11-19T04:38:52.860812+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
@@ -89,12 +89,21 @@
       "case": "Operator-confirmed whole-radio software-reboot hang",
       "state": "unresolved",
       "next_requirement": "Bounded live shutdown trace before any further software-reboot qualification; preserve successful physical cold boots separately."
+    },
+    {
+      "case": "Cold-start all-bypass diagnostic omission",
+      "state": "offline_rejection_reporting_fixed_hardware_cause_unproven",
+      "evidence": [
+        "FIT-REJECTION-DIAGNOSTICS-QUALIFICATION.json",
+        "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json"
+      ],
+      "limits": "Real WDSP phase rejection with oldflags0 causally reproduced; all five fields now reported coherently. Seven CTests/six portable host tests pass; ARMv7/ARM64 built only. Current radio remains on runtimeab and its bypass root cause is open."
     }
   ],
   "next_available_case": {
-    "purpose": "Diagnose current cold-start all-bypass using bounded acquisition/aligned-pair and fit-worker timing evidence; actual arrays and worker timing are missing. Preserve completed helper-fault and receive-only API scopes.",
-    "state": "current_symptom_reproduced_cause_unproven",
-    "authority_constraint": "Offline causal work before another separately dispatched RF case; no automatic retry/rearm, safety threshold relaxation, credential invalidation or software reboot."
+    "purpose": "Prepare a source-closed managed diagnostic candidate with complete rejection flags, bounded fit-worker timing and exact unmatched/aligned sample evidence. If existing RAW/DUMP/trace hooks are enabled in a fixed bench-only wrapper, buffer/prefault their entire bounded output before keying and flush only after radio release to avoid introducing filesystem stalls; validate fixed volatile paths, no caller-selected environment or persistent privilege, ownership, cleanup and buffer behavior before any separate guarded RF case. Do not relax fitting/readiness thresholds or extend/rearm the bounded source.",
+    "state": "diagnostic_packing_fixed_offline_not_installed",
+    "authority_constraint": "No shipping general root/capture endpoint. Exact bounded samples and fit timing are missing for live causal replay; fixed volatile capture instrumentation must be qualified before any separately dispatched guarded RF case. No automatic RF retry/rearm or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
