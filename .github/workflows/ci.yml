@@ -611,31 +611,43 @@ jobs:
         shell: pwsh
         run: .\scripts\setup\setup-deepfilter.ps1
 
-      # Restored BEFORE sccache first runs, so the server sees a populated
-      # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
-      # since it survives the key drift that made the exact-key GHA backend
-      # miss 100%. Same save-on-main split as the Linux ccache step.
-      - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: D:\sccache
-          key: sccache-windows-
-          restore-keys: |
-            sccache-windows-
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-
       # CMAKE_CXX_COMPILER_LAUNCHER is honoured by Ninja and Make
       # generators, NOT by the Visual Studio / MSBuild generator that
       # CMake selects by default on windows-latest.  Switch to Ninja so
       # cl.exe invocations actually route through sccache.  msvc-dev-cmd
       # puts the MSVC toolchain on PATH (cl.exe, link.exe, etc.) so
-      # Ninja can find them.
+      # Ninja can find them. It runs before the sccache restore because it
+      # also exports VCToolsVersion, which the cache key needs.
       - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         with:
           arch: x64
+
+      # Restored BEFORE sccache first runs, so the server sees a populated
+      # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
+      # since it survives the key drift that made the exact-key GHA backend
+      # miss 100%. Same save-on-main split as the Linux ccache step.
+      #
+      # The key carries the MSVC toolset version because sccache hashes the
+      # compiler, so objects from another MSVC are a 100% miss. GitHub rolls a
+      # new runner image out over days and serves both meanwhile: with one
+      # shared entry, whichever MSVC saved last made every run on the other
+      # build cold, overrun the Build timeout and never save (2026-11-18/19,
+      # 14.51 vs 14.52). cache-cleanup.yml keeps one entry PER VERSION. The
+      # bare-prefix fallback only matters when this version has no entry yet;
+      # it may restore the wrong MSVC's objects, which miss, which costs only
+      # the ~10 s download, and sccache's LRU replaces them as it saves.
+      - name: Restore sccache objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: D:\sccache
+          key: sccache-windows-${{ env.VCToolsVersion }}-
+          restore-keys: |
+            sccache-windows-${{ env.VCToolsVersion }}-
+            sccache-windows-
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
 
       - name: Setup hidapi (HID encoder support)
         # Needed for the Ulanzi Dial Windows backend (#3239) and the
@@ -891,7 +903,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: D:\sccache
-          key: sccache-windows-${{ github.run_id }}
+          key: sccache-windows-${{ env.VCToolsVersion }}-${{ github.run_id }}
 
   # macOS build check — runs on every PR (no path gating), same rationale
   # as check-windows above.  Catches Q_OS_MACOS / CoreAudio / Cocoa-bridge
