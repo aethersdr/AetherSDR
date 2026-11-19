@@ -610,6 +610,67 @@ int main(int argc, char** argv)
         report("fresh_ptt_admitted_after_paddle_release", Access::admit(radio, ptt.request()));
     }
 
+    // A squeezed or memorised iambic element the keyer sends after the paddle
+    // let go is not a held input: a later expiry in the same over clears its
+    // latch once the radio is idle.
+    {
+        int downs = 0;
+        bool keyDown = false;
+        RadioModel radio;
+        qint64 now = 5'000'000;
+        Access::setClock(radio, &now);
+        radio.transmitModel().setCwBreakIn(true);
+        auto owned = std::make_unique<CwKeyingStub>();
+        {
+            hl2::Hl2Backend real;
+            owned->caps = real.capabilities();
+        }
+        owned->caps.canTransmit = true;
+        owned->downs = &downs;
+        owned->keyDown = &keyDown;
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        SliceDelta slice;
+        slice.frequency = 7.020;
+        slice.mode = QStringLiteral("CW");
+        slice.panId = QStringLiteral("0x40000000");
+        slice.txSlice = true;
+        radio.emitBackendSliceChangedForTest(0, slice);
+        const TxCoordinator::Producer paddle = radio.registerTxProducer();
+        const TxCoordinator::Request input = paddle.request();
+        TxCoordinator::Request element;
+        const auto edge = [&radio, &input, &element](bool down) {
+            if (down) {
+                element = input.derive();
+            }
+            radio.queueProducerCwKeyEdge(element, down, QStringLiteral("cw:iambic-keyer"),
+                                         0, 0, std::chrono::steady_clock::now());
+        };
+        Access::radioKeyed(radio, true);
+        radio.setProducerCwPaddleHeld(input, true);
+        edge(true);
+        const bool keyed = pumpUntil([&] { return downs >= 1 && keyDown; }, 3000);
+        radio.setProducerCwPaddleHeld(input, false);   // let go mid-element
+        edge(false);
+        (void)pumpUntil([&] { return !keyDown; }, 3000);
+        edge(true);                                    // the trailing element
+        const bool trailing = pumpUntil([&] { return downs >= 2 && keyDown; }, 3000);
+        edge(false);
+        (void)pumpUntil([&] { return !keyDown; }, 3000);
+        const int holdersAfter = Access::holders(radio);
+        runOver(radio, now, 180'000);
+        const bool expired = radio.txTimeoutLatched();
+        Access::radioKeyed(radio, false);
+        Access::tick(radio);
+        const std::string detail = "keyed=" + std::to_string(keyed) + " trailing=" + std::to_string(trailing)
+            + " holders=" + std::to_string(holdersAfter) + " expired=" + std::to_string(expired)
+            + " latched=" + std::to_string(radio.txTimeoutLatched());
+        report("trailing_iambic_element_after_paddle_release_holds_nothing",
+               keyed && trailing && holdersAfter == 0 && expired && !radio.txTimeoutLatched(), detail);
+        const TxCoordinator::Producer ptt = radio.registerTxProducer();
+        Access::clearNoticeDedup(radio);
+        report("fresh_ptt_admitted_after_trailing_iambic_element", Access::admit(radio, ptt.request()));
+    }
+
     // Fail closed past the holder table: with 32 live inputs holding, a 33rd
     // key-down is refused, and one of the 32 keying again is still admitted.
     {

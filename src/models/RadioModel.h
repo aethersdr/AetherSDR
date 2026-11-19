@@ -653,6 +653,7 @@ public:
     // Each paddle source's held state per input (keyboard, serial, scoped
     // controller); its last release releases the time-out latch.
     void setProducerCwPaddleHeld(const TxCoordinator::Request& input, bool held);
+    bool producerCwPaddleHeld(const TxCoordinator::Request& anyRequestOfProducer) const;
     void    setBinauralRx(bool on);  // optimistic update + radio command
     bool    muteLocalWhenRemote() const { return m_muteLocalWhenRemote; }
     bool    autoSave() const { return m_autoSave; }

@@ -1348,12 +1348,22 @@ void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, b
         }
         if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
             refused();
-        } else if (down && hostTextGates) {
+        } else if (down && (hostTextGates || !producerCwPaddleHeld(request))) {
             // Host CW text is sent text, not a held input, like CWX: its
             // keyer owns its producer, and no element holds the time-out latch.
+            // Nor does an iambic element the keyer sends after its paddle let
+            // go (a squeezed or memorised one): only a held paddle holds.
             noteTxInputReleased(request);
         }
     }, Qt::QueuedConnection);
+}
+
+bool RadioModel::producerCwPaddleHeld(const TxCoordinator::Request& anyRequestOfProducer) const
+{
+    return std::any_of(m_producerCwPaddleInputs.begin(), m_producerCwPaddleInputs.end(),
+        [&anyRequestOfProducer](const TxCoordinator::Request& existing) {
+            return existing.valid() && existing.producerKey() == anyRequestOfProducer.producerKey();
+        });
 }
 
 void RadioModel::setProducerCwPaddleHeld(const TxCoordinator::Request& input, bool held)
@@ -1367,11 +1377,7 @@ void RadioModel::setProducerCwPaddleHeld(const TxCoordinator::Request& input, bo
     }
     // Every paddle of this producer up releases the time-out latch; the
     // keyer's element key-ups (queueProducerCwKeyEdge) never do.
-    const bool otherHeld = std::any_of(m_producerCwPaddleInputs.begin(), m_producerCwPaddleInputs.end(),
-        [&input](const TxCoordinator::Request& existing) {
-            return existing.producerKey() == input.producerKey();
-        });
-    if (!held && !otherHeld) {
+    if (!held && !producerCwPaddleHeld(input)) {
         noteTxInputReleased(input);
     }
 }
