@@ -990,6 +990,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 
         // A clicked slider gets a short keyboard lease so arrow nudges adjust
         // the slider, then global operating shortcuts automatically resume.
+        // The bridge gates these keys by its own copy of the list,
+        // bridgeKeyMovesTxSetpoint() in SliderLeaseTxGate.h: change both together.
         if (event->type() == QEvent::KeyPress) {
             auto* slider = qobject_cast<QAbstractSlider*>(QApplication::focusWidget());
             if (slider && m_sliderShortcutLease.data() == slider && s_sliderShortcutLeaseActive) {
