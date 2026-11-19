@@ -544,8 +544,8 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "Squelch for the decoded text: drops characters the decoder is not confident\n"
         "about, so noise between transmissions stops filling the pane with gibberish.\n"
         "0 (default) shows every decoded character — exactly the behavior before this\n"
-        "control existed. Higher values drop more; ~38 filters what the stats bar\n"
-        "calls UNLOCK; 100 keeps only near-certain copy. Affects display only —\n"
+        "control existed. Higher values drop more: 23 hides the red letters, 45 the\n"
+        "orange ones too, and 78 keeps only the green ones. Affects display only —\n"
         "nothing is retuned and no audio changes."));
     m_rttySensSlider->setRange(0, 100);
     const int savedRttySens = RttyDecodeSettings::sensitivity();
@@ -1303,11 +1303,12 @@ void PanadapterApplet::setRttyInputHint(const QString& hint, const QString& reas
     setDecoderInputHint(m_rttyInputHint, text, reason, tr("RTTY receive input: %1").arg(text));
 }
 
-void PanadapterApplet::setRttyStats(float markLevel, float /* spaceLevel */, float snrDb, bool locked)
+void PanadapterApplet::setRttyStats(float level, float snrDb, bool locked)
 {
-    const int markSegs = qBound(0, qRound(markLevel * 15.0f), 15);
+    // Level bar: the decoder's average character score on the letter colours' scale,
+    // empty with no characters, full on a clean copy. 15 segments, left to right.
+    const int markSegs = qBound(0, qRound(level * 15.0f), 15);
 
-    // Mark bar: 15 segments, fills left to right
     QString markBar;
     for (int i = 0; i < 15; ++i) {
         markBar += (i < markSegs)
