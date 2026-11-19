@@ -136,6 +136,8 @@ struct Policy {
     // The device sends an empty pong frame every second and never ends a
     // session for a silent client; a held session with no frame this long has
     // lost the network path. Largest gap measured on a live session: 2.76 s.
+    // That 1 Hz pong is required: equal to the keep-alive interval, this bound
+    // cannot be held by replies to our own ping alone.
     qint64 heartbeatLostAfterMs{5000};
     qint64 sessionDeadAfterMs{10000};  // a keep-alive unanswered this long (as the page)
     qint64 failureBackoffMs{5000};     // doubles per consecutive failure
