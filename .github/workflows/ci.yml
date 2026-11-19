@@ -170,9 +170,10 @@ jobs:
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
       #
-      # 750M: this job builds no tests, and test objects were ~80% of its
-      # compiles. An estimate with ~2x headroom; raise it if "ccache stats"
-      # shows Cleanups climbing and hits falling.
+      # 750M: this job builds no tests. Building aether_non_test_targets with
+      # these flags into an empty ccache wrote 189 MB (1,367 compiles, measured
+      # locally 2026-11-19), so 750M holds about four builds' worth of churn.
+      # Raise it if "ccache stats" shows Cleanups climbing and hits falling.
       CCACHE_MAXSIZE: 750M
 
     steps:
@@ -1265,9 +1266,10 @@ jobs:
 # Compiler-cache strategy: restore everywhere, save only on main
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# All three build jobs restore their compiler cache on every run but save only
-# from a green build of main. This section records why, because the previous
-# arrangement was a reasonable-looking pattern that failed silently for months.
+# All three build jobs, and full-suite.yml's test build, restore their
+# compiler cache on every run but save only from a green build of main. This
+# section records why, because the previous arrangement was a
+# reasonable-looking pattern that failed silently for months.
 #
 # WHAT WENT WRONG BEFORE
 #
@@ -1340,7 +1342,7 @@ jobs:
 #   resolve to the most recent match, so run N's cache is unreachable the moment
 #   run N+1 saves, and an unreachable entry is never accessed again — so nothing
 #   refreshes its LRU position and nothing deletes it. Left alone, main writes
-#   ~4.3 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
+#   ~5 GiB per push, several times a day, and would pin the repo at its allowance on its
 #   own. That job prunes each prefix to the newest 1 (was 2 until #5548; the
 #   second copy alone put main over the allowance once every cache had filled
 #   to its cap). (Retention is itself a configurable policy as of 2025-11;
