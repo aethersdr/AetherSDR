@@ -2912,7 +2912,9 @@ public:
     // TCI, rigctl, logging) sees RF. Receive-only: see refuseKeyInReceiveOnlyMode().
     bool usesClientTransverters() const { return m_backend && m_clientXvtrsAvailable; }
     const ClientTransverterSet& clientTransverters() const { return m_clientXvtrs; }
-    void setClientTransverters(const QVector<ClientTransverter>& list);
+    // False, with nothing stored or applied, when the connected backend does
+    // not qualify (no capability record, or more than one receiver).
+    bool setClientTransverters(const QVector<ClientTransverter>& list);
     // The frequency a slice transmits on. Equal to its frequency, except under a
     // client transverter with its own TX LO (QO-100: RX 10489.540 transmits on
     // 2400.040), which TCI tx_frequency and logging must report.
@@ -2929,6 +2931,10 @@ private:
     ClientTransverterSet m_clientXvtrs;
     bool m_clientXvtrsAvailable{false};
     void loadClientTransverters();
+    // Qualification is the backend's, not the session's: recomputed when its
+    // capabilities change and dropped with it in teardownBackend().
+    void refreshClientTransverterQualification();
+    void clearClientTransverterState();
     void saveClientTransverters();
     void noteClientTransverterActivation(int previousIndex);
     // Empty when the radio cannot reach the request; the operator is told and

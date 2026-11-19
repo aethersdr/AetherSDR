@@ -51,6 +51,9 @@ public:
     int panCenters{0};
     double lastPanCenterHz{0.0};
     int keys{0};
+    int unkeys{0};
+    int tuneOns{0};
+    int tuneOffs{0};
     int atuStarts{0};
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return connected; }
@@ -65,8 +68,18 @@ public:
         ++panCenters;
         lastPanCenterHz = hz;
     }
-    void setKeying(bool, const AetherSDR::TxCoordinator::Operation&,
-                   const AetherSDR::TxCoordinator::Completion&) override { ++keys; }
+    void setKeying(bool key, const AetherSDR::TxCoordinator::Operation&,
+                   const AetherSDR::TxCoordinator::Completion&) override
+    {
+        ++keys;
+        unkeys += !key;
+    }
+    void setTune(bool on, int, const AetherSDR::TxCoordinator::Operation&,
+                 const AetherSDR::TxCoordinator::Completion&) override
+    {
+        tuneOns += on;
+        tuneOffs += !on;
+    }
     void setAtu(bool start, const AetherSDR::TxCoordinator::Operation&,
                 const AetherSDR::TxCoordinator::Completion&) override { atuStarts += start; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
@@ -265,6 +278,120 @@ static void nativeBandStillKeys()
     f.radio.transmitModel().setMox(false);
 }
 
+// Blocker from the #7373 review: the key-on refusal cannot see a tune made
+// after key-on, so the tune itself is refused while the transmitter is up.
+static void tuningOntoATransverterWhileKeyedIsRefused()
+{
+    Fixture f;
+    f.backend->reportFrequency(14.200);
+    f.radio.transmitModel().setMox(true);
+    check(f.radio.transmitModel().isTransmitting() && f.backend->keys == 1,
+          "MOX on a native band keys");
+    const int tunes = f.backend->tunes;
+    f.slice->setFrequency(10489.540);
+    check(f.backend->tunes == tunes && f.active(nullptr),
+          "a tune onto a transverter band while keyed reaches no backend tune");
+    check(f.interlocks.contains(QStringLiteral("xvtr-rx-only:QO-100")),
+          "the refusal names the transverter");
+    check(near(f.slice->frequency(), 14.200), "the slice goes back to what the radio reported");
+    f.radio.requestBackendSliceTune(0, {144.300e6, SliceTuneRequest::PanIntent::PreservePan});
+    check(f.backend->tunes == tunes && f.active(nullptr),
+          "a headless tune onto a transverter band while keyed is refused too");
+    f.slice->setFrequency(14.074);
+    check(f.backend->tunes == tunes + 1 && near(f.backend->lastTuneHz, 14.074e6),
+          "a native tune while keyed is still sent");
+    f.radio.transmitModel().setMox(false);
+    check(f.backend->unkeys == 1, "the unkey reaches the backend");
+    f.slice->setFrequency(10489.540);
+    check(near(f.backend->lastTuneHz, 28.540e6) && f.active("QO-100"),
+          "once unkeyed the same tune is translated and activates the transverter");
+}
+
+static void tuningOntoATransverterDuringTuneIsRefused()
+{
+    Fixture f;
+    f.backend->reportFrequency(14.200);
+    f.radio.transmitModel().startTune();
+    check(f.radio.transmitModel().isTuning() && f.backend->tuneOns == 1,
+          "TUNE on a native band starts the carrier");
+    const int tunes = f.backend->tunes;
+    f.slice->setFrequency(10489.540);
+    check(f.backend->tunes == tunes && f.active(nullptr),
+          "a tune onto a transverter band during TUNE reaches no backend tune");
+    check(f.interlocks.contains(QStringLiteral("xvtr-rx-only:QO-100")),
+          "the refusal names the transverter");
+    f.radio.transmitModel().stopTune();
+    check(!f.radio.transmitModel().isTuning() && f.backend->tuneOffs == 1,
+          "the tune stop reaches the backend");
+    f.slice->setFrequency(10489.540);
+    check(near(f.backend->lastTuneHz, 28.540e6) && f.active("QO-100"),
+          "once the carrier is off the same tune activates the transverter");
+}
+
+// Blocker from the #7373 review: qualification belongs to the backend. The
+// next backend in the same process must inherit none of it.
+static void theNextBackendInheritsNothing()
+{
+    Fixture f;
+    f.slice->setFrequency(10489.540);
+    check(f.radio.usesClientTransverters() && f.active("QO-100"), "the Icom session is on QO-100");
+
+    auto owned = std::make_unique<RecordingBackend>();
+    RecordingBackend* flex = owned.get();
+    flex->caps.family = QStringLiteral("flex");
+    flex->caps.canTransmit = true;
+    flex->caps.maxSlices = 8;
+    flex->caps.tuningMinHz = 30.0e3;
+    flex->caps.tuningMaxHz = 54.0e6;
+    f.radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
+    flex->connected = true;
+    check(!f.radio.usesClientTransverters() && f.active(nullptr)
+              && f.radio.clientTransverters().transverters().isEmpty(),
+          "a backend that replaces it holds no client transverters");
+    const RadioCapabilities caps = f.radio.backendCapabilities();
+    check(near(caps.tuningMaxHz, 54.0e6) && caps.declaredBandRanges.isEmpty(),
+          "its capabilities carry none of the Icom's bands or tuning range");
+    f.radio.requestBackendSliceTune(0, {28.700e6, SliceTuneRequest::PanIntent::PreservePan});
+    check(flex->tunes == 1 && near(flex->lastTuneHz, 28.700e6), "its tunes are sent raw");
+    f.radio.requestBackendPanCenter(QStringLiteral("0"), 28.750e6,
+                                    IRadioBackend::PanCenterIntent::Range);
+    check(near(flex->lastPanCenterHz, 28.750e6), "its pan centres are sent raw");
+    check(!f.radio.setClientTransverters({qo100()})
+              && f.radio.clientTransverters().transverters().isEmpty(),
+          "and it accepts no list");
+}
+
+// An Icom reports one receiver until it has identified itself, so the list is
+// loaded for a model that turns out to have two.
+static void qualificationFollowsTheIdentifiedModel()
+{
+    Fixture f;
+    f.slice->setFrequency(10489.540);
+    f.backend->reportFrequency(28.540);
+    check(near(f.slice->frequency(), 10489.540), "before identification the slice shows RF");
+    f.backend->caps.maxSlices = 2;
+    emit f.backend->capabilitiesChanged();
+    check(!f.radio.usesClientTransverters() && f.active(nullptr)
+              && f.radio.clientTransverters().transverters().isEmpty(),
+          "identifying as a two-receiver model withdraws client transverters");
+    check(near(f.slice->frequency(), 28.540), "the slice shows the IF the radio is on");
+    check(near(f.radio.backendCapabilities().tuningMaxHz, 470.0e6),
+          "the capabilities above the seam are native again");
+    f.slice->setFrequency(28.600);
+    check(near(f.backend->lastTuneHz, 28.600e6), "tunes are sent raw");
+    f.radio.transmitModel().setMox(true);
+    check(f.backend->keys == 1, "and nothing refuses MOX in a transverter's name");
+    f.radio.transmitModel().setMox(false);
+    check(!f.radio.setClientTransverters({qo100()}),
+          "Apply reports that the list was not stored");
+
+    f.backend->caps.maxSlices = 1;
+    emit f.backend->capabilitiesChanged();
+    check(f.radio.usesClientTransverters()
+              && f.radio.clientTransverters().transverters().size() == 2,
+          "a backend that qualifies again gets this radio's stored list back");
+}
+
 static void internalTunerIsLockedOut()
 {
     Fixture f;
@@ -435,6 +562,10 @@ int main(int argc, char** argv)
     moxIsRefusedOnATransverter();
     tuneIsRefusedOnATransverter();
     nativeBandStillKeys();
+    tuningOntoATransverterWhileKeyedIsRefused();
+    tuningOntoATransverterDuringTuneIsRefused();
+    theNextBackendInheritsNothing();
+    qualificationFollowsTheIdentifiedModel();
     internalTunerIsLockedOut();
     headlessTargetsUseTheSameSeam();
     editingTheListKeepsTheRadioOnItsIf();

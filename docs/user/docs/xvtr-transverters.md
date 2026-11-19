@@ -93,6 +93,10 @@ not yet limit the radio's RF power to what a transverter input takes. The
 radio's own PTT, VOX and front-panel key are outside AetherSDR's control: set
 the radio's power for your transverter before keying it from the radio.
 
+While the radio is transmitting or sending a TUNE carrier, a tune onto a
+transverter band is refused with the notice "Unkey before tuning to the *name*
+transverter band", and the radio stays where it is. Unkey first, then tune.
+
 TCI reports the transmit frequency through the TX LO (`tx_frequency` is
 2400.040 MHz for a 10489.540 MHz QO-100 downlink).
 

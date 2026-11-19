@@ -6289,7 +6289,11 @@ QWidget* RadioSetupDialog::buildClientXvtrTab()
             }
             list.append(t);
         }
-        m_model->setClientTransverters(list);
+        if (!m_model->setClientTransverters(list)) {
+            status->setText(tr("Not available on this radio; nothing was saved"));
+            setTone(status, Tone::Error);
+            return;
+        }
         status->setText(unusable ? tr("Saved; %1 row(s) incomplete and ignored").arg(unusable)
                                  : tr("Saved"));
         setTone(status, unusable ? Tone::Error : Tone::Ok);
