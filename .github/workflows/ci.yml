@@ -140,24 +140,24 @@ jobs:
       #   check-macos     0.3 / 0.5 GB (57.63%)
       #   check-windows   628 MiB / 1 GiB (61%)
       #
-      # Budget at 1500M, against the repo's 10 GiB cache allowance, with
-      # cache-cleanup.yml's KEEP=1. Entry sizes are MEASURED on refs/heads/main
-      # from the "Save" steps, except Linux which is extrapolated from the
-      # ~95% ratio at the new cap:
-      #   Linux    ~1.4 GiB entry x 1 retained  = 1.4 GiB
-      #   Windows  ~1.02 GiB x 1                = 1.0 GiB
-      #   macOS    ~0.44 GiB x 1                = 0.4 GiB
-      #   canary   ~0.94 GiB x 1                = 0.9 GiB
-      #   deps (Qt 1.3, install-qt 0.4, DeepFilterNet, FFTW, qtkeychain)
-      #                                         ~ 1.8 GiB
-      #                                         --------
-      #                                         ~ 5.5 GiB
-      # That is the post-prune FLOOR, not what LRU evaluates. prune-main runs
-      # on workflow_run AFTER a main save, so between the save and the prune
-      # every prefix briefly holds two entries — a transient peak of about
-      # (1.4+1.02+0.44+0.94)x2 + 1.8 = ~9.4 GiB, and main runs are not
-      # serialised (cancel-in-progress is off for main), so those windows can
-      # overlap. Budget against the peak, not the floor.
+      # Budget against the repo's 10 GiB cache allowance, with
+      # cache-cleanup.yml's KEEP=1 (Linux and Full Suite at ~95% of their caps;
+      # the others measured from their "Save" steps):
+      #   Linux build  750M cap                  ~0.71 GiB
+      #   Full Suite   2000M cap (full-suite.yml) ~1.86 GiB
+      #   Windows      ~1.02 GiB per MSVC version ~1.02 GiB (2.04 mid-rollout)
+      #   macOS        500M cap                  ~0.44 GiB
+      #   canary                                 ~0.94 GiB
+      #   deps (Qt, DeepFilterNet, FFTW, qtkeychain) ~1.8 GiB
+      #                                          ---------
+      #   post-prune floor                       ~6.8 GiB (~7.8 mid-rollout)
+      # That is not what LRU evaluates. prune-main runs on workflow_run AFTER a
+      # save, so each prefix briefly holds two entries; if every prefix did at
+      # once the peak would be (0.71+1.86+1.02+0.44+0.94)x2 + 1.8 = ~11.7 GiB,
+      # over the allowance. Accepted: each prune follows its save by minutes,
+      # so the windows rarely coincide. Full Suite's is the longest (its prune
+      # waits for ctest unless a CI completion prunes first). If "Report repo
+      # cache usage" in cache-cleanup.yml nears 10 GiB, lower Full Suite's cap.
       # The canary line is system-libs-canary.yml's cache; it was missed by an
       # earlier revision of this table and by cache-cleanup.yml's PREFIXES
       # alike, so if you add a compiler cache in ANY workflow, add it to both.
@@ -170,14 +170,9 @@ jobs:
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
       #
-      # 1500M -> 750M (2026-11-19), when this job stopped building tests on
-      # main and full-suite.yml took over the test tree with its own
-      # ccache-linux-full- entry (~1.9 GiB at its 2000M cap). Tests were 80%
-      # of this job's compiles, so its objects now need roughly a fifth of the
-      # old window; 750M leaves about 2x headroom, unmeasured. Check "ccache
-      # stats" after the change and raise it if Cleanups climbs and hits fall.
-      # Floor with that entry: 0.75 + 1.9 (full) + 1.0 (Windows) + 0.95
-      # (macOS at 1G) + 0.94 (canary) + 1.8 (deps) = ~7.3 GiB.
+      # 750M: this job builds no tests, and test objects were ~80% of its
+      # compiles. An estimate with ~2x headroom; raise it if "ccache stats"
+      # shows Cleanups climbing and hits falling.
       CCACHE_MAXSIZE: 750M
 
     steps:
@@ -271,15 +266,13 @@ jobs:
           # AETHER_GPU_SPECTRUM=ON is stated rather than left to the CMake
           # default so the assertion below has a request to check against.
           #
-          # AETHER_SHARED_CORE=ON: on pushes to main, where this job builds
-          # `all`, the test executables link one libaethercore.so instead of
-          # each carrying a static copy of the core, which keeps the tree at
-          # ~4 GB instead of ~53 GB (#6962). Pull requests build no tests.
-          # Release workflows still link the core statically.
+          # AETHER_SHARED_CORE=ON: this job builds no tests, but full-suite.yml
+          # builds `all` with this same configure, where it keeps the tree at
+          # ~4 GB instead of ~53 GB (#6962). It stays here so this job's
+          # objects hit for Full Suite's ccache-linux-build- fallback; change
+          # both files together. Release workflows link the core statically.
           # -g1, not RelWithDebInfo's -g: line tables only, so backtraces keep
           # file:line at a fraction of the debug size.
-          # full-suite.yml configures identically and restores this job's
-          # ccache, so change both together.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             -DAETHER_SHARED_CORE=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
@@ -1129,9 +1122,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@dbeefd73e8e2ffc1bbc412570072735eb4db3607
         with:
           key: ccache-macos-ci
-          # 1G from 500M (2026-11-19): at 500M every main build evicted 60-200
-          # times and missed 40-100 more objects than Linux on the same commit.
-          max-size: 1G
+          max-size: 500M
           # Same save-on-main split as the Linux and Windows jobs, expressed
           # through this action's own `save` input rather than a restore/save
           # pair. Restore stays on (default) so PRs read main's entry.
@@ -1145,7 +1136,7 @@ jobs:
           # step runs, and the action saves from its own post-job hook, so there
           # is no `success()` half — a failed main build here still writes an
           # entry. Tolerated rather than worked around: the cost is a sparser
-          # cache until the next green main run, not a wrong one, and at 1G on
+          # cache until the next green main run, not a wrong one, and at 500M on
           # the lighter macOS configuration that is the smallest of the three.
           save: ${{ github.ref == 'refs/heads/main' }}
 
@@ -1197,11 +1188,9 @@ jobs:
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
 
       # Builds aether_non_test_targets plus the two gate tests run below, on
-      # PRs and main alike; same reasoning as the Linux job's Build step. Main
-      # used to build `all`, which compiled every test on macOS for no test run
-      # and overflowed the ccache (60-200 evictions a build). A gate test added
-      # to a ctest -R step here must also join this --target list: its PR
-      # otherwise fails at ctest with "Could not find executable".
+      # PRs and main alike; same reasoning as the Linux job's Build step. A
+      # gate test added to a ctest -R step here must also join this --target
+      # list: its PR otherwise fails at ctest with "Could not find executable".
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu) --target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test
 
