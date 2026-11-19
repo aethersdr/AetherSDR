@@ -715,6 +715,60 @@ void noLineForAnUnmovedBoard()
           "CONTROL: a board that moves is still sent");
 }
 
+// A set held in the window yields to a newer change made elsewhere (the setup
+// page's hw.set): it is dropped, not applied over the operator's choice. A
+// change elsewhere that leaves the board and HPF alone does not drop it.
+void heldSetYieldsToAChangeElsewhere()
+{
+    RadioModel model;
+    auto owner = std::make_unique<Hl2FakeBackend>();
+    Hl2FakeBackend* backend = owner.get();
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    TciServer server(&model);
+    server.setHl2HardwareChangesAllowed(true);
+    Wire a;
+    TciHl2ExtensionTest::attach(server, a.client, model);
+    RadioInfo info;
+    info.family = QStringLiteral("test");
+    info.serial = QStringLiteral("00:00:00:00:00:03");
+    info.address = QHostAddress(QStringLiteral("127.0.0.1"));
+    model.connectToRadio(info);
+    settle();
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    check(!model.settingsScope().radioId().isEmpty(), "the radio has an identity");
+
+    a.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;"
+           "aethersdr_hl2_filter_board:n2adr_txonly,true;");
+    check(backend->hwSets.size() == 1 && backend->filterBoard == 1,
+          "the first set is applied and the second is held in the window");
+    // The setup page, inside the window: no reply expected, id 0.
+    model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
+                                 QVariantMap{{QStringLiteral("filterBoard"), 0}});
+    settle(250);
+    QStringList got = a.take();
+    check(backend->hwSets.size() == 2 && backend->filterBoard == 0 && !backend->n2adrHpf,
+          "a held set does not overwrite a newer change from the setup page");
+    check(!got.isEmpty() && got.last() == QStringLiteral("aethersdr_hl2_filter_board:none,false;"),
+          "and the client is told the board the operator chose");
+    if (got.isEmpty() || got.last() != QStringLiteral("aethersdr_hl2_filter_board:none,false;")) {
+        dump("a", got);
+    }
+    settle(250);
+    a.take();
+
+    // CONTROL: a change elsewhere that leaves the board alone keeps the held set.
+    a.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;"
+           "aethersdr_hl2_filter_board:n2adr_txonly,true;");
+    model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
+                                 QVariantMap{{QStringLiteral("codec"), 1}});
+    settle(250);
+    check(backend->filterBoard == 2 && backend->n2adrHpf && backend->codec == 1,
+          "CONTROL: a change elsewhere that leaves the board alone does not drop the held set");
+    a.take();
+    server.setHl2HardwareChangesAllowed(false);
+}
+
 // The real HL2 backend tells every listener when a hw.set moves an option, and
 // says nothing when it does not.
 void realBackendNotifies()
@@ -884,6 +938,7 @@ int main(int argc, char** argv)
     writeGateSetting();
     serverBehaviour();
     noLineForAnUnmovedBoard();
+    heldSetYieldsToAChangeElsewhere();
     realBackendNotifies();
     realBackendRefusesInTheTail();
 
