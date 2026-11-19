@@ -36,6 +36,7 @@
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QThread>
 
 #include <algorithm>
@@ -5797,11 +5798,15 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         }
     }
     // Whoever set it (the setup page, the bridge, a TCI client), every listener
-    // learns of a change; the setup page's writes expect no reply.
-    if (m_hw != before) {
-        emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("hw"),
-                             hardwareOptionsReport());
-    }
+    // learns of a change; the setup page's writes expect no reply. Announced
+    // once the change is fully applied (calibration normalized, band filter
+    // re-evaluated), on every exit path.
+    const auto announce = qScopeGuard([this, changed = m_hw != before] {
+        if (changed) {
+            emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("hw"),
+                                 hardwareOptionsReport());
+        }
+    });
     if (!m_metis)
         return;
 
