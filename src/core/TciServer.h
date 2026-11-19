@@ -544,9 +544,7 @@ private:
     QPointer<IRadioBackend> m_hl2Backend;
     QList<QMetaObject::Connection> m_hl2Connections;
     QHash<quint64, QPointer<TciClient>> m_hl2IoBoardPending;
-    QTimer*           m_hl2FilterRateTimer{nullptr};
-    bool              m_hl2FilterPending{false};
-    bool              m_hl2FilterSendPosted{false};
+    std::unique_ptr<TciExtensionNotice> m_hl2FilterNotice;
     // Filter board and HPF the enabled clients were last sent (state lines or
     // a hw status); a notice is queued when a status moves them.
     std::optional<QPair<int, bool>> m_hl2LastFilter;

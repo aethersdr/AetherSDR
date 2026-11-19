@@ -692,14 +692,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     });
 
     // Extension set, HL2 group: the same limiter for the filter board notice.
-    m_hl2FilterRateTimer = new QTimer(this);
-    m_hl2FilterRateTimer->setSingleShot(true);
-    m_hl2FilterRateTimer->setInterval(kPowerRateLimitMs);
-    connect(m_hl2FilterRateTimer, &QTimer::timeout, this, [this]() {
-        if (m_hl2FilterPending && broadcastHl2FilterBoard()) {
-            m_hl2FilterRateTimer->start();
-        }
-    });
+    m_hl2FilterNotice = std::make_unique<TciExtensionNotice>(
+        this, kPowerRateLimitMs, [this] { return broadcastHl2FilterBoard(); });
     m_hl2SetRateTimer = new QTimer(this);
     m_hl2SetRateTimer->setSingleShot(true);
     m_hl2SetRateTimer->setInterval(kPowerRateLimitMs);
@@ -4258,25 +4252,12 @@ void TciServer::onHl2ExtensionStatus(const QString& ns, const QString& kind,
 
 void TciServer::queueHl2FilterNotice()
 {
-    m_hl2FilterPending = true;
-    if (m_hl2FilterSendPosted || m_hl2FilterRateTimer->isActive()) {
-        return;
-    }
-    m_hl2FilterSendPosted = true;
-    QMetaObject::invokeMethod(this, [this]() {
-        m_hl2FilterSendPosted = false;
-        if (broadcastHl2FilterBoard()) {
-            m_hl2FilterRateTimer->start();
-        }
-    }, Qt::QueuedConnection);
+    m_hl2FilterNotice->queue();
 }
 
 bool TciServer::broadcastHl2FilterBoard()
 {
-    m_hl2FilterPending = false;
-    const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
-        [](const ClientState& client) { return client.extensionsEnabled; });
-    if (!anyEnabled || !hl2Offered()) {
+    if (!anyExtensionClient() || !hl2Offered()) {
         return false;
     }
     const QString line = hl2FilterBoardLine();
