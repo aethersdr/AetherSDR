@@ -402,6 +402,10 @@ aethersdr_rx_span:1,192000;       # set it
   and the stream stay up; the panadapter and the audio of every receiver may
   glitch briefly, and the answer comes when the rebuild is done. Elsewhere a
   set is allowed while transmitting, as the span buttons are.
+- On a Hermes-Lite 2 the TCI IQ stream is taken at the radio's rate, which is
+  the span. A span below a client's `iq_samplerate` therefore also lowers the
+  IQ rate, and `iq_samplerate:` is sent again with the rate the frames now
+  carry. It never goes above the radio's rate.
 
 ## Known issues
 
