@@ -1,20 +1,20 @@
 {
-  "recorded_utc": "2026-11-19T11:53:47.224622+00:00",
+  "recorded_utc": "2026-11-19T12:28:11.459756+00:00",
   "tested_source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
   "production_ready": false,
   "shipping_candidate": false,
-  "status": "All45 current-source native credential-backend cases pass acrossWindows/AppleSilicon/IntelmacOS, with artifact SHA/source and every cleanup/absence record verified. The same3 application build jobs remain observed in progress;42 setup-window cases and whole workflow/package outcomes remain pending. This is partial component qualification, not a final native release gate.",
+  "status": "All 87 exact-source native credential and setup-window cases pass on Windows AMD64, macOS Apple Silicon and macOS Intel, with artifact/source digests, fixture cleanup and credential-binary linkage verified. Both terminal native workflows pass their application-build and unsigned branch-packaging gates. Production signing, publication, actual radio credential operations and remaining P1-P10 scopes are not qualified by these controlled fixtures.",
   "native_backend_populations_qualified": [
     "Windows AMD64",
     "macOS Apple Silicon arm64",
     "macOS Intel x86_64"
   ],
   "verified_backend_cases": 45,
-  "verified_setup_window_cases": 0,
-  "all_six_native_populations_verified": false,
-  "whole_workflow_completion_claimed": false,
+  "verified_setup_window_cases": 42,
+  "all_six_native_populations_verified": true,
+  "whole_workflow_completion_claimed": true,
   "verification": {
-    "recorded_utc": "2026-11-19T11:49:41.009782+00:00",
+    "recorded_utc": "2026-11-19T12:22:40.125813+00:00",
     "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
     "artifacts": [
       {
@@ -49,14 +49,135 @@
         "all_fixture_identifiers_cleaned_and_absent": true,
         "OS": "Windows",
         "machine": "AMD64"
+      },
+      {
+        "name": "native-enrollment-macos-apple-silicon",
+        "artifact_id": 14527598568,
+        "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+        "sha256": "f7779b7aa33376c057d8eb9490a22d454dcc53d4bef855d9102b0ab79d8799e2",
+        "cases_passed": 14,
+        "binary_sha256": "07504b0198ee934bb0ae5224080a3f8175750b87aa8464b77b1ca171d3cd771c",
+        "all_fixture_identifiers_cleaned_and_absent": true,
+        "OS": "Darwin",
+        "machine": "arm64"
+      },
+      {
+        "name": "native-enrollment-macos-intel",
+        "artifact_id": 14529365066,
+        "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+        "sha256": "6b8ce8196cc312d325b8ef3db83a28519d8b96dedcb28b1ac0f61699240ab076",
+        "cases_passed": 14,
+        "binary_sha256": "50debe2188b47fdb4d9eec8c4e55a9e3f2b9b310c8502c660f563612190ded10",
+        "all_fixture_identifiers_cleaned_and_absent": true,
+        "OS": "Darwin",
+        "machine": "x86_64"
+      },
+      {
+        "name": "native-enrollment-windows",
+        "artifact_id": 14528661186,
+        "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+        "sha256": "b3f8a675db4a879565262366970bc19addd67dd674e1dcbce6113dbc421ad2f9",
+        "cases_passed": 14,
+        "binary_sha256": "ea0a3803da4328afa7f05542636bb5ad0c9b04ae4c67590f15fdd4f115c85025",
+        "all_fixture_identifiers_cleaned_and_absent": true,
+        "OS": "Windows",
+        "machine": "AMD64"
       }
     ],
-    "verified_cases": 45,
-    "all_six_native_populations_verified": false,
+    "verified_cases": 87,
+    "all_six_native_populations_verified": true,
     "whole_workflow_completion_claimed": false,
     "production_ready": false,
     "radio_access": [],
     "RF_commands": []
+  },
+  "terminal_gates": {
+    "recorded_utc": "2026-11-19T12:27:58.384912+00:00",
+    "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+    "native_backend_and_window_cases_verified": 87,
+    "current_source_build_and_branch_package_gates_passed": true,
+    "workflow_receipts": {
+      "windows": {
+        "run_id": 44516019742,
+        "head_sha": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+        "conclusion": "success",
+        "jobs": [
+          {
+            "id": 135532112508,
+            "name": "build-windows",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135557032189,
+            "name": "package-windows",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135559539521,
+            "name": "Fully submit developer Store flight",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "id": 135559539708,
+            "name": "Publish Microsoft Store production",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "id": 135559540615,
+            "name": "release-windows",
+            "status": "completed",
+            "conclusion": "skipped"
+          }
+        ],
+        "publication_and_release_signing_skipped": true
+      },
+      "macos": {
+        "run_id": 44516026293,
+        "head_sha": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+        "conclusion": "success",
+        "jobs": [
+          {
+            "id": 135532131409,
+            "name": "build-dmg (macos-15, apple-silicon, arm64, 14.4)",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135532131730,
+            "name": "build-dmg (macos-15-intel, intel, x86_64, 14.4)",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135554856235,
+            "name": "App update tarball (intel)",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135554856407,
+            "name": "App update tarball (apple-silicon)",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 135554858979,
+            "name": "Sign and notarize (${{ matrix.label }})",
+            "status": "completed",
+            "conclusion": "skipped"
+          }
+        ],
+        "publication_and_release_signing_skipped": true
+      }
+    },
+    "production_ready": false,
+    "radio_access": [],
+    "RF_commands": [],
+    "scope": "Exact-source branch builds, unsigned packaging and controlled native credential/setup-window fixtures. Not production signing/publishing, bench development installer selections, actual radio enrollment/credential revocation, RF or6300."
   },
   "dispatch_scope": {
     "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
@@ -73,43 +194,25 @@
       "name": "Windows Installer",
       "head_sha": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
       "head_branch": "feat/aetherpd-shim-integration",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "success",
       "html_url": "https://github.com/aethersdr/AetherSDR/actions/runs/44516019742",
-      "created_at": "2026-11-19T11:34:21Z"
+      "created_at": "2026-11-19T11:34:21Z",
+      "updated_at": "2026-11-19T12:26:57Z"
     },
     {
       "id": 44516026293,
       "name": "macOS DMG",
       "head_sha": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
       "head_branch": "feat/aetherpd-shim-integration",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "success",
       "html_url": "https://github.com/aethersdr/AetherSDR/actions/runs/44516026293",
-      "created_at": "2026-11-19T11:34:23Z"
+      "created_at": "2026-11-19T11:34:23Z",
+      "updated_at": "2026-11-19T12:21:13Z"
     }
   ],
-  "last_job_observation_utc": "2026-11-19T11:49:23.033Z",
-  "live_jobs": [
-    {
-      "id": 135532112508,
-      "name": "build-windows",
-      "status": "in_progress",
-      "run_id": 44516019742
-    },
-    {
-      "id": 135532131409,
-      "name": "build-dmg (macos-15, apple-silicon, arm64, 14.4)",
-      "status": "in_progress",
-      "run_id": 44516026293
-    },
-    {
-      "id": 135532131730,
-      "name": "build-dmg (macos-15-intel, intel, x86_64, 14.4)",
-      "status": "in_progress",
-      "run_id": 44516026293
-    }
-  ],
+  "live_jobs": [],
   "canonical_source_alignment": {
     "feature_source": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
     "desktop_worktree_base": "e26ce672782520b7b627173cfd92cd77ad45b93e",
@@ -129,10 +232,10 @@
     "new_Linux_rebuild_required_for_this_drift": false
   },
   "archive": {
-    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-native-platform-backends-partial-components.tar.gz",
-    "bytes": 69209,
-    "sha256": "13e4a4eb4e8264c19c6187e46369053a27f886581d064d5f817606a29873b5be",
-    "members": 42,
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-native-platform-complete-components.tar.gz",
+    "bytes": 112439,
+    "sha256": "78dc6e7546d0ec904f3876017ba2c6fee6fedcf173f8e3e3fc600a31790f53ae",
+    "members": 78,
     "all_members_verified": true
   },
   "new_positive_GUI_key_requests": 0,
@@ -143,14 +246,13 @@
   "radio_reboots": [],
   "production_code_modified": false,
   "scope_limits": [
-    "These45 cases exercise real OS keychains and production token/persistence sources using unique disposable fixture identities and independent processes. All primary/metadata absence checks pass after cleanup. No real operator/radio credential is read or rotated.",
-    "The42 controlled RemoteAccess setup-window lifecycle cases have not yet produced artifacts. Earlier87case reports on their recordedb2ad8a6c/75ab2685 sources remain separately preserved and cannot substitute for current-source results.",
-    "All3 current native app build jobs are observed in_progress, not passed. Packaging, bundle closure, deployment targets and branch unsigned-payload outcomes must be inspected when terminal. Do not rerun or redispatch on polling timeout.",
-    "The signed canonical feature branch already contains the tested upstreambasee26ce672. Allsrc/tests C++/header/CMake input bytes match the running desktop snapshot except2SpectrumWindow comment edits; both windows preprocess identically. This avoids an unnecessary merge or Linux rebuild, not final native platform testing.",
-    "Current native workflow inputs use normal branch/default distribution configuration, not the pinned bench-only development installer selections. These checks do not qualify production publisher/catalogue or first-install/upgrade UX on native desktops.",
-    "No real radio enrollment, on-radio credential-loss/revocation behavior, RF, final-graph cleanup, DSP alignment/cold-start cause or actual6300 qualification is claimed.",
-    "The prepared one5W DSPAPI-loss completion case remains source-unarmed and pending explicit operator keying approval. This CI progress does not authorize RF.",
-    "FullP1-P10 and all remaining final native/window/package, actual6300/disk/adapter, cold/natural128, fault/credential/stale-cache, repeated/raw/extended RF, final stock and independent release gates remain active."
+    "The 45 credential-backend and 42 controlled RemoteAccess setup-window cases exercise real OS keychains and production persistence sources through disposable fixture identities. Every fixture primary/metadata absence check passes after cleanup, and each window receipt identifies its matching credential-probe binary.",
+    "Both dispatched runs test e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9. Later evidence-only commits and this report do not change that source attribution. Earlier 75ab2685 and b2ad8a6c platform results remain separately preserved.",
+    "The terminal workflows pass all three application builds, dependency/bundle closure and deployment checks, Windows packaging and both macOS app-update tarballs. These feature-branch jobs deliberately skip production signing, notarization, Store submission and release publication; their success is not a shipping-release assertion.",
+    "The workflow inputs use normal branch/default distribution configuration, not the pinned bench-only development installer selections. They do not qualify a production AetherPD publisher/catalogue, native desktop radio enrollment or actual on-radio credential revocation.",
+    "The canonical source already contains the tested upstream base. Matching C++ source inputs and preprocess evidence avoid an unnecessary Linux rebuild, not the remaining end-to-end radio gates.",
+    "The prepared 5 W DSP API-loss completion case remains unarmed, pending specific operator keying approval. No radio state or operator credentials were changed for this qualification.",
+    "Full P1-P10 remains active, including natural alignment/cold-start causes, remaining current-graph failures, repeated/raw/extended RF, final stock comparison, actual FLEX-6300 kernel/hardware/disk/adapter qualification, production publisher and independent release review."
   ],
-  "next_step": "Poll the existing run IDs, collect the remaining3 setup-window artifacts and tie each to its credential-probe hash, then inspect terminal build/package outcomes. Keep the current partial report and prior platform evidence separately attributed; no automatic redispatch or RF."
+  "next_step": "Preserve signed source and complete receipts, then continue the remaining current-graph/radio/production gates. Perform the prepared bounded 5 W case only upon its specific operator approval; do not redispatch successful native workflows for evidence-only changes."
 }

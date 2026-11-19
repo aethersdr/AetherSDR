@@ -1,0 +1,71 @@
+{
+  "source_file": "STOCK-CANDIDATE-QUALIFICATION.json",
+  "source_sha256": "6f445598738e5b9941224eba89ec1d96f3bf7196fdf7ff2ea20ca7984825abd3",
+  "renderer_sha256": "c70a44cd923f84fd994e03c37dc713c37a1d228f0118cb9b398d35acb34db353",
+  "recorded_runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+  "recorded_desktop_source": "b1256a1657319360279029cabfcbcb647728b86a",
+  "report_date": "2026-11-16",
+  "historical_finite_comparison": true,
+  "final_candidate_qualified": false,
+  "numeric_rows": [
+    {
+      "order": 3,
+      "upper": false,
+      "aether_dbc_per_tone": -44.363769325856104,
+      "stock_dbc_per_tone": -45.8297659852669,
+      "positive_means_aether_lower_db": -1.4659966594107985
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "aether_dbc_per_tone": -51.35784567295741,
+      "stock_dbc_per_tone": -45.2466291530352,
+      "positive_means_aether_lower_db": 6.111216519922209
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "aether_dbc_per_tone": -54.22057005166437,
+      "stock_dbc_per_tone": -52.1992032218013,
+      "positive_means_aether_lower_db": 2.0213668298630694
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "aether_dbc_per_tone": -60.698797282016415,
+      "stock_dbc_per_tone": -52.148736953419,
+      "positive_means_aether_lower_db": 8.550060328597418
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "aether_dbc_per_tone": -65.51877002545623,
+      "stock_dbc_per_tone": -49.0509214387065,
+      "positive_means_aether_lower_db": 16.46784858674973
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "aether_dbc_per_tone": -63.005242312579924,
+      "stock_dbc_per_tone": -49.6874928820173,
+      "positive_means_aether_lower_db": 13.317749430562621
+    }
+  ],
+  "table_text_count": 21,
+  "table_labels_inside_axes_and_nonoverlapping": true,
+  "matplotlib_version": "3.11.2",
+  "files": {
+    "stock-comparison.png": {
+      "bytes": 141828,
+      "sha256": "5ddbc0d0a6c65015070856c459e9c85c202b5a93d1c5f896ad2a9bb5419c4a33"
+    },
+    "stock-comparison.svg": {
+      "bytes": 109423,
+      "sha256": "cee95a1fa534354bba013a04f5209ad46793070b6f3bf1603eaafe705228f43e"
+    },
+    "stock-comparison.csv": {
+      "bytes": 463,
+      "sha256": "9a37fd2fd4e48a3a6ca9bfb03368fe87d56e4aa5f72a0b1339d0dbe8210d4bfa"
+    }
+  }
+}

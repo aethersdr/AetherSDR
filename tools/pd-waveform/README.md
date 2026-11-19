@@ -240,6 +240,21 @@ speech equivalence or cold training time. Unprocessed speech qualification
 remains unresolved: its upper adjacent-band measurement was close to the
 same capture's noise floor and did not consistently improve.
 
+A separate 2026-11-16 finite comparison is available as a
+[figure](./figures/20261116-stock-comparison/stock-comparison.png),
+[vector export](./figures/20261116-stock-comparison/stock-comparison.svg) and
+[full-precision table](./figures/20261116-stock-comparison/stock-comparison.csv).
+It gives IMD3, IMD5 and IMD7 separate rows. Its
+[manifest](./figures/20261116-stock-comparison/manifest.json) binds the exports
+to the unchanged historical qualification report and rendering script.
+Stock's corrected fundamental was 0.475 dB higher, and the input paths and
+calibration histories differed. These historical measurements do not qualify
+the final candidate or establish sustained performance. To reproduce the
+exports, install Matplotlib for the standalone plotting tool and run
+`python3 tools/pd-waveform/plot_stock_comparison.py --output <new-directory>`.
+The export records the Matplotlib version; byte reproduction requires the
+same plotting environment. The application does not depend on this tool.
+
 Two independent pairs with offline crest-reduced, band-limited speech passed
 the matched-interval check. The second pair matched occupied output within
 0.064 dB and improved adjacent-channel power by 15.2–17.7 dB across its three

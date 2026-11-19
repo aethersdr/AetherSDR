@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "independent_renders_byte_identical": true,
+  "csv_round_trip_rows": 6,
+  "historical_input_files_unchanged_from_git_HEAD": [
+    "STOCK-CANDIDATE-QUALIFICATION.json",
+    "evidence/20261116-candidate-rf/captures/10w/comparison.json",
+    "evidence/20261116-stock-rf/comparison.json"
+  ],
+  "underlying_stock_and_aether_products_match": true,
+  "all_six_products_exported_noise_limited": false,
+  "layout_nonoverlapping": true,
+  "final_candidate_qualified": false,
+  "RF_commands": [],
+  "files": {
+    "stock-comparison.png": {
+      "bytes": 141828,
+      "sha256": "5ddbc0d0a6c65015070856c459e9c85c202b5a93d1c5f896ad2a9bb5419c4a33"
+    },
+    "stock-comparison.svg": {
+      "bytes": 109423,
+      "sha256": "cee95a1fa534354bba013a04f5209ad46793070b6f3bf1603eaafe705228f43e"
+    },
+    "stock-comparison.csv": {
+      "bytes": 463,
+      "sha256": "9a37fd2fd4e48a3a6ca9bfb03368fe87d56e4aa5f72a0b1339d0dbe8210d4bfa"
+    }
+  }
+}
