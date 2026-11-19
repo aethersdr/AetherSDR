@@ -3846,13 +3846,13 @@ void tciKeepAliveDeadlineUnkeysThroughTheDisconnectPath()
 
     TxOperationIntegrationTestAccess::nativeTciText(server, *client, QStringLiteral("trx:0,true;"));
     check(f.commands == QStringList({QStringLiteral("mox:on")}), "fixture: the TCI client owns PTT");
-    TxOperationIntegrationTestAccess::injectTciKeepAlive(server, *client, &now, &pings, &aborts);
+    // No re-seed: the trx text itself, through receiveText(), renews the deadline.
     const qint64 keyedAt = now;
     for (; now < keyedAt + TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
         TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
     }
-    check(aborts == 0 && f.commands == QStringList({QStringLiteral("mox:on")}),
-          "inside the window the owner stays keyed");
+    check(aborts == 0 && pings == 2 && f.commands == QStringList({QStringLiteral("mox:on")}),
+          "the inbound trx renewed the deadline: one new probe, and the owner stays keyed");
     TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     check(aborts == 1 && f.commands == QStringList({QStringLiteral("mox:on"), QStringLiteral("mox:off")}),

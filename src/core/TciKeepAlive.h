@@ -5,7 +5,7 @@
 namespace AetherSDR {
 
 // Transport liveness of one TCI socket, as a pure state machine: the caller
-// supplies the time and performs the action. Any frame from the peer (text,
+// supplies the time and performs the action. Any message from the peer (text,
 // binary or pong) is evidence it is alive. After kIdleMs of silence one ping
 // goes out; a peer silent for kSilentDropWindowMs is aborted. It never keys.
 class TciKeepAlive {
@@ -47,6 +47,7 @@ public:
         return Action::None;
     }
 
+    qint64 silentMs(qint64 nowMs) const { return nowMs - m_lastHeardMs; }
     bool probing() const { return m_probing; }
     bool expired() const { return m_expired; }
 

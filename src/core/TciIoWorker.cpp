@@ -251,8 +251,7 @@ void TciIoWorker::acceptConnections()
         connect(socket, &QWebSocket::binaryMessageReceived, this, [this, id](const QByteArray& data) {
             receiveBinary(id, data);
         });
-        connect(socket, &QWebSocket::textFrameReceived, this, [this, id] { heardFrom(id); });
-        connect(socket, &QWebSocket::binaryFrameReceived, this, [this, id] { heardFrom(id); });
+        // Text and binary messages renew the deadline in receiveText()/receiveBinary().
         connect(socket, &QWebSocket::pong, this, [this, id] { heardFrom(id); });
         connect(socket, &QWebSocket::errorOccurred, this, [this, id, socket](QAbstractSocket::SocketError error) {
             auto it = m_clients.find(id);
@@ -324,21 +323,20 @@ void TciIoWorker::abortClient(quint64 id, const QString& reason)
     const auto it = m_clients.find(id);
     if (it == m_clients.end() || it->disconnected) { return; }
     qCWarning(lcCat) << "TCI: aborting client=" << id << "reason=" << reason
-                     << "silent_ms>=" << TciKeepAlive::kSilentDropWindowMs
+                     << "silent_ms=" << it->keepAlive.silentMs(m_keepAliveNow())
                      << "pending_bytes=" << (it->socket ? it->socket->bytesToWrite() : -1);
-    it->lifetime->live.store(false, std::memory_order_release);
-    it->producer.invalidate();
     it->abortCloseCode = int(QWebSocketProtocol::CloseCodeAbnormalDisconnection);
     if (it->errorText.isEmpty()) { it->errorText = reason; }
-    if (m_txClient == id) { stopChrono(); }
     m_keepAliveAbort(id);
-    socketDisconnected(id);  // no-op when abort() already emitted disconnected
+    // Retires the entry; a no-op when abort() already emitted disconnected.
+    socketDisconnected(id);
 }
 
 void TciIoWorker::receiveText(quint64 id, const QString& text)
 {
     auto it = m_clients.find(id);
     if (it == m_clients.end() || !it->lifetime->live.load()) { return; }
+    it->keepAlive.heard(m_keepAliveNow());
     const qsizetype bytes = text.size() * sizeof(QChar);
     if (bytes > kTextBytes - it->textBytes || it->texts.size() >= 64) {
         closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
@@ -920,6 +918,7 @@ void TciIoWorker::sendTxChronoFrame(quint64 client)
 
 void TciIoWorker::receiveBinary(quint64 id, const QByteArray& data)
 {
+    heardFrom(id);
     const TxCoordinator::Context context = m_tciTxContext;
     if (id != m_txClient || !context.permitsDispatch(TxCoordinator::monotonicMs())) { return; }
     if (data.size() < static_cast<int>(sizeof(TciAudioHeader))) return;
