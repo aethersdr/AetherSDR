@@ -375,7 +375,7 @@ int main(int argc, char** argv)
         QFile src(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Shortcuts.cpp"));
         const QString text = src.open(QIODevice::ReadOnly) ? QString::fromUtf8(src.readAll()) : QString();
         const qsizetype fn = text.indexOf(QStringLiteral(
-            "int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,\n"));
+            "int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,"));
         const qsizetype gate = text.indexOf(QStringLiteral("bridgeKeyMovesTxSetpoint("), fn);
         const qsizetype send = text.indexOf(QStringLiteral("QApplication::sendEvent(this, &ev);"), fn);
         check(fn >= 0 && gate > fn && send > gate,
