@@ -4040,7 +4040,7 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     // the DWM border and the client. Inset only while maximized so nothing
     // sits past the screen edge; the WM_NCHITTEST above keeps the edges resizable.
     if (msg && result && msg->message == WM_NCCALCSIZE && msg->wParam
-        && windowFlags().testFlag(Qt::ExpandedClientAreaHint)) {
+        && WindowChrome::claimsWholeWindowAsClient(windowFlags())) {
         if (IsZoomed(msg->hwnd) && !isFullScreen()) {
             const UINT dpi = GetDpiForWindow(msg->hwnd);
             const int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
@@ -4201,7 +4201,7 @@ void MainWindow::positionSizeGrip()
     // overlaying the status bar.  Direct child of MainWindow so the
     // grip's native dotted-texture paint isn't suppressed by the
     // status-bar stylesheet.  Inside the contents margins, which hold the
-    // Windows 11 non-client band (applyNonClientBandInsets()) and are 0
+    // Windows 11 resize band (applyNonClientBandInsets()) and are 0
     // everywhere else.
     if (m_sizeGrip) {
         m_sizeGrip->move(WindowChrome::sizeGripOrigin(size(), m_sizeGrip->width(),

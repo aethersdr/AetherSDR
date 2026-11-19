@@ -76,6 +76,12 @@ inline bool usesNativeCaption(const QWidget* window)
     return usesNativeCaption(window->windowFlags(), QGuiApplication::platformName());
 }
 
+// The expanded Windows frame paints through the resize band to the DWM border.
+inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags)
+{
+    return flags.testFlag(Qt::ExpandedClientAreaHint);
+}
+
 // Windows expanded client area: the part of the window a point is on, for the
 // main window's own WM_NCHITTEST. Qt 6.12's answer for these flags turns the
 // live mouse-button state into synthetic presses, doubling real clicks (#6272).

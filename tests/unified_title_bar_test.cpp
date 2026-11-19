@@ -138,6 +138,10 @@ int main(int argc, char** argv)
               "turning frameless off on Windows restores the system title and buttons");
         check(WindowChrome::usesNativeCaption(winOff, win),
               "Windows system decorations hide the bar's caption buttons");
+        check(WindowChrome::claimsWholeWindowAsClient(winOn),
+              "Windows frameless paints through the resize band");
+        check(!WindowChrome::claimsWholeWindowAsClient(winOff),
+              "turning frameless off leaves native client sizing to Windows");
         const Qt::WindowFlags macOn = WindowChrome::chromeFlags(base, true, QStringLiteral("cocoa"));
         check(WindowChrome::usesNativeCaption(macOn, QStringLiteral("cocoa")),
               "macOS frameless keeps the native traffic lights");
