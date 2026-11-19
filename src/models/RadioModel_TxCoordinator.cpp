@@ -1,10 +1,12 @@
 #include "RadioModel.h"
+#include "ModeVocabulary.h"
 #include "TxController.h"
 #include "core/LogManager.h"
 #include "core/SerialPortController.h"
 
 #include <QPointer>
 #include <QScopeGuard>
+#include <QThread>
 #include <vector>
 
 namespace AetherSDR {
@@ -242,7 +244,8 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     }
 }
 
-bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request)
+bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request,
+                                 bool askKeyObjection)
 {
     if (m_txInputsStopping) {
         return false;
@@ -324,6 +327,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         : activity == TxActivity::VoiceKeyer ? QStringLiteral("dvk")
         : activity == TxActivity::Navtex ? QStringLiteral("navtex") : QStringLiteral("cw-key");
     if (transmitStartBlockedByInhibit(gate)) {
+        return false;
+    }
+    // After the radio's own refusals, so a pan inhibit is reported ahead of it.
+    if (askKeyObjection && transmitStartBlockedByKeyObjection(gate)) {
         return false;
     }
     const bool independent = request && m_txCoordinator.isIndependentRequest(*request);
@@ -1141,6 +1148,61 @@ void RadioModel::emergencyTransmitStop()
     cancelLocalTransmit();
 }
 
+void RadioModel::addKeyObjection(QObject* owner, KeyObjection objection)
+{
+    if (QThread::currentThread() != thread() || owner == nullptr || !objection) {
+        return;
+    }
+    m_keyObjections.push_back({QPointer<QObject>(owner), std::move(objection)});
+}
+
+QString RadioModel::keyObjectionMessage() const
+{
+    // A request while this client already transmits is not a key-on: refusing
+    // it would roll back the state of a transmission on the air.
+    if (activeTxActivities() != 0) {
+        return QString();
+    }
+    return firstKeyObjection();
+}
+
+QString RadioModel::firstKeyObjection() const
+{
+    for (const KeyObjectionEntry& entry : m_keyObjections) {
+        if (entry.owner.isNull()) {
+            continue;
+        }
+        const QString message = entry.objection().trimmed();
+        if (!message.isEmpty()) {
+            return message;
+        }
+    }
+    return QString();
+}
+
+void RadioModel::emitKeyObjectionNotice(const QString& message, const QString& gate)
+{
+    // Keyed by gate, never by the sentence, so a changing sentence does not
+    // re-fire the notice inside its de-duplication window.
+    const QString panId = txSlice() ? txSlice()->panId() : QString();
+    emitInterlockNotification(message, QStringLiteral("key-objection:%1:%2").arg(panId, gate), panId);
+}
+
+bool RadioModel::transmitStartBlockedByKeyObjection(const QString& gate)
+{
+    const QString message = keyObjectionMessage();
+    if (message.isEmpty()) {
+        return false;
+    }
+    emitKeyObjectionNotice(message, gate);
+    m_transmitModel.setTransmitting(false);
+    if (m_txAudioGate) {
+        m_txAudioGate = false;
+        emit txAudioGateChanged(false);
+    }
+    return true;
+}
+
 void RadioModel::resetTxOperations()
 {
     // Even an idle coordinator must refuse new intent while the session dies.
@@ -1191,13 +1253,49 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
 
 void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                        const QString& source, quint64 traceId, quint64 sourceMs,
-                                       std::chrono::steady_clock::time_point scheduledAt)
+                                       std::chrono::steady_clock::time_point scheduledAt,
+                                       bool hostTextGates, std::function<void()> onDownRefused)
 {
-    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt] {
+    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt,
+                                     hostTextGates, onDownRefused = std::move(onDownRefused)] {
+        const auto refused = [down, &onDownRefused] {
+            if (down && onDownRefused) {
+                onDownRefused();
+            }
+        };
         if (m_txSessionClosing || scheduledAt < m_cwInputNotBefore) {
+            refused();
             return;
         }
-        (void)sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request);
+        if (down && hostTextGates) {
+            SliceModel* tx = txSlice();
+            if (!tx || !isCwMode(tx->mode())) {
+                emitInterlockNotification(
+                    tr("CW text stopped: the transmit slice is not in a CW mode."),
+                    QStringLiteral("cw-text-mode:%1").arg(tx ? tx->mode() : QString()),
+                    tx ? tx->panId() : QString());
+                refused();
+                return;
+            }
+            if (!m_transmitModel.admitsCwKeyEdge(true)) {
+                emitInterlockNotification(tr("CW text stopped: TUNE is active."),
+                                          QStringLiteral("cw-text-tuning"), tx->panId());
+                refused();
+                return;
+            }
+            // Break-in turned off, or MOX/PTT released, mid-message: the
+            // backend would not raise MOX, so the element would not go out.
+            if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
+                emitInterlockNotification(
+                    tr("CW text stopped: break-in is off and transmit is not keyed."),
+                    QStringLiteral("cw-text-unkeyed"), tx->panId());
+                refused();
+                return;
+            }
+        }
+        if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
+            refused();
+        }
     }, Qt::QueuedConnection);
 }
 
