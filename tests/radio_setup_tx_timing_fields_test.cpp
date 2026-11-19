@@ -3,6 +3,7 @@
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
 #include "core/RadioDiscovery.h"
+#include "core/RadioSettingsScope.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "gui/RadioSetupDialog.h"
@@ -11,8 +12,10 @@
 #include "models/TransmitModel.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QGridLayout>
 #include <QHostAddress>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -21,6 +24,7 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QSignalSpy>
+#include <QSpinBox>
 #include <QStringList>
 #include <QtTest>
 
@@ -162,6 +166,17 @@ void connectDemo(RadioModel& model)
     model.connectToRadio(demo);
 }
 
+template <typename W>
+W* findByAccessibleName(QWidget& root, const QString& name)
+{
+    for (W* w : root.findChildren<W*>()) {
+        if (w->accessibleName() == name) {
+            return w;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 class RadioSetupTxTimingFieldsTest : public QObject {
@@ -277,6 +292,55 @@ private slots:
             QVERIFY(!edit->isEnabled());
             QVERIFY(!edit->accessibleDescription().isEmpty());
         }
+    }
+
+    // The host time-out group (RFC #7021) writes this radio's TxTimeout
+    // document on an edit, and a new session on the same radio reads it back.
+    void txTimeoutGroupWritesTheDocument()
+    {
+        {
+            RadioModel model;
+            connectDemo(model);
+            QTRY_VERIFY_WITH_TIMEOUT(model.isConnected(), 5000);
+            const RadioSettingsScope scope = model.settingsScope();
+            QVERIFY2(scope.hasRadioIdentity(), "the demo has a radio identity");
+            RadioSetupDialog dialog(&model);
+            dialog.show();
+            dialog.selectTab(QStringLiteral("Transmit"));
+            auto* enable = findByAccessibleName<QCheckBox>(dialog, QStringLiteral("Transmit time-out enabled"));
+            auto* timeout = findByAccessibleName<QSpinBox>(dialog, QStringLiteral("Transmit time-out (seconds)"));
+            auto* warning = findByAccessibleName<QSpinBox>(
+                dialog, QStringLiteral("Transmit time-out warning (seconds before)"));
+            QVERIFY(enable && timeout && warning);
+            QVERIFY2(enable->isEnabled() && enable->isChecked(), "connected, on by default");
+            int version = 0;
+            QVERIFY2(scope.featureExact(QStringLiteral("TxTimeout"), &version).isEmpty(), "nothing stored yet");
+
+            enable->setChecked(false);
+            QJsonObject doc = scope.featureExact(QStringLiteral("TxTimeout"), &version);
+            QCOMPARE(version, 1);
+            QCOMPARE(doc.value(QStringLiteral("enabled")).toBool(true), false);
+            QVERIFY(!model.txTimeoutSettings().enabled);
+
+            enable->setChecked(true);
+            timeout->setValue(300);
+            emit timeout->editingFinished();
+            warning->setValue(20);
+            emit warning->editingFinished();
+            doc = scope.featureExact(QStringLiteral("TxTimeout"), &version);
+            QCOMPARE(version, 1);
+            QCOMPARE(doc.value(QStringLiteral("enabled")).toBool(false), true);
+            QCOMPARE(doc.value(QStringLiteral("timeoutS")).toInt(), 300);
+            QCOMPARE(doc.value(QStringLiteral("warningS")).toInt(), 20);
+            QCOMPARE(model.txTimeoutSettings().timeoutS, 300);
+        }
+        RadioModel again;
+        connectDemo(again);
+        QTRY_VERIFY_WITH_TIMEOUT(again.isConnected(), 5000);
+        const TxTimeoutSettings loaded = again.txTimeoutSettings();
+        QVERIFY(loaded.enabled);
+        QCOMPARE(loaded.timeoutS, 300);
+        QCOMPARE(loaded.warningS, 20);
     }
 
     // PTT Mic Override (#6442) shows the RADIO's value: unreported (firmware
