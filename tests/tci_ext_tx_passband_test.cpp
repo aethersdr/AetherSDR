@@ -391,33 +391,62 @@ void setsWhileKeyedAndAfterTheOver()
 {
     RadioModel model;
     auto owner = std::make_unique<FilterBackend>();
-    owner->caps.hasTxFilterControls = true;
+    FilterBackend* backend = owner.get();
+    backend->caps.hasTxFilterControls = true;
+    backend->connected = false;  // the slice fixture is applied while disconnected
     model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    QString error;
+    const bool fixture = model.automationApplySliceFixture(0, QStringLiteral("A"), &error);
+    backend->connected = true;
+    SliceModel* s0 = model.slice(0);
+    if (!fixture || !s0) {
+        check(false, "keyed: a fixture TX slice on a connected radio");
+        std::printf("      fixture: %s\n", qPrintable(error));
+        return;
+    }
+    SliceDelta usbTx;
+    usbTx.txSlice = true;
+    usbTx.mode = QStringLiteral("USB");
+    s0->applyChanges(usbTx);
     TransmitModel& tx = model.transmitModel();
     tx.setTxFilter(100, 2900);
     TciServer server(&model);
+    server.wireSlice(s0->sliceId(), s0);
     Wire a;
     TciTxPassbandExtensionTest::attach(server, a.client, model);
-    settle();
+    settle(600);  // past wireSlice()'s 400 ms seeds
     a.send("aethersdr_ext_enable:true;");
     a.take();
 
+    const auto setAndHear = [&](const char* set, const char* line, int low, int high,
+                                const char* what) {
+        a.send(set);
+        settle();
+        const QStringList heard = bandLines(a.take());
+        const bool ok = passbandIs(tx, low, high) && heard == one(line);
+        check(ok, what);
+        if (!ok) {
+            std::printf("      passband %d,%d\n", tx.txFilterLow(), tx.txFilterHigh());
+            for (const QString& l : heard) {
+                std::printf("      a< %s\n", qPrintable(l));
+            }
+        }
+    };
+
+    QObject::connect(&model, &RadioModel::interlockNotificationRequested, &model,
+                     [](const QString& message) {
+                         std::printf("      interlock: %s\n", qPrintable(message));
+                     });
     model.setTransmit(true);
-    const bool keyed = model.transmitOwnershipPending();
-    check(keyed, "keyed: the radio holds TX ownership");
-    a.send("aethersdr_tx_filter_band:0,300,2400;");
-    settle();
-    check(keyed && passbandIs(tx, 300, 2400)
-              && bandLines(a.take()) == one("aethersdr_tx_filter_band:0,300,2400;"),
-          "a set while keyed changes TransmitModel and is answered");
+    check(model.transmitOwnershipPending() && tx.isTransmitting(),
+          "keyed: the radio holds TX ownership");
+    setAndHear("aethersdr_tx_filter_band:0,300,2400;", "aethersdr_tx_filter_band:0,300,2400;",
+               300, 2400, "a set while keyed changes TransmitModel and is answered");
 
     model.setTransmit(false);
     std::printf("      after the over: ownership pending=%d\n", model.transmitOwnershipPending());
-    a.send("aethersdr_tx_filter_band:0,200,2700;");
-    settle();
-    check(passbandIs(tx, 200, 2700)
-              && bandLines(a.take()) == one("aethersdr_tx_filter_band:0,200,2700;"),
-          "a set after the over changes TransmitModel and is answered");
+    setAndHear("aethersdr_tx_filter_band:0,200,2700;", "aethersdr_tx_filter_band:0,200,2700;",
+               200, 2700, "a set after the over changes TransmitModel and is answered");
 }
 
 // The notice's limiter starts only after a line went out: a change nobody was
