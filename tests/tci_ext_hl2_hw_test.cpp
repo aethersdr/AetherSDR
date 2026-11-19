@@ -98,6 +98,7 @@ public:
     bool connected{true};
     int filterBoard{0};
     bool n2adrHpf{false};
+    bool filterBoardSuggested{false};  // reported, not an option: no status of its own
     int codec{0};
     QList<QVariantMap> hwSets;
     QList<quint64> ioRequests;
@@ -134,12 +135,17 @@ public:
         }
         if (verb == QLatin1String("hw.get")) {
             if (id != 0) {
-                emit extensionResult(id, hw());
+                QVariantMap report = hw();
+                report.insert(QStringLiteral("filterBoardSuggested"), filterBoardSuggested);
+                emit extensionResult(id, report);
             }
         } else if (verb == QLatin1String("hw.set")) {
             const QVariantMap in = arg.toMap();
             hwSets << in;
             const QVariantMap before = hw();
+            if (in.contains(QStringLiteral("filterBoard"))) {
+                filterBoardSuggested = false;
+            }
             filterBoard = in.value(QStringLiteral("filterBoard"), filterBoard).toInt();
             n2adrHpf = in.value(QStringLiteral("n2adrHpf"), n2adrHpf).toBool();
             codec = in.value(QStringLiteral("codec"), codec).toInt();
@@ -765,7 +771,27 @@ void heldSetYieldsToAChangeElsewhere()
     settle(250);
     check(backend->filterBoard == 2 && backend->n2adrHpf && backend->codec == 1,
           "CONTROL: a change elsewhere that leaves the board alone does not drop the held set");
+    settle(250);
     a.take();
+
+    // A board the gateware only suggested is not stored: a set naming it is
+    // not a no-op, and stores it as the setup page's choice would.
+    backend->filterBoardSuggested = true;
+    const qsizetype setsBefore = backend->hwSets.size();
+    a.send("aethersdr_hl2_filter_board:n2adr_txonly,true;");
+    settle(250);
+    got = a.take();
+    check(backend->hwSets.size() == setsBefore + 1 && !backend->filterBoardSuggested
+              && backend->filterBoard == 2
+              && got == one("aethersdr_hl2_filter_board:n2adr_txonly,true;"),
+          "a set naming the suggested board stores it and is answered");
+    if (got != one("aethersdr_hl2_filter_board:n2adr_txonly,true;")) {
+        dump("a", got);
+    }
+    a.send("aethersdr_hl2_filter_board:n2adr_txonly,true;");
+    settle(250);
+    check(backend->hwSets.size() == setsBefore + 1 && a.take().isEmpty(),
+          "CONTROL: once stored, the same set is a no-op again");
     server.setHl2HardwareChangesAllowed(false);
 }
 

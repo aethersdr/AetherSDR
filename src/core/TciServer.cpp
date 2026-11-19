@@ -4074,9 +4074,12 @@ TciExtensionSet::Result TciServer::handleHl2(const QString& name, const QStringL
     const bool hpfApplies = request->board == TciHl2Extension::kBoardTxOnly;
     const bool hpfWanted = hpfApplies ? request->hpf : hpfNow;
     const bool adoptedAsAsked = hpfWanted == request->hpf;
+    // A board that is only the gateware's suggestion is not stored yet; a set
+    // naming it stores it, as the setup page's choice does.
+    const bool suggested = hw->value(QStringLiteral("filterBoardSuggested")).toBool();
     // A set equal to what stands also replaces one still held in the window:
     // the newest request is the one that counts.
-    if (request->board == boardNow && hpfWanted == hpfNow) {
+    if (request->board == boardNow && hpfWanted == hpfNow && !suggested) {
         m_hl2SetPending.reset();
         if (!adoptedAsAsked) {
             result.reply = current;  // the HPF was not applied: say what stands
