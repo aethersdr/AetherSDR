@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T04:11:10.491753+00:00",
+  "recorded_utc": "2026-11-19T04:23:58.826012+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
@@ -69,6 +69,13 @@
       "earlier_scope": "Physical cycle after exhausted budget was already qualified at50ca57748 on release622. Do not reopen as missing evidence. Current restart policy unchanged; this desktop-stall case did not crash the control service."
     },
     {
+      "case": "Owned lifetime unkey guardian API connection loss",
+      "state": "current_receive_only_passed_keyed_precondition_failed_no_fault_injected",
+      "evidence": "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json",
+      "earlier_evidence": "CURRENT-RUNTIME-API-LOSS-QUALIFICATION.json",
+      "limits": "Current receive-only disconnect/cleanup and ordinary two-frame USB successor pass. One keyed attempt did not reach correction, ended normally at source completion and injected no API fault. Native journal captures EQ residual-9.7dB and LCALC state; root cause unresolved. Original errors retained, final Stop/ACK/freshidle and independent cleanup pass. No RF retry."
+    },
+    {
       "case": "API loss, successful owner credential revocation, malformed status, partial startup/allocation",
       "state": "remaining_full_scope",
       "earlier_evidence": [
@@ -85,9 +92,9 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Inspect final API-loss and credential-revocation behavior and remaining startup/combined scopes; construct fixed bounded receive-only admission tests before separately dispatched keyed qualification.",
-    "state": "not_executed_by_this_report",
-    "authority_constraint": "Minimize fixed lab injection privileges, pin exact owned resources, retain native bounded unkey/LP guards, and avoid global service/network changes. No automatic keying/rearm or software reboot."
+    "purpose": "Diagnose current cold-start all-bypass using bounded acquisition/aligned-pair and fit-worker timing evidence; actual arrays and worker timing are missing. Preserve completed helper-fault and receive-only API scopes.",
+    "state": "current_symptom_reproduced_cause_unproven",
+    "authority_constraint": "Offline causal work before another separately dispatched RF case; no automatic retry/rearm, safety threshold relaxation, credential invalidation or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",

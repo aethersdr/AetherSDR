@@ -1,0 +1,2159 @@
+{
+  "recorded_utc": "2026-11-19T04:23:58.826012+00:00",
+  "production_ready": false,
+  "source_parent": "0480f836e9edc48f094d573f5502f74bcf8b24f2",
+  "desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
+  "desktop": {
+    "pid": 2456863,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "83f00798eca5daae4d3f65a9e9e235125b409b286e0182f181a880dbf3a9f3eb",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0,
+    "source_patch_sha256": "6f06deeeb4cfedf50ee73420bf3afe8b7320669a2550364883863816be81e7da"
+  },
+  "runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "runtime_source": "f75063713186512a38e4e895a8598693b8018a91",
+  "status": "Current receive-only owned lifetime-unkey API disconnect, cleanup and explicit ordinary USB IQ recovery passed. Keyed qualification remains unexecuted: one separately dispatched finite attempt never reached corrected readiness, so no API fault or desktop pause occurred. Current cold-start all-bypass symptom captured with poor EQ residual and WDSP calculation state. Negative attempt and instrumentation timeout preserved unchanged.",
+  "new_positive_GUI_key_requests": 1,
+  "new_observed_TX_intervals": 1,
+  "source_arm_actions": 1,
+  "FDX": false,
+  "nominal_W": 5,
+  "configured_max_W": 10,
+  "LP_whole_run_peak_W": 3.61,
+  "receive_only_preflight": {
+    "passed": true,
+    "RF_commands": [],
+    "source_arm_actions": 0,
+    "cleanup_errors": [],
+    "before": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 22.90625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x77853631",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "native_before": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "idle",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "diagnostics": {
+        "alignment": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "alignment_reset": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "version": 2
+      },
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 2005218865,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "measurement_capture_batch_version": 1,
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000000",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "calibration",
+      "state": "idle"
+    },
+    "capture_before": {
+      "body": {
+        "capture_id": "36d8067d658bc22b9392f076870022cf",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 2005218865,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "42561647269094",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "42561988269683",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "9",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "complete": true,
+      "http_status": 200,
+      "iq_sha256": "ac569a0111f6e625221b14ac3a52daedb8f6ec3d17c43217088ac16605133ddf"
+    },
+    "ready": {
+      "ready": true,
+      "passed": false,
+      "RF_commands": [],
+      "signals": [],
+      "network_mutations": [],
+      "commands": [],
+      "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+      "target_socket": {
+        "inode": "276757",
+        "local": "0100007F:B666",
+        "peer": "0100007F:1380",
+        "state": "01"
+      },
+      "target": {
+        "pid": 13953,
+        "ppid": 13935,
+        "start_ticks": 4256071,
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@99-6196-78666.service"
+        ],
+        "exe": "/run/aetherpd/bin/pd-unkey-guard",
+        "sha256": "55f5d58d5c6c77244eacc46caf33ba3465561e159ae33e4c180e0cbcca211cbb",
+        "argv": [
+          "/run/aetherpd/bin/pd-unkey-guard",
+          "3",
+          "4",
+          "0x6ce08104",
+          "0x77853631"
+        ]
+      },
+      "DSP_peer": {
+        "pid": 13945,
+        "ppid": 13935,
+        "start_ticks": 4256052,
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@99-6196-78666.service"
+        ],
+        "exe": "/run/aetherpd/bin/aether-pd",
+        "sha256": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+      },
+      "injector": {
+        "pid": 14035,
+        "ppid": 14033,
+        "start_ticks": 4256514,
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/"
+        ]
+      },
+      "open_fds_after_drop": [
+        {
+          "fd": 0,
+          "target": "/null"
+        },
+        {
+          "fd": 1,
+          "target": "pipe:[279364]"
+        },
+        {
+          "fd": 2,
+          "target": "pipe:[279365]"
+        },
+        {
+          "fd": 3,
+          "target": "anon_inode:[pidfd]"
+        }
+      ],
+      "idle_before_readiness": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    },
+    "trigger": {
+      "passed": true,
+      "target": {
+        "pid": 13953,
+        "ppid": 13935,
+        "start_ticks": 4256071,
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@99-6196-78666.service"
+        ],
+        "exe": "/run/aetherpd/bin/pd-unkey-guard",
+        "sha256": "55f5d58d5c6c77244eacc46caf33ba3465561e159ae33e4c180e0cbcca211cbb",
+        "argv": [
+          "/run/aetherpd/bin/pd-unkey-guard",
+          "3",
+          "4",
+          "0x6ce08104",
+          "0x77853631"
+        ]
+      },
+      "signals": [],
+      "command_sender_uid": 78666,
+      "disconnect_ack": "R91|0|"
+    },
+    "terminal_after_fault": {
+      "body": {
+        "available": false,
+        "state": "cleanup_unconfirmed"
+      },
+      "complete": true,
+      "http_status": 200
+    },
+    "post_terminal_samples": [
+      {
+        "body": {
+          "available": false,
+          "state": "cleanup_unconfirmed"
+        },
+        "complete": true,
+        "http_status": 200
+      },
+      {
+        "body": {
+          "available": false,
+          "state": "cleanup_unconfirmed"
+        },
+        "complete": true,
+        "http_status": 200
+      },
+      {
+        "body": {
+          "available": false,
+          "state": "cleanup_unconfirmed"
+        },
+        "complete": true,
+        "http_status": 200
+      },
+      {
+        "body": {
+          "available": false,
+          "state": "cleanup_unconfirmed"
+        },
+        "complete": true,
+        "http_status": 200
+      },
+      {
+        "body": {
+          "available": false,
+          "state": "cleanup_unconfirmed"
+        },
+        "complete": true,
+        "http_status": 200
+      },
+      {
+        "body": {
+          "available": false,
+          "state": "cleanup_unconfirmed"
+        },
+        "complete": true,
+        "http_status": 200
+      }
+    ],
+    "fault_receipt": {
+      "job": {
+        "passed": true,
+        "RF_commands": [],
+        "signals": [],
+        "network_mutations": [],
+        "commands": [
+          "C91|client disconnect 0x6ce08104"
+        ],
+        "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+        "target_socket": {
+          "inode": "276757",
+          "local": "0100007F:B666",
+          "peer": "0100007F:1380",
+          "state": "01"
+        },
+        "target": {
+          "pid": 13953,
+          "ppid": 13935,
+          "start_ticks": 4256071,
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@99-6196-78666.service"
+          ],
+          "exe": "/run/aetherpd/bin/pd-unkey-guard",
+          "sha256": "55f5d58d5c6c77244eacc46caf33ba3465561e159ae33e4c180e0cbcca211cbb",
+          "argv": [
+            "/run/aetherpd/bin/pd-unkey-guard",
+            "3",
+            "4",
+            "0x6ce08104",
+            "0x77853631"
+          ]
+        },
+        "DSP_peer": {
+          "pid": 13945,
+          "ppid": 13935,
+          "start_ticks": 4256052,
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@99-6196-78666.service"
+          ],
+          "exe": "/run/aetherpd/bin/aether-pd",
+          "sha256": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+        },
+        "injector": {
+          "pid": 14035,
+          "ppid": 14033,
+          "start_ticks": 4256514,
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "cgroup": [
+            "0::/"
+          ]
+        },
+        "open_fds_after_drop": [
+          {
+            "fd": 0,
+            "target": "/null"
+          },
+          {
+            "fd": 1,
+            "target": "pipe:[279364]"
+          },
+          {
+            "fd": 2,
+            "target": "pipe:[279365]"
+          },
+          {
+            "fd": 3,
+            "target": "anon_inode:[pidfd]"
+          }
+        ],
+        "idle_before_readiness": {
+          "tx_client_handle": "0x00000000",
+          "state": "READY",
+          "reason": "",
+          "source": "",
+          "tx_allowed": "1",
+          "amplifier": ""
+        },
+        "interlock_before_disconnect": {
+          "tx_client_handle": "0x00000000",
+          "state": "READY",
+          "reason": "",
+          "source": "",
+          "tx_allowed": "1",
+          "amplifier": ""
+        },
+        "disconnect_requested_ns": 42566038483096,
+        "command_sender_uid": 78666,
+        "disconnect_ack": "R91|0|",
+        "ack_observed_ns": 42566109591171,
+        "target_exit_observed_ns": 42566109621523
+      },
+      "job_container_deleted": true,
+      "temporary_host_directory_deleted": true,
+      "runner_exit": 0
+    },
+    "terminal_after_Stop": {
+      "body": {
+        "available": false,
+        "state": "cleanup_unconfirmed"
+      },
+      "complete": true,
+      "http_status": 200
+    },
+    "final": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x77853631",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    }
+  },
+  "receive_only_successor": {
+    "passed": true,
+    "RF_commands": [],
+    "calibration_arms": [],
+    "explicit_Start_actions": 1,
+    "cleanup_errors": [],
+    "captures": [
+      {
+        "metadata": {
+          "capture_id": "aafedd5a0795fb0497f5a1f2657e1fa3",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 2005218865,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "42636767456822",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "42637108384360",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "6",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        },
+        "bytes": 131072,
+        "sha256": "c634fc873dbcbd851c3880a6534bba851344f2235b335ff69f5ca1ff6170d0a4",
+        "file": "IQ-1.f32le"
+      },
+      {
+        "metadata": {
+          "capture_id": "e685f1e178e71bfdf3fbdf2d506f13db",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 2005218865,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "42637240363115",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "42637581379263",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "6",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        },
+        "bytes": 131072,
+        "sha256": "9ec022fc4ba7d268a71f8c6d134776cd6ec66c2d9ab3c05187d7c1359e896982",
+        "file": "IQ-2.f32le"
+      }
+    ],
+    "before": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x77853631",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "terminal_before_Start": {
+      "available": false,
+      "state": "cleanup_unconfirmed"
+    },
+    "session_stopped": true,
+    "final": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x77853631",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    }
+  },
+  "resource_audits": {
+    "receive-audit": {
+      "passed": true,
+      "scope": "read-only post-fault runtime/network cleanup audit",
+      "RF_commands": [],
+      "signals_to_radio_processes": [],
+      "service_mutations": [],
+      "network_mutations": [],
+      "runtime_hashes": {
+        "flex-tailnet-shim": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+        "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+        "pd-primary-launch": "3cf9685c5a0cbd87e50a440cee2d8c94ca9bad5b735099c9ca649675091828b2",
+        "pd-start-session": "616bfb8f36627f43547e9fa90daa14cfbd92c7bb342f499b3367afea0eb59fed",
+        "pd-radio-launch": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+        "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+        "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+        "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+        "pd-unkey-guard": "55f5d58d5c6c77244eacc46caf33ba3465561e159ae33e4c180e0cbcca211cbb",
+        "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+        "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1",
+        "pd-boot": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7"
+      },
+      "graph": [
+        {
+          "pid": 6196,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "start_ticks": 1968672,
+          "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+          "packet_fds": [],
+          "role": "control/status frontend"
+        },
+        {
+          "pid": 13927,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "start_ticks": 4255924,
+          "sha256": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7",
+          "packet_fds": [],
+          "role": "unprivileged control manager"
+        },
+        {
+          "pid": 13935,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "start_ticks": 4255948,
+          "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+          "packet_fds": [],
+          "role": "control/status frontend"
+        }
+      ],
+      "zombies": [],
+      "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+      "ARP": [],
+      "ARP_journal_bytes": 0,
+      "accept_local": "0",
+      "private_session_sockets": [],
+      "temporary_install_paths": {
+        "/var/lib/smartsdr/aetherpd-installation": false,
+        "/run/aetherpd-install": false,
+        "/run/aetherpd-delivery": false,
+        "/etc/systemd/system/aetherpd-install.service": false,
+        "/etc/systemd/system/aetherpd-recover.service": false
+      },
+      "control_service": {
+        "MainPID": "6196",
+        "NRestarts": "0",
+        "ActiveState": "active",
+        "SubState": "running"
+      },
+      "journal_read_result": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "native_journal": [
+        {
+          "MESSAGE": "1795061762.037 registered AetherPD: tx_in 0x81000001 rx_in 0x81000000",
+          "_PID": "13927",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42561013558",
+          "_SYSTEMD_UNIT": "aetherpd-start@99-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061762.285 PD selected on slice 0",
+          "_PID": "13927",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42561261163",
+          "_SYSTEMD_UNIT": "aetherpd-start@99-6196-78666.service"
+        }
+      ],
+      "native_journal_visibility": true
+    },
+    "post-refusal-audit": {
+      "passed": true,
+      "scope": "read-only post-fault runtime/network cleanup audit",
+      "RF_commands": [],
+      "signals_to_radio_processes": [],
+      "service_mutations": [],
+      "network_mutations": [],
+      "runtime_hashes": {
+        "flex-tailnet-shim": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+        "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d",
+        "pd-primary-launch": "3cf9685c5a0cbd87e50a440cee2d8c94ca9bad5b735099c9ca649675091828b2",
+        "pd-start-session": "616bfb8f36627f43547e9fa90daa14cfbd92c7bb342f499b3367afea0eb59fed",
+        "pd-radio-launch": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+        "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+        "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+        "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+        "pd-unkey-guard": "55f5d58d5c6c77244eacc46caf33ba3465561e159ae33e4c180e0cbcca211cbb",
+        "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+        "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1",
+        "pd-boot": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7"
+      },
+      "graph": [
+        {
+          "pid": 6196,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "start_ticks": 1968672,
+          "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+          "packet_fds": [],
+          "role": "control/status frontend"
+        },
+        {
+          "pid": 14210,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "start_ticks": 4266020,
+          "sha256": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7",
+          "packet_fds": [],
+          "role": "unprivileged control manager"
+        },
+        {
+          "pid": 14217,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "gid": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "start_ticks": 4266044,
+          "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+          "packet_fds": [],
+          "role": "control/status frontend"
+        }
+      ],
+      "zombies": [],
+      "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+      "ARP": [],
+      "ARP_journal_bytes": 0,
+      "accept_local": "0",
+      "private_session_sockets": [],
+      "temporary_install_paths": {
+        "/var/lib/smartsdr/aetherpd-installation": false,
+        "/run/aetherpd-install": false,
+        "/run/aetherpd-delivery": false,
+        "/etc/systemd/system/aetherpd-install.service": false,
+        "/etc/systemd/system/aetherpd-recover.service": false
+      },
+      "control_service": {
+        "MainPID": "6196",
+        "NRestarts": "0",
+        "ActiveState": "active",
+        "SubState": "running"
+      },
+      "journal_read_result": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "native_journal": [
+        {
+          "MESSAGE": "1795061862.966 AetherPD 0.1.0 starting, radio 127.0.0.1, udp 60219, feedback DAX IQ 4 at 48000 Hz, peak 0.70, correction on",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42661942242",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061863.034 registered AetherPD: tx_in 0x81000001 rx_in 0x81000000",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42662010308",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061863.360 PD selected on slice 0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42662336715",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061897.094 measurement window: event=periodic ready=0 now_ns=42696070179786 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=1 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=42696068621780 iq_age_ns=1532746 deadline_ns=42704069882196 fits=0 solution=0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42696073542",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061897.094 tx: aligned 0, fits 0, correcting 0, state 0, offset 0.000 Hz",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42696073542",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061897.094 calibration: key 0.000 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.000000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42696073542",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061899.094 measurement window: event=periodic ready=0 now_ns=42698070336613 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=1 noise_left=48000 test_left=144000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=42698070289540 iq_age_ns=1198509 deadline_ns=42704069882196 fits=0 solution=0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42698070483",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061899.094 tx: aligned 0, fits 0, correcting 0, state 0, offset 0.000 Hz",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42698070483",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061899.094 calibration: key 2.000 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.470944, limited 0, acquisition pending 1, EQ pending 0, fit flags 0x0, rejected 0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42698070483",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061899.098 alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=42696069932529 submitted_ns=42697820737333 started_ns=42697820772073 completed_ns=42698065926076 consumed_ns=42698074320543 delay=1768.950 envelope=0.891177 phase=0.941976 offset_hz=-0.022969 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42698074610",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061899.098 loop delay 1768.95 samples (73.71 ms), envelope correlation 0.89, phase correlation 0.942",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42698074610",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061900.912 transmit path fitted: 31 taps, -9.7 dB of the feedback left unexplained",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42699888675",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061901.096 measurement window: event=periodic ready=0 now_ns=42700072373091 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=0 test_left=96000 tone1=710 tone2=1900 tone_sent_ns=42700069022490 guard_ns=500000000 iq_valid_ns=42700072323610 iq_age_ns=1272767 deadline_ns=42704069882196 fits=0 solution=0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42700072527",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061901.096 tx: aligned 1, fits 0, correcting 0, state 2, offset -0.034 Hz",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42700072527",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061901.096 calibration: key 4.003 s, EQ 1 residual -9.7 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.470944, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42700072527",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061903.096 measurement window: event=periodic ready=0 now_ns=42702072478438 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=0 test_left=48000 tone1=710 tone2=1900 tone_sent_ns=42700069022490 guard_ns=500000000 iq_valid_ns=42702070315752 iq_age_ns=909752 deadline_ns=42704069882196 fits=0 solution=0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42702072708",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061903.096 tx: aligned 1, fits 0, correcting 0, state 6, offset -0.029 Hz",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42702072708",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061903.096 calibration: key 6.003 s, EQ 1 residual -9.7 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.700000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42702077072",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061905.093 bounded source ended: reason=source_samples_complete mono_ns=42704069074572 source=0000000000000001 phase=completed keyed=1 tx_on=1 samples_left=0 generated=191999 iq_frames=11489 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1382581 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=1 idle=0 gui=77853631 slice=0 correction=1 native_apd=0 iq_valid_ns=42704065448102",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42704069439",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061905.098 tx: aligned 1, fits 1, correcting 0, state 6, offset -0.027 Hz",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42704074431",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061905.098 calibration: key 8.004 s, EQ 1 residual -9.7 dB, phase 3, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.700000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42704074431",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        },
+        {
+          "MESSAGE": "1795061905.138 receive: 1 fits, cache 0, delay 1768.95, offset -0.032 Hz",
+          "_PID": "14210",
+          "_BOOT_ID": "258f9d4161b14d4fae6c8116cc178094",
+          "__MONOTONIC_TIMESTAMP": "42704114716",
+          "_SYSTEMD_UNIT": "aetherpd-start@101-6196-78666.service"
+        }
+      ],
+      "native_journal_visibility": true
+    }
+  },
+  "keyed_API_fault_qualified": false,
+  "keyed_attempt": {
+    "passed": false,
+    "error": "AssertionError: Transmission ended before the intended corrected-tone fault; do not retry",
+    "fault_injected": false,
+    "desktop_paused": false,
+    "automatic_RF_retry": false,
+    "source_rearmed": false,
+    "LP_guard_passed": true,
+    "original_key_writes": 1,
+    "original_off_writes": 1,
+    "stop_sequence": "5407",
+    "stop_ACK_log_seq": 41772,
+    "fresh_original_idle_log_seq": 41785,
+    "desktop_key_write_to_off_write_ms": 8062.424,
+    "cleanup_expectation_errors": [
+      "session cleanup: Observed bench prerequisite deadline",
+      "fault injector retirement: "
+    ],
+    "actual_terminal_after_cleanup": {
+      "available": false,
+      "state": "stopped"
+    },
+    "unused_injector_exit": {
+      "StatusCode": 1,
+      "Error": null
+    },
+    "unused_injector_commands": [],
+    "unused_injector_error": "TimeoutError: timed out",
+    "unused_injector_carrier_retired": true
+  },
+  "cold_start_bypass_observation": {
+    "sampled_native_statuses": 132,
+    "sampled_correcting_statuses": 0,
+    "transport_fault_counters_zero_in_all_samples": true,
+    "input_limited_samples_zero": true,
+    "alignment_reset_count_zero": true,
+    "alignment_event": "alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=42696069932529 submitted_ns=42697820737333 started_ns=42697820772073 completed_ns=42698065926076 consumed_ns=42698074320543 delay=1768.950 envelope=0.891177 phase=0.941976 offset_hz=-0.022969 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+    "EQ_residual_dB": -9.7,
+    "source_ended": "source_samples_complete",
+    "WDSP_state6_source_meaning": "LCALC, tools/pd-waveform/vendor/calcc.c enum _calcc_state; this is a sampled state, not a measured worker CPU duration.",
+    "analysis": "Current cold-start bypass is reproduced. Poor initial correlation and EQ residual coincide with no usable model during the bounded source. This is not proof of the underlying cause. correction_ready requires a current published WDSP solution; EQ readiness alone is insufficient. Acquisition arrays, aligned pairs and fit-worker start/completion timestamps were not captured. No threshold, calibration duration or safety-gate change is justified by this evidence alone.",
+    "next_observation": "Use bounded instrumentation to distinguish initial alignment error/transport phase from long or rejected WDSP fitting; reproduce offline using the actual acquisition/pair samples before altering production behavior."
+  },
+  "final_idle": {
+    "state": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.265625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x77853631",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "native": {
+      "available": false,
+      "state": "stopped"
+    },
+    "desktop": {
+      "agentName": "Automation",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-native-durability",
+      "ok": true,
+      "pid": 2456863,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-native-durability",
+      "station": "Automation",
+      "txAllowed": true,
+      "version": "26.11.3"
+    },
+    "wire_log_coverage": {
+      "oldest": 34879,
+      "seq": 42878,
+      "key_bookmark": 41450
+    }
+  },
+  "scope_limits": [
+    "One current receive-only API case passes; earlier receive-only release43d1 evidence remains separate. No current keyed API-fault success is claimed. Other API roles, credential revocation, partial startup and combined failure scopes remain open.",
+    "The injector reads exact process/hash/socket admission as root, then irreversibly drops to UID78666/GID20, empty groups, all capability sets zero and NNP1 with stdio plus one pinned pidfd before opening its observer/trigger sockets. Only one FlexLib-supported disconnect of the owned non-GUI handle is allowed; no radio-process signals or RF verbs. The keyed attempt sent no disconnect.",
+    "The no-trigger instrumentation wait timed out and exited1; its carrier/container/directory retirement is independently confirmed. The RF harness expected abnormal cleanup_unconfirmed even though no fault occurred, so it reported a cleanup expectation timeout; later direct status and root audit prove normal stopped and scoped resource cleanup. These errors remain in the original result.",
+    "The draft keyed-success verifier was generated but never run; it is explicitly archived as DRAFT-save-keyed-qualification-not-executed.py. It cannot support a qualification claim.",
+    "Root inventory after receive fault precedes its successful ordinary two-frame USB successor. Post-refusal inventory independently confirms no packet workers, capabilities, zombies, ARP/journal or private session sockets after the failed RF attempt. Same control service PID6196/restart0 and boot remain.",
+    "Host log/receipt timings are not physical RF latency. LP peak-hold forward/net basis and absolute rawIQ/ADC headroom remain uncalibrated. No new IMD/ACPR performance result or sustained correction is claimed.",
+    "Managed signout retains the installed local owner credential; successful signout is not successful owner-token revocation. No actual owner credential, tailnet enrollment, service restart or installation was changed.",
+    "No automatic RF retry/source rearm, AetherTX, processing-settings restoration or radio reboot. Full P1-P10 including P3 natural128/cold bypass cause, final stock, extended speech, actual6300, final native/publisher/disk and independent release gates remain open."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-unkey-api-loss-progress-components.tar.gz",
+    "bytes": 215115,
+    "sha256": "be15ce3aeaeaf631ac963c36b07d70ab06168f74fea944c5ce2871115ec2600a",
+    "members": 61,
+    "all_members_verified": true
+  }
+}
