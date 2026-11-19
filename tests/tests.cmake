@@ -11400,13 +11400,12 @@ add_executable(automation_tx_setpoint_gate_test
     tests/automation_tx_setpoint_gate_test.cpp
     src/gui/TxApplet.cpp
     src/gui/TxBandDialog.cpp
-    src/gui/CanonWindow.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/AtuPreTuneDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     $<TARGET_OBJECTS:aether_test_drag_value_popup>
     $<TARGET_OBJECTS:aether_test_frameless_resizer>
     $<TARGET_OBJECTS:aether_test_frameless_title_bar>
-    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(automation_tx_setpoint_gate_test PRIVATE src tests)
 # The source root lets it read the MainWindow key-injection wiring it cannot construct.
