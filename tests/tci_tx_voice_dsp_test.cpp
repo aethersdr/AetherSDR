@@ -3,7 +3,8 @@
 // Socket-free. Drives the real AudioEngine through injected PCM and reads the
 // host-modulation transport seam (txTransportPcmReady), as
 // tx_audio_context_test does. Covers the routing the ruling asks for (toggle
-// off, toggle on, DAX untouched) and the L/R fold to mono.
+// off, toggle on, DAX untouched), the digital-mode bypass with the toggle on
+// (#7379 review), and the L/R fold to mono.
 #include "core/AudioEngine.h"
 #include "core/backends/TxAudioSource.h"
 #include "core/TxCoordinator.h"
@@ -122,6 +123,7 @@ void onRunsTheChain()
 {
     Rig rig;
     rig.audio.setTciTxVoiceDsp(true);
+    rig.audio.setTciTxVoiceMode(true);
     for (int b = 0; b < kBlocks; ++b) {
         rig.audio.feedTciTxAudio(toneBlock(b, 0.5f, 0.5f), rig.live);
     }
@@ -134,6 +136,7 @@ void onFoldsOneSidedClient()
 {
     Rig rig;
     rig.audio.setTciTxVoiceDsp(true);
+    rig.audio.setTciTxVoiceMode(true);
     for (int b = 0; b < kBlocks; ++b) {
         rig.audio.feedTciTxAudio(toneBlock(b, 0.0f, 0.5f), rig.live);
     }
@@ -141,11 +144,53 @@ void onFoldsOneSidedClient()
           "toggle on: a client that fills only the right channel still transmits");
 }
 
+void onWithDigitalModeIsTheDaxPath()
+{
+    // WSJT-X, JTDX, fldigi: the TX slice is in DIGU/DIGL/RTTY/FDV*, so
+    // TciServer leaves the voice-mode gate closed even with the option on.
+    Rig tci;
+    Rig dax;
+    tci.audio.setTciTxVoiceDsp(true);
+    check(!tci.audio.tciTxVoiceMode(), "voice-mode gate closed by default");
+    for (int b = 0; b < kBlocks; ++b) {
+        tci.audio.feedTciTxAudio(toneBlock(b, 0.5f, 0.0f), tci.live);
+        dax.audio.feedDaxTxAudio(toneBlock(b, 0.5f, 0.0f), dax.live);
+    }
+    check(tci.audio.tciTxVoiceBlocks() == 0,
+          "toggle on, digital TX mode: the TCI voice chain never runs");
+    check(!tci.transport.isEmpty() && tci.joined() == dax.joined(),
+          "toggle on, digital TX mode: TCI audio reaches transport byte for byte as the DAX path sends it");
+}
+
+void modeSwitchClosesAndReopens()
+{
+    Rig rig;
+    rig.audio.setTciTxVoiceDsp(true);
+    rig.audio.setTciTxVoiceMode(true);
+    for (int b = 0; b < kBlocks; ++b) {
+        rig.audio.feedTciTxAudio(toneBlock(b, 0.5f, 0.5f), rig.live);
+    }
+    const quint64 voiceBlocks = rig.audio.tciTxVoiceBlocks();
+    rig.audio.setTciTxVoiceMode(false);
+    for (int b = 0; b < kBlocks; ++b) {
+        rig.audio.feedTciTxAudio(toneBlock(b, 0.5f, 0.5f), rig.live);
+    }
+    check(voiceBlocks > 0 && rig.audio.tciTxVoiceBlocks() == voiceBlocks,
+          "a switch to a digital mode stops the chain at the next block");
+    rig.audio.setTciTxVoiceMode(true);
+    for (int b = 0; b < kBlocks; ++b) {
+        rig.audio.feedTciTxAudio(toneBlock(b, 0.5f, 0.5f), rig.live);
+    }
+    check(rig.audio.tciTxVoiceBlocks() > voiceBlocks,
+          "a switch back to a voice mode runs the chain again");
+}
+
 void daxUntouched()
 {
     Rig on;
     Rig off;
     on.audio.setTciTxVoiceDsp(true);
+    on.audio.setTciTxVoiceMode(true);
     for (int b = 0; b < kBlocks; ++b) {
         on.audio.feedDaxTxAudio(toneBlock(b, 0.5f, 0.0f), on.live);
         off.audio.feedDaxTxAudio(toneBlock(b, 0.5f, 0.0f), off.live);
@@ -164,6 +209,8 @@ int main(int argc, char** argv)
     offIsTheDaxPath();
     onRunsTheChain();
     onFoldsOneSidedClient();
+    onWithDigitalModeIsTheDaxPath();
+    modeSwitchClosesAndReopens();
     daxUntouched();
     return failures ? 1 : 0;
 }

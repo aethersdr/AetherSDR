@@ -3803,6 +3803,34 @@ void tciHostModulationIgnoresDaxSelection()
         "TCI worker PCM reaches host modulation and the injected audio seam despite blocked DAX selection");
 }
 
+void tciTxVoiceModeFollowsTxSlice()
+{
+    // #7066 / #7379: the TX voice DSP may only see audio for a TX slice in a
+    // voice mode. TciServer keeps AudioEngine's gate on the live TX slice.
+    DaxTciFixture f(true, QStringLiteral("USB"));
+    AudioEngine audio;
+    check(!audio.tciTxVoiceMode(), "TCI voice-mode gate is closed before any server sets it");
+    f.server.setAudioEngine(&audio);
+    check(audio.tciTxVoiceMode(), "a TX slice in USB opens the TCI voice-mode gate on attach");
+    f.mode(QStringLiteral("DIGU"));
+    check(!audio.tciTxVoiceMode(), "switching the TX slice to DIGU closes the gate");
+    f.mode(QStringLiteral("RTTY"));
+    check(!audio.tciTxVoiceMode(), "RTTY keeps the gate closed");
+    f.mode(QStringLiteral("FDVU"));
+    check(!audio.tciTxVoiceMode(), "FreeDV keeps the gate closed");
+    f.mode(QStringLiteral("LSB"));
+    check(audio.tciTxVoiceMode(), "back to LSB reopens the gate");
+    f.txSlice(false);
+    check(!audio.tciTxVoiceMode(), "no TX slice closes the gate");
+    f.txSlice(true);
+    check(audio.tciTxVoiceMode(), "a voice-mode slice regaining TX reopens the gate");
+
+    DaxTciFixture digital(true, QStringLiteral("DIGU"));
+    AudioEngine digitalAudio;
+    digital.server.setAudioEngine(&digitalAudio);
+    check(!digitalAudio.tciTxVoiceMode(), "a TX slice already in DIGU keeps the gate closed on attach");
+}
+
 void tciProducerLifetimes()
 {
     // Drive the production server handler with disconnected WebSocket
@@ -4102,6 +4130,7 @@ int main(int argc, char** argv)
     tciRefusedPromotionCannotClassifyFreshRequest();
     tciHardwareAndCwIgnoreDaxSelection();
     tciHostModulationIgnoresDaxSelection();
+    tciTxVoiceModeFollowsTxSlice();
     tciProducerLifetimes();
     tciPermissionRequiresConfirmedOwnership();
     tciPromotionRechecksPermissionAfterReply();

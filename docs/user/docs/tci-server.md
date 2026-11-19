@@ -38,7 +38,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
-| **TX audio through TX DSP (voice clients)** | Runs audio a TCI client transmits through the same client TX chain as the microphone (see [TX voice DSP](#tx-voice-dsp)). Off by default; leave it off for digital modes. |
+| **TX audio through TX DSP (voice clients)** | Runs audio a TCI client transmits through the same client TX chain as the microphone (see [TX voice DSP](#tx-voice-dsp)). Off by default. Digital modes bypass it even when it is on. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -238,6 +238,7 @@ Live TX, MON and multi-client recording qualification remain outstanding
 TCI transmit audio normally goes to the radio as the client sent it, which is what digital-mode clients (WSJT-X, JTDX, fldigi) need: their tones must not pass a voice compressor or EQ. A voice client, such as a remote-operation app, can instead be given the same client TX chain as the microphone (EQ, compressor, tube, enhancer, reverb, final limiter) with **TX audio through TX DSP (voice clients)** in the TCI Server applet ([#7066](https://github.com/aethersdr/AetherSDR/issues/7066)).
 
 - Off by default. Off, the transmit path is unchanged.
+- It applies only while the TX slice is in a voice mode. With the TX slice in DIGU, DIGL, RTTY or FreeDV, TCI audio goes to the radio exactly as with the option off, so WSJT-X, JTDX and fldigi are unaffected as long as they key in a digital mode (in WSJT-X: *Mode* **Data/Pkt**). A digital client that leaves the slice in USB or LSB would get the chain; leave the option off on a station that does that.
 - The stages, their order and their settings are the microphone's; there is no second chain to configure.
 - The PC mic gain and RNNoise are not applied inside the chain, because the client sets its own level. On a Hermes-Lite 2 the mic slider still scales the chain's output, as it does with this option off; if the compressor adds makeup gain, lower the slider.
 - The TX test tone and the Quindar tones belong to the microphone path and are not added to TCI audio.

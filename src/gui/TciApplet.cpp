@@ -260,8 +260,9 @@ void TciApplet::buildUI()
     m_txVoiceDsp->setAccessibleDescription(tr(
         "When enabled, audio a TCI client transmits goes through the same TX chain as "
         "the microphone: EQ, compressor, tube, enhancer, reverb and the "
-        "final limiter. For voice clients such as remote-operation apps. Leave it off "
-        "for digital modes (WSJT-X, JTDX, fldigi): their tones must not be processed. "
+        "final limiter. For voice clients such as remote-operation apps. It applies "
+        "only while the TX slice is in a voice mode: in DIGU, DIGL, RTTY or FreeDV "
+        "(WSJT-X, JTDX, fldigi) the audio is sent unprocessed. "
         "DAX audio is never affected. Off by default."));
     m_txVoiceDsp->setToolTip(m_txVoiceDsp->accessibleDescription());
     // TciServer owns the setting; the box shows it once a server is attached.

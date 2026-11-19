@@ -278,6 +278,9 @@ private:
                           const DaxTxAudioPermit& daxPermit);
     void retireTrxRequest(TciClient* client, const TxCoordinator::Request& request);
     bool trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& request) const;
+    // Tells AudioEngine whether the TX slice is in a voice mode, so the TX
+    // voice DSP never processes digital-mode audio (#7066).
+    void refreshTxVoiceMode();
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);

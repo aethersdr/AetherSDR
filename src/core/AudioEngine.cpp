@@ -10557,7 +10557,9 @@ void AudioEngine::foldTciStereoToMono(QByteArray& interleavedStereoFloat32)
 
 void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::Context& context)
 {
-    if (!m_tciTxVoiceDsp.load(std::memory_order_acquire) || inPcm.isEmpty()) {
+    // A digital TX mode always bypasses the chain, even with the option on.
+    if (!m_tciTxVoiceDsp.load(std::memory_order_acquire)
+        || !m_tciTxVoiceMode.load(std::memory_order_acquire) || inPcm.isEmpty()) {
         feedDaxTxAudio(inPcm, context);
         return;
     }
