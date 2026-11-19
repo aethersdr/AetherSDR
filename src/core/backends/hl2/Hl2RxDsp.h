@@ -378,6 +378,10 @@ public:
     {
         return m_anfOn && autoNotchRunsIn(m_config.mode);
     }
+    // setNoiseReduction()/setAutoNotch() calls received, for tests: each one
+    // re-sends the stage's values to WDSP, which flushes its LMS taps.
+    [[nodiscard]] int noiseReductionDeliveries() const noexcept { return m_nrDeliveries; }
+    [[nodiscard]] int autoNotchDeliveries() const noexcept { return m_anfDeliveries; }
 
     // Post-DDC half of the ADC pairing (docs/HERMES.md §13 item 16;
     // Hl2AdcPairing.h). WDSP's RXA_ADC_PK in dB re wire full scale, not
@@ -651,6 +655,8 @@ private:
     int m_nrLevel = kDefaultNrLevel;
     bool m_anfOn = false;
     int m_anfLevel = kDefaultAnfLevel;
+    int m_nrDeliveries = 0;
+    int m_anfDeliveries = 0;
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and
     // 0 are the "never observed" sentinels, which is why neither is a value the
     // accessors can return. A steady_clock stamp rather than a QElapsedTimer

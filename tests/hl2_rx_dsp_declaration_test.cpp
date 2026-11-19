@@ -149,24 +149,25 @@ int main(int argc, char** argv)
         using DspFeature = SliceDspRequest::Feature;
         using DspField = SliceDspRequest::Field;
         check(dspRequest(DspFeature::Nr, DspField::Enabled, true, 0) == ReceiveDispatch::Dispatched
-                  && echo.nr == true && echo.nrLevel == 50 && echo.anf == false,
+                  && echo.nr == true && echo.nrLevel == 50 && !echo.anf && !echo.anfLevel,
               "an NR enable is dispatched and echoed on, at the held level, ANF untouched");
         echo = SliceDelta{};
         backend.setSliceAudioGain(0, 60);
         check(echo.audioGain.has_value() && !echo.nr && !echo.nrLevel && !echo.anf && !echo.anfLevel,
               "an unrelated echo carries no NR/ANF: SliceModel re-emits them for each one");
         check(dspRequest(DspFeature::Nr, DspField::Level, false, 70) == ReceiveDispatch::Dispatched
-                  && echo.nr == true && echo.nrLevel == 70,
+                  && echo.nr == true && echo.nrLevel == 70 && !echo.anf,
               "an NR level moves the level only");
         check(dspRequest(DspFeature::Anf, DspField::Enabled, true, 0) == ReceiveDispatch::Dispatched
-                  && echo.anf == true && echo.anfLevel == 50 && echo.nr == true,
+                  && echo.anf == true && echo.anfLevel == 50 && !echo.nr && !echo.nrLevel,
               "an ANF enable is dispatched and echoed on, NR untouched");
         check(dspRequest(DspFeature::Anf, DspField::Level, false, 20) == ReceiveDispatch::Dispatched
-                  && echo.anf == true && echo.anfLevel == 20,
+                  && echo.anf == true && echo.anfLevel == 20 && !echo.nr,
               "an ANF level moves the level only");
         check(dspRequest(DspFeature::Nr, DspField::Enabled, false, 0) == ReceiveDispatch::Dispatched
+                  && echo.nr == false && !echo.anf
                   && dspRequest(DspFeature::Anf, DspField::Enabled, false, 0) == ReceiveDispatch::Dispatched
-                  && echo.nr == false && echo.anf == false,
+                  && echo.anf == false && !echo.nr,
               "and both switch off again");
         check(dspRequest(DspFeature::Nrl, DspField::Enabled, true, 0) == ReceiveDispatch::Unsupported,
               "negative control: the Flex LMS NRL is still refused");

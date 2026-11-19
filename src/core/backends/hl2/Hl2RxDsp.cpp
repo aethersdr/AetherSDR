@@ -491,6 +491,7 @@ void Hl2RxDsp::applyApf()
 
 void Hl2RxDsp::setNoiseReduction(bool on, int level)
 {
+    ++m_nrDeliveries;
     m_nrOn = on;
     m_nrLevel = std::clamp(level, 0, 100);
     if (canPushToChannel()) {
@@ -510,6 +511,7 @@ void Hl2RxDsp::applyNoiseReduction()
 
 void Hl2RxDsp::setAutoNotch(bool on, int level)
 {
+    ++m_anfDeliveries;
     m_anfOn = on;
     m_anfLevel = std::clamp(level, 0, 100);
     if (canPushToChannel()) {
