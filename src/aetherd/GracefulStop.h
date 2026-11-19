@@ -17,11 +17,11 @@ namespace AetherSDR::aetherd {
 // (a stuck loop is why people reach for kill), fires the registered radio
 // releases (FatalSignalRelease) and dies by the signal exactly as before.
 // SIGQUIT keeps the GUI's behavior (the releases, then the default action). An
-// inherited SIG_IGN stays ignored. Windows: a console control event queues the quit and waits for
-// teardown on its own handler thread; if teardown has not finished within the
-// grace period (shorter for close, logoff and shutdown, which Windows itself
-// ends after about 5 s), it fires the releases and lets the default
-// handler end the process.
+// inherited SIG_IGN stays ignored. Windows: a console control event queues the
+// quit and waits for teardown on its own handler thread; if teardown has not
+// finished within the grace period (shorter for close, logoff and shutdown,
+// which Windows itself ends after about 5 s), it fires the releases and lets
+// the default handler end the process.
 //
 // A stop that arrives before the event loop runs (startup can pump nested
 // loops) cannot quit a loop that has not started: main() checks

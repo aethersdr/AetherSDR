@@ -45,8 +45,11 @@ bool registerFatalSignalRelease(FatalSignalReleaseFn fn) noexcept
 
 bool isFatalSignalReleaseRegistered(FatalSignalReleaseFn fn) noexcept
 {
+    if (!fn) {
+        return false;
+    }
     for (const auto& slot : g_releases) {
-        if (fn && slot.load(std::memory_order_acquire) == fn) {
+        if (slot.load(std::memory_order_acquire) == fn) {
             return true;
         }
     }

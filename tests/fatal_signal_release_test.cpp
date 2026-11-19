@@ -114,6 +114,7 @@ int main()
     // Every termination signal fires each release once, then dies by that signal.
     for (const int sig : {SIGTERM, SIGINT, SIGHUP, SIGQUIT}) {
         const ChildResult r = inChild([sig] {
+            std::signal(sig, SIG_DFL);   // a background job or nohup inherits SIG_IGN
             registerFatalSignalRelease(reportRelease<'x'>);
             registerFatalSignalRelease(reportRelease<'y'>);
             installFatalSignalRelease();
@@ -127,6 +128,7 @@ int main()
 
     // Nothing registered: the handler is a pass-through.
     const ChildResult empty = inChild([] {
+        std::signal(SIGTERM, SIG_DFL);
         installFatalSignalRelease();
         std::raise(SIGTERM);
         return 3;

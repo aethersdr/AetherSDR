@@ -43,11 +43,11 @@ So the receiver is resolved explicitly rather than guessed from the directory:
 
 WHERE IT LOOKS. The same above-seam definition check_engine_boundary.py uses
 (src/gui + src/core + src/models + src/aetherd, plus the src/ root shell
-files), minus src/core/backends/ — that is where the wire text is SUPPOSED to live, and M4's
-direction is moving encode there. The first version scanned only models and gui,
-which missed WfmDemodulator.cpp's two live emissions in src/core/ and made the
-"backends/flex is excluded" claim describe an exclusion that did not exist,
-since nothing under src/core/ was read at all.
+files), minus src/core/backends/ — that is where the wire text is SUPPOSED to
+live, and M4's direction is moving encode there. The first version scanned only
+models and gui, which missed WfmDemodulator.cpp's two live emissions in
+src/core/ and made the "backends/flex is excluded" claim describe an exclusion
+that did not exist, since nothing under src/core/ was read at all.
 
 PER-FILE, NOT A TOTAL. A total lets one subsystem's conversion pay for another's
 regression; per-file means a converted file cannot quietly refill. A file absent

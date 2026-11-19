@@ -1,6 +1,7 @@
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 
 #include "core/FatalSignalRelease.h"
+#include "core/LogManager.h"
 
 #include <QHostAddress>
 
@@ -76,7 +77,12 @@ void armEmergencyStop(qintptr fd, const QHostAddress& host, quint16 port,
     slot.addr.sin_addr.s_addr = htonl(v4);
     std::memcpy(slot.packet, stopPacket.data(), sizeof(slot.packet));
     slot.fd = fd;
-    registerFatalSignalRelease(fireEmergencyStop);
+    if (!registerFatalSignalRelease(fireEmergencyStop)) {
+        // Not in a handler here. A full table leaves this HL2 armed with no
+        // signal release behind it.
+        qCWarning(lcHl2) << "HL2 emergency stop: the fatal-signal release table is full;"
+                            " a termination signal will not send the stop datagram";
+    }
 
     // Publish last, as one store, so fd never becomes visible ahead of its address.
     g_armed.store(&slot, std::memory_order_release);
