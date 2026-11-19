@@ -1312,7 +1312,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
-        QStringLiteral("tx transmit rf power tune ptt mic override band settings"), [this] { return buildTxTab(); });
+        QStringLiteral("tx transmit rf power tune ptt mic override band settings time-out timeout tot"),
+        [this] { return buildTxTab(); });
     addPage(signalCategory, QStringLiteral("Phone & CW"),
         QStringLiteral("phone cw keyer break-in sidetone microphone voice"), [this] { return buildPhoneCwTab(); });
     addPage(signalCategory, QStringLiteral("Receive"),
@@ -3025,7 +3026,9 @@ QWidget* RadioSetupDialog::buildTxTab()
         grid->setSpacing(6);
 
         auto* enable = new QCheckBox(tr("Stop transmitting after"));
-        enable->setAccessibleName(tr("Transmit time-out enabled"));
+        // No bare "transmit" token: the TX guard would take it for a keying
+        // control, and it only ever stops transmission.
+        enable->setAccessibleName(tr("Time-out enabled, stops transmission"));
         grid->addWidget(enable, 0, 0);
         auto* timeoutSpin = new QSpinBox;
         timeoutSpin->setRange(TxTimeoutSettings::kMinimumTimeoutS, TxTimeoutSettings::kMaximumTimeoutS);

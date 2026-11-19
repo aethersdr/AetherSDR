@@ -4,6 +4,7 @@
 #include "RadioSetupControlFixture.h"
 #include "core/RadioDiscovery.h"
 #include "core/RadioSettingsScope.h"
+#include "core/TxKeyingMarker.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "gui/RadioSetupDialog.h"
@@ -26,6 +27,7 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QStringList>
+#include <QTreeWidget>
 #include <QtTest>
 
 #include <memory>
@@ -307,7 +309,7 @@ private slots:
             RadioSetupDialog dialog(&model);
             dialog.show();
             dialog.selectTab(QStringLiteral("Transmit"));
-            auto* enable = findByAccessibleName<QCheckBox>(dialog, QStringLiteral("Transmit time-out enabled"));
+            auto* enable = findByAccessibleName<QCheckBox>(dialog, QStringLiteral("Time-out enabled, stops transmission"));
             auto* timeout = findByAccessibleName<QSpinBox>(dialog, QStringLiteral("Transmit time-out (seconds)"));
             auto* warning = findByAccessibleName<QSpinBox>(
                 dialog, QStringLiteral("Transmit time-out warning (seconds before)"));
@@ -341,6 +343,42 @@ private slots:
         QVERIFY(loaded.enabled);
         QCOMPARE(loaded.timeoutS, 300);
         QCOMPARE(loaded.warningS, 20);
+    }
+
+    // The enable checkbox only ever stops transmission: the TX guard (bridge
+    // and Space activation) must not take it for a keying control, and a
+    // Radio Setup search for the setting finds the Transmit page.
+    void txTimeoutEnableIsNotAKeyingControlAndIsFound()
+    {
+        RadioModel model;
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        dialog.selectTab(QStringLiteral("Transmit"));
+        auto* enable = findByAccessibleName<QCheckBox>(dialog, QStringLiteral("Time-out enabled, stops transmission"));
+        QVERIFY(enable);
+        QVERIFY(transmitControlMatch(enable) == TransmitControlMatch::None);
+
+        auto* search = dialog.findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
+        QVERIFY(search);
+        for (const QString& term : {QStringLiteral("time-out"), QStringLiteral("timeout"),
+                                    QStringLiteral("tot")}) {
+            search->setText(term);
+            bool transmitShown = false;
+            bool audioShown = false;
+            for (QTreeWidget* nav : dialog.findChildren<QTreeWidget*>()) {
+                for (int i = 0; i < nav->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem* category = nav->topLevelItem(i);
+                    for (int j = 0; j < category->childCount(); ++j) {
+                        QTreeWidgetItem* page = category->child(j);
+                        transmitShown |= page->text(0) == QStringLiteral("Transmit") && !page->isHidden();
+                        audioShown |= page->text(0) == QStringLiteral("Audio") && !page->isHidden();
+                    }
+                }
+            }
+            QVERIFY2(transmitShown, qPrintable(term));
+            QVERIFY2(!audioShown, "the filter ran: an unrelated page is hidden");
+        }
+        search->clear();
     }
 
     // PTT Mic Override (#6442) shows the RADIO's value: unreported (firmware
