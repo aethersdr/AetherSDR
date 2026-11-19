@@ -9,10 +9,10 @@
 namespace AetherSDR::hl2 {
 
 // The HL2 panadapter path: accumulate raw IQ (normalized [-1, 1)) into fixed
-// FFT frames and produce a DC-centered magnitude spectrum in dBFS. Ported from
-// tools/hl2/spectrum.py — Hanning-windowed, a slow running DC estimate removed
-// (kDcTimeConstantS), coherent-gain normalized, fftshifted so DC lands at the
-// centre bin.
+// FFT frames and produce a DC-centered magnitude spectrum in dBFS. After
+// tools/hl2/spectrum.py, with a running DC estimate in place of its per-capture
+// mean: Hanning-windowed, the slow DC estimate removed (kDcTimeConstantS),
+// coherent-gain normalized, fftshifted so DC lands at the centre bin.
 //
 // Owns an FFTW plan; construction/destruction allocate, process() does not
 // (fftw_execute is allocation-free). FFTW's global planner is not thread-safe,
@@ -59,6 +59,9 @@ public:
     // Restart both DC estimates: for an NCO move. reset() (a gap) restarts the
     // receive one only. Not part of dropAverage(), which a T/R edge may call too.
     void restartDc() noexcept;
+    // A rebuild (span or rate change) keeps the DC estimates and the T/R state:
+    // the converter and the key are the same, only the geometry changed.
+    void carryDcFrom(const Hl2Spectrum& old) noexcept;
 
     // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
     // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting

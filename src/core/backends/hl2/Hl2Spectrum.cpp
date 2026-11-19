@@ -217,6 +217,18 @@ void Hl2Spectrum::restartDc() noexcept
     m_txDcSeeded = dcTransmitting();   // mid-key: the transmit estimate starts from zero
 }
 
+void Hl2Spectrum::carryDcFrom(const Hl2Spectrum& old) noexcept
+{
+    m_rxDc = old.m_rxDc;
+    m_txDc = old.m_txDc;
+    m_rxPower = old.m_rxPower;
+    m_txDcSeeded = old.m_txDcSeeded;
+    m_dcState = old.m_dcState;
+    m_dcOnsetRun = old.m_dcOnsetRun;
+    m_dcReleaseIn = old.m_dcReleaseIn;   // a pending hold, in old-rate samples
+    m_dcSamples = old.m_dcSamples;
+}
+
 void Hl2Spectrum::trackDc(std::complex<float> s) noexcept
 {
     // A one-pole low-pass over every sample: a tone f Hz off centre leaks in at

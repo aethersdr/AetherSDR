@@ -251,6 +251,11 @@ void Hl2RxDsp::installChannel(RebuildResult result)
                "100 ms stop-and-flush timeout.";
     }
     m_channel = std::move(result.channel);
+    // New geometry, same converter and key: the DC estimates and the T/R state
+    // carry over (a fresh one keyed would learn the keyed DC as receive DC).
+    if (m_spectrum && result.spectrum) {
+        result.spectrum->carryDcFrom(*m_spectrum);
+    }
     m_spectrum = std::move(result.spectrum);
     // The operator's averaging, which the fresh spectrum does not know. A new
     // span is new geometry, so the average starts over (it was constructed

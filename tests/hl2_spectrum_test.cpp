@@ -393,6 +393,54 @@ void centreBinTests()
               "gap mid-key: the keyed frames after the gap keep the transmit DC (no centre line)");
     }
 
+    // 8 · A REBUILD mid-key (Hl2RxDsp::installChannel() on a pan rate
+    // crossing): the new spectrum takes the DC estimates and the T/R state from
+    // the old one. Receive after the unkey stays at the floor and the next key
+    // switches to transmit. Control: a fresh spectrum given only the key learns
+    // the keyed DC as receive DC and shows a line after the unkey.
+    for (const bool carry : {true, false}) {
+        for (const double capFps : {0.0, 30.0}) {
+            constexpr double kHoldMs = 70.0;
+            const Signal keyedSig{12544.0, 0.5, {5e-4, -2e-4}};   // DC ~30 dB over the floor
+            Signal tail = keyedSig;
+            tail.endS = 0.03;                                    // keyed IQ outlasts the unkey
+            auto spec = std::make_unique<Hl2Spectrum>(kStreamN, kStreamFs);
+            Noise noise;
+            std::uint64_t n = 0;
+            stream(*spec, noise, n, {}, 1.0, false, capFps);
+            spec->setTransmitting(true);
+            stream(*spec, noise, n, keyedSig, 3.0, false, capFps);
+            auto rebuilt = std::make_unique<Hl2Spectrum>(kStreamN, kStreamFs);
+            if (carry) {
+                rebuilt->carryDcFrom(*spec);
+            }
+            rebuilt->setTransmitting(true);                      // as installChannel() re-applies it
+            spec = std::move(rebuilt);
+            const Seen rest = stream(*spec, noise, n, keyedSig, 2.0, true, capFps);
+            spec->setTransmitting(false, kHoldMs);
+            stream(*spec, noise, n, tail, 0.1, false, capFps);
+            const Seen rx = stream(*spec, noise, n, {}, 3.0, true, capFps);
+            spec->setTransmitting(true);
+            const Seen next = stream(*spec, noise, n, keyedSig, 3.0, true, capFps);
+            const bool nextSwitched = spec->dcTransmitting();
+            std::fprintf(stderr, "  rebuild mid-key%s, cap %.0f fps: rest of key %.1f dB (mean), after unkey "
+                         "%.1f dB (mean) %.1f dB (worst), next key %.1f dB (mean), switched %s\n",
+                         carry ? "" : " (control, no carry)", capFps, centreOverFloorDb(rest),
+                         centreOverFloorDb(rx), maxOf(rx.centreOverFloorDb), centreOverFloorDb(next),
+                         nextSwitched ? "yes" : "no");
+            if (carry) {
+                check(centreOverFloorDb(rest) < 6.0, "rebuild mid-key: the rest of the key keeps the transmit DC");
+                check(centreOverFloorDb(rx) < 3.0 && maxOf(rx.centreOverFloorDb) < 12.0,
+                      "rebuild mid-key: receive after the unkey stays at the floor");
+                check(nextSwitched && centreOverFloorDb(next) < 3.0,
+                      "rebuild mid-key: the next key switches to transmit, at the floor");
+            } else {
+                check(centreOverFloorDb(rx) > 12.0,
+                      "rebuild control: without the carry, receive after the unkey shows the keyed DC");
+            }
+        }
+    }
+
     // 3 · An ON-BIN tone (bin 100 exactly) reads its textbook level and the
     // centre bin stays at the floor.
     {
