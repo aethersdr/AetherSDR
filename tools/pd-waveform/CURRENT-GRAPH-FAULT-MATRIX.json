@@ -1,9 +1,9 @@
 {
-  "recorded_utc": "2026-11-19T02:22:47.472825+00:00",
+  "recorded_utc": "2026-11-19T02:56:44.327492+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
-  "current_desktop_implementation": "e25ec9af1e9a8f5a7bbfcf94424d466ad4cb66fe",
+  "current_desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
   "cases": [
     {
       "case": "Desktop stalls during corrected tones; Stop arrives after own READY and before owner clear",
@@ -31,9 +31,11 @@
     },
     {
       "case": "DSP death during steady corrected tones while desktop is paused",
-      "state": "pending_current_graph",
+      "state": "passed_one_current_graph_keyed_case_after_causal_stop_proof_fix",
       "earlier_evidence": "DESKTOP-STALL-KEYED-QUALIFICATION.json",
-      "earlier_scope": "Runtime489b1ed5, DSP death about2s into startup, directional peak0.926W. Do not substitute for current steady-tone case."
+      "earlier_scope": "Runtime489b1ed5, DSP death about2s into startup, directional peak0.926W. Do not substitute for current steady-tone case.",
+      "evidence": "CURRENT-STEADY-DSP-DEATH-QUALIFICATION.json",
+      "limits": "One5W setting case after383.8ms observed corrected tones, desktop paused399ms. Original failed UI-completion case preserved; two fresh same-connection USB snapshots after explicit successor. No scheduling-stall or full matrix claim."
     },
     {
       "case": "DSP scheduling stall, stale model retirement and validated recent-model recovery",
@@ -76,9 +78,9 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Current same-UID DSP-death test during corrected tones with desktop paused, independently bounded unkey/LP guards, exact process identity, no automatic restart and explicit receive recovery.",
-    "state": "not_prepared_or_executed_by_this_report",
-    "authority_constraint": "Any lab injection must be a concrete reviewed temporary job; do not add a shipping arbitrary-execution or signaling endpoint or persistent privileges."
+    "purpose": "Current-graph DSP scheduling stall, bypass and validated recent-model recovery with bounded keying and independent guards, then remaining IQ/ARP/API/credential/combined cleanup cases.",
+    "state": "not_executed_by_this_report",
+    "authority_constraint": "Fixed temporary injection only; exact owned process and irreversible privilege drop before signals. No automatic RF rekey or calibration-source rearm."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
