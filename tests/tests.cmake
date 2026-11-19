@@ -4922,25 +4922,25 @@ set_tests_properties(hl2_codec_suggestion_dialog_test PROPERTIES
 # Injected hl2 extension backend; no socket and no radio.
 add_executable(hl2_ioboard_status_dialog_test
     tests/hl2_ioboard_status_dialog_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(hl2_ioboard_status_dialog_test PRIVATE src tests)
 target_link_libraries(hl2_ioboard_status_dialog_test PRIVATE
