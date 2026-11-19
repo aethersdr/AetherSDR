@@ -23,7 +23,19 @@
         26.878250406011922
       ]
     },
-    "scope": "Finite pairs and8600 cold-power/control-recovery qualification are not6300 proof."
+    "scope": "Finite pairs and8600 cold-power/control-recovery qualification are not6300 proof.",
+    "latest_snapshot": {
+      "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+      "radio_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+      "source_and_evidence_parent": "6b8e1847e39afff16f65a26b446398f588ac18ef",
+      "reports": [
+        "DSP-API-LOSS-RELEASE-QUALIFICATION.json",
+        "RECEIVE-RELEASE-DESKTOP-QUALIFICATION.json",
+        "FOREIGN-ARP-KERNEL-COMPONENT-QUALIFICATION.json",
+        "CURRENT-UPGRADE-BUDGET-QUALIFICATION.json"
+      ],
+      "scope": "Exact83d6 receive-only recovery passes; one keyed fault safely unkeys but original desktop completion remains failed. Causal desktop fix runs with receive-only proof; new keyed completion test awaits operator approval. Local-kernel ARP tests and synthetic-capacity disk checks are component scopes, not6300 evidence."
+    }
   },
   "floor_information_from_operator": {
     "model": "FLEX-6300",
@@ -67,11 +79,25 @@
   "qualification_gates_after_readiness": [
     "Actual Linux 2.6 kernel hardening, filesystem layout, scheduling and packet-ring support; preserve unsupported no_new_privs separately from strict-seccomp failure.",
     "Qualify the narrow privilege-entry/boot adapter for the actual firmware service and internal interface/address. Do not reuse 8600 hard-coded network or service assumptions.",
-    "Measure real disk high-water including firmware-retained uploads, both versions, installation adapters and persistent identity. The existing 39,702,528 byte modeled peak leaves 1,297,472 bytes against a rounded 41,000,000 byte report, not a measured floor margin.",
+    "Measure real disk high-water including firmware-retained uploads, both versions, installation adapters and persistent identity. The existing 39,743,488 byte current reference model leaves 1,256,512 bytes against a rounded 41,000,000 byte report, not a measured floor margin.",
     "Qualify local IQ availability and latency, DSP CPU/resource use, cleanup/recovery, then separately authorize actual 6300 RF."
   ],
   "RF_commands": [],
   "reboot_commands": [],
   "privileged_actions": [],
-  "external_message_sent": false
+  "external_message_sent": false,
+  "current_package_budget": {
+    "report": "CURRENT-UPGRADE-BUDGET-QUALIFICATION.json",
+    "ARMv7_release_bytes": 9414653,
+    "ARMv7_expanded_executables_and_licenses_RAM_bytes": 22841846,
+    "worst_ARMv7_store_peak_including_native_reserve_bytes": 39743488,
+    "headroom_against_rounded_decimal41MB_bytes": 1256512,
+    "largest_units_volume_requirement_with_allowance_bytes": 8757248,
+    "one_extra_full_release_fits_rounded_decimal41MB": false,
+    "private_state_allowance_bytes": 1048576,
+    "native_reserve_bytes_each_volume": 8388608,
+    "model": "Current full generation plus compacted predecessor and permanent management/state/metadata reference ledger, conservatively added to fresh native signed-pair staging admission. Not a measured transaction timeline or physical high-water.",
+    "actual6300_qualified": false
+  },
+  "updated_utc": "2026-11-19T11:27:32.009354+00:00"
 }

@@ -20,27 +20,33 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The complete ARMv7 development runtime from signed source `75ab26852` is
-9,407,745 bytes; its expanded executables/licenses occupy 22,836,670 bytes in RAM. Both ARMv7 and
-ARM64 runtime releases reproduced byte for byte with pinned compilers on the
-same host. This does not qualify the first-install adapter or radio operation.
-See [current reproducible runtime qualification](./UPSTREAM-RUNTIME-QUALIFICATION.json).
-The new runtime is not installed. The [merged desktop receive-only qualification](./UPSTREAM-DESKTOP-IQ-QUALIFICATION.json)
-uses the prior installed ARM64 release `0d88765b…`, not the rebuilt runtime.
-The [installed ARM64 identity qualification](./NATIVE-IDENTITY-DURABILITY-INSTALLED-QUALIFICATION.json)
-remains bound to its recorded earlier package.
-Earlier [restart qualification](./RESTART-RUNTIME-QUALIFICATION.md) remains
-bound to its original source. The current runtime retains native identity
-directory sync and uncertain-commit refusal. Its new Go relay/telemetry code
-has not been qualified on the radio. The earlier installed report includes
-receive-only whole-service stop/start and fresh local IQ on the 8600.
-The [lifecycle report](./WHOLE-RUNTIME-STOP-QUALIFICATION.json)
-preserves the predecessor's results and failed observer attempt.
+The current bench diagnostic is built from signed source `fd49ae7ef`.
+Its complete ARMv7 runtime is 9,414,653 bytes; expanded executables/licenses
+occupy 22,841,846 bytes in RAM. ARMv7 and ARM64 releases and upgrade
+distributions reproduced byte for byte in two paths with pinned compilers on
+the same host. The [current package budget](./CURRENT-UPGRADE-BUDGET-QUALIFICATION.json)
+pins both signed inputs and the earlier artifact archives. This does not
+qualify the ARMv7 first-install adapter or radio operation.
 
-The calculated ARMv7 successor-upgrade budget is up to 39,702,528 bytes,
-including the existing compacted installation, stated state/metadata allowances,
-transient files and the native 8 MiB reserve. Against a conservative decimal
-interpretation of the reported 41 MB free, only 1,297,472 bytes remain.
+The ARM64 release `83d6f6b3…` is installed on the 8600. Its
+[API-loss qualification](./DSP-API-LOSS-RELEASE-QUALIFICATION.json) includes
+receive-only recovery and one safely unkeyed keyed fault, whose overall desktop
+completion result remains failed. The subsequent release-only desktop fix has
+[ordinary receive/IQ/Stop proof](./RECEIVE-RELEASE-DESKTOP-QUALIFICATION.json);
+its separate keyed completion test remains pending. Earlier identity,
+restart, RF and lifecycle reports retain their recorded binaries and scope.
+None establishes operation on a 6300. The existing readiness kit below remains
+unchanged and separately pinned to its original source.
+
+The current conservative ARMv7 storage model reaches 39,743,488 bytes,
+including a complete current generation, its compacted predecessor, stated
+state/metadata allowances, fresh signed-pair staging and the native 8 MiB
+reserve. This adds resident and admission ledgers; it is not a measured
+transaction timeline. Against a decimal interpretation of the reported 41 MB
+free, 1,256,512 bytes remain. The native capacity checks pass independently for
+both volumes, including mixed 1 KiB/4 KiB allocation sizes. A separate units
+filesystem receives its own 8 MiB reserve; the modeled units-volume requirement
+is up to 8,757,248 bytes with the stated resident metadata allowance.
 One extra full release archive does not fit. The final 6000 adapter must account
 for firmware-retained upload/extraction copies as well as signed input staging;
 that adapter and first-install high-water measurement remain unqualified.

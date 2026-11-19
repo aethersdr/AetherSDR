@@ -1,0 +1,4554 @@
+{
+  "recorded_utc": "2026-11-19T11:27:32.009354+00:00",
+  "source_parent": "6b8e1847e39afff16f65a26b446398f588ac18ef",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "status": "Current signed ARMv7/ARM64 pair passes80 independent per-volume capacity boundaries across12 layouts, including mixed block sizes. Separate artifact allocation ledger matches native byte/inode charges. Three unsafe accounting mutants are detected. No production code or radio changes; actual6300 and final first-install whole-volume high-water remain unqualified.",
+  "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "candidate_runtime_source": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+  "previous_runtime_source": "a936fb8333bb0bc893e26f308ae1ddb4a70014f4",
+  "actual_signed_inputs": {
+    "armv7-candidate": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/runtime/short/armv7/candidate.release",
+      "bytes": 9414653,
+      "sha256": "b5dd5d72725255a4d61443f1fa93d5f5788656e31051cfcc8d2a1d69a3e89dd1"
+    },
+    "armv7-previous": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/no-tx-recovery-candidate/runtime/short/armv7/candidate.release",
+      "bytes": 9414621,
+      "sha256": "6c8308866b7e0d9ad97259b74436df110dbbc44e4fd220899b502f73599ae540"
+    },
+    "arm64-candidate": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/runtime/short/arm64/candidate.release",
+      "bytes": 9084890,
+      "sha256": "2a492b704f1bc5c52bb8cd46a2222a665e1eda653379261d77ec60c1a21e635e"
+    },
+    "arm64-previous": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/no-tx-recovery-candidate/runtime/short/arm64/candidate.release",
+      "bytes": 9084857,
+      "sha256": "3a69b454bddeebdb71b3561663312887aab52c16cc5a780489098480889a97b9"
+    }
+  },
+  "production_source_inputs_sha256": {
+    "tools/pd-waveform/boot/approval.py": "96989d5580b865a21b49518b950703393d8594b6c3dc194cc0159000ce5b4458",
+    "tools/pd-waveform/boot/approval_check.c": "f5121d449190ba81b63723518b139db1d099e337d8253c3d88417859db38a193",
+    "tools/pd-waveform/boot/boot_dispatch_check.c": "a3de9139647496c3e9881e8031d29d44240d5b0a13d45650f7c96c0df6eb0d1e",
+    "tools/pd-waveform/boot/boot_prepare_check.c": "f8206b4d397dd57bc10bd7ee6f0365c3c92dc902bdec9cfd765a6b8fb5c6b6bb",
+    "tools/pd-waveform/boot/boot_runtime_test.c": "d569fd7290831b7e1d09b3acc100756ad036537de533ef7aae7a3d4811660ae7",
+    "tools/pd-waveform/boot/boot_wait_check.c": "07dcf212d4173255bff9fe1e48fc009d000375333368c46225da0e95bd96dc46",
+    "tools/pd-waveform/boot/bootstrap_artifact.py": "6a70a8bcba4c12d65905edf018cad7e7befe75486203af82014437b661ce4fea",
+    "tools/pd-waveform/boot/bootstrap_artifact_check.c": "48beaa2075f4ddb2242a20e6050063b77f4c12d4541e8102b61fcf2ad491fb70",
+    "tools/pd-waveform/boot/build.py": "d291479ffc68615ce525b351dbc334188894bfbb502899e442da6c0979fe0f5f",
+    "tools/pd-waveform/boot/bundle.py": "8264ca4f6e1f5a3c75182b0b5cca295259b7c5d0ab449da07d2d45809eaa3ac9",
+    "tools/pd-waveform/boot/bundle_check.c": "be2d046e08c9f3dce336e3903082461a4febbef927af8e999280969d0f54de0d",
+    "tools/pd-waveform/boot/capsule_check.c": "6d3d1a5e73a6daeb18cdfb975e23dd98ef2dcab0338da9f3b53395605bbed907",
+    "tools/pd-waveform/boot/carrier_check.c": "a4d181140cf6f143f3695a3a0ae86afe4f85d25f1f1e7d6307e3e076cfd3c869",
+    "tools/pd-waveform/boot/delivery_check.c": "4dbf0daab1c130f27bf447a9a23d87877c2b0e96a2bafb8f51a392cb6db71120",
+    "tools/pd-waveform/boot/delivery_consent.py": "44b437ccdc8ce3278b78f9a3b0fa95777a7f7a224cae9929a3dac51510d74a9b",
+    "tools/pd-waveform/boot/first_install.py": "466ae5e928b69a89ec76ef450ac61a9551e2f2a7bdb829328a1e8a2c2c337c91",
+    "tools/pd-waveform/boot/first_request_check.c": "8c1a305d04c6aea9f9462d8debb7d37d713a6d64b373ee9d363f812b496815e0",
+    "tools/pd-waveform/boot/generation_check.c": "9a8a3f506d6d5a1a1a1eac0e3e9f830c4f72a05f4d0117f331dfdc7b96a75407",
+    "tools/pd-waveform/boot/handoff_check.c": "266934c33e3266f2fd02181ebc5ff29512f741bf5d7711f1d641c92ae3018af6",
+    "tools/pd-waveform/boot/identity_test.c": "f7106d597c10142f136dd47f76f02ee51af90767b2fa714ae9e31e8809483336",
+    "tools/pd-waveform/boot/install_check.c": "9ea6d26889e06fe2dd803d2c89528e706e135bced30386b10a51d42e1d22ca78",
+    "tools/pd-waveform/boot/installation_check.c": "7acdf1f61878178b3cb4dc5e150e201ed8243f70e529e230823d830521467b85",
+    "tools/pd-waveform/boot/managed_directory_check.c": "ff3e7dc7e548dd1e53abf18b0210f297bd6b8238165b663264494098518721c8",
+    "tools/pd-waveform/boot/managed_launch_probe.c": "1301f8529ac990c4b5d6f65d47f4b924762bee63b2724736d0deb5183db51954",
+    "tools/pd-waveform/boot/management_blob.py": "c8f951c5cbf927a19ff0233d541820b8619c37696549f1f9e4c1f5dc6053eceb",
+    "tools/pd-waveform/boot/management_check.c": "9656e641d302fa2015061dd9e06dde78622ef15fce38b100954063a7a7826abb",
+    "tools/pd-waveform/boot/migration.py": "c56310df502ac0d352fc80d735b54567f181e29a546145044ca3201b0ea202bb",
+    "tools/pd-waveform/boot/migration_check.c": "df3caf950bef741cf641d78b154dc9fce237557cc61f2d3ffe609be7328349e3",
+    "tools/pd-waveform/boot/package_fixture.py": "1d36975de082b4d4edd712977c91be1243c7923db77b1fc39ca8760e524d34c9",
+    "tools/pd-waveform/boot/pd_accept.c": "2d68fce2f02c2cbad052eea1586cea3f6f4d03c3ce16d15e21bc756c56fc68e6",
+    "tools/pd-waveform/boot/pd_approval.c": "7321e957ff8e7ba98fd65a0e2d0c2a418a5f1b23fef137de203b868e2e3699ab",
+    "tools/pd-waveform/boot/pd_approval.h": "85efb79916e197c761b649a532ef60636458f2781814f3c949aae89d9fce7a83",
+    "tools/pd-waveform/boot/pd_boot.c": "08eb302b106796dd08e4ba35efa65da836e0810d6e59d4ae8966ac3ca4b8a44f",
+    "tools/pd-waveform/boot/pd_boot_primary.c": "1397fcb2494051fb62daf3a3de63d17b631a9ec17b61d0d7f48ca774c7490815",
+    "tools/pd-waveform/boot/pd_boot_session.c": "3fd8731bc6aa8067c1bdb97dcafead888c80493a76ff03879a998e5bc916481f",
+    "tools/pd-waveform/boot/pd_boot_wait.c": "3ac1a78fb58ab2bec538a599f042849a241d74d75b9ae6315b32826efbdce711",
+    "tools/pd-waveform/boot/pd_boot_wait.h": "2bd354e13df06d64ddefa444017e4be3c42ea9c8f6569e77543989d954046b18",
+    "tools/pd-waveform/boot/pd_bootstrap_artifact.c": "6fadebe452254d993b937caab52e224aa92266034b1e1f725befb7d3a2ca1ed5",
+    "tools/pd-waveform/boot/pd_bootstrap_artifact.h": "561f4c3f4757a912d6215c756bdfc48b4efbb0fc514ecf75fb526ea1c83e8aaa",
+    "tools/pd-waveform/boot/pd_bundle.c": "d50bd9f96927a4189c40182c6bde3555992f26982a20b035a4454988973280b6",
+    "tools/pd-waveform/boot/pd_bundle.h": "a876473ac2c3fa12d52a7f866dcfb1a7c6465db96d5f0126233f926f9b9a0551",
+    "tools/pd-waveform/boot/pd_capsule.c": "9cf2b2de030f8d1e263e8720f6f9680ffff3a657b0fabdb562f36ca3ddbf4500",
+    "tools/pd-waveform/boot/pd_capsule.h": "fd53c844afc91deb033bbe642d9679c591e18f0a55ba6fcbcd1249f9a197dd35",
+    "tools/pd-waveform/boot/pd_capsule_io.c": "dec4860b3390929de2444e87047af0d89cffd0ddfa1f0c50f674b11da8ee0f26",
+    "tools/pd-waveform/boot/pd_capsule_io.h": "19d6301b276e806311a44a4140a3bb5aa2eec06c407fde6aff2ec4d967e9939a",
+    "tools/pd-waveform/boot/pd_carrier.c": "432cce0f4630222b70033fdc8aa5e9cbe3d089ce1c9dde3da203985ed01f8883",
+    "tools/pd-waveform/boot/pd_carrier.h": "68ec339e48e754d2944540764a77bf879ae3cce8433db440638d0a80387d8cb9",
+    "tools/pd-waveform/boot/pd_copy_predecessor.c": "7b915a53f248ccb2d0e5158ec9af0c714b75b750c3d3e471955fc2eaad889f3c",
+    "tools/pd-waveform/boot/pd_deliver.c": "98551cc3b64f471fe8effc9c48b22dfd124b7942e08bd0d9db891b48fc5ca968",
+    "tools/pd-waveform/boot/pd_delivery.c": "1509bdbf7e9cf4c1d7dcbfbbf1e59717be74368a3efc8cc76e1dc8e908b99988",
+    "tools/pd-waveform/boot/pd_delivery.h": "0ccfa31eb4cbbcadc44e0d16066ce1a911c8fd55f38a4eb3f96264625fe789c0",
+    "tools/pd-waveform/boot/pd_delivery_lease.h": "dda07bd8ebad0da50c988d3b05acdc5f9d2a524e51cd024131d1b2c356c52baa",
+    "tools/pd-waveform/boot/pd_endpoint.c": "6eed2eeb7124cfa64868e9ae111c1d833aa731c33ede607181e44673cb26ceac",
+    "tools/pd-waveform/boot/pd_endpoint.h": "c290208bf972da9e152297e08de68da309845a8fb1db47284c6fff2947cf9a45",
+    "tools/pd-waveform/boot/pd_first.c": "067934826dc919235988326c2b8acd43665fd0d9b4d901b8315a355561459aff",
+    "tools/pd-waveform/boot/pd_first.h": "62e8a5adbaceb64f0a78e87bcd21a6154cdc51239f67a402dc553eebc4c42344",
+    "tools/pd-waveform/boot/pd_first_request.c": "fef5264af79efa6a0ff2a401b93f6dd36e6a82edee9bc1b8ff0a5e8593f09475",
+    "tools/pd-waveform/boot/pd_generation.c": "279385b0cad27ef38efe7a8257b6d587e8d28019039fd68cc17782b89711d51c",
+    "tools/pd-waveform/boot/pd_generation.h": "25ca6686e6a7f305ad75a8e3108489260fe8654220be88d3c229697df051fcf0",
+    "tools/pd-waveform/boot/pd_handoff.c": "0b398005deba7b3099e83579388c27f282942f31d19327037aae4f3ffc2e39f1",
+    "tools/pd-waveform/boot/pd_handoff.h": "bf66c133e1dfbde7bac3047636a1ee8dd76eb699d6ba59d2ebabfff6999026bd",
+    "tools/pd-waveform/boot/pd_identity.c": "c8d9adf201a4e3f7d1fbd94c4d5f37571aeaa98270ad1f86f3b1617573ff15b1",
+    "tools/pd-waveform/boot/pd_identity.h": "9aab7115d903116adaad08a7fffe76dbf9f4f7134882d2c3bc40a20c5d68b770",
+    "tools/pd-waveform/boot/pd_inspect_predecessor.c": "cb433129bbe03c357f9233e6e00950543da09bd9df10f9df83590d60393fde9d",
+    "tools/pd-waveform/boot/pd_install.c": "d291f3a65220970138fa1062a81875393c14c79865bc19b5b87cdb594510b289",
+    "tools/pd-waveform/boot/pd_install.h": "337e98b4553eef27af78d6de442959e19778e2de6da5e45e84717868613d62de",
+    "tools/pd-waveform/boot/pd_install_release.c": "385634cbf62790d8ebb2f222b455f0a9ee6479b3f52d164f5da27563bfac68d0",
+    "tools/pd-waveform/boot/pd_install_worker.c": "cbf0815dae1bbf87ce2d18c82f8a4a878c8cb326a2c62dd39f129e5ed4295717",
+    "tools/pd-waveform/boot/pd_installation.c": "9b998105ae9262bbe598a55e3da842660f6728854a63fab21f0ca478c90b55f9",
+    "tools/pd-waveform/boot/pd_installation.h": "729b30f7ae26c0a023eed7c93e62188637bf80cf79c9055663f3d83793c31f0e",
+    "tools/pd-waveform/boot/pd_management.c": "1ce5ae751a13421a7346812c9ffce474ceaf8a0f6921a25fa831438590ca2778",
+    "tools/pd-waveform/boot/pd_management.h": "afde18644bdb1494f90163fa81a3cc17a5e417ae68acbda636e579f27e7b6e50",
+    "tools/pd-waveform/boot/pd_migration.c": "cf0fe83451117081f04c3dd0b26cd32d62fce9d3783b65617f4cfb5e62111ff9",
+    "tools/pd-waveform/boot/pd_migration.h": "9477c9aa8e28634a4995f3d1a08b54e0b47ce198bbf949fb754ad5fb07032932",
+    "tools/pd-waveform/boot/pd_pair.c": "b66767bcbf0a65f21bc93d7f2cc104e8e4ae8e4d14b8373ed5a120c0dea9388d",
+    "tools/pd-waveform/boot/pd_pair.h": "803a6b1824cf892b9e42ec66b7bedb19a1d65a685178b9296ac225e9066f795c",
+    "tools/pd-waveform/boot/pd_predecessor.c": "5aa6ca97718c5ea6e2fe0be783ac53ba2a8274d041bd2a787bf063db1ed73447",
+    "tools/pd-waveform/boot/pd_predecessor.h": "5aeb7f782de7022967e99e000e9a6c451c6ed24f39217e5356c4b74578d5fc07",
+    "tools/pd-waveform/boot/pd_primary.c": "1a3a4c0e41ddd6578152106bccde4ad8c008c4cebb49f00e1d09fa61312cfcc5",
+    "tools/pd-waveform/boot/pd_primary.h": "ff816a7770a5ddfd5008f7acb8527ef5f0fda449315556839bc66c06428b6f9a",
+    "tools/pd-waveform/boot/pd_readiness.c": "9075b28046eeb982822765bfcd2cd21404f199706b73ef0c0792dba0fd37ff5e",
+    "tools/pd-waveform/boot/pd_readiness.h": "1bd44036de21fe6ac150224937a827d2840143387d9adf69650844d808d2a433",
+    "tools/pd-waveform/boot/pd_recover_predecessor.c": "615f1253e1d5cc88246a2e77de493595abf73f394a9eebb2f7ca1b5c621210a4",
+    "tools/pd-waveform/boot/pd_recovery.c": "d11f9352446fb5911df200ca3cba7bff81bd2eb99e12e31841e0abec83e0a021",
+    "tools/pd-waveform/boot/pd_recovery.h": "f3f337ef71f637cfc08573d7ad93e8b7d4ff0b417b1a311532b65302ea10ba44",
+    "tools/pd-waveform/boot/pd_release.c": "de99ae474ac2bcd87155623a4a20ac5686d0648eeed7371ea6b67cef7769aa0d",
+    "tools/pd-waveform/boot/pd_release.h": "cb65ef2bbf1f37e81cccf6b2ca390e401b7fa5183a78da58cef34fe73cbd0b9c",
+    "tools/pd-waveform/boot/pd_retained.c": "d5edbcbffc546886823e795b5f376d4a32a421a1a1941ab23af47683b1ceface",
+    "tools/pd-waveform/boot/pd_retained.h": "92f155c6e36bfcb4a78303f92c7d81809f31dfb2ce75d51162a3f9f17b95a006",
+    "tools/pd-waveform/boot/pd_retire.c": "32c86dcc29181bd4f40121a8df0ce8f02edd362cb68d74e95edea85b1f025b7f",
+    "tools/pd-waveform/boot/pd_retire.h": "32fc7378a6f7b2e95b6fd5d7ba46ddb4b0e6c0aa58ea520bcb367e66c785edc1",
+    "tools/pd-waveform/boot/pd_runtime.c": "da0e83b9e1c0ee25b0e8e49539a639e12c0c6514d781de3321c1393af7944fba",
+    "tools/pd-waveform/boot/pd_runtime.h": "d11a88216f9f84e63fedb18556bdafcff9eb9702cf4b931b2222f64b08458843",
+    "tools/pd-waveform/boot/pd_runtime_config.c": "a225e1550efea6729f7816724f6579ac4c2d0ff0aa42f68d2d58695f2d6446a8",
+    "tools/pd-waveform/boot/pd_runtime_config.h": "a1ecd4b73dd4a423d0edd7a2748f4ea62c8c56453520fa3fc95c660d0e2937da",
+    "tools/pd-waveform/boot/pd_send.c": "4a03d5755323c5482f2d8280bf8b5791563de4652c96d16d3f982afbd29dc79a",
+    "tools/pd-waveform/boot/pd_service.c": "b60e042a504deff7739c00a5f10820aead26d016e8e91d26acbbf57218ec634c",
+    "tools/pd-waveform/boot/pd_service.h": "3877cc4651e87102663023f44cbdff16ccba02b612f669de15f6f13b3fa2a04d",
+    "tools/pd-waveform/boot/pd_slots_retire.c": "38c40e3f4e1ac1922059d80c961189ea8a875ba4a8b385a1b8ebcae0c9dbae33",
+    "tools/pd-waveform/boot/pd_slots_retire.h": "25e6490bce4e5b3ab7420a179269b842263d39b66b7bef1d44cbb62bb9488b70",
+    "tools/pd-waveform/boot/pd_stage_release.c": "1720b85abaa2bad6de3bffe44974abb4fb2d8f32ff0d0ad275f4a27810ed8db8",
+    "tools/pd-waveform/boot/pd_state_transfer.c": "a1bae49dac6ac3288e9134ad57ea1ff3c6831ee4dd68a8d57a5e1439f1e6c2fe",
+    "tools/pd-waveform/boot/pd_state_transfer.h": "01109f43ca235d3490ace59d1df8c4bb27ed0794703c1946f363d6a7367a6c42",
+    "tools/pd-waveform/boot/pd_store.c": "59ae236fff47338390e14ef86865f7789c421e1037692b0be7c13038749c8ed4",
+    "tools/pd-waveform/boot/pd_store.h": "8cb01651913727cc2b63aa6b5f91b31908e9a1685ddff9ee52355fcbb7414d42",
+    "tools/pd-waveform/boot/pd_transaction.c": "e56cf19689e991dd77eb32a19e7f7443c3a81ea821a0155f862a1c10b56b7afe",
+    "tools/pd-waveform/boot/pd_transaction.h": "1bef7f4b5a156734989b004e77d5de3483fcb54ac1bde8213322ffac5114405f",
+    "tools/pd-waveform/boot/pd_transport.c": "6f9c52a728fdf82b734cb4ace406bb21439f1e7856d6fdb9cad913cafb52a780",
+    "tools/pd-waveform/boot/pd_transport.h": "e872979e32329ecb2469bb493c515152cccbc8a547918976c92c9c85bb51823b",
+    "tools/pd-waveform/boot/pd_unit_files.c": "206206da49bdb91a2712f6c45d3707e8c62cc4b270c85ed75c28426ddf91602e",
+    "tools/pd-waveform/boot/pd_unit_files.h": "499df45eaf627921a5bdfcb7baf8bd97e88be9c30a8d7d426e1549a15b2aa9d4",
+    "tools/pd-waveform/boot/pd_update.c": "5b150e8cecc9be18321a1b371b73b6b6493ce0cd0d95709c85b76081aa172a7a",
+    "tools/pd-waveform/boot/pd_upgrade.c": "331be0e28e17aa7e89f1fbae751e08300224e73efe248ca0b53e64031370c726",
+    "tools/pd-waveform/boot/pd_upgrade.h": "914a55cb657d3fd36b65ab77232f6287dda53b91a339ebc5e729b838d51c64ae",
+    "tools/pd-waveform/boot/pd_upgrade_approval.c": "a902b44a364d6bfbef92f7756c8f7b46d8b9d2c3e4384d0ba1f2acecec973cb8",
+    "tools/pd-waveform/boot/pd_upgrade_bootstrap.c": "41445697a09040ece043d4045dcade69cfb4d1fc3c03e55a5c80ccd7e13303e2",
+    "tools/pd-waveform/boot/pd_upgrade_bootstrap.h": "4370d9ab0cf952cda32afaed09cda9f89e69c79d9aacd043d4cf31438bb4657b",
+    "tools/pd-waveform/boot/pd_upgrade_capsule.c": "fdfdce26454fec2bc335c0ce1887ca1466f50a3333b44cab2a6e2b6ec71344c1",
+    "tools/pd-waveform/boot/pd_upgrade_capsule.h": "4b0e9bf01e8e5226f67cf20b7fc777e4dd8d6345554f964180c88d6acdbf112b",
+    "tools/pd-waveform/boot/pd_upgrade_origin.c": "82c05d490943743a7de2110e82d039b5874a4475075fe44cc9ba9f2dc99f7e05",
+    "tools/pd-waveform/boot/pd_upgrade_origin.h": "c34dd7cab942a166122932fdc5c132f8ce1f8fc951d8106ab86d0249f44eaace",
+    "tools/pd-waveform/boot/pd_upgrade_resume.c": "2a8d4e9ddb80a9d9edbce4903051d2b5eedeec0f902bb61c27ceb14576e1b9e6",
+    "tools/pd-waveform/boot/pd_upgrade_space.c": "32a4454a2660d860e1c4ba73693007bf1c802272ba82588dfd6f10981bb794d9",
+    "tools/pd-waveform/boot/pd_upgrade_state.c": "c06a49afe8bfff4ceab17112d20142202b3d309f18da71a57263750e88455d48",
+    "tools/pd-waveform/boot/pd_upgrade_state.h": "b8546112f25a6d7915fc62d04db9d31fe21e073092cbfb2050a0e97bca60962c",
+    "tools/pd-waveform/boot/pd_upgrade_units.c": "5b527b93f30e0bab4dde610681f05b0130827b6b262df1b0ee6c9a44cb319d23",
+    "tools/pd-waveform/boot/pd_upgrade_units.h": "92846598a904de816033f1c939594a040194cf54a3b2c0cb0f8abfa7e5b9dd0b",
+    "tools/pd-waveform/boot/pd_upgrade_worker.c": "39c58f8045e286045573a55a96ba55f26aa107a3644f38f7124a39e986811711",
+    "tools/pd-waveform/boot/pd_worker_units.c": "9d31b8ca96c3d6ae22b2d1a064f76a5ce0502444710c60b76fcb066c1f82a657",
+    "tools/pd-waveform/boot/pd_worker_units.h": "e91bbec8c14624385ecd87615a9fdbf7acf8176fe4c4fbf4d2bdab5cf099f2dd",
+    "tools/pd-waveform/boot/predecessor_check.c": "4f6c27ede2f604c07ebed6581b9bf56a4327633ab6de4aa41b27deae7bef8d8a",
+    "tools/pd-waveform/boot/primary_check.c": "02e707961d02df5a98c238e1b84881bbd2330ec33099fb77b90330ad5449faa8",
+    "tools/pd-waveform/boot/readiness_check.c": "b9fb935e2e31b8b06301a206a0e5eca58557c3550fc568dfe84b83553b581f6b",
+    "tools/pd-waveform/boot/release.py": "bc4a9f120b446f05a71482b1d9f0f67d1926df0afcc741d5d69b2ddb144405b9",
+    "tools/pd-waveform/boot/release_check.c": "0e51b43724fdb218b9a2c6703078c0cf822e7e3338d4691958fd9a641b4fbf79",
+    "tools/pd-waveform/boot/restore_check.c": "34bbf17e822230c33b91ae590227f63d6398e1465deddd1714e689d244f554c4",
+    "tools/pd-waveform/boot/runtime_check.c": "56583e800639bebc6a7f884a15dfe18f8f5bf9e0a74aaf1ae330b349c5883424",
+    "tools/pd-waveform/boot/runtime_config_check.c": "292789fa913fca6f84471d0aa81f3e9e6d0a65a422cfb2110da48a3786027d3f",
+    "tools/pd-waveform/boot/service_activation_check.c": "01dede0c8c597f1c27d3107708fdda18878f5bb53b4da10d96f4434f3f7c0fc1",
+    "tools/pd-waveform/boot/service_check.c": "288421989b3bec8163e86ff5ce9dac8cb0494b93c901b8ea7d5218f2ee797d4b",
+    "tools/pd-waveform/boot/session_gate_check.c": "9d9113bd61174b8d6befdacbaace66ea0e646198dba2e277574aa86bc19cf7b1",
+    "tools/pd-waveform/boot/state_check.c": "665d892fb150b83d989ae2d4345211db91ca941a0f47bde15909a6606274f7cb",
+    "tools/pd-waveform/boot/store_check.c": "6bf49aa0cb002ae1cb6ca762b9449e1615b10faa2d116584adef339b19b9d451",
+    "tools/pd-waveform/boot/test_approval.py": "174d73ef8e388060d0e5f2176f304d098f3476f9c49711da71cd1f63eaf741a2",
+    "tools/pd-waveform/boot/test_boot_wait.py": "df57fee0ce254b0e5bd5f83ccd4951d6f5e52a19baa9577423782c87b4b57a37",
+    "tools/pd-waveform/boot/test_bootstrap_artifact.py": "a4f7b9c6cf6b3580578b6584b9391b9bdecec757cd052688a272bddfbb1ec632",
+    "tools/pd-waveform/boot/test_bundle.py": "78ee0b2a2a92b52ee26981dd6143abd9c18747d9f638e4a4f8a3766e34df23fd",
+    "tools/pd-waveform/boot/test_capsule.py": "a5fdaaec0bf5f0507bed3cb0011aea968f686e40f2d39167d1de5df0a7a95f61",
+    "tools/pd-waveform/boot/test_delivery.py": "d658099464c41f73814cb5556807a484e6e641acf83acd2c7cedae88c16cc7fb",
+    "tools/pd-waveform/boot/test_first_request.py": "05cc409cd65e322f0f6b888b9e6b3fc3abd387a9a053dc4a40ba553484732ebd",
+    "tools/pd-waveform/boot/test_generation.py": "9e1e6e707faaa1bae440bb8516f09a9be6c03f60d9da861482f702a0cb63ed28",
+    "tools/pd-waveform/boot/test_generation_chain.py": "76cda81b7d7ef9fbde4188b6cece5a6d31802bf8afbd5d7e3318dce7b9891fd7",
+    "tools/pd-waveform/boot/test_generation_worker.py": "2387bb71252733d6d46ed389f598f06a3d95d2ff9aeb07be5172ed7bcbe1208d",
+    "tools/pd-waveform/boot/test_handoff.py": "fa4f73f4bab0dc18a4b73279a195c130c929b47210a38ff9f688db05ed08c5c8",
+    "tools/pd-waveform/boot/test_install.py": "16bef48d9b8c8ef35109b97f174ea550f99f10b0edff9b45e04612fc330667b4",
+    "tools/pd-waveform/boot/test_installation.py": "c03124392f9e7da039787d8794d0b8a2a2cc01a0d6d084578db5858e3b9b3bc0",
+    "tools/pd-waveform/boot/test_managed_directory.py": "d13273bad7724e703257a69a894405690f6f0433a1b8d5bdafa9ac36b54106a4",
+    "tools/pd-waveform/boot/test_management.py": "9ed9aa45224ff86627c520108dd13974887847161c86f08b02cdedb0b3ca00ca",
+    "tools/pd-waveform/boot/test_migration.py": "56926da5e7fabfbf91b3795b9aea45dd83ef6eff4a6caf10073a740c8cdb71b7",
+    "tools/pd-waveform/boot/test_predecessor.py": "a9b81cc17034fd08101cb17284c377561ce84650f9c1daa716fccd0d4118b430",
+    "tools/pd-waveform/boot/test_primary.py": "6c4348b18668c600d1c1f9d939e81e0e758408ccb8d4fa5c5006e78d528ebaf0",
+    "tools/pd-waveform/boot/test_readiness.py": "40efe3aa5f9fc3abf85c6db317497da05929c52d94c50e0cf13c21ad58dba0f2",
+    "tools/pd-waveform/boot/test_recovery.py": "2f53aa5cbbd737e9c8cee219584ae9612f12660c0133855f346e6fe2c27e0eea",
+    "tools/pd-waveform/boot/test_release.py": "18b1c0b296dcf929269f629cf5ec952c5f2d80f8f85444dd889df07f367876ed",
+    "tools/pd-waveform/boot/test_restore.py": "e4d30709c71ce37bda5f282644633ff88747a5d254d543a162aeaa9648e38c68",
+    "tools/pd-waveform/boot/test_retained.py": "e655be3341744fb057c37cfd740fffd80e24f5992489dce43997e5a68d70d3d3",
+    "tools/pd-waveform/boot/test_retire.py": "4cc7473623e69b731f1bcac78cf88bda34449be5926f9b41e43ba81536ee1c37",
+    "tools/pd-waveform/boot/test_runtime.py": "01891dd6127addb1aced9d17634c0947fd2a38d9a9cdf29460fdaee6cc883c38",
+    "tools/pd-waveform/boot/test_service.py": "bc1d723e9b90e5357622f4138b9a62a372aa7a3a070000f3223a8728269903b4",
+    "tools/pd-waveform/boot/test_service_activation.py": "1bfee2906b1bddd039466cafcfd13b3655a907cae43bcd156c0e0b7d52c8ad81",
+    "tools/pd-waveform/boot/test_session_gate.py": "3dd4d717dbdaebbeb44d8416970caf4612c9d82cd6ba9a2150dd5df36ad4891d",
+    "tools/pd-waveform/boot/test_slots_retire.py": "ad801e51dba397b2b21e1f7c9798b50c6ed4c1e6b9001d21685b175cebe4d871",
+    "tools/pd-waveform/boot/test_state_transfer.py": "cb055058960e726d03220d77c22d41377d271efc30974cfe7ec1f459497b4058",
+    "tools/pd-waveform/boot/test_store.py": "9ef63e38efa9906104acd05270189ef1384030d35b96fcfdd77a947d2c5ed0b9",
+    "tools/pd-waveform/boot/test_transaction.py": "4c4bf11d7b669e1ab41acac3bea0c0f0a358a603ed6adb7986acfc40ba2f24c6",
+    "tools/pd-waveform/boot/test_transport.py": "6c93a3c63dcc30c678287aeb93ec5d24f43e5337bd2b190aacdcad529abe9d34",
+    "tools/pd-waveform/boot/test_units.py": "9634c8589a936bf59230d89f1e72a8a9e68776e4a6436cd7cbf24c8bd574a232",
+    "tools/pd-waveform/boot/test_upgrade.py": "15665e405ff887d68481e752082f09a93ae6ada842ca7ec243342cac07ad3b81",
+    "tools/pd-waveform/boot/test_upgrade_capsule.py": "c7d3b0e6583877168ec67fe018a7aa3cc85931efece4fdacad7ec068db565f43",
+    "tools/pd-waveform/boot/test_upgrade_transaction.py": "2262603fb8c51f65e9d6f3de9f0ceab95004bd9a655c52cd55cbfa80df3ea106",
+    "tools/pd-waveform/boot/test_upgrade_units.py": "ace908b78ca731b80b2ff1711b5cbb6938e008af524737408d98116b64765232",
+    "tools/pd-waveform/boot/test_upgrade_worker.py": "f09aa4ed4e6a620ac0b3fcbee1fccf67cb28beec4a0a644ca1278cff35191e02",
+    "tools/pd-waveform/boot/test_worker.py": "36b9c07ce218046468eba5f41e624c07bf99341ca380523f5b80081cebb1db76",
+    "tools/pd-waveform/boot/test_worker_units.py": "5fb2bac68b63ef7001896d3d8996bd706c8bc7bd346f27f1694b9e774464b66f",
+    "tools/pd-waveform/boot/transaction_check.c": "3d3039f8144927049519c42a3d390b9aeb3bbfd19bfc12d110ee4a43c6035442",
+    "tools/pd-waveform/boot/transport_check.c": "e83b83244cda7442fb6f38e7df64e2dbc92d62581f4c136947e9f8381f793c4c",
+    "tools/pd-waveform/boot/units.py": "e254163bb8cbdcf1fdbcd3bb6d9c94616e8a0c120fbfaf79ea7fb6a1d8ec351c",
+    "tools/pd-waveform/boot/upgrade.py": "8340adab3fe0fa44fcd03119a01f374daa53feed669c3089facd09971634f3ae",
+    "tools/pd-waveform/boot/upgrade_capsule_check.c": "d825838a54f60a76a8c40b64201db6da830a268e710274e14305af515905ee81",
+    "tools/pd-waveform/boot/upgrade_check.c": "63cac84f6ce68845b2ae63d9a471132e4ed3d11c0bfd759eaa9f94e9cded7488",
+    "tools/pd-waveform/boot/upgrade_transaction_check.c": "be09f43bef5257ac714c7b599501ce1b2ad6176d670f92d6c2a7808821f9a92d",
+    "tools/pd-waveform/boot/upgrade_units.py": "4eb42f03cef851549d791211e8ff369a0f52e1b795274344995f5c18c4204fcd",
+    "tools/pd-waveform/boot/upgrade_units_check.c": "51f17388c0897b62d35fcc6aa12566973fc6f2ef0329c6df01574dacd171df9b",
+    "tools/pd-waveform/boot/upgrade_worker_fixture.c": "75418e28ec3eb27db803c783bfed5dd3a15404abc7798bc6abcf6b9d406759a5",
+    "tools/pd-waveform/boot/upgrade_worker_namespace.c": "ef9fe37dd2f248fcfaaf01c8fe90e5af1ccb4f3dbf5874515ce8065bebc6174d",
+    "tools/pd-waveform/boot/worker_fixture.c": "f01d14d7d243f635c17498d03ac94a88083a8af7cb78748d0f97a7748dac6fb1",
+    "tools/pd-waveform/boot/worker_namespace.c": "742d2132ba209a80183a3f8008b60b41a62f4d7f520b8e31058b03f589904842",
+    "tools/pd-waveform/boot/worker_units.py": "a9f93f1a0881a64f175ff4c90339cf9dc9cabe2ba4bffefed4aea5e5e4465d3e",
+    "tools/pd-waveform/boot/worker_units_check.c": "e705baefda460c29024c7c246a573aa4d52eeddea3633d9c7cbbacb1b3253393"
+  },
+  "budget_sources_match_closed_current_runtime_source": true,
+  "production_code_modified": false,
+  "configuration_count": 12,
+  "capacity_boundary_checks_passed": 80,
+  "native_signed_input_calls": 92,
+  "independent_allocation_ledgers_matched": 12,
+  "separate_volume_checks": "Each store and service-unit volume gets its own exact/one-short bytes and inode check while the other volume remains ample. 1KiB and4KiB blocks are varied independently.",
+  "mutations": [
+    {
+      "name": "ignore-unit-byte-limit",
+      "detected": true,
+      "detected_by": "independent service-unit filesystem one-short boundary accepts unsafely"
+    },
+    {
+      "name": "ignore-unit-inode-limit",
+      "detected": true,
+      "detected_by": "independent service-unit filesystem one-short boundary accepts unsafely"
+    },
+    {
+      "name": "omit-staged-payload",
+      "detected": true,
+      "detected_by": "independent actual-file allocation ledger disagrees despite native admission accepting"
+    }
+  ],
+  "modeled_budget": {
+    "worst_ARMv7_store_peak_including_native_reserve_bytes": 39743488,
+    "headroom_against_rounded_decimal41MB_bytes": 1256512,
+    "largest_units_volume_requirement_with_allowance_bytes": 8757248,
+    "one_extra_full_release_fits_rounded_decimal41MB": false,
+    "private_state_allowance_bytes": 1048576,
+    "native_reserve_bytes_each_volume": 8388608,
+    "model": "Current full generation plus compacted predecessor and permanent management/state/metadata reference ledger, conservatively added to fresh native signed-pair staging admission. Not a measured transaction timeline or physical high-water."
+  },
+  "all_measurements": [
+    {
+      "arch": "armv7",
+      "store_block_bytes": 1024,
+      "units_block_bytes": 1024,
+      "units_on_separate_filesystem": false,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            294,
+            346
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 28076032,
+            "required_inodes": 90
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 1024,
+          "required_bytes": 28076032,
+          "required_inodes": 90,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 1024,
+              "objects": 3,
+              "allocated_bytes": 3072,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 95232,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 9070353,
+              "objects": 1,
+              "allocated_bytes": 9070592,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 95232,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 9070385,
+              "objects": 1,
+              "allocated_bytes": 9070592,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 294,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 346,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 1024,
+              "objects": 4,
+              "allocated_bytes": 4096,
+              "inodes": 4
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9768960,
+      "reference_resident_store_bytes": 11136000,
+      "reference_resident_units_bytes": 0,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 65536,
+      "units_metadata_allowance_bytes": 0,
+      "modeled_store_peak_including_native_reserve_bytes": 39212032,
+      "modeled_units_peak_including_native_reserve_bytes": null,
+      "headroom_against_rounded_41_decimal_MB": 1787968,
+      "headroom_against_rounded_41_MiB": 3779584,
+      "unit_headroom_against_rounded_27_decimal_MB": null,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "armv7",
+      "store_block_bytes": 4096,
+      "units_block_bytes": 4096,
+      "units_on_separate_filesystem": false,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            294,
+            346
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 28344320,
+            "required_inodes": 90
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 4096,
+          "required_bytes": 28344320,
+          "required_inodes": 90,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 4096,
+              "objects": 3,
+              "allocated_bytes": 12288,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 98304,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 9070353,
+              "objects": 1,
+              "allocated_bytes": 9072640,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 98304,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 9070385,
+              "objects": 1,
+              "allocated_bytes": 9072640,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 294,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 346,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 4096,
+              "objects": 4,
+              "allocated_bytes": 16384,
+              "inodes": 4
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9818112,
+      "reference_resident_store_bytes": 11399168,
+      "reference_resident_units_bytes": 0,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 262144,
+      "units_metadata_allowance_bytes": 0,
+      "modeled_store_peak_including_native_reserve_bytes": 39743488,
+      "modeled_units_peak_including_native_reserve_bytes": null,
+      "headroom_against_rounded_41_decimal_MB": 1256512,
+      "headroom_against_rounded_41_MiB": 3248128,
+      "unit_headroom_against_rounded_27_decimal_MB": null,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "armv7",
+      "store_block_bytes": 1024,
+      "units_block_bytes": 1024,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            294,
+            346
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 28053504,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8411136,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 1024,
+          "required_bytes": 28053504,
+          "required_inodes": 68,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 1024,
+              "objects": 3,
+              "allocated_bytes": 3072,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 95232,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 9070353,
+              "objects": 1,
+              "allocated_bytes": 9070592,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 95232,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 9070385,
+              "objects": 1,
+              "allocated_bytes": 9070592,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 1024,
+              "objects": 4,
+              "allocated_bytes": 4096,
+              "inodes": 4
+            }
+          ]
+        },
+        {
+          "block_bytes": 1024,
+          "required_bytes": 8411136,
+          "required_inodes": 22,
+          "allocations": [
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 294,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 346,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample",
+        "unit exact bytes accepted with other volume ample",
+        "unit one bytes short refused with other volume ample",
+        "unit exact inodes accepted with other volume ample",
+        "unit one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9768960,
+      "reference_resident_store_bytes": 11131904,
+      "reference_resident_units_bytes": 69632,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 65536,
+      "units_metadata_allowance_bytes": 65536,
+      "modeled_store_peak_including_native_reserve_bytes": 39185408,
+      "modeled_units_peak_including_native_reserve_bytes": 8480768,
+      "headroom_against_rounded_41_decimal_MB": 1814592,
+      "headroom_against_rounded_41_MiB": 3806208,
+      "unit_headroom_against_rounded_27_decimal_MB": 18519232,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "armv7",
+      "store_block_bytes": 1024,
+      "units_block_bytes": 4096,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            294,
+            346
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 28053504,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8478720,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 1024,
+          "required_bytes": 28053504,
+          "required_inodes": 68,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 1024,
+              "objects": 3,
+              "allocated_bytes": 3072,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 95232,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 9070353,
+              "objects": 1,
+              "allocated_bytes": 9070592,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 95232,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 9070385,
+              "objects": 1,
+              "allocated_bytes": 9070592,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 210944,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 1024,
+              "objects": 4,
+              "allocated_bytes": 4096,
+              "inodes": 4
+            }
+          ]
+        },
+        {
+          "block_bytes": 4096,
+          "required_bytes": 8478720,
+          "required_inodes": 22,
+          "allocations": [
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 294,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 346,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample",
+        "unit exact bytes accepted with other volume ample",
+        "unit one bytes short refused with other volume ample",
+        "unit exact inodes accepted with other volume ample",
+        "unit one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9768960,
+      "reference_resident_store_bytes": 11131904,
+      "reference_resident_units_bytes": 278528,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 65536,
+      "units_metadata_allowance_bytes": 262144,
+      "modeled_store_peak_including_native_reserve_bytes": 39185408,
+      "modeled_units_peak_including_native_reserve_bytes": 8757248,
+      "headroom_against_rounded_41_decimal_MB": 1814592,
+      "headroom_against_rounded_41_MiB": 3806208,
+      "unit_headroom_against_rounded_27_decimal_MB": 18242752,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "armv7",
+      "store_block_bytes": 4096,
+      "units_block_bytes": 1024,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            294,
+            346
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 28254208,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8411136,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 4096,
+          "required_bytes": 28254208,
+          "required_inodes": 68,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 4096,
+              "objects": 3,
+              "allocated_bytes": 12288,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 98304,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 9070353,
+              "objects": 1,
+              "allocated_bytes": 9072640,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 98304,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 9070385,
+              "objects": 1,
+              "allocated_bytes": 9072640,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 4096,
+              "objects": 4,
+              "allocated_bytes": 16384,
+              "inodes": 4
+            }
+          ]
+        },
+        {
+          "block_bytes": 1024,
+          "required_bytes": 8411136,
+          "required_inodes": 22,
+          "allocations": [
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 294,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 346,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample",
+        "unit exact bytes accepted with other volume ample",
+        "unit one bytes short refused with other volume ample",
+        "unit exact inodes accepted with other volume ample",
+        "unit one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9818112,
+      "reference_resident_store_bytes": 11382784,
+      "reference_resident_units_bytes": 69632,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 262144,
+      "units_metadata_allowance_bytes": 65536,
+      "modeled_store_peak_including_native_reserve_bytes": 39636992,
+      "modeled_units_peak_including_native_reserve_bytes": 8480768,
+      "headroom_against_rounded_41_decimal_MB": 1363008,
+      "headroom_against_rounded_41_MiB": 3354624,
+      "unit_headroom_against_rounded_27_decimal_MB": 18519232,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "armv7",
+      "store_block_bytes": 4096,
+      "units_block_bytes": 4096,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            294,
+            346
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 28254208,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8478720,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 4096,
+          "required_bytes": 28254208,
+          "required_inodes": 68,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 4096,
+              "objects": 3,
+              "allocated_bytes": 12288,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 98304,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 9070353,
+              "objects": 1,
+              "allocated_bytes": 9072640,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 94832,
+              "objects": 1,
+              "allocated_bytes": 98304,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 9070385,
+              "objects": 1,
+              "allocated_bytes": 9072640,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 210164,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 4096,
+              "objects": 4,
+              "allocated_bytes": 16384,
+              "inodes": 4
+            }
+          ]
+        },
+        {
+          "block_bytes": 4096,
+          "required_bytes": 8478720,
+          "required_inodes": 22,
+          "allocations": [
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 233,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 342,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 310,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 442,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 294,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 346,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample",
+        "unit exact bytes accepted with other volume ample",
+        "unit one bytes short refused with other volume ample",
+        "unit exact inodes accepted with other volume ample",
+        "unit one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9818112,
+      "reference_resident_store_bytes": 11382784,
+      "reference_resident_units_bytes": 278528,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 262144,
+      "units_metadata_allowance_bytes": 262144,
+      "modeled_store_peak_including_native_reserve_bytes": 39636992,
+      "modeled_units_peak_including_native_reserve_bytes": 8757248,
+      "headroom_against_rounded_41_decimal_MB": 1363008,
+      "headroom_against_rounded_41_MiB": 3354624,
+      "unit_headroom_against_rounded_27_decimal_MB": 18242752,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "store_block_bytes": 1024,
+      "units_block_bytes": 1024,
+      "units_on_separate_filesystem": false,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            394,
+            446
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 27415552,
+            "required_inodes": 90
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 1024,
+          "required_bytes": 27415552,
+          "required_inodes": 90,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 1024,
+              "objects": 3,
+              "allocated_bytes": 3072,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 79872,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 8756745,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 79872,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 8756778,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 394,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 446,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 1024,
+              "objects": 4,
+              "allocated_bytes": 4096,
+              "inodes": 4
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9422848,
+      "reference_resident_store_bytes": 10788864,
+      "reference_resident_units_bytes": 0,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 65536,
+      "units_metadata_allowance_bytes": 0,
+      "modeled_store_peak_including_native_reserve_bytes": 38204416,
+      "modeled_units_peak_including_native_reserve_bytes": null,
+      "headroom_against_rounded_41_decimal_MB": 2795584,
+      "headroom_against_rounded_41_MiB": 4787200,
+      "unit_headroom_against_rounded_27_decimal_MB": null,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "store_block_bytes": 4096,
+      "units_block_bytes": 4096,
+      "units_on_separate_filesystem": false,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            394,
+            446
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 27680768,
+            "required_inodes": 90
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 4096,
+          "required_bytes": 27680768,
+          "required_inodes": 90,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 4096,
+              "objects": 3,
+              "allocated_bytes": 12288,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 81920,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 8756745,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 81920,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 8756778,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 394,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 446,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 4096,
+              "objects": 4,
+              "allocated_bytes": 16384,
+              "inodes": 4
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9469952,
+      "reference_resident_store_bytes": 11051008,
+      "reference_resident_units_bytes": 0,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 262144,
+      "units_metadata_allowance_bytes": 0,
+      "modeled_store_peak_including_native_reserve_bytes": 38731776,
+      "modeled_units_peak_including_native_reserve_bytes": null,
+      "headroom_against_rounded_41_decimal_MB": 2268224,
+      "headroom_against_rounded_41_MiB": 4259840,
+      "unit_headroom_against_rounded_27_decimal_MB": null,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "store_block_bytes": 1024,
+      "units_block_bytes": 1024,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            394,
+            446
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 27393024,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8411136,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 1024,
+          "required_bytes": 27393024,
+          "required_inodes": 68,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 1024,
+              "objects": 3,
+              "allocated_bytes": 3072,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 79872,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 8756745,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 79872,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 8756778,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 1024,
+              "objects": 4,
+              "allocated_bytes": 4096,
+              "inodes": 4
+            }
+          ]
+        },
+        {
+          "block_bytes": 1024,
+          "required_bytes": 8411136,
+          "required_inodes": 22,
+          "allocations": [
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 394,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 446,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample",
+        "unit exact bytes accepted with other volume ample",
+        "unit one bytes short refused with other volume ample",
+        "unit exact inodes accepted with other volume ample",
+        "unit one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9422848,
+      "reference_resident_store_bytes": 10784768,
+      "reference_resident_units_bytes": 69632,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 65536,
+      "units_metadata_allowance_bytes": 65536,
+      "modeled_store_peak_including_native_reserve_bytes": 38177792,
+      "modeled_units_peak_including_native_reserve_bytes": 8480768,
+      "headroom_against_rounded_41_decimal_MB": 2822208,
+      "headroom_against_rounded_41_MiB": 4813824,
+      "unit_headroom_against_rounded_27_decimal_MB": 18519232,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "store_block_bytes": 1024,
+      "units_block_bytes": 4096,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            394,
+            446
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 27393024,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8478720,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 1024,
+          "required_bytes": 27393024,
+          "required_inodes": 68,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 1024,
+              "objects": 3,
+              "allocated_bytes": 3072,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 79872,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 8756745,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 79872,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 8756778,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 209920,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 37888,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 2048,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 1024,
+              "objects": 4,
+              "allocated_bytes": 4096,
+              "inodes": 4
+            }
+          ]
+        },
+        {
+          "block_bytes": 4096,
+          "required_bytes": 8478720,
+          "required_inodes": 22,
+          "allocations": [
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 394,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 446,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample",
+        "unit exact bytes accepted with other volume ample",
+        "unit one bytes short refused with other volume ample",
+        "unit exact inodes accepted with other volume ample",
+        "unit one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9422848,
+      "reference_resident_store_bytes": 10784768,
+      "reference_resident_units_bytes": 278528,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 65536,
+      "units_metadata_allowance_bytes": 262144,
+      "modeled_store_peak_including_native_reserve_bytes": 38177792,
+      "modeled_units_peak_including_native_reserve_bytes": 8757248,
+      "headroom_against_rounded_41_decimal_MB": 2822208,
+      "headroom_against_rounded_41_MiB": 4813824,
+      "unit_headroom_against_rounded_27_decimal_MB": 18242752,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "store_block_bytes": 4096,
+      "units_block_bytes": 1024,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            394,
+            446
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 27590656,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8411136,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 4096,
+          "required_bytes": 27590656,
+          "required_inodes": 68,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 4096,
+              "objects": 3,
+              "allocated_bytes": 12288,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 81920,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 8756745,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 81920,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 8756778,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 4096,
+              "objects": 4,
+              "allocated_bytes": 16384,
+              "inodes": 4
+            }
+          ]
+        },
+        {
+          "block_bytes": 1024,
+          "required_bytes": 8411136,
+          "required_inodes": 22,
+          "allocations": [
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 394,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 446,
+              "objects": 1,
+              "allocated_bytes": 1024,
+              "inodes": 1
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 1024,
+              "objects": 16,
+              "allocated_bytes": 16384,
+              "inodes": 16
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample",
+        "unit exact bytes accepted with other volume ample",
+        "unit one bytes short refused with other volume ample",
+        "unit exact inodes accepted with other volume ample",
+        "unit one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9469952,
+      "reference_resident_store_bytes": 11034624,
+      "reference_resident_units_bytes": 69632,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 262144,
+      "units_metadata_allowance_bytes": 65536,
+      "modeled_store_peak_including_native_reserve_bytes": 38625280,
+      "modeled_units_peak_including_native_reserve_bytes": 8480768,
+      "headroom_against_rounded_41_decimal_MB": 2374720,
+      "headroom_against_rounded_41_MiB": 4366336,
+      "unit_headroom_against_rounded_27_decimal_MB": 18519232,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "store_block_bytes": 4096,
+      "units_block_bytes": 4096,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "constants": {
+          "reserve_bytes": 8388608,
+          "release_prefix_bytes": 432,
+          "approval_bytes": 352,
+          "worker_max_bytes": 524288,
+          "capsule_origin_bytes": 1564,
+          "retained_bytes": 1236,
+          "retire_bytes": 1804,
+          "slots_retire_bytes": 652,
+          "upgrade_unit_lengths": [
+            394,
+            446
+          ]
+        },
+        "volumes": [
+          {
+            "required_bytes": 27590656,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8478720,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "independent_allocation_ledger": [
+        {
+          "block_bytes": 4096,
+          "required_bytes": 27590656,
+          "required_inodes": 68,
+          "allocations": [
+            {
+              "role": "signed-pair directory creation and growth",
+              "logical_bytes_each": 4096,
+              "objects": 3,
+              "allocated_bytes": 12288,
+              "inodes": 2
+            },
+            {
+              "role": "operator-approved pair record",
+              "logical_bytes_each": 352,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 81920,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member payload.bundle",
+              "logical_bytes_each": 8756745,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "previous release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate authenticated header",
+              "logical_bytes_each": 432,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member pd-update",
+              "logical_bytes_each": 79752,
+              "objects": 1,
+              "allocated_bytes": 81920,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member payload.bundle",
+              "logical_bytes_each": 8756778,
+              "objects": 1,
+              "allocated_bytes": 8757248,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "candidate release member aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "bounded durable recovery worker",
+              "logical_bytes_each": 524288,
+              "objects": 1,
+              "allocated_bytes": 524288,
+              "inodes": 1
+            },
+            {
+              "role": "recovery capsule and origin record",
+              "logical_bytes_each": 1564,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement pd-boot",
+              "logical_bytes_each": 209040,
+              "objects": 1,
+              "allocated_bytes": 212992,
+              "inodes": 1
+            },
+            {
+              "role": "management replacement BOOT-LICENSES.txt",
+              "logical_bytes_each": 37513,
+              "objects": 1,
+              "allocated_bytes": 40960,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "staged fixed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "capsule/control locks and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "stage selectors/journal metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            },
+            {
+              "role": "generation receipt retained_bytes",
+              "logical_bytes_each": 1236,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt retire_bytes",
+              "logical_bytes_each": 1804,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "generation receipt slots_retire_bytes",
+              "logical_bytes_each": 652,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "receipt and approval directory growth",
+              "logical_bytes_each": 4096,
+              "objects": 4,
+              "allocated_bytes": 16384,
+              "inodes": 4
+            }
+          ]
+        },
+        {
+          "block_bytes": 4096,
+          "required_bytes": 8478720,
+          "required_inodes": 22,
+          "allocations": [
+            {
+              "role": "atomic installed unit aetherpd-boot.service",
+              "logical_bytes_each": 245,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start.socket",
+              "logical_bytes_each": 354,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-start@.service",
+              "logical_bytes_each": 322,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "atomic installed unit aetherpd-shim.service",
+              "logical_bytes_each": 454,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 0",
+              "logical_bytes_each": 394,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "temporary fixed upgrade unit 1",
+              "logical_bytes_each": 446,
+              "objects": 1,
+              "allocated_bytes": 4096,
+              "inodes": 1
+            },
+            {
+              "role": "unit links and metadata growth",
+              "logical_bytes_each": 4096,
+              "objects": 16,
+              "allocated_bytes": 65536,
+              "inodes": 16
+            }
+          ]
+        }
+      ],
+      "boundary_checks_passed": [
+        "store exact bytes accepted with other volume ample",
+        "store one bytes short refused with other volume ample",
+        "store exact inodes accepted with other volume ample",
+        "store one inodes short refused with other volume ample",
+        "unit exact bytes accepted with other volume ample",
+        "unit one bytes short refused with other volume ample",
+        "unit exact inodes accepted with other volume ample",
+        "unit one inodes short refused with other volume ample"
+      ],
+      "reference_current_generations_store_bytes": 9469952,
+      "reference_resident_store_bytes": 11034624,
+      "reference_resident_units_bytes": 278528,
+      "private_state_allowance_bytes": 1048576,
+      "store_metadata_allowance_bytes": 262144,
+      "units_metadata_allowance_bytes": 262144,
+      "modeled_store_peak_including_native_reserve_bytes": 38625280,
+      "modeled_units_peak_including_native_reserve_bytes": 8757248,
+      "headroom_against_rounded_41_decimal_MB": 2374720,
+      "headroom_against_rounded_41_MiB": 4366336,
+      "unit_headroom_against_rounded_27_decimal_MB": 18242752,
+      "one_extra_full_release_fits_rounded_41_decimal_MB": false
+    }
+  ],
+  "host_binaries": {
+    "admission_probe": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-upgrade-budget/budget-build/budget-probe",
+      "bytes": 755144,
+      "sha256": "1625ae238c0585e8dec264db8124eaab5ed46d60e92b9f7a34fe2fe1c23b35ee"
+    },
+    "ignore-unit-byte-limit": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-upgrade-budget/mutation-ignore-unit-byte-limit/build/budget-probe",
+      "bytes": 755208,
+      "sha256": "847e975b5aef0bc65da77e7ddcb239e002a8690e60ac243729959158de106b5a"
+    },
+    "ignore-unit-inode-limit": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-upgrade-budget/mutation-ignore-unit-inode-limit/build/budget-probe",
+      "bytes": 755208,
+      "sha256": "d4ae944c0a53c0746053effeb9f4f631286ef7588772769e7440778945b471d9"
+    },
+    "omit-staged-payload": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-upgrade-budget/mutation-omit-staged-payload/build/budget-probe",
+      "bytes": 755272,
+      "sha256": "aad68ee6ea6096cf6be3fcc29ddc51be4fb38853e793c99f6ada8faefb645a79"
+    }
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-signed-upgrade-budget-components.tar.gz",
+    "bytes": 85459,
+    "sha256": "b3a25f6add13833370a41d16bc8b9e6c043fe3bd0799385fc8e2a5f69170c61f",
+    "members": 57,
+    "all_members_verified": true
+  },
+  "new_positive_GUI_key_requests": 0,
+  "new_observed_TX_intervals": 0,
+  "source_arm_actions": 0,
+  "radio_access": [],
+  "radio_updates": [],
+  "radio_reboots": [],
+  "scope_limits": [
+    "Production signature/admission code reads actual signed inputs, but filesystem capacity, grouping and allocation sizes are injected, not measured on either radio.",
+    "The separate reference resident-state ledger plus native staging requirement is conservative under its explicit two-generation/state/metadata assumptions. It is not the measured whole-volume high-water or a verified transaction timeline.",
+    "Current public artifacts use the retained development publisher. No actual6300 install/network/profile/Linux2.6 qualification occurs.",
+    "The1MiB state allowance and metadata allowance are model assumptions, not whole-volume quotas. Legacy state, other waveform data, firmware-retained uploads, first-install extraction and another full release copy are additional.",
+    "ARMv7 first-install adapter is still missing. Signed transport input staging must remain in RAM; a rounded41MB free report cannot establish actual free blocks/inodes or safe installation capacity.",
+    "The wrapper is compiled for the local host and injects statvfs/devices/capacities. It verifies current production allocation arithmetic and signed-input admission, not ARM filesystem ABI, actual free blocks/inodes, storage ordering or power-loss persistence.",
+    "All production boot C/header/build input files match the source snapshot of the closed83d6 artifact. Only the offline probe, mutation sources and reference ledger are new.",
+    "The modeled storage sum includes the native8MiB reserve, which is not itself allocated file data. Explicit resident/state/metadata assumptions must not be read as measured volume usage or enforced whole-volume quotas.",
+    "The actual6300 first-install adapter, firmware-retained upload/extraction copies, filesystem layouts/free blocks/inodes and high-water measurements remain required. The supplied rounded41MB report alone cannot approve an installation.",
+    "The existing6300 readiness kit and its original source/package hashes are unchanged. This report refreshes current package references and does not silently replace that kit.",
+    "The prepared one5W DSPAPI-loss test is still pending explicit operator keying approval. No new radio/RF/sourcearm action or change to the original failed keyed case.",
+    "FullP1-P10, natural128/cold-bypass, remaining final-graph failures/foreign/credential/stale-cache, repeated/raw/extended RF, final stock/native/publisher and independent release gates remain open."
+  ],
+  "next_step": "Use the current artifact ledger in actual6300 qualification, obtain real block sizes/free blocks/inodes and account for final adapter/native-waveform retention before installing. Keep pending RF completion proof separate and never infer approval from elapsed time."
+}
