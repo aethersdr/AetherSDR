@@ -1,0 +1,697 @@
+{
+  "recorded_utc": "2026-11-19T10:45:35.517064+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "status": "Exact83d6 receive-only API-loss recovery passes. One bounded5W keyed DSP-API-loss unkeys safely with exit7, explicit USB recovery and exact cleanup; original overall case remains FAILED because desktop stop proof rejects missing-receiver RECEIVE. Causal release-only tracker fix passes offline regressions and builds; new desktop has not been launched or live-qualified.",
+  "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "runtime_origin_commit": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+  "build_and_install": {
+    "full_artifacts": {
+      "recorded_utc": "2026-11-19T10:01:44.966083+00:00",
+      "source_commit": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+      "source_manifest_sha256": "f2d1fdfa96db27efa25e71837087fb0ef0ccf3a406b8acd1fa2701473504fd6f",
+      "source_files": 8341,
+      "release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+      "binaries": {
+        "AetherSDR": {
+          "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/bin/AetherSDR",
+          "bytes": 833355720,
+          "sha256": "878f4f7f6f4da0232d93adc64d8328cb915137f015ef9ea9968bdf77c7e74c5f",
+          "durable_path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/api-exit-preserving-artifacts-83d6f6b35/binaries/AetherSDR"
+        },
+        "aetherd": {
+          "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/bin/aetherd",
+          "bytes": 413583984,
+          "sha256": "d69e61cd807b842e6503d8f91ed1793a82637bc8a2977ef6fb8c1071a8de40f6",
+          "durable_path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/api-exit-preserving-artifacts-83d6f6b35/binaries/aetherd"
+        }
+      },
+      "archive": {
+        "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/api-exit-preserving-artifacts-83d6f6b35/diagnostic-upgrades-and-public-source.tar.gz",
+        "bytes": 480368545,
+        "sha256": "d8b6bca0353caf61ea93c60dab914bd50e9e6b5d8f0602ad1a48ed25de434bd8",
+        "members": 8412,
+        "all_members_verified": true
+      },
+      "both_architectures_and_source_paths_reproduced": true,
+      "component_comparison": {
+        "passed": true,
+        "architectures": {
+          "armv7": {
+            "changed_payload_files": [
+              "aether-pd"
+            ],
+            "Go_and_fixed_helpers_byte_identical": true,
+            "payload_files": {
+              "flex-tailnet-shim": "544f91b5a42c78f443f1980737460caf0f5f863f82447d4429187a66ca398090",
+              "aether-pd": "24204d1971d1a43d4dfa5a8a9e4de9a20a2212b920242d8fb49f3cce8dc0df5a",
+              "pd-primary-launch": "5935cb4700b00f969240cf4f690b95061a33bf5a3da896f0ff8169a4af3fe679",
+              "pd-start-session": "7a11e4cc69b48e738390edb369bfbcd77fe811af95b39646fac9a8ac530fd82c",
+              "pd-radio-launch": "1195b127e6d8f49bc1ee697ab0d1c660f708acc36d3797585832490a13d254b1",
+              "pd-fixed-arp": "41a6b3a7cfa78f8472f546df8372a9459c871ed559d780ec792f7bd4ee0197f5",
+              "pd-iq-source": "729fc31d6905bd45cffef0a63d0020acb8fc856ddb1d9bf1f1aa23b3462dfd47",
+              "pd-capture-bootstrap": "f86fbdcd6848d1df04992aa550379328b34d1e696dfa4124c8638def5e42ea6b",
+              "pd-unkey-guard": "e14d04fc7b83b828f72e0f9fd03600d1928bc4d561413662c25249e3d1bf712a",
+              "pd-lease-guard": "9ad9baac195793530517dab80170bddccb681cbd20e433967f4e84981b0a830c",
+              "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+            },
+            "expanded_bytes": 22841846,
+            "release": {
+              "format": "AEPDR005",
+              "paired_boot": true,
+              "managed_startup": true,
+              "origin_recovery": true,
+              "generation_selection": true,
+              "guardian_hold": true,
+              "profile": "flex6300",
+              "architecture": "armv7",
+              "control_restart": true,
+              "firmware": "4.2.18.41174",
+              "source_sha256": "f2d1fdfa96db27efa25e71837087fb0ef0ccf3a406b8acd1fa2701473504fd6f",
+              "bytes": 9414653,
+              "sha256": "b5dd5d72725255a4d61443f1fa93d5f5788656e31051cfcc8d2a1d69a3e89dd1",
+              "blake2b_256": "8affef121dfe9ee373df739479c3f61f8222c6f913424c314c0745f7364bc94c",
+              "public_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+              "files": [
+                {
+                  "name": "pd-boot",
+                  "bytes": 210164,
+                  "sha256": "f7d5f70c726c50bd4437fbedc6d9ac393a97ffb8a3d7adc254e0e80ce1c60467",
+                  "mode": "0755"
+                },
+                {
+                  "name": "pd-update",
+                  "bytes": 94832,
+                  "sha256": "b49702db04540f90ca07f1ee855c4aefa32973f3564059593908ff585276b31f",
+                  "mode": "0755"
+                },
+                {
+                  "name": "payload.bundle",
+                  "bytes": 9070385,
+                  "sha256": "04e1bc964c0c82998d0ab9ac842d3357f0d66cf3a04a21e5798299d6858a80b6",
+                  "mode": "0644"
+                },
+                {
+                  "name": "BOOT-LICENSES.txt",
+                  "bytes": 37513,
+                  "sha256": "5d8bba006bb4efb4894defe2784831bf4d48e6d98b3d4680e8d01c1493e12f86",
+                  "mode": "0644"
+                },
+                {
+                  "name": "aetherpd-boot.service",
+                  "bytes": 233,
+                  "sha256": "440e55b7212a1ffc66fdeb0f2a2b263eed31317b83979f079bf9d923e5166530",
+                  "mode": "0644"
+                },
+                {
+                  "name": "aetherpd-start.socket",
+                  "bytes": 342,
+                  "sha256": "2e6529a8605e70700461c4d731510706358ca4a5cb12c86c997302760d457470",
+                  "mode": "0644"
+                },
+                {
+                  "name": "aetherpd-start@.service",
+                  "bytes": 310,
+                  "sha256": "b3b98ef98c573212ac4e5edf77d422d7eeaa156036378ed09851a1906418fe1a",
+                  "mode": "0644"
+                },
+                {
+                  "name": "aetherpd-shim.service",
+                  "bytes": 442,
+                  "sha256": "82a22a406f647597ab8434347ac9e9f99d459acc3147f4b67a956f07eca6e3a2",
+                  "mode": "0644"
+                }
+              ],
+              "persistent_store": "/user/aetherpd",
+              "runtime": "/run/aetherpd",
+              "fixed_units": [
+                "aetherpd-boot.service",
+                "aetherpd-start.socket",
+                "aetherpd-start@.service",
+                "aetherpd-shim.service"
+              ],
+              "privileged_actions": [
+                "verify approved release digest and trusted signature",
+                "stage fixed authenticated files in private RAM",
+                "retire the owned runtime before updating",
+                "publish protected payload and boot files",
+                "install fixed boot and local socket units",
+                "start the ordinary-user primary shim after retiring any recognized predecessor"
+              ],
+              "temporary_components": [
+                "pd-update",
+                "installer/bootstrap staging and authority"
+              ],
+              "rf_actions": [],
+              "automatic_calibration": false,
+              "integration_status": "release artifact only; this builder does not install, migrate, enable or start anything"
+            }
+          },
+          "arm64": {
+            "changed_payload_files": [
+              "aether-pd"
+            ],
+            "Go_and_fixed_helpers_byte_identical": true,
+            "payload_files": {
+              "flex-tailnet-shim": "f73c59642b0d8e8fa406a8d3ffd10fe7de71e0bb94cedbc4c04ba23c1bc24c84",
+              "aether-pd": "cf8cc53074a11891b933456ae352a189bb8401ca32503ce2da2f7c476311efcf",
+              "pd-primary-launch": "3cf9685c5a0cbd87e50a440cee2d8c94ca9bad5b735099c9ca649675091828b2",
+              "pd-start-session": "616bfb8f36627f43547e9fa90daa14cfbd92c7bb342f499b3367afea0eb59fed",
+              "pd-radio-launch": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+              "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+              "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+              "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+              "pd-unkey-guard": "55f5d58d5c6c77244eacc46caf33ba3465561e159ae33e4c180e0cbcca211cbb",
+              "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+              "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+            },
+            "expanded_bytes": 22451754,
+            "release": {
+              "format": "AEPDR005",
+              "paired_boot": true,
+              "managed_startup": true,
+              "origin_recovery": true,
+              "generation_selection": true,
+              "guardian_hold": true,
+              "profile": "flex8600",
+              "architecture": "arm64",
+              "control_restart": true,
+              "firmware": "4.3.16.42034",
+              "source_sha256": "f2d1fdfa96db27efa25e71837087fb0ef0ccf3a406b8acd1fa2701473504fd6f",
+              "bytes": 9084890,
+              "sha256": "2a492b704f1bc5c52bb8cd46a2222a665e1eda653379261d77ec60c1a21e635e",
+              "blake2b_256": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+              "public_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+              "files": [
+                {
+                  "name": "pd-boot",
+                  "bytes": 209040,
+                  "sha256": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7",
+                  "mode": "0755"
+                },
+                {
+                  "name": "pd-update",
+                  "bytes": 79752,
+                  "sha256": "468f253310de971ad82ae452327e79667a38f22ee3f4a4002378837a816b5365",
+                  "mode": "0755"
+                },
+                {
+                  "name": "payload.bundle",
+                  "bytes": 8756778,
+                  "sha256": "040be5c139d710c93c8f74b9f1de6726cd58a8ece3fbd927c8c45ee77de56c6b",
+                  "mode": "0644"
+                },
+                {
+                  "name": "BOOT-LICENSES.txt",
+                  "bytes": 37513,
+                  "sha256": "5d8bba006bb4efb4894defe2784831bf4d48e6d98b3d4680e8d01c1493e12f86",
+                  "mode": "0644"
+                },
+                {
+                  "name": "aetherpd-boot.service",
+                  "bytes": 245,
+                  "sha256": "08f24faab3500778cfbf343cf62d00970789a44f63c5915cddd311fc6283a504",
+                  "mode": "0644"
+                },
+                {
+                  "name": "aetherpd-start.socket",
+                  "bytes": 354,
+                  "sha256": "1d77b02319b737ba07d8fd27cca0ae01479bfde05aca1b5a8270ba4d7b981d21",
+                  "mode": "0644"
+                },
+                {
+                  "name": "aetherpd-start@.service",
+                  "bytes": 322,
+                  "sha256": "d999a37b368ca764a3a3818a674fc29288cfdda1b9280aa0315b3247da4975d1",
+                  "mode": "0644"
+                },
+                {
+                  "name": "aetherpd-shim.service",
+                  "bytes": 454,
+                  "sha256": "0db2ea355f48345faf7d051d49daba34eb4a983aa090e2ca3cfc30786160a299",
+                  "mode": "0644"
+                }
+              ],
+              "persistent_store": "/var/lib/smartsdr/aetherpd",
+              "runtime": "/run/aetherpd",
+              "fixed_units": [
+                "aetherpd-boot.service",
+                "aetherpd-start.socket",
+                "aetherpd-start@.service",
+                "aetherpd-shim.service"
+              ],
+              "privileged_actions": [
+                "verify approved release digest and trusted signature",
+                "stage fixed authenticated files in private RAM",
+                "retire the owned runtime before updating",
+                "publish protected payload and boot files",
+                "install fixed boot and local socket units",
+                "start the ordinary-user primary shim after retiring any recognized predecessor"
+              ],
+              "temporary_components": [
+                "pd-update",
+                "installer/bootstrap staging and authority"
+              ],
+              "rf_actions": [],
+              "automatic_calibration": false,
+              "integration_status": "release artifact only; this builder does not install, migrate, enable or start anything"
+            }
+          }
+        },
+        "radio_installed": false,
+        "ARMv7_actual_6300_qualified": false
+      },
+      "installed": false,
+      "RF_commands": [],
+      "production_ready": false,
+      "scope": "Host-tested bench diagnostic API-exit preservation; full ARMv7/ARM64 diagnostic packages and existing desktop with new package pins. Native DSP diagnostic finalizer changed; Go and fixed helpers unchanged. No installation, live recovery or actual6300 qualification yet."
+    },
+    "ordinary_GUI_update_passed": true,
+    "operator_approval_clicks": 1,
+    "root_diagnostics_bridge_used_for_install": false,
+    "update_seconds": 48.871652310015634,
+    "only_native_DSP_changed_Go_and_fixed_helpers_identical": true,
+    "development_publisher_only": true,
+    "actual_6300_qualified": false
+  },
+  "sessions": {
+    "receive_only": {
+      "fault_case_passed": true,
+      "explicit_original_28_field_USB_restore_passed": true,
+      "fresh_successor_captures": [
+        {
+          "metadata": {
+            "capture_id": "cf09f0d34482ad8ba75f44d082e6de52",
+            "center_hz": 7150000,
+            "chunk_samples": 512,
+            "correcting": false,
+            "feedback_binding": {
+              "channel": 4,
+              "failed": false,
+              "gui_handle": 2105532258,
+              "pan": 1073741824,
+              "transport": "local_dax_iq",
+              "valid": true
+            },
+            "first_receive_ns": "63910425260506",
+            "format": "f32le-iq-v1",
+            "keyed": false,
+            "last_receive_ns": "63910766249726",
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "sample_count": 16384,
+            "sample_rate_hz": 48000,
+            "source": {
+              "generation": "6",
+              "kind": "local_dax_iq",
+              "stream_id": 536870912
+            }
+          },
+          "bytes": 131072,
+          "sha256": "4bf24461e4fe3fa46f40bf441c0427434c2f219bfa76aac472556a7a3c2c887c",
+          "file": "IQ-1.f32le"
+        },
+        {
+          "metadata": {
+            "capture_id": "69e80042cc067e3df1b2463a6200f12d",
+            "center_hz": 7150000,
+            "chunk_samples": 512,
+            "correcting": false,
+            "feedback_binding": {
+              "channel": 4,
+              "failed": false,
+              "gui_handle": 2105532258,
+              "pan": 1073741824,
+              "transport": "local_dax_iq",
+              "valid": true
+            },
+            "first_receive_ns": "63910894257134",
+            "format": "f32le-iq-v1",
+            "keyed": false,
+            "last_receive_ns": "63911236279846",
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "sample_count": 16384,
+            "sample_rate_hz": 48000,
+            "source": {
+              "generation": "6",
+              "kind": "local_dax_iq",
+              "stream_id": 536870912
+            }
+          },
+          "bytes": 131072,
+          "sha256": "44426a840653a6e915c6d3b92eedc33c3313c52e9606e56eef5d05d31927d7e8",
+          "file": "IQ-2.f32le"
+        }
+      ],
+      "cleanup": {
+        "fault": {
+          "original_workers_absent_including_zombies": 10,
+          "ordinary_controls_remaining": 3
+        },
+        "recovery": {
+          "original_workers_absent_including_zombies": 10,
+          "ordinary_controls_remaining": 3
+        }
+      },
+      "native_exit7_verified_in_exact_unit_journal": true,
+      "final_radio_idle": true,
+      "capture_manifest": {
+        "passed": true,
+        "phase": "fault",
+        "completion": {
+          "event": "complete",
+          "pid": 26798,
+          "unmatched_bytes": 0,
+          "aligned_bytes": 0,
+          "trace_bytes": 205,
+          "fit_records": 0,
+          "fit_records_dropped": 0,
+          "deferred_flushes": 0,
+          "deferred_closes": 1,
+          "unowned_READY": true
+        },
+        "files": {
+          "lab-unmatched.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-aligned.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-tx.csv": {
+            "bytes": 205,
+            "sha256": "a9812e336670ec0715ba375ac0f22193dbec491cf6c6c1a79292ca6392748f04"
+          },
+          "lab-fit.jsonl": {
+            "bytes": 191,
+            "sha256": "8a672b5207e489cd1fdbc0bca796fa4b84d56cb35a0d16e03f23a90b4a61d31a"
+          }
+        },
+        "file_operator": {
+          "UID": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "GID": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapEff": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapInh": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          }
+        },
+        "capture_status": "complete",
+        "completion_verified": true,
+        "radio_files_removed": false,
+        "local_files_fsynced_and_verified": true,
+        "RF_commands": []
+      },
+      "fault_buffers_discarded_all_four_zero_bytes": false
+    },
+    "keyed": {
+      "fault_case_passed": false,
+      "explicit_original_28_field_USB_restore_passed": true,
+      "fresh_successor_captures": [
+        {
+          "metadata": {
+            "capture_id": "b4c98b16cdc12c9a0bd6bb48e172181d",
+            "center_hz": 7150000,
+            "chunk_samples": 512,
+            "correcting": false,
+            "feedback_binding": {
+              "channel": 4,
+              "failed": false,
+              "gui_handle": 2105532258,
+              "pan": 1073741824,
+              "transport": "local_dax_iq",
+              "valid": true
+            },
+            "first_receive_ns": "64809093351251",
+            "format": "f32le-iq-v1",
+            "keyed": false,
+            "last_receive_ns": "64809434301399",
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "sample_count": 16384,
+            "sample_rate_hz": 48000,
+            "source": {
+              "generation": "6",
+              "kind": "local_dax_iq",
+              "stream_id": 536870912
+            }
+          },
+          "bytes": 131072,
+          "sha256": "c9505eb39bc337b0bd853800f844b10c642b39ce7e8c437222401f011d762955",
+          "file": "IQ-1.f32le"
+        },
+        {
+          "metadata": {
+            "capture_id": "a754299618ebe529ffd70acf981219fa",
+            "center_hz": 7150000,
+            "chunk_samples": 512,
+            "correcting": false,
+            "feedback_binding": {
+              "channel": 4,
+              "failed": false,
+              "gui_handle": 2105532258,
+              "pan": 1073741824,
+              "transport": "local_dax_iq",
+              "valid": true
+            },
+            "first_receive_ns": "64809585311054",
+            "format": "f32le-iq-v1",
+            "keyed": false,
+            "last_receive_ns": "64809926269921",
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "sample_count": 16384,
+            "sample_rate_hz": 48000,
+            "source": {
+              "generation": "6",
+              "kind": "local_dax_iq",
+              "stream_id": 536870912
+            }
+          },
+          "bytes": 131072,
+          "sha256": "37b1870afb9c1f9548db291a0f89a4693c11ca674ae8f48dacd19550ed174aa7",
+          "file": "IQ-2.f32le"
+        }
+      ],
+      "cleanup": {
+        "fault": {
+          "original_workers_absent_including_zombies": 11,
+          "ordinary_controls_remaining": 3
+        },
+        "recovery": {
+          "original_workers_absent_including_zombies": 10,
+          "ordinary_controls_remaining": 3
+        }
+      },
+      "native_exit7_verified_in_exact_unit_journal": true,
+      "final_radio_idle": true,
+      "capture_manifest": {
+        "passed": true,
+        "phase": "fault",
+        "completion": {
+          "event": "no_verified_completion",
+          "parse_error": null,
+          "scope": "Fixed bounded files preserved after all active session writers exited; not usable fit/RF evidence."
+        },
+        "files": {
+          "lab-unmatched.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-aligned.f32le": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-tx.csv": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "lab-fit.jsonl": {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "file_operator": {
+          "UID": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "GID": [
+            "20",
+            "20",
+            "20",
+            "20"
+          ],
+          "NNP": "1",
+          "caps": {
+            "CapEff": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapInh": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          }
+        },
+        "capture_status": "empty_after_worker_exit",
+        "completion_verified": false,
+        "radio_files_removed": false,
+        "local_files_fsynced_and_verified": true,
+        "RF_commands": []
+      },
+      "fault_buffers_discarded_all_four_zero_bytes": true
+    }
+  },
+  "new_positive_GUI_key_requests": 1,
+  "new_observed_TX_intervals": 1,
+  "source_arm_actions": 1,
+  "automatic_RF_retry": false,
+  "radio_reboots": [],
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "keyed_case": {
+    "overall_passed": false,
+    "original_result_path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-keyed-loss/api-exit-keyed-loss-5W-01/result.json",
+    "original_result_sha256": "7cf6782fd1417c0b600b28a0caca12c7ea396d1116c952c933ca5e8fa524478a",
+    "physical_unkey_and_cleanup_passed": true,
+    "desktop_terminal_completion_passed": false,
+    "observed_corrected_plateau_before_fault_ms": 407.889065972995,
+    "host_fault_request_to_idle_observation_ms": 447.240662,
+    "key_intent_to_idle_observation_ms": 6654.588596,
+    "GUI_paused_ms": 448.323918,
+    "LP_peak_W": 3.61,
+    "LP_peak_SWR": 1.05,
+    "LP_guard_passed": true,
+    "independent_unkey_observed_while_GUI_paused": true,
+    "injector_scope": "temporary exact nativeFD4/leaseFD3 socket injector; UID78666/caps0/NNP1 before one SHUT_RDWR; no bridge RF commands",
+    "fault_trigger": {
+      "passed": true,
+      "target": {
+        "pid": 27562,
+        "ppid": 27551,
+        "start_ticks": 6421375,
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@117-26446-78666.service"
+        ],
+        "exe": "/run/aetherpd/bin/aether-pd",
+        "sha256": "cf8cc53074a11891b933456ae352a189bb8401ca32503ce2da2f7c476311efcf"
+      },
+      "socket_actions": [
+        {
+          "action": "shutdown_SHUT_RDWR",
+          "inode": 454823,
+          "UID": 78666,
+          "native_FD": 4,
+          "lease_guard_FD": 3
+        }
+      ],
+      "RF_commands": [],
+      "signals": []
+    },
+    "captures_discarded_no_IMD_or_fit_claim": true
+  },
+  "desktop_completion_fix": {
+    "causal_old_source_fails_identical_final_fixture": true,
+    "new_source_pass_assertions": 433,
+    "unsafe_READY_mutant_rejected": true,
+    "registered_tracker_and_wire_session_CTests_passed": 2,
+    "wire_session_assertions": 310,
+    "docs_build_passed": true,
+    "new_desktop_build": {
+      "passed": true,
+      "base_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+      "feature_parent": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+      "tracker_sources": {
+        "src/core/backends/flex/FlexPttStopTracker.cpp": "27ca210e827236020e8a83dfcb842b4783502e1ee77b1a9aec613715764b6658",
+        "src/core/backends/flex/FlexPttStopTracker.h": "a7e2300f24375daa80398a6c687ca3c68087714a1f1944bdfbf48d1ee36d3dfe",
+        "tests/flex_ptt_stop_tracker_test.cpp": "b82abb5f7d3d04c2d33dc6927a4b605ea2606ed59c8dd0310d2512e324eda2fe"
+      },
+      "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+      "base_source_archive_sha256": "f1f976916d7000376d50daffa7337b1bd2878900d29b90771080f23e5efae47e",
+      "untracked_source": {
+        "tools/pd-waveform/fit_rejection_test.c": "dc7958ee74eff45b3d8efebc11eb7875828a2d033b335ba3bbe72a1fe3bc8f23",
+        "tools/pd-waveform/lowess_window_test.c": "bec187dd653273bd4cdfb20a709bbe89781b8339a203c502f75dd55255221665"
+      },
+      "binaries": {
+        "AetherSDR": {
+          "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/receive-owner-clear-desktop/bin/AetherSDR",
+          "bytes": 833358152,
+          "sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a"
+        },
+        "aetherd": {
+          "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/receive-owner-clear-desktop/bin/aetherd",
+          "bytes": 413586416,
+          "sha256": "ee9003aa7c35f4e578deefff243ad0442533c6b800296051feba16aac0ccf8d8"
+        }
+      },
+      "runtime_release_unchanged": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+      "development_selection": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/distributions/short/arm64/selection.json",
+      "previous_binaries_preserved": true,
+      "new_desktop_launched": false,
+      "radio_updated": false,
+      "RF_commands": []
+    },
+    "live_desktop_completion_qualified": false,
+    "change": "Only after original owned UNKEY_REQUESTED/READY, accept complete owner-clear RECEIVE/denied with empty or NO_TX_ASSIGNED reason as release evidence. Require matching Stop write/reply and fresh original/global frame. Foreign snapshots are inert. Consumed receive proof returns to AwaitIdle; new TX still requires fresh READY. No deadline, ownership, session or malformed-input guards relaxed."
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/DSP-API-loss-and-receive-release-components.tar.gz",
+    "bytes": 874883,
+    "sha256": "0e42cfa35f2005c5e520ae1deaf5ff128a0bddb913a9c1e9a865be6403b8b3f6",
+    "members": 327,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Original keyed overall result remains failed. Physical RF-off, native API7 preservation and full recovery are separate positive observations; the new desktop fix is host-tested only.",
+    "The keyed fault deliberately leaves all four files zero. The receive-only fault has verified unowned READY and only an empty-IQ trace/completion. Neither is usable IMD, fit or sustained-correction evidence.",
+    "Host timing includes socket injection transport and observation, not FPGA latency or a worst-case RF-off bound. One keyed case and no automatic repeat.",
+    "LP configured forward/net basis remains unknown; voltage/current are null. LP product integration remains deferred.",
+    "All earlier failed/successful cases and runtime identities remain preserved. Other fault rows are not requalified by this change.",
+    "Private-state directories, caches, vault material and full desktop runtime logs excluded; complete public package/source artifacts separately sealed before installation.",
+    "Full P1-P10, natural128/cold-bypass cause, remaining failure/foreign/credential/stale-cache scopes, repeated/raw/extended RF, final matched stock APD comparison, actual6300/disk/kernel and independent release gates remain open."
+  ],
+  "next_step": "Preserve and sign the causal desktop fix and all negative evidence, checkpoint the built candidate separately, then qualify new desktop completion as a separate test. Do not retry the original RF case or reinterpret it as passed."
+}

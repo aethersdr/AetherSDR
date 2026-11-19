@@ -54,6 +54,7 @@ void FlexPttStopTracker::disconnect()
     m_stopWritten = false;
     m_stopReplied = false;
     m_desktopStop = false;
+    m_releaseReady = false;
     m_phase = Phase::Disconnected;
     m_failure = Failure::None;
 }
@@ -87,7 +88,8 @@ bool FlexPttStopTracker::advanceClock(qint64 nowMs)
     // Admission reads readiness before acquiring the next operation. A consumed
     // proof must retire its deadline even while the old cleanup epoch is current.
     if (m_phase == Phase::Confirmed && m_operation.hasConfirmedStop()) {
-        m_phase = Phase::Idle;
+        m_phase = m_releaseReady ? Phase::Idle : Phase::AwaitIdle;
+        m_releaseReady = false;
         m_deadlineMs = 0;
         m_operation = {};
         m_stop = {};
@@ -138,6 +140,7 @@ bool FlexPttStopTracker::begin(const TxCoordinator::Operation& operation,
     m_stopWritten = false;
     m_stopReplied = false;
     m_desktopStop = false;
+    m_releaseReady = false;
     m_keySequence = keySequence;
     m_stopSequence = 0;
     m_deadlineMs = nowMs + kTransitionTimeoutMs;
@@ -163,8 +166,9 @@ bool FlexPttStopTracker::stopRecorded() const
     return m_stop.matchesOperation(m_operation) || m_desktopStop;
 }
 
-void FlexPttStopTracker::completeRelease()
+void FlexPttStopTracker::completeRelease(bool ready)
 {
+    m_releaseReady = ready;
     m_phase = m_stop.matchesOperation(m_operation) ? Phase::Confirmed : Phase::AwaitStopBinding;
 }
 
@@ -380,18 +384,24 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
         fail(Failure::InvalidInput);
         return;
     }
+    const bool ownedReadyObserved = m_phase == Phase::AwaitOwnerClear
+        || m_phase == Phase::AwaitExternalOwnerClear || m_phase == Phase::ExternalReleased
+        || m_phase == Phase::AwaitRecoveryStopWrite || m_phase == Phase::AwaitRecoveryStopReply
+        || m_phase == Phase::AwaitRecoveryIdle || m_phase == Phase::AwaitStopBinding
+        || m_phase == Phase::Confirmed;
+    // FLEX-8600 4.3.16 clears a removed PD receiver with RECEIVE/denied.
+    // Only a completed owned UNKEY/READY can use this as release evidence;
+    // admission still requires READY, and foreign snapshots never advance proof.
+    const bool receiveClear = ownedReadyObserved && state == u"RECEIVE" && source.isEmpty()
+        && handle == 0 && allowed == u"0" && (reason.isEmpty() || reason == u"NO_TX_ASSIGNED");
+    const bool releasedIdle = idle || receiveClear;
     if (envelopeHandle != 0 && envelopeHandle != m_clientHandle) {
-        const bool ownedReadyObserved = m_phase == Phase::AwaitOwnerClear
-            || m_phase == Phase::AwaitExternalOwnerClear || m_phase == Phase::ExternalReleased
-            || m_phase == Phase::AwaitRecoveryStopWrite || m_phase == Phase::AwaitRecoveryStopReply
-            || m_phase == Phase::AwaitRecoveryIdle || m_phase == Phase::AwaitStopBinding
-            || m_phase == Phase::Confirmed;
         // FLEX-8600 4.3.16 helper subscriptions also broadcast owned READY
         // during receive recovery. Ignore a repeat only after the original
         // connection observed it; the snapshot never advances release proof.
         const bool repeatedOwnedReady = ownedReadyObserved && state == u"READY"
             && source.isEmpty() && handle == m_clientHandle && allowed == u"1" && reason.isEmpty();
-        if (idle || repeatedOwnedReady) { return; }
+        if (idle || repeatedOwnedReady || receiveClear) { return; }
         fail(Failure::Ownership);
         return;
     }
@@ -399,7 +409,7 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
         fail(Failure::Ownership);
         return;
     }
-    if (allowed != u"1" || !reason.isEmpty() || !m_operation.permitsCleanup()) {
+    if ((!receiveClear && (allowed != u"1" || !reason.isEmpty())) || !m_operation.permitsCleanup()) {
         fail(Failure::State);
         return;
     }
@@ -436,10 +446,10 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
     } else if (m_phase == Phase::AwaitExternalReady && state == u"READY"
                && source.isEmpty() && handle == m_clientHandle) {
         m_phase = Phase::AwaitExternalOwnerClear;
-    } else if (m_phase == Phase::AwaitExternalOwnerClear && idle) {
+    } else if (m_phase == Phase::AwaitExternalOwnerClear && releasedIdle) {
         if (stopRecorded()) {
             if (m_stopReplied) {
-                completeRelease();
+                completeRelease(idle);
             } else {
                 m_phase = m_stopWritten ? Phase::AwaitRecoveryStopReply : Phase::AwaitRecoveryStopWrite;
             }
@@ -448,11 +458,11 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
         }
     } else if ((m_phase == Phase::ExternalReleased
                 || m_phase == Phase::AwaitRecoveryStopWrite
-                || m_phase == Phase::AwaitRecoveryStopReply) && idle) {
+                || m_phase == Phase::AwaitRecoveryStopReply) && releasedIdle) {
         // Idle before our stop acknowledgment cannot finish recovery.
-    } else if (m_phase == Phase::AwaitRecoveryIdle && idle
+    } else if (m_phase == Phase::AwaitRecoveryIdle && releasedIdle
                && stopRecorded()) {
-        completeRelease();
+        completeRelease(idle);
     } else if (m_phase == Phase::AwaitUnkey && state == u"UNKEY_REQUESTED"
                && source.isEmpty() && handle == m_clientHandle) {
         m_phase = Phase::AwaitReady;
@@ -460,8 +470,8 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
                && source.isEmpty() && handle == m_clientHandle) {
         m_phase = Phase::AwaitOwnerClear;
     } else if ((m_phase == Phase::AwaitOwnerClear || m_phase == Phase::AwaitStopBinding
-                || m_phase == Phase::Confirmed) && idle && stopRecorded()) {
-        completeRelease();
+                || m_phase == Phase::Confirmed) && releasedIdle && stopRecorded()) {
+        completeRelease(idle);
     } else {
         fail(Failure::State);
     }

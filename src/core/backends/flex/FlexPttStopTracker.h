@@ -86,7 +86,7 @@ private:
                                  const TxCoordinator::StopRequest& request,
                                  quint32 stopSequence, qint64 nowMs, bool desktop);
     [[nodiscard]] bool stopRecorded() const;
-    void completeRelease();
+    void completeRelease(bool ready);
 
     QThread* const m_thread{QThread::currentThread()};
     quint64 m_session{0};
@@ -104,6 +104,7 @@ private:
     bool m_stopWritten{false};
     bool m_stopReplied{false};
     bool m_desktopStop{false};
+    bool m_releaseReady{false};
 };
 
 } // namespace AetherSDR

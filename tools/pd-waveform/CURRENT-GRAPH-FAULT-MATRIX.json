@@ -1,8 +1,8 @@
 {
-  "recorded_utc": "2026-11-19T09:51:37.036681+00:00",
+  "recorded_utc": "2026-11-19T10:45:35.517064+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
-  "current_runtime_release": "aa5649cc48ebebb49909bb3c80fad5d4083cdad156013da9624ede5335a5d039",
+  "current_runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
   "current_desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
   "cases": [
     {
@@ -114,16 +114,21 @@
         "NO-TX-ASSIGNED-RECOVERY-QUALIFICATION.json"
       ],
       "limits": "One installed aa56 receive-only DSP API-loss case passes pre-arm ownership witnessing, desktop-independent shutdown, explicit missing-receiver restoration with28-field original profile readback, two fresh local DAX IQ captures in an ordinary successor and exact cleanup of both sessions. Both earlier failed product restore cases remain preserved. Keyed API-loss and full P1-P10 remain separate requirements."
+    },
+    {
+      "case": "Exact83d6 inherited DSP API loss while corrected and desktop paused",
+      "state": "physical_unkey_exit7_explicit_USB_recovery_and_cleanup_passed_OVERALL_DESKTOP_COMPLETION_FAILED",
+      "evidence": "DSP-API-LOSS-RELEASE-QUALIFICATION.json",
+      "limits": "One5W source/key,408ms observed corrected plateau,447ms host fault request to idle; no fault IMD/fit data. Old desktop rejects RECEIVE after owned UNKEY/READY. Release-only causal fix passes433checks and registered wire tests, builds separately; live completion remains unqualified."
     }
   ],
   "next_available_case": {
-    "purpose": "Reproduce the exact API-exit-preserving diagnostic runtime for ARMv7/ARM64 with unchanged Go/fixed helpers, preserve complete source/artifacts and upgrade normally from aa56. Validate the exact new runtime receive-only first. Then separately prepare and dispatch one bounded keyed DSP API-loss case through the pinned GUI with independent unkey/power guards and explicit receive recovery, without RF retry/rearm or software reboot.",
-    "state": "host_API_exit_preservation_passed_pending_ARM_build_and_live_qualification",
+    "purpose": "Preserve and sign the causal desktop fix and all negative evidence, checkpoint the built candidate separately, then qualify new desktop completion as a separate test. Do not retry the original RF case or reinterpret it as passed.",
+    "state": "causal_desktop_fix_built_host_tested_not_live_qualified",
     "evidence": [
-      "NO-TX-ASSIGNED-RECOVERY-QUALIFICATION.json",
-      "API-EXIT-PRESERVATION-QUALIFICATION.json"
+      "DSP-API-LOSS-RELEASE-QUALIFICATION.json"
     ],
-    "authority_constraint": "Receive-only validation of the exact new runtime first; one separately prepared bounded GUI key with independent cutoff/power guards. No automatic RF retry/rearm or software reboot."
+    "authority_constraint": "No automatic RF retry/source rearm or software reboot. New live proof is separately scoped; current radio USB/nativeStopped."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
@@ -132,5 +137,5 @@
     "Actual FLEX6300 teammate hardware and disk qualification",
     "Final native candidate packaging, production publisher/catalogue and independent release review"
   ],
-  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified. The same d7 diagnostic now separately passed one keyed owned lifetime-unkey API-loss case plus explicit USB successor and exact cleanup; no other old fault rows are automatically requalified. Current29db installs the first Go ownership-witness fix with unchanged DSP/fixed helper bytes. Its one receive-only DSP API fault passes shutdown/retirement but explicit product restore fails on bound NO_TX_ASSIGNED. Second exact admission fix remains host-only; no other prior row is automatically requalified. Currentaa56 installs the exact NO_TX_ASSIGNED missing-receiver exception. One new unarmed DSP API-loss case now passes explicit28-field basicUSB recovery and freshDAXIQ successor/normalStop with both exact cleanup audits. Both older product failures remain failed; keyed DSP API-loss and other rows are not automatically qualified."
+  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified. The same d7 diagnostic now separately passed one keyed owned lifetime-unkey API-loss case plus explicit USB successor and exact cleanup; no other old fault rows are automatically requalified. Current29db installs the first Go ownership-witness fix with unchanged DSP/fixed helper bytes. Its one receive-only DSP API fault passes shutdown/retirement but explicit product restore fails on bound NO_TX_ASSIGNED. Second exact admission fix remains host-only; no other prior row is automatically requalified. Currentaa56 installs the exact NO_TX_ASSIGNED missing-receiver exception. One new unarmed DSP API-loss case now passes explicit28-field basicUSB recovery and freshDAXIQ successor/normalStop with both exact cleanup audits. Both older product failures remain failed; keyed DSP API-loss and other rows are not automatically qualified. Exact83d6 upgrades normally with only native diagnostic finalizer bytes changed; full receive-only recovery passes. One keyed inherited-DSP API-loss case now preserves exit7 and unkeys while GUI paused; product Restore and fresh IQ successor plus all cleanups pass, but overall result remains failed on desktop RECEIVE stop-proof completion. Causal release-only C++ fix is built and host-tested, not yet live-qualified."
 }

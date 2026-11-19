@@ -1,6 +1,7 @@
 #include "core/backends/flex/FlexPttStopTracker.h"
 
 #include <QCoreApplication>
+#include <QString>
 
 #include <cstdio>
 #include <limits>
@@ -491,6 +492,90 @@ void failedWritesDeadlinesAndLateEvents()
           "off-thread evidence inspection cannot acknowledge or mutate owner state");
 }
 
+void receiveOwnerClearAfterApiLoss()
+{
+    // FLEX-8600 4.3.16.42034 API-loss trace: owned UNKEY/READY, foreign
+    // no-slice snapshot, global RECEIVE, our stop write/ACK, fresh RECEIVE.
+    for (const QString& reason : {QString{}, QStringLiteral("NO_TX_ASSIGNED")}) {
+        const QString receive = QStringLiteral("S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason=%1 source= tx_allowed=0 amplifier=").arg(reason);
+        const QString foreign = QString(receive).replace(QStringLiteral("S0|"), QStringLiteral("S87654321|"));
+        for (const bool earlyStop : {false, true}) {
+            Harness h;
+            h.start();
+            if (earlyStop) { h.stopReply(); }
+            h.feed(kUnkey);
+            h.feed(kReadyOwned);
+            h.feed(foreign);
+            check(h.tracker.failure() == Failure::None, "foreign no-slice snapshot after own READY is inert");
+            h.feed(receive);
+            if (!earlyStop) {
+                check(!h.tracker.evidence(h.now).valid(), "external RECEIVE cannot replace our stop write and reply");
+                h.stopReply();
+                check(!h.tracker.evidence(h.now).valid(), "stop reply still needs a fresh original-session receive idle");
+                h.feed(foreign);
+                check(!h.tracker.evidence(h.now).valid(), "foreign RECEIVE cannot finish release after stop reply");
+                h.feed(receive);
+            }
+            check(h.tracker.evidence(h.now).sameRequest(h.stop), "complete owned stop sequence accepts no-slice RECEIVE owner clear");
+            check(h.coordinator.confirmStopped(h.tracker.evidence(h.now)), "receive-only owner clear retires only the original stop token");
+            h.tracker.poll(h.now);
+            check(h.tracker.phase() == Phase::AwaitIdle, "confirmed RECEIVE release does not grant transmit readiness");
+            const auto next = h.coordinator.acquire(h.other, h.now);
+            check(next.accepted() && !h.tracker.begin(next.operation, 103, h.now), "new key remains refused until a fresh READY snapshot");
+            h.feed(kIdle);
+            check(h.tracker.begin(next.operation, 103, h.now), "fresh READY restores ordinary admission after receiver recovery");
+        }
+    }
+}
+
+void receiveOwnerClearBoundaries()
+{
+    constexpr QStringView receive = u"S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason=NO_TX_ASSIGNED source= tx_allowed=0 amplifier=";
+    for (int stage = 0; stage < 2; ++stage) {
+        Harness h;
+        h.start();
+        if (stage == 1) { h.feed(kUnkey); }
+        h.feed(receive);
+        check(h.tracker.phase() == Phase::Failed && !h.tracker.evidence(h.now).valid(), "RECEIVE never substitutes for owned UNKEY and READY");
+        Harness foreign;
+        foreign.start();
+        if (stage == 1) { foreign.feed(kUnkey); }
+        foreign.feed(QString(receive).replace(QStringLiteral("S0|"), QStringLiteral("S87654321|")));
+        check(foreign.tracker.failure() == Failure::Ownership, "foreign RECEIVE is not ignored before original owned READY");
+    }
+    for (const QString& invalid : {
+             QStringLiteral("S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason=INTERLOCK source= tx_allowed=0"),
+             QStringLiteral("S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason=NO_TX_ASSIGNED source=SW tx_allowed=0"),
+             QStringLiteral("S0|interlock tx_client_handle=0x12345678 state=RECEIVE reason=NO_TX_ASSIGNED source= tx_allowed=0"),
+             QStringLiteral("S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason=NO_TX_ASSIGNED source= tx_allowed=1"),
+             QStringLiteral("S0|interlock tx_client_handle=0x00000000 state=NOT_READY reason=NO_TX_ASSIGNED source= tx_allowed=0"),
+             QStringLiteral("S0|interlock tx_client_handle=0x00000000 state=READY reason=NO_TX_ASSIGNED source= tx_allowed=0"),
+             QStringLiteral("S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason=NO_TX_ASSIGNED source="),
+             QStringLiteral("S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason=NO_TX_ASSIGNED source= tx_allowed=0 state=RECEIVE")}) {
+        Harness h;
+        h.start();
+        h.stopReply();
+        h.feed(kUnkey);
+        h.feed(kReadyOwned);
+        h.feed(invalid);
+        check(h.tracker.phase() == Phase::Failed && !h.tracker.evidence(h.now).valid(), "invalid, contradictory or incomplete receive clear fails closed");
+    }
+    Harness admission;
+    admission.feed(receive);
+    check(!admission.tracker.begin(admission.operation, 101, admission.now), "initial RECEIVE never grants key admission");
+
+    Harness deadline;
+    deadline.start();
+    deadline.feed(kUnkey);
+    deadline.feed(kReadyOwned);
+    deadline.feed(receive);
+    deadline.stopReply();
+    const qint64 expires = deadline.tracker.evidenceDeadlineMs();
+    deadline.now = expires;
+    deadline.feed(receive);
+    check(deadline.tracker.failure() == Failure::Timeout && !deadline.tracker.evidence(deadline.now).valid(), "receive clear cannot renew or cross the stop deadline");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -506,5 +591,7 @@ int main(int argc, char** argv)
     otherClientTriggeredIdle();
     attemptIdentityAndReconnect();
     failedWritesDeadlinesAndLateEvents();
+    receiveOwnerClearAfterApiLoss();
+    receiveOwnerClearBoundaries();
     return failures == 0 ? 0 : 1;
 }

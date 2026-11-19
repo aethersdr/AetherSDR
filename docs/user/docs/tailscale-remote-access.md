@@ -1013,6 +1013,10 @@ Fresh unkeyed status observations record the owned PD receiver before calibratio
 is armed. If ownership was not confirmed before the connection failed,
 **Restore receive** refuses to allocate a replacement; add a receive slice in
 AetherSDR instead.
+If an API failure removes the PD slice during a measurement, the desktop must
+confirm the original unkey before recording the interrupted measurement. A new
+transmission still requires a fresh ready radio; use **Restore receive** to
+recover the basic receiver.
 It checks allocation and ownership before restoring receive settings. A confirmed conflict with another receiver using the original DAX channel
 makes the automatic receive guardian refuse restoration promptly and report the
 reason in its log. It leaves that receiver untouched. Advanced

@@ -172,7 +172,8 @@ requires the following observations on that original connection:
 2. The original coordinator operation is fenced and its exact stop request is
    bound to a full `xmit 0` write and matching successful reply on the original
    connection. This exchange may interleave with the release transitions.
-3. A complete unowned READY arrives after that acknowledgment. It can be the
+3. A complete unowned READY (or the narrowly qualified missing-receiver
+   RECEIVE below) arrives after that acknowledgment. It can be the
    owner-clear in step 1 if it arrives later; otherwise another idle sample is
    required. An earlier idle sample cannot satisfy this condition retroactively.
 
@@ -203,6 +204,29 @@ enough. FLEX-8600 traces cover both complete release before the desktop stop and
 stop acknowledgment between owned READY and owner-clear. Socket-free tests
 cover all nine placements of stop and reply around the three transitions;
 that enumeration is not a claim of hardware coverage for every placement.
+
+## Receive owner-clear after PD API loss
+
+FLEX-8600 firmware 4.3.16.42034 can remove the PD receive slice when the
+waveform API connection closes. The captured sequence contains owned
+`UNKEY_REQUESTED` and `READY`, then unowned `RECEIVE` with `tx_allowed=0`, an
+empty source, and reason empty or `NO_TX_ASSIGNED`. A helper-origin snapshot
+can precede the original connection's owner-clear.
+
+That exact receive state can finish only the original release sequence. It
+still requires the owned UNKEY/READY transitions, the exact terminal stop
+write and successful matching reply, and a fresh original/global owner-clear
+after the reply. Helper snapshots after owned READY are ignored without
+advancing proof or extending deadlines. Other reasons, partial or contradictory
+fields, foreign ownership and missing transitions remain refusals.
+
+A consumed receive-only release leaves the tracker waiting for fresh READY;
+it does not grant a new transmit operation. New admission retains its existing
+READY/allowed checks. The captured keyed fault unkeyed safely before the source
+cutoff, but the earlier client left its measurement pending because it refused
+this receive state. The release-only fix is covered by socket-free replay and
+admission/deadline refusals; live completion on the updated client remains a
+separate qualification requirement.
 
 ## Production composition and qualification
 
