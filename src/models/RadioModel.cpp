@@ -5501,7 +5501,13 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
             m_transmitModel.expireTxOffDelayNow();
         }
     }
+    const int radioTimeoutBefore = m_transmitModel.interlockTimeout();
     m_transmitModel.applyChanges(delta);
+    // With nothing stored, the host time-out default follows the radio's own:
+    // republish it (dialog, aetherd) when the radio reports a new one.
+    if (!m_txTimeoutStored && m_transmitModel.interlockTimeout() != radioTimeoutBefore) {
+        emit txTimeoutSettingsChanged();
+    }
     if (delta.radioPtt) {
         followRadioPtt(*delta.radioPtt);
     }

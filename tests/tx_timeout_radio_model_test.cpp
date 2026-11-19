@@ -9,6 +9,7 @@
 #include "core/backends/CwControlRequest.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/TransmitDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "models/HostCwTextKeyer.h"
 #include "models/RadioModel.h"
@@ -732,6 +733,23 @@ int main(int argc, char** argv)
         report("model_default_enabled_180_warning_10",
                d.enabled && d.timeoutS == 180 && d.warningS == 10);
         report("unidentified_radio_does_not_store", !radio.setTxTimeoutSettings(d));
+    }
+
+    // With nothing stored the default follows the radio's own Timeout, and a
+    // new one from the radio is republished (dialog, aetherd transmitTimeout).
+    {
+        RadioModel radio;
+        int changes = 0;
+        QObject::connect(&radio, &RadioModel::txTimeoutSettingsChanged, &radio, [&changes] { ++changes; });
+        TransmitDelta timeout;
+        timeout.interlockTimeout = 600'000;
+        radio.applyBackendTransmitDeltaForTest(timeout);
+        const int afterNew = changes;
+        const int followedS = radio.txTimeoutSettings().timeoutS;
+        radio.applyBackendTransmitDeltaForTest(timeout);
+        report("radio_timeout_change_republishes_the_default",
+               afterNew == 1 && followedS == 600 && changes == 1,
+               "changes=" + std::to_string(changes) + " timeoutS=" + std::to_string(followedS));
     }
 
     std::printf("\n%s (%d failure%s)\n", g_failed ? "FAILED" : "PASSED", g_failed,
