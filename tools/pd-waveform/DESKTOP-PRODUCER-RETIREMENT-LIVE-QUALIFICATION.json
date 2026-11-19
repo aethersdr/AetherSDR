@@ -1,0 +1,84 @@
+{
+  "recorded_utc": "2026-11-19T01:45:07.442189+00:00",
+  "implementation_commit": "e25ec9af1e9a8f5a7bbfcf94424d466ad4cb66fe",
+  "production_ready": false,
+  "status": "The repaired full desktop PTT release, extra global Cancel, old-controller retirement and fresh independent analyzer key succeeds on one desktop connection; one finite corrected local-DAX-IQ capture passes and unkeys cleanly with FDX off.",
+  "desktop": {
+    "pid": 2390136,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "d7a80aacee76fc25c5f75f11b1dbcafebe9f4ce727bf682ec3fef7b0ce84128f",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0,
+    "source_patch_sha256": "1f06e6e015c064cb96a73021d560aceb0f33f29c4484610f72ce10ce56e8c73f"
+  },
+  "desktop_implementation_commit": "e25ec9af1e9a8f5a7bbfcf94424d466ad4cb66fe",
+  "normal_PTT_then_Cancel": {
+    "silent_PTT_seconds": 1,
+    "LP_peak_W": 0.0,
+    "positive_GUI_key_requests": 1,
+    "extra_global_Cancel_requests": 1,
+    "session_stopped": true,
+    "cleanup_errors": []
+  },
+  "fresh_analyzer_run": {
+    "positive_GUI_key_requests": 1,
+    "same_pid": 2390136,
+    "desktop_reconnects_between_cases": 0,
+    "nominal_W": 5,
+    "configured_max_W": 10,
+    "LP_whole_run_peak_W": 3.61,
+    "observed_RF_seconds": 7.600204395,
+    "FDX": false,
+    "source": "local-dax-iq",
+    "correction_active": true,
+    "frames": 4,
+    "samples_per_frame": 16384,
+    "window": "blackman-harris-7",
+    "maximum_independent_FFT_error_dB": 3.527877936448931e-06,
+    "input_limited_samples": 0,
+    "alignment_reset_count": 0,
+    "native_faults": false,
+    "session_stopped": true,
+    "cleanup_errors": [],
+    "wire_key_sequence": 212,
+    "wire_unkey_sequence": 221,
+    "extra_original_connection_unkey_before_key": false
+  },
+  "build": {
+    "passed": true,
+    "affected_tests_passed": 8,
+    "source_parent": "f90b4e8a1bc835a6f83c1cf70c764f7c1cb31512",
+    "binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-producer-retirement/bin/AetherSDR",
+        "bytes": 833354648,
+        "sha256": "d7a80aacee76fc25c5f75f11b1dbcafebe9f4ce727bf682ec3fef7b0ce84128f"
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-producer-retirement/bin/aetherd",
+        "bytes": 413578824,
+        "sha256": "2972a1e6d6da1691553f63ebf0d47bee88ab14462085a8cde4567afef81a24b8"
+      }
+    },
+    "radio_actions": []
+  },
+  "build_source_base": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+  "build_source_patch_sha256": "1f06e6e015c064cb96a73021d560aceb0f33f29c4484610f72ce10ce56e8c73f",
+  "affected_tests_passed": 8,
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-producer-retirement-live-components.tar.gz",
+    "bytes": 886326,
+    "sha256": "75502563f4404b8aaa8e7ccab00f9bd067657f2acacc34d71c1a09590aef83d0",
+    "members": 89,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "One finite end-to-end handoff and corrected capture. This is not sustained operation or a matched baseline/performance comparison; earlier5W/10W and stock comparisons keep their original runtime/source identities.",
+    "LP peak is whole-run peak-held power, including alignment excitation. Raw IQ units and ADC headroom remain uncalibrated. No input-limiter, native fault or alignment reset was reported in the sampled statuses.",
+    "The native library release and privileged helper installation were unchanged. No root radio bridge, radio reboot, AetherTX or processing-settings restoration was used. The desktop was gracefully replaced once from the prior attested idle candidate before the test, then retained one connection for both cases.",
+    "Negative prekey/refused-start evidence for the previous2a candidate, the sandbox audio wait and all debugger diagnostics are preserved in the separate producer-retirement qualification.",
+    "Native credential45cases, controlled window42cases and six build/package jobs were verified at538fc85d5, which predates this repair. Final native release, actual6300, alignment/cold bypass, final graph/recovery, sustained/raw speech, integrated stock comparison and independent release gates remain open."
+  ]
+}
