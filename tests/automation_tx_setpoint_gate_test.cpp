@@ -146,24 +146,30 @@ int main(int argc, char** argv)
         const int sliderBefore = sp.slider->value();
         const QString w = QString::number(sp.slider->width() - 2);
         const QString h = QString::number(sp.slider->height() / 2);
-        const QJsonObject invoke = cmd(server, QStringLiteral("invoke"), sp.name,
-                                       QStringLiteral("setValue"),
-                                       QString::number(before == 37 ? 38 : 37));
-        check(!ok(invoke) && invoke.value(QStringLiteral("error")).toString()
-                                 .contains(QStringLiteral("sets transmit drive")),
+        const auto refusedAsDrive = [](const QJsonObject& reply) {
+            return !ok(reply) && reply.value(QStringLiteral("error")).toString()
+                                     .contains(QStringLiteral("sets transmit drive"));
+        };
+        check(refusedAsDrive(cmd(server, QStringLiteral("invoke"), sp.name,
+                                 QStringLiteral("setValue"),
+                                 QString::number(before == 37 ? 38 : 37))),
               "TX not allowed: invoke setValue on " + n + " is refused as transmit drive");
-        check(!ok(cmd(server, QStringLiteral("invoke"), sp.name, QStringLiteral("wheel"),
-                      QStringLiteral("3"))),
-              "TX not allowed: invoke wheel on " + n + " is refused");
-        check(!ok(cmd(server, QStringLiteral("clickAt"), sp.name, {}, w + QLatin1Char(' ') + h)),
-              "TX not allowed: clickAt on the " + n + " groove is refused");
-        check(!ok(cmd(server, QStringLiteral("doubleClick"), sp.name, {}, w + QLatin1Char(' ') + h)),
-              "TX not allowed: doubleClick on " + n + " is refused");
-        check(!ok(cmd(server, QStringLiteral("wheel"), sp.name, {}, h + QLatin1Char(' ') + h
-                      + QStringLiteral(" 3"))),
-              "TX not allowed: wheel on " + n + " is refused");
-        check(!ok(cmd(server, QStringLiteral("drag"), sp.name, {}, QStringLiteral("40 0"))),
-              "TX not allowed: drag on " + n + " is refused");
+        // 1, not 3: invoke wheel takes only -1 or 1, so 3 is refused unguarded.
+        check(refusedAsDrive(cmd(server, QStringLiteral("invoke"), sp.name,
+                                 QStringLiteral("wheel"), QStringLiteral("1"))),
+              "TX not allowed: invoke wheel on " + n + " is refused as transmit drive");
+        check(refusedAsDrive(cmd(server, QStringLiteral("clickAt"), sp.name, {},
+                                 w + QLatin1Char(' ') + h)),
+              "TX not allowed: clickAt on the " + n + " groove is refused as transmit drive");
+        check(refusedAsDrive(cmd(server, QStringLiteral("doubleClick"), sp.name, {},
+                                 w + QLatin1Char(' ') + h)),
+              "TX not allowed: doubleClick on " + n + " is refused as transmit drive");
+        check(refusedAsDrive(cmd(server, QStringLiteral("wheel"), sp.name, {},
+                                 h + QLatin1Char(' ') + h + QStringLiteral(" 3"))),
+              "TX not allowed: wheel on " + n + " is refused as transmit drive");
+        check(refusedAsDrive(cmd(server, QStringLiteral("drag"), sp.name, {},
+                                 QStringLiteral("40 0"))),
+              "TX not allowed: drag on " + n + " is refused as transmit drive");
         AetherTest::pumpFor(100);
         check(sp.model() == before && sp.slider->value() == sliderBefore,
               "TX not allowed: " + n + " is unchanged in the model and on the slider");
