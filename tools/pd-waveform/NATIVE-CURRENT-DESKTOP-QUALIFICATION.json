@@ -1,0 +1,120 @@
+{
+  "recorded_utc": "2026-11-19T00:07:09.690941+00:00",
+  "source_commit": "ec6dc102ef06b52a12e39f196828bbfb2579e430",
+  "status": "Windows, macOS arm64 and macOS x86_64 builds/packaging and downloaded package integrity/layout checks passed.",
+  "Windows": {
+    "source_commit": "ec6dc102ef06b52a12e39f196828bbfb2579e430",
+    "artifact_id": 14480537565,
+    "outer_ZIP_sha256": "c8967aa30dd4f7597a81578ad2a3aea490556775d491c67b5b0d65d6ae8f085b",
+    "portable_app": {
+      "path": "AetherSDR.exe",
+      "bytes": 203630592,
+      "sha256": "60d5a8ac3a1b80364841a02121448eb22a615cea5fb416e43f7b0a6b891719f0",
+      "machine": "AMD64",
+      "format": "PE32+",
+      "policy_disclosure_literals_present": [
+        "Control service recovery:",
+        "at most 3 starts in 60 seconds, including the initial start.",
+        "does not automatically restart the control service"
+      ],
+      "member_count": 72
+    },
+    "MSIX_app": {
+      "path": "AetherSDR.exe",
+      "bytes": 203630592,
+      "sha256": "60d5a8ac3a1b80364841a02121448eb22a615cea5fb416e43f7b0a6b891719f0",
+      "machine": "AMD64",
+      "format": "PE32+",
+      "policy_disclosure_literals_present": [
+        "Control service recovery:",
+        "at most 3 starts in 60 seconds, including the initial start.",
+        "does not automatically restart the control service"
+      ],
+      "member_count": 93
+    },
+    "portable_and_MSIX_executable_bytes_match": true,
+    "MSIX_identity": {
+      "Name": "AetherSDR.AetherSDR",
+      "Publisher": "CN=E03F94A2-AEAB-46D2-8BF1-6419C305CC44",
+      "Version": "26.11.267.0",
+      "ProcessorArchitecture": "x64"
+    },
+    "MSIX_upload_contains_identical_package_and_symbols": true,
+    "MSIX_sha256": "58310e97d7428b4a4badae77baba769832342f35f230a6d3a716015a5b42c7a3",
+    "symbols_sha256": "44fc606f33925e39571a6fad51448de3d845036cc7772042ab643cd0aeb5fdc6",
+    "outer_members": [
+      "AetherSDR-26.11.267.0-Windows-x64.appxsym",
+      "AetherSDR-26.11.267.0-Windows-x64.msixupload",
+      "AetherSDR-26.11.267.0-Windows-x64.msix",
+      "AetherSDR-feat_aetherpd-shim-integration-Windows-x64-portable.zip",
+      "AetherSDR-vfeat_aetherpd-shim-integration-Windows-x64-setup.exe"
+    ],
+    "archive_extracted": false,
+    "binary_executed": false,
+    "radio_actions": [],
+    "production_ready": false
+  },
+  "macOS": {
+    "source_sha": "ec6dc102ef06b52a12e39f196828bbfb2579e430",
+    "architectures": {
+      "apple-silicon": {
+        "unsigned_artifact_id": 14477929734,
+        "update_artifact_id": 14481434666,
+        "all_bundle_files_and_symlinks_identical": true,
+        "bundle_members": 128,
+        "app_binary": {
+          "path": "build/AetherSDR.app/Contents/MacOS/AetherSDR",
+          "type": "file",
+          "bytes": 108579792,
+          "sha256": "f314190938b3291638dd17da1e929a1ad493f9fdd4da526e425358a23a57ddec",
+          "architecture": "arm64"
+        }
+      },
+      "intel": {
+        "unsigned_artifact_id": 14481144618,
+        "update_artifact_id": 14482342146,
+        "all_bundle_files_and_symlinks_identical": true,
+        "bundle_members": 125,
+        "app_binary": {
+          "path": "build/AetherSDR.app/Contents/MacOS/AetherSDR",
+          "type": "file",
+          "bytes": 104796656,
+          "sha256": "f03babc68b0684b31b24bc34a84ee013d6b4d5587927b05f1f72ff8b06173f7f",
+          "architecture": "x86_64"
+        }
+      }
+    },
+    "apps_executed": false,
+    "code_signing_or_notarization_performed": false,
+    "published": false,
+    "native_credential_or_window_runtime_tests_rerun": false,
+    "production_ready": false
+  },
+  "artifact_directory": "/home/jeremy/AetherSDR/aetherpd-checkpoints/native-desktop-artifacts-ec6dc102e",
+  "Windows_transfer_failure_preserved": {
+    "prior_transfer_terminal_exit": 1,
+    "partial_bytes": 631046144
+  },
+  "Windows_HTTP_Range_resume": [
+    {
+      "attempt": 1,
+      "range_start": 631046144,
+      "bytes_after": 1132325903
+    }
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-current-desktop-components.tar.gz",
+    "bytes": 27405,
+    "sha256": "28323f24590db927211b3127bbd4c8390fa5f3d9022bce4cee05854aabe03f0e",
+    "members": 18,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Artifacts were not executed; native credential and window runtime opt-ins were not rerun.",
+    "No signing, notarization, release publication, Store upload or catalogue change.",
+    "These artifacts build ec6dc102e, not the later experimental desktop-handoff change.",
+    "This is a package/build component, not completion of P6 or the full production goal."
+  ],
+  "production_ready": false,
+  "radio_actions": []
+}
