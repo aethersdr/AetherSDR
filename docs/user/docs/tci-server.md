@@ -340,12 +340,19 @@ aethersdr_ext_enable:true;
 
 The server answers with the set's version and the items this radio offers,
 then the current state of the offered items. An item sends as many state lines
-as it needs, and may send none:
+as it needs, and may send none. On a Hermes-Lite 2 with one receiver, for
+example:
 
 ```
-aethersdr_ext:1,tx_filter_band;
+aethersdr_ext:1,tx_filter_band,rx_rf_gain,rx_auto_rf_gain,rx_overload;
 aethersdr_tx_filter_band:0,100,2900;
+aethersdr_rx_rf_gain_range:0,-12,48,1;
+aethersdr_rx_rf_gain:0,20;
+aethersdr_rx_auto_rf_gain:false;
+aethersdr_rx_overload:clean,false,0;
 ```
+
+On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
 
 - Every command of the set starts with `aethersdr_`. Before the enable, the
   server ignores them without a reply, like any unknown command.
@@ -384,6 +391,70 @@ aethersdr_tx_filter_band:0,100,2900;    # set low and high cut, audio Hz
 - The value is the operator's setting. On a Hermes-Lite 2 it applies to USB
   and LSB voice; CW, AM, FM and the digital modes transmit with their mode's
   own passband.
+
+#### Receive RF gain: `rx_rf_gain`
+
+Offered while the connected radio has an RF Gain control on the panadapter and
+has told AetherSDR its range in dB, for example a Flex or a Hermes-Lite 2. Not
+on the simulator, and not on an Icom, whose RF gain is in percent.
+
+```
+aethersdr_rx_rf_gain_range:0;      # read the range: min, max, step in dB
+aethersdr_rx_rf_gain:0;            # read the gain
+aethersdr_rx_rf_gain:0,20;         # set the gain, dB
+```
+
+- `<trx>` is the receiver. The gain belongs to the receiver's panadapter, so
+  every receiver on that panadapter reports the same value. On a Hermes-Lite 2
+  all receivers share one front end, and a change is reported for each of them.
+- A set is limited to the range and moved to the nearest step, then applied
+  the way the panadapter's RF Gain control applies it.
+- Every change, from any source (the RF Gain control, CAT, another client), is
+  sent as `aethersdr_rx_rf_gain:<trx>,<db>;` to every client that enabled the
+  set. That is also the answer to a set. A set that the limits moved onto the
+  current value is answered to the sender only. A set that changes nothing gets
+  no answer.
+- The range line is sent again when the radio reports a new range, and both
+  lines are sent again when a receiver appears or moves to another panadapter.
+- On a Hermes-Lite 2 with automatic RF gain on, the value is the gain the radio
+  is running at, which can be below the operator's setting (see
+  `aethersdr_rx_overload`). A set still writes the operator's setting, so while
+  automatic gain holds the gain down, the value reported after a set is that
+  setting minus the `aethersdr_rx_overload` offset.
+- Allowed while transmitting.
+
+#### Automatic RF gain: `rx_auto_rf_gain`
+
+Offered while the connected radio has automatic RF gain (the Hermes-Lite 2).
+There is one switch for the whole radio, so the command has no `<trx>`.
+
+```
+aethersdr_rx_auto_rf_gain;          # read
+aethersdr_rx_auto_rf_gain:true;     # turn on (false: off)
+```
+
+- The answer, and every change from any source, is
+  `aethersdr_rx_auto_rf_gain:<bool>;` to every client that enabled the set.
+- The radio can refuse to turn it on. The answer then reads `false`, and
+  AetherSDR shows the reason on the panadapter, as it does for the Auto box.
+- Asking for the state it is already in gets no answer.
+
+#### Front-end overload: `rx_overload`
+
+Offered while the connected radio watches its converter for clipping (the
+Hermes-Lite 2). Read only.
+
+```
+aethersdr_rx_overload;                  # read
+aethersdr_rx_overload:hot,true,6;       # level, automatic gain on, dB below setting
+```
+
+- The level is `unobserved` (no reading yet), `clean`, `marginal`, `hot` or
+  `at_floor` (still clipping with the automatic gain as low as it may go).
+- The second field says whether automatic RF gain is running, and the third how
+  many dB it holds the gain below the operator's setting.
+- Every change is sent to every client that enabled the set, at most one line
+  every 100 ms. After a reconnect the level starts at `unobserved`.
 
 ## Known issues
 

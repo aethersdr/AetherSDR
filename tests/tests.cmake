@@ -133,8 +133,8 @@ get_property(_aether_targets_before_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS
 
 # ── aether_non_test_targets: everything the root declared before this file ───
 # Built from the same baseline, so the production/test boundary has one
-# definition. Pull-request CI builds this instead of `all` (ci.yml): it runs
-# none of the tests, and compiling and linking them was most of its build
+# definition. ci.yml builds this instead of `all`, on pull requests and main:
+# it runs none of the tests, and compiling and linking them was most of its build
 # time. Every default-built executable and library the root CMakeLists.txt
 # declares above include(tests/tests.cmake) joins without a CI edit. Custom
 # targets and targets from add_subdirectory() build only when a collected
@@ -8155,6 +8155,13 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tci_ext_tx_passband_test PRIVATE
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_ext_tx_passband_test COMMAND tci_ext_tx_passband_test)
+
+    # The extension set's receive gain and overload groups.
+    add_executable(tci_ext_rx_gain_test tests/tci_ext_rx_gain_test.cpp)
+    target_include_directories(tci_ext_rx_gain_test PRIVATE src tests)
+    target_link_libraries(tci_ext_rx_gain_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_rx_gain_test COMMAND tci_ext_rx_gain_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -8967,9 +8974,16 @@ target_link_libraries(aetherd_amp_decode_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherd_amp_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_amp_decode_test COMMAND aetherd_amp_decode_test)
 
-add_executable(tuner_model_test tests/tuner_model_test.cpp)
+add_executable(tuner_model_test
+    tests/tuner_model_test.cpp
+    src/models/TunerModel.cpp
+    src/core/TgxlConnection.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
 target_include_directories(tuner_model_test PRIVATE src)
-target_link_libraries(tuner_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
+target_link_libraries(tuner_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 set_target_properties(tuner_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME tuner_model_test COMMAND tuner_model_test)
 
@@ -11631,6 +11645,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_extension_set_test
     tci_extension_zero_traffic_test
     tci_ext_tx_passband_test
+    tci_ext_rx_gain_test
     tci_applet_test
     tci_rx_applet_test
     tci_host_iq_test
@@ -11874,6 +11889,7 @@ set(AETHER_SETTINGS_CONSUMERS
     spectrum_overlay_auto_rf_gain_refusal_test
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
+    tuner_model_test
     tgxl_docked_parity_test
     tgxl_antenna_names_test
     tgxl_applet_ports_test
