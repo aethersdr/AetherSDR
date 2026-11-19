@@ -32,6 +32,7 @@
 #endif
 #include "core/AppSettings.h"
 #include "core/BandStackSettings.h"
+#include "core/CwxMacroTemplateSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/ShutdownTrace.h"
 #include "core/CwTrace.h"
@@ -2938,6 +2939,15 @@ RadioModel::RadioModel(QObject* parent)
     m_cwxModel.setTextSender([this](const QString& text, int wpm) {
         Q_UNUSED(wpm);
         return dispatchCwxText(text, m_cwxCommandOperation);
+    });
+    m_cwxModel.setMacroTemplateStore({
+        [this](int idx) { return CwxMacroTemplateSettings::load(settingsScope(), idx); },
+        [this](int idx, const QString& typed) {
+            // Disconnected edits are drafts. settingsScope() can still name
+            // the last radio after disconnect.
+            if (!isConnected() || m_txSessionClosing || m_expiringPendingCallbacks) { return; }
+            CwxMacroTemplateSettings::save(settingsScope(), idx, typed);
+        },
     });
     connect(&m_cwxModel, &CwxModel::requestRejected, this, [this](const QString& reason) {
         emit radioMessageReceived(reason, MessageSeverity::Warning);
@@ -8774,6 +8784,7 @@ void RadioModel::onDisconnected()
     // Reset the CWX drain watch and bump its epoch so a watch armed mid-macro
     // at disconnect can't wedge the monotonic guard after reconnect. (#3949)
     m_cwxModel.resetDrainWatch();
+    m_cwxModel.setDxCall({});
     m_lastInterlockSource.clear();
     m_lastInterlockNotificationKey.clear();
     m_lastInterlockNotificationMs = 0;
