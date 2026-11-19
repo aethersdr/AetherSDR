@@ -1,8 +1,8 @@
 {
-  "recorded_utc": "2026-11-19T06:01:12.423948+00:00",
+  "recorded_utc": "2026-11-19T06:43:03.439211+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
-  "current_runtime_release": "e4107da729d7caff8cb6dce504fe7c1f9761ec8399a1904ecd54cc60e614b5a9",
+  "current_runtime_release": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
   "current_desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
   "cases": [
     {
@@ -101,10 +101,10 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Build a source-closed managed diagnostic candidate with the standalone LOWESS optimization, preserve the same bounded RAM-only capture and unchanged privileged helpers, reproduce both architecture distributions, then perform ordinary approved upgrade and receive-only qualification before one separately dispatched guarded RF integration case. Continue cold-start phase/stationarity diagnosis without lowering acceptance thresholds, adding a residual-only cutoff, automatically rearming/keying or software-rebooting.",
-    "state": "LOWESS_CPU_optimization_component_and_receive_only_radio_probe_passed_not_installed_RF_unqualified",
-    "evidence": "LOWESS-CPU-QUALIFICATION.json",
-    "authority_constraint": "No automatic RF retry/rearm or software reboot. Ordinary reviewed update, receive-only qualification and fixed bounded GUI-keyed RF case remain separate."
+    "purpose": "Qualify the remaining owned lifetime-unkey API-loss case on the current runtime with one separately prepared bounded5W dispatch and corrected-tone precondition, preserving any refusal without automatic RF retry. In parallel use the actual unmatched/aligned mapping to replay the phase tracker and isolate the poor-EQ cold-start mechanism; retain all remaining P1-P10 requirements.",
+    "state": "optimized_managed_upgrade_receive_and_one_normal_RF_passed_remaining_API_case_open",
+    "evidence": "LOWESS-MANAGED-QUALIFICATION.json",
+    "authority_constraint": "Operator exclusive radio access; one bounded GUI-keyed case with independent guards, no automatic RF retry/rearm or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
@@ -113,5 +113,5 @@
     "Actual FLEX6300 teammate hardware and disk qualification",
     "Final native candidate packaging, production publisher/catalogue and independent release review"
   ],
-  "runtime_scope_note": "Current installed runtime is bench-only buffered diagnostic e410. Earlier fault rows remain scoped to their recorded runtimeab and desktop implementation; they are not requalification of e410."
+  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified."
 }

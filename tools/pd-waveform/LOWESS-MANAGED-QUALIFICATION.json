@@ -1,0 +1,809 @@
+{
+  "recorded_utc": "2026-11-19T06:43:03.439211+00:00",
+  "production_ready": false,
+  "source_parent": "ab9a1dbbda4a7e7590a63cb00e8edd623907cab1",
+  "status": "Reproduced optimized managed diagnostic runtime and upgrades, installed through ordinary GUI approval, receive-only qualified, then one guarded5W FDXoff localDAXIQ RF case corrected. Actual first fit CPU939.078ms/wall1101.654ms. Normal unkey/Stop, fixed capture cleanup and exact-session resource audits passed. Cold-start/natural128 causes remain open.",
+  "installed": true,
+  "shipping_candidate": false,
+  "installed_release": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
+  "new_positive_GUI_key_requests": 1,
+  "new_observed_TX_intervals": 1,
+  "source_arm_actions": 1,
+  "automatic_RF_retry": false,
+  "automatic_calibration_rearm": false,
+  "fault_injected": false,
+  "radio_reboots": [],
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "build": {
+    "complete_public_source_paths": 8322,
+    "source_manifest_sha256": "6d6d4131cc7c43e81c6f044701d7772d285d76aa61a1320e05483b79f32b5b9a",
+    "two_architectures_two_source_paths_and_caches_identical": true,
+    "complete_upgrade_distributions_identical_both_architectures": true,
+    "component_comparison": {
+      "armv7": {
+        "changed_payload_components": [
+          "aether-pd"
+        ],
+        "privileged_session_helpers_and_Go_identical": true,
+        "boot_helper_identical": true,
+        "new_release_blake2b_256": "edb5eb7a1aabf371834d90d8fcef1b9b38f48c8c679d2f97fad632edc13ea5cb",
+        "new_release_bytes": 9412706,
+        "new_native_sha256": "b07b3965b203458827008406f78eada505128c7aa284dba59162e19fcbc9d2e9"
+      },
+      "arm64": {
+        "changed_payload_components": [
+          "aether-pd"
+        ],
+        "privileged_session_helpers_and_Go_identical": true,
+        "boot_helper_identical": true,
+        "new_release_blake2b_256": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
+        "new_release_bytes": 9083402,
+        "new_native_sha256": "f86091d2d18969455b77cad620665c187a9849376de3105b713bd2492a516526"
+      }
+    },
+    "desktop": {
+      "passed": true,
+      "base_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+      "desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
+      "package_native_origin_commit": "ab9a1dbbda4a7e7590a63cb00e8edd623907cab1",
+      "source_patch_sha256": "c7b530fa711e6ae2e14826b9057c715cedf593175b75f309c8dbb573808a28b4",
+      "base_source_archive_sha256": "f1f976916d7000376d50daffa7337b1bd2878900d29b90771080f23e5efae47e",
+      "untracked_source": {
+        "tools/pd-waveform/fit_rejection_test.c": "dc7958ee74eff45b3d8efebc11eb7875828a2d033b335ba3bbe72a1fe3bc8f23",
+        "tools/pd-waveform/lowess_window_test.c": "bec187dd653273bd4cdfb20a709bbe89781b8339a203c502f75dd55255221665"
+      },
+      "binaries": {
+        "AetherSDR": {
+          "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-candidate/bin/AetherSDR",
+          "bytes": 833355720,
+          "sha256": "2bc23d6c80c80c56c5a4acc682623c4d10f834b927535f81aa31e77cf5eb5591"
+        },
+        "aetherd": {
+          "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-candidate/bin/aetherd",
+          "bytes": 413583984,
+          "sha256": "487d3fb0b4e4ea7c38507545877486aaf3059ed47f4c1d7433a8fd3298a26cfe"
+        }
+      },
+      "development_selection": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-candidate/distributions/short/arm64/selection.json",
+      "first_install_selection_unchanged": true,
+      "new_desktop_launched": false,
+      "radio_updated": false,
+      "RF_commands": []
+    },
+    "first_install_requalified": false,
+    "development_publisher_only": true
+  },
+  "operator_access": {
+    "initial_replacement_refused_before_close_or_launch": true,
+    "direct_observation": "StockAPD enabled with idle radio; Tune indication changed during independent observation. GUI history contains Tune commands outside this test recipe.",
+    "external_Tune_commands": [
+      {
+        "seq": 5047,
+        "t": "22:07:28.785",
+        "msg": "TX: \"C3890|transmit tune 1\""
+      },
+      {
+        "seq": 5063,
+        "t": "22:07:31.983",
+        "msg": "TX: \"C3894|transmit tune 0\""
+      },
+      {
+        "seq": 5094,
+        "t": "22:07:42.523",
+        "msg": "TX: \"C3905|transmit tune 1\""
+      },
+      {
+        "seq": 5118,
+        "t": "22:08:11.341",
+        "msg": "TX: \"C3935|transmit tune 0\""
+      },
+      {
+        "seq": 5126,
+        "t": "22:09:53.468",
+        "msg": "TX: \"C4038|transmit tune 1\""
+      },
+      {
+        "seq": 5151,
+        "t": "22:10:34.668",
+        "msg": "TX: \"C4081|transmit tune 0\""
+      },
+      {
+        "seq": 5168,
+        "t": "22:10:37.807",
+        "msg": "TX: \"C4086|transmit tune 1\""
+      },
+      {
+        "seq": 5249,
+        "t": "22:12:18.710",
+        "msg": "TX: \"C4188|transmit tune 0\""
+      },
+      {
+        "seq": 5256,
+        "t": "22:12:19.819",
+        "msg": "TX: \"C4190|transmit tune 1\""
+      }
+    ],
+    "exclusive_access_operator_answer": {
+      "operator_answer": "Yes\u2014hold other radio changes",
+      "scope": "Exclusive radio/GUI installation and bounded AetherPD test access resumed; no permission expansion beyond existing bench bounds."
+    },
+    "new_desktop_after_exclusive_PID": 2792075,
+    "old_desktop_retired_gracefully": true,
+    "stock_APD_and_Tune_already_off_when_exclusive_access_resumed": true,
+    "external_commands_not_counted_as_this_test": true
+  },
+  "ordinary_upgrade": {
+    "passed": true,
+    "approval_clicks": 1,
+    "completion_seconds": 52.56108698103344,
+    "existing_saved_owner_credential_continued_working": true,
+    "temporary_installer_cleanup_confirmed": true,
+    "broad_diagnostics_bridge_used_for_upgrade": false
+  },
+  "receive_only": {
+    "passed": true,
+    "fresh_IQ_captures": [
+      {
+        "file": "IQ-1.f32le",
+        "bytes": 131072,
+        "sha256": "866b7d65e25f3d62e5cf83429eaf38cfaca22d1809c3ee1b5c2cfef0a8dc8455",
+        "metadata": {
+          "capture_id": "67b727fb46c1f96e4bb2766fdb0a9b8b",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 35965895,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "50280145269748",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "50280485316113",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "9",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        }
+      },
+      {
+        "file": "IQ-2.f32le",
+        "bytes": 131072,
+        "sha256": "5afc15e197f305bae95894b3ef198bc665eaf6fee192fb5a54e657b21bf9c3c6",
+        "metadata": {
+          "capture_id": "f6c3abbfbb7c6d153b05273b5284d00e",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 35965895,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "50280628271842",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "50280969296310",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "9",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        }
+      }
+    ],
+    "FDX": false,
+    "feedback": "local_dax_iq",
+    "channel": 4,
+    "native_RSS_kib": 69512,
+    "native_threads": [
+      {
+        "tid": 18229,
+        "name": "64",
+        "policy": 2,
+        "priority": 1,
+        "nice": 0
+      },
+      {
+        "tid": 18230,
+        "name": "64",
+        "policy": 0,
+        "priority": 0,
+        "nice": 10
+      },
+      {
+        "tid": 18231,
+        "name": "64",
+        "policy": 0,
+        "priority": 0,
+        "nice": 10
+      }
+    ],
+    "fixed_capture_files_empty_while_active": true,
+    "normal_Stop": {
+      "available": false,
+      "state": "stopped"
+    },
+    "capture_download_exact_hash_cleanup_and_observed_worker_audit_passed": true
+  },
+  "RF": {
+    "nominal_setting_W": 5,
+    "configured_maximum_W": 10,
+    "frequency_MHz": 7.15,
+    "antenna": "ANT1 dummy load/sampler to RXA",
+    "FDX": false,
+    "stock_APD": false,
+    "feedback": "local_dax_iq",
+    "channel": 4,
+    "independent_LP_and_directional_guards_passed": true,
+    "native_cutoff_ms": 9000,
+    "measurement_timeout_ms": 10000,
+    "analysis": {
+      "LP_peak_W": 3.61,
+      "LP_SWR_max_during_RF": 1.06,
+      "correcting_observations": 23,
+      "observed_span_ms": 1403.027008,
+      "analyzer_result": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 corrected\nTransmit authorization timeout 10 s\nDAX IQ stream 0x20000000 \u00b7 IQ Ch 4 \u00b7 pan 0x40000000 \u00b7 GUI 0x0224cbc7 \u00b7 captured tone offsets 710.0/1900.0 Hz\n4 averages \u00b7 tone imbalance 0.25 dB\nIMD: dBc per tone / fundamental-derived PEP\nIMD3 lower: -44.7 / -50.8\nIMD3 upper: -53.6 / -59.6\nIMD5 lower: -56.0 / -62.0\nIMD5 upper: -64.3 / -70.3\nIMD7 lower: -75.1 / -81.1\nIMD7 upper: -64.4 / -70.4\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+      "first_alignment": "alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=50902136538841 submitted_ns=50903888759831 started_ns=50903888790905 completed_ns=50904129314037 consumed_ns=50904141457677 delay=1734.970 envelope=0.997408 phase=0.999133 offset_hz=-0.024522 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+      "all_status_faults_zero": true,
+      "all_status_input_limited_zero": true,
+      "alignment_reset_counts": [
+        0
+      ],
+      "radio_fit_timings": [
+        {
+          "sequence": 0,
+          "wall_ms": 1101.654169,
+          "CPU_ms": 939.078133,
+          "begin_after_key_ms": 4352.366717,
+          "end_after_key_ms": 5454.020886,
+          "completed_before_source_end": true,
+          "accepted_by_calc": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "sequence": 1,
+          "wall_ms": 1279.923725,
+          "CPU_ms": 1072.424805,
+          "begin_after_key_ms": 5910.312598,
+          "end_after_key_ms": 7190.236323,
+          "completed_before_source_end": false,
+          "accepted_by_calc": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "source_end": "1795070110.049 bounded source ended: reason=interlock_ineligible mono_ns=50909024825653 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=26624 generated=165376 iq_frames=47627 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=911807 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=0224cbc7 slice=0 correction=1 native_apd=0 iq_valid_ns=50909021352681",
+      "radio_key_to_source_end_ms": 6888.286812,
+      "captured_pairs": {
+        "lab-unmatched.f32le": {
+          "pairs": 164864,
+          "seconds_at_24000": 6.8693333333333335,
+          "sha256": "e708a6e1ca2ef362a38fce519ac916d36ba055ff7b6cd87da4f1477fbaf43e2d",
+          "all_finite": true,
+          "component_absolute_peak": [
+            0.699999988079071,
+            0.6995155215263367,
+            49152.05078125,
+            49115.21875
+          ]
+        },
+        "lab-aligned.f32le": {
+          "pairs": 114995,
+          "seconds_at_24000": 4.791458333333333,
+          "sha256": "4d8f408d3e6eb8e2e0bdc6f7d2a9333c6416e77de6a1556454f3897a1ff39757",
+          "all_finite": true,
+          "component_absolute_peak": [
+            0.7181512713432312,
+            0.6993815898895264,
+            51704.7890625,
+            49089.87109375
+          ]
+        }
+      }
+    },
+    "completed_fit_sequences_before_source_end": [
+      0
+    ],
+    "matched_OFF_or_stock_baseline_in_this_case": false
+  },
+  "cleanup": {
+    "both_phases_passed": true,
+    "normal_Stop_after_RF": {
+      "available": false,
+      "state": "stopped"
+    },
+    "receive_original_worker_PIDs_absent_including_zombies": [
+      18220,
+      18221,
+      18222,
+      18225,
+      18227,
+      18228,
+      18229,
+      18237,
+      18239,
+      18241
+    ],
+    "keyed_original_worker_PIDs_absent_including_zombies": [
+      18578,
+      18579,
+      18580,
+      18583,
+      18585,
+      18586,
+      18587,
+      18595,
+      18597,
+      18600
+    ],
+    "both_capture_sets_downloaded_fsynced_verified_then_removed": true,
+    "both_ARP_and_journal_empty": true,
+    "both_accept_local_disabled": true,
+    "both_private_session_sockets_and_temporary_install_paths_absent": true,
+    "remaining_controls": [
+      {
+        "pid": 17839,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 5018951,
+        "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+        "packet_fds": [],
+        "role": "control/status frontend"
+      },
+      {
+        "pid": 18568,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 5073262,
+        "sha256": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7",
+        "packet_fds": [],
+        "role": "unprivileged control manager"
+      },
+      {
+        "pid": 18577,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 5073286,
+        "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+        "packet_fds": [],
+        "role": "control/status frontend"
+      }
+    ],
+    "all_temporary_diagnostics_jobs_and_carriers_retired": true,
+    "exact_receive_unit": "aetherpd-start@104-17839-78666.service",
+    "exact_keyed_unit": "aetherpd-start@105-17839-78666.service"
+  },
+  "capture_completion": {
+    "event": "complete",
+    "pid": 18587,
+    "unmatched_bytes": 2637824,
+    "aligned_bytes": 1839920,
+    "trace_bytes": 188454,
+    "fit_records": 2,
+    "fit_records_dropped": 0,
+    "deferred_flushes": 0,
+    "deferred_closes": 1,
+    "unowned_READY": true
+  },
+  "final_idle": {
+    "state": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 22.703125,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x224cbc7",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "native": {
+      "available": false,
+      "state": "stopped"
+    },
+    "whoami": {
+      "agentName": "Automation",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-native-durability",
+      "ok": true,
+      "pid": 2792075,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-native-durability",
+      "station": "Automation",
+      "txAllowed": true,
+      "version": "26.11.3"
+    }
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-live-components.tar.gz",
+    "bytes": 13396017,
+    "sha256": "e4cbe676c8f47a3a68c3906ecc845c63307aac95e21b173d583be51a75a975b1",
+    "members": 146,
+    "all_members_verified": true
+  },
+  "preinstallation_artifacts": {
+    "recorded_utc": "2026-11-19T06:18:12.308909+00:00",
+    "origin_source_commit": "ab9a1dbbda4a7e7590a63cb00e8edd623907cab1",
+    "source_manifest_sha256": "6d6d4131cc7c43e81c6f044701d7772d285d76aa61a1320e05483b79f32b5b9a",
+    "complete_native_source_files_verified": 8322,
+    "archive": {
+      "path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/lowess-capture-artifacts-d7ad58962/diagnostic-upgrades-and-public-source.tar.gz",
+      "bytes": 449231749,
+      "sha256": "e4b44d0cb0f11335e51e51fe944c1f0c35aff3a246e7ee5f6819751f32214675",
+      "members": 8409,
+      "all_members_verified": true
+    },
+    "binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-candidate/bin/AetherSDR",
+        "bytes": 833355720,
+        "sha256": "2bc23d6c80c80c56c5a4acc682623c4d10f834b927535f81aa31e77cf5eb5591",
+        "durable_path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/lowess-capture-artifacts-d7ad58962/binaries/AetherSDR"
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-candidate/bin/aetherd",
+        "bytes": 413583984,
+        "sha256": "487d3fb0b4e4ea7c38507545877486aaf3059ed47f4c1d7433a8fd3298a26cfe",
+        "durable_path": "/home/jeremy/AetherSDR/aetherpd-checkpoints/lowess-capture-artifacts-d7ad58962/binaries/aetherd"
+      }
+    },
+    "buffer_preflight_cases_passed": 7,
+    "source_and_upgrade_reproducibility_both_architectures": true,
+    "component_comparison": {
+      "armv7": {
+        "changed_payload_components": [
+          "aether-pd"
+        ],
+        "privileged_session_helpers_and_Go_identical": true,
+        "boot_helper_identical": true,
+        "new_release_blake2b_256": "edb5eb7a1aabf371834d90d8fcef1b9b38f48c8c679d2f97fad632edc13ea5cb",
+        "new_release_bytes": 9412706,
+        "new_native_sha256": "b07b3965b203458827008406f78eada505128c7aa284dba59162e19fcbc9d2e9"
+      },
+      "arm64": {
+        "changed_payload_components": [
+          "aether-pd"
+        ],
+        "privileged_session_helpers_and_Go_identical": true,
+        "boot_helper_identical": true,
+        "new_release_blake2b_256": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
+        "new_release_bytes": 9083402,
+        "new_native_sha256": "f86091d2d18969455b77cad620665c187a9849376de3105b713bd2492a516526"
+      }
+    },
+    "desktop_source": {
+      "passed": true,
+      "base_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+      "desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
+      "package_native_origin_commit": "ab9a1dbbda4a7e7590a63cb00e8edd623907cab1",
+      "source_patch_sha256": "c7b530fa711e6ae2e14826b9057c715cedf593175b75f309c8dbb573808a28b4",
+      "base_source_archive_sha256": "f1f976916d7000376d50daffa7337b1bd2878900d29b90771080f23e5efae47e",
+      "untracked_source": {
+        "tools/pd-waveform/fit_rejection_test.c": "dc7958ee74eff45b3d8efebc11eb7875828a2d033b335ba3bbe72a1fe3bc8f23",
+        "tools/pd-waveform/lowess_window_test.c": "bec187dd653273bd4cdfb20a709bbe89781b8339a203c502f75dd55255221665"
+      },
+      "binaries": {
+        "AetherSDR": {
+          "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-candidate/bin/AetherSDR",
+          "bytes": 833355720,
+          "sha256": "2bc23d6c80c80c56c5a4acc682623c4d10f834b927535f81aa31e77cf5eb5591"
+        },
+        "aetherd": {
+          "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-candidate/bin/aetherd",
+          "bytes": 413583984,
+          "sha256": "487d3fb0b4e4ea7c38507545877486aaf3059ed47f4c1d7433a8fd3298a26cfe"
+        }
+      },
+      "development_selection": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-managed-candidate/distributions/short/arm64/selection.json",
+      "first_install_selection_unchanged": true,
+      "new_desktop_launched": false,
+      "radio_updated": false,
+      "RF_commands": []
+    },
+    "installed": false,
+    "RF_keys": 0,
+    "shipping_candidate": false,
+    "production_ready": false,
+    "scope": "Offline LOWESS buffered diagnostic source and two-architecture upgrade artifacts plus unlaunched desktop binaries. Replacement preflight refused concurrent stock APD/Tune state before closing or launching anything. No update plan approval, installation, receive-only or RF qualification of this candidate yet."
+  },
+  "scope_limits": [
+    "One finite5W integration case qualifies this observation only. It does not resolve the intermittent cold-start bypass or historical natural128sample event, establish sustained/repeated performance, or close final-process-graph qualification.",
+    "The two accepted calc calls are numerical acceptance, not proof both were published or applied. Their completion relative to source end is explicitly recorded. Only observed correcting statuses and the finite analyzer capture prove RF application.",
+    "Actual integrated fit CPU/wall timing is measured on this run, but it is not a matched on-radio old/new CPU comparison. The separately preserved receive-only fixed-input ARM64 comparison established40.9% CPU reduction; excitation/scheduling differ between RF runs.",
+    "Captured unmatched/aligned float32 pairs are actual successful radio evidence. The stored previous-reference mapping can anchor future replay through the actual phase tracker; no failed-run reconstruction, physical-delay attribution or general residual threshold is claimed.",
+    "ARMv7 source/release/upgrade reproduction does not establish actual6300 Linux2.6/Cortex-A8/one-core support, fixed network profile, scheduler/PI behavior, disk peak, feedback or RF. No actual6300 execution occurred here.",
+    "Full source-closed builds use the authorized development publisher. Production signer/catalogue, final native desktop packaging and independent release review remain required. First-install and reboot persistence were not repeated for this pure DSP change.",
+    "Temporary broad root diagnostics served only fixed read-only inspection and bounded capture retrieval/removal; normal installation/Start/IQ operation used the ordinary workflow. File reads/removal dropped toUID78666/caps0/NNP1; the diagnostics bridge is not shipped as a runtime dependency.",
+    "Cleanup proves observed original worker PID absence including zombies and no executable-matched active workers, not arbitrary unobserved descendants or retrospective completion of older name-only zombie checks.",
+    "Absolute IQ scale and ADC headroom remain uncalibrated; LP configured forward/net basis remains unknown. No current matched stock APD or OFF comparison was made. External controller Tune activity was excluded from this qualification.",
+    "FullP1-P10 remains active, including remaining API/credential/partial/combined/stall-expiry/foreign-resource cases, raw/extended/repeated speech, final integrated stock workflow, actual6300 and independent delivery gates. No software reboot before bounded shutdown tracing."
+  ],
+  "next_step": "Qualify the remaining owned lifetime-unkey API-loss case on the current runtime with one separately prepared bounded5W dispatch and corrected-tone precondition, preserving any refusal without automatic RF retry. In parallel use the actual unmatched/aligned mapping to replay the phase tracker and isolate the poor-EQ cold-start mechanism; retain all remaining P1-P10 requirements."
+}
