@@ -1,0 +1,85 @@
+{
+  "recorded_utc": "2026-11-19T16:18:12.392340+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "passed_one_scoped_case": true,
+  "status": "One receive-only managed sign-out retires the entire active session while preserving local owner identity and effective sharing. The same GUI/credential explicitly starts a fresh process and captures fresh local DAX IQ, then normal Stop and exact cleanup pass. Sign-out is not managed token revocation; lost-owner recovery/rotation remains unfinished.",
+  "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "desktop": {
+    "pid": 3233869,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+    "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+    "development_native_origin": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "FDX": false,
+  "RF_commands": [],
+  "source_arm_actions": 0,
+  "signout_actions": 1,
+  "owner_token_revoked": false,
+  "local_owner_preserved": true,
+  "tailnet_identity_existed_before": false,
+  "tailnet_identity_removed": false,
+  "effective_sharing_preserved": true,
+  "installation_id_preserved": true,
+  "authenticated_installation_readback_unchanged": true,
+  "signout_HTTP_roundtrip_ms": 44.462186,
+  "authority_retirement": {
+    "primary_processes_remaining": 1,
+    "original_session_processes_absent": 12,
+    "ARP_removed": true,
+    "packet_FDs_closed": true,
+    "temporary_diagnostic_jobs_removed": true,
+    "before_any_GUI_Stop": true,
+    "public_PD_status_after": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "complete": false,
+      "http_status": 503
+    }
+  },
+  "ordinary_GUI_successor": {
+    "explicit_Start_actions": 1,
+    "fresh_DSP_PID": 30990,
+    "prior_DSP_PID": 30523,
+    "capture_count": 2,
+    "capture_bytes_each": 131072,
+    "fresh_receive_times_verified": true,
+    "normal_Stop_passed": true,
+    "session_workers_absent": 10,
+    "ordinary_controls_remaining": 3
+  },
+  "capture_SHA256": [
+    "7512778b3b6baa1a801ec2c0c8217ce46481377908d94c2bd2fe8eeb8c7ca435",
+    "eb2696789b54b43319fa480830fb23ee12c3249c1474b35864b5fe3d9c84a8c0",
+    "8540cef1c9f97a5c29c1c1f7fd0cd889ac84ae3a3b4945f0d116a8ff20a38391"
+  ],
+  "owner_client_SHA256": "41ed7df85a14dee44f0744cb152c272e190e0a25a5c6798eb9eefd2f056209fa",
+  "owner_client_source_SHA256": "d8ba201da17e794f78c135c26c6265bcae188f8c227c44af639f56dddebcadf7",
+  "negative_evidence_retained": [
+    "The initial post-retirement audit expected the three control processes retained by normal Stop. It failed because authority retirement removes the session manager/frontend too. That failure is preserved; a separate stricter audit pins the sole primary PID26446 and requires all12 original session processes absent. No product guard was loosened."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/managed-authority-receive-components.tar.gz",
+    "bytes": 111863,
+    "sha256": "510041ccfa519ea6ce472b52e3d013aa232bb5b0811ebd73180f06908bf32ab2",
+    "members": 88,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "This is managed same-owner authority-lifetime retirement, not successful local-owner-token revocation, credential loss or recovery/rotation. No new public credential operation was invented or claimed.",
+    "Only a verified local-only installation without a saved tailnet identity was used. Joined-account logout, membership loss, expiry or control-plane behavior is not qualified.",
+    "HTTP roundtrip is not a bound on full process retirement. Resource audits were performed afterward; initial PD status503/unavailable was retained, not relabeled stopped.",
+    "Stream ID and source generation may repeat across fresh DSP processes. Freshness is proved using different observed DSP PIDs, complete intervening retirement and increasing receive timestamps, not those identifiers alone.",
+    "The ordinary GUI started/stopped the sessions; one fixed-path CLI used the production Qt keychain reader for the normal authenticated sign-out endpoint. The Remote Access dialog enrollment/logout UI is not qualified by this CLI operation.",
+    "Existing diagnostic bootstrap was used for fixed read/cleanup audits with privileges dropped before identity reads. No installation, persistent privilege change, software reboot, new app instance, AetherTX or processing-settings restoration occurred.",
+    "All remaining P1-P10 installation, current-graph fault, credential recovery/rotation, cold/alignment, repeated/raw/extended RF, final stock comparison, actual6300 and independent production review gates remain open."
+  ]
+}

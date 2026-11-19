@@ -457,12 +457,20 @@ Use a subsequent authenticated status read to observe supervisor completion.
 The retained unprivileged relay keeps the receive journal for an explicit
 restore request; reporting completion does not apply receive settings.
 
-Successful sign-out, rejoin or an admin-token rotation also stops the owned session
-and permanently closes that session's calibration gate. The old token cannot
-arm or restore it, and acquiring a new token does not restart it. Rejected
+Successful sign-out or rejoin also stops the owned session and permanently
+closes that session's calibration gate. Legacy admin-token rotation does the
+same. A retired session cannot be armed or restored with an old credential,
+and acquiring a new token does not restart it. Rejected
 requests and failed configuration writes leave the existing session intact.
 Sign-out retires the owned session before waiting for tailnet logout; a managed
 installation retains its credential for subsequent explicit local control.
+One receive-only local-owner case on the current FLEX-8600 runtime verifies
+whole-session retirement before any GUI Stop, unchanged local ownership, and
+an explicit fresh GUI Start with two fresh local DAX IQ captures and normal
+cleanup. The [scoped report](../pd-waveform/MANAGED-AUTHORITY-RECEIVE-QUALIFICATION.json)
+preserves the initial audit's incorrect normal-Stop graph assumption. It does
+not qualify token revocation, lost-owner recovery/rotation, joined-account
+logout, RF or FLEX-6000 operation.
 Configuration replacement/deletion and live publication share a transaction
 lock, including automatic sign-in-completion saves and sharing changes. This
 prevents a delayed save from recreating an old credential after sign-out.
