@@ -155,7 +155,7 @@ CredentialPersistence::Backend systemBackend()
 
 class CredentialPersistence::State : public std::enable_shared_from_this<CredentialPersistence::State> {
 public:
-    enum class Kind { Read, Write, Retire, Replace };
+    enum class Kind { Read, Write, Retire, Replace, Create };
     class Operation;
     State(Backend backend, Acquire acquire, int timeout)
         : m_backend(std::move(backend)), m_acquire(std::move(acquire)), m_timeout(qBound(1, timeout, 10000)) {}
@@ -203,7 +203,11 @@ private:
     {
         m_state->m_backend.read(m_key, this, [this](Raw raw) {
             if (raw.error == Error::Missing) {
+                if (m_kind == Kind::Create) { readRecord(); return; }
                 finish({m_kind == Kind::Retire || m_kind == Kind::Replace ? Error::Rejected : Error::Missing, {}, {}, {}}); return;
+            }
+            if (m_kind == Kind::Create && raw.error == Error::None) {
+                finish({Error::Rejected, {}, {}, {}}); return;
             }
             if (raw.error != Error::None || raw.text.toUtf8().size() > kTokenLimit) { unavailable(); return; }
             m_primary = std::move(raw.text);
@@ -304,6 +308,7 @@ void CredentialPersistence::State::enqueue(Kind kind, const QString& key, const 
         || key.isEmpty() || key.toUtf8().size() > 2048 || token.toUtf8().size() > kTokenLimit
         || (kind == Kind::Retire && (version.size() != 16 || token.isEmpty()))
         || (kind == Kind::Replace && (version.size() != 32 || previous.isEmpty() || previous.toUtf8().size() > kTokenLimit || token.isEmpty()))
+        || (kind == Kind::Create && token.isEmpty())
         || m_outstanding >= kQueueLimit || m_queues.value(key).size() >= kEntryQueueLimit) {
         QTimer::singleShot(0, QCoreApplication::instance(), [done = std::move(done)] {
             done({Error::Unavailable, {}, {}, QStringLiteral("credential persistence request refused")});
@@ -338,6 +343,10 @@ void CredentialPersistence::compareAndWrite(const QString& key, const QString& e
                                           const QString& replacement, Done done)
 {
     m_state->enqueue(State::Kind::Replace, key, replacement, selection, std::move(done), expectedToken);
+}
+void CredentialPersistence::createIfMissing(const QString& key, const QString& token, Done done)
+{
+    m_state->enqueue(State::Kind::Create, key, token, {}, std::move(done));
 }
 QString CredentialPersistence::versionKey(const QString& key)
 {

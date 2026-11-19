@@ -513,7 +513,7 @@ bool TailnetShimClient::replaceOwnerKey(const QString& installationId, const QSt
                                        const QString& adminToken)
 {
     const std::optional<QByteArray> body = aetherpd::ownerKeyBody(installationId, savedCandidate);
-    if (!body || m_ownerKeyReply || !aetherpd::validAdminToken(adminToken) || !aetherpd::lanAddress(m_address)) { return false; }
+    if (!body || !m_network || m_ownerKeyReply || !aetherpd::validAdminToken(adminToken) || !aetherpd::lanAddress(m_address)) { return false; }
     retirePendingReplies();
     const aetherpd::OwnerKeyReceipt expected{installationId,
         QCryptographicHash::hash(savedCandidate.toLatin1(), QCryptographicHash::Sha256)};

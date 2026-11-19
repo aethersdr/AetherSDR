@@ -1,7 +1,7 @@
 {
-  "status": "Implementation notes for the remaining controller; not implemented or UI-approved",
+  "status": "Controller/storage integration implemented and Linux-tested; operator UI and shipping qualification remain unfinished.",
   "completed_source": "81be1bf0efadc31c25317d7aec3d35343ef0342b",
-  "new_wire_work": "Fixed request/receipt parser and transport have been implemented separately; the transaction coordinator is still missing.",
+  "new_wire_work": "Wire parser, transport, durable transaction, conditional creation and observed-durability guards are implemented. UI and packaged radio proof remain.",
   "admission": [
     "Explicit operator begin or resume only; no mutating request on status, reconnect, timer or automatic retry.",
     "Hold the existing per-radio provisioning lease through candidate persistence, HTTP, active-key promotion and candidate retirement.",
@@ -34,12 +34,11 @@
     "No source arm, Start, receive restoration, RF, root privilege or tailnet sign-out is a side effect of this operation."
   ],
   "remaining_tests": [
-    "Injected storage/network ordering and every uncertain persistence/reply boundary",
-    "Canceled/deleted/retired callers, same-address reconnect and late receipt/version fences",
-    "Explicit resume with old/current candidate and with an absent active slot",
-    "No automatic mutating retry, no first-use reset, no candidate deletion before durable promotion",
-    "Real Linux/macOS/Windows OS-keychain coordinator checks and ordinary operator UI",
-    "Packaged receive-only FLEX8600 rotation/revocation/receipt-loss/cleanup proof"
+    "Operator UI integration and original-session admission using the actual RadioModel",
+    "Real macOS/Windows controller/keychain qualification; Linux23-case native suite passed",
+    "Packaged receive-only FLEX8600 owner rotation/revocation/receipt-loss/cleanup proof",
+    "Full application build, bridge proof and independent review; other P1-P10 requirements remain"
   ],
-  "other_goal_scope": "FullP1-P10 remains active, including actual6000 adapter/hardware, natural128/cold cause, remaining process faults, repeated/raw/extended RF, final stock comparison and independent release review."
+  "other_goal_scope": "FullP1-P10 remains active, including actual6000 adapter/hardware, natural128/cold cause, remaining process faults, repeated/raw/extended RF, final stock comparison and independent release review.",
+  "controller_report": "MANAGED-OWNER-KEY-CONTROLLER-QUALIFICATION.json"
 }

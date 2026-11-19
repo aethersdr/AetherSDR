@@ -164,13 +164,24 @@ with a newly generated candidate. The desktop credential store provides a separa
 installation-scoped candidate slot and conditional promotion against both the
 process revision and an exact primary/metadata observation under its backend
 lease. An interrupted keychain write can be recovered from a fresh observation;
-a missing active entry refuses implicit creation. Session-only builds cannot
+a missing active entry refuses implicit replacement. The explicit transaction
+controller can adopt a separately saved, radio-confirmed candidate into an
+absent active slot using a distinct conditional-create operation; any competing
+primary or unknown metadata schema refuses creation. Session-only builds cannot
 promote a credential. Component checks include the real Linux keychain; new
 macOS/Windows qualification remains outstanding.
 
-Complete candidate-save/server/promotion coordination, operator UI, packaged
-on-radio qualification and recovery without an existing owner credential remain
-outstanding. The endpoint's offline checks are
+The controller saves and reads back the candidate before HTTP, pins the original
+session and credential revisions, and conditionally promotes and verifies the
+active key before retiring its candidate. Explicit Resume first authenticates the
+exact saved candidate; a 401 permits one submission of that same candidate using
+the retained old owner. A lost or ambiguous reply preserves both credentials,
+without a timer or reconnect retry. Pending backend operations retain the local
+setup lease after an observer is retired. Cleanup rechecks that the adopted key
+is still the observed durable current key; uncertainty does not erase its backup.
+
+Operator UI integration, packaged on-radio qualification and recovery without
+any saved owner or candidate remain outstanding. The endpoint's offline checks are
 recorded in `../pd-waveform/MANAGED-OWNER-KEY-SERVER-QUALIFICATION.json`; they do
 not qualify a shipping credential-rotation workflow. Desktop component evidence
 is in `../pd-waveform/MANAGED-OWNER-KEY-CREDENTIAL-QUALIFICATION.json`.
@@ -180,6 +191,9 @@ responses over 512 bytes, redirects, transport errors and retired observations
 cannot confirm replacement. It sends no automatic retry and performs no
 credential-store mutation. Its separate component report is
 `../pd-waveform/MANAGED-OWNER-KEY-WIRE-QUALIFICATION.json`.
+Controller and conditional-create evidence, including real Linux lost-reply and
+missing-active-entry cases, is recorded in
+`../pd-waveform/MANAGED-OWNER-KEY-CONTROLLER-QUALIFICATION.json`.
 
 ### AetherPD status (development)
 

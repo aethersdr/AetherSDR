@@ -190,7 +190,7 @@ private:
                 std::optional<aetherpd::OwnerKeyReceipt> expectedOwner = std::nullopt);
 
     QNetworkAccessManager m_nam;
-    QNetworkAccessManager* m_network{&m_nam};
+    QPointer<QNetworkAccessManager> m_network{&m_nam};
     QHostAddress m_address;
     QPointer<QNetworkReply> m_statusReply;   // the status request in flight, if any
     QPointer<QNetworkReply> m_loginReply;    // the login request in flight, if any

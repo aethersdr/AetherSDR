@@ -48,6 +48,9 @@ public:
     // from read(); it also permits explicit recovery of an interrupted save.
     void compareAndWrite(const QString& key, const QString& expectedToken, const QByteArray& selection,
                          const QString& replacement, Done done);
+    // For a separately verified credential. Refuses any existing primary and
+    // checks the metadata schema before publishing under the same lease.
+    void createIfMissing(const QString& key, const QString& token, Done done);
     static QString versionKey(const QString& key);
     static Acquire systemAuthority();
     static Backend keychainBackend();

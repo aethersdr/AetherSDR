@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QTimer>
 
 #ifdef HAVE_KEYCHAIN
@@ -74,6 +75,51 @@ QHash<QString, QByteArray>& persistedSelections()
     static QHash<QString, QByteArray> selections;
     return selections;
 }
+
+QSet<QString>& observedMissing()
+{
+    static QSet<QString> missing;
+    return missing;
+}
+
+void conditionalWrite(const QString& key, const QString& expectedToken, const QString& replacement,
+                      QObject* context, std::function<void(bool, const QString&)> done, bool creating)
+{
+    const QByteArray selection = persistedSelections().value(key);
+    const quint64 generation = ++saveGenerations()[key];
+    const quint64 revision = ++credentialRevisions()[key];
+    sessionOverrides().insert(key, true);
+    observedMissing().remove(key);
+    const QPointer<QObject> guard(context);
+    auto complete = [key, expectedToken, replacement, generation, revision, guard, hasContext = context != nullptr,
+                     done = std::move(done)](tailnetshim::CredentialPersistence::Value result) {
+        const bool current = saveGenerations().value(key) == generation && credentialRevisions().value(key) == revision
+            && sessionTokens().value(key) == expectedToken;
+        const bool persisted = result.error == tailnetshim::CredentialPersistence::Error::None
+            && result.token == replacement && result.version.size() == 16 && result.selection.size() == 32;
+        if (current) {
+            ++credentialRevisions()[key];
+            sessionOverrides().insert(key, false);
+            if (persisted) {
+                sessionTokens().insert(key, replacement);
+                persistedVersions().insert(key, result.version);
+                persistedSelections().insert(key, result.selection);
+            } else {
+                persistedVersions().remove(key);
+                persistedSelections().remove(key);
+            }
+        }
+        if (done && (!hasContext || guard)) {
+            done(current && persisted, current && persisted ? QString()
+                : QStringLiteral("owner credential changed or its replacement could not be confirmed; retain the saved candidate"));
+        }
+    };
+    if (creating) {
+        tailnetshim::CredentialPersistence::system().createIfMissing(key, replacement, std::move(complete));
+    } else {
+        tailnetshim::CredentialPersistence::system().compareAndWrite(key, expectedToken, selection, replacement, std::move(complete));
+    }
+}
 #endif
 
 }  // namespace
@@ -127,6 +173,8 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
             if (ok) {
                 persistedVersions().insert(key, result.version);
                 persistedSelections().insert(key, result.selection);
+                if (deleting) { observedMissing().insert(key); }
+                else { observedMissing().remove(key); }
             }
         }
         if (done && (!hasContext || guard)) {
@@ -171,6 +219,7 @@ bool TailnetShimTokenStore::clearIfCurrent(const QString& radioSerial, const QSt
                 ++saveGenerations()[key];
                 sessionTokens().remove(key);
                 sessionOverrides().insert(key, false);
+                observedMissing().insert(key);
             }
             persistedVersions().remove(key);
             persistedSelections().remove(key);
@@ -197,41 +246,45 @@ bool TailnetShimTokenStore::replaceIfCurrent(const QString& radioSerial, const Q
     if (sessionOverrides().value(key) || persistedSelections().value(key).size() != 32) {
         return false;
     }
-    const QByteArray selection = persistedSelections().value(key);
-    const quint64 generation = ++saveGenerations()[key];
-    const quint64 revision = ++credentialRevisions()[key];
-    sessionOverrides().insert(key, true);
-    const QPointer<QObject> guard(context);
-    tailnetshim::CredentialPersistence::system().compareAndWrite(key, expectedToken, selection, replacement,
-        [key, expectedToken, replacement, generation, revision, guard, hasContext = context != nullptr,
-         done = std::move(done)](tailnetshim::CredentialPersistence::Value result) {
-        const bool current = saveGenerations().value(key) == generation && credentialRevisions().value(key) == revision
-            && sessionTokens().value(key) == expectedToken;
-        const bool persisted = result.error == tailnetshim::CredentialPersistence::Error::None
-            && result.token == replacement && result.version.size() == 16 && result.selection.size() == 32;
-        if (current) {
-            ++credentialRevisions()[key];
-            sessionOverrides().insert(key, false);
-            if (persisted) {
-                sessionTokens().insert(key, replacement);
-                persistedVersions().insert(key, result.version);
-                persistedSelections().insert(key, result.selection);
-            } else {
-                // The backend may have applied part of an uncertain save.
-                // A later operation must obtain a fresh exact observation.
-                persistedVersions().remove(key);
-                persistedSelections().remove(key);
-            }
-        }
-        if (done && (!hasContext || guard)) {
-            done(current && persisted, current && persisted ? QString()
-                : QStringLiteral("owner credential changed or its replacement could not be confirmed; retain the saved candidate"));
-        }
-    });
+    conditionalWrite(key, expectedToken, replacement, context, std::move(done), false);
     return true;
 #else
     Q_UNUSED(context)
     Q_UNUSED(done)
+    Q_UNUSED(entry)
+    return false;
+#endif
+}
+
+bool TailnetShimTokenStore::createIfMissing(const QString& radioSerial, quint64 expectedRevision, const QString& token,
+                                           QObject* context, std::function<void(bool, const QString&)> done, Entry entry)
+{
+    if (radioSerial.trimmed().isEmpty() || token.isEmpty() || !sessionTokens().value(keyFor(radioSerial, entry)).isEmpty()
+        || revision(radioSerial, entry) != expectedRevision) { return false; }
+#ifdef HAVE_KEYCHAIN
+    const QString key = keyFor(radioSerial, entry);
+    if (sessionOverrides().value(key) || !observedMissing().contains(key)) { return false; }
+    conditionalWrite(key, {}, token, context, std::move(done), true);
+    return true;
+#else
+    Q_UNUSED(context)
+    Q_UNUSED(done)
+    return false;
+#endif
+}
+
+bool TailnetShimTokenStore::isDurableCurrent(const QString& radioSerial, const QString& token,
+                                             quint64 expectedRevision, Entry entry)
+{
+#ifdef HAVE_KEYCHAIN
+    const QString key = keyFor(radioSerial, entry);
+    return !radioSerial.trimmed().isEmpty() && !token.isEmpty() && sessionTokens().value(key) == token
+        && revision(radioSerial, entry) == expectedRevision && !sessionOverrides().value(key)
+        && persistedVersions().value(key).size() == 16 && persistedSelections().value(key).size() == 32;
+#else
+    Q_UNUSED(radioSerial)
+    Q_UNUSED(token)
+    Q_UNUSED(expectedRevision)
     Q_UNUSED(entry)
     return false;
 #endif
@@ -264,6 +317,8 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
             const QString token = pickLoadedToken(savedSince, read, sessionTokens().value(key));
             if (!savedSince) {
                 if (result.error == Error::None || result.error == Error::Missing) {
+                    if (result.error == Error::Missing) { observedMissing().insert(key); }
+                    else { observedMissing().remove(key); }
                     if (sessionTokens().value(key) != token || persistedVersions().value(key) != result.version
                         || persistedSelections().value(key) != result.selection) {
                         ++credentialRevisions()[key];
@@ -278,6 +333,7 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
                     ++credentialRevisions()[key];
                     persistedVersions().remove(key);
                     persistedSelections().remove(key);
+                    observedMissing().remove(key);
                 }
                 sessionOverrides().insert(key, false);
             }

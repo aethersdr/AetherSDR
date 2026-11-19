@@ -1,6 +1,7 @@
 #include "core/TailnetShimCredentialPersistence.h"
 #include "core/TailnetShimTokenStore.h"
 #include "core/SettingsCredentialPolicy.h"
+#include "NativeOwnerKeyProbe.h"
 
 #include <QAbstractEventDispatcher>
 #include <QByteArray>
@@ -70,16 +71,19 @@ int main(int argc, char** argv)
 
     // Start after exec(): synchronous refusals must also produce an exit code.
     QTimer::singleShot(0, &app, [&] {
-        if (mode == u"owner-cleanup") {
-            TailnetShimTokenStore::save(candidateId, {}, &app, [&, finish](bool persisted, const QString&) {
+        if (mode == u"owner-cleanup" || mode == u"owner-transaction-cleanup") {
+            const QString cleaning = mode == u"owner-cleanup" ? candidateId : id + u'/' + QString(64, u'c');
+            TailnetShimTokenStore::save(cleaning, {}, &app, [&, finish](bool persisted, const QString&) {
                 if (!persisted) { finish(false); return; }
                 TailnetShimTokenStore::save(id, {}, &app, [finish](bool saved, const QString&) { finish(saved); });
             }, Entry::AetherPDOwnerCandidate);
-        } else if (mode == u"owner-candidate-absent" || mode == u"owner-candidate-absent-meta") {
+        } else if (mode == u"owner-candidate-absent" || mode == u"owner-candidate-absent-meta"
+                   || mode == u"owner-transaction-absent" || mode == u"owner-transaction-absent-meta") {
+            const QString checking = mode.startsWith(u"owner-transaction-") ? id + u'/' + QString(64, u'c') : candidateId;
             QString slot = AetherSDR::SettingsCredentialPolicy::scopedCredentialKey(
                 AetherSDR::SettingsCredentialPolicy::kAetherPDOwnerCandidate,
-                QString::fromLatin1(QCryptographicHash::hash(candidateId.toUtf8(), QCryptographicHash::Sha256).toHex()));
-            if (mode == u"owner-candidate-absent-meta") { slot = Persistence::versionKey(slot); }
+                QString::fromLatin1(QCryptographicHash::hash(checking.toUtf8(), QCryptographicHash::Sha256).toHex()));
+            if (mode.endsWith(u"-meta")) { slot = Persistence::versionKey(slot); }
             auto* job = new QKeychain::ReadPasswordJob(QStringLiteral("AetherSDR"), &app);
             job->setKey(slot);
             job->setAutoDelete(true);
@@ -88,11 +92,16 @@ int main(int argc, char** argv)
                 finish(job->error() == QKeychain::EntryNotFound);
             });
             job->start();
+        } else if (mode == u"owner-transaction" || mode == u"owner-transaction-lost" || mode == u"owner-transaction-missing") {
+            runNativeOwnerKeyProbe(app, mode, id, finish);
         } else if (mode == u"owner-promote" || mode == u"owner-promote-close") {
             TailnetShimTokenStore::save(candidateId, candidate, &app, [&, finish](bool persisted, const QString&) {
                 if (!persisted) { finish(false); return; }
                 TailnetShimTokenStore::load(candidateId, &app, [&, finish](const QString& saved) {
-                    if (saved != candidate) { finish(false); return; }
+                    if (saved != candidate || !TailnetShimTokenStore::isDurableCurrent(candidateId, saved,
+                            TailnetShimTokenStore::revision(candidateId, Entry::AetherPDOwnerCandidate), Entry::AetherPDOwnerCandidate)) {
+                        finish(false); return;
+                    }
                     TailnetShimTokenStore::load(id, &app, [&, finish](const QString& current) {
                         if (current != value) { finish(false); return; }
                         const quint64 revision = TailnetShimTokenStore::revision(id);

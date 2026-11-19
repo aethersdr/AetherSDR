@@ -1180,6 +1180,7 @@ set(CORE_SOURCES
     src/core/TailnetShimClient.cpp    # in-radio tailnet shim provisioning API (prototype)
     src/core/TailnetShimTokenStore.cpp
     src/core/TailnetShimCredentialPersistence.cpp
+    src/core/TailnetShimOwnerKeyTransaction.cpp
     src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
     src/core/RadioHealthClient.cpp    # radio health agent readout (tools/radio-health)
     src/core/GpsdSkyClient.cpp        # AetherGPS sky view: gpsd on the radio (tools/aether-gps)

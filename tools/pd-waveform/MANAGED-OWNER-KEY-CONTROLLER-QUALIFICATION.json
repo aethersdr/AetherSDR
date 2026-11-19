@@ -1,0 +1,246 @@
+{
+  "status": "Controller/storage components passed injected, sanitizer and real Linux keychain checks; operator UI/live radio/release qualification outstanding",
+  "baseline_source": "0b565512007ea7315e31c9f517f4a03cbb8e403e",
+  "source_sha256": {
+    "CMakeLists.txt": "d2d89083005c18b816019a9b0ca438fc9bab36eeaee894385842d4c81a9b64f2",
+    "src/core/TailnetShimOwnerKeyTransaction.cpp": "7c9ba4f45813e97be910fe168059aaaf936577cfb0c7f82c07099e1199a3111f",
+    "src/core/TailnetShimOwnerKeyTransaction.h": "f088623e213b18cf17f749cc3aaf8728e667d5eb6d04d5ebe91d1278841855e3",
+    "src/core/TailnetShimClient.cpp": "26c9fa925086fb3404904f0d5bf3c748150ed025e5dfa7806a1d7612c6e787dc",
+    "src/core/TailnetShimClient.h": "4c3519ac462f24cfdd1baacc2bf7b844d579b5afac5f2cf5061acbc9b986b83d",
+    "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28",
+    "src/core/TailnetShimCredentialPersistence.h": "98048d7843b3df102129cde2b0af6086449c46105de7a76274abe7b586ce82ad",
+    "src/core/TailnetShimTokenStore.cpp": "5d7597adc0c8cccbf384c62d71b0b656afc622732a81fd0730c1734dec3e12e1",
+    "src/core/TailnetShimTokenStore.h": "dd77cfa26fb744fdb489051473b56aa7a4e08d9332b746181a97061e9cf9de00",
+    "tests/tailnet_shim_owner_key_transaction_test.cpp": "ee5eef9b37d26709c1ff564c33b829a02a98a25d07afb281d398b68313707e05",
+    "tests/tailnet_shim_credential_persistence_test.cpp": "cfef9f84563617535e01f0bc0b73abc6243121a74ce3a1a1b4c7db8ba9bfb3e7",
+    "tests/native_credential_probe.cpp": "8143929d965a9f1ec25c9da1663927fdcb6f66070223ddd3cf311717ecbd7d8b",
+    "tests/NativeOwnerKeyProbe.cpp": "6fb4de90026e4eb23d5e01285c03234b0bf58e8de7c8c8030e340ad0c43bacb1",
+    "tests/NativeOwnerKeyProbe.h": "778cb638d38df14f56c050f242b8c09c16cf585e592b629a832cf51c1f7253dc",
+    "tests/tests.cmake": "fde4a7044577c5e8fbb721edbd228be64e9ed9bcd386f3c57c4296c7a858cc60",
+    "tools/qualify_native_credentials.py": "8eef521d0e66d49214f18bfa86004cc8202d6648bf02c8bdfab1ee3ac96320be"
+  },
+  "evidence": {
+    "path": "MANAGED-OWNER-KEY-CONTROLLER-EVIDENCE.json.gz",
+    "sha256": "6f1994acab6a0743a376944eef7c7de505ce1b639f7e08dde313e8b497625d70",
+    "members": 162
+  },
+  "injected_and_sanitizer": {
+    "status": "controller and persistence components; native probe built but OS run separate, UI/radio qualification outstanding",
+    "reports": [
+      {
+        "name": "controller",
+        "compile_exit": 0,
+        "sanitized": false,
+        "mutant": false,
+        "native_build_only": false,
+        "binary_sha256": "388e3a598d01e2cb40b21e845a31806ec30e965b931b76eefabc10e9869c4d14",
+        "source_sha256": {
+          "tests/tailnet_shim_owner_key_transaction_test.cpp": "ee5eef9b37d26709c1ff564c33b829a02a98a25d07afb281d398b68313707e05",
+          "src/core/TailnetShimOwnerKeyTransaction.cpp": "7c9ba4f45813e97be910fe168059aaaf936577cfb0c7f82c07099e1199a3111f",
+          "src/core/TailnetShimClient.cpp": "26c9fa925086fb3404904f0d5bf3c748150ed025e5dfa7806a1d7612c6e787dc",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28",
+          "src/core/TailnetShimTokenStore.cpp": "5d7597adc0c8cccbf384c62d71b0b656afc622732a81fd0730c1734dec3e12e1",
+          "checks-qualified/controller/moc_TailnetShimOwnerKeyTransaction.cpp": "c893ebdc98a741c3a4d0d5daf77865d0999bd8f0f60e2ee1ecd1fc2daa835019",
+          "checks-qualified/controller/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7"
+        },
+        "test_exit": 0
+      },
+      {
+        "name": "controller-sanitized",
+        "compile_exit": 0,
+        "sanitized": true,
+        "mutant": false,
+        "native_build_only": false,
+        "binary_sha256": "a3df5fe35ff6dcc1324f03ca8f83cb6ff16fcc27ad093a1211f6433f5f64b6ad",
+        "source_sha256": {
+          "tests/tailnet_shim_owner_key_transaction_test.cpp": "ee5eef9b37d26709c1ff564c33b829a02a98a25d07afb281d398b68313707e05",
+          "src/core/TailnetShimOwnerKeyTransaction.cpp": "7c9ba4f45813e97be910fe168059aaaf936577cfb0c7f82c07099e1199a3111f",
+          "src/core/TailnetShimClient.cpp": "26c9fa925086fb3404904f0d5bf3c748150ed025e5dfa7806a1d7612c6e787dc",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28",
+          "src/core/TailnetShimTokenStore.cpp": "5d7597adc0c8cccbf384c62d71b0b656afc622732a81fd0730c1734dec3e12e1",
+          "checks-qualified/controller-sanitized/moc_TailnetShimOwnerKeyTransaction.cpp": "c893ebdc98a741c3a4d0d5daf77865d0999bd8f0f60e2ee1ecd1fc2daa835019",
+          "checks-qualified/controller-sanitized/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7"
+        },
+        "test_exit": 0
+      },
+      {
+        "name": "persistence",
+        "compile_exit": 0,
+        "sanitized": false,
+        "mutant": false,
+        "native_build_only": false,
+        "binary_sha256": "d14ffc509b7880793ac1a4a4eedafb73b39c3245991cd6319e2f54ffdf5d9121",
+        "source_sha256": {
+          "tests/tailnet_shim_credential_persistence_test.cpp": "cfef9f84563617535e01f0bc0b73abc6243121a74ce3a1a1b4c7db8ba9bfb3e7",
+          "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28"
+        },
+        "test_exit": 0
+      },
+      {
+        "name": "persistence-sanitized",
+        "compile_exit": 0,
+        "sanitized": true,
+        "mutant": false,
+        "native_build_only": false,
+        "binary_sha256": "9106825231c053d0912fab0901f1bd6806f7a0e4463ff61ed02a3fe6496f9897",
+        "source_sha256": {
+          "tests/tailnet_shim_credential_persistence_test.cpp": "cfef9f84563617535e01f0bc0b73abc6243121a74ce3a1a1b4c7db8ba9bfb3e7",
+          "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28"
+        },
+        "test_exit": 0
+      },
+      {
+        "name": "native-probe",
+        "compile_exit": 0,
+        "sanitized": false,
+        "mutant": false,
+        "native_build_only": true,
+        "binary_sha256": "3fccaa81065e5bc6e1c9a76d5423203af0ec15d18ebb06cdeca40cfd6b8d4b36",
+        "source_sha256": {
+          "tests/native_credential_probe.cpp": "8143929d965a9f1ec25c9da1663927fdcb6f66070223ddd3cf311717ecbd7d8b",
+          "tests/NativeOwnerKeyProbe.cpp": "6fb4de90026e4eb23d5e01285c03234b0bf58e8de7c8c8030e340ad0c43bacb1",
+          "src/core/TailnetShimOwnerKeyTransaction.cpp": "7c9ba4f45813e97be910fe168059aaaf936577cfb0c7f82c07099e1199a3111f",
+          "src/core/TailnetShimClient.cpp": "26c9fa925086fb3404904f0d5bf3c748150ed025e5dfa7806a1d7612c6e787dc",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28",
+          "src/core/TailnetShimTokenStore.cpp": "5d7597adc0c8cccbf384c62d71b0b656afc622732a81fd0730c1734dec3e12e1",
+          "checks-qualified/native-probe/moc_TailnetShimOwnerKeyTransaction.cpp": "c893ebdc98a741c3a4d0d5daf77865d0999bd8f0f60e2ee1ecd1fc2daa835019",
+          "checks-qualified/native-probe/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7"
+        }
+      },
+      {
+        "name": "mutant-skip-readback",
+        "compile_exit": 0,
+        "sanitized": false,
+        "mutant": true,
+        "native_build_only": false,
+        "binary_sha256": "8c9de26353a45551482f0b6c8528819e948601a61e344a97ba6f187207b56ac8",
+        "source_sha256": {
+          "tests/tailnet_shim_owner_key_transaction_test.cpp": "ee5eef9b37d26709c1ff564c33b829a02a98a25d07afb281d398b68313707e05",
+          "checks-qualified/mutant-skip-readback/TailnetShimOwnerKeyTransaction.cpp": "3629eb4f49d18d2bf163fd03c08eb1a0f86eab07111e0b8027aa929a7b00fa5d",
+          "src/core/TailnetShimClient.cpp": "26c9fa925086fb3404904f0d5bf3c748150ed025e5dfa7806a1d7612c6e787dc",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28",
+          "src/core/TailnetShimTokenStore.cpp": "5d7597adc0c8cccbf384c62d71b0b656afc622732a81fd0730c1734dec3e12e1",
+          "checks-qualified/mutant-skip-readback/moc_TailnetShimOwnerKeyTransaction.cpp": "c893ebdc98a741c3a4d0d5daf77865d0999bd8f0f60e2ee1ecd1fc2daa835019",
+          "checks-qualified/mutant-skip-readback/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7"
+        },
+        "test_exit": 1
+      },
+      {
+        "name": "mutant-cleanup-guard",
+        "compile_exit": 0,
+        "sanitized": false,
+        "mutant": true,
+        "native_build_only": false,
+        "binary_sha256": "9a7f981e15f0f5e8db34c8b9951cc88b6c2129273df686bf5a0761f8b2e546f1",
+        "source_sha256": {
+          "tests/tailnet_shim_owner_key_transaction_test.cpp": "ee5eef9b37d26709c1ff564c33b829a02a98a25d07afb281d398b68313707e05",
+          "checks-qualified/mutant-cleanup-guard/TailnetShimOwnerKeyTransaction.cpp": "adaed32b49322add5c191d1d4c0ddeb7cdbcfe31de4118b925aff3bd28e66d81",
+          "src/core/TailnetShimClient.cpp": "26c9fa925086fb3404904f0d5bf3c748150ed025e5dfa7806a1d7612c6e787dc",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28",
+          "src/core/TailnetShimTokenStore.cpp": "5d7597adc0c8cccbf384c62d71b0b656afc622732a81fd0730c1734dec3e12e1",
+          "checks-qualified/mutant-cleanup-guard/moc_TailnetShimOwnerKeyTransaction.cpp": "c893ebdc98a741c3a4d0d5daf77865d0999bd8f0f60e2ee1ecd1fc2daa835019",
+          "checks-qualified/mutant-cleanup-guard/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7"
+        },
+        "test_exit": 1
+      },
+      {
+        "name": "mutant-auto-retry",
+        "compile_exit": 0,
+        "sanitized": false,
+        "mutant": true,
+        "native_build_only": false,
+        "binary_sha256": "9fd216f879aa4e4fcb1ee7d2b098cb5ca92401059a7fd43db1e99f3c214cfc84",
+        "source_sha256": {
+          "tests/tailnet_shim_owner_key_transaction_test.cpp": "ee5eef9b37d26709c1ff564c33b829a02a98a25d07afb281d398b68313707e05",
+          "checks-qualified/mutant-auto-retry/TailnetShimOwnerKeyTransaction.cpp": "cb3c4241c54809214dc544aa4f80b010de6b42a04f1b9d2d2f58e8c2c601b77a",
+          "src/core/TailnetShimClient.cpp": "26c9fa925086fb3404904f0d5bf3c748150ed025e5dfa7806a1d7612c6e787dc",
+          "src/core/AetherPDProtocol.cpp": "d5a962e2f5a5986207e8b23f226fb7971fd9052d2bef1bf85e186746a169eb69",
+          "src/core/TailnetShimCredentialPersistence.cpp": "315435684fd8360fa9f92efd37642d05cda7fdd2ecc0456f69e665a347951b28",
+          "src/core/TailnetShimTokenStore.cpp": "5d7597adc0c8cccbf384c62d71b0b656afc622732a81fd0730c1734dec3e12e1",
+          "checks-qualified/mutant-auto-retry/moc_TailnetShimOwnerKeyTransaction.cpp": "c893ebdc98a741c3a4d0d5daf77865d0999bd8f0f60e2ee1ecd1fc2daa835019",
+          "checks-qualified/mutant-auto-retry/moc_TailnetShimClient.cpp": "4329d1c184621690f73ddf6c24716ffa1f699015075cfdd3427826ddb33258a7"
+        },
+        "test_exit": 1
+      }
+    ],
+    "radio_changes": false,
+    "real_keychain_writes": false
+  },
+  "registered_target": {
+    "status": "unchanged registered test block built in isolated CMake project and CTest passed; not a full application build",
+    "commands": [
+      [
+        "cmake",
+        "-S",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/owner-key-controller/cmake-project",
+        "-B",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/owner-key-controller/cmake-build",
+        "-G",
+        "Ninja",
+        "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+      ],
+      [
+        "cmake",
+        "--build",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/owner-key-controller/cmake-build",
+        "--parallel",
+        "2"
+      ],
+      [
+        "ctest",
+        "--test-dir",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/owner-key-controller/cmake-build",
+        "--output-on-failure",
+        "--no-tests=error",
+        "-R",
+        "^tailnet_shim_owner_key_transaction_test$"
+      ]
+    ]
+  },
+  "real_OS_backend": {
+    "platform": "Linux",
+    "passed_and_cleaned_cases": 23,
+    "native_binary_sha256": "9b77e406892a5bfd6363bc57a24dcd55bf1ecebd3f6dd021a76afd17e5abe557",
+    "HTTP": "injected own API; no radio or real network peer",
+    "new_controller_cases": [
+      "complete transaction",
+      "lost server reply with explicit Resume",
+      "confirmed candidate adoption when active entry is absent"
+    ]
+  },
+  "regression": {
+    "cleanup_boundary_failed_before_guard": true,
+    "failed_result": "evidence/pre-cleanup-guard/result.json",
+    "fixed_current_controller_and_sanitizer_passed": true
+  },
+  "development_attempts": {
+    "first_candidate_write_guard_mutant": "Passed safely: an independent pre-submit durability guard still prevented HTTP; not counted as unsafe behavior rejected.",
+    "first_skip_readback_mutant": "Incomplete revision update triggered a safe refusal and then a test-harness null dereference. Retained as unsuccessful qualification; final fault variant preserves the revision and all final variants exit1 on assertions."
+  },
+  "invariants": [
+    "Explicit begin/resume only; known managed target and original-session predicate required",
+    "Independent installation-scoped candidate saved and read back before HTTP",
+    "Existing pending candidate is not replaced; session-only/unavailable storage refuses mutation",
+    "Explicit Resume confirms saved candidate, with at most one identical-candidate submission using retained old owner after401",
+    "No mutating request on timer/reconnect or automatic network retry; ambiguous outcome retains credentials",
+    "Conditional promotion/creation under actual backend lease; competing primary or unknown metadata refuses creation",
+    "Observed durable active key and revisions rechecked at cleanup before conditional candidate retirement",
+    "Backend completion retains setup lease after caller cancellation/destruction; late callbacks cannot issue new HTTP",
+    "No Start, arm, RF, signout, settings restoration or new privileged operation"
+  ],
+  "remaining": [
+    "Operator UI and real RadioModel/session admission integration",
+    "Full application build and bridge qualification",
+    "New native macOS/Windows coverage",
+    "Authenticated packaged deployment and receive-only owner rotation/receipt-loss/cleanup on FLEX8600",
+    "Lost-owner recovery without any saved owner/candidate and all other unfinishedP1-P10 requirements"
+  ],
+  "production_ready": false,
+  "radio_changes": false,
+  "RF_or_source_arms": 0
+}

@@ -58,6 +58,13 @@ public:
                                  quint64 expectedRevision, const QString& replacement, QObject* context,
                                  std::function<void(bool persisted, const QString& error)> done,
                                  Entry entry = Entry::TailnetShim);
+    // Explicit verified-candidate adoption, or creation of its separate slot.
+    // Requires an observed absence and refuses a competing backend primary.
+    static bool createIfMissing(const QString& radioSerial, quint64 expectedRevision, const QString& token,
+                                QObject* context, std::function<void(bool, const QString&)> done,
+                                Entry entry = Entry::TailnetShim);
+    [[nodiscard]] static bool isDurableCurrent(const QString& radioSerial, const QString& token,
+                                               quint64 expectedRevision, Entry entry = Entry::TailnetShim);
     [[nodiscard]] static bool persistentStoreAvailable();
     // What a finished keychain read yields: the read, unless a save happened
     // while it ran, in which case that save's (newer) token, or none if the

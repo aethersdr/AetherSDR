@@ -2,8 +2,10 @@
 
 Status: unfinished research. The server endpoint now has offline component
 coverage recorded in [its qualification report](./MANAGED-OWNER-KEY-SERVER-QUALIFICATION.json).
-The client transaction, operator UI, packaged installation and radio qualification
-remain outstanding. Managed sign-out continues to preserve the owner credential.
+The client transaction now has injected and real Linux keychain qualification in
+[the controller report](./MANAGED-OWNER-KEY-CONTROLLER-QUALIFICATION.json). Operator
+UI, packaged delivery and radio qualification remain outstanding. Managed
+sign-out continues to preserve the owner credential.
 The [credential component report](./MANAGED-OWNER-KEY-CREDENTIAL-QUALIFICATION.json)
 records conditional promotion, an installation-scoped candidate slot, injected
 failure tests and real Linux keychain checks. It does not qualify the complete

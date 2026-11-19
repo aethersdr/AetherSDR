@@ -5450,6 +5450,19 @@ target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
+# Injected storage and HTTP handlers; no sockets, real keyring, settings or radio.
+add_executable(tailnet_shim_owner_key_transaction_test
+    tests/tailnet_shim_owner_key_transaction_test.cpp
+    src/core/TailnetShimOwnerKeyTransaction.cpp
+    src/core/TailnetShimClient.cpp
+    src/core/AetherPDProtocol.cpp
+    src/core/TailnetShimCredentialPersistence.cpp
+    src/core/TailnetShimTokenStore.cpp)
+target_include_directories(tailnet_shim_owner_key_transaction_test PRIVATE src tests)
+target_link_libraries(tailnet_shim_owner_key_transaction_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME tailnet_shim_owner_key_transaction_test COMMAND tailnet_shim_owner_key_transaction_test)
+set_tests_properties(tailnet_shim_owner_key_transaction_test PROPERTIES TIMEOUT 15)
+
 # Explicit opt-in real OS-keychain qualification; disposable slots, no radio.
 option(AETHER_NATIVE_CREDENTIAL_QUALIFICATION
     "Opt in to disposable writes against the real local OS keychain" OFF)
@@ -5460,11 +5473,15 @@ if(AETHER_NATIVE_CREDENTIAL_QUALIFICATION)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_executable(native_credential_probe
         tests/native_credential_probe.cpp
+        tests/NativeOwnerKeyProbe.cpp
+        src/core/TailnetShimOwnerKeyTransaction.cpp
+        src/core/TailnetShimClient.cpp
+        src/core/AetherPDProtocol.cpp
         src/core/TailnetShimCredentialPersistence.cpp
         src/core/TailnetShimTokenStore.cpp)
     target_include_directories(native_credential_probe PRIVATE src)
     target_compile_definitions(native_credential_probe PRIVATE HAVE_KEYCHAIN)
-    target_link_libraries(native_credential_probe PRIVATE Qt6::Core Qt6Keychain::Qt6Keychain)
+    target_link_libraries(native_credential_probe PRIVATE Qt6::Core Qt6::Network Qt6Keychain::Qt6Keychain)
     if(APPLE)
         target_link_libraries(native_credential_probe PRIVATE Qt6::Gui "-framework Cocoa")
     endif()

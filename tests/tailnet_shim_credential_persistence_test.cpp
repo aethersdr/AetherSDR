@@ -121,6 +121,42 @@ int main(int argc, char** argv)
     bool ok = true;
     {
         const auto memory = std::make_shared<Memory>();
+        Store store(memory->backend(), memory->acquire());
+        memory->values.insert(Store::versionKey(kKey), record(true, QStringLiteral("unknown"), 2));
+        const auto unknown = wait([&](Store::Done done) { store.createIfMissing(kKey, QStringLiteral("verified"), std::move(done)); });
+        ok &= check(unknown && unknown->error == Error::Unavailable && !memory->values.contains(kKey),
+                    "conditional creation refuses unknown orphaned metadata");
+        memory->values.remove(Store::versionKey(kKey));
+        const auto created = wait([&](Store::Done done) { store.createIfMissing(kKey, QStringLiteral("verified"), std::move(done)); });
+        const auto refused = wait([&](Store::Done done) { store.createIfMissing(kKey, QStringLiteral("other"), std::move(done)); });
+        ok &= check(created && created->error == Error::None && created->version.size() == 16 && created->selection.size() == 32
+                        && refused && refused->error == Error::Rejected && memory->values.value(kKey) == QStringLiteral("verified")
+                        && !memory->leaseViolation && !memory->held,
+                    "explicit creation admits only an absent primary and cannot overwrite a competing value");
+    }
+    for (int boundary = 1; boundary <= 6; ++boundary) {
+        for (bool apply : {false, true}) {
+            const auto memory = std::make_shared<Memory>();
+            Store store(memory->backend(), memory->acquire());
+            memory->failAt = boundary; memory->applyOnFailure = apply;
+            const auto failed = wait([&](Store::Done done) { store.createIfMissing(kKey, QStringLiteral("verified"), std::move(done)); });
+            ok &= check(failed && failed->error == Error::Unavailable && !memory->held,
+                        "conditional creation reports uncertainty at every backend boundary");
+            memory->failAt = 0;
+            const auto observed = wait([&](Store::Done done) { store.read(kKey, std::move(done)); });
+            const auto recovered = wait([&](Store::Done done) {
+                if (observed->error == Error::Missing) {
+                    store.createIfMissing(kKey, QStringLiteral("verified"), std::move(done));
+                } else {
+                    store.compareAndWrite(kKey, observed->token, observed->selection, QStringLiteral("verified"), std::move(done));
+                }
+            });
+            ok &= check(recovered && recovered->error == Error::None && memory->values.value(kKey) == QStringLiteral("verified"),
+                        "explicit recovery handles both absent and whole-primary interrupted creation states");
+        }
+    }
+    {
+        const auto memory = std::make_shared<Memory>();
         Store a(memory->backend(), memory->acquire());
         Store b(memory->backend(), memory->acquire());
         const auto original = wait([&](Store::Done done) { a.write(kKey, QStringLiteral("old"), std::move(done)); });

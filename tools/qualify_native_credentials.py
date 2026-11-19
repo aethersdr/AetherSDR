@@ -98,6 +98,7 @@ CASES = (
     "legacy_read_upgrade", "pending_write", "inflight_read_save",
     "owner_promotion", "owner_promotion_closed_context", "owner_stale_identical_save",
     "owner_stale_foreign_save", "owner_active_deleted",
+    "owner_transaction", "owner_transaction_lost", "owner_transaction_missing",
 )
 
 
@@ -163,13 +164,25 @@ def qualify(binary, receipt):
                 # Never replace a pre-existing entry, even for this random identifier.
                 command("absent")
                 command("absent-metadata")
-                if kind.startswith("owner_"):
+                if kind.startswith("owner_transaction"):
+                    command("owner-transaction-absent")
+                    command("owner-transaction-absent-meta")
+                elif kind.startswith("owner_"):
                     command("owner-candidate-absent")
                     command("owner-candidate-absent-meta")
                 admitted = True
-                command("legacy-write" if kind == "legacy_read_upgrade" else "write", "fixture-old")
-                command("raw-read", "fixture-old")
-                if kind in ("owner_promotion", "owner_promotion_closed_context"):
+                if not kind.startswith("owner_transaction"):
+                    command("legacy-write" if kind == "legacy_read_upgrade" else "write", "fixture-old")
+                    command("raw-read", "fixture-old")
+                if kind.startswith("owner_transaction"):
+                    command(kind.replace("_", "-"))
+                    # The controller fixture uses one fixed, non-production key.
+                    candidate = "b" * 64
+                    command("raw-read", candidate)
+                    command("read", candidate)
+                    command("owner-transaction-absent")
+                    command("owner-transaction-absent-meta")
+                elif kind in ("owner_promotion", "owner_promotion_closed_context"):
                     command("owner-promote" if kind == "owner_promotion" else "owner-promote-close", "fixture-old")
                     candidate = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
                     command("raw-read", candidate)
@@ -281,8 +294,11 @@ def qualify(binary, receipt):
                     except Exception as error:
                         case.setdefault("cleanup_errors", []).append(str(error))
                 if admitted:
-                    modes = ("owner-cleanup", "absent", "absent-metadata", "owner-candidate-absent", "owner-candidate-absent-meta") \
-                        if kind.startswith("owner_") else ("cleanup", "cleanup", "absent", "absent-metadata")
+                    if kind.startswith("owner_transaction"):
+                        modes = ("owner-transaction-cleanup", "absent", "absent-metadata", "owner-transaction-absent", "owner-transaction-absent-meta")
+                    else:
+                        modes = ("owner-cleanup", "absent", "absent-metadata", "owner-candidate-absent", "owner-candidate-absent-meta") \
+                            if kind.startswith("owner_") else ("cleanup", "cleanup", "absent", "absent-metadata")
                     for mode in modes:
                         try:
                             command(mode, cleanup=True)
