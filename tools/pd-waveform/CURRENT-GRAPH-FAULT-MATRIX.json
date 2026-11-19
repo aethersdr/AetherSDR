@@ -1,8 +1,8 @@
 {
-  "recorded_utc": "2026-11-19T08:57:49.820876+00:00",
+  "recorded_utc": "2026-11-19T09:22:39.603194+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
-  "current_runtime_release": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
+  "current_runtime_release": "29db5fe1a8ec20a3da018fa6d63f96140ab621b8f2724a3c925b9e6cdff15d0e",
   "current_desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
   "cases": [
     {
@@ -107,16 +107,19 @@
     },
     {
       "case": "DSP inherited API lease loss before any calibration arm",
-      "state": "old_runtime_explicit_recovery_failed_causal_fix_host_tested_not_installed",
-      "evidence": "PREARM-API-RECOVERY-QUALIFICATION.json",
-      "limits": "Receive-only DSP API loss exposed a pre-arm explicit receive-recovery gap. A causal Go fix and host tests pass; the fix is not installed or radio-qualified. Original failed harness/product recovery results are preserved. Manual basic USB recovery, fresh ordinary DAX IQ successor and both exact-session cleanup audits pass. Native exit7 survived; no RF/keyed case. Manual receiver creation is not product recovery. The original overly strict READY-only observer failure remains failed."
+      "state": "installed_ownership_witness_passed_product_restore_still_failed_NO_TX_ASSIGNED_fix_host_only",
+      "evidence": [
+        "PREARM-API-RECOVERY-QUALIFICATION.json",
+        "PREARM-API-RECOVERY-INSTALLED-QUALIFICATION.json"
+      ],
+      "limits": "First ownership-witness fix is reproducibly built, installed and observed before an unarmed DSP API loss. Fault retirement passed while the GUI was paused, but explicit Restore receive still failed on the bound NO_TX_ASSIGNED reason. A second exact missing-receiver admission fix passes causal/full/race host tests and is not built or installed. Manual basic USB recovery and a fresh DAX IQ successor pass; both exact-session cleanup audits pass."
     }
   ],
   "next_available_case": {
-    "purpose": "Build the exact fixed full ARMv7/ARM64 runtime reproducibly, verify changed components and disk bounds, then use the ordinary approved upgrade. Dispatch a new receive-only DSP API fault with fresh ownership witness, allow READY/RECEIVE only after the unkeyed fault, and prove explicit Restore receive plus fresh USB DAX IQ successor and exact cleanup. Preserve the old failed run; no automatic RF retry/rearm or software reboot.",
-    "state": "build_install_and_qualify_prearm_recovery_fix",
-    "evidence": "PREARM-API-RECOVERY-QUALIFICATION.json",
-    "authority_constraint": "Ordinary approved upgrade; receive-only first; exact owned socket and privilege drop before shutdown. No automatic RF retry/rearm or software reboot."
+    "purpose": "Build and reproduce the exact second missing-receiver NO_TX_ASSIGNED fix for ARMv7/ARM64, package it with current29db as predecessor, verify component/disk bounds and preserve complete artifacts, then ordinary GUI upgrade. Dispatch a new receive-only case and prove explicit Restore receive plus full original profile readback and fresh local DAX IQ successor. Retain both failed product restore cases; no automatic RF retry/rearm or software reboot.",
+    "state": "build_install_and_qualify_exact_NO_TX_ASSIGNED_recovery_fix",
+    "evidence": "PREARM-API-RECOVERY-INSTALLED-QUALIFICATION.json",
+    "authority_constraint": "Ordinary approved upgrade, receive-only first, exact owned socket and privilege drop. No automatic RF retry/rearm or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
@@ -125,5 +128,5 @@
     "Actual FLEX6300 teammate hardware and disk qualification",
     "Final native candidate packaging, production publisher/catalogue and independent release review"
   ],
-  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified. The same d7 diagnostic now separately passed one keyed owned lifetime-unkey API-loss case plus explicit USB successor and exact cleanup; no other old fault rows are automatically requalified."
+  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified. The same d7 diagnostic now separately passed one keyed owned lifetime-unkey API-loss case plus explicit USB successor and exact cleanup; no other old fault rows are automatically requalified. Current29db installs the first Go ownership-witness fix with unchanged DSP/fixed helper bytes. Its one receive-only DSP API fault passes shutdown/retirement but explicit product restore fails on bound NO_TX_ASSIGNED. Second exact admission fix remains host-only; no other prior row is automatically requalified."
 }

@@ -150,7 +150,11 @@ func validatePDReceiveIdentityForAllocation(o pdReceiveOriginal, v pdReceiveView
 	if !v.guiConnected || v.guiHandle != o.guiHandle || !strings.EqualFold(v.clientID, o.clientID) {
 		return errors.New("original GUI identity no longer owns session")
 	}
-	if (!(v.ready && v.txAllowed) && !(allowEmptyReceive && v.receive && !v.txAllowed && !v.slices[o.sliceID].present)) || v.source != "" || v.reason != "" || v.txOwner != 0 {
+	// Firmware 4.3.16 reports NO_TX_ASSIGNED for a bound GUI with no slice.
+	// Only explicit missing-receiver allocation admits that receive-only state.
+	emptyReceive := allowEmptyReceive && v.receive && !v.ready && !v.txAllowed && !v.slices[o.sliceID].present
+	reasonAllowed := v.reason == "" || emptyReceive && v.reason == "NO_TX_ASSIGNED"
+	if (!(v.ready && v.txAllowed) && !emptyReceive) || v.source != "" || !reasonAllowed || v.txOwner != 0 {
 		return errors.New("fresh unkeyed READY required")
 	}
 	if v.panID != o.panID || v.panOwner != o.guiHandle || v.panAntenna != o.settings.antenna || v.panGain != o.panGain {

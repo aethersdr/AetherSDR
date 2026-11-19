@@ -174,3 +174,44 @@ func TestPDReceiveAllocationOnlyAdmitsExactEmptyReceiveState(t *testing.T) {
 		})
 	}
 }
+
+func TestPDReceiveAllocationNoTXAssignedOnlyForMissingReceiver(t *testing.T) {
+	request, view, _ := receiveRecoveryFixture()
+	view.observedAt = time.Now()
+	view.ready, view.receive, view.txAllowed = false, true, false
+	view.reason = "NO_TX_ASSIGNED"
+	if _, err := planPDReceiveRecovery(request, view, time.Now()); err != nil {
+		t.Fatal("measured bound empty-GUI receive state refused", err)
+	}
+	if err := validateExistingPDReceiveRestore(request.original, view, time.Now()); err == nil {
+		t.Fatal("ordinary restore acquired empty-receiver exception")
+	}
+	for _, name := range []string{"source", "owner", "not receive", "permission", "ready", "occupied", "another own receiver", "other reason", "noncanonical reason"} {
+		t.Run(name, func(t *testing.T) {
+			v := view
+			switch name {
+			case "source":
+				v.source = "SW"
+			case "owner":
+				v.txOwner = request.original.guiHandle
+			case "not receive":
+				v.receive = false
+			case "permission":
+				v.txAllowed = true
+			case "ready":
+				v.ready, v.receive = true, false
+			case "occupied":
+				v.slices[0] = pdReceiveSlice{present: true, owner: request.original.guiHandle}
+			case "another own receiver":
+				v.slices[1].owner = request.original.guiHandle
+			case "other reason":
+				v.reason = "INTERLOCK"
+			case "noncanonical reason":
+				v.reason = "no_tx_assigned"
+			}
+			if _, err := planPDReceiveRecovery(request, v, time.Now()); err == nil {
+				t.Fatal("unsafe or occupied bound context admitted")
+			}
+		})
+	}
+}
