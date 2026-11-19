@@ -75,6 +75,7 @@ void MicrohamTrioSession::stop()
     }
     m_link = Link::NeverConnected;
     m_failure = Failure::None;
+    m_heartbeatLostAfterMs.reset();
     m_lastConnectAtMs.reset();
     m_transientRetryAtMs.reset();
     m_consecutiveFailures = 0;
@@ -219,7 +220,7 @@ void MicrohamTrioSession::evaluate()
     const SessionDecision decision = decideSession(state, policy);
     if (m_phase == Phase::Open) {
         // Wake just past the silence bound rather than up to a tick late.
-        wait = std::min(wait, policy.sessionDeadAfterMs - state.lastMessageAgeMs + 1);
+        wait = std::min(wait, policy.heartbeatLostAfterMs - state.lastMessageAgeMs + 1);
         if (state.unansweredKeepAliveAgeMs) {
             wait = std::min(wait, policy.sessionDeadAfterMs - *state.unansweredKeepAliveAgeMs + 1);
         }
@@ -230,8 +231,13 @@ void MicrohamTrioSession::evaluate()
         if (decision.reason == SessionReason::SessionDead) {
             // A failed attempt like any other: the owner sees Failed, and
             // stops here when it does not reconnect. Otherwise the retry
-            // decision runs at once.
-            fail(Failure::SessionSilent);
+            // decision runs at once. No frame at all is the network path;
+            // frames without a keep-alive reply is the device.
+            if (state.lastMessageAgeMs > policy.heartbeatLostAfterMs) {
+                fail(Failure::ConnectionLost, state.lastMessageAgeMs);
+            } else {
+                fail(Failure::SessionSilent);
+            }
             evaluate();
             return;
         }
@@ -392,8 +398,8 @@ void MicrohamTrioSession::onClosedByPeer()
         fail(Failure::ClosedEarly);
         return;
     case Phase::Open:
-        // The device serves one session: a close of a held one is another
-        // client taking it.
+        // The device closes a held session only when another client
+        // upgrades (a bare FIN, measured); never for silence.
         becomeEvicted();
         return;
     }
@@ -487,6 +493,7 @@ void MicrohamTrioSession::takeState(const Frame& frame)
     m_consecutiveFailures = 0;
     m_transientFailures = 0;
     m_failure = Failure::None;
+    m_heartbeatLostAfterMs.reset();
     m_snapshot = frame.state.snapshot;
     if (frame.kind == FrameKind::StateReply && m_pending) {
         const PendingWrite write = *m_pending;
@@ -534,13 +541,14 @@ void MicrohamTrioSession::becomeEvicted()
     schedule(1);
 }
 
-void MicrohamTrioSession::fail(Failure failure)
+void MicrohamTrioSession::fail(Failure failure, std::optional<qint64> silenceMs)
 {
     dropConnection();
     m_link = Link::Failed;
     ++m_consecutiveFailures;
     m_transientFailures = 0;
     m_failure = failure;
+    m_heartbeatLostAfterMs = silenceMs;
     setStatus(Status::Failed);
     schedule(1);
 }
@@ -555,6 +563,7 @@ void MicrohamTrioSession::failTransient(Failure failure, qint64 nowMs)
     dropConnection();
     m_link = Link::Failed;
     m_failure = failure;
+    m_heartbeatLostAfterMs.reset();
     m_transientRetryAtMs = nowMs + m_config.transientRetryMs;
     setStatus(Status::Connecting);
     schedule(m_config.transientRetryMs);

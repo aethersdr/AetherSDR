@@ -178,7 +178,8 @@ Command encodeAntennaCommand(const Snapshot& snapshot, AntennaField field, const
 QString antennaFieldValue(const Snapshot& snapshot, AntennaField field);
 
 // The one long-lived session. The device serves a single session: a second
-// client evicts the first.
+// client's upgrade evicts the first with a bare TCP close, and nothing else
+// closes it.
 enum class Link {
     NeverConnected,
     Held,
@@ -189,7 +190,11 @@ enum class Link {
 // Timing parameters. None is a device constant; all are the caller's to set.
 struct Policy {
     qint64 keepAliveIntervalMs{5000};  // the device's own web page uses 5 s
-    qint64 sessionDeadAfterMs{10000};  // silent, or a keep-alive unanswered, this long (as the page)
+    // The device sends an empty pong frame every second and never ends a
+    // session for a silent client; a held session with no frame this long has
+    // lost the network path. Largest gap measured on a live session: 2.76 s.
+    qint64 heartbeatLostAfterMs{5000};
+    qint64 sessionDeadAfterMs{10000};  // a keep-alive unanswered this long (as the page)
     qint64 failureBackoffMs{5000};     // doubles per consecutive failure
     qint64 maxBackoffMs{600000};
 };
@@ -206,7 +211,8 @@ struct State {
     bool   hasSnapshot{false};        // a state document arrived on this session
 };
 
-// Held, yet silent or owing a keep-alive reply for longer than sessionDeadAfterMs.
+// Held, yet without a frame for longer than heartbeatLostAfterMs, or owing a
+// keep-alive reply for longer than sessionDeadAfterMs.
 bool sessionDead(const State& state, const Policy& policy = {});
 
 enum class SessionAction {

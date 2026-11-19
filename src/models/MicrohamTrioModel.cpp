@@ -408,13 +408,21 @@ void MicrohamTrioModel::onSessionState(MicrohamTrioSession::Status status)
         // Never retaken: that would evict the other client in turn.
         dropSession();
         m_evicted = true;
-        m_failure = tr("another client took the Trio's session (its own web page, or another "
-                       "program); click Connect to take it back");
+        m_failure = tr("another client took the Trio's session (perhaps its own web page, "
+                       "or another program); click Connect to take it back");
         qCInfo(lcDevices) << "MicrohamTrioModel: session taken by another client; not retaken";
         emit connectionFailed(m_failure);
         break;
     case MicrohamTrioSession::Status::Failed:
         m_failure = m_session ? failureText(m_session->lastFailure()) : tr("connection failed");
+        if (m_session && m_session->heartbeatLostAfterMs()) {
+            const QString after =
+                QString::number(*m_session->heartbeatLostAfterMs() / 1000.0, 'f', 1);
+            m_failure = m_autoReconnect
+                ? tr("no heartbeat from the Trio for %1 s (network); reconnecting").arg(after)
+                : tr("no heartbeat from the Trio for %1 s (network); click Connect to "
+                     "reconnect").arg(after);
+        }
         qCInfo(lcDevices) << "MicrohamTrioModel: attempt failed:" << m_failure;
         if (!m_autoReconnect) {
             dropSession();
