@@ -1,0 +1,156 @@
+{
+  "recorded_utc": "2026-11-19T11:53:47.224622+00:00",
+  "tested_source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "status": "All45 current-source native credential-backend cases pass acrossWindows/AppleSilicon/IntelmacOS, with artifact SHA/source and every cleanup/absence record verified. The same3 application build jobs remain observed in progress;42 setup-window cases and whole workflow/package outcomes remain pending. This is partial component qualification, not a final native release gate.",
+  "native_backend_populations_qualified": [
+    "Windows AMD64",
+    "macOS Apple Silicon arm64",
+    "macOS Intel x86_64"
+  ],
+  "verified_backend_cases": 45,
+  "verified_setup_window_cases": 0,
+  "all_six_native_populations_verified": false,
+  "whole_workflow_completion_claimed": false,
+  "verification": {
+    "recorded_utc": "2026-11-19T11:49:41.009782+00:00",
+    "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+    "artifacts": [
+      {
+        "name": "native-credential-macos-apple-silicon",
+        "artifact_id": 14525044282,
+        "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+        "sha256": "69a80095b16f839147bed890c4ed5302d9f62fd864adb8209b2faf85400b6325",
+        "cases_passed": 15,
+        "binary_sha256": "c7c7c391e0d63cc2cd888049a7b2601ef8e8c9a97a855cbdcfac5e38d979d2dc",
+        "all_fixture_identifiers_cleaned_and_absent": true,
+        "OS": "Darwin",
+        "machine": "arm64"
+      },
+      {
+        "name": "native-credential-macos-intel",
+        "artifact_id": 14527160199,
+        "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+        "sha256": "c2dec8b2e67a3fa19d98683249c09cf5f89fb97f4fe5febf1d022b3024820e09",
+        "cases_passed": 15,
+        "binary_sha256": "25baedd4e58c7374b11aec89f68d454837c79de4fc9d063646e6a421322da496",
+        "all_fixture_identifiers_cleaned_and_absent": true,
+        "OS": "Darwin",
+        "machine": "x86_64"
+      },
+      {
+        "name": "native-credential-windows",
+        "artifact_id": 14525962553,
+        "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+        "sha256": "48e08d8d2980ab273897d647ddba283c759d6d14f67e89b22ae379ff1278e784",
+        "cases_passed": 15,
+        "binary_sha256": "38a673f4d0962e1c342e2b025427aaf1b6a7d906e0e613e923919d344859a893",
+        "all_fixture_identifiers_cleaned_and_absent": true,
+        "OS": "Windows",
+        "machine": "AMD64"
+      }
+    ],
+    "verified_cases": 45,
+    "all_six_native_populations_verified": false,
+    "whole_workflow_completion_claimed": false,
+    "production_ready": false,
+    "radio_access": [],
+    "RF_commands": []
+  },
+  "dispatch_scope": {
+    "source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+    "dispatches": 2,
+    "qualify_credentials": true,
+    "Windows_publish_store_flight": false,
+    "Windows_dev_overrides": false,
+    "branch_builds_without_release_signing_or_publication": true,
+    "radio_access": []
+  },
+  "runs": [
+    {
+      "id": 44516019742,
+      "name": "Windows Installer",
+      "head_sha": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+      "head_branch": "feat/aetherpd-shim-integration",
+      "status": "in_progress",
+      "conclusion": null,
+      "html_url": "https://github.com/aethersdr/AetherSDR/actions/runs/44516019742",
+      "created_at": "2026-11-19T11:34:21Z"
+    },
+    {
+      "id": 44516026293,
+      "name": "macOS DMG",
+      "head_sha": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+      "head_branch": "feat/aetherpd-shim-integration",
+      "status": "in_progress",
+      "conclusion": null,
+      "html_url": "https://github.com/aethersdr/AetherSDR/actions/runs/44516026293",
+      "created_at": "2026-11-19T11:34:23Z"
+    }
+  ],
+  "last_job_observation_utc": "2026-11-19T11:49:23.033Z",
+  "live_jobs": [
+    {
+      "id": 135532112508,
+      "name": "build-windows",
+      "status": "in_progress",
+      "run_id": 44516019742
+    },
+    {
+      "id": 135532131409,
+      "name": "build-dmg (macos-15, apple-silicon, arm64, 14.4)",
+      "status": "in_progress",
+      "run_id": 44516026293
+    },
+    {
+      "id": 135532131730,
+      "name": "build-dmg (macos-15-intel, intel, x86_64, 14.4)",
+      "status": "in_progress",
+      "run_id": 44516026293
+    }
+  ],
+  "canonical_source_alignment": {
+    "feature_source": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",
+    "desktop_worktree_base": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "merge_base": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "upstream_base_already_ancestor": true,
+    "new_merge_required": false,
+    "source_differences": [
+      "src/core/txlinearity/SpectrumWindow.cpp",
+      "src/core/txlinearity/SpectrumWindow.h"
+    ],
+    "radio_binary_replaced": false,
+    "RF_commands": [],
+    "note": "The signed feature branch already includes the tested upstream base. All trackedsrc/tests C++/headers/CMake match the running desktop source snapshot except two SpectrumWindow comment-only edits; both versions preprocess identically. No new merge or redundant Linux rebuild is needed. New native workflow runs use the current signed feature branch; current packaged radio runtime remains separately pinned to closedfd49ae7 source.",
+    "source_differences_are_comments_only": true,
+    "window_preprocessed_code_identical": true,
+    "window_preprocessed_sha256": "329fd7dc35ec5087d9b758ae8d90789981a0e7e02c2bbc90a8448f83733a2a18",
+    "new_Linux_rebuild_required_for_this_drift": false
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-native-platform-backends-partial-components.tar.gz",
+    "bytes": 69209,
+    "sha256": "13e4a4eb4e8264c19c6187e46369053a27f886581d064d5f817606a29873b5be",
+    "members": 42,
+    "all_members_verified": true
+  },
+  "new_positive_GUI_key_requests": 0,
+  "new_observed_TX_intervals": 0,
+  "source_arm_actions": 0,
+  "radio_access": [],
+  "radio_updates": [],
+  "radio_reboots": [],
+  "production_code_modified": false,
+  "scope_limits": [
+    "These45 cases exercise real OS keychains and production token/persistence sources using unique disposable fixture identities and independent processes. All primary/metadata absence checks pass after cleanup. No real operator/radio credential is read or rotated.",
+    "The42 controlled RemoteAccess setup-window lifecycle cases have not yet produced artifacts. Earlier87case reports on their recordedb2ad8a6c/75ab2685 sources remain separately preserved and cannot substitute for current-source results.",
+    "All3 current native app build jobs are observed in_progress, not passed. Packaging, bundle closure, deployment targets and branch unsigned-payload outcomes must be inspected when terminal. Do not rerun or redispatch on polling timeout.",
+    "The signed canonical feature branch already contains the tested upstreambasee26ce672. Allsrc/tests C++/header/CMake input bytes match the running desktop snapshot except2SpectrumWindow comment edits; both windows preprocess identically. This avoids an unnecessary merge or Linux rebuild, not final native platform testing.",
+    "Current native workflow inputs use normal branch/default distribution configuration, not the pinned bench-only development installer selections. These checks do not qualify production publisher/catalogue or first-install/upgrade UX on native desktops.",
+    "No real radio enrollment, on-radio credential-loss/revocation behavior, RF, final-graph cleanup, DSP alignment/cold-start cause or actual6300 qualification is claimed.",
+    "The prepared one5W DSPAPI-loss completion case remains source-unarmed and pending explicit operator keying approval. This CI progress does not authorize RF.",
+    "FullP1-P10 and all remaining final native/window/package, actual6300/disk/adapter, cold/natural128, fault/credential/stale-cache, repeated/raw/extended RF, final stock and independent release gates remain active."
+  ],
+  "next_step": "Poll the existing run IDs, collect the remaining3 setup-window artifacts and tie each to its credential-probe hash, then inspect terminal build/package outcomes. Keep the current partial report and prior platform evidence separately attributed; no automatic redispatch or RF."
+}
