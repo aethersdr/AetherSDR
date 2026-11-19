@@ -26,6 +26,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace AetherSDR {
 class TxTimeoutTestAccess {
@@ -607,6 +608,38 @@ int main(int argc, char** argv)
         const TxCoordinator::Producer ptt = radio.registerTxProducer();
         Access::clearNoticeDedup(radio);
         report("fresh_ptt_admitted_after_paddle_release", Access::admit(radio, ptt.request()));
+    }
+
+    // Fail closed past the holder table: with 32 live inputs holding, a 33rd
+    // key-down is refused, and one of the 32 keying again is still admitted.
+    {
+        int downs = 0;
+        bool keyDown = false;
+        RadioModel radio;
+        auto owned = std::make_unique<CwKeyingStub>();
+        {
+            hl2::Hl2Backend real;
+            owned->caps = real.capabilities();
+        }
+        owned->caps.canTransmit = true;
+        owned->downs = &downs;
+        owned->keyDown = &keyDown;
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        Recorder rec(radio);
+        std::vector<TxCoordinator::Producer> holding;
+        for (int i = 0; i < TxTimeoutGuard::kMaximumHolders; ++i) {
+            holding.push_back(radio.registerTxProducer());
+            Access::hold(radio, holding.back().request());
+        }
+        const TxCoordinator::Producer extra = radio.registerTxProducer();
+        const bool admitted = Access::admit(radio, extra.request());
+        report("thirty_third_holder_key_down_is_refused",
+               !admitted && rec.keys.contains(QStringLiteral("tx-timeout-holders-full"))
+                   && Access::holders(radio) == TxTimeoutGuard::kMaximumHolders,
+               "admitted=" + std::to_string(admitted) + " holders=" + std::to_string(Access::holders(radio)));
+        Access::clearNoticeDedup(radio);
+        report("holding_input_keys_again_with_a_full_table",
+               Access::admit(radio, holding.front().request()));
     }
 
     // A hold is the producer's, not the request's: noting one keeps no request

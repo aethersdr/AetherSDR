@@ -271,6 +271,14 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
             return false;
         }
     }
+    // Fail closed: an input whose release the latch could not track is not
+    // admitted. CWX is sent text and never holds (below).
+    if (request && activity != TxActivity::Cwx && !txTimeoutCanHold(*request)) {
+        emitInterlockNotification(
+            tr("Transmit refused: too many inputs hold a key. Release one, then key again."),
+            QStringLiteral("tx-timeout-holders-full"));
+        return false;
+    }
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
         return false;
     }
@@ -466,8 +474,11 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
     // CWX is sent text, not a held input: no producer sends an off for it,
     // so it never holds the time-out latch.
-    if (admitted && request && activity != TxActivity::Cwx) {
-        noteTxTimeoutHold(*request);
+    if (admitted && request && activity != TxActivity::Cwx && !noteTxTimeoutHold(*request)) {
+        // The table filled while this key-down was admitted (an observer above
+        // re-entered): refuse it rather than key an input the latch cannot see.
+        endLocalTxActivity(intent);
+        return false;
     }
     return admitted;
 }

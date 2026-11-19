@@ -2535,7 +2535,10 @@ private:
     void expireTransmitTimeout();
     void loadTxTimeoutSettings();
     QString txTimeoutKeyingSource() const;
-    void noteTxTimeoutHold(const TxCoordinator::Request& request);
+    bool txTimeoutExemptHolder(const TxCoordinator::Request& request) const;
+    bool txTimeoutCanHold(const TxCoordinator::Request& request);
+    // False when the holder table is full: the key-down must be refused.
+    bool noteTxTimeoutHold(const TxCoordinator::Request& request);
     void noteTxTimeoutRelease(const TxCoordinator::Request& request);
     void noteTxTimeoutRefused(const TxCoordinator::Request& request);
     bool txTimeoutRefused(const TxCoordinator::Request& request) const;

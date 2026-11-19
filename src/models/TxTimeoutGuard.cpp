@@ -109,21 +109,27 @@ TxTimeoutGuard::Event TxTimeoutGuard::poll()
     return Event::None;
 }
 
-void TxTimeoutGuard::noteHold(quintptr key, std::function<bool()> alive)
+bool TxTimeoutGuard::canHold(quintptr key)
+{
+    if (!key || m_holders.contains(key)
+        || m_holders.size() < static_cast<std::size_t>(kMaximumHolders)) {
+        return true;
+    }
+    // Evict only the dead: a live holder is never dropped to make room.
+    std::erase_if(m_holders, [](const auto& entry) { return !entry.second || !entry.second(); });
+    return m_holders.size() < static_cast<std::size_t>(kMaximumHolders);
+}
+
+bool TxTimeoutGuard::noteHold(quintptr key, std::function<bool()> alive)
 {
     if (!key) {
-        return;
+        return true;
     }
-    if (m_holders.size() >= static_cast<std::size_t>(kMaximumHolders)
-        && !m_holders.contains(key)) {
-        // Prune before refusing to record: a full table must never let a
-        // live input slip past the latch, so evict only the dead.
-        std::erase_if(m_holders, [](const auto& entry) { return !entry.second || !entry.second(); });
-        if (m_holders.size() >= static_cast<std::size_t>(kMaximumHolders)) {
-            return;
-        }
+    if (!canHold(key)) {
+        return false;
     }
     m_holders[key] = std::move(alive);
+    return true;
 }
 
 void TxTimeoutGuard::noteRelease(quintptr key)

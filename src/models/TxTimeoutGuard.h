@@ -59,8 +59,11 @@ public:
     [[nodiscard]] int lastExpiredAfterS() const { return m_lastExpiredAfterS; }
 
     // An input that holds a key. `alive` reports whether its lifetime still
-    // exists; a dead holder counts as released.
-    void noteHold(quintptr key, std::function<bool()> alive);
+    // exists; a dead holder counts as released. False when the table is full
+    // of live holders: the owner must refuse that key-down (fail closed).
+    [[nodiscard]] bool noteHold(quintptr key, std::function<bool()> alive);
+    // Whether noteHold(key) would record it; prunes dead holders to make room.
+    [[nodiscard]] bool canHold(quintptr key);
     void noteRelease(quintptr key);
     // Inputs the owner knows hold nothing (no live intent, radio idle).
     void forgetHolders();

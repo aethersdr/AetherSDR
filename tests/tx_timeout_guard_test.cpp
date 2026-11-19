@@ -149,8 +149,8 @@ int main()
         FakeClock c;
         TxTimeoutGuard g(c.clock());
         bool tciAlive = true;
-        g.noteHold(0x10, [] { return true; });
-        g.noteHold(0x20, [&tciAlive] { return tciAlive; });
+        (void)g.noteHold(0x10, [] { return true; });
+        (void)g.noteHold(0x20, [&tciAlive] { return tciAlive; });
         g.setTransmitting(true, {});
         c.now += 180'000;
         (void)g.poll();
@@ -180,7 +180,7 @@ int main()
     {
         FakeClock c;
         TxTimeoutGuard g(c.clock());
-        g.noteHold(0x30, [] { return true; });
+        (void)g.noteHold(0x30, [] { return true; });
         g.setTransmitting(true, {});
         c.now += 180'000;
         (void)g.poll();
@@ -193,7 +193,7 @@ int main()
     {
         FakeClock c;
         TxTimeoutGuard g(c.clock());
-        g.noteHold(0x40, [] { return true; });
+        (void)g.noteHold(0x40, [] { return true; });
         g.forgetHolders();
         g.setTransmitting(true, {});
         c.now += 180'000;
@@ -206,11 +206,20 @@ int main()
     {
         FakeClock c;
         TxTimeoutGuard g(c.clock());
+        bool dead = false;
+        bool allRecorded = true;
         for (quintptr k = 1; k <= TxTimeoutGuard::kMaximumHolders; ++k) {
-            g.noteHold(k, [] { return true; });
+            allRecorded &= k == 1 ? g.noteHold(k, [&dead] { return !dead; })
+                                  : g.noteHold(k, [] { return true; });
         }
-        g.noteHold(999, [] { return true; });
+        const bool thirtyThirdRefused = !g.canHold(999) && !g.noteHold(999, [] { return true; });
         report("holder_table_bounded", g.holderCount() == TxTimeoutGuard::kMaximumHolders);
+        report("thirty_third_live_holder_is_refused_not_dropped",
+               allRecorded && thirtyThirdRefused && g.holderCount() == TxTimeoutGuard::kMaximumHolders);
+        report("full_table_still_accepts_a_holder_it_has",
+               g.canHold(2) && g.noteHold(2, [] { return true; }));
+        dead = true;
+        report("a_dead_holder_makes_room", g.canHold(999) && g.noteHold(999, [] { return true; }));
     }
 
     std::printf("\n%s (%d failure%s)\n", g_failed ? "FAILED" : "PASSED", g_failed,

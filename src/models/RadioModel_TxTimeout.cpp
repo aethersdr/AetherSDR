@@ -200,14 +200,24 @@ void RadioModel::expireTransmitTimeout()
     publishTxTimeoutLatch(m_txTimeout.latched());
 }
 
-void RadioModel::noteTxTimeoutHold(const TxCoordinator::Request& request)
+bool RadioModel::txTimeoutExemptHolder(const TxCoordinator::Request& request) const
 {
-    if (m_localTxController && m_localTxController->ownsRequest(request)) {
-        // The local controls' state is reset by the stop itself; their next
-        // press is a new key-down, never a held one.
-        return;
+    // The local controls' state is reset by the stop itself; their next
+    // press is a new key-down, never a held one.
+    return m_localTxController && m_localTxController->ownsRequest(request);
+}
+
+bool RadioModel::txTimeoutCanHold(const TxCoordinator::Request& request)
+{
+    return txTimeoutExemptHolder(request) || m_txTimeout.canHold(request.producerKey());
+}
+
+bool RadioModel::noteTxTimeoutHold(const TxCoordinator::Request& request)
+{
+    if (txTimeoutExemptHolder(request)) {
+        return true;
     }
-    m_txTimeout.noteHold(request.producerKey(), request.producerAlive());
+    return m_txTimeout.noteHold(request.producerKey(), request.producerAlive());
 }
 
 void RadioModel::noteTxTimeoutRelease(const TxCoordinator::Request& request)
