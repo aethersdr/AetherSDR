@@ -516,6 +516,75 @@ int main(int argc, char** argv)
                Access::admit(radio, ptt.request()));
     }
 
+    // An iambic paddle keys element by element (MainWindow's routed keyer edge
+    // -> queueProducerCwKeyEdge); the paddle input, not an element, is the held
+    // input. A time-out while it is held latches; element key-ups while it is
+    // still held do not release; letting go of every paddle does.
+    {
+        int downs = 0;
+        bool keyDown = false;
+        RadioModel radio;
+        qint64 now = 5'000'000;
+        Access::setClock(radio, &now);
+        radio.transmitModel().setCwBreakIn(true);
+        auto owned = std::make_unique<CwKeyingStub>();
+        {
+            hl2::Hl2Backend real;
+            owned->caps = real.capabilities();
+        }
+        owned->caps.canTransmit = true;
+        owned->downs = &downs;
+        owned->keyDown = &keyDown;
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        SliceDelta slice;
+        slice.frequency = 7.020;
+        slice.mode = QStringLiteral("CW");
+        slice.panId = QStringLiteral("0x40000000");
+        slice.txSlice = true;
+        radio.emitBackendSliceChangedForTest(0, slice);
+        const TxCoordinator::Producer paddle = radio.registerTxProducer();
+        const TxCoordinator::Request input = paddle.request();
+        // Like IambicKeyer: each element derives from the input, and its
+        // key-up carries the same element.
+        TxCoordinator::Request element;
+        const auto edge = [&radio, &input, &element](bool down) {
+            if (down) {
+                element = input.derive();
+            }
+            radio.queueProducerCwKeyEdge(element, down, QStringLiteral("cw:iambic-keyer"),
+                                         0, 0, std::chrono::steady_clock::now());
+        };
+        radio.setProducerCwPaddleHeld(input, true);
+        edge(true);
+        const bool keyed = pumpUntil([&] { return downs >= 1 && keyDown; }, 3000);
+        edge(false);
+        (void)pumpUntil([&] { return !keyDown; }, 3000);
+        edge(true);
+        const bool keyedAgain = pumpUntil([&] { return downs >= 2 && keyDown; }, 3000);
+        runOver(radio, now, 180'000);
+        Access::radioKeyed(radio, false);
+        Access::tick(radio);
+        const bool latched = radio.txTimeoutLatched();
+        // The keyer runs on while the paddle is held: the key-up of the
+        // element that was down at the stop, a refused down, its up.
+        edge(false);
+        edge(true);
+        edge(false);
+        (void)pumpUntil([] { return false; }, 300);
+        Access::tick(radio);
+        const std::string held = "keyed=" + std::to_string(keyed) + " again=" + std::to_string(keyedAgain)
+            + " latched=" + std::to_string(latched) + " after=" + std::to_string(radio.txTimeoutLatched());
+        report("paddle_element_key_ups_while_held_keep_the_latch",
+               keyed && keyedAgain && latched && radio.txTimeoutLatched(), held);
+        radio.setProducerCwPaddleHeld(input, false);
+        Access::tick(radio);
+        report("paddle_release_clears_the_latch", latched && !radio.txTimeoutLatched(),
+               "holders=" + std::to_string(Access::holders(radio)));
+        const TxCoordinator::Producer ptt = radio.registerTxProducer();
+        Access::clearNoticeDedup(radio);
+        report("fresh_ptt_admitted_after_paddle_release", Access::admit(radio, ptt.request()));
+    }
+
     // A hold is the producer's, not the request's: noting one keeps no request
     // alive, so a finished CW element's work can still end under MOX.
     {
