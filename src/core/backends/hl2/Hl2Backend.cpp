@@ -2679,7 +2679,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
     c.hasPaTemperatureTelemetry = true;
-    c.hasPaCurrentTelemetry = false;
+    // Calibrated by hl2PaCurrentAmps() from the schematic, not by an ammeter.
+    c.hasPaCurrentTelemetry = true;
     // PROC runs in this host's ClientComp (hostModulates), not in the radio.
     c.speechProcessorControl = std::nullopt;
     c.voxControl = std::nullopt;
@@ -7458,6 +7459,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
         (inBandLive && m_havePaTemp) ? QVariant(m_paTempC) : QVariant());
     put("temperatureRaw", QStringLiteral("Temperature (raw counts)"),
         opt(t.temperatureRaw));
+    put("paCurrentA", QStringLiteral("PA current (A)"),
+        t.biasCurrentRaw ? QVariant(hl2PaCurrentAmps(*t.biasCurrentRaw)) : QVariant());
     put("biasCurrentRaw", QStringLiteral("PA bias current (raw counts)"),
         opt(t.biasCurrentRaw));
 
@@ -9262,6 +9265,9 @@ void Hl2Backend::defineMeters()
         -140.0, 0.0,   QStringLiteral("Transmit audio after the ALC, into the modulator"));
     def(11, QStringLiteral("TX"), QStringLiteral("SC_FILT_2"), QStringLiteral("dBFS"),
         -140.0, 0.0,   QStringLiteral("Modulated transmit IQ, the modulator's output"));
+    // Full scale is the converter's top count (about 2.07 A); hl2PaCurrentAmps().
+    def(12, QStringLiteral("RAD"), QStringLiteral("PACURRENT"), QStringLiteral("Amps"),
+        0.0, hl2PaCurrentAmps(4095), QStringLiteral("PA drain current"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
@@ -9354,6 +9360,9 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
         m_havePaTemp = true;
         emit meterUpdate(QStringLiteral("RAD:PATEMP"), m_paTempC);
     }
+    if (t.biasCurrentRaw)
+        emit meterUpdate(QStringLiteral("RAD:PACURRENT"),
+                         hl2PaCurrentAmps(*t.biasCurrentRaw));
 
     m_telemetry = t;
     // THE RATE, ACCUMULATED RATHER THAN SAMPLED. The edge counter below sees

@@ -4,6 +4,7 @@
 // the drive register is read both from the health rows and from the EP2
 // packet MetisClient would send.
 
+#include "core/backends/MeterDef.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2Settings.h"
@@ -103,6 +104,7 @@ struct Hl2TxGateTestAccess {
             b.m_swrGate.accept(0);
     }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
+    static void defineMeters(Hl2Backend& b) { b.defineMeters(); }
     static quint64 setPureSignal(Hl2Backend& b, bool on)
     {
         return b.setPureSignalEnabled(on) ? b.m_psGeneration : 0;
@@ -264,6 +266,47 @@ static void capabilitiesSeam()
               && live.maxPanadapters == live.maxSlices,
           "connected: maxSlices is the receiver ceiling, not a fixed 1");
     Access::metisEdge(b, "linkDown");
+}
+
+// PA current: declared, defined as RAD:PACURRENT in amps, and converted by the
+// schematic's chain (0.04 ohm, x50, 270/1k divider, 3.26 V over 4096 counts).
+static void paCurrentMeter()
+{
+    Hl2Backend b;
+    check(b.capabilities().hasPaCurrentTelemetry, "declares calibrated PA current");
+    check(hl2::hl2PaCurrentAmps(0) == 0.0, "0 counts is 0 A");
+    check(std::abs(hl2::hl2PaCurrentAmps(1000) - 0.5053955078125) < 1e-9,
+          "1000 counts is 0.5054 A, the divider included (0.3979 A without it)");
+    check(std::abs(hl2::hl2PaCurrentAmps(4095) - 2.0695946044921874) < 1e-9,
+          "full scale, 4095 counts, is 2.07 A");
+
+    QSignalSpy defs(&b, &IRadioBackend::meterDefined);
+    Access::defineMeters(b);
+    bool defined = false;
+    for (const auto& args : defs) {
+        const auto d = args.at(0).value<MeterDef>();
+        if (d.source == QStringLiteral("RAD") && d.name == QStringLiteral("PACURRENT"))
+            defined = d.unit == QStringLiteral("Amps") && d.low == 0.0
+                && d.high == hl2::hl2PaCurrentAmps(4095);
+    }
+    check(defined, "RAD:PACURRENT is defined in Amps, 0 to full scale");
+
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    hl2::Hl2Telemetry t;
+    t.biasCurrentRaw = 1000;
+    Access::publish(b, t);
+    double amps = std::nan("");
+    for (const auto& args : meters) {
+        if (args.at(0).toString() == QStringLiteral("RAD:PACURRENT"))
+            amps = args.at(1).toDouble();
+    }
+    check(amps == hl2::hl2PaCurrentAmps(1000), "publishTelemetry emits RAD:PACURRENT in amps");
+    meters.clear();
+    Access::publish(b, hl2::Hl2Telemetry{});
+    bool emptyEmitted = false;
+    for (const auto& args : meters)
+        emptyEmitted |= args.at(0).toString() == QStringLiteral("RAD:PACURRENT");
+    check(!emptyEmitted, "no reading, no PACURRENT sample (never a 0 A)");
 }
 
 static void linkLifecycle()
@@ -1222,9 +1265,11 @@ int main(int argc, char** argv)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<NotchDelta>();
+    qRegisterMetaType<MeterDef>();
     check(Hl2Settings::spanMhz() == 0.0, "isolated profile starts with no remembered span");
 
     capabilitiesSeam();
+    paCurrentMeter();
     linkLifecycle();
     iqTapEndsWithTheSession();
     connectWithoutEp6();
