@@ -189,6 +189,16 @@ public:
                                const QHostAddress& broadcast = QHostAddress::Broadcast,
                                quint16 port = kMetisPort);
 
+    // A peer on this host (hpsdrsim at 127.0.0.1) replies from the address it was
+    // sent from: from a LAN-bound socket, the LAN address, which onReadyRead()'s
+    // sender filter (m_host:m_port only) drops. So a loopback target is probed
+    // from loopback interfaces only and its session binds loopback; every other
+    // target is unchanged.
+    [[nodiscard]] static bool discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                                      const QHostAddress& target);
+    [[nodiscard]] static QHostAddress sessionBindAddress(const QHostAddress& host,
+                                                         const QHostAddress& requested);
+
     // start()/stop() and every live-control setter below MUST execute on this
     // object's own thread: start() constructs the QUdpSocket, and a socket takes
     // the affinity of the thread that creates it. Hl2Backend owns an I/O thread

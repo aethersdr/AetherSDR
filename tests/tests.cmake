@@ -2319,6 +2319,13 @@ target_include_directories(hl2_metis_link_counters_test PRIVATE src)
 target_link_libraries(hl2_metis_link_counters_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_metis_link_counters_test COMMAND hl2_metis_link_counters_test)
 
+# A session to a peer on this host (hpsdrsim at 127.0.0.1) binds loopback so
+# its replies pass MetisClient's sender filter; LAN targets are unchanged.
+add_executable(hl2_sim_loopback_bind_test tests/hl2_sim_loopback_bind_test.cpp)
+target_include_directories(hl2_sim_loopback_bind_test PRIVATE src)
+target_link_libraries(hl2_sim_loopback_bind_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_sim_loopback_bind_test COMMAND hl2_sim_loopback_bind_test)
+
 # HL2 linkStats seam, both halves: the backend's publish cadence and liveness,
 # and RadioModel's readouts and absent-vs-zero predicates. No socket.
 add_executable(hl2_link_stats_seam_test tests/hl2_link_stats_seam_test.cpp)
