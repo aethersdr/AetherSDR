@@ -322,6 +322,14 @@ int main(int argc, char** argv)
         check(!WdspChannel::create(bad, &err), "a negative fmRxPanelGain is refused");
         bad.fmRxPanelGain = std::nan("");
         check(!WdspChannel::create(bad, &err), "a NaN fmRxPanelGain is refused");
+        check(err.find("fmRxPanelGain") != std::string::npos, "the refusal names fmRxPanelGain");
+        WdspChannel::Config badPanel;
+        badPanel.rxPanelGain = -1.0;
+        err.clear();
+        check(!WdspChannel::create(badPanel, &err)
+                  && err.find("rxPanelGain") != std::string::npos
+                  && err.find("fmRxPanelGain") == std::string::npos,
+              "a negative rxPanelGain is refused, and the refusal names rxPanelGain");
     }
 
     if (g_failures == 0)

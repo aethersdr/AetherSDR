@@ -144,7 +144,8 @@ public:
         // and leaves every other mode untouched across live mode changes (#7222).
         bool fmLimiter = false;
         // RXA output panel gain, linear, applied after the AGC. Unset keeps
-        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942).
+        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942). In FM,
+        // fmRxPanelGain overrides this when set.
         std::optional<double> rxPanelGain;
         // RXA panel gain while the mode is FM, applied at open() and on every
         // live mode change; other modes then get rxPanelGain or WDSP's 4.0. The
