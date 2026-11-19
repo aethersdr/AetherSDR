@@ -1846,5 +1846,11 @@
   "note": "Bounded Flex VITA count/timestamp receive ordering and loss resolution; private to the Flex stream path.",
   "split": "",
   "confidence": "high"
+ },
+ "core/control/AppControlHost.h": {
+  "tag": "universal",
+  "note": "The desktop app serving aetherd's local v1 control endpoint (--control-socket) for its own radio: the receive targets aetherd binds, over a connection target that only observes the app's connection, with no radio.connect/disconnect, no transmit verbs and no catalogue. Family-neutral; included only by src/main.cpp.",
+  "split": "",
+  "confidence": "high"
  }
 }

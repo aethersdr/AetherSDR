@@ -22,6 +22,7 @@
 #include "core/MacMicPermission.h"
 #include "core/AppActivity.h"
 #include "core/AutomationServer.h"
+#include "core/control/AppControlHost.h"
 #include "QtPlatformChoice.h"
 
 #ifdef Q_OS_MACOS
@@ -840,6 +841,27 @@ int main(int argc, char* argv[])
         const bool bridgePersisted = AetherSDR::AutomationBridgeSettings::enabled();
         if (qEnvironmentVariableIsSet("AETHER_AUTOMATION") || bridgePersisted)
             window.startAutomationBridge();
+
+        // --control-socket <name>: serve aetherd's local v1 control endpoint for
+        // this window's radio, receive verbs only, so an on-radio panel daemon
+        // can drive the radio the app holds (docs/aetherd-app-control-socket.md).
+        // Off unless asked for. Declared after the window, so it goes first.
+        std::unique_ptr<AetherSDR::control::AppControlHost> controlHost;
+        if (const QStringList args = app.arguments();
+            args.contains(QStringLiteral("--control-socket"))) {
+            const QString name = args.value(args.indexOf(QStringLiteral("--control-socket")) + 1);
+            QString error;
+            if (!name.isEmpty() && !name.startsWith(QLatin1Char('-'))) {
+                controlHost = AetherSDR::control::AppControlHost::start(&window.radioModel(), name, &error);
+            } else {
+                error = QStringLiteral("--control-socket needs a name");
+            }
+            if (controlHost) {
+                qInfo() << "local control endpoint:" << controlHost->endpoint();
+            } else {
+                qWarning() << "local control endpoint not served:" << error;
+            }
+        }
 
         exitCode = app.exec();
     }
