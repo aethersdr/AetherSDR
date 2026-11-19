@@ -4730,7 +4730,8 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         if (!backend)
             return;
         // Own decade, like hw.get's below (see BandscopeDialog's note).
-        // 0x07 is TCI's HL2 extension, 0x08 the CW edge lead's: 0x09 is this one's.
+        // 0x09 is this one's; open PRs #7198 (TCI's HL2 extension) and #7245
+        // (the CW edge lead) reserve 0x07 and 0x08.
         constexpr quint64 kIoRequestIdBase = 0x0900000000000000ull;
         static quint64 nextIoId = kIoRequestIdBase;
         const quint64 requestId = nextIoId++;
