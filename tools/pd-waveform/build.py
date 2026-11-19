@@ -32,7 +32,7 @@ WDSP_TUS = ['calcc', 'iqc', 'delay', 'extrapolate', 'nurbs', 'nurbs_fit', 'nurbs
             'fir', 'utilities', 'impulse_cache']
 ARMV7 = ['-target', 'arm-linux-musleabihf', '-mcpu=cortex_a8']
 ARM64 = ['-target', 'aarch64-linux-musl']
-CFLAGS = ['-O2', '-std=gnu11', '-ffunction-sections', '-fdata-sections', f'-ffile-prefix-map={ROOT}=.']
+CFLAGS = ['-O2', '-std=gnu11', '-DAETHER_PD_LOWESS_WINDOW_SEARCH', '-ffunction-sections', '-fdata-sections', f'-ffile-prefix-map={ROOT}=.']
 LDFLAGS = ['-static', '-s', '-Wl,--gc-sections', '-Wl,--build-id=none']
 WDSP_INC = ['-DAETHER_PD_PI_CRITICAL_SECTIONS', '-include', str(WDSP / 'port' / 'include' / 'wdsp_port.h'),
             '-I', str(HERE), '-I', str(WDSP / 'upstream'), '-I', str(WDSP / 'port' / 'include'),
@@ -66,7 +66,7 @@ def zig_cc(target, out, cache, static=True, entry_source=None, extra_cflags=(),
 
 
 def zig_regression_tests(target, output, cache, arch):
-    for name in ('recovery_collection', 'eq_phase_startup', 'warm_core', 'eq_worker', 'dispatch_deadline', 'fit_rejection'):
+    for name in ('recovery_collection', 'eq_phase_startup', 'warm_core', 'eq_worker', 'dispatch_deadline', 'fit_rejection', 'lowess_window'):
         zig_cc(target, output / f'{name}-test-{arch}', cache,
                entry_source=HERE / f'{name}_test.c', extra_cflags=('-UNDEBUG', *WDSP_INC),
                extra_sources=(HERE / 'warm_seed_curve.c',) if name == 'dispatch_deadline' else (),
@@ -109,7 +109,7 @@ def main():
     ap.add_argument('--output', required=True, type=pathlib.Path)
     ap.add_argument('--arch', choices=('armv7','arm64','both'), default='both', help='architectures stored in the installed package')
     ap.add_argument('--host', action='store_true', help='also build a native binary for the selftest')
-    ap.add_argument('--regression-tests', action='store_true', help='also build the five staged DSP regression tests; never adds them to the installed package')
+    ap.add_argument('--regression-tests', action='store_true', help='also build the standalone DSP regression tests; never adds them to the installed package')
     ap.add_argument('--transport-tests', action='store_true', help='also build standalone experimental transport recovery tests')
     ap.add_argument('--calibration-tests', action='store_true', help='also build bounded calibration state and native control tests')
     ap.add_argument('--test-tones', metavar='F1,F2',

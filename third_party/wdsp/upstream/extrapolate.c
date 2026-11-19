@@ -287,6 +287,22 @@ static void lowess(STLOWESS a, const double *xs, const double *ys, int n,
     for (int iter = 0; iter <= robust_iters; iter++) 
     { 
         for (int i = 0; i < n; i++) {
+#ifdef AETHER_PD_LOWESS_WINDOW_SEARCH
+            // Sorted samples permit a bounded search for the same k-point
+            // window containing i. Equal distances keep the left candidate.
+            int lo = i - k + 1;
+            if (lo < 0) { lo = 0; }
+            int last = i < n - k ? i : n - k;
+            while (lo < last) {
+                int mid = lo + (last - lo) / 2;
+                if (xs[i] - xs[mid] > xs[mid + k] - xs[i]) {
+                    lo = mid + 1;
+                } else {
+                    last = mid;
+                }
+            }
+            int hi = lo + k - 1;
+#else
             int lo = i, hi = i, count = 1;
             while (count < k) 
             {
@@ -295,6 +311,7 @@ static void lowess(STLOWESS a, const double *xs, const double *ys, int n,
                 if (d_lo <= d_hi) lo--; else hi++;
                 count++;
             }
+#endif
             double dmax = fmax(xs[i] - xs[lo], xs[hi] - xs[i]);
             if (dmax < 1e-12) dmax = 1e-12;
             double S0=0.0, S1=0.0, S2=0.0, T0=0.0, T1=0.0;

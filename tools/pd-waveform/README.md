@@ -53,15 +53,23 @@ Build from the repository root with Zig installed:
 python3 tools/pd-waveform/build.py --output build/aetherpd --arch both --host
 ```
 
-`--regression-tests` also builds six standalone DSP tests for both selected
+`--regression-tests` also builds seven standalone DSP tests for both selected
 ARM targets and, with `--host`, the host. They cover dispatch/freshness fences,
 warm-model lifetime, phase settling, calibration amplitude coverage and EQ
-worker results, and real WDSP phase-fit rejection diagnostics. They are not
+worker results, real WDSP phase-fit rejection diagnostics, and bit-identical
+LOWESS endpoint/confidence results against the original window selection. They are not
 installed in the waveform package. The Linux
 CTest graph registers these tests against the current core, plus a calibration
 dispatch test that checks retirement before output. Datagram I/O is injected;
 the tests create no sockets, radio connection or RF commands. ARM builds alone
 do not qualify a Cortex-A8 or Linux 2.6 radio.
+
+The standalone build enables `AETHER_PD_LOWESS_WINDOW_SEARCH`: a bounded
+search of sorted samples replaces repeated linear nearest-window growth in
+LOWESS. It preserves weighted arithmetic, robust iterations, memory use and
+fit acceptance. Desktop WDSP keeps its original path. Captured-pair host
+profiling measures CPU savings separately from equivalence checks; it does
+not establish an on-radio speedup or resolve an unexplained cold-start bypass.
 
 `AETHER_PD_OWNER_FD` optionally names an inherited read-only lifetime pipe.
 Managed startup requires an unprivileged process with no effective, permitted,

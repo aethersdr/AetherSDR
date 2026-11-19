@@ -1,0 +1,1910 @@
+{
+  "recorded_utc": "2026-11-19T06:01:12.423948+00:00",
+  "production_ready": false,
+  "source_parent": "c661b8a61a4b5d2fb1495d77e492033cffa2147c",
+  "status": "Captured-pair profiling isolated four LOWESS extrapolations as the CPU hotspot. Standalone-only bounded nearest-window search preserves arithmetic and memory use; ARM64 saved-sample probe on8600 reduced calc CPU by40.9%. Differential equivalence and related regressions pass. Optimization is not installed in managed runtime or RF-qualified.",
+  "installed": false,
+  "managed_runtime_unchanged": "e4107da729d7caff8cb6dce504fe7c1f9761ec8399a1904ecd54cc60e614b5a9",
+  "new_positive_GUI_key_requests": 0,
+  "new_observed_TX_intervals": 0,
+  "radio_reboots": [],
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "source_files": {
+    "third_party/wdsp/upstream/extrapolate.c": "753a04bc3952a175e897bda11a5d092693130b4ae379460d15f69ce76a3a4fec",
+    "third_party/wdsp/AETHERSDR-PATCHES.md": "8b54bfc2c23794674a4b21555f22153747e4a11351a18d478e5910a861d2d057",
+    "tests/tests.cmake": "5c6b8cb1d702ecf97023e02c24cd470971bd9543d1f1b5194e9499ed46bcff13",
+    "tools/pd-waveform/build.py": "2419795e9e21713423101e7a201bf669b65444af885861d235364ef5b2d8bde4",
+    "tools/pd-waveform/lowess_window_test.c": "bec187dd653273bd4cdfb20a709bbe89781b8339a203c502f75dd55255221665",
+    "tools/pd-waveform/README.md": "c9fb56d0439b922b8c1f8c50eb9512a29a6cc58a9592c7a81025add647a9fc06"
+  },
+  "implementation": {
+    "flag": "AETHER_PD_LOWESS_WINDOW_SEARCH",
+    "enabled_in": "standalone build and Linux aether_pd_test_core only",
+    "desktop_WDSP_default_path_unchanged": true,
+    "window_work": "logarithmic instead of linear in nearest-window size",
+    "left_tie_preference_preserved": true,
+    "weighted_arithmetic_changed": false,
+    "fit_acceptance_changed": false,
+    "robust_iterations_changed": false,
+    "memory_growth_bytes": 0,
+    "new_threads_or_syscalls": false
+  },
+  "sensitivity": {
+    "input": "Successful finite on-radio aligned pairs fromc661b8a61; float32 input hash15a39c3930a05f4c569b1380ddb9e6d6ebbcbb51145af64118729a52a0b082b5",
+    "cases": [
+      {
+        "case": "original",
+        "exit": 0,
+        "shift_samples": 0,
+        "phase_degrees": 0,
+        "phase_mode": 0,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -29.636309316,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": true,
+          "fits": 2,
+          "packed_flags": 0
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 206.44212,
+            "CPU_ms": 205.717166
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 200.527403,
+            "CPU_ms": 199.853438
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 199.963924,
+            "CPU_ms": 199.168239
+          }
+        ],
+        "stages": [
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.087506,
+            "CPU_ms": 0.086764
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.092191,
+            "CPU_ms": 0.090891
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.084598,
+            "CPU_ms": 0.084623
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.066724,
+            "CPU_ms": 0.065957
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.083122,
+            "CPU_ms": 0.08201
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.073704,
+            "CPU_ms": 0.07367
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.063829,
+            "CPU_ms": 0.063447
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.085284,
+            "CPU_ms": 0.07887
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.080975,
+            "CPU_ms": 0.080641
+          }
+        ]
+      },
+      {
+        "case": "delay-plus1",
+        "exit": 0,
+        "shift_samples": 1,
+        "phase_degrees": 0,
+        "phase_mode": 0,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -29.635296171,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": true,
+          "fits": 2,
+          "packed_flags": 0
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 398.059235,
+            "CPU_ms": 396.597693
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 205.114049,
+            "CPU_ms": 204.682622
+          }
+        ],
+        "stages": [
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.118512,
+            "CPU_ms": 0.117292
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.263742,
+            "CPU_ms": 0.262346
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.218367,
+            "CPU_ms": 0.212427
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.072938,
+            "CPU_ms": 0.071998
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.082936,
+            "CPU_ms": 0.082696
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.078573,
+            "CPU_ms": 0.078358
+          }
+        ]
+      },
+      {
+        "case": "delay-plus4",
+        "exit": 0,
+        "shift_samples": 4,
+        "phase_degrees": 0,
+        "phase_mode": 0,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -29.634651891,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": true,
+          "fits": 2,
+          "packed_flags": 0
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 204.97989,
+            "CPU_ms": 204.46533
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 199.717955,
+            "CPU_ms": 198.991995
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 202.369342,
+            "CPU_ms": 197.90228
+          }
+        ],
+        "stages": [
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.088027,
+            "CPU_ms": 0.08658
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.094359,
+            "CPU_ms": 0.093908
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.091386,
+            "CPU_ms": 0.090857
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.067548,
+            "CPU_ms": 0.066742
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.080729,
+            "CPU_ms": 0.080405
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.078281,
+            "CPU_ms": 0.078197
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.072114,
+            "CPU_ms": 0.071153
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.087093,
+            "CPU_ms": 0.086943
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.087242,
+            "CPU_ms": 0.087109
+          }
+        ]
+      },
+      {
+        "case": "delay-minus4",
+        "exit": 0,
+        "shift_samples": -4,
+        "phase_degrees": 0,
+        "phase_mode": 0,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -29.636114316,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": true,
+          "fits": 2,
+          "packed_flags": 0
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 206.581463,
+            "CPU_ms": 202.066271
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 202.584028,
+            "CPU_ms": 202.203814
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 198.529386,
+            "CPU_ms": 197.831664
+          }
+        ],
+        "stages": [
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.11393,
+            "CPU_ms": 0.112884
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.128457,
+            "CPU_ms": 0.127178
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.108071,
+            "CPU_ms": 0.107546
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.067127,
+            "CPU_ms": 0.066426
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.08749,
+            "CPU_ms": 0.086628
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.083419,
+            "CPU_ms": 0.08265
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.067671,
+            "CPU_ms": 0.06569
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.079512,
+            "CPU_ms": 0.079272
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.072217,
+            "CPU_ms": 0.07226
+          }
+        ]
+      },
+      {
+        "case": "delay-plus16",
+        "exit": 0,
+        "shift_samples": 16,
+        "phase_degrees": 0,
+        "phase_mode": 0,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -26.038727511,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": true,
+          "fits": 2,
+          "packed_flags": 0
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 209.203058,
+            "CPU_ms": 208.381909
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 204.03772,
+            "CPU_ms": 202.594114
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 206.035202,
+            "CPU_ms": 204.544959
+          }
+        ],
+        "stages": [
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 94,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.092407,
+            "CPU_ms": 0.090284
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 94,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.086711,
+            "CPU_ms": 0.08664
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 94,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.116144,
+            "CPU_ms": 0.114446
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 94,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.068106,
+            "CPU_ms": 0.067313
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 94,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.083702,
+            "CPU_ms": 0.083494
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 94,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.072785,
+            "CPU_ms": 0.072103
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 95,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.063049,
+            "CPU_ms": 0.062099
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 95,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.081002,
+            "CPU_ms": 0.080867
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 95,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.087081,
+            "CPU_ms": 0.086845
+          }
+        ]
+      },
+      {
+        "case": "delay-plus128",
+        "exit": 0,
+        "shift_samples": 128,
+        "phase_degrees": 0,
+        "phase_mode": 0,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -0.007948092,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": false,
+          "fits": 1,
+          "packed_flags": 1
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": false,
+            "flags": [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 47.9962,
+            "CPU_ms": 47.7987
+          }
+        ],
+        "stages": []
+      },
+      {
+        "case": "single-phase-step40",
+        "exit": 0,
+        "shift_samples": 0,
+        "phase_degrees": 40,
+        "phase_mode": 1,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -9.255154002,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": true,
+          "fits": 2,
+          "packed_flags": 0
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 207.877582,
+            "CPU_ms": 206.103284
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 203.848142,
+            "CPU_ms": 202.7045
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 204.124578,
+            "CPU_ms": 202.759293
+          }
+        ],
+        "stages": [
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.102039,
+            "CPU_ms": 0.100979
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.125505,
+            "CPU_ms": 0.12433
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.08917,
+            "CPU_ms": 0.089086
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.080081,
+            "CPU_ms": 0.078795
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.080197,
+            "CPU_ms": 0.079742
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.082552,
+            "CPU_ms": 0.082221
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.066679,
+            "CPU_ms": 0.066027
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.080122,
+            "CPU_ms": 0.079752
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.075922,
+            "CPU_ms": 0.075617
+          }
+        ]
+      },
+      {
+        "case": "phase-modulation14",
+        "exit": 0,
+        "shift_samples": 0,
+        "phase_degrees": 14,
+        "phase_mode": 2,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -15.175179899,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": true,
+          "fits": 2,
+          "packed_flags": 0
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 222.063471,
+            "CPU_ms": 220.628892
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 204.303074,
+            "CPU_ms": 202.689012
+          },
+          {
+            "event": "host_fit",
+            "accepted": true,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "wall_ms": 206.603184,
+            "CPU_ms": 204.828797
+          }
+        ],
+        "stages": [
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.091369,
+            "CPU_ms": 0.09067
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.099653,
+            "CPU_ms": 0.099137
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.108504,
+            "CPU_ms": 0.107898
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.069078,
+            "CPU_ms": 0.066226
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.088139,
+            "CPU_ms": 0.087627
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.076598,
+            "CPU_ms": 0.076535
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.063212,
+            "CPU_ms": 0.062974
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.080424,
+            "CPU_ms": 0.080198
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.079474,
+            "CPU_ms": 0.079086
+          }
+        ]
+      },
+      {
+        "case": "phase-modulation28",
+        "exit": 0,
+        "shift_samples": 0,
+        "phase_degrees": 28,
+        "phase_mode": 2,
+        "EQ": {
+          "event": "EQ",
+          "train_start_pair": 12019,
+          "train_pairs": 24064,
+          "residual_dB": -9.417008777,
+          "exact_radio_training_window_proven": false
+        },
+        "end": {
+          "event": "end",
+          "solution": false,
+          "fits": 2,
+          "packed_flags": 68157440
+        },
+        "fits": [
+          {
+            "event": "host_fit",
+            "accepted": false,
+            "flags": [
+              0,
+              0,
+              16,
+              16,
+              0
+            ],
+            "wall_ms": 206.50253,
+            "CPU_ms": 202.87588
+          },
+          {
+            "event": "host_fit",
+            "accepted": false,
+            "flags": [
+              0,
+              0,
+              16,
+              16,
+              0
+            ],
+            "wall_ms": 202.688733,
+            "CPU_ms": 202.028247
+          },
+          {
+            "event": "host_fit",
+            "accepted": false,
+            "flags": [
+              0,
+              0,
+              16,
+              16,
+              0
+            ],
+            "wall_ms": 201.113754,
+            "CPU_ms": 200.432544
+          }
+        ],
+        "stages": [
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.095002,
+            "CPU_ms": 0.094219
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.096898,
+            "CPU_ms": 0.095979
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.122346,
+            "CPU_ms": 0.122122
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.062512,
+            "CPU_ms": 0.062434
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.086174,
+            "CPU_ms": 0.085866
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.075163,
+            "CPU_ms": 0.075108
+          },
+          {
+            "event": "nf_stage",
+            "stage": 0,
+            "points": 97,
+            "control_points": 20,
+            "quality": 65537,
+            "wall_ms": 0.069378,
+            "CPU_ms": 0.06764
+          },
+          {
+            "event": "nf_stage",
+            "stage": 1,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.085452,
+            "CPU_ms": 0.084745
+          },
+          {
+            "event": "nf_stage",
+            "stage": 2,
+            "points": 97,
+            "control_points": 20,
+            "quality": 1,
+            "wall_ms": 0.092798,
+            "CPU_ms": 0.092074
+          }
+        ]
+      }
+    ],
+    "interpretation": "Constant1/4sample errors remain correctable by31tap EQ in this replay. A single40degree step gives EQ-9.255dB yet a usable later fit. Continuing50Hz phase modulation at28degrees gives EQ-9.417dB and cosine/sine rejection0x10 with bypass. Poor EQ residual alone therefore does not identify the historical cause or justify a general rejection threshold. These are controlled perturbations after alignment, not actual failed-run samples or phase-loop replay."
+  },
+  "host_profile": {
+    "NURBS_fit_stages": [
+      {
+        "event": "nf_stage",
+        "stage": 0,
+        "points": 97,
+        "control_points": 20,
+        "quality": 65537,
+        "wall_ms": 0.087506,
+        "CPU_ms": 0.086764
+      },
+      {
+        "event": "nf_stage",
+        "stage": 1,
+        "points": 97,
+        "control_points": 20,
+        "quality": 1,
+        "wall_ms": 0.092191,
+        "CPU_ms": 0.090891
+      },
+      {
+        "event": "nf_stage",
+        "stage": 2,
+        "points": 97,
+        "control_points": 20,
+        "quality": 1,
+        "wall_ms": 0.084598,
+        "CPU_ms": 0.084623
+      },
+      {
+        "event": "nf_stage",
+        "stage": 0,
+        "points": 97,
+        "control_points": 20,
+        "quality": 65537,
+        "wall_ms": 0.066724,
+        "CPU_ms": 0.065957
+      },
+      {
+        "event": "nf_stage",
+        "stage": 1,
+        "points": 97,
+        "control_points": 20,
+        "quality": 1,
+        "wall_ms": 0.083122,
+        "CPU_ms": 0.08201
+      },
+      {
+        "event": "nf_stage",
+        "stage": 2,
+        "points": 97,
+        "control_points": 20,
+        "quality": 1,
+        "wall_ms": 0.073704,
+        "CPU_ms": 0.07367
+      },
+      {
+        "event": "nf_stage",
+        "stage": 0,
+        "points": 97,
+        "control_points": 20,
+        "quality": 65537,
+        "wall_ms": 0.063829,
+        "CPU_ms": 0.063447
+      },
+      {
+        "event": "nf_stage",
+        "stage": 1,
+        "points": 97,
+        "control_points": 20,
+        "quality": 1,
+        "wall_ms": 0.085284,
+        "CPU_ms": 0.07887
+      },
+      {
+        "event": "nf_stage",
+        "stage": 2,
+        "points": 97,
+        "control_points": 20,
+        "quality": 1,
+        "wall_ms": 0.080975,
+        "CPU_ms": 0.080641
+      }
+    ],
+    "baseline_calc_stages": {
+      "end_peak_extrapolation": [
+        54.564367,
+        49.398792,
+        47.341771
+      ],
+      "clean_boundary_detection": [
+        0.035958,
+        0.020675,
+        0.01852
+      ],
+      "density_and_magnitude_pin": [
+        49.238426,
+        50.097047,
+        49.735756
+      ],
+      "magnitude_fit_and_cosine_pin": [
+        51.891365,
+        51.462118,
+        51.930712
+      ],
+      "cosine_fit_and_sine_pin": [
+        50.74362,
+        51.224473,
+        50.098153
+      ],
+      "sine_fit_and_spline_build_checks": [
+        0.261679,
+        0.269239,
+        0.278111
+      ],
+      "sin_cos_identity_check": [
+        0.001843,
+        0.002286,
+        0.002003
+      ],
+      "solution_deviation_check": [
+        0.00433,
+        0.004598,
+        0.004662
+      ],
+      "curve_ema_updates": [
+        0.021972,
+        0.023637,
+        0.023408
+      ]
+    },
+    "optimized_calc_stages": {
+      "end_peak_extrapolation": [
+        23.275543,
+        21.773963,
+        22.138219,
+        21.782456,
+        21.954635
+      ],
+      "clean_boundary_detection": [
+        0.036354,
+        0.010035,
+        0.015204,
+        0.010423,
+        0.020097
+      ],
+      "density_and_magnitude_pin": [
+        25.253587,
+        24.652669,
+        25.409072,
+        24.843551,
+        24.125652
+      ],
+      "magnitude_fit_and_cosine_pin": [
+        27.041428,
+        26.935341,
+        27.010769,
+        26.997943,
+        26.173692
+      ],
+      "cosine_fit_and_sine_pin": [
+        25.692369,
+        25.771071,
+        25.844283,
+        26.004428,
+        25.169361
+      ],
+      "sine_fit_and_spline_build_checks": [
+        0.244816,
+        0.290457,
+        0.260991,
+        0.23438,
+        0.198549
+      ],
+      "sin_cos_identity_check": [
+        0.00192,
+        0.002118,
+        0.001842,
+        0.001817,
+        0.002047
+      ],
+      "solution_deviation_check": [
+        0.003938,
+        0.003933,
+        0.003979,
+        0.003879,
+        0.003674
+      ],
+      "curve_ema_updates": [
+        0.022911,
+        0.021671,
+        0.022699,
+        0.022287,
+        0.022832
+      ]
+    },
+    "conclusion": "Four LOWESS endpoint extrapolations dominate this host calc profile; NURBS fits themselves use a small fraction. No host timing extrapolation to6300."
+  },
+  "equivalence": {
+    "prototype_window_comparisons": 5592064,
+    "prototype_windows_identical": true,
+    "Linux_GCC_and_host_musl_endpoint_confidence_comparisons_each": 108,
+    "actual_ARM64_8600_endpoint_confidence_comparisons": 108,
+    "tie_policy_mutation_killed": {
+      "killed": true,
+      "exit": -6,
+      "production_source_mutated": false,
+      "mutation": "Equal distances prefer right instead of left."
+    },
+    "original_algorithm_expected_to_pass_differential_test": true
+  },
+  "radio_CPU_probe": {
+    "passed": true,
+    "platform": "FLEX8600 ARM64",
+    "RF_commands": [],
+    "execution_identity": {
+      "UID": [
+        "78666",
+        "78666",
+        "78666",
+        "78666"
+      ],
+      "GID": [
+        "20",
+        "20",
+        "20",
+        "20"
+      ],
+      "groups": [],
+      "NNP": "1",
+      "caps": {
+        "CapEff": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapInh": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nice": 10,
+      "scheduler": 0
+    },
+    "fit_timings": {
+      "baseline": {
+        "event": "host_fit",
+        "accepted": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "wall_ms": 1724.715111,
+        "CPU_ms": 1535.522421
+      },
+      "optimized": {
+        "event": "host_fit",
+        "accepted": true,
+        "flags": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "wall_ms": 1058.783364,
+        "CPU_ms": 907.946523
+      }
+    },
+    "CPU_reduction_fraction": 0.40870513475882353,
+    "wall_reduction_fraction": 0.38611115699791654,
+    "only_binary_variant": "LOWESS nearest-window selection; common objects identical",
+    "input": "15a39c3930a05f4c569b1380ddb9e6d6ebbcbb51145af64118729a52a0b082b5",
+    "resource_limits": {
+      "address_space_bytes": 268435456,
+      "CPU_seconds_per_child": 20,
+      "core_bytes": 0
+    },
+    "temporary_container_and_host_files_removed": true,
+    "temporary_diagnostic_waveform_absent_and_port_closed": true,
+    "managed_runtime_replaced": false,
+    "model_applied": false,
+    "publication_scope": "Accelerated playback reaches end and unkeys core before calc returns in both ARM64 cases. Both calc calls are numerically accepted; neither is an RF application or completed corrected-playback demonstration."
+  },
+  "regressions": {
+    "Linux_CTest": {
+      "passed": true,
+      "targets": [
+        "pd_lowess_window_test",
+        "pd_fit_rejection_test",
+        "pd_eq_phase_startup_test",
+        "pd_warm_core_test",
+        "pd_eq_worker_test",
+        "pd_dispatch_deadline_test",
+        "pd_recovery_collection_test",
+        "pd_calibration_dispatch_test"
+      ],
+      "count": 8
+    },
+    "portable": {
+      "host_tests": [
+        {
+          "name": "recovery_collection",
+          "exit": 0,
+          "sha256": "d7e8aabc0ae2d4ede34996e87d4deb01d5d3fd1b14e0b23266da5e7e8b61f32b"
+        },
+        {
+          "name": "eq_phase_startup",
+          "exit": 0,
+          "sha256": "d1fb230cbb464d82b1e5582fcf64ccd54281e2d7dca968b4fd01a20448eb8148"
+        },
+        {
+          "name": "warm_core",
+          "exit": 0,
+          "sha256": "64d49228ca6176190db76e1119be40c7f25266e611409de2eaa59757e86c3789"
+        },
+        {
+          "name": "eq_worker",
+          "exit": 0,
+          "sha256": "caf0609f74faa96f227874969e08f0b194288ee2aff07eef518c2f61bd8290df"
+        },
+        {
+          "name": "dispatch_deadline",
+          "exit": 0,
+          "sha256": "9332d8489773c8026113fe85d14c9b6c73c3099d6a2316dbc83f7961eec9d79f"
+        },
+        {
+          "name": "fit_rejection",
+          "exit": 0,
+          "sha256": "ade15ddf3fd4e3dccb33f5e1b7080860afed7df833823c00b2b7b47f3c118729"
+        },
+        {
+          "name": "lowess_window",
+          "exit": 0,
+          "sha256": "fff2e22dc54f6ee05ced8954e4ea32bb3268c279676593687be2ef3bfd7d81a3"
+        }
+      ],
+      "host_passed": 7,
+      "artifacts": {
+        "AetherPD.ssdr_waveform": {
+          "bytes": 329105,
+          "sha256": "0a73bed9b6f12894657bacd0f25ba384101a18fab56bae044316f9ef975add67"
+        },
+        "aether-pd-host": {
+          "bytes": 317728,
+          "sha256": "0eed734576a4073e357b19bc9185e02f254e513b94cd6af5d4f9c1238b1ab567"
+        },
+        "dispatch_deadline-test-arm64": {
+          "bytes": 259224,
+          "sha256": "e068c695d13d11e55791256cd5e3c4654f124856d51cad89e1d09d4f1c87f026"
+        },
+        "dispatch_deadline-test-armv7": {
+          "bytes": 246108,
+          "sha256": "42557a9e3dce4fc542498da2179575bada5d5f4fee179362cd1183dd9e5a7db3"
+        },
+        "dispatch_deadline-test-host": {
+          "bytes": 288592,
+          "sha256": "9332d8489773c8026113fe85d14c9b6c73c3099d6a2316dbc83f7961eec9d79f"
+        },
+        "eq_phase_startup-test-arm64": {
+          "bytes": 193104,
+          "sha256": "69ea0b172e06914298008109778b4b42142b525f924afcb2a20f47e95760ecea"
+        },
+        "eq_phase_startup-test-armv7": {
+          "bytes": 177756,
+          "sha256": "dba86304c493eea7397b564532bc941709489b7324460e09c7be48d6f7eef0b7"
+        },
+        "eq_phase_startup-test-host": {
+          "bytes": 218080,
+          "sha256": "d1fb230cbb464d82b1e5582fcf64ccd54281e2d7dca968b4fd01a20448eb8148"
+        },
+        "eq_worker-test-arm64": {
+          "bytes": 70504,
+          "sha256": "3645af96b3722600ffdac7c131350973b6c4950790c28aadec2254b201e74e67"
+        },
+        "eq_worker-test-armv7": {
+          "bytes": 61232,
+          "sha256": "5e7594fd86a6d43b62159c2690678270f5397ed15f73f0fcf15a96a370dfe512"
+        },
+        "eq_worker-test-host": {
+          "bytes": 68384,
+          "sha256": "caf0609f74faa96f227874969e08f0b194288ee2aff07eef518c2f61bd8290df"
+        },
+        "fit_rejection-test-arm64": {
+          "bytes": 158728,
+          "sha256": "4ff9c8eb8e69a3b3f82cab834cc8b50ead72c0a8495422cd8fd39376cae96d75"
+        },
+        "fit_rejection-test-armv7": {
+          "bytes": 143172,
+          "sha256": "3653d58c6d7b790f0b9c3154ca79864fad389eaf3ed14d68dd2e5297d9be23a2"
+        },
+        "fit_rejection-test-host": {
+          "bytes": 177320,
+          "sha256": "ade15ddf3fd4e3dccb33f5e1b7080860afed7df833823c00b2b7b47f3c118729"
+        },
+        "lowess_window-test-arm64": {
+          "bytes": 63088,
+          "sha256": "d3dacf2224149833bf795f7d5ba27e89c8e4f8d0a22e2d33a51dfcdc45741468"
+        },
+        "lowess_window-test-armv7": {
+          "bytes": 54104,
+          "sha256": "da1bd14238f15c18083448f7d416feeed3080642e711361c56a3c30011030a3b"
+        },
+        "lowess_window-test-host": {
+          "bytes": 67184,
+          "sha256": "fff2e22dc54f6ee05ced8954e4ea32bb3268c279676593687be2ef3bfd7d81a3"
+        },
+        "recovery_collection-test-arm64": {
+          "bytes": 161632,
+          "sha256": "038311a5d520c7f771fb757c2fdb0bff7f628b711831445f3d31a2e9317f03e9"
+        },
+        "recovery_collection-test-armv7": {
+          "bytes": 145756,
+          "sha256": "16cc07301d8f6cef9162dd7d098dc19fdf34428b04cb6b0ba647e20803755526"
+        },
+        "recovery_collection-test-host": {
+          "bytes": 180128,
+          "sha256": "d7e8aabc0ae2d4ede34996e87d4deb01d5d3fd1b14e0b23266da5e7e8b61f32b"
+        },
+        "warm_core-test-arm64": {
+          "bytes": 158328,
+          "sha256": "ae33e2c87f0fe2e07cad610764b49254e040f0036c8bfe7f979dcc33e1d3af36"
+        },
+        "warm_core-test-armv7": {
+          "bytes": 140948,
+          "sha256": "e7986ea2dd1f39c82c906c7444dfd87da44d7f7fe37692c772847ea4fbb7a574"
+        },
+        "warm_core-test-host": {
+          "bytes": 179000,
+          "sha256": "64d49228ca6176190db76e1119be40c7f25266e611409de2eaa59757e86c3789"
+        },
+        "aether-pd-armv7": {
+          "bytes": 272140,
+          "sha256": "86284a88435e553a267d38637883a58ea69d140e3af20c55412ed23b4c9a02a2"
+        },
+        "aether-pd-arm64": {
+          "bytes": 283112,
+          "sha256": "2fed10decd535dd715f239c7c2ff32eb82b3f02753dbbf9230456cde09ab34aa"
+        }
+      },
+      "ARMv7_tests_executed": false,
+      "ARM64_tests_executed_on_8600": [
+        "lowess_window"
+      ]
+    },
+    "repeat": {
+      "same_source_path_separate_caches": true,
+      "files": {
+        "aether-pd-host": {
+          "sha256": "0eed734576a4073e357b19bc9185e02f254e513b94cd6af5d4f9c1238b1ab567",
+          "bytes": 317728,
+          "identical": true
+        },
+        "AetherPD.ssdr_waveform": {
+          "sha256": "0a73bed9b6f12894657bacd0f25ba384101a18fab56bae044316f9ef975add67",
+          "bytes": 329105,
+          "identical": true
+        },
+        "aether-pd-armv7": {
+          "sha256": "86284a88435e553a267d38637883a58ea69d140e3af20c55412ed23b4c9a02a2",
+          "bytes": 272140,
+          "identical": true,
+          "source": "fixed package member"
+        },
+        "aether-pd-arm64": {
+          "sha256": "2fed10decd535dd715f239c7c2ff32eb82b3f02753dbbf9230456cde09ab34aa",
+          "bytes": 283112,
+          "identical": true,
+          "source": "fixed package member"
+        }
+      },
+      "initial_verifier_note": "ARM native outputs reside inside the waveform ZIP; fixed member bytes compared without rebuilding."
+    },
+    "test_registration_and_frozen_gate_passed": true,
+    "docs_build_passed": true
+  },
+  "observed_preparation_failures": [
+    "The final initial grid parser rejected mixed WDSP stderr and JSON. Its raw log remains; final case was explicitly rerun with separate streams and returned0 with expected rejection.",
+    "An initial stage-instrumentation assertion found two identical lock statements; no stage binary ran. A unique marker was selected and a separate stage run passed.",
+    "The first repeat verifier expected loose ARM files; build.py stores them in the ZIP. Fixed ZIP-member bytes were compared and retained without rebuilding."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/captured-pair-lowess-components.tar.gz",
+    "bytes": 2321478,
+    "sha256": "5f37e628c00d6251870424c3025082fa49b4f6322a11a82a5e4f57a0ce783462",
+    "members": 82,
+    "all_members_verified": true
+  },
+  "final_idle": {
+    "state": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 22.78125,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x422b5da0",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "native": {
+      "available": false,
+      "state": "stopped"
+    },
+    "whoami": {
+      "agentName": "Automation",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-native-durability",
+      "ok": true,
+      "pid": 2651239,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-native-durability",
+      "station": "Automation",
+      "txAllowed": true,
+      "version": "26.11.3"
+    }
+  },
+  "scope_limits": [
+    "Historical natural128sample slip and actual cold-start bypass remain unproved. Controlled perturbations demonstrate sensitivity only; no physical cause or attribution is claimed. No new RF case was dispatched.",
+    "The new performance change has standalone component/package and receive-only saved-sample CPU proof, not integrated live RF or a full managed install/update/reboot proof. Installed runtime remains the earlier diagnostic e410 release.",
+    "The radio CPU comparison is one baseline and one optimized calc with actual saved successful samples and nice10 scheduling. It does not establish integrated RR packet-path timing, sustained correction, all workloads, repeated scheduling-tail bounds or actual6300 performance.",
+    "Only the ARM64 LOWESS equivalence test executed on the8600; remaining ARM64 and all ARMv7 regressions were built only. Actual Linux2.6/Cortex-A8/one-core6300 resource/disk/network/feedback/RF qualification is still required.",
+    "Reproduction compares the legacy standalone waveform and native outputs on one source path with independent caches. It is not a full managed runtime/distribution reproduction or production-publisher proof. Legacy package was not installed.",
+    "The temporary broad diagnostics bridge delivered the fixed CPU job, but all math execution occurred only after dropping UID/groups/capabilities and privileged descriptors. No general root/capture endpoint or new persistent privilege is shipped.",
+    "Full P1-P10 remains active: cold/natural128 causal evidence, remaining final process graph failures, repeated/extended/raw speech, final integrated stock comparison, actual6300 hardware, native delivery/publisher/disk and independent release gates remain open."
+  ],
+  "next_step": "Build a source-closed managed diagnostic candidate with the standalone LOWESS optimization, preserve the same bounded RAM-only capture and unchanged privileged helpers, reproduce both architecture distributions, then perform ordinary approved upgrade and receive-only qualification before one separately dispatched guarded RF integration case. Continue cold-start phase/stationarity diagnosis without lowering acceptance thresholds, adding a residual-only cutoff, automatically rearming/keying or software-rebooting."
+}

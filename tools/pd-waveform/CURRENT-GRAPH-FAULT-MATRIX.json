@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T05:36:20.164634+00:00",
+  "recorded_utc": "2026-11-19T06:01:12.423948+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "e4107da729d7caff8cb6dce504fe7c1f9761ec8399a1904ecd54cc60e614b5a9",
@@ -101,10 +101,10 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Use captured successful pairs as a reference to isolate the earlier poor-EQ/phase cold-start failure, profile the actual fitting computation and determine how to qualify its CPU cost on the6300. A separate deliberately specified experiment may be warranted after this evidence is analyzed; do not automatically key until passing. Preserve all remaining P1-P10 gates.",
-    "state": "one_successful_buffered_RF_capture_and_host_reference_replay_cold_cause_open",
-    "evidence": "BUFFERED-CAPTURE-RF-QUALIFICATION.json",
-    "authority_constraint": "No automatic RF retry/rearm or software reboot; positive keying through attested GUI with independent guards only."
+    "purpose": "Build a source-closed managed diagnostic candidate with the standalone LOWESS optimization, preserve the same bounded RAM-only capture and unchanged privileged helpers, reproduce both architecture distributions, then perform ordinary approved upgrade and receive-only qualification before one separately dispatched guarded RF integration case. Continue cold-start phase/stationarity diagnosis without lowering acceptance thresholds, adding a residual-only cutoff, automatically rearming/keying or software-rebooting.",
+    "state": "LOWESS_CPU_optimization_component_and_receive_only_radio_probe_passed_not_installed_RF_unqualified",
+    "evidence": "LOWESS-CPU-QUALIFICATION.json",
+    "authority_constraint": "No automatic RF retry/rearm or software reboot. Ordinary reviewed update, receive-only qualification and fixed bounded GUI-keyed RF case remain separate."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",

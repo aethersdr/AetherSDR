@@ -455,7 +455,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         -include "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wdsp/port/include/wdsp_port.h"
         -ffunction-sections -fdata-sections)
     target_compile_definitions(aether_pd_test_core PUBLIC _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
-    target_compile_definitions(aether_pd_test_core PRIVATE AETHER_PD_PI_CRITICAL_SECTIONS)
+    target_compile_definitions(aether_pd_test_core PRIVATE
+        AETHER_PD_PI_CRITICAL_SECTIONS AETHER_PD_LOWESS_WINDOW_SEARCH)
     target_link_options(aether_pd_test_core INTERFACE -Wl,--gc-sections)
     target_link_libraries(aether_pd_test_core PUBLIC Threads::Threads m)
     set_target_properties(aether_pd_test_core PROPERTIES
@@ -481,6 +482,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(pd_fit_rejection_test PRIVATE aether_pd_test_core)
     add_test(NAME pd_fit_rejection_test COMMAND pd_fit_rejection_test)
     set_tests_properties(pd_fit_rejection_test PROPERTIES TIMEOUT 60)
+    add_executable(pd_lowess_window_test tools/pd-waveform/lowess_window_test.c)
+    target_link_libraries(pd_lowess_window_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_lowess_window_test COMMAND pd_lowess_window_test)
+    set_target_properties(pd_lowess_window_test PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    set_tests_properties(pd_lowess_window_test PROPERTIES TIMEOUT 60)
     add_executable(pd_dispatch_deadline_test
         tools/pd-waveform/dispatch_deadline_test.c
         tools/pd-waveform/warm_seed_curve.c)

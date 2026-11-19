@@ -1320,3 +1320,21 @@ historical natural128sample slip's cause. Actual6300 kernel support and RF
 qualification of the new build remain required. `pd_pi_lock_policy_test` checks
 recursive PI construction and injected pthread failures without sockets or a
 firmware peer.
+
+## Standalone AetherPD LOWESS window search
+
+`upstream/extrapolate.c` accepts `AETHER_PD_LOWESS_WINDOW_SEARCH`, enabled
+only by the standalone AetherPD build and its test core. LOWESS searches the
+sorted samples for the same nearest window containing the current sample,
+preserving the original preference for the left sample on equal distances.
+Window selection takes logarithmic rather than linear work in the window
+size. Weighted sums, robust iterations, endpoint extrapolation, fit acceptance
+and memory use are unchanged. Desktop WDSP retains the original path.
+
+`pd_lowess_window_test` compares endpoint values bit for bit and confidence
+flags against a separately named copy of the original path, including tied,
+constant, unsorted, clamped and outlier inputs. The differential test proves
+arithmetic equivalence on those inputs; the captured-pair profile separately
+measures performance. Host timings do not establish radio or FLEX-6300 speed.
+
+Drop this opt-in patch if upstream supplies an equivalent bounded search.
