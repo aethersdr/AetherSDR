@@ -8782,6 +8782,7 @@ void RadioModel::onDisconnected()
     // Reset the CWX drain watch and bump its epoch so a watch armed mid-macro
     // at disconnect can't wedge the monotonic guard after reconnect. (#3949)
     m_cwxModel.resetDrainWatch();
+    m_cwxModel.setDxCall({});
     m_lastInterlockSource.clear();
     m_lastInterlockNotificationKey.clear();
     m_lastInterlockNotificationMs = 0;

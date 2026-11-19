@@ -51,6 +51,7 @@ public:
     // The DX call fills the {CALL} placeholder in stored macros and in text
     // typed into the CWX panel. Session state only: never saved, and never
     // written to the radio. Kept as capitals, digits and '/'.
+    static constexpr int kMaxDxCallLength = 17;  // longest call accepted by Callsigns::regex()
     QString dxCall() const { return m_dxCall; }
     void setDxCall(const QString& call);
     // Replaces every {CALL} (not case-sensitive) with the DX call. Returns

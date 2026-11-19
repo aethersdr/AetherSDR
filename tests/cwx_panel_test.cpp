@@ -536,10 +536,13 @@ void testDxCallBoxFillsCallPlaceholder()
     report("a {CALL} macro with an empty DX call box sends nothing and paints no bubble",
            f.commands.isEmpty() && f.panel.historyBubbleCount() == 0);
 
-    // insert() is the programmatic edit that emits textEdited, as typing does.
-    dxCall->insert(QStringLiteral("k1abc/p !"));
-    report("typing in the box sets the model's DX call, kept as capitals, digits and '/'",
+    dxCall->insert(QStringLiteral("k1abc/p"));
+    report("typing in the box uppercases the model's DX call and its display",
            f.model.dxCall() == QLatin1String("K1ABC/P") && dxCall->text() == QLatin1String("K1ABC/P"));
+    dxCall->setCursorPosition(2);
+    dxCall->insert(QStringLiteral("-"));
+    report("invalid input leaves the DX call and caret in place",
+           dxCall->text() == QLatin1String("K1ABC/P") && dxCall->cursorPosition() == 2);
 
     f1Button->click();
     const CwxBubble* bubble = f.panel.pendingBubble();
@@ -567,8 +570,13 @@ void testDxCallBoxFillsCallPlaceholder()
            f.commands.isEmpty() && input->toPlainText() == QLatin1String("{CALL} TU")
                && f.panel.historyBubbleCount() == 2);
 
-    f.model.setDxCall(QStringLiteral("W1AW"));
-    report("a DX call set on the model shows in the box", dxCall->text() == QLatin1String("W1AW"));
+    const QString portableCall = QStringLiteral("ABCD/KH6ABCD/QRPP");
+    f.model.setDxCall(portableCall);
+    report("the longest decoded callsign fits in the DX call field",
+           dxCall->text() == portableCall && dxCall->toolTip() == portableCall);
+    dxCall->setText(QStringLiteral("w1aw"));
+    report("a programmatic edit updates the model and display",
+           f.model.dxCall() == QLatin1String("W1AW") && dxCall->text() == QLatin1String("W1AW"));
 }
 
 // A keyboard or MIDI "CWX Macro" follows the panel's F-key rules: refused

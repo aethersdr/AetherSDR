@@ -47,7 +47,10 @@ void CwxModel::setDxCall(const QString& call)
     QString kept;
     for (const QChar ch : call.toUpper()) {
         const ushort c = ch.unicode();
-        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/') { kept += ch; }
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/') {
+            kept += ch;
+            if (kept.size() == kMaxDxCallLength) { break; }
+        }
     }
     if (kept == m_dxCall) { return; }
     m_dxCall = kept;

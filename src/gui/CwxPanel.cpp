@@ -17,6 +17,8 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPushButton>
+#include <QRegularExpression>
+#include <QRegularExpressionValidator>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QShortcut>
@@ -237,9 +239,10 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     m_dxCallEdit = new QLineEdit;
     m_dxCallEdit->setObjectName(QStringLiteral("cwxDxCallEdit"));
     m_dxCallEdit->setAccessibleName(tr("DX call"));
-    m_dxCallEdit->setToolTip(tr("Fills {CALL} in macros and sent text. "
-                                "Double-click a callsign in the CW decoder to set it."));
-    m_dxCallEdit->setMaxLength(16);
+    m_dxCallEdit->setAccessibleDescription(tr("Type a callsign using letters, digits and slashes."));
+    m_dxCallEdit->setMaxLength(CwxModel::kMaxDxCallLength);
+    m_dxCallEdit->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("[A-Za-z0-9/]*")), m_dxCallEdit));
     m_dxCallEdit->setFixedWidth(92);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_dxCallEdit, "QLineEdit { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 2px; font-size: 11px; padding: 2px; }");
@@ -257,7 +260,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     vbox->addWidget(titleRow);
 
     // The model keeps capitals, digits and '/'; the box shows what it kept.
-    connect(m_dxCallEdit, &QLineEdit::textEdited, this, [this](const QString& text) {
+    connect(m_dxCallEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
         if (m_model) { m_model->setDxCall(text); }
         syncDxCallEdit();
     });
@@ -453,6 +456,7 @@ void CwxPanel::configureTextKeyer(const QString& name, int minWpm, int maxWpm,
 void CwxPanel::setModel(CwxModel* model)
 {
     m_model = model;
+    syncDxCallEdit();
     if (!m_model) return;
 
     if (m_liveBtn) {
@@ -477,7 +481,6 @@ void CwxPanel::setModel(CwxModel* model)
         }
     });
     connect(m_model, &CwxModel::dxCallChanged, this, [this](const QString&) { syncDxCallEdit(); });
-    syncDxCallEdit();
     connect(m_model, &CwxModel::delayChanged, this, [this](int ms) {
         if (m_delaySpin) {
             QSignalBlocker b(m_delaySpin);
@@ -645,10 +648,12 @@ void CwxPanel::buildSetupView()
             if (!m_model || action != QLatin1String("click")) { return {}; }
             const TxController::Input input = controller->capture(TxController::Activity::Cwx);
             if (!input.belongsTo(m_model)) { return {}; }
-            const std::optional<QString> resolved = m_model->resolveForSend(m_model->macro(i));
-            if (!resolved) { return {}; }
-            const QString text = *resolved;
-            return [this, input, text, i] {
+            const QString macro = m_model->macro(i);
+            return [this, input, macro, i] {
+                if (!input.belongsTo(m_model)) { return; }
+                const std::optional<QString> resolved = m_model->resolveForSend(macro);
+                if (!resolved) { return; }
+                const QString text = *resolved;
                 const QPointer<CwxPanel> guard(this);
                 const auto admitted = [guard, text] { if (guard) { guard->appendHistoryBubble(text); } };
                 if (!text.isEmpty()) { (void)input.send(text, admitted); }
@@ -961,6 +966,9 @@ void AetherSDR::CwxPanel::syncDxCallEdit()
 {
     if (!m_dxCallEdit) { return; }
     const QString call = m_model ? m_model->dxCall() : QString();
+    m_dxCallEdit->setToolTip(call.isEmpty()
+        ? tr("Fills {CALL} in macros and sent text. Double-click a callsign in the CW decoder to set it.")
+        : call);
     if (m_dxCallEdit->text() == call) { return; }
     const int cursor = m_dxCallEdit->cursorPosition();
     const QSignalBlocker blocker(m_dxCallEdit);
