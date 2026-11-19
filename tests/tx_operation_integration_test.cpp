@@ -3809,7 +3809,7 @@ void tciTxVoiceModeFollowsTxSlice()
     // voice mode. TciServer keeps AudioEngine's gate on the live TX slice.
     DaxTciFixture f(true, QStringLiteral("USB"));
     // MainWindow wires every slice as RadioModel adds it; the fixture does not.
-    f.server.wireSlice(0, f.radio.slice(0));
+    f.server.wireSlice(0, f.f.radio.slice(0));
     AudioEngine audio;
     check(!audio.tciTxVoiceMode(), "TCI voice-mode gate is closed before any server sets it");
     f.server.setAudioEngine(&audio);
