@@ -1597,7 +1597,8 @@ void MetisClient::setTxRoute(int route, int level)
 
 void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
                                std::chrono::steady_clock::time_point scheduledAt,
-                               std::chrono::steady_clock::time_point releaseAt)
+                               std::chrono::steady_clock::time_point releaseAt,
+                               const TxCoordinator::Completion& completion)
 {
     if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
@@ -1625,7 +1626,12 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
         enterCwMode(operation);
     }
     if (!scheduled) {
-        m_cwKeyDown = down;
+        if (down) {
+            addCwHold(operation);
+        } else {
+            m_cwKeyDown = false;
+            releaseCwHolds();
+        }
         // The engine suppresses a global up while another CW contributor holds
         // down. Retain that compatible set after checking this original command.
         m_cwOperation = down ? operation.heldCwKeying() : operation;
@@ -1639,8 +1645,12 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
             while (at > 0 && !(m_cwSchedule[at - 1].release && !m_cwSchedule[at - 1].down)) {
                 --at;
             }
-            if (at == 0 || target >= m_cwSchedule[at - 1].sample) {
-                return;   // the element's own release is placed, or already on the wire
+            if (at == 0) {
+                return;   // the element's own release is already on the wire
+            }
+            if (target >= m_cwSchedule[at - 1].sample) {
+                m_cwSchedule[at - 1].completion = completion;   // held until it is written
+                return;
             }
             // An earlier key-up (a keyer stopped mid-element) replaces it.
             for (std::size_t i = at; i < m_cwScheduleCount; ++i) {
@@ -1648,7 +1658,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
             }
             m_cwSchedule[--m_cwScheduleCount] = {};
         }
-        scheduleCwKeyUp(target, operation, false);
+        scheduleCwKeyUp(target, operation, false, completion);
         return;
     }
     if (target < m_cwFrameSample) {
@@ -1680,12 +1690,12 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
     (void)insertCwEdge(CwScheduledEdge{target, true, operation, false});
     m_cwReleaseOwed = withRelease;
     if (withRelease) {
-        scheduleCwKeyUp(cwSampleAt(releaseAt) + m_cwEdgeLeadSamples + m_cwShiftSamples, operation, true);
+        scheduleCwKeyUp(cwSampleAt(releaseAt) + m_cwEdgeLeadSamples + m_cwShiftSamples, operation, true, {});
     }
 }
 
 void MetisClient::scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Operation& operation,
-                                  bool release)
+                                  bool release, const TxCoordinator::Completion& completion)
 {
     if (target < m_cwFrameSample) {
         // A late key-up is applied at once: the element runs long, never short.
@@ -1695,7 +1705,7 @@ void MetisClient::scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Oper
         m_cwOperation = operation;
         return;
     }
-    if (!insertCwEdge(CwScheduledEdge{target, false, operation, release})) {
+    if (!insertCwEdge(CwScheduledEdge{target, false, operation, release, completion})) {
         flushCwSchedule();
         ++m_cwScheduleOverflows;
         logCwFailSafe("scheduled CW edges overflowed; keyed up");
@@ -1760,8 +1770,11 @@ void MetisClient::applyDueCwEdges(std::int64_t sample, qint64 nowMs)
         }
         m_cwSchedule[--m_cwScheduleCount] = {};
         if (!edge.down) {
+            // The scheduled carrier only: a live hold stays on. The edge's
+            // completion is dropped with it, the element now written.
             m_cwKeyDown = false;
             m_cwForceUpSample = -1;
+            pruneCwHolds(nowMs);
             // A release keeps the held CW operation its key-down entered with;
             // the element's own intent may end before the shifted up is due.
             if (m_cwMode && !edge.release) {
@@ -1826,10 +1839,48 @@ void MetisClient::logCwFailSafe(const char* what)
                      << "overflows" << m_cwScheduleOverflows << "forced ups" << m_cwForcedKeyUps << ")";
 }
 
+void MetisClient::addCwHold(const TxCoordinator::Operation& operation)
+{
+    pruneCwHolds(TxCoordinator::monotonicMs());
+    if (m_cwHoldCount == kCwHoldCapacity) {
+        // Full of live holds: the oldest goes. Its carrier may end early,
+        // never late.
+        std::move(m_cwHolds.begin() + 1, m_cwHolds.end(), m_cwHolds.begin());
+        --m_cwHoldCount;
+    }
+    m_cwHolds[m_cwHoldCount++] = operation;
+}
+
+void MetisClient::pruneCwHolds(qint64 nowMs)
+{
+    std::size_t kept = 0;
+    for (std::size_t i = 0; i < m_cwHoldCount; ++i) {
+        if (m_cwHolds[i].permitsDispatch(nowMs)) {
+            if (kept != i) {
+                m_cwHolds[kept] = std::move(m_cwHolds[i]);
+            }
+            ++kept;
+        }
+    }
+    for (std::size_t i = kept; i < m_cwHoldCount; ++i) {
+        m_cwHolds[i] = {};
+    }
+    m_cwHoldCount = kept;
+}
+
+void MetisClient::releaseCwHolds() noexcept
+{
+    for (std::size_t i = 0; i < m_cwHoldCount; ++i) {
+        m_cwHolds[i] = {};
+    }
+    m_cwHoldCount = 0;
+}
+
 void MetisClient::clearCwKeying()
 {
     flushCwSchedule();
     resetCwShift();   // the over ends here
+    releaseCwHolds();
     m_cwMode = false;
     m_cwKeyDown = false;
     m_cwEnvelope = 0.0;
@@ -2008,6 +2059,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         m_mox = false;
     }
     if (!m_cwOperation.permitsDispatch(now)) {
+        releaseCwHolds();
         m_cwMode = false;
         m_cwKeyDown = false;
         m_cwEnvelope = 0.0;
@@ -2124,9 +2176,12 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         constexpr double kRampStep = 1.0 / static_cast<double>(kCwRampSamples);
         constexpr double kPi = 3.14159265358979323846;
         std::vector<std::complex<float>> block(kTxSamplesPerPacket);
+        if (!m_cwKeyDown && m_cwScheduleCount == 0) {
+            pruneCwHolds(now);   // no element to bridge to
+        }
         for (int n = 0; n < kTxSamplesPerPacket; ++n) {
             applyDueCwEdges(cwFrameStart + n, now);
-            if (m_cwKeyDown) {
+            if (m_cwKeyDown || m_cwHoldCount > 0) {
                 m_cwEnvelope = std::min(1.0, m_cwEnvelope + kRampStep);
             } else {
                 m_cwEnvelope = std::max(0.0, m_cwEnvelope - kRampStep);

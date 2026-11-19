@@ -430,12 +430,17 @@ public:
     // kCwMaxEdgeShiftMs is refused, and the over has no carrier until it
     // ends. A late key-up without a scheduled release is applied at once.
     // An unscheduled edge flushes pending ones and takes effect now.
+    // A scheduled key-up keeps `completion` until its element's release has
+    // been written to EP2, so the element's intent outlives its pending
+    // edges; a flush drops it. An unscheduled key-down is a hold of its own,
+    // which a scheduled release does not clear (see m_cwHolds).
     void setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
                       std::chrono::steady_clock::time_point scheduledAt = {},
-                      std::chrono::steady_clock::time_point releaseAt = {});
+                      std::chrono::steady_clock::time_point releaseAt = {},
+                      const TxCoordinator::Completion& completion = {});
     Q_INVOKABLE void clearCwKeying();
     [[nodiscard]] bool cwModeActive() const noexcept { return m_cwMode; }
-    [[nodiscard]] bool cwKeyDown() const noexcept { return m_cwKeyDown; }
+    [[nodiscard]] bool cwKeyDown() const noexcept { return m_cwKeyDown || m_cwHoldCount > 0; }
     // The delay that absorbs GUI and I/O-thread stalls in scheduled CW edges
     // before the over's shift has to grow; the operator's setting
     // (Hl2Settings::cwEdgeLeadMs, #7245), default 40 ms, which covers the GUI
@@ -1059,6 +1064,7 @@ private:
         bool down = false;
         TxCoordinator::Operation operation;
         bool release = false;   // a key-up scheduled with its own key-down
+        TxCoordinator::Completion completion;   // a key-up's; dropped once written
     };
     // Edges pending at once: those whose instant lies within the lead plus
     // the shift before now, plus a key-down's own release. At the keyer's
@@ -1103,7 +1109,21 @@ private:
     void flushCwSchedule() noexcept;   // drops pending edges and keys up
     void resetCwShift() noexcept;      // the over ended: shift and refusal cleared
     bool insertCwEdge(const CwScheduledEdge& edge);
-    void scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Operation& operation, bool release);
+    void scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Operation& operation, bool release,
+                         const TxCoordinator::Completion& completion);
+    // Unscheduled key-downs still held (a straight key, a TCI keyer hold),
+    // each by its original operation and so its producer's intent. The
+    // carrier is m_cwKeyDown (the scheduled elements') or any hold. The model
+    // suppresses a hold's up while another contributor is live, and ends that
+    // intent: the hold then lapses at the next scheduled release, or at once
+    // when no scheduled element is pending or keyed. An unscheduled up ends
+    // them all.
+    static constexpr std::size_t kCwHoldCapacity = 8;
+    std::array<TxCoordinator::Operation, kCwHoldCapacity> m_cwHolds{};
+    std::size_t m_cwHoldCount = 0;
+    void addCwHold(const TxCoordinator::Operation& operation);
+    void pruneCwHolds(qint64 nowMs);   // drops lapsed holds
+    void releaseCwHolds() noexcept;
     void logCwFailSafe(const char* what);
     TxCoordinator::Operation m_toneOperation;
     bool setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);

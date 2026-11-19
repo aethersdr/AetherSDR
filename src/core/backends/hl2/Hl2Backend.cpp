@@ -5453,11 +5453,15 @@ void Hl2Backend::keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
     if (m_cwHangTimer) {
         m_cwHangTimer->stop();
     }
-    m_cwHangCompletion = {}; // a fresh element supersedes that local hang
+    // A fresh element supersedes that local hang. The earlier element's own
+    // completion is still held by its scheduled release in MetisClient.
+    m_cwHangCompletion = {};
     if (m_metis) {
+        // A scheduled key-up's completion goes with it: MetisClient releases it
+        // once the element's release is written to EP2, not when this returns.
         QMetaObject::invokeMethod(m_metis, [metis = m_metis, down, operation, completion, scheduledAt,
                                             releaseAt] {
-            metis->setCwKeyDown(down, operation, scheduledAt, releaseAt);
+            metis->setCwKeyDown(down, operation, scheduledAt, releaseAt, completion);
         }, Qt::QueuedConnection);
     }
 
