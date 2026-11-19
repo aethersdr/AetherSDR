@@ -194,7 +194,7 @@ private:
     qsizetype m_mailboxBytes{0};      // every queued item
     qsizetype m_streamItems{0};       // the stream share of the two counts
     qsizetype m_streamBytes{0};
-    quint64 m_droppedStreamPosts{0};
+    quint64 m_droppedStreamPosts{0};  // all clients together; not in any Client::droppedStreamFrames
     QElapsedTimer m_streamPostDropLog;
     bool m_drainScheduled{false};
     bool m_overloaded{false};

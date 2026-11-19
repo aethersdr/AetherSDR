@@ -1452,10 +1452,53 @@ public:
         check(dropped == 300 - 64, "IQ frames past the 64-frame budget are dropped and counted");
         check(socket->sendTextMessage(QStringLiteral("vfo:0,0,14074000;")) >= 0,
               "a control post still fits after the stream budget is full");
+        // From the queue, not from 1: onClientOpened() already queued control work.
+        qsizetype controlItems = 0;
+        {
+            QMutexLocker lock(&f.server.m_io->m_mailboxMutex);
+            controlItems = qsizetype(f.server.m_io->m_mailbox.size()) - f.server.m_io->m_streamItems;
+        }
+        while (controlItems < 256 && f.server.m_io->post([] {})) { ++controlItems; }
+        check(controlItems == 256, "a full stream budget leaves the whole 256-item control budget");
         worker.resume.release();
         for (int i = 0; i < 600 && worker.items() > 0; ++i) { QThread::msleep(5); }
         check(worker.items() == 0, "worker drains the mailbox");
         check(lifetime->live.load(), "a full stream budget retires no client");
+        f.server.stop();
+    }
+
+    // The other half of the policy: control past its own budget still marks
+    // the mailbox overloaded, and the drain retires every client.
+    static void controlOverflowStillRetires()
+    {
+        Fixture f;
+        f.server.m_running.store(true);
+        auto lifetime = std::make_shared<TciClientLifetime>();
+        TciIoWorker::Client registered;
+        registered.lifetime = lifetime;
+        f.server.m_io->m_clients.insert(lifetime->id, registered);
+        PausedWorker worker(f);
+        f.server.onClientOpened(lifetime, QHostAddress(QStringLiteral("192.0.2.2")), 50001);
+        TciClient* socket = f.server.clientById(lifetime->id);
+        check(socket != nullptr, "client registered without a socket");
+        if (!socket) { worker.resume.release(); f.server.stop(); return; }
+        const QByteArray iqFrame(1024, 0);
+        for (int i = 0; i < 64; ++i) { socket->sendStreamMessage(iqFrame); }
+        int refused = 0;
+        for (int i = 0; i < 300 && refused == 0; ++i) {
+            if (!f.server.m_io->post([] {})) { ++refused; }
+        }
+        bool overloaded = false;
+        {
+            QMutexLocker lock(&f.server.m_io->m_mailboxMutex);
+            overloaded = f.server.m_io->m_overloaded;
+        }
+        check(refused == 1, "a control post past its budget is refused");
+        check(overloaded, "a control overflow still marks the mailbox overloaded");
+        worker.resume.release();
+        // The drain clears the mailbox before it retires, so wait on the client.
+        for (int i = 0; i < 600 && lifetime->live.load(); ++i) { QThread::msleep(5); }
+        check(!lifetime->live.load(), "a control overflow still retires the client");
         f.server.stop();
     }
 
@@ -1464,6 +1507,7 @@ public:
         serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
         streamOverflowRetiresNobody();
+        controlOverflowStillRetires();
         lineOutCaptureConsent(); lineOutFailureIsolation(); lineOutProtocol(); lineOutDemandLifecycle(); lineOutDelivery(); eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence(); receiveAttenuationAndMeter();
         replayAndEpochs(); resetIsolation(); sampleTypeIsNamed(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
