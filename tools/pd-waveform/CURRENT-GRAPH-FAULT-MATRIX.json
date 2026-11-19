@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T08:00:52.027664+00:00",
+  "recorded_utc": "2026-11-19T08:57:49.820876+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
@@ -104,13 +104,19 @@
         "FRESH-PROCESS-IQ-CAPTURE-QUALIFICATION.json"
       ],
       "limits": "Five-field rejection reporting fixed and installed in current d7 diagnostic, which has finite normal RF and keyed owned-unkey API-loss passes. Successful actual raw acquisition/phase/EQ replay now anchored; controlled pre-acquisition28degree/50Hz phase modulation reproduces poorEQ/phase rejection while coherence guard stays satisfied, including512sample calibration calls. This does not identify the actual cold-start or natural128sample cause; failed-run raw data remains unavailable. No acceptance/readiness thresholds changed. One later fresh-process first-key d7 diagnostic run corrected; actual second raw capture also matches acquisition/phase/EQ replay. It did not reproduce the failure and was not repeated."
+    },
+    {
+      "case": "DSP inherited API lease loss before any calibration arm",
+      "state": "old_runtime_explicit_recovery_failed_causal_fix_host_tested_not_installed",
+      "evidence": "PREARM-API-RECOVERY-QUALIFICATION.json",
+      "limits": "Receive-only DSP API loss exposed a pre-arm explicit receive-recovery gap. A causal Go fix and host tests pass; the fix is not installed or radio-qualified. Original failed harness/product recovery results are preserved. Manual basic USB recovery, fresh ordinary DAX IQ successor and both exact-session cleanup audits pass. Native exit7 survived; no RF/keyed case. Manual receiver creation is not product recovery. The original overly strict READY-only observer failure remains failed."
     }
   ],
   "next_available_case": {
-    "purpose": "Qualify receive-only loss of the DSP inherited API lease as a distinct P5 fault. First validate a fixed socket duplicate tied to the exact native process and lease guardian, drop privileges before any shutdown action, and require cleanup plus explicit IQ recovery. A separately prepared bounded keyed case may follow only after receive-only proof. Preserve the unreproduced cold/natural128 cases and all P1-P10 requirements.",
-    "state": "fresh_process_capture_succeeded_no_cold_reproduction_next_receive_only_DSP_API_lease_fault",
-    "evidence": "FRESH-PROCESS-IQ-CAPTURE-QUALIFICATION.json",
-    "authority_constraint": "Receive-only preflight first, exact owned socket only and privilege drop before shutdown. No automatic RF retry/rearm or software reboot."
+    "purpose": "Build the exact fixed full ARMv7/ARM64 runtime reproducibly, verify changed components and disk bounds, then use the ordinary approved upgrade. Dispatch a new receive-only DSP API fault with fresh ownership witness, allow READY/RECEIVE only after the unkeyed fault, and prove explicit Restore receive plus fresh USB DAX IQ successor and exact cleanup. Preserve the old failed run; no automatic RF retry/rearm or software reboot.",
+    "state": "build_install_and_qualify_prearm_recovery_fix",
+    "evidence": "PREARM-API-RECOVERY-QUALIFICATION.json",
+    "authority_constraint": "Ordinary approved upgrade; receive-only first; exact owned socket and privilege drop before shutdown. No automatic RF retry/rearm or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",

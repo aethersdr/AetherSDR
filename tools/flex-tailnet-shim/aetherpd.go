@@ -18,9 +18,10 @@ const aetherPDMaxStatusBytes = 16 << 10
 var aetherPDReads = make(chan struct{}, 1)
 
 // Operational state, selected IQ binding and bounded failure records cross the
-// shim boundary. Other native debug fields stay local to the waveform.
+// shim boundary. Native ownership hints remain private.
 // This report never authorizes capture provisioning or transmitter control.
 type aetherPDStatus struct {
+	nativeActiveSlice             *int
 	CaptureBatchVersion           uint32                   `json:"measurement_capture_batch_version,omitempty"`
 	Diagnostics                   *pdDiagnostics           `json:"diagnostics,omitempty"`
 	FeedbackBinding               *pdFeedbackBinding       `json:"feedback_binding,omitempty"`
@@ -71,6 +72,13 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 	var name string
 	if err = read("name", &name); err != nil || name != "AetherPD" {
 		return result, errors.New("unexpected status producer")
+	}
+	if _, present := fields["active_slice"]; present {
+		var slice int
+		if err = read("active_slice", &slice); err != nil || slice < -1 || slice >= 16 {
+			return result, errors.New("invalid native active slice")
+		}
+		result.nativeActiveSlice = &slice
 	}
 	var fault, blocked bool
 	for _, field := range []struct {

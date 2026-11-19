@@ -29,6 +29,7 @@ type aetherPDProcess struct {
 	captures                  pdCaptureStore
 	calibrationIntents        pdCalibrationIntents
 	receiveJournal            *pdReceiveJournal
+	receiveObserve            func(context.Context, pdReceiveOriginal) (pdReceiveView, error)
 	owner                     *os.File
 	setupOwner                *os.File
 	done                      chan struct{}

@@ -1009,6 +1009,10 @@ Loss of the waveform's radio API connection can remove its active PD receive
 slice, even while unkeyed. The development restore request can recreate a
 receiver after confirmed API loss for a basic single-receiver USB/LSB session,
 provided the original GUI and pan survive and the radio reports free resources.
+Fresh unkeyed status observations record the owned PD receiver before calibration
+is armed. If ownership was not confirmed before the connection failed,
+**Restore receive** refuses to allocate a replacement; add a receive slice in
+AetherSDR instead.
 It checks allocation and ownership before restoring receive settings. A confirmed conflict with another receiver using the original DAX channel
 makes the automatic receive guardian refuse restoration promptly and report the
 reason in its log. It leaves that receiver untouched. Advanced

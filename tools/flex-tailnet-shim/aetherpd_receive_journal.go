@@ -13,11 +13,32 @@ type pdReceiveJournal struct {
 	mu                  sync.Mutex
 	original            pdReceiveOriginal
 	pdObserved          bool
+	pdObserving         bool
+	pdObserveAfter      time.Time
 	apiFailed           bool
 	processDone         bool
 	restoring           bool
 	allocationAttempted bool
 	allocationConfirmed bool
+}
+
+// Native PD status only triggers a fresh radio observation; it is not ownership
+// proof. Successful ownership is retained once without requiring a source arm.
+func (j *pdReceiveJournal) beginPDObservation(slice int, now time.Time) (pdReceiveOriginal, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.processDone || j.pdObserved || j.pdObserving || !j.original.complete || slice != j.original.sliceID || now.Before(j.pdObserveAfter) {
+		return pdReceiveOriginal{}, false
+	}
+	j.pdObserving = true
+	j.pdObserveAfter = now.Add(time.Second)
+	return j.original, true
+}
+
+func (j *pdReceiveJournal) endPDObservation() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.pdObserving = false
 }
 
 func (j *pdReceiveJournal) beginExistingRestore() (pdReceiveOriginal, error) {

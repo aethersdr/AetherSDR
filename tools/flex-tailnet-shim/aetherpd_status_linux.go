@@ -35,7 +35,11 @@ func (p *aetherPDProcess) queryStatus(ctx context.Context) (aetherPDStatus, erro
 	if err != nil {
 		return aetherPDStatus{}, err
 	}
-	return parseAetherPDStatus(data)
+	status, err := parseAetherPDStatus(data)
+	if err == nil {
+		p.observePDReceiveOwnership(ctx, status)
+	}
+	return status, err
 }
 
 // The inherited socket is the child identity. No fallback to a shared port is
