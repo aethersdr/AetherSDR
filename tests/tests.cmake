@@ -9262,6 +9262,14 @@ add_executable(transmit_services_test tests/transmit_services_test.cpp)
 target_include_directories(transmit_services_test PRIVATE src tests)
 target_link_libraries(transmit_services_test PRIVATE aethercore Qt6::Core)
 add_test(NAME transmit_services_test COMMAND transmit_services_test)
+
+# A key objection (RFC #6237) at every key-on gate, never on an un-key, CW once
+# per message, VOX on, DVK, NAVTEX and the tuner's own autotune. An injected
+# backend records what is dispatched; no socket, no radio, no device.
+add_executable(key_objection_gate_test tests/key_objection_gate_test.cpp)
+target_include_directories(key_objection_gate_test PRIVATE src tests)
+target_link_libraries(key_objection_gate_test PRIVATE aethercore Qt6::Core)
+add_test(NAME key_objection_gate_test COMMAND key_objection_gate_test)
 # Socket-free production NetCW encoder, scheduler, session and local PTT lifecycle.
 add_executable(flex_cw_controls_test tests/flex_cw_controls_test.cpp)
 target_include_directories(flex_cw_controls_test PRIVATE src tests)
@@ -11702,6 +11710,7 @@ set(AETHER_SETTINGS_CONSUMERS
     flex_cw_controls_test
     tune_inhibit_restore_test
     transmit_services_test
+    key_objection_gate_test
     tx_audio_context_test
     backend_slice_lifecycle_test
     slice_lifecycle_routing_test

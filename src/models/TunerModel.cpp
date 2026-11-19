@@ -217,14 +217,23 @@ void TunerModel::autoTune()
     // `tgxl autotune` command path, which broke for some users in firmware 4.2.
     // The TGXL drives radio PTT via its hardware interlock cable, so we don't
     // need to key the radio from the client.
-    if (m_directConn && m_directConn->isConnected()) {
+    const bool direct = m_directConn && m_directConn->isConnected();
+    if (!direct && m_handle.isEmpty()) {
+        qCDebug(lcTuner) << "TunerModel::autoTune: no direct conn and no handle, ignoring";
+        return;
+    }
+    // Either route keys the radio, so a start is a key-on of this client. While
+    // tuning the same verb aborts, and an abort is never refused.
+    if (m_autotuneAdmission && !m_tuning) {
+        if (const QString refusal = m_autotuneAdmission().trimmed(); !refusal.isEmpty()) {
+            emit autotuneRefused(refusal);
+            return;
+        }
+    }
+    if (direct) {
         qCDebug(lcTuner) << "TunerModel::autoTune: using direct TGXL path";
         emit directAutotuneStarted();
         m_directConn->requestAutotune();
-        return;
-    }
-    if (m_handle.isEmpty()) {
-        qCDebug(lcTuner) << "TunerModel::autoTune: no direct conn and no handle, ignoring";
         return;
     }
     // Neutral intent → Flex "tgxl autotune handle=<h>" wire. RadioModel applies
