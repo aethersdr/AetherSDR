@@ -1,8 +1,13 @@
 # Managed-owner credential rotation research
 
-Status: unfinished research saved while work is paused. No rotation endpoint,
-client transaction, UI, installation, or radio qualification has been implemented.
-The existing managed sign-out behavior continues to preserve the owner credential.
+Status: unfinished research. The server endpoint now has offline component
+coverage recorded in [its qualification report](./MANAGED-OWNER-KEY-SERVER-QUALIFICATION.json).
+The client transaction, operator UI, packaged installation and radio qualification
+remain outstanding. Managed sign-out continues to preserve the owner credential.
+The [credential component report](./MANAGED-OWNER-KEY-CREDENTIAL-QUALIFICATION.json)
+records conditional promotion, an installation-scoped candidate slot, injected
+failure tests and real Linux keychain checks. It does not qualify the complete
+client transaction or the new code on macOS/Windows.
 
 [The original draft](./MANAGED-OWNER-ROTATION-DRAFT.json) is preserved verbatim.
 It describes a two-phase server transaction; it is not an approved shipping design.
@@ -11,8 +16,10 @@ Subsequent source review identified a smaller alternative to evaluate: the clien
 first generates and durably saves a replacement credential, then submits a single
 known-owner authenticated replacement bound to the installation identity. Atomic
 server persistence would replace the owner hash and retire PD session authority.
-This could avoid persistent pending-rotation state on the radio. Neither approach
-has been implemented or tested.
+The server implementation uses this smaller alternative, without persistent
+pending-rotation state on the radio. Its offline tests do not qualify the client
+credential transaction or a shipping workflow. The original two-phase proposal
+remains an unimplemented research record.
 
 Any implementation must retain both client credentials when a reply or persistence
 outcome is uncertain. A successful request with the old credential during an

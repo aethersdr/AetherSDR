@@ -74,7 +74,7 @@ func aetherPDStartVersionHandler(n *Node, selected bool) http.HandlerFunc {
 			writeJSON(w, 401, apiError{errUnauthorized.Error()})
 			return
 		}
-		if n.pdInstallActiveLocked() || n.pdProcess != nil || n.pdStarting != nil || (n.pdSession != nil && n.pdSession.alive() && (!n.pdSessionStopped || n.pdSession.busy())) {
+		if n.ownerKeyChanging || n.pdInstallActiveLocked() || n.pdProcess != nil || n.pdStarting != nil || (n.pdSession != nil && n.pdSession.alive() && (!n.pdSessionStopped || n.pdSession.busy())) {
 			n.mu.Unlock()
 			writeJSON(w, 409, apiError{"AetherPD session already owned or starting"})
 			return

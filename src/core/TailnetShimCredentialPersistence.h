@@ -20,6 +20,9 @@ public:
         QString token;
         QByteArray version;
         QString message;
+        // Exact primary/sidecar observation for conditional replacement. A
+        // readable crash remnant can have a selection without a committed version.
+        QByteArray selection{};
     };
     struct Raw {
         Error error{Error::Unavailable};
@@ -41,6 +44,10 @@ public:
     void read(const QString& key, Done done);
     void write(const QString& key, const QString& token, Done done);
     void retire(const QString& key, const QString& token, const QByteArray& version, Done done);
+    // Compare and publish under the same backend lease. The observation comes
+    // from read(); it also permits explicit recovery of an interrupted save.
+    void compareAndWrite(const QString& key, const QString& expectedToken, const QByteArray& selection,
+                         const QString& replacement, Done done);
     static QString versionKey(const QString& key);
     static Acquire systemAuthority();
     static Backend keychainBackend();

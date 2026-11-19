@@ -95,7 +95,7 @@ func aetherPDInstallRequestHandler(n *Node) http.HandlerFunc {
 			writeJSON(w, 401, apiError{errUnauthorized.Error()})
 			return
 		}
-		if n.pdInstallActiveLocked() || n.pdProcess != nil || n.pdStarting != nil || (n.pdSession != nil && n.pdSession.alive() && (!n.pdSessionStopped || !n.pdSessionCleanupConfirmed || n.pdSession.busy())) {
+		if n.ownerKeyChanging || n.pdInstallActiveLocked() || n.pdProcess != nil || n.pdStarting != nil || (n.pdSession != nil && n.pdSession.alive() && (!n.pdSessionStopped || !n.pdSessionCleanupConfirmed || n.pdSession.busy())) {
 			n.mu.Unlock()
 			cancel()
 			writeJSON(w, 409, apiError{"AetherPD operation already active"})

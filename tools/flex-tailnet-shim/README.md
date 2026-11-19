@@ -123,6 +123,7 @@ are refused.
 | GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
 | PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
 | POST | `/v1/signout` | yes | Logs out and deletes tailnet state; legacy containers forget the token, managed installations retain local ownership |
+| POST | `/v1/owner-key` | yes | Development managed-owner replacement: fixed `{installation_id, new_token}` body; returns `{state:"owner_key_current", installation_id, owner_key_sha256}` after durable selection. No secret is generated in the response. |
 
 A managed installation has an `installation_id` and an owner credential before
 tailnet enrollment. Both persist across keyed/interactive joins and disconnect.
@@ -137,6 +138,42 @@ gate; no session or RF is restarted. A failed configuration write preserves the
 existing owner/session. Legacy container token rotation and pending first-use
 behavior remain unchanged. Loss of the managed owner's saved token still needs
 a separately qualified recovery procedure; it does not reopen first use.
+
+The development owner-key endpoint is available only on managed native storage
+and advertises `owner_key_version:1`. Both request values are nonzero, lowercase
+64-digit hex strings; the replacement must be generated with a cryptographic
+random source. The body is limited to 512 bytes, with exact fields, no duplicate
+keys, trailing JSON or query parameters. The current bearer and installation
+identity are checked before boot interruption and again under the operation and
+configuration locks. An active installer refuses replacement; while the key file
+is being replaced, new installer and PD Start requests refuse admission.
+
+Only the owner hash changes. Tailnet identity, enrollment, hostname, routes and
+sharing are retained. A successful durable replacement retires pending and active
+PD authority; it does not start, arm or transmit. Confirmation with the current
+replacement is idempotent and does not retire a later explicitly started session.
+A definite pre-rename failure preserves the old key and session. An uncertain
+native commit refuses both keys in that process and retires PD authority; the
+reply never asserts that the old key remains selected.
+
+Before sending this mutation, a client must durably save and read back the
+candidate separately from its active credential. A lost reply requires retaining
+both credentials and confirming the exact saved candidate and installation;
+old-key success during an in-flight write does not prove rollback. Do not retry
+with a newly generated candidate. The desktop credential store provides a separate
+installation-scoped candidate slot and conditional promotion against both the
+process revision and an exact primary/metadata observation under its backend
+lease. An interrupted keychain write can be recovered from a fresh observation;
+a missing active entry refuses implicit creation. Session-only builds cannot
+promote a credential. Component checks include the real Linux keychain; new
+macOS/Windows qualification remains outstanding.
+
+Complete candidate-save/server/promotion coordination, operator UI, packaged
+on-radio qualification and recovery without an existing owner credential remain
+outstanding. The endpoint's offline checks are
+recorded in `../pd-waveform/MANAGED-OWNER-KEY-SERVER-QUALIFICATION.json`; they do
+not qualify a shipping credential-rotation workflow. Desktop component evidence
+is in `../pd-waveform/MANAGED-OWNER-KEY-CREDENTIAL-QUALIFICATION.json`.
 
 ### AetherPD status (development)
 

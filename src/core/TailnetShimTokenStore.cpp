@@ -21,8 +21,10 @@ namespace {
 
 QString keyFor(const QString& radioSerial, TailnetShimTokenStore::Entry entry)
 {
-    if (entry == TailnetShimTokenStore::Entry::AetherPDFirst) {
-        return SettingsCredentialPolicy::scopedCredentialKey(SettingsCredentialPolicy::kAetherPDFirstCredential,
+    if (entry == TailnetShimTokenStore::Entry::AetherPDFirst || entry == TailnetShimTokenStore::Entry::AetherPDOwnerCandidate) {
+        const auto& type = entry == TailnetShimTokenStore::Entry::AetherPDFirst
+            ? SettingsCredentialPolicy::kAetherPDFirstCredential : SettingsCredentialPolicy::kAetherPDOwnerCandidate;
+        return SettingsCredentialPolicy::scopedCredentialKey(type,
             QString::fromLatin1(QCryptographicHash::hash(radioSerial.toUtf8(), QCryptographicHash::Sha256).toHex()));
     }
     return (entry == TailnetShimTokenStore::Entry::Wspr ? QStringLiteral("AetherWSPR/AdminToken/")
@@ -65,6 +67,12 @@ QHash<QString, QByteArray>& persistedVersions()
 {
     static QHash<QString, QByteArray> versions;
     return versions;
+}
+
+QHash<QString, QByteArray>& persistedSelections()
+{
+    static QHash<QString, QByteArray> selections;
+    return selections;
 }
 #endif
 
@@ -116,7 +124,10 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
         }
         if (saveGenerations().value(key) == generation) {
             sessionOverrides().insert(key, !ok);
-            if (ok) { persistedVersions().insert(key, result.version); }
+            if (ok) {
+                persistedVersions().insert(key, result.version);
+                persistedSelections().insert(key, result.selection);
+            }
         }
         if (done && (!hasContext || guard)) {
             done(ok, ok ? QString() : result.message);
@@ -162,6 +173,7 @@ bool TailnetShimTokenStore::clearIfCurrent(const QString& radioSerial, const QSt
                 sessionOverrides().insert(key, false);
             }
             persistedVersions().remove(key);
+            persistedSelections().remove(key);
         }
         if (done && (!hasContext || guard)) { done(removed); }
     });
@@ -169,6 +181,60 @@ bool TailnetShimTokenStore::clearIfCurrent(const QString& radioSerial, const QSt
     save(radioSerial, QString(), context, [done = std::move(done)](bool, const QString&) { if (done) { done(false); } }, entry);
 #endif
     return true;
+}
+
+bool TailnetShimTokenStore::replaceIfCurrent(const QString& radioSerial, const QString& expectedToken,
+                                            quint64 expectedRevision, const QString& replacement, QObject* context,
+                                            std::function<void(bool, const QString&)> done, Entry entry)
+{
+    if (radioSerial.trimmed().isEmpty() || expectedToken.isEmpty() || replacement.isEmpty()
+        || sessionTokens().value(keyFor(radioSerial, entry)) != expectedToken
+        || revision(radioSerial, entry) != expectedRevision) {
+        return false;
+    }
+#ifdef HAVE_KEYCHAIN
+    const QString key = keyFor(radioSerial, entry);
+    if (sessionOverrides().value(key) || persistedSelections().value(key).size() != 32) {
+        return false;
+    }
+    const QByteArray selection = persistedSelections().value(key);
+    const quint64 generation = ++saveGenerations()[key];
+    const quint64 revision = ++credentialRevisions()[key];
+    sessionOverrides().insert(key, true);
+    const QPointer<QObject> guard(context);
+    tailnetshim::CredentialPersistence::system().compareAndWrite(key, expectedToken, selection, replacement,
+        [key, expectedToken, replacement, generation, revision, guard, hasContext = context != nullptr,
+         done = std::move(done)](tailnetshim::CredentialPersistence::Value result) {
+        const bool current = saveGenerations().value(key) == generation && credentialRevisions().value(key) == revision
+            && sessionTokens().value(key) == expectedToken;
+        const bool persisted = result.error == tailnetshim::CredentialPersistence::Error::None
+            && result.token == replacement && result.version.size() == 16 && result.selection.size() == 32;
+        if (current) {
+            ++credentialRevisions()[key];
+            sessionOverrides().insert(key, false);
+            if (persisted) {
+                sessionTokens().insert(key, replacement);
+                persistedVersions().insert(key, result.version);
+                persistedSelections().insert(key, result.selection);
+            } else {
+                // The backend may have applied part of an uncertain save.
+                // A later operation must obtain a fresh exact observation.
+                persistedVersions().remove(key);
+                persistedSelections().remove(key);
+            }
+        }
+        if (done && (!hasContext || guard)) {
+            done(current && persisted, current && persisted ? QString()
+                : QStringLiteral("owner credential changed or its replacement could not be confirmed; retain the saved candidate"));
+        }
+    });
+    return true;
+#else
+    Q_UNUSED(context)
+    Q_UNUSED(done)
+    Q_UNUSED(entry)
+    return false;
+#endif
 }
 
 void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
@@ -198,10 +264,12 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
             const QString token = pickLoadedToken(savedSince, read, sessionTokens().value(key));
             if (!savedSince) {
                 if (result.error == Error::None || result.error == Error::Missing) {
-                    if (sessionTokens().value(key) != token || persistedVersions().value(key) != result.version) {
+                    if (sessionTokens().value(key) != token || persistedVersions().value(key) != result.version
+                        || persistedSelections().value(key) != result.selection) {
                         ++credentialRevisions()[key];
                     }
                     persistedVersions().insert(key, result.version);
+                    persistedSelections().insert(key, result.selection);
                     if (token.isEmpty()) { sessionTokens().remove(key); }
                     else { sessionTokens().insert(key, token); }
                 } else {
@@ -209,6 +277,7 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
                     // using a previously adopted process-local revision.
                     ++credentialRevisions()[key];
                     persistedVersions().remove(key);
+                    persistedSelections().remove(key);
                 }
                 sessionOverrides().insert(key, false);
             }

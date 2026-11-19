@@ -322,7 +322,28 @@ int main(int argc, char** argv)
         QCoreApplication::processEvents(); QCoreApplication::processEvents();
         ok &= expect(!persisted && first == QStringLiteral("new-first-token") && other.isEmpty()
             && active == QStringLiteral("issued-after"), "first-install attempt is isolated and session-only storage is not durable");
+        using Entry = TailnetShimTokenStore::Entry;
+        QString ownerCandidate, foreignCandidate;
+        TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL/install-a"), QStringLiteral("owner-candidate"), &app,
+            [&persisted](bool value, const QString&) { persisted = value; }, Entry::AetherPDOwnerCandidate);
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL/install-a"), &app,
+            [&ownerCandidate](const QString& value) { ownerCandidate = value; }, Entry::AetherPDOwnerCandidate);
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL/install-b"), &app,
+            [&foreignCandidate](const QString& value) { foreignCandidate = value; }, Entry::AetherPDOwnerCandidate);
+        QCoreApplication::processEvents(); QCoreApplication::processEvents();
+        ok &= expect(!persisted && ownerCandidate == QStringLiteral("owner-candidate") && foreignCandidate.isEmpty(),
+                     "rotation candidates are separate per installation and never pretend session-only storage is durable");
         const quint64 activeRevision = TailnetShimTokenStore::revision(QStringLiteral("REVIEW-SERIAL"));
+        bool promotionCallback = false;
+        ok &= expect(!TailnetShimTokenStore::replaceIfCurrent(QStringLiteral("REVIEW-SERIAL"), QStringLiteral("issued-after"),
+            activeRevision, QStringLiteral("owner-candidate"), &app,
+            [&promotionCallback](bool, const QString&) { promotionCallback = true; }),
+            "session-only builds cannot conditionally promote an owner credential");
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL"), &app,
+            [&active](const QString& value) { active = value; });
+        QCoreApplication::processEvents();
+        ok &= expect(!promotionCallback && active == QStringLiteral("issued-after"),
+                     "refused conditional promotion leaves the active owner unchanged");
         const quint64 attemptRevision = TailnetShimTokenStore::revision(QStringLiteral("REVIEW-SERIAL/attempt-a"),
                                                                        TailnetShimTokenStore::Entry::AetherPDFirst);
         ok &= expect(!TailnetShimTokenStore::clearIfCurrent(QStringLiteral("REVIEW-SERIAL"), QString(), activeRevision)

@@ -70,6 +70,19 @@ QString encodeRecord(const Record& record)
         {"sha256", QString::fromLatin1(record.fingerprint.toHex())}, {"committed", record.committed}}).toJson(QJsonDocument::Compact));
 }
 
+QByteArray selectionFor(const QString& primary, const Raw& record)
+{
+    const QByteArray bytes = primary.toUtf8();
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    hash.addData(QByteArrayLiteral("AetherSDR/CredentialSelection/1:"));
+    hash.addData(QByteArray::number(bytes.size()));
+    hash.addData(QByteArrayLiteral(":"));
+    hash.addData(bytes);
+    hash.addData(record.error == Error::Missing ? QByteArrayLiteral(":missing") : QByteArrayLiteral(":present:"));
+    hash.addData(record.text.toUtf8());
+    return hash.result();
+}
+
 CredentialPersistence::Lease acquireSystemLease(const QString& key)
 {
     QString directory;
@@ -142,11 +155,12 @@ CredentialPersistence::Backend systemBackend()
 
 class CredentialPersistence::State : public std::enable_shared_from_this<CredentialPersistence::State> {
 public:
-    enum class Kind { Read, Write, Retire };
+    enum class Kind { Read, Write, Retire, Replace };
     class Operation;
     State(Backend backend, Acquire acquire, int timeout)
         : m_backend(std::move(backend)), m_acquire(std::move(acquire)), m_timeout(qBound(1, timeout, 10000)) {}
-    void enqueue(Kind kind, const QString& key, const QString& token, const QByteArray& version, Done done);
+    void enqueue(Kind kind, const QString& key, const QString& token, const QByteArray& version, Done done,
+                 const QString& previous = {});
     void released(Operation* operation);
     Backend m_backend;
     Acquire m_acquire;
@@ -157,9 +171,10 @@ public:
 
 class CredentialPersistence::State::Operation : public QObject {
 public:
-    Operation(std::shared_ptr<State> state, Kind kind, QString key, QString token, QByteArray version, Done done)
+    Operation(std::shared_ptr<State> state, Kind kind, QString key, QString token, QByteArray version, Done done,
+              QString previous)
         : QObject(QCoreApplication::instance()), m_state(std::move(state)), m_kind(kind), m_key(std::move(key)),
-          m_token(std::move(token)), m_expected(std::move(version)), m_done(std::move(done))
+          m_token(std::move(token)), m_expected(std::move(version)), m_previous(std::move(previous)), m_done(std::move(done))
     {
         m_elapsed.start();
         m_wait.setInterval(10);
@@ -188,7 +203,7 @@ private:
     {
         m_state->m_backend.read(m_key, this, [this](Raw raw) {
             if (raw.error == Error::Missing) {
-                finish({m_kind == Kind::Retire ? Error::Rejected : Error::Missing, {}, {}, {}}); return;
+                finish({m_kind == Kind::Retire || m_kind == Kind::Replace ? Error::Rejected : Error::Missing, {}, {}, {}}); return;
             }
             if (raw.error != Error::None || raw.text.toUtf8().size() > kTokenLimit) { unavailable(); return; }
             m_primary = std::move(raw.text);
@@ -203,10 +218,13 @@ private:
             if (m_kind == Kind::Read) {
                 const QByteArray version = record->committed && record->fingerprint == fingerprint(m_primary)
                     ? record->version : QByteArray{};
-                finish({Error::None, m_primary, version, {}}); return;
+                finish({Error::None, m_primary, version, {}, selectionFor(m_primary, raw)}); return;
             }
             if (m_kind == Kind::Retire && (m_primary != m_token || m_expected.size() != 16
                 || !record->committed || record->version != m_expected || record->fingerprint != fingerprint(m_primary))) {
+                finish({Error::Rejected, {}, {}, {}}); return;
+            }
+            if (m_kind == Kind::Replace && (m_primary != m_previous || selectionFor(m_primary, raw) != m_expected)) {
                 finish({Error::Rejected, {}, {}, {}}); return;
             }
             m_record = {QUuid::createUuid().toRfc4122(), fingerprint(m_token), false};
@@ -218,7 +236,10 @@ private:
         m_record.committed = committed;
         m_state->m_backend.write(CredentialPersistence::versionKey(m_key), encodeRecord(m_record), this, [this, committed](Raw raw) {
             if (raw.error != Error::None) { unavailable(); return; }
-            if (committed) { finish({Error::None, m_token, m_record.version, {}}); }
+            if (committed) {
+                finish({Error::None, m_token, m_record.version, {},
+                        selectionFor(m_token, Raw{Error::None, encodeRecord(m_record), {}})});
+            }
             else { writePrimary(); }
         });
     }
@@ -260,6 +281,7 @@ private:
     QString m_key;
     QString m_token;
     QByteArray m_expected;
+    QString m_previous;
     QString m_primary;
     Record m_record;
     Done m_done;
@@ -271,7 +293,8 @@ private:
     bool m_finished{false};
 };
 
-void CredentialPersistence::State::enqueue(Kind kind, const QString& key, const QString& token, const QByteArray& version, Done done)
+void CredentialPersistence::State::enqueue(Kind kind, const QString& key, const QString& token, const QByteArray& version,
+                                          Done done, const QString& previous)
 {
     if (!done) { return; }
     if (!QCoreApplication::instance()) {
@@ -280,13 +303,14 @@ void CredentialPersistence::State::enqueue(Kind kind, const QString& key, const 
     if (!m_backend.read || !m_backend.write || !m_backend.remove || !m_acquire
         || key.isEmpty() || key.toUtf8().size() > 2048 || token.toUtf8().size() > kTokenLimit
         || (kind == Kind::Retire && (version.size() != 16 || token.isEmpty()))
+        || (kind == Kind::Replace && (version.size() != 32 || previous.isEmpty() || previous.toUtf8().size() > kTokenLimit || token.isEmpty()))
         || m_outstanding >= kQueueLimit || m_queues.value(key).size() >= kEntryQueueLimit) {
         QTimer::singleShot(0, QCoreApplication::instance(), [done = std::move(done)] {
             done({Error::Unavailable, {}, {}, QStringLiteral("credential persistence request refused")});
         });
         return;
     }
-    auto* operation = new Operation(shared_from_this(), kind, key, token, version, std::move(done));
+    auto* operation = new Operation(shared_from_this(), kind, key, token, version, std::move(done), previous);
     ++m_outstanding;
     QList<Operation*>& queue = m_queues[key];
     queue.append(operation);
@@ -310,6 +334,11 @@ CredentialPersistence::~CredentialPersistence() = default;
 void CredentialPersistence::read(const QString& key, Done done) { m_state->enqueue(State::Kind::Read, key, {}, {}, std::move(done)); }
 void CredentialPersistence::write(const QString& key, const QString& token, Done done) { m_state->enqueue(State::Kind::Write, key, token, {}, std::move(done)); }
 void CredentialPersistence::retire(const QString& key, const QString& token, const QByteArray& version, Done done) { m_state->enqueue(State::Kind::Retire, key, token, version, std::move(done)); }
+void CredentialPersistence::compareAndWrite(const QString& key, const QString& expectedToken, const QByteArray& selection,
+                                          const QString& replacement, Done done)
+{
+    m_state->enqueue(State::Kind::Replace, key, replacement, selection, std::move(done), expectedToken);
+}
 QString CredentialPersistence::versionKey(const QString& key)
 {
     return QStringLiteral("TailnetShim/Version/") + QString::fromLatin1(fingerprint(key).toHex());

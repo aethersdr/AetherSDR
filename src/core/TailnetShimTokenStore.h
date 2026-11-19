@@ -24,7 +24,9 @@ public:
     // has its own keychain entry per radio serial.
     // AetherPDFirst uses serial + '/' + exact plan digest as its identifier.
     // Its hashed, attempt-specific slot never replaces the active radio token.
-    enum class Entry { TailnetShim, Wspr, AetherPDFirst };
+    // AetherPDOwnerCandidate uses serial + '/' + installation ID. It survives
+    // an uncertain server reply independently of the active owner credential.
+    enum class Entry { TailnetShim, Wspr, AetherPDFirst, AetherPDOwnerCandidate };
 
     // Invoke on the application thread with a context on that thread.
     // Calls back with the stored token, or an empty
@@ -50,6 +52,12 @@ public:
     static bool clearIfCurrent(const QString& radioSerial, const QString& expectedToken,
                                quint64 expectedRevision, Entry entry = Entry::TailnetShim,
                                QObject* context = nullptr, std::function<void(bool)> done = {});
+    // Promote only after radio confirmation, against the exact keychain
+    // observation and process revision. Never falls back to an unconditional save.
+    static bool replaceIfCurrent(const QString& radioSerial, const QString& expectedToken,
+                                 quint64 expectedRevision, const QString& replacement, QObject* context,
+                                 std::function<void(bool persisted, const QString& error)> done,
+                                 Entry entry = Entry::TailnetShim);
     [[nodiscard]] static bool persistentStoreAvailable();
     // What a finished keychain read yields: the read, unless a save happened
     // while it ran, in which case that save's (newer) token, or none if the

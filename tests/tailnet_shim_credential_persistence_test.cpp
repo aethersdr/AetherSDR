@@ -123,6 +123,96 @@ int main(int argc, char** argv)
         const auto memory = std::make_shared<Memory>();
         Store a(memory->backend(), memory->acquire());
         Store b(memory->backend(), memory->acquire());
+        const auto original = wait([&](Store::Done done) { a.write(kKey, QStringLiteral("old"), std::move(done)); });
+        const auto observed = wait([&](Store::Done done) { a.read(kKey, std::move(done)); });
+        const auto identical = wait([&](Store::Done done) { b.write(kKey, QStringLiteral("old"), std::move(done)); });
+        ok &= check(original && observed && identical && observed->selection.size() == 32
+                        && observed->selection == original->selection && identical->selection != observed->selection,
+                    "conditional replacement observes both primary bytes and the committed save identity");
+        const auto stale = wait([&](Store::Done done) {
+            a.compareAndWrite(kKey, QStringLiteral("old"), observed->selection, QStringLiteral("candidate"), std::move(done));
+        });
+        ok &= check(stale && stale->error == Error::Rejected && memory->values.value(kKey) == QStringLiteral("old"),
+                    "an identical-token save invalidates an earlier conditional replacement");
+        const auto replaced = wait([&](Store::Done done) {
+            b.compareAndWrite(kKey, QStringLiteral("old"), identical->selection, QStringLiteral("candidate"), std::move(done));
+        });
+        const auto current = wait([&](Store::Done done) { a.read(kKey, std::move(done)); });
+        ok &= check(replaced && current && replaced->error == Error::None && current->token == QStringLiteral("candidate")
+                        && replaced->selection == current->selection && replaced->version == current->version
+                        && !memory->leaseViolation && !memory->held,
+                    "matching conditional replacement commits and reads back under one authority lease");
+        const auto wrong = wait([&](Store::Done done) {
+            a.compareAndWrite(kKey, QStringLiteral("foreign"), current->selection, QStringLiteral("other"), std::move(done));
+        });
+        ok &= check(wrong && wrong->error == Error::Rejected && memory->values.value(kKey) == QStringLiteral("candidate"),
+                    "a matching selection cannot replace a different expected primary");
+    }
+    for (int boundary = 1; boundary <= 6; ++boundary) {
+        for (bool apply : {false, true}) {
+            const auto memory = std::make_shared<Memory>();
+            Store store(memory->backend(), memory->acquire());
+            const auto previous = wait([&](Store::Done done) { store.write(kKey, QStringLiteral("old"), std::move(done)); });
+            const auto candidate = wait([&](Store::Done done) { store.write(QStringLiteral("saved-candidate"), QStringLiteral("candidate"), std::move(done)); });
+            ok &= check(previous && candidate && previous->error == Error::None && candidate->error == Error::None,
+                        "the independent candidate is durable before testing active-key promotion");
+            memory->calls = 0; memory->failAt = boundary; memory->applyOnFailure = apply;
+            const auto failed = wait([&](Store::Done done) {
+                store.compareAndWrite(kKey, QStringLiteral("old"), previous->selection, QStringLiteral("candidate"), std::move(done));
+            });
+            ok &= check(failed && failed->error == Error::Unavailable && !memory->held && !memory->leaseViolation
+                            && memory->values.value(QStringLiteral("saved-candidate")) == QStringLiteral("candidate"),
+                        "a failed promotion retains its separately saved candidate at every backend boundary");
+            memory->failAt = 0;
+            const auto observed = wait([&](Store::Done done) { store.read(kKey, std::move(done)); });
+            ok &= check(observed && observed->error == Error::None && observed->selection.size() == 32
+                            && (observed->token == QStringLiteral("old") || observed->token == QStringLiteral("candidate")),
+                        "a promotion interrupted before or after effect leaves an observable whole primary");
+            const auto recovered = wait([&](Store::Done done) {
+                store.compareAndWrite(kKey, observed->token, observed->selection, QStringLiteral("candidate"), std::move(done));
+            });
+            ok &= check(recovered && recovered->error == Error::None && recovered->version.size() == 16
+                            && memory->values.value(kKey) == QStringLiteral("candidate"),
+                        "a fresh exact observation permits explicit recovery without an unconditional overwrite");
+        }
+    }
+    {
+        const auto memory = std::make_shared<Memory>();
+        Store a(memory->backend(), memory->acquire());
+        Store b(memory->backend(), memory->acquire());
+        const auto previous = wait([&](Store::Done done) { a.write(kKey, QStringLiteral("old"), std::move(done)); });
+        memory->calls = 0; memory->pauseAt = 2;
+        std::optional<Value> first;
+        a.compareAndWrite(kKey, QStringLiteral("old"), previous->selection, QStringLiteral("winner"),
+                          [&](Value value) { first = std::move(value); });
+        ok &= check(memory->held && memory->pending && !first, "comparison retains authority until publication completes");
+        const auto second = wait([&](Store::Done done) {
+            b.compareAndWrite(kKey, QStringLiteral("old"), previous->selection, QStringLiteral("loser"), std::move(done));
+            ok &= check(memory->calls == 2 && !first, "competing promotion cannot enter the first comparison interval");
+            memory->resume();
+        });
+        ok &= check(first && second && first->error == Error::None && second->error == Error::Rejected
+                        && memory->values.value(kKey) == QStringLiteral("winner") && !memory->leaseViolation,
+                    "a queued competing promotion cannot overwrite the first committed candidate");
+    }
+    {
+        const auto memory = std::make_shared<Memory>();
+        Store store(memory->backend(), memory->acquire());
+        const auto invalid = wait([&](Store::Done done) {
+            store.compareAndWrite(kKey, QStringLiteral("old"), QByteArray(31, 'x'), QStringLiteral("new"), std::move(done));
+        });
+        ok &= check(invalid && invalid->error == Error::Unavailable && memory->calls == 0,
+                    "invalid conditional proof refuses before backend access");
+        const auto missing = wait([&](Store::Done done) {
+            store.compareAndWrite(kKey, QStringLiteral("old"), QByteArray(32, 'x'), QStringLiteral("new"), std::move(done));
+        });
+        ok &= check(missing && missing->error == Error::Rejected && memory->values.isEmpty(),
+                    "conditional promotion cannot create a missing active owner entry");
+    }
+    {
+        const auto memory = std::make_shared<Memory>();
+        Store a(memory->backend(), memory->acquire());
+        Store b(memory->backend(), memory->acquire());
         const auto first = wait([&](Store::Done done) { a.write(kKey, QStringLiteral("fixture-token"), std::move(done)); });
         const auto second = wait([&](Store::Done done) { b.write(kKey, QStringLiteral("fixture-token"), std::move(done)); });
         ok &= check(first && second && first->error == Error::None && second->error == Error::None

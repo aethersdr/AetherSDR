@@ -1,0 +1,89 @@
+{
+  "status": "offline server component passed; production workflow incomplete",
+  "baseline_source": "d28aedb332bc6ce674a5adf6b13c25f206733bf1",
+  "contract": "POST /v1/owner-key: existing owner bearer plus exact managed installation and previously saved client candidate",
+  "checks": {
+    "full_suite_pass_events": 828,
+    "new_component_pass_events": 28,
+    "race_10_repetitions_pass_events": 280,
+    "deliberately_broken_variants_rejected": 6,
+    "pinned_go_1_27_1_full_suite_pass_events": 828
+  },
+  "source_sha256": {
+    "tools/flex-tailnet-shim/owner_key.go": "ea0153eee443e56648cf085ff48e9e8fd63a2f9891e42c3079a5ca062ecba259",
+    "tools/flex-tailnet-shim/owner_key_test.go": "421b668a741b9eb7c1643cbe23db35edc1a4dfde2da6ab3655e146714aba0b0f",
+    "tools/flex-tailnet-shim/owner_key_linux_test.go": "c2cf6343be18acd813b9e7f226bbe1d72e6e76c25bf56144630f82eb527e4889",
+    "tools/flex-tailnet-shim/node.go": "10111e1dd992fb3c29c09a106c7edfadf685c92646961926a9c41ac12c47e0b4",
+    "tools/flex-tailnet-shim/api.go": "35979995be559678870e7b5ab9583dfcc866ef7865b11400e2223e546e790f95",
+    "tools/flex-tailnet-shim/aetherpd_start.go": "b4ca1b844ca9e7126bd27049829830eae3a96c7972ac9e4484e7ef3296a83e82",
+    "tools/flex-tailnet-shim/aetherpd_install_request.go": "b287910ab2c4f53594703ef6a639d538e3e0f2548b3cc40a069a767d2f6a47b3"
+  },
+  "evidence": {
+    "path": "MANAGED-OWNER-KEY-SERVER-EVIDENCE.json.gz",
+    "sha256": "de4edcbbc3c6b6efd2b4bd2d463b7ba06c30ba629a0d5ed22ee903921a6487fc",
+    "members": 58
+  },
+  "scope": [
+    "strict request boundary and no first-use reset",
+    "known-owner installation binding",
+    "old-key revocation and replacement-key receipt-loss confirmation after reload",
+    "pending/active session retirement and direct DSP arm/lifetime retirement",
+    "installer and Start exclusion across file replacement",
+    "real native file/directory-sync failures before and after rename",
+    "competing replacements, no premature publication, idempotent confirmation",
+    "unrelated configuration retained; no new persistent pending state or privileged operation"
+  ],
+  "not_qualified": [
+    "desktop durable candidate and compare-and-swap promotion",
+    "explicit operator UI",
+    "native OS keychain qualification",
+    "packaged on-radio revocation/receipt-loss qualification",
+    "actual FLEX-6300 and lost-owner recovery without an existing credential"
+  ],
+  "radio_changes": "none; no deployment, RF, source arm, reboot or settings restoration",
+  "initial_sandbox_suite": "local sockets denied; failed result is not a qualification pass; full socket-enabled suite subsequently passed",
+  "goal": "Full P1-P10 remains active and incomplete; this report does not qualify production credential rotation",
+  "cross_compiles_only": {
+    "status": "cross-compile only; not installed, not runtime or Linux2.6 qualification",
+    "results": [
+      {
+        "arch": "armv7",
+        "exit": 0,
+        "size": 21954720,
+        "sha256": "2daff284565986db7eb599b65b25179969a035c911ff66202a285c592b148a84",
+        "command": [
+          "go",
+          "build",
+          "-mod=vendor",
+          "-trimpath",
+          "-buildvcs=false",
+          "-ldflags=-s -w",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/managed-owner-rotation/pinned-shim-builds/armv7/flex-tailnet-shim",
+          "."
+        ],
+        "toolchain": "go1.27.1",
+        "runtime_tested": false
+      },
+      {
+        "arch": "arm64",
+        "exit": 0,
+        "size": 21495968,
+        "sha256": "93dc16778bdce7e8aadb9d4eb245988fd9172bd7131dfacd878186635576d54c",
+        "command": [
+          "go",
+          "build",
+          "-mod=vendor",
+          "-trimpath",
+          "-buildvcs=false",
+          "-ldflags=-s -w",
+          "-o",
+          "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/managed-owner-rotation/pinned-shim-builds/arm64/flex-tailnet-shim",
+          "."
+        ],
+        "toolchain": "go1.27.1",
+        "runtime_tested": false
+      }
+    ]
+  }
+}

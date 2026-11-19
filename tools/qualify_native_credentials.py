@@ -96,6 +96,8 @@ CASES = (
     "matching_retirement", "lease_blocks_writer", "lease_crash_recovery", "closed_caller_queued",
     "waiting_writer_killed", "busy_admission", "crash_before_primary", "crash_after_primary",
     "legacy_read_upgrade", "pending_write", "inflight_read_save",
+    "owner_promotion", "owner_promotion_closed_context", "owner_stale_identical_save",
+    "owner_stale_foreign_save", "owner_active_deleted",
 )
 
 
@@ -105,7 +107,7 @@ def qualify(binary, receipt):
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "system": platform.system(), "machine": platform.machine(), "platform": platform.platform(),
         "scope": "Real local OS-keychain and production token/persistence sources, independent processes. No radio, network peer, settings database, UI lifecycle or RF qualification.",
-        "fixture_policy": "Unique aetherpd-native-credential-UUID primary and derived version keys only. No enumeration or access to real radio credentials; insecure fallback disabled.",
+        "fixture_policy": "Unique aetherpd-native-credential-UUID primary, derived owner candidate and version keys only. No enumeration or access to real radio credentials; insecure fallback disabled.",
         "cases": [], "success": False,
     }
     atomic_json(receipt, result)
@@ -161,10 +163,33 @@ def qualify(binary, receipt):
                 # Never replace a pre-existing entry, even for this random identifier.
                 command("absent")
                 command("absent-metadata")
+                if kind.startswith("owner_"):
+                    command("owner-candidate-absent")
+                    command("owner-candidate-absent-meta")
                 admitted = True
                 command("legacy-write" if kind == "legacy_read_upgrade" else "write", "fixture-old")
                 command("raw-read", "fixture-old")
-                if kind.startswith("stale_") or kind == "matching_retirement":
+                if kind in ("owner_promotion", "owner_promotion_closed_context"):
+                    command("owner-promote" if kind == "owner_promotion" else "owner-promote-close", "fixture-old")
+                    candidate = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                    command("raw-read", candidate)
+                    command("read", candidate)
+                elif kind.startswith("owner_"):
+                    actor = start("owner-actor", "fixture-old")
+                    actor.expect("actor_loaded")
+                    if kind == "owner_active_deleted":
+                        command("cleanup")
+                    else:
+                        newer = "fixture-old" if kind == "owner_stale_identical_save" else "fixture-new"
+                        command("write", newer)
+                    actor.send("promote")
+                    actor.expect("promotion_rejected")
+                    finish(actor)
+                    if kind == "owner_active_deleted":
+                        command("absent")
+                    else:
+                        command("raw-read", newer)
+                elif kind.startswith("stale_") or kind == "matching_retirement":
                     actor = start("actor", "fixture-old")
                     actor.expect("actor_loaded")
                     if kind.startswith("stale_"):
@@ -256,7 +281,9 @@ def qualify(binary, receipt):
                     except Exception as error:
                         case.setdefault("cleanup_errors", []).append(str(error))
                 if admitted:
-                    for mode in ("cleanup", "cleanup", "absent", "absent-metadata"):
+                    modes = ("owner-cleanup", "absent", "absent-metadata", "owner-candidate-absent", "owner-candidate-absent-meta") \
+                        if kind.startswith("owner_") else ("cleanup", "cleanup", "absent", "absent-metadata")
+                    for mode in modes:
                         try:
                             command(mode, cleanup=True)
                         except Exception as error:

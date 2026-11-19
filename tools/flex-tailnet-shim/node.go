@@ -77,6 +77,9 @@ type Node struct {
 	pdSessionStopped          bool
 	pdSessionCleanupConfirmed bool
 	pdSessionDial             func(context.Context, pdStartIdentity) (*pdSessionChannel, error)
+	// Held across an owner-key file replacement; installer admission uses mu,
+	// not opMu, and must not race the authority change.
+	ownerKeyChanging bool
 
 	// An unreadable native identity or uncertain directory commit is not first
 	// use. Retain its file and refuse control/enrollment until explicit recovery.
@@ -1117,6 +1120,7 @@ type Status struct {
 	InstallationID string `json:"installation_id,omitempty"`
 	// ManagedOwnerVersion 1 preserves local ownership across tailnet changes.
 	ManagedOwnerVersion int      `json:"managed_owner_version,omitempty"`
+	OwnerKeyVersion     int      `json:"owner_key_version,omitempty"`
 	TailnetIP           string   `json:"tailnet_ip"`
 	DNSName             string   `json:"dns_name"`
 	Allow               []string `json:"allow"`
@@ -1222,6 +1226,9 @@ func (n *Node) statusLocked() Status {
 	}
 	if n.cfg.InstallationID != "" {
 		st.ManagedOwnerVersion = 1
+		if n.RunDir != "" && !n.nativeStateUnavailable {
+			st.OwnerKeyVersion = 1
+		}
 	}
 	if n.keyExpiry != nil {
 		st.KeyExpiry = n.keyExpiry.UTC().Format(time.RFC3339)
