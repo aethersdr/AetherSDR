@@ -3930,7 +3930,9 @@ QStringList TciServer::antennaStateLines(bool tx) const
 bool TciServer::extensionKeyed() const
 {
     const TransmitModel& tx = m_model->transmitModel();
-    return m_model->transmitOwnershipPending() || m_model->isRadioTransmitting()
+    // Not transmitOwnershipPending(): a Flex keeps a finished over's ownership
+    // until stop evidence that may never come, which refused every set after it.
+    return !m_model->transmitIdleForSelection() || m_model->isRadioTransmitting()
         || tx.isTransmitting() || tx.isMox() || tx.isTuning() || m_tciPttClient;
 }
 

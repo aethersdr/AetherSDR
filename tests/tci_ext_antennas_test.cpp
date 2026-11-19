@@ -6,8 +6,9 @@
 // to enabled clients only; an RX set asks first for a KiwiSDR antenna to be
 // released, and a keyed refusal warns once per keyed period, re-armed also
 // when a TCI key ends on its own; a list change reaches every enabled client
-// even when only some of them were behind on the item list. Two slices.
-// Socket-free; nothing keys.
+// even when only some of them were behind on the item list; a TX set is
+// accepted again after an over whose stop the radio never confirms, once fresh
+// RX is seen. Socket-free; the over keys only this test's backend.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -114,8 +115,18 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool, const TxCoordinator::Operation&,
-                   const TxCoordinator::Completion&) override {}
+    // Each key edge; with holdKeyUp, the key-up's delivery is kept unfinished.
+    QList<bool> keyEdges;
+    bool holdKeyUp{false};
+    TxCoordinator::Completion heldKeyUp;
+    void setKeying(bool on, const TxCoordinator::Operation&,
+                   const TxCoordinator::Completion& completion) override
+    {
+        keyEdges.append(on);
+        if (!on && holdKeyUp) {
+            heldKeyUp = completion;
+        }
+    }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
 
@@ -618,6 +629,94 @@ void serverBehaviour()
           "the plain client received no aethersdr_ line at any point");
 }
 
+// A Flex keeps a finished over's TX ownership until qualified stop evidence,
+// which may never come (NF0T on #7197, FLEX-8400): every TX set after an over
+// was refused. Desktop MOX keys and unkeys here, interlock status as a Flex
+// sends it; the over stays unconfirmed throughout, as there.
+void txSetAfterAnOver()
+{
+    RadioModel model;
+    auto owner = std::make_unique<AntennaBackend>();
+    AntennaBackend* backend = owner.get();
+    backend->connected = false;
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    QString error;
+    const bool fixture = model.automationApplySliceFixture(0, QStringLiteral("A"), &error);
+    backend->connected = true;
+    SliceModel* s0 = model.slice(0);
+    check(fixture && s0, "over: one fixture slice");
+    if (!fixture || !s0) {
+        std::printf("      fixture: %s\n", qPrintable(error));
+        return;
+    }
+    SliceDelta tx = antennas({QStringLiteral("ANT1"), QStringLiteral("ANT2")}, QStringLiteral("ANT1"),
+                             {QStringLiteral("ANT1"), QStringLiteral("ANT2")}, QStringLiteral("ANT1"));
+    tx.txSlice = true;
+    tx.mode = QStringLiteral("USB");
+    s0->applyChanges(tx);
+    TciServer server(&model);
+    server.wireSlice(s0->sliceId(), s0);
+    Wire a;
+    TciAntennaExtensionTest::attach(server, a.client, model);
+    settle(600);
+    a.take();
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    const auto interlock = [&model](const char* state) {
+        model.handleStatusForTest(QStringLiteral("interlock"),
+                                  {{QStringLiteral("state"), QString::fromLatin1(state)}});
+    };
+    const auto setTo = [&a](const char* antenna) {
+        a.send(QStringLiteral("aethersdr_tx_antenna:0,%1;").arg(QLatin1String(antenna)).toLatin1().constData());
+        settle();
+        return a.takeExtension();
+    };
+    const QStringList stays1{QStringLiteral("aethersdr_tx_antenna:0,ANT1;")};
+
+    interlock("READY");
+    model.setTransmit(true);
+    interlock("TRANSMITTING");
+    check(backend->keyEdges == QList<bool>({true}) && model.transmitModel().isTransmitting(),
+          "over: desktop MOX keys the backend");
+    check(setTo("ANT2") == stays1 && backend->txRequests.isEmpty(),
+          "over: a TX set while keyed is refused");
+    model.setTransmit(false);
+    interlock("UNKEY_REQUESTED");
+    check(backend->keyEdges == QList<bool>({true, false}) && model.transmitOwnershipPending()
+              && !model.transmitModel().isTransmitting() && !model.isRadioTransmitting(),
+          "over: after the key-up the over's TX ownership is retained, unconfirmed");
+    check(setTo("ANT2") == stays1 && backend->txRequests.isEmpty(),
+          "over: a TX set before fresh settled RX is refused");
+    interlock("READY");
+    const QStringList moved = setTo("ANT2");
+    check(model.transmitOwnershipPending() && backend->txRequests.size() == 1
+              && backend->txRequests.first() == qMakePair(0, QStringLiteral("ANT2"))
+              && s0->txAntenna() == QStringLiteral("ANT2")
+              && moved == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT2;")}),
+          "over: with fresh RX after the over, a TX set is accepted; ownership is still retained");
+    if (backend->txRequests.size() != 1) {
+        dump("a", moved);
+    }
+
+    // The key-up still being delivered is not idle, fresh RX or not.
+    backend->holdKeyUp = true;
+    model.setTransmit(true);
+    interlock("TRANSMITTING");
+    check(setTo("ANT1").size() == 1 && backend->txRequests.size() == 1,
+          "over: the next over refuses a TX set again");
+    model.setTransmit(false);
+    interlock("READY");
+    check(setTo("ANT1").size() == 1 && backend->txRequests.size() == 1,
+          "over: a TX set while the key-up is still being delivered is refused");
+    backend->holdKeyUp = false;
+    backend->heldKeyUp.finish();
+    backend->heldKeyUp = {};
+    setTo("ANT1");
+    check(model.transmitOwnershipPending() && backend->txRequests.size() == 2
+              && s0->txAntenna() == QStringLiteral("ANT1"),
+          "over: once it is delivered, the TX set is accepted");
+}
+
 // One enabled client is behind on the item list, the other already holds it:
 // the resend reaches only the first, so a list change is still noticed to both.
 void mixedResend()
@@ -693,6 +792,7 @@ int main(int argc, char** argv)
     transmitGatePerBackend();
     serverBehaviour();
     mixedResend();
+    txSetAfterAnOver();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
