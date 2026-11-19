@@ -69,6 +69,22 @@ bool hasToken(const QByteArray& headerValue, const QByteArray& token)
     return false;
 }
 
+// "WID=" as a cookie name: at the start of the value or after a "; ", never
+// inside another name such as "SWID=".
+qsizetype widStart(const QByteArray& value)
+{
+    for (qsizetype at = value.indexOf(kWidStart); at >= 0; at = value.indexOf(kWidStart, at + 1)) {
+        qsizetype before = at;
+        while (before > 0 && value.at(before - 1) == ' ') {
+            --before;
+        }
+        if (before == 0 || value.at(before - 1) == ';') {
+            return at;
+        }
+    }
+    return -1;
+}
+
 } // namespace
 
 QByteArray HttpHead::value(const QByteArray& name) const
@@ -152,7 +168,7 @@ Cookie parseCookie(const HttpHead& head)
         if (header.name != QByteArrayLiteral("set-cookie")) {
             continue;
         }
-        const qsizetype start = header.value.indexOf(kWidStart);
+        const qsizetype start = widStart(header.value);
         if (start < 0) {
             continue;
         }
