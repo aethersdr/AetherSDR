@@ -346,18 +346,32 @@ private slots:
     }
 
     // The enable checkbox only ever stops transmission: the TX guard (bridge
-    // and Space activation) must not take it for a keying control, and a
-    // Radio Setup search for the setting finds the Transmit page.
-    void txTimeoutEnableIsNotAKeyingControlAndIsFound()
+    // and Space activation) must not take it for a keying control. Found by its
+    // visible text, so the check does not depend on the name it checks.
+    void txTimeoutEnableIsNotAKeyingControl()
     {
         RadioModel model;
         RadioSetupDialog dialog(&model);
         dialog.show();
         dialog.selectTab(QStringLiteral("Transmit"));
-        auto* enable = findByAccessibleName<QCheckBox>(dialog, QStringLiteral("Time-out enabled, stops transmission"));
+        QCheckBox* enable = nullptr;
+        for (QCheckBox* box : dialog.findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("Stop transmitting after")) {
+                enable = box;
+            }
+        }
         QVERIFY(enable);
-        QVERIFY(transmitControlMatch(enable) == TransmitControlMatch::None);
+        QCOMPARE(enable->accessibleName(), QStringLiteral("Time-out enabled, stops transmission"));
+        QVERIFY2(transmitControlMatch(enable) == TransmitControlMatch::None,
+                 qPrintable(enable->accessibleName()));
+    }
 
+    // A Radio Setup search for the setting finds the Transmit page.
+    void txTimeoutIsFoundBySearch()
+    {
+        RadioModel model;
+        RadioSetupDialog dialog(&model);
+        dialog.show();
         auto* search = dialog.findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
         QVERIFY(search);
         for (const QString& term : {QStringLiteral("time-out"), QStringLiteral("timeout"),
