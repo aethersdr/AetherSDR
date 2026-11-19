@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T07:19:59.298869+00:00",
+  "recorded_utc": "2026-11-19T07:33:34.962234+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
@@ -98,16 +98,18 @@
       "state": "offline_rejection_reporting_fixed_hardware_cause_unproven",
       "evidence": [
         "FIT-REJECTION-DIAGNOSTICS-QUALIFICATION.json",
-        "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json"
+        "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json",
+        "PHASE-TRACKER-REPLAY-QUALIFICATION.json",
+        "LOWESS-MANAGED-QUALIFICATION.json"
       ],
-      "limits": "Real WDSP phase rejection with oldflags0 causally reproduced; all five fields now reported coherently. Seven CTests/six portable host tests pass; ARMv7/ARM64 built only. Current radio remains on runtimeab and its bypass root cause is open."
+      "limits": "Five-field rejection reporting fixed and installed in current d7 diagnostic, which has finite normal RF and keyed owned-unkey API-loss passes. Successful actual raw acquisition/phase/EQ replay now anchored; controlled pre-acquisition28degree/50Hz phase modulation reproduces poorEQ/phase rejection while coherence guard stays satisfied, including512sample calibration calls. This does not identify the actual cold-start or natural128sample cause; failed-run raw data remains unavailable. No acceptance/readiness thresholds changed."
     }
   ],
   "next_available_case": {
-    "purpose": "Replay the actual successful unmatched capture through the real phase tracker using the preserved raw/aligned sample mapping, then test controlled delay changes offline. Preserve the unresolved failed-run cause and remaining full P1-P10 gates.",
-    "state": "current_keyed_owned_unkey_API_case_passed_offline_phase_tracker_replay_next",
-    "evidence": "LOWESS-UNKEY-API-LOSS-QUALIFICATION.json",
-    "authority_constraint": "Offline next step; no RF retry/rearm, additional key or software reboot."
+    "purpose": "Prepare one separately dispatched cold-start diagnostic capture using the installed buffered runtime, preserving outcomes whether it corrects or bypasses. Analyze any actual failed raw/aligned pairs with this verified acquisition/phase/EQ replay before changing the algorithm. No automatic RF retry or calibration rearm. Continue remaining P5 and fullP1-P10 requirements.",
+    "state": "verified_offline_phase_replay_possible_mechanism_only_actual_cold_failure_capture_needed",
+    "evidence": "PHASE-TRACKER-REPLAY-QUALIFICATION.json",
+    "authority_constraint": "Separately prepared bounded GUI case with independent guards; preserve failure, no automatic RF retry/rearm or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",

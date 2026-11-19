@@ -1,0 +1,1523 @@
+{
+  "recorded_utc": "2026-11-19T07:33:34.962234+00:00",
+  "production_ready": false,
+  "source_parent": "7e4d84128e07db6f1b5cc2f35c822630c6f94fff",
+  "status": "Actual successful raw capture reproduces the recorded acquisition and aligned output through unmodified phase tracker and EQ. Controlled pre-acquisition phase modulation reproduces poor EQ and WDSP phase rejection without crossing the coherence guard, including current-source512sample calibration calls. This identifies a possible mechanism, not the hardware cause.",
+  "RF_commands": [],
+  "source_arms": [],
+  "radio_installs": [],
+  "radio_reboots": [],
+  "production_source_changes": [],
+  "root_bridge_used": false,
+  "anchor": {
+    "source_consistent_acquisition_and_alignment_anchor_passed": true,
+    "wrong_128_block_model_rejected_by_sample_comparison": true,
+    "comparisons": {
+      "actual-block-baseline": {
+        "TX_relative_RMS": 4.18056514209321e-08,
+        "RX_relative_RMS": 4.2932329236821074e-08,
+        "max_absolute_per_component": [
+          5.960464477539063e-08,
+          5.960464477539063e-08,
+          0.00390625,
+          0.00390625
+        ]
+      },
+      "coupled-phase-0": {
+        "TX_relative_RMS": 4.1805640131672636e-08,
+        "RX_relative_RMS": 4.289055233229682e-08,
+        "max_absolute_per_component": [
+          5.960464477539063e-08,
+          5.960464477539063e-08,
+          0.00390625,
+          0.00390625
+        ]
+      },
+      "counterfactual-128-block": {
+        "TX_relative_RMS": 4.18056514209321e-08,
+        "RX_relative_RMS": 0.010672686933519655,
+        "max_absolute_per_component": [
+          5.960464477539063e-08,
+          5.960464477539063e-08,
+          2125.698013305664,
+          4783.856750488281
+        ]
+      }
+    },
+    "successful_alignment_journal": "1795066169.127 alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=46966117975540 submitted_ns=46967868774439 started_ns=46967868802568 completed_ns=46968095438269 consumed_ns=46968103431943 delay=1798.470 envelope=0.833558 phase=0.999136 offset_hz=-0.029794 noise_left=48384 samples_left=144384 tone_sent_ns=0 guard_ns=500000000",
+    "actual_failed_run_reconstructed": false,
+    "radio_actions": []
+  },
+  "manifest": {
+    "source_commit": "7e4d84128e07db6f1b5cc2f35c822630c6f94fff",
+    "source_hashes": {
+      "pd_align.c": "8f1aba82bcad64622cb5c1d5b8ecb3cf2a5ba63083c2e78f74d04a8510a2faa0",
+      "pd_align.h": "3a112c98ac320dbc0254026afbce34765f443586cbc8c4feac10b6f6220bac7b",
+      "pd_eq.c": "97e879be0756fc550be50ca451fcee566d4583eb9b5c654e561baa56a550fb53",
+      "pd_eq.h": "49e61cef2b520029c3ea0084f19b2c16c0e704ebe7500f27d8f4023bdee09b05"
+    },
+    "waveform_source_sha256": "a2208c8db78035fbce2d40c3b3915657c4b1107272b92d54de63bab6e757c637",
+    "script_sha256": "06ae20cf8bb5ab669ec9aecc666007657db5c5c2f033896024af8bfbc72eedee",
+    "library_sha256": "41fb56e5c3cf75212df01d05aaa55def295fb1f17f91a244e3a60bd35f00e0e8",
+    "input_hashes": {
+      "lab-unmatched.f32le": "2e6e45687c244d36f4cbc3d9fde6945cc5c8cf8f872f3034e5a6af3f50d5e5ee",
+      "lab-aligned.f32le": "15a39c3930a05f4c569b1380ddb9e6d6ebbcbb51145af64118729a52a0b082b5"
+    },
+    "raw_start_pair_inferred": 47616,
+    "actual_waveform_alignment_block": 512,
+    "sample_rate": 24000,
+    "logged_delay": 1798.47,
+    "logged_offset_hz": -0.029794,
+    "radio_actions": [],
+    "production_source_changes": [],
+    "scope": "Successful captured raw pairs replayed through the real phase tracker; controlled wrong-delay and counterfactual block cases. Actual failed-run raw pairs remain unavailable. EQ collection follows deterministic post-alignment settling/train length, not acquisition-worker completion scheduling."
+  },
+  "acquisition": {
+    "assumed_initial_settle_pairs": 24064,
+    "acquisition_pairs": 17792,
+    "delay": 1798.4699999999984,
+    "envelope_correlation": 0.8335584508223991,
+    "phase_correlation": 0.9991358789886672,
+    "offset_hz": -0.029793887213786008,
+    "initial_cold_state_assumed": true,
+    "worker_completion_scheduling_replayed": false
+  },
+  "actual_waveform_alignment_block_samples": 512,
+  "successful_EQ_residual_dB": -29.63630935238665,
+  "reconstructed_EQ_window": {
+    "start_aligned_pair": 12019,
+    "pairs": 24064,
+    "scope": "Source-consistent after aligned-stream start and deterministic signal-present settling. Worker completion/publication scheduling and original double-precision inputs were not recorded."
+  },
+  "delay_error_cases_with_existing_guard": [
+    {
+      "case": "actual-block-baseline",
+      "delay_samples": 1798.47,
+      "alignment_block_samples": 512,
+      "output_pairs": 134899,
+      "sha256": "5de1a094e10204299ffc0ea84730e57bd32723bcd8fb8dbff8b7f7fde88bb0ab",
+      "EQ_residual_dB": -29.63630935238665,
+      "EQ_train_start_pair": 12019,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.9989873764036559,
+      "actual_capture_comparison": {
+        "max_absolute_per_component": [
+          6.356163728682418e-08,
+          6.168469879330729e-08,
+          0.0037840724253328517,
+          0.003900820971466601
+        ],
+        "RMS_per_component": [
+          1.0740618428600396e-08,
+          1.0121964116424812e-08,
+          0.0005747068576282626,
+          0.000570249040991136
+        ],
+        "RX_relative_RMS": 3.6950640474757066e-08,
+        "TX_relative_RMS": 3.578270745826646e-08,
+        "first_32_RX_max_abs": 0.0008731908383197151,
+        "float32_input_rounding_and_logged_offset_precision_limits": true
+      },
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": null,
+        "maximum_consecutive_weak_blocks_if_unguarded": 0,
+        "would_invalidate_before_EQ_training_complete": false,
+        "diagnostic_replay_continued_past_invalidation": false
+      }
+    },
+    {
+      "case": "delay--4",
+      "delay_samples": 1794.47,
+      "alignment_block_samples": 512,
+      "output_pairs": 134903,
+      "sha256": "85c2550a4adba3e1e6b5bb5db021af3d1e04c7424a182a1721c521ec331bd5d3",
+      "EQ_residual_dB": -1.8530640001942604,
+      "EQ_train_start_pair": 12023,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.014589527769477785,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": {
+          "raw_pair": 52736,
+          "valid_pairs_seen": 3831,
+          "coherence": 0.08345904621838279
+        },
+        "maximum_consecutive_weak_blocks_if_unguarded": 264,
+        "would_invalidate_before_EQ_training_complete": true,
+        "diagnostic_replay_continued_past_invalidation": true
+      }
+    },
+    {
+      "case": "delay--1",
+      "delay_samples": 1797.47,
+      "alignment_block_samples": 512,
+      "output_pairs": 134900,
+      "sha256": "0298e9dfe530ad9c99853acd6539579f770e1a403c6e1049aee047ab97179f61",
+      "EQ_residual_dB": -26.69221083110889,
+      "EQ_train_start_pair": 12020,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.6065781352048867,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": {
+          "raw_pair": 52736,
+          "valid_pairs_seen": 3828,
+          "coherence": 0.6353406828499966
+        },
+        "maximum_consecutive_weak_blocks_if_unguarded": 95,
+        "would_invalidate_before_EQ_training_complete": true,
+        "diagnostic_replay_continued_past_invalidation": true
+      }
+    },
+    {
+      "case": "delay--0_25",
+      "delay_samples": 1798.22,
+      "alignment_block_samples": 512,
+      "output_pairs": 134899,
+      "sha256": "8ec153f411344aa0508b2d29352024f907b52dc40e39ee37e8beb9112b3f2dbb",
+      "EQ_residual_dB": -29.410867045544045,
+      "EQ_train_start_pair": 12019,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.9714950661786764,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": null,
+        "maximum_consecutive_weak_blocks_if_unguarded": 0,
+        "would_invalidate_before_EQ_training_complete": false,
+        "diagnostic_replay_continued_past_invalidation": false
+      }
+    },
+    {
+      "case": "delay-0_25",
+      "delay_samples": 1798.72,
+      "alignment_block_samples": 512,
+      "output_pairs": 134899,
+      "sha256": "44136bf0f50f65ab5d1f574ef4780bf552489c4fab63db6f62e88a1e8ee3a315",
+      "EQ_residual_dB": -29.518616519776188,
+      "EQ_train_start_pair": 12019,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.971921164699465,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": null,
+        "maximum_consecutive_weak_blocks_if_unguarded": 0,
+        "would_invalidate_before_EQ_training_complete": false,
+        "diagnostic_replay_continued_past_invalidation": false
+      }
+    },
+    {
+      "case": "delay-1",
+      "delay_samples": 1799.47,
+      "alignment_block_samples": 512,
+      "output_pairs": 134898,
+      "sha256": "8b91ca266300ef28e2ef8a203234b0f18005a8c97e1df687cfde335384548448",
+      "EQ_residual_dB": -27.069682184925114,
+      "EQ_train_start_pair": 12018,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.6105555026434744,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": {
+          "raw_pair": 52736,
+          "valid_pairs_seen": 3826,
+          "coherence": 0.6336524986581269
+        },
+        "maximum_consecutive_weak_blocks_if_unguarded": 95,
+        "would_invalidate_before_EQ_training_complete": true,
+        "diagnostic_replay_continued_past_invalidation": true
+      }
+    },
+    {
+      "case": "delay-4",
+      "delay_samples": 1802.47,
+      "alignment_block_samples": 512,
+      "output_pairs": 134895,
+      "sha256": "e9d30e21a7d816a7b894fcb162ec464d8b4e3c4ec5796762a2e1e9511bd24e73",
+      "EQ_residual_dB": -1.8931656804623975,
+      "EQ_train_start_pair": 12015,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.01202718079183215,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": {
+          "raw_pair": 52736,
+          "valid_pairs_seen": 3823,
+          "coherence": 0.07339867835423311
+        },
+        "maximum_consecutive_weak_blocks_if_unguarded": 264,
+        "would_invalidate_before_EQ_training_complete": true,
+        "diagnostic_replay_continued_past_invalidation": true
+      }
+    },
+    {
+      "case": "delay-16",
+      "delay_samples": 1814.47,
+      "alignment_block_samples": 512,
+      "output_pairs": 134883,
+      "sha256": "3565b40292c5aa54abbab19b02ee44f96e2a2f2d9532516c727ddc824ee493b9",
+      "EQ_residual_dB": -1.7286562597563964,
+      "EQ_train_start_pair": 12003,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.01012384765961881,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": {
+          "raw_pair": 52736,
+          "valid_pairs_seen": 3811,
+          "coherence": 0.051002930429583655
+        },
+        "maximum_consecutive_weak_blocks_if_unguarded": 264,
+        "would_invalidate_before_EQ_training_complete": true,
+        "diagnostic_replay_continued_past_invalidation": true
+      }
+    },
+    {
+      "case": "delay-128",
+      "delay_samples": 1926.47,
+      "alignment_block_samples": 512,
+      "output_pairs": 134771,
+      "sha256": "8a40127077f596a10d61a4abac753d828888837a59b48e26922d05078dd53c8f",
+      "EQ_residual_dB": -0.0042209127802931845,
+      "EQ_train_start_pair": 12403,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.005895269019137035,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": {
+          "raw_pair": 52736,
+          "valid_pairs_seen": 3699,
+          "coherence": 0.03809108980890581
+        },
+        "maximum_consecutive_weak_blocks_if_unguarded": 264,
+        "would_invalidate_before_EQ_training_complete": true,
+        "diagnostic_replay_continued_past_invalidation": true
+      }
+    },
+    {
+      "case": "counterfactual-128-block",
+      "delay_samples": 1798.47,
+      "alignment_block_samples": 128,
+      "output_pairs": 134899,
+      "sha256": "2f40bf7bb296ba0fc8b5da06e0baf1aad11bb20122a44260242703b9c96cfc9b",
+      "EQ_residual_dB": -29.668764520113676,
+      "EQ_train_start_pair": 12019,
+      "EQ_train_count": 24064,
+      "minimum_training_coherence": 0.9987166197963648,
+      "counterfactual_only": true,
+      "existing_coherence_guard": {
+        "threshold": 0.9,
+        "consecutive_weak_blocks": 8,
+        "first_invalidation": null,
+        "maximum_consecutive_weak_blocks_if_unguarded": 0,
+        "would_invalidate_before_EQ_training_complete": false,
+        "diagnostic_replay_continued_past_invalidation": false
+      }
+    }
+  ],
+  "controlled_pre_acquisition_phase_cases": [
+    {
+      "case": "coupled-phase-0",
+      "controlled_phase_degrees": 0,
+      "phase_modulation_hz": 50,
+      "acquisition": {
+        "delay": 1798.4699999999984,
+        "envelope_correlation": 0.8335584508223991,
+        "phase_correlation": 0.9991358789886672,
+        "offset_hz": -0.029793887213786008
+      },
+      "applied_actual_estimated_delay_and_offset": true,
+      "first_weak_guard_invalidation_raw_pair": null,
+      "maximum_consecutive_weak_blocks": 0,
+      "EQ_train_start_pair": 12019,
+      "aligned_pairs": 134899,
+      "aligned_sha256": "0ba7a31de49d202f1cdf1945957f830f02bb5e5a26efe863eba3d81cbbcba21c",
+      "EQ": {
+        "event": "EQ",
+        "train_start_pair": 12019,
+        "train_pairs": 24064,
+        "residual_dB": -29.636309222,
+        "exact_radio_training_window_proven": false
+      },
+      "fits": [
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 101.266592,
+          "CPU_ms": 100.935563
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 102.325794,
+          "CPU_ms": 102.03491
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 99.892536,
+          "CPU_ms": 99.634338
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 101.158075,
+          "CPU_ms": 100.921076
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 101.494718,
+          "CPU_ms": 101.257896
+        }
+      ],
+      "end": {
+        "event": "end",
+        "solution": true,
+        "fits": 4,
+        "packed_flags": 0
+      },
+      "counterfactual_controlled_input": false
+    },
+    {
+      "case": "coupled-phase-14",
+      "controlled_phase_degrees": 14,
+      "phase_modulation_hz": 50,
+      "acquisition": {
+        "delay": 1798.4699999999984,
+        "envelope_correlation": 0.8335584508223992,
+        "phase_correlation": 0.984043389112225,
+        "offset_hz": -0.026462206440010114
+      },
+      "applied_actual_estimated_delay_and_offset": true,
+      "first_weak_guard_invalidation_raw_pair": null,
+      "maximum_consecutive_weak_blocks": 0,
+      "EQ_train_start_pair": 12019,
+      "aligned_pairs": 134899,
+      "aligned_sha256": "7c02e5acbe42832f18bbf9b8155b43952e0b9c841beba5e59e6bfe81fa38830b",
+      "EQ": {
+        "event": "EQ",
+        "train_start_pair": 12019,
+        "train_pairs": 24064,
+        "residual_dB": -15.171907852,
+        "exact_radio_training_window_proven": false
+      },
+      "fits": [
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 102.415559,
+          "CPU_ms": 102.194894
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 103.292082,
+          "CPU_ms": 102.540867
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 103.52964,
+          "CPU_ms": 103.279984
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 103.355378,
+          "CPU_ms": 103.129052
+        }
+      ],
+      "end": {
+        "event": "end",
+        "solution": true,
+        "fits": 4,
+        "packed_flags": 0
+      },
+      "counterfactual_controlled_input": true
+    },
+    {
+      "case": "coupled-phase-28",
+      "controlled_phase_degrees": 28,
+      "phase_modulation_hz": 50,
+      "acquisition": {
+        "delay": 1798.4699999999984,
+        "envelope_correlation": 0.8335584508223991,
+        "phase_correlation": 0.9394243876154245,
+        "offset_hz": -0.02329562604478683
+      },
+      "applied_actual_estimated_delay_and_offset": true,
+      "first_weak_guard_invalidation_raw_pair": null,
+      "maximum_consecutive_weak_blocks": 0,
+      "EQ_train_start_pair": 12019,
+      "aligned_pairs": 134899,
+      "aligned_sha256": "361e9606fbfb99afed696c585bdda657a22c079e777a252682e57551db0f0804",
+      "EQ": {
+        "event": "EQ",
+        "train_start_pair": 12019,
+        "train_pairs": 24064,
+        "residual_dB": -9.413552382,
+        "exact_radio_training_window_proven": false
+      },
+      "fits": [
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 103.482771,
+          "CPU_ms": 103.246306
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 104.555901,
+          "CPU_ms": 104.29767
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 104.603553,
+          "CPU_ms": 104.031714
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 104.652019,
+          "CPU_ms": 104.056045
+        }
+      ],
+      "end": {
+        "event": "end",
+        "solution": false,
+        "fits": 4,
+        "packed_flags": 68157440
+      },
+      "counterfactual_controlled_input": true
+    }
+  ],
+  "current_source_native_sized_calibration_replay": [
+    {
+      "case": "coupled-phase-0",
+      "core_block_samples": 512,
+      "pace_ns_per_block": 21333333,
+      "EQ": {
+        "event": "EQ",
+        "train_start_pair": 12019,
+        "train_pairs": 24064,
+        "residual_dB": -29.636309222,
+        "exact_radio_training_window_proven": false
+      },
+      "fits": [
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 103.489974,
+          "CPU_ms": 103.198639
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 101.186599,
+          "CPU_ms": 100.781914
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 102.068889,
+          "CPU_ms": 101.062464
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 101.489301,
+          "CPU_ms": 101.077621
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 101.735154,
+          "CPU_ms": 101.348331
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 102.119853,
+          "CPU_ms": 101.882645
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 101.814011,
+          "CPU_ms": 101.086045
+        }
+      ],
+      "end": {
+        "event": "end",
+        "solution": true,
+        "fits": 7,
+        "packed_flags": 0
+      },
+      "host_only": true,
+      "radio_scheduling_reproduced": false
+    },
+    {
+      "case": "coupled-phase-14",
+      "core_block_samples": 512,
+      "pace_ns_per_block": 21333333,
+      "EQ": {
+        "event": "EQ",
+        "train_start_pair": 12019,
+        "train_pairs": 24064,
+        "residual_dB": -15.171907852,
+        "exact_radio_training_window_proven": false
+      },
+      "fits": [
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 103.95645,
+          "CPU_ms": 103.649476
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 101.743347,
+          "CPU_ms": 101.474043
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 103.981706,
+          "CPU_ms": 103.678713
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 102.508966,
+          "CPU_ms": 102.2239
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 103.309626,
+          "CPU_ms": 102.957691
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 106.106042,
+          "CPU_ms": 105.815564
+        },
+        {
+          "event": "host_fit",
+          "accepted": true,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "wall_ms": 102.745826,
+          "CPU_ms": 101.766545
+        }
+      ],
+      "end": {
+        "event": "end",
+        "solution": true,
+        "fits": 7,
+        "packed_flags": 0
+      },
+      "host_only": true,
+      "radio_scheduling_reproduced": false
+    },
+    {
+      "case": "coupled-phase-28",
+      "core_block_samples": 512,
+      "pace_ns_per_block": 21333333,
+      "EQ": {
+        "event": "EQ",
+        "train_start_pair": 12019,
+        "train_pairs": 24064,
+        "residual_dB": -9.413552382,
+        "exact_radio_training_window_proven": false
+      },
+      "fits": [
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 103.116052,
+          "CPU_ms": 102.858377
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 104.504571,
+          "CPU_ms": 104.254738
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 103.902112,
+          "CPU_ms": 103.570522
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 104.447443,
+          "CPU_ms": 104.225073
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 105.630565,
+          "CPU_ms": 105.352604
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 104.126228,
+          "CPU_ms": 103.862021
+        },
+        {
+          "event": "host_fit",
+          "accepted": false,
+          "flags": [
+            0,
+            0,
+            16,
+            16,
+            0
+          ],
+          "wall_ms": 103.554148,
+          "CPU_ms": 103.290122
+        }
+      ],
+      "end": {
+        "event": "end",
+        "solution": false,
+        "fits": 7,
+        "packed_flags": 68157440
+      },
+      "host_only": true,
+      "radio_scheduling_reproduced": false
+    }
+  ],
+  "native_core_build": {
+    "source_commit": "7e4d84128e07db6f1b5cc2f35c822630c6f94fff",
+    "source_files": {
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/calcc.c": "53e279933d92de7208efba6610f0eda2c76c5df0d728f6374b8a1e1b8d5f9ee1",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/vendor/iqc.c": "7b55fd68fa9bf9e5a387147529afe77adc1e0d12127120ec7e52b51e8307234c",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/delay.c": "384003453c2296d567ce86463681d7a95f3e45aa118d0f66627a256d9ff0b73f",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/extrapolate.c": "753a04bc3952a175e897bda11a5d092693130b4ae379460d15f69ce76a3a4fec",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/nurbs.c": "79b2ab558a7a989e9caf0bee098edf76761b6b8b069d972e2b41c28aa6bd41be",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/nurbs_fit.c": "087a229bccf7d4a89edfba3ba60f62090ae016e2d1bf512975a73881acaa96e2",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/nurbs_spline.c": "4b7ed84413a18bb05f64caf0fea66c381f72cfcfb4ec190260477af2f2195344",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/fir.c": "01d3e08222e696a8e45c5f3e4fc89e80d03122c0713f2568a693de18ad7c561b",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/utilities.c": "e31a554584d79c1746b80929a4fecd3dffcf274126e2a8c72e421a920d3f3283",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/impulse_cache.c": "f5d2fe15b89e06def6089c4ea6b5d20080a3332cefbd53412eb45f2dc47a810c",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/wdsp_port.c": "8b05926905b10bb1a999cc997bb7caf8a6afad5551ed4d85b7c130041609a7b7",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_core.c": "79e673a282aea820927657445ecfc4611278bb0bf47c4e7768d0601eee636769",
+      "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_eq.c": "97e879be0756fc550be50ca451fcee566d4583eb9b5c654e561baa56a550fb53",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/profile.c": "6380c3e9b3ab40630efb4f2aebd43d3de1180320148603589d580d712493d4e5"
+    },
+    "objects": {
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/calcc.o": "985360ea6951255a35d216db13b973018eecc91c8f148ec748074e271dbb166a",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/iqc.o": "b42b86da18702bb3e8ade1669854176870a04ad1c6482d77193dccb6460ad45b",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/delay.o": "2ddb78eb65dd38bf1d3c85b9864374eb0da188e7bd6e37fa30d325b158d4b1d6",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/extrapolate.o": "c829e6851d651f4b209ed5586fb2bcf41acfaa1daa6165cda96900e5b9947fbb",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs.o": "a7da23de57553aecf27f43092f2e710d965d2bf205e2b06ba48a90638a39d5c0",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs_fit.o": "c40f1bacf12bf81489b676724c455bfaae574608b31831ce22f9e92947fedb20",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs_spline.o": "f8d1f8913bb7c103b80b2e8d51c40f91dd5652e88e5bd8e5eb9cfeb2d0826ffe",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/fir.o": "1f9f0706d3f136b5753e1f0b499dbef84fbab1a9f77296eba3433ad6e8210472",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/utilities.o": "ba2654f2c6c94c2b37225b4415c667f80c74f3539d8f470541182a606ac5cc36",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/impulse_cache.o": "fa8e3a720b399067a140362283784000c673546a054baa98cee5a4d455e6796e",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/wdsp_port.o": "83746751f1f9e450bc58ca660114bfe08503bd91fe93cf5657fef85149cf4cca",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/pd_core.o": "884f78ad62d9a46f8e5f758f10afcc79b0d087121a67c45a90d544d1e6578911",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/pd_eq.o": "c77b0882f02882efc91e4dc1db28649e52280b438654422945560af2ffe46b27"
+    },
+    "binary": {
+      "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/profile-512",
+      "sha256": "5438f5eb6e130a01936d3082ccbd686fc66741772a8b2e5f4c8c82a312382c99",
+      "bytes": 190112
+    },
+    "commands": [
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/calcc.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/calcc.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/vendor/iqc.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/iqc.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/delay.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/delay.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/extrapolate.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/extrapolate.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/nurbs.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/nurbs_fit.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs_fit.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/nurbs_spline.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs_spline.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/fir.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/fir.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/utilities.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/utilities.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream/impulse_cache.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/impulse_cache.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/wdsp_port.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/wdsp_port.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_core.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/pd_core.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-w",
+        "-c",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_eq.c",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/pd_eq.o"
+      ],
+      [
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-O2",
+        "-std=gnu11",
+        "-DAETHER_PD_LOWESS_WINDOW_SEARCH",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-ffile-prefix-map=/home/jeremy/AetherSDR/build/aetherpd-source=.",
+        "-static",
+        "-s",
+        "-Wl,--gc-sections",
+        "-Wl,--build-id=none",
+        "-DAETHER_PD_PI_CRITICAL_SECTIONS",
+        "-include",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/upstream",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/include",
+        "-I",
+        "/home/jeremy/AetherSDR/build/aetherpd-source/third_party/fftw3/include",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wl,--wrap=nf_fit",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/profile.c",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/calcc.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/iqc.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/delay.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/extrapolate.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs_fit.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/nurbs_spline.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/fir.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/utilities.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/impulse_cache.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/wdsp_port.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/pd_core.o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/pd_eq.o",
+        "-lm",
+        "-lpthread",
+        "-o",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay/native-block-core/profile-512"
+      ]
+    ],
+    "radio_actions": [],
+    "production_source_changes": [],
+    "scope": "Current standalone optimized source plus exact calcc begin/end diagnostic hooks. Aligned controlled probe output, native-sized512sample calibration calls, host real-time nominal pacing. Exact radio asynchronous EQ completion and worker scheduling are not replayed."
+  },
+  "historical_failed_observation_preserved": {
+    "sampled_native_statuses": 132,
+    "sampled_correcting_statuses": 0,
+    "transport_fault_counters_zero_in_all_samples": true,
+    "input_limited_samples_zero": true,
+    "alignment_reset_count_zero": true,
+    "alignment_event": "alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=42696069932529 submitted_ns=42697820737333 started_ns=42697820772073 completed_ns=42698065926076 consumed_ns=42698074320543 delay=1768.950 envelope=0.891177 phase=0.941976 offset_hz=-0.022969 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+    "EQ_residual_dB": -9.7,
+    "source_ended": "source_samples_complete",
+    "WDSP_state6_source_meaning": "LCALC, tools/pd-waveform/vendor/calcc.c enum _calcc_state; this is a sampled state, not a measured worker CPU duration.",
+    "analysis": "Current cold-start bypass is reproduced. Poor initial correlation and EQ residual coincide with no usable model during the bounded source. This is not proof of the underlying cause. correction_ready requires a current published WDSP solution; EQ readiness alone is insufficient. Acquisition arrays, aligned pairs and fit-worker start/completion timestamps were not captured. No threshold, calibration duration or safety-gate change is justified by this evidence alone.",
+    "next_observation": "Use bounded instrumentation to distinguish initial alignment error/transport phase from long or rejected WDSP fitting; reproduce offline using the actual acquisition/pair samples before altering production behavior."
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/phase-tracker-replay-components.tar.gz",
+    "bytes": 4854583,
+    "sha256": "8376ffe9320b03b9264606216ce8bd1aeb2155e6d5c6f835605ca720ba9f2c0c",
+    "members": 51,
+    "all_members_verified": true
+  },
+  "derived_outputs": {
+    "actual-block-baseline.f32le": {
+      "bytes": 2158384,
+      "sha256": "5de1a094e10204299ffc0ea84730e57bd32723bcd8fb8dbff8b7f7fde88bb0ab",
+      "regenerable": true
+    },
+    "counterfactual-128-block.f32le": {
+      "bytes": 2158384,
+      "sha256": "2f40bf7bb296ba0fc8b5da06e0baf1aad11bb20122a44260242703b9c96cfc9b",
+      "regenerable": true
+    },
+    "coupled-phase-0.f32le": {
+      "bytes": 2158384,
+      "sha256": "0ba7a31de49d202f1cdf1945957f830f02bb5e5a26efe863eba3d81cbbcba21c",
+      "regenerable": true
+    },
+    "coupled-phase-14.f32le": {
+      "bytes": 2158384,
+      "sha256": "7c02e5acbe42832f18bbf9b8155b43952e0b9c841beba5e59e6bfe81fa38830b",
+      "regenerable": true
+    },
+    "coupled-phase-28.f32le": {
+      "bytes": 2158384,
+      "sha256": "361e9606fbfb99afed696c585bdda657a22c079e777a252682e57551db0f0804",
+      "regenerable": true
+    },
+    "delay--0_25.f32le": {
+      "bytes": 2158384,
+      "sha256": "8ec153f411344aa0508b2d29352024f907b52dc40e39ee37e8beb9112b3f2dbb",
+      "regenerable": true
+    },
+    "delay--1.f32le": {
+      "bytes": 2158400,
+      "sha256": "0298e9dfe530ad9c99853acd6539579f770e1a403c6e1049aee047ab97179f61",
+      "regenerable": true
+    },
+    "delay--4.f32le": {
+      "bytes": 2158448,
+      "sha256": "85c2550a4adba3e1e6b5bb5db021af3d1e04c7424a182a1721c521ec331bd5d3",
+      "regenerable": true
+    },
+    "delay-0_25.f32le": {
+      "bytes": 2158384,
+      "sha256": "44136bf0f50f65ab5d1f574ef4780bf552489c4fab63db6f62e88a1e8ee3a315",
+      "regenerable": true
+    },
+    "delay-1.f32le": {
+      "bytes": 2158368,
+      "sha256": "8b91ca266300ef28e2ef8a203234b0f18005a8c97e1df687cfde335384548448",
+      "regenerable": true
+    },
+    "delay-128.f32le": {
+      "bytes": 2156336,
+      "sha256": "8a40127077f596a10d61a4abac753d828888837a59b48e26922d05078dd53c8f",
+      "regenerable": true
+    },
+    "delay-16.f32le": {
+      "bytes": 2158128,
+      "sha256": "3565b40292c5aa54abbab19b02ee44f96e2a2f2d9532516c727ddc824ee493b9",
+      "regenerable": true
+    },
+    "delay-4.f32le": {
+      "bytes": 2158320,
+      "sha256": "e9d30e21a7d816a7b894fcb162ec464d8b4e3c4ec5796762a2e1e9511bd24e73",
+      "regenerable": true
+    }
+  },
+  "scope_limits": [
+    "The input capture is a successful e410 RF run, not the failed all-bypass run. Controlled inputs cannot identify what produced phase variation in the actual failed run.",
+    "The 50Hz and14/28degree disturbances are deliberately chosen controls retained from prior probes, not measured hardware disturbance frequency/amplitude or a calibrated fault model.",
+    "Large fixed wrong delays produce bad EQ if allowed to continue, but the existing eight-block0.9 coherence guard would invalidate these cases before EQ training completed. Their later residuals are counterfactual diagnostics, not evidence production accepted those models.",
+    "Healthy and14degree controlled cases yield host models;28degree yields phase flags16/16 and bypass. This is numerical and host-model evidence, not on-air application, IMD improvement, radio worker timing or6300 performance.",
+    "Native-sized calibration checks use current standalone source and512sample calibration calls with nominal real-time host pacing. They do not reproduce180sample VITA transmit callbacks,360sample core buffer limit, radio asynchronous EQ completion, scheduling, ownership or transport.",
+    "Original replay used128sample core calls and accelerated pacing; those preliminary logs remain preserved. Final512sample current-source results are separate, and the original128-block alignment counterfactual fails the actual captured sample comparison.",
+    "The512sample alignment block is read from the unchanged waveform source. The historical natural128sample alignment-coordinate event is a separate unresolved issue; alignment coordinates are not calibrated physical latency.",
+    "No phase/coherence/readiness thresholds, WDSP acceptance rules, source duration or production defaults were changed. No general EQ-residual cutoff is justified by these data.",
+    "All original raw inputs are preserved by hash in this archive and earlier evidence; generated outputs can be regenerated from scripts. Source closure includes the full cumulative project checkpoint and the listed prior optimized diagnostic binary for preliminary probes.",
+    "Full P1-P10 remains open, including actual failed-run capture/cause, natural128sample cause, remaining current-process-graph faults, repeated/extended RF and integrated stock comparison, actual6300, native delivery and independent release gates."
+  ],
+  "next_step": "Prepare one separately dispatched cold-start diagnostic capture using the installed buffered runtime, preserving outcomes whether it corrects or bypasses. Analyze any actual failed raw/aligned pairs with this verified acquisition/phase/EQ replay before changing the algorithm. No automatic RF retry or calibration rearm. Continue remaining P5 and fullP1-P10 requirements."
+}
