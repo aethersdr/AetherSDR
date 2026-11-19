@@ -951,7 +951,9 @@ void testKeepAliveCadence()
 
 void testDeadSession()
 {
-    // Silence: no frame at all after the last idle frame.
+    // The heartbeat stops: no frame at all after the last idle frame. The
+    // device sends one every second and never closes a silent client, so
+    // this is the network path (2026-11-18: 5 s blackouts of its segment).
     Harness silent;
     silent.connectHeld();
     silent.hold(20000);
@@ -960,19 +962,44 @@ void testDeadSession()
     silent.transport.peerSends(kIdleFrame);
     const qint64 lastFrame = silent.clock.now;
     silent.autoPong = false;
-    const qint64 bound = Harness::config().policy.sessionDeadAfterMs;
-    silent.advanceTo(lastFrame + bound);
-    report("silent for exactly the bound: still held",
+    const qint64 heartbeat = Harness::config().policy.heartbeatLostAfterMs;
+    report("the heartbeat bound is 5 s, under the 10 s keep-alive bound",
+           heartbeat == 5000 && Harness::config().policy.sessionDeadAfterMs == 10000);
+    silent.advanceTo(lastFrame + heartbeat);
+    report("no frame for exactly the heartbeat bound: still held",
            silent.session.status() == Status::Held && silent.transport.opens == 2);
     silent.advance(1);
     report("one millisecond more: the session is dropped and reopened",
            silent.session.status() == Status::Connecting && silent.transport.opens == 3
-               && silent.transport.openPending);
-    report("a dead session's state is no longer current, and is named silent",
+               && silent.transport.openPending,
+           "status=" + num(static_cast<int>(silent.session.status())));
+    report("named a lost connection, with the silence, not an eviction",
            !silent.session.snapshotCurrent()
-               && silent.session.lastFailure() == Failure::SessionSilent);
-    report("the reconnect holds again", silent.handshakeWithState()
-               && silent.session.status() == Status::Held && silent.session.snapshotCurrent());
+               && silent.session.lastFailure() == Failure::ConnectionLost
+               && silent.session.heartbeatLostAfterMs().value_or(-1) == heartbeat + 1,
+           num(silent.session.heartbeatLostAfterMs().value_or(-1)));
+    report("the reconnect holds again, and forgets the silence", silent.handshakeWithState()
+               && silent.session.status() == Status::Held && silent.session.snapshotCurrent()
+               && !silent.session.heartbeatLostAfterMs());
+
+    // Still no network: the reconnect times out, and the next waits a backoff.
+    Harness outage;
+    outage.connectHeld();
+    outage.hold(2000);
+    outage.autoPong = false;
+    outage.advance(heartbeat + 1);
+    const int reopened = outage.transport.opens;
+    outage.advance(Harness::config().connectTimeoutMs);
+    report("a reconnect into the outage fails",
+           outage.session.status() == Status::Failed && outage.transport.opens == reopened);
+    // Two failures in a row: 10 s from the start of the last attempt.
+    outage.advance(3999);
+    report("and the next waits the doubled backoff", outage.transport.opens == reopened,
+           num(outage.transport.opens - reopened));
+    outage.advance(1);
+    report("then tries again", outage.transport.opens == reopened + 1,
+           num(outage.transport.opens - reopened));
+    const qint64 bound = Harness::config().policy.sessionDeadAfterMs;
 
     // Idle frames keep coming, the keep-alive goes unanswered.
     Harness deaf;
@@ -993,12 +1020,28 @@ void testDeadSession()
     deaf.advance(1);
     report("one millisecond more: reopened, idle frames or not",
            deaf.session.status() == Status::Connecting && deaf.transport.opens == 3);
+    report("frames without a reply is the device, named silent",
+           deaf.session.lastFailure() == Failure::SessionSilent
+               && !deaf.session.heartbeatLostAfterMs());
 }
 
-// The device serves one session. A close of the held one is another client
-// taking it (most often the Trio's own web page): never taken back by itself.
+// The device serves one session. A close of the held one is another client's
+// upgrade (most often the Trio's own web page): never taken back by itself.
 void testEvictionIsNotRetaken()
 {
+    {
+        // The device ends a session only for another client, so a bare close
+        // stays an eviction even after a silence under the heartbeat bound.
+        Harness late;
+        late.connectHeld();
+        late.hold(2000);
+        late.autoPong = false;
+        late.advance(Harness::config().policy.heartbeatLostAfterMs - 1);
+        late.transport.peerCloses();
+        report("a close after a silence under the heartbeat bound is an eviction",
+               late.session.status() == Status::Evicted);
+    }
+
     Harness h;
     h.connectHeld();
     h.hold(3000);
@@ -1149,7 +1192,7 @@ void testCloseAndPing()
     quiet.connectHeld(rare);
     quiet.advance(1);
     const qint64 lastPong = quiet.clock.now;
-    const qint64 quietBound = rare.policy.sessionDeadAfterMs;
+    const qint64 quietBound = rare.policy.heartbeatLostAfterMs;
     quiet.advance(quietBound - 1000);
     quiet.transport.peerSends(serverFrame(0x89, QByteArray()));
     quiet.advance(quietBound - 1000);

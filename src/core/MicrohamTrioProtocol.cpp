@@ -310,7 +310,7 @@ bool sessionDead(const State& state, const Policy& policy)
     if (state.link != Link::Held) {
         return false;
     }
-    if (state.lastMessageAgeMs < 0 || state.lastMessageAgeMs > policy.sessionDeadAfterMs) {
+    if (state.lastMessageAgeMs < 0 || state.lastMessageAgeMs > policy.heartbeatLostAfterMs) {
         return true;
     }
     return state.unansweredKeepAliveAgeMs

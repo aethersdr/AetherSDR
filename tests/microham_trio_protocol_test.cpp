@@ -604,17 +604,19 @@ void testPredicates()
     const Policy policy;
     State s = goodState();
     report("a held session that just spoke is alive", !sessionDead(s));
-    s.lastMessageAgeMs = policy.sessionDeadAfterMs;
-    report("silent for exactly the bound is still alive", !sessionDead(s));
-    s.lastMessageAgeMs = policy.sessionDeadAfterMs + 1;
-    report("silent past the bound is dead", sessionDead(s));
+    s.lastMessageAgeMs = policy.heartbeatLostAfterMs;
+    report("no frame for exactly the heartbeat bound is still alive", !sessionDead(s));
+    s.lastMessageAgeMs = policy.heartbeatLostAfterMs + 1;
+    report("no frame past the heartbeat bound is dead", sessionDead(s));
     s.lastMessageAgeMs = -1;
     report("a negative message age is dead", sessionDead(s));
     s.link = Link::Evicted;
     report("only a held session can be dead", !sessionDead(s));
 
-    report("the defaults: keep-alive 5 s, lost after 10 s, backoff 5 s up to 10 min",
-           policy.keepAliveIntervalMs == 5000 && policy.sessionDeadAfterMs == 10000
+    report("the defaults: keep-alive 5 s, heartbeat lost after 5 s, keep-alive reply "
+           "after 10 s, backoff 5 s up to 10 min",
+           policy.keepAliveIntervalMs == 5000 && policy.heartbeatLostAfterMs == 5000
+               && policy.sessionDeadAfterMs == 10000
                && policy.failureBackoffMs == 5000 && policy.maxBackoffMs == 600000);
     s = goodState();
     s.unansweredKeepAliveAgeMs = policy.sessionDeadAfterMs;
@@ -652,12 +654,12 @@ void testSessionKeepAliveAndLiveness()
            is(decideSession(s), SessionAction::SendKeepAlive, SessionReason::KeepAliveDue, 0));
 
     s = goodState();
-    s.lastMessageAgeMs = policy.sessionDeadAfterMs;
-    report("silent for exactly the bound: still the session", is(decideSession(s),
+    s.lastMessageAgeMs = policy.heartbeatLostAfterMs;
+    report("no frame for exactly the heartbeat bound: still the session", is(decideSession(s),
                SessionAction::Wait, SessionReason::KeepAliveNotDue,
                policy.keepAliveIntervalMs - 1000));
-    s.lastMessageAgeMs = policy.sessionDeadAfterMs + 1;
-    report("silent past the bound: dead, connect again",
+    s.lastMessageAgeMs = policy.heartbeatLostAfterMs + 1;
+    report("no frame past the heartbeat bound: dead, connect again",
            is(decideSession(s), SessionAction::Connect, SessionReason::SessionDead, 0));
 
     s = goodState();

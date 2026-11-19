@@ -97,8 +97,8 @@ public:
         NoStateDocument,
         UnreadableState,
         ProtocolError,       // a frame the decoder refuses
-        ConnectionLost,      // the held connection broke without a close
-        SessionSilent,       // held, but no frame or keep-alive reply in time
+        ConnectionLost,      // the held connection broke, or its heartbeat stopped
+        SessionSilent,       // frames arrive, but a keep-alive went unanswered
     };
 
     enum class SnapshotSource {
@@ -119,6 +119,8 @@ public:
     bool    isRunning() const { return m_running; }
     Status  status() const { return m_status; }
     Failure lastFailure() const { return m_failure; }
+    // For a ConnectionLost by a stopped heartbeat: how long no frame arrived.
+    std::optional<qint64> heartbeatLostAfterMs() const { return m_heartbeatLostAfterMs; }
     // The last state received since start(), and whether it arrived on the
     // session held now.
     const std::optional<MicrohamTrio::Snapshot>& snapshot() const { return m_snapshot; }
@@ -168,7 +170,7 @@ private:
     void takeState(const MicrohamTrio::Frame& frame);
     void dropConnection();
     void becomeEvicted();
-    void fail(Failure failure);
+    void fail(Failure failure, std::optional<qint64> silenceMs = std::nullopt);
     void failTransient(Failure failure, qint64 nowMs);
     void sendText(const QByteArray& payload);
     void setStatus(Status status);
@@ -186,6 +188,7 @@ private:
     Phase   m_phase{Phase::Idle};
     Status  m_status{Status::Idle};
     Failure m_failure{Failure::None};
+    std::optional<qint64> m_heartbeatLostAfterMs;
     MicrohamTrio::Link m_link{MicrohamTrio::Link::NeverConnected};
 
     // Handshake: the response head so far, the cookie, our key.
