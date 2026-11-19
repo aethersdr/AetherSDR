@@ -2766,6 +2766,9 @@ void MainWindow::wireExternalControllers()
         } else if (!input.sameRequest(m_serialCwPaddleInput)) {
             return;
         }
+        if (held != m_serialCwPaddleHeld) {
+            m_radioModel.setProducerCwPaddleHeld(input, held);
+        }
         m_serialCwPaddleHeld = held;
         m_lastCwPaddleTraceId.store(0, std::memory_order_relaxed);
         m_lastCwPaddleSourceMs.store(0, std::memory_order_relaxed);

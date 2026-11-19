@@ -6,6 +6,7 @@
 
 #include <QPointer>
 #include <QScopeGuard>
+#include <algorithm>
 #include <vector>
 
 namespace AetherSDR {
@@ -1290,6 +1291,16 @@ void RadioModel::setProducerCwPaddleHeld(const TxCoordinator::Request& input, bo
     });
     if (held && input.valid()) {
         m_producerCwPaddleInputs.push_back(input);
+        return;
+    }
+    // Every paddle of this producer up releases the time-out latch; the
+    // keyer's element key-ups (queueProducerCwKeyEdge) never do.
+    const bool otherHeld = std::any_of(m_producerCwPaddleInputs.begin(), m_producerCwPaddleInputs.end(),
+        [&input](const TxCoordinator::Request& existing) {
+            return existing.producerKey() == input.producerKey();
+        });
+    if (!held && !otherHeld) {
+        noteTxInputReleased(input);
     }
 }
 

@@ -4665,6 +4665,13 @@ void MainWindow::cancelTransmitFromIndicator()
 
     m_pttHoldActive = false;
     m_cwStraightKeyActive = false;
+    // The reset swallows the paddles' own releases, so it releases them.
+    if (m_cwPaddleInputHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_cwPaddleInput, false);
+    }
+    if (m_serialCwPaddleHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_serialCwPaddleInput, false);
+    }
     m_cwLeftPaddleActive = false;
     m_cwRightPaddleActive = false;
     m_cwPaddleInputHeld = false;
@@ -4786,6 +4793,9 @@ void MainWindow::captureLocalCwPaddleInput(bool held)
             m_cwPaddleController = std::make_shared<TxController>(&m_radioModel);
         }
         m_cwPaddleInput = m_cwPaddleController->capture(TxController::Activity::CwKey).request();
+    }
+    if (held != m_cwPaddleInputHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_cwPaddleInput, held);
     }
     m_cwPaddleInputHeld = held;
 }
