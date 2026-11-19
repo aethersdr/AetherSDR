@@ -1,0 +1,587 @@
+{
+  "recorded_utc": "2026-11-19T07:19:59.298869+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "source_parent": "74704b7f5d101fdc7d6ed6829b484d64fa2015a0",
+  "runtime_release": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
+  "desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
+  "desktop": {
+    "pid": 2792075,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "2bc23d6c80c80c56c5a4acc682623c4d10f834b927535f81aa31e77cf5eb5591",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "source_patch_sha256": "c7b530fa711e6ae2e14826b9057c715cedf593175b75f309c8dbb573808a28b4",
+    "desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
+    "development_native_origin": "ab9a1dbbda4a7e7590a63cb00e8edd623907cab1",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "status": "One current managed diagnostic keyed owned lifetime-unkey API-loss case passed with the desktop paused, followed by explicit receive-only USB DAX IQ recovery and exact-session cleanup audits. Full P1-P10 qualification remains open.",
+  "new_positive_GUI_key_requests": 1,
+  "new_observed_TX_intervals": 1,
+  "source_arm_actions": 1,
+  "automatic_RF_retry": false,
+  "automatic_calibration_rearm": false,
+  "source_or_runtime_code_changed": false,
+  "radio_installs": [],
+  "radio_reboots": [],
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "bench": {
+    "frequency_MHz": 7.15,
+    "nominal_setting_W": 5,
+    "configured_maximum_W": 10,
+    "FDX": false,
+    "stock_APD": false,
+    "feedback": "local_dax_iq",
+    "channel": 4,
+    "native_cutoff_ms": 9000,
+    "measurement_timeout_ms": 10000,
+    "pre_fault_corrected_tone_plateau_ms": 374.76978299673647,
+    "desktop_pause_ms": 526.985577,
+    "fault_request_to_READY_ms": 525.932475,
+    "GUI_key_request_to_READY_ms": 6734.336013,
+    "LP_peak_W": 3.61,
+    "LP_max_SWR_during_RF": 1.05,
+    "injector_identity": {
+      "pid": 19093,
+      "ppid": 19091,
+      "start_ticks": 5275013,
+      "uid": [
+        "78666",
+        "78666",
+        "78666",
+        "78666"
+      ],
+      "gid": [
+        "20",
+        "20",
+        "20",
+        "20"
+      ],
+      "NNP": "1",
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "cgroup": [
+        "0::/"
+      ]
+    },
+    "target_API_handle": "0x04d3ee14"
+  },
+  "fault": {
+    "passed": true,
+    "target": {
+      "pid": 19005,
+      "ppid": 18987,
+      "start_ticks": 5248244,
+      "uid": [
+        "78666",
+        "78666",
+        "78666",
+        "78666"
+      ],
+      "gid": [
+        "20",
+        "20",
+        "20",
+        "20"
+      ],
+      "NNP": "1",
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@106-17839-78666.service"
+      ],
+      "exe": "/run/aetherpd/bin/pd-unkey-guard",
+      "sha256": "55f5d58d5c6c77244eacc46caf33ba3465561e159ae33e4c180e0cbcca211cbb",
+      "argv": [
+        "/run/aetherpd/bin/pd-unkey-guard",
+        "3",
+        "4",
+        "0x04d3ee14",
+        "0x0224cbc7"
+      ]
+    },
+    "disconnect_ack": "R91|0|",
+    "injector_RF_commands": [],
+    "injector_signals": [],
+    "one_fixed_client_disconnect_after_UID_drop": true,
+    "UNKEY_REQUESTED_then_READY_observed_while_desktop_stopped": true,
+    "READY_before_ordinary_eight_second_source_cutoff": true,
+    "wire_order": {
+      "GUI_xmit0_after_resume_ms_at_log_resolution": 8.186469,
+      "wire_log_resolution_ms": 1,
+      "fault_latency_uses_monotonic_clock": true,
+      "scope": "Corroborating host-clock ordering only; radio READY was independently observed while the desktop was stopped."
+    },
+    "independent_LP_guard_sent_no_unkey": true,
+    "watchdog_normal_parent_lease_branch_only": true,
+    "terminal_after_Stop": {
+      "available": false,
+      "state": "cleanup_unconfirmed"
+    },
+    "journal_guardian_exit_status": 7,
+    "capture_status": "empty_after_worker_exit",
+    "capture_completion_verified": false
+  },
+  "explicit_receive_recovery": {
+    "passed": true,
+    "explicit_Start_actions": 1,
+    "RF_commands": [],
+    "calibration_arms": [],
+    "captures": [
+      {
+        "metadata": {
+          "capture_id": "9bbb3166d8a205c35b8ca36726bc382e",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 35965895,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "53343989345718",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "53344330526432",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "6",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        },
+        "bytes": 131072,
+        "sha256": "565eeae4a454b7c95a107b00ce7d036209cca988bb1a01be6835672ad8bca092",
+        "file": "IQ-1.f32le"
+      },
+      {
+        "metadata": {
+          "capture_id": "ef16c5746b1df663bdd95cdbb63f0883",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 35965895,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "53344462378879",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "53344802441880",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "6",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        },
+        "bytes": 131072,
+        "sha256": "dea2fe05bf0ea441e86018e40e9edff2ca184195669ddff60cce521df3ab1dd0",
+        "file": "IQ-2.f32le"
+      }
+    ],
+    "native_RSS_kib": 69512,
+    "session_stopped": true
+  },
+  "cleanup": {
+    "both_phases_passed": true,
+    "fault_original_worker_PIDs_absent_including_zombies": [
+      18988,
+      18989,
+      18990,
+      18993,
+      18995,
+      18996,
+      18997,
+      19005,
+      19007,
+      19009
+    ],
+    "recovery_original_worker_PIDs_absent_including_zombies": [
+      19393,
+      19394,
+      19395,
+      19398,
+      19400,
+      19401,
+      19402,
+      19411,
+      19412,
+      19415
+    ],
+    "exact_fault_unit": "aetherpd-start@106-17839-78666.service",
+    "exact_recovery_unit": "aetherpd-start@107-17839-78666.service",
+    "all_fixed_capture_files_preserved_fsynced_then_hash_pinned_removed": true,
+    "both_ARP_and_journal_empty": true,
+    "both_accept_local_disabled": true,
+    "remaining_controls": [
+      {
+        "pid": 17839,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 5018951,
+        "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+        "packet_fds": [],
+        "role": "control/status frontend"
+      },
+      {
+        "pid": 19384,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 5334150,
+        "sha256": "711e6eb0c5aac149083135c351547745fb044f5e7fb296cacab6d1a71dfeb6d7",
+        "packet_fds": [],
+        "role": "unprivileged control manager"
+      },
+      {
+        "pid": 19392,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "gid": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "start_ticks": 5334172,
+        "sha256": "2a6fee0d0835f8579a7531b44bd86cb86c84307d1b629a1276a75c2cd62830e5",
+        "packet_fds": [],
+        "role": "control/status frontend"
+      }
+    ],
+    "all_temporary_diagnostics_jobs_and_carriers_retired": true
+  },
+  "final_idle": {
+    "state": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x224cbc7",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "native": {
+      "available": false,
+      "state": "stopped"
+    },
+    "desktop": {
+      "agentName": "Automation",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-native-durability",
+      "ok": true,
+      "pid": 2792075,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-native-durability",
+      "station": "Automation",
+      "txAllowed": true,
+      "version": "26.11.3"
+    },
+    "RF_commands": [],
+    "settings_restored": false
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/lowess-unkey-api-loss-components.tar.gz",
+    "bytes": 180506,
+    "sha256": "06e19f1ea43d1180ca45fdcde6da5286ff6c17ce6053f15d193a1d7a20876565",
+    "members": 101,
+    "all_members_verified": true
+  },
+  "earlier_evidence_preserved": [
+    "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json",
+    "CURRENT-RUNTIME-API-LOSS-QUALIFICATION.json"
+  ],
+  "scope_limits": [
+    "One bounded current diagnostic failure ordering, not full P5 or final shipping graph qualification.",
+    "526ms is host fault-request to observed radio READY including command transport and polling; it is not FPGA-to-AetherPD packet latency or a worst-case response bound.",
+    "Paused desktop and READY before resume distinguish this case from GUI unkey. Independent guards remained installed; the normal source/cutoff did not expire first. Not an arbitrary client/API outage test.",
+    "The failed guardian leaves cleanup_unconfirmed visible rather than claiming a successful release proof. Explicit ordinary Start recovered; no automatic source rearm or RF retry.",
+    "Diagnostic worker deliberately discarded its buffered files without a complete unowned READY. Empty files were preserved and removed; no usable fit/RF capture or failed-run phase replay is claimed.",
+    "Worker absence covers the observed original cohort including zombies and executable-matched active graph; arbitrary unobserved descendants and all race interleavings remain unqualified.",
+    "LP configured forward/net basis and absolute ADC IQ headroom remain unknown. No matched OFF/stock or signal-quality improvement measurement in this fault case.",
+    "Temporary root diagnostics only identify fixed peers, inject the exact disconnect after UID/capability drop, inspect and transport bounded files. They are not a shipped runtime dependency.",
+    "Prior receive-only pass and all-bypass keyed no-injection attempt remain unchanged, separately attributed to runtime ab. This success does not establish the cold-start or natural128-sample root cause.",
+    "Actual FLEX6300, final native packages/publisher, repeated/extended RF, integrated matched stock comparison, other P5 cases and independent release gates remain required. No software reboot without bounded shutdown trace."
+  ],
+  "next_step": "Replay the actual successful unmatched capture through the real phase tracker using the preserved raw/aligned sample mapping, then test controlled delay changes offline. Preserve the unresolved failed-run cause and remaining full P1-P10 gates."
+}

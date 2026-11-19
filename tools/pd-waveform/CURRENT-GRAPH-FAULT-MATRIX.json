@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T06:43:03.439211+00:00",
+  "recorded_utc": "2026-11-19T07:19:59.298869+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
@@ -70,10 +70,13 @@
     },
     {
       "case": "Owned lifetime unkey guardian API connection loss",
-      "state": "current_receive_only_passed_keyed_precondition_failed_no_fault_injected",
-      "evidence": "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json",
-      "earlier_evidence": "CURRENT-RUNTIME-API-LOSS-QUALIFICATION.json",
-      "limits": "Current receive-only disconnect/cleanup and ordinary two-frame USB successor pass. One keyed attempt did not reach correction, ended normally at source completion and injected no API fault. Native journal captures EQ residual-9.7dB and LCALC state; root cause unresolved. Original errors retained, final Stop/ACK/freshidle and independent cleanup pass. No RF retry."
+      "state": "current_d7_managed_diagnostic_one_keyed_case_and_explicit_USB_recovery_passed",
+      "evidence": "LOWESS-UNKEY-API-LOSS-QUALIFICATION.json",
+      "earlier_evidence": [
+        "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json",
+        "CURRENT-RUNTIME-API-LOSS-QUALIFICATION.json"
+      ],
+      "limits": "One5W case after374.77ms corrected tones; exact owned API disconnect, desktop paused526.99ms and radio READY observed525.93ms after fault request. Terminal cleanup_unconfirmed is retained; one explicit receive-only USB successor with two fresh frames and both exact-unit cleanup audits pass. Fault capture deliberately discarded, no fitting/IMD claim. Earlier receive-only pass and all-bypass keyed no-injection attempt remain preserved. FullP5 and cold/natural128 causes remain open."
     },
     {
       "case": "API loss, successful owner credential revocation, malformed status, partial startup/allocation",
@@ -101,10 +104,10 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Qualify the remaining owned lifetime-unkey API-loss case on the current runtime with one separately prepared bounded5W dispatch and corrected-tone precondition, preserving any refusal without automatic RF retry. In parallel use the actual unmatched/aligned mapping to replay the phase tracker and isolate the poor-EQ cold-start mechanism; retain all remaining P1-P10 requirements.",
-    "state": "optimized_managed_upgrade_receive_and_one_normal_RF_passed_remaining_API_case_open",
-    "evidence": "LOWESS-MANAGED-QUALIFICATION.json",
-    "authority_constraint": "Operator exclusive radio access; one bounded GUI-keyed case with independent guards, no automatic RF retry/rearm or software reboot."
+    "purpose": "Replay the actual successful unmatched capture through the real phase tracker using the preserved raw/aligned sample mapping, then test controlled delay changes offline. Preserve the unresolved failed-run cause and remaining full P1-P10 gates.",
+    "state": "current_keyed_owned_unkey_API_case_passed_offline_phase_tracker_replay_next",
+    "evidence": "LOWESS-UNKEY-API-LOSS-QUALIFICATION.json",
+    "authority_constraint": "Offline next step; no RF retry/rearm, additional key or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
@@ -113,5 +116,5 @@
     "Actual FLEX6300 teammate hardware and disk qualification",
     "Final native candidate packaging, production publisher/catalogue and independent release review"
   ],
-  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified."
+  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified. The same d7 diagnostic now separately passed one keyed owned lifetime-unkey API-loss case plus explicit USB successor and exact cleanup; no other old fault rows are automatically requalified."
 }
