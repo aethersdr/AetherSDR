@@ -205,6 +205,33 @@ int main(int argc, char** argv)
     const int offCentreBin = static_cast<int>(kBins / 2 + 1700.0 / hzPerBin);
     report("pan centre away from 14.100: the birdie is drawn at its RF frequency", offCentre == offCentreBin);
 
+    // ANF in RTTY mode carves the birdie where it is drawn, and nothing at its
+    // audio pitch (2125 - 1200 = 925 Hz), where it is not. Pink noise keeps
+    // every uncarved bin above the floor.
+    QMetaObject::invokeMethod(src, [src] {
+        src->setPanCenterMhz(14.100); src->setLowerSideband(true); src->setRttyMode(true); src->setVfoMhz(14.100);
+        src->setNoiseEnabled(QStringLiteral("pink"), true);
+        src->setAnf(true);
+    }, Qt::QueuedConnection);
+    waitFor([&] { return false; }, 300);
+    rx.spectrum = 0;
+    waitFor([&] { return rx.spectrum > 3; }, 1000);
+    {
+        const auto* bins = reinterpret_cast<const float*>(rx.lastSpectrum.constData());
+        const int n = rx.lastSpectrum.size() / int(sizeof(float));
+        const int pitchBin = static_cast<int>(kBins / 2 + 925.0 / hzPerBin);
+        const float lowest = n == kBins ? *std::min_element(bins, bins + n) : 0.0f;
+        report("ANF in RTTY mode: nothing is carved at the birdie's audio pitch",
+               n == kBins && bins[pitchBin] > lowest);
+        report("ANF in RTTY mode: the birdie's notch is carved where it is drawn",
+               n == kBins && bins[birdieBin] == lowest);
+    }
+    QMetaObject::invokeMethod(src, [src] {
+        src->setAnf(false);
+        src->setNoiseEnabled(QStringLiteral("pink"), false);
+    }, Qt::QueuedConnection);
+    waitFor([&] { return false; }, 120);
+
     // ── RTTY stations: which tone is mark (#7420) ─────────────────────────
     // A station keys 1 s of idle mark when switched on. In RTTY mode with the
     // dial on its upper tone, "rtty" (mark on the upper tone) sounds at

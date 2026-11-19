@@ -664,8 +664,12 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
     }
 
     // Notch display: carve each notched offset to the floor (line disappears).
+    // The birdie's notch is carved where the birdie is drawn: its RF offset.
+    const ChannelState& birdie = m_ch.at(Channel::Birdie);
     for (double fHz : m_notchHz) {
-        const int nb = binOf(fHz);
+        const bool onBirdie = !std::isnan(m_birdieRfOffsetHz) && birdie.enabled
+                              && std::abs(fHz - birdie.hz) < 0.5;
+        const int nb = binOf(onBirdie ? m_birdieRfOffsetHz : fHz);
         const double w = m_notchWidthHz.count(std::lround(fHz))
                              ? m_notchWidthHz.at(std::lround(fHz)) : 100.0;
         const int half = std::max(1, static_cast<int>(w / (2 * hzPerBin)));
