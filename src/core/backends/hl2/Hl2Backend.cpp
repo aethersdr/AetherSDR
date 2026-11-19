@@ -6634,13 +6634,14 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         e[QStringLiteral("apfCenterHz")] = c->apfCenterHz;
         e[QStringLiteral("apfBandwidthHz")] = c->apfBandwidthHz;
         e[QStringLiteral("apfGain")] = c->apfGain;
-        // The channel NR (ANR) and ANF as the chain holds them: requested,
-        // in circuit for the current mode, and level.
+        // The channel NR (ANR) and ANF: the request, what the channel last
+        // ACCEPTED (like apfRun, so a refused push reads differently from an
+        // applied one), and the level.
         e[QStringLiteral("nrRequested")] = dsp->noiseReductionRequested();
-        e[QStringLiteral("nrRun")] = dsp->noiseReductionInCircuit();
+        e[QStringLiteral("nrRun")] = dsp->noiseReductionApplied();
         e[QStringLiteral("nrLevel")] = dsp->noiseReductionLevel();
         e[QStringLiteral("anfRequested")] = dsp->autoNotchRequested();
-        e[QStringLiteral("anfRun")] = dsp->autoNotchInCircuit();
+        e[QStringLiteral("anfRun")] = dsp->autoNotchApplied();
         e[QStringLiteral("anfLevel")] = dsp->autoNotchLevel();
         // Level 4 where it exists: these two ask WDSP itself rather than
         // reading the config, and are marked so a reader can tell.

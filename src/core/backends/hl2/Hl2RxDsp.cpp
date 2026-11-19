@@ -296,6 +296,7 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     // Held outside Config, so re-applied after the mode (the APF depends on it).
     applyAgcOffLevel();
     applyApf();
+    m_nrApplied = m_anfApplied = false;   // the fresh channel runs neither yet
     applyNoiseReduction();
     applyAutoNotch();
     // A rebuild (rate change) creates a fresh channel; restore the operator's
@@ -506,7 +507,9 @@ void Hl2RxDsp::applyNoiseReduction()
         qCWarning(lcHl2RxDsp) << "channel NR" << (run ? "on" : "off") << "level" << m_nrLevel
                               << "refused by the channel; held and re-applied on"
                                  " the next configure()";
+        return;
     }
+    m_nrApplied = run;
 }
 
 void Hl2RxDsp::setAutoNotch(bool on, int level)
@@ -526,7 +529,9 @@ void Hl2RxDsp::applyAutoNotch()
         qCWarning(lcHl2RxDsp) << "channel ANF" << (run ? "on" : "off") << "level" << m_anfLevel
                               << "refused by the channel; held and re-applied on"
                                  " the next configure()";
+        return;
     }
+    m_anfApplied = run;
 }
 
 bool Hl2RxDsp::applyFilterTaps(int notchCount, int hysteresisFromTaps)

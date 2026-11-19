@@ -14,7 +14,7 @@
 //             DSP (NRS/RNN/NRF), the radio-side single manual notch
 //
 // receiveDspControl names the same set per mode (AGC, NB, RIT everywhere, APF
-// in CW, NR outside FM, ANF in the voice modes), and so gates both the
+// in CW, NR outside FM and DRM, ANF in the voice modes), and so gates both the
 // desktop's DSP buttons and aetherd's verbs. hl2_rxdsp_channel_nr_anf_test
 // measures NR and ANF on the audio.
 //
@@ -124,8 +124,10 @@ int main(int argc, char** argv)
         check(apfModes == QStringList({QStringLiteral("CW"), QStringLiteral("CWL")}),
               "the APF applies only where Hl2RxDsp puts it in circuit, CW and CWL");
         check(!nrModes.contains(QStringLiteral("FM")) && !nrModes.contains(QStringLiteral("WBFM"))
-                  && nrModes.size() == dsp->modes.size() - 2,
-              "NR applies in every mode but FM and WBFM");
+                  && !nrModes.contains(QStringLiteral("DRM"))
+                  && dsp->modes.contains(QStringLiteral("DRM"))
+                  && nrModes.size() == dsp->modes.size() - 3,
+              "NR applies in every mode but FM, WBFM and DRM (a digital waveform ANR would corrupt)");
         check(anfModes == QStringList({QStringLiteral("AM"), QStringLiteral("DSB"), QStringLiteral("LSB"),
                                        QStringLiteral("SAM"), QStringLiteral("USB")}),
               "ANF applies only in the voice modes, where a steady tone is interference");
