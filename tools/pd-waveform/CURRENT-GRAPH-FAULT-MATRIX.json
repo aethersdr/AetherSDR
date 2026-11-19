@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T02:56:44.327492+00:00",
+  "recorded_utc": "2026-11-19T03:18:23.717509+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
@@ -39,12 +39,14 @@
     },
     {
       "case": "DSP scheduling stall, stale model retirement and validated recent-model recovery",
-      "state": "pending_final_graph_RF",
+      "state": "passed_one_current_graph20ms_keyed_cached_recovery_case",
       "earlier_evidence": [
         "RECEIVE-STALL-QUALIFICATION.json",
         "ALIGNMENT-EVIDENCE-RECONCILIATION.json"
       ],
-      "earlier_scope": "Receive-only150ms stall and separately controlled20ms transport diagnostic exist; neither attributes the historical natural128sample event."
+      "earlier_scope": "Receive-only150ms stall and separately controlled20ms transport diagnostic exist; neither attributes the historical natural128sample event.",
+      "evidence": "CURRENT-DSP-STALL-RECOVERY-QUALIFICATION.json",
+      "limits": "Single20.74ms pause with bypass, exact-session cached-model acceptance, corrected normal-input capture and clean unkey/receive. RF stale-IQ expiry, changed-path/rejected cache,30second expiry and repeatability remain unqualified. Does not attribute the historical natural128sample event."
     },
     {
       "case": "IQ broker and both ARP-owner deaths, simultaneous cleanup-owner failures",
@@ -78,9 +80,9 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Current-graph DSP scheduling stall, bypass and validated recent-model recovery with bounded keying and independent guards, then remaining IQ/ARP/API/credential/combined cleanup cases.",
+    "purpose": "Current-graph IQ-broker death and explicit receive recovery; then both ARP-owner/combined-cleanup/API/credential cases and remaining stall rejection/expiry scopes.",
     "state": "not_executed_by_this_report",
-    "authority_constraint": "Fixed temporary injection only; exact owned process and irreversible privilege drop before signals. No automatic RF rekey or calibration-source rearm."
+    "authority_constraint": "Fixed temporary injection on an exactly pinned owned process; drop all privileges before signaling when UID ownership permits. No automatic RF key/rearm or shipping arbitrary endpoint."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
