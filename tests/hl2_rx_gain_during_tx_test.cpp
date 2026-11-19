@@ -332,13 +332,13 @@ void testPureSignal(TxTestAuthority& authority)
     c.setLnaGainDb(48);
     C::setStreaming(c);
     c.enableTransmit(true);
-    c.setPureSignal(true);
+    c.setPureSignal(true, 1);
     check(c.currentTxLnaGainBank() == ccAdcAssign(), "PureSignal on: 0x0e all-zero");
     c.setMox(true, authority.operation);
     check(c.currentGainBank() == ccGain(c.pureSignalTxGainDb(), true),
           "keyed 0x0a still carries the PureSignal feedback gain");
     c.setMox(false, authority.operation);
-    c.setPureSignal(false);
+    c.setPureSignal(false, 2);
     check(c.currentTxLnaGainBank() == ccTxLnaGain(48, false), "PureSignal off: the cap returns");
 }
 
