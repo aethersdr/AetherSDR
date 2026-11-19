@@ -15,6 +15,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/hl2/MetisProtocol.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/RadioModel.h"
 
@@ -66,22 +67,24 @@ public:
     void setKeying(bool, const TxCoordinator::Operation&,
                    const TxCoordinator::Completion&) override {}
 
-    // Hl2Backend's reply for a board at firmware 1, receiving, In2 high,
-    // a tune in progress and no fault (decodeIoBoardStatus(0x0100EE05)).
-    static QVariantMap boardReply()
+    // Hl2Backend's reply map for the registers word the board sent.
+    static QVariantMap replyFor(std::uint32_t registers)
     {
-        return {{QStringLiteral("inputPins"), 0x05},
-                {QStringLiteral("receiving"), true},
-                {QStringLiteral("in1"), false},
-                {QStringLiteral("in2"), true},
-                {QStringLiteral("in3"), false},
-                {QStringLiteral("in4"), false},
-                {QStringLiteral("in5"), false},
-                {QStringLiteral("antennaTuner"), 0xEE},
-                {QStringLiteral("fault"), 0},
-                {QStringLiteral("firmwareMajor"), 1}};
+        const hl2::IoBoardStatus s = hl2::decodeIoBoardStatus(registers);
+        return {{QStringLiteral("inputPins"), s.inputPins},
+                {QStringLiteral("receiving"), s.receiving()},
+                {QStringLiteral("in1"), s.input(1)},
+                {QStringLiteral("in2"), s.input(2)},
+                {QStringLiteral("in3"), s.input(3)},
+                {QStringLiteral("in4"), s.input(4)},
+                {QStringLiteral("in5"), s.input(5)},
+                {QStringLiteral("antennaTuner"), s.antennaTuner},
+                {QStringLiteral("fault"), s.fault},
+                {QStringLiteral("firmwareMajor"), s.firmwareMajor}};
     }
-    void finish() { emit extensionResult(std::exchange(pendingId, 0), boardReply()); }
+    // Firmware 1, receiving, In2 high, a tune in progress (0xEE), no fault.
+    std::uint32_t registers{0x0100EE05};
+    void finish() { emit extensionResult(std::exchange(pendingId, 0), replyFor(registers)); }
 
     void invokeExtension(const QString& ns, const QString& verb, quint64 id,
                          const QVariant&) override
@@ -97,7 +100,7 @@ public:
         ++reads;
         switch (answer) {
         case Answer::Board:
-            emit extensionResult(id, boardReply());
+            emit extensionResult(id, replyFor(registers));
             break;
         case Answer::NoBoard:
             emit extensionError(id, QStringLiteral("No IO board answered."));
@@ -182,6 +185,36 @@ private slots:
                  qPrintable(spokenName(page.status)));
         QVERIFY2(page.read->isEnabled(), "a finished read can be repeated");
         QCOMPARE(backend->writes, 0);
+    }
+
+    // Firmware 3, transmitting, In1 and In5 high, tune failed (0xF2), fault 3.
+    void failedTuneAndFaultAreShownInHex()
+    {
+        RadioModel model;
+        IoBoardBackend* backend = install(model, IoBoardBackend::Answer::Board);
+        backend->registers = 0x0303F222;
+        RadioSetupDialog dialog(&model);
+        const Page page = openPage(dialog);
+        QVERIFY2(page.read && page.status, "IO board button and status line found");
+        page.read->click();
+        QCOMPARE(page.status->text(),
+                 QStringLiteral("Firmware major: 3\nEXTTR: low (transmit)\n"
+                                "Inputs: In1 high, In2 low, In3 low, In4 low, In5 high\n"
+                                "Antenna tuner: tune failed (0xf2)\nFault: code 0x03"));
+    }
+
+    // An ATU code the board defines no meaning for is shown raw.
+    void undefinedTunerCodeIsShownRaw()
+    {
+        RadioModel model;
+        IoBoardBackend* backend = install(model, IoBoardBackend::Answer::Board);
+        backend->registers = 0x01004201;
+        RadioSetupDialog dialog(&model);
+        const Page page = openPage(dialog);
+        QVERIFY2(page.read && page.status, "IO board button and status line found");
+        page.read->click();
+        QVERIFY2(page.status->text().contains(QStringLiteral("\nAntenna tuner: 0x42\nFault: none")),
+                 qPrintable(page.status->text()));
     }
 
     void keyboardActivationReads()

@@ -4262,7 +4262,8 @@ QString describeIoBoardStatus(const QVariantMap& m)
              m.value(QStringLiteral("receiving")).toBool() ? QStringLiteral("high (receive)")
                                                            : QStringLiteral("low (transmit)"),
              inputs.join(QStringLiteral(", ")), atuText,
-             fault == 0 ? QStringLiteral("none") : QStringLiteral("code %1").arg(fault));
+             fault == 0 ? QStringLiteral("none")
+                        : QStringLiteral("code 0x%1").arg(fault, 2, 16, QLatin1Char('0')));
 }
 
 } // namespace
