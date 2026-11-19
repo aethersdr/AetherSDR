@@ -1,0 +1,42 @@
+{
+  "status": "Draft for implementation within P4/P5; not shipped, not radio-tested and not a lost-owner recovery bypass.",
+  "baseline_source": "22f67a1fd976e1816721087163ac396e65db1505",
+  "authority_evidence": {
+    "current_config": "tools/flex-tailnet-shim/node.go:provisionConfig/load/changeConfig",
+    "owner_check": "Node.beginOp/checkTokenLocked under existing opMu",
+    "managed_signout": "forgetConfig preserves TokenSHA256/InstallationID",
+    "pending_research": [
+      "Check all boot/install identity anchors before permitting TokenSHA256 replacement.",
+      "Check desktop credential namespace/setup lease and saved-attempt coordination before adding pending slots."
+    ]
+  },
+  "invariants": [
+    "Managed signout and tailnet rejoin continue to preserve the existing local owner.",
+    "Rotation is an explicit separately authenticated known-owner operation; no trust-on-first-use reset or privilege bootstrap.",
+    "Client generates and durably saves the candidate credential before sending any mutation. Server never generates an irreplaceable secret reply.",
+    "One bounded pending proposal per installation; preserve old owner until candidate commit proves possession.",
+    "Authenticated old-owner prepare binds installationID, proposalID and new hash; identical retries are idempotent, conflicting proposals refused.",
+    "Candidate credential authorizes only commit of that prepared proposal until commit; it is not ordinary admin authority beforehand.",
+    "Commit atomically persists the new hash, clears pending proposal and retires active PD session/arms; never keys/restarts/rearms.",
+    "Lost prepare/commit replies and app crash recover using already-saved keys and exact installation/proposal identity; old-key ordinary authority revoked after commit.",
+    "Uncertain native persistence fails closed, retains both client credentials and never asserts the old key is still valid.",
+    "No host-root authority, arbitrary target/path/command operation or new privilege entry.",
+    "No pending-candidate expiry based on unqualified radio wall clock; explicit exact-proposal cancellation by authenticated old owner.",
+    "Preserve tailnet identity/hostname/routes/sharing; rotation affects only local owner credential and PD session authority."
+  ],
+  "required_tests": [
+    "No owner/foreign owner/legacy mode/installation mismatch rejection",
+    "Hash/proposal/body bounds, unknown/trailing JSON rejection",
+    "Conflicting and duplicate proposals, old/new key admission before/after commit",
+    "Lost prepare reply, lost commit reply, client deletion/session replacement/credential-write timeout",
+    "Pre-rename failure vs post-rename persistence uncertainty; process restart from each durable state",
+    "Failed prepare/commit save preserves or fails-closed prior session as appropriate",
+    "Active receive-only session retires on successful commit, no automatic Start/arm/TX",
+    "Only after build/package verification: ordinary owner UI known-owner rotation, receipt-loss recovery and exact resource audit on8600"
+  ],
+  "open_scope": [
+    "UI entry and review wording not implemented",
+    "Actual6000 installer source/adapter and hardware remain external",
+    "Lost-owner recovery without old or prepared candidate key remains unresolved and must not weaken authentication"
+  ]
+}
