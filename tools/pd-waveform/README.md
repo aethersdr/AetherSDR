@@ -97,6 +97,15 @@ The shim supplies this contract through its trusted launcher handoff. The
 runtime, guardian, and capture helper are distinct responsibilities. No
 privileged IQ provisioning service is installed by this builder.
 
+One installed FLEX-8600 receive-only test verifies that a preexisting foreign
+fixed ARP entry prevents session startup and survives GUI Start and Stop.
+After the bounded fixture removes its own entry, an explicit GUI successor
+captures two fresh local DAX IQ frames with FDX off and stops cleanly. The
+[qualification](./RADIO-FOREIGN-ARP-PREEXISTING-QUALIFICATION.json) preserves
+the constructor's conservative exit9 and the audit's incorrect exit8
+expectation. Active-session replacement, unrelated concurrent writes,
+Linux2.6 and keyed foreign-entry behavior remain unqualified.
+
 The [fixed capture constructor](./capture/README.md) builds the packet socket
 inside the same trusted executable as its strict ring worker. Its current
 profile is FLEX-8600 only; ARMv7 compilation does not establish a FLEX-6000

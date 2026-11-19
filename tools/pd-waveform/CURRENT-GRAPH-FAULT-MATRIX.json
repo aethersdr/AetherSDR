@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T16:18:12.392340+00:00",
+  "recorded_utc": "2026-11-19T16:45:52.353212+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
@@ -126,9 +126,12 @@
     },
     {
       "case": "Foreign fixed-entry conflicts, replacement and ownership-preserving cleanup",
-      "state": "eight_real_local_kernel_component_cases_passed_on_radio_final_graph_and_concurrent_CAS_scope_remain_open",
-      "evidence": "FOREIGN-ARP-KERNEL-COMPONENT-QUALIFICATION.json",
-      "limits": "Unchanged production C source on isolated x86_64 local kernel; zero radio/RF actions. Unsafe delete mutant rejected. Does not establish ARM ELF, final radio graph, Linux2.6 or atomicity against unrelated concurrent writes."
+      "state": "eight_local_kernel_component_cases_and_one_installed_radio_preexisting_conflict_receive_only_case_passed",
+      "evidence": [
+        "FOREIGN-ARP-KERNEL-COMPONENT-QUALIFICATION.json",
+        "RADIO-FOREIGN-ARP-PREEXISTING-QUALIFICATION.json"
+      ],
+      "limits": "Eight isolated x86_64 kernel cases plus one actual83d6/8600 receive-only preexisting foreign-entry Start refusal/preservation and explicit fresh twoIQ GUI successor/normal Stop/exact cleanup. Original wrong-exit8 audit failure retained; actual exit9/unavailable not relabeled. Active foreign replacement, concurrent CAS, Linux2.6 and keyed foreign-entry scope remain open."
     },
     {
       "case": "Managed local sign-out retires active unarmed local DAX IQ session and preserves local owner",
@@ -152,7 +155,7 @@
     "Actual FLEX6300 teammate hardware and disk qualification",
     "Final native candidate packaging, production publisher/catalogue and independent release review"
   ],
-  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified. The same d7 diagnostic now separately passed one keyed owned lifetime-unkey API-loss case plus explicit USB successor and exact cleanup; no other old fault rows are automatically requalified. Current29db installs the first Go ownership-witness fix with unchanged DSP/fixed helper bytes. Its one receive-only DSP API fault passes shutdown/retirement but explicit product restore fails on bound NO_TX_ASSIGNED. Second exact admission fix remains host-only; no other prior row is automatically requalified. Currentaa56 installs the exact NO_TX_ASSIGNED missing-receiver exception. One new unarmed DSP API-loss case now passes explicit28-field basicUSB recovery and freshDAXIQ successor/normalStop with both exact cleanup audits. Both older product failures remain failed; keyed DSP API-loss and other rows are not automatically qualified. Exact83d6 upgrades normally with only native diagnostic finalizer bytes changed; full receive-only recovery passes. One keyed inherited-DSP API-loss case now preserves exit7 and unkeys while GUI paused; product Restore and fresh IQ successor plus all cleanups pass, but overall result remains failed on desktop RECEIVE stop-proof completion. Causal release-only C++ fix is built and host-tested, not yet live-qualified.",
+  "runtime_scope_note": "Installed d7ad managed diagnostic has the LOWESS optimization and bounded captures; one receive-only and one finite5W normal RF case passed. Earlier failure rows retain their recorded runtime/desktop scope and are not automatically requalified. The same d7 diagnostic now separately passed one keyed owned lifetime-unkey API-loss case plus explicit USB successor and exact cleanup; no other old fault rows are automatically requalified. Current29db installs the first Go ownership-witness fix with unchanged DSP/fixed helper bytes. Its one receive-only DSP API fault passes shutdown/retirement but explicit product restore fails on bound NO_TX_ASSIGNED. Second exact admission fix remains host-only; no other prior row is automatically requalified. Currentaa56 installs the exact NO_TX_ASSIGNED missing-receiver exception. One new unarmed DSP API-loss case now passes explicit28-field basicUSB recovery and freshDAXIQ successor/normalStop with both exact cleanup audits. Both older product failures remain failed; keyed DSP API-loss and other rows are not automatically qualified. Exact83d6 upgrades normally with only native diagnostic finalizer bytes changed; full receive-only recovery passes. One keyed inherited-DSP API-loss case now preserves exit7 and unkeys while GUI paused; product Restore and fresh IQ successor plus all cleanups pass, but overall result remains failed on desktop RECEIVE stop-proof completion. At that checkpoint the causal release-only C++ fix was built and host-tested, with live qualification still pending. On exact83d6 and desktop276e/e519, the later single authorized5W inherited-DSP API-loss case now passes interrupted-measurement completion, causal idle-before-GUI-unkey ordering, explicit USB restore/two freshIQ successor and exact cleanup; earlier failed desktop case remains failed. One later receive-only preexisting foreign-entry refusal/preservation and successful successor is separately qualified; active replacement remains open.",
   "native_platform_current_source": {
     "report": "CURRENT-NATIVE-PLATFORM-QUALIFICATION.json",
     "tested_source_commit": "e41a8ff6fc14751eb4bd57f5f85b0c1e35ac18d9",

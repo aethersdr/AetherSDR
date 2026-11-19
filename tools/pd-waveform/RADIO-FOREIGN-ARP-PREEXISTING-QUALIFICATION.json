@@ -1,0 +1,105 @@
+{
+  "recorded_utc": "2026-11-19T16:45:52.353212+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "passed_one_scoped_case": true,
+  "status": "One installed8600 receive-only preexisting foreign fixed-neighbor case refuses startup and preserves the foreign tuple through GUI Start/Stop. Fixture removes only its own tuple, then one explicit GUI successor captures two fresh local DAX IQ frames and normal Stop/exact cleanup pass. Constructor exit9 and failed exit8 audit expectation remain preserved.",
+  "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "desktop": {
+    "pid": 3233869,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+    "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+    "development_native_origin": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "FDX": false,
+  "RF_commands": [],
+  "source_arm_actions": 0,
+  "foreign_tuple": {
+    "mac": "02:aa:bb:cc:dd:ee",
+    "family": 1,
+    "flags": 6
+  },
+  "fixture_mutations": [
+    {
+      "action": "add_test_neighbor",
+      "IP": "172.30.2.1",
+      "interface": "eth0.10",
+      "MAC": "02:aa:bb:cc:dd:ee",
+      "uid": 65534
+    },
+    {
+      "action": "remove_own_test_neighbor",
+      "IP": "172.30.2.1",
+      "interface": "eth0.10",
+      "MAC": "02:aa:bb:cc:dd:ee",
+      "uid": 65534
+    }
+  ],
+  "fixture_mutation_UID": 65534,
+  "fixture_only_effective_capability": "NET_ADMIN",
+  "fixture_final_capabilities_zero": true,
+  "foreign_tuple_preserved_through_Start_and_Stop": true,
+  "failed_start": {
+    "unit": {
+      "name": "aetherpd-start@125-26446-78666.service",
+      "MainPID": "0",
+      "Result": "exit-code",
+      "ExecMainCode": "1",
+      "ExecMainStatus": "9",
+      "ActiveState": "failed",
+      "SubState": "failed"
+    },
+    "terminal_status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "complete": false,
+      "http_status": 503
+    },
+    "registered_DSP_or_stream_observed": false,
+    "sole_primary_PID": 26446,
+    "session_workers_observed_remaining": 0,
+    "packet_FDs_observed_remaining": 0,
+    "ARP_absent_after_fixture_removed": true,
+    "journal_bytes": 0
+  },
+  "ordinary_GUI_successor": {
+    "explicit_Start_actions": 1,
+    "fresh_DSP_PID": 31556,
+    "capture_count": 2,
+    "capture_bytes_each": 131072,
+    "fresh_receive_times_verified": true,
+    "normal_Stop_passed": true,
+    "session_workers_absent": 10,
+    "ordinary_controls_remaining": 3
+  },
+  "capture_SHA256": [
+    "0c934aa57e658ebbacb5d64589174a0a8279842af35e429304161c8249f6d716",
+    "427701b3c06da58ab8769de8ef7fc41ffef88e05d692ec47fb742b879f8d6274"
+  ],
+  "negative_evidence_retained": [
+    "radio_reap treats any child nonzero exit as unconfirmed cleanup. A fixed-ARP preflight refusal is nonzero, so constructor returns 9 even with all observed resources absent. This does not claim the constructor reported clean retirement or expose its consumed ARP refusal event."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/radio-foreign-arp-preexisting-components.tar.gz",
+    "bytes": 85947,
+    "sha256": "61533e670ba0fdc7edbe83e6327d550b23c4d2813358fedffddcc5b7450bb73d",
+    "members": 58,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Preexisting foreign entry only. This does not qualify foreign replacement during an active session, concurrent unrelated administrator writes, atomic compare/delete, Linux2.6 or keyed fault behavior.",
+    "No specific ARP refusal event or kernel syscall trace is exposed by the constructor. Generic failed startup, exact controlled foreign-neighbor observations, resource inventory and successful successor after removal support this workflow claim.",
+    "The original audit expected exit8 and failed because actual exit9 conservatively classifies any nonzero child status as unconfirmed cleanup. It is retained unchanged; separate offline verification checks actual resource observations. No product status or guard was relaxed.",
+    "Existing broad diagnostic bootstrap was used for the bounded fixture and fixed read/cleanup audits. The fixture drops to UID65534 with NET_ADMIN alone before network mutation, then drops all capabilities. This does not qualify that broad bridge as a shipping installer.",
+    "No RF, calibration/source arm, persistent installation, software reboot, new desktop instance, AetherTX or processing-settings restoration occurred.",
+    "All other P1-P10 production gates remain open. The prior single5W authorization is consumed; no automatic transmission or rearm is authorized."
+  ]
+}
