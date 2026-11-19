@@ -1275,6 +1275,10 @@ void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, b
         }
         if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
             refused();
+        } else if (down && hostTextGates) {
+            // Host CW text is sent text, not a held input, like CWX: its
+            // keyer owns its producer, and no element holds the time-out latch.
+            noteTxInputReleased(request);
         }
     }, Qt::QueuedConnection);
 }
