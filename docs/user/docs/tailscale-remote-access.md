@@ -586,8 +586,11 @@ ADC headroom or calibrated output power.
    armed, a transmission or measurement is active, or installation is pending.
    After a normal desktop PTT release, power editing waits for queued transmit
    work to finish and a fresh receive report. This does not release transmit
-   ownership for the analyzer: if an earlier desktop transmission still holds
-   that ownership, stop AetherPD and reconnect before preparing an analyzer run.
+   ownership for the analyzer. On a supported local Flex connection, a complete
+   software-PTT cycle can release that ownership after its matching command
+   replies and the radio's owner-clear report arrive. Missing or contradictory
+   readback, or a cycle combined with CW, TUNE or ATU, keeps preparation blocked;
+   stop AetherPD and reconnect before preparing an analyzer run.
    The analyzer does not remember or restore this radio setting.
 2. Choose **Measured forward-power abort limit (W)**. This is a measured-power
    cutoff, not a command to change radio drive. The nominal radio power setting

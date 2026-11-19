@@ -1002,15 +1002,23 @@ void aetherPDMeasurementWorkflow()
         power.rfPower = 5;
         TxOperationIntegrationTestAccess::transmitDelta(f.radio, power);
         MeterModel& meters = f.radio.meterModel();
-        const std::array<QString, 4> names = {"SWR", "PATEMP", "+13.8A", "FWDPWR"};
-        const std::array<QString, 4> units = {"SWR", "degC", "Volts", "Watts"};
-        const std::array<float, 4> values = {1.08f, 40.f, 13.8f, 0.f};
-        for (int i = 0; i < 4; ++i) {
+        const std::array<QString, 5> names = {"SWR", "PATEMP", "+13.8A", "FWDPWR", "REFPWR"};
+        const std::array<QString, 5> units = {"SWR", "degC", "Volts", "Watts", "Watts"};
+        const std::array<float, 5> values = {1.08f, 40.f, 13.8f, 0.f, 0.f};
+        for (int i = 0; i < 5; ++i) {
             MeterDef def;
-            def.index = i + 1; def.source = (i == 0 || i == 3) ? "TX" : "RAD";
+            def.index = i + 1; def.source = (i == 0 || i >= 3) ? "TX" : "RAD";
+            def.sourceIndex = i >= 3 ? i - 2 : 0;
             def.name = names[i]; def.unit = units[i];
             meters.defineMeter(def);
             check(meters.updateValueByName(def.source, def.name, values[i]), "measurement meter sample accepted");
+        }
+        meters.updateValues({4, 5}, {0, 0});
+        const auto directional = meters.directionalPowerSample();
+        check(directional && directional->forwardWatts == 0 && directional->reflectedWatts == 0,
+              "measurement fixture supplies the required same-packet directional pair from distinct TX sensors");
+        if (!directional) {
+            continue;
         }
         std::unique_ptr<AetherPDMeasurementModel> model = std::make_unique<AetherPDMeasurementModel>(f.radio, measurementNetwork);
         const RadioControlSession session = f.radio.controlSession();
@@ -1128,7 +1136,7 @@ void aetherPDMeasurementWorkflow()
                 operatorCurrent = false; model->poll();
                 check(proof.valid(), "original operator authorization loss requests owned cleanup");
             } else if (scenario == 5) {
-                meters.updateValueByName("TX", "FWDPWR", 11.f);
+                meters.updateValues({4, 5}, {11, 0});
                 model->poll();
             } else {
                 QJsonObject running = sourceStatus;
@@ -1180,6 +1188,9 @@ void aetherPDMeasurementWorkflow()
                       && result->powerSetting == 5 && result->mode == "USB" && result->transmitAntenna == "ANT1"
                       && result->measurement.captures.size() == 1 && !result->measurement.fullScaleKnown,
                   "composed workflow preserves measurement and station provenance");
+            if (!result || !result->measurement.measurement || !result->measurement.measurement->valid) {
+                continue;
+            }
             const QJsonObject exported = QJsonDocument::fromJson(model->exportResult()).object();
             const QJsonObject measured = exported.value("measurement").toObject();
             check(exported.value("schema").toString() == "aetherpd-linearity-v1"
@@ -1410,6 +1421,61 @@ void grantedModelWireStopIdentity()
                   && a.operation.hasConfirmedStop() && writes.size() == 3 && writes.last() == "xmit 1",
               "fresh client reaches terminal writer after complete model-to-wire handoff");
     }
+}
+
+void desktopModelWireHandoff()
+{
+    GrantedFixture f;
+    QStringList writes;
+    quint32 sequence = 100;
+    TxStopEvidence proof;
+    FlexPttWireSession wire([&](quint32, const QString& text) {
+        writes.append(text);
+        return true;
+    }, [&](const TxStopEvidence& evidence) { proof = evidence; });
+    const auto feed = [&](QStringView line) { wire.observe(line, TxCoordinator::monotonicMs()); };
+    wire.reset(1, 0x12345678);
+    feed(u"S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1");
+    f.backend->keyingWriter = [&](bool on, const TxCoordinator::Operation& operation,
+                                   const TxCoordinator::Completion& completion) {
+        const TxCoordinator::Dispatch dispatch = operation.beginDispatch(TxCoordinator::monotonicMs(), on);
+        if (dispatch) {
+            if (operation.independent()) {
+                if (on) { wire.key(++sequence, {operation, true}, TxCoordinator::monotonicMs()); }
+            } else {
+                wire.desktopPtt(++sequence, {operation, on}, TxCoordinator::monotonicMs());
+            }
+        }
+        completion.finish();
+    };
+    f.backend->stopWriter = [&](const TxCoordinator::Operation& operation,
+                                const TxCoordinator::StopRequest& request) {
+        wire.stop(++sequence, operation, request, TxCoordinator::monotonicMs());
+    };
+    const auto detach = qScopeGuard([&] {
+        f.backend->keyingWriter = {};
+        f.backend->stopWriter = {};
+    });
+    f.radio.setTransmit(true);
+    const TxCoordinator::Operation desktop = f.radio.transmitOperation();
+    feed(u"R101|0|");
+    feed(u"S0|interlock tx_client_handle=0x12345678 state=PTT_REQUESTED reason= source=SW tx_allowed=1");
+    feed(u"S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason= source=SW tx_allowed=1");
+    f.radio.setTransmit(false);
+    check(writes == QStringList{"xmit 1", "xmit 0"} && f.coordinator.hasOwnership(),
+          "normal model PTT records its own off edge without an extra stop or early handoff");
+    feed(u"R102|0|");
+    feed(u"S0|interlock tx_client_handle=0x12345678 state=UNKEY_REQUESTED reason= source= tx_allowed=1");
+    feed(u"S0|interlock tx_client_handle=0x12345678 state=READY reason= source= tx_allowed=1");
+    check(!proof.valid() && f.coordinator.hasOwnership(), "desktop owned READY retains the model handoff barrier");
+    feed(u"S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1");
+    check(proof.valid() && !desktop.hasConfirmedStop(), "complete desktop sequence yields exact revocable evidence");
+    TxOperationIntegrationTestAccess::stopEvidence(f.radio, proof);
+    check(desktop.hasConfirmedStop() && !f.coordinator.hasOwnership() && writes.size() == 2,
+          "model confirms original desktop operation without reconnecting or another RF command");
+    const auto admitted = f.grants.acquire(f.a, f.ga.grant, 1, TxCoordinator::Activity::Mox);
+    check(admitted.accepted() && writes.size() == 2,
+          "fresh independent analyzer admission follows confirmed desktop release without automatic keying");
 }
 
 void grantedModelPreflightAndCancellation()
@@ -4684,6 +4750,7 @@ int main(int argc, char** argv)
     aetherPDMeasurementWorkflow();
     aetherPDPowerAfterDesktopRelease();
     grantedModelWireStopIdentity();
+    desktopModelWireHandoff();
     grantedModelPreflightAndCancellation();
     grantedModelSessionAndActivityBoundaries();
     protocolProducerLifetimes();

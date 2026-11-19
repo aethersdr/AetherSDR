@@ -73,6 +73,8 @@ public slots:
     // Write a pre-sequenced command to the socket. Called from RadioModel
     // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
     void writeCommand(quint32 seq, const QString& command);
+    void writeTxCommand(quint32 seq, const QString& command,
+                        const TxCoordinator::Operation& operation, bool keying);
     quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
     // The status epoch lines are tagged with (FlexStatusIngress). Set on this
     // thread just before a session's connect, so every line of that session

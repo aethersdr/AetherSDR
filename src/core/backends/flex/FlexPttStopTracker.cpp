@@ -53,6 +53,7 @@ void FlexPttStopTracker::disconnect()
     m_stop = {};
     m_stopWritten = false;
     m_stopReplied = false;
+    m_desktopStop = false;
     m_phase = Phase::Disconnected;
     m_failure = Failure::None;
 }
@@ -90,6 +91,7 @@ bool FlexPttStopTracker::advanceClock(qint64 nowMs)
         m_deadlineMs = 0;
         m_operation = {};
         m_stop = {};
+        m_desktopStop = false;
     }
     if (nowMs < m_lastMs || nowMs < 0
         || nowMs > std::numeric_limits<qint64>::max() - kTransitionTimeoutMs) {
@@ -135,6 +137,7 @@ bool FlexPttStopTracker::begin(const TxCoordinator::Operation& operation,
     m_stop = {};
     m_stopWritten = false;
     m_stopReplied = false;
+    m_desktopStop = false;
     m_keySequence = keySequence;
     m_stopSequence = 0;
     m_deadlineMs = nowMs + kTransitionTimeoutMs;
@@ -146,10 +149,51 @@ bool FlexPttStopTracker::requestStop(const TxCoordinator::Operation& operation,
                                     const TxCoordinator::StopRequest& request,
                                     quint32 stopSequence, qint64 nowMs)
 {
+    return startStop(operation, request, stopSequence, nowMs, false);
+}
+
+bool FlexPttStopTracker::desktopStop(const TxCoordinator::Operation& operation,
+                                    quint32 stopSequence, qint64 nowMs)
+{
+    return startStop(operation, {}, stopSequence, nowMs, true);
+}
+
+bool FlexPttStopTracker::stopRecorded() const
+{
+    return m_stop.matchesOperation(m_operation) || m_desktopStop;
+}
+
+void FlexPttStopTracker::completeRelease()
+{
+    m_phase = m_stop.matchesOperation(m_operation) ? Phase::Confirmed : Phase::AwaitStopBinding;
+}
+
+bool FlexPttStopTracker::bindDesktopStop(const TxCoordinator::Operation& operation,
+                                        const TxCoordinator::StopRequest& request, qint64 nowMs)
+{
+    if (!advanceClock(nowMs) || !m_desktopStop || operation.independent()
+        || !m_operation.sameOperation(operation) || !request.matchesOperation(operation)
+        || m_stop.valid() || m_stopSequence == 0 || !m_stopWritten) {
+        return false;
+    }
+    m_stop = request;
+    m_desktopStop = false; // One token only; supersession cannot inherit earlier writes.
+    if (m_phase == Phase::AwaitStopBinding) {
+        m_phase = Phase::Confirmed;
+    }
+    return true;
+}
+
+bool FlexPttStopTracker::startStop(const TxCoordinator::Operation& operation,
+                                  const TxCoordinator::StopRequest& request,
+                                  quint32 stopSequence, qint64 nowMs, bool desktop)
+{
     if (!advanceClock(nowMs)) {
         return false;
     }
-    if (!m_operation.sameOperation(operation) || !request.matchesOperation(operation)
+    if (!m_operation.sameOperation(operation)
+        || (desktop ? operation.independent() || !operation.permitsCleanup()
+                    : !request.matchesOperation(operation))
         || stopSequence <= m_keySequence) {
         fail(Failure::Identity);
         return false;
@@ -162,6 +206,7 @@ bool FlexPttStopTracker::requestStop(const TxCoordinator::Operation& operation,
         return false;
     }
     m_stop = request;
+    m_desktopStop = desktop;
     m_stopSequence = stopSequence;
     if (recovering) {
         // The first external-unkey observation owns the entire recovery budget.
@@ -188,7 +233,7 @@ void FlexPttStopTracker::commandWritten(Stamp stamp, quint32 sequence, bool keyi
     } else if (m_phase == Phase::AwaitKeyWrite && keying && sequence == m_keySequence) {
         m_phase = Phase::AwaitKeyReply;
     } else if (!m_stopWritten && !keying && sequence == m_stopSequence
-               && m_stop.matchesOperation(m_operation)) {
+               && stopRecorded()) {
         m_stopWritten = true;
         if (m_phase == Phase::AwaitStopWrite) {
             m_phase = Phase::AwaitStopReply;
@@ -219,7 +264,7 @@ void FlexPttStopTracker::response(QStringView body)
     } else if (sequence == m_keySequence && m_phase == Phase::AwaitKeyReply) {
         m_phase = Phase::AwaitPttRequested;
     } else if (sequence == m_stopSequence && m_stopWritten && !m_stopReplied
-               && m_stop.matchesOperation(m_operation)) {
+               && stopRecorded()) {
         m_stopReplied = true;
         if (m_phase == Phase::AwaitStopReply) {
             m_phase = Phase::AwaitUnkey;
@@ -326,7 +371,7 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
     } else if (m_phase == Phase::AwaitTransmitting && state == u"TRANSMITTING"
                && source == u"SW" && handle == m_clientHandle) {
         m_phase = Phase::Transmitting;
-        if (m_stop.valid()) {
+        if (stopRecorded()) {
             m_phase = m_stopReplied ? Phase::AwaitUnkey
                 : m_stopWritten ? Phase::AwaitStopReply : Phase::AwaitStopWrite;
         } else {
@@ -347,9 +392,12 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
                && source.isEmpty() && handle == m_clientHandle) {
         m_phase = Phase::AwaitExternalOwnerClear;
     } else if (m_phase == Phase::AwaitExternalOwnerClear && idle) {
-        if (m_stop.matchesOperation(m_operation)) {
-            m_phase = m_stopReplied ? Phase::Confirmed
-                : m_stopWritten ? Phase::AwaitRecoveryStopReply : Phase::AwaitRecoveryStopWrite;
+        if (stopRecorded()) {
+            if (m_stopReplied) {
+                completeRelease();
+            } else {
+                m_phase = m_stopWritten ? Phase::AwaitRecoveryStopReply : Phase::AwaitRecoveryStopWrite;
+            }
         } else {
             m_phase = Phase::ExternalReleased;
         }
@@ -358,17 +406,17 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
                 || m_phase == Phase::AwaitRecoveryStopReply) && idle) {
         // Idle before our stop acknowledgment cannot finish recovery.
     } else if (m_phase == Phase::AwaitRecoveryIdle && idle
-               && m_stop.matchesOperation(m_operation)) {
-        m_phase = Phase::Confirmed;
+               && stopRecorded()) {
+        completeRelease();
     } else if (m_phase == Phase::AwaitUnkey && state == u"UNKEY_REQUESTED"
                && source.isEmpty() && handle == m_clientHandle) {
         m_phase = Phase::AwaitReady;
     } else if (m_phase == Phase::AwaitReady && state == u"READY"
                && source.isEmpty() && handle == m_clientHandle) {
         m_phase = Phase::AwaitOwnerClear;
-    } else if ((m_phase == Phase::AwaitOwnerClear || m_phase == Phase::Confirmed) && idle
-               && m_stop.matchesOperation(m_operation)) {
-        m_phase = Phase::Confirmed;
+    } else if ((m_phase == Phase::AwaitOwnerClear || m_phase == Phase::AwaitStopBinding
+                || m_phase == Phase::Confirmed) && idle && stopRecorded()) {
+        completeRelease();
     } else {
         fail(Failure::State);
     }

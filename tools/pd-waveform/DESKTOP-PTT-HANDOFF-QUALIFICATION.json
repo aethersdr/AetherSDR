@@ -1,0 +1,145 @@
+{
+  "recorded_utc": "2026-11-19T00:14:20.746685+00:00",
+  "status": "Desktop MOX-only original-operation release binding passes socket-free component tests; live handoff qualification pending.",
+  "source_parent": "629d1de49c030a7aff921b048414059a1021e153",
+  "build": {
+    "passed": true,
+    "source": {
+      "source_base": "b17897ec0345314ef3d17931117507b1aaf4d85f",
+      "build_base": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+      "patch_sha256": "6352f76b605acb05d1763ff285d4cf8dc7fe4e07a500f55ff39ec8b28ae005dc",
+      "changed_files": {
+        "docs/aetherd-flex-ptt-stop-evidence.md": "0741055e22b5f1fc6083b86ae599d8de6ab8f6b7485b21a6e7c9385198354ac7",
+        "docs/user/docs/tailscale-remote-access.md": "1b309aa0d7e078b697f23513db38090112ba33eba3cee409d48147e697d1792a",
+        "src/core/backends/flex/FlexPttStopTracker.cpp": "17dc2298059d84bd17dccbd5cfcc0df87722ac8c92a441de804fa409843115f0",
+        "src/core/backends/flex/FlexPttStopTracker.h": "03ea7e1be6e1791ff83f8d8cc44e8b46726dcdcf714f06c15fe4386472c4d8c4",
+        "src/core/backends/flex/FlexPttWireSession.cpp": "61436dec9938683a8fad3cd157d05eb3e8ff90603254f69ce6bda5e65e96ffa1",
+        "src/core/backends/flex/FlexPttWireSession.h": "2d6b24a2f0b1af8f775cc233e321986eeb35af8a5548fe262a665c84fd1a74d8",
+        "src/core/backends/flex/RadioConnection.cpp": "be02070de29bbbc57758df8ea196378f5598dde24f8ac28f73d1b3b9aabd999d",
+        "src/core/backends/flex/RadioConnection.h": "2e7e8001c3c5f8f2ecfafde1443049231f77b8fa126c1ff8bad80dc5cd070dc8",
+        "src/models/RadioModel.cpp": "24c39bc522463241000834cc1a34cf9d558e41a3155affadf6607012533c7722",
+        "src/models/RadioModel_TxCoordinator.cpp": "e0d4e2e8fea4011cf4a687443a4f11ca9d4f85e1102e2e14c60c56c09b9919e9",
+        "tests/flex_ptt_wire_session_test.cpp": "ab3aaa1882cee885601f16f8f5ac7e7ba8fa25751f1081124d60bdbf4d21324a",
+        "tests/tx_operation_integration_test.cpp": "4e98bed84d5ef8a05fdb9ca804402fd1c3968d90f4129d8b85345054c16929e0"
+      }
+    },
+    "commands": [
+      [
+        "cmake",
+        "-S",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/worktree",
+        "-B",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/build",
+        "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-handoff/bin"
+      ],
+      [
+        "cmake",
+        "--build",
+        "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upstream-integration-audit/build",
+        "--target",
+        "AetherSDR",
+        "aetherd",
+        "aetherpd_client_test",
+        "aetherpd_model_test",
+        "aetherpd_dialog_test",
+        "tx_linearity_controller_test",
+        "tx_coordinator_test",
+        "--parallel",
+        "4"
+      ]
+    ],
+    "binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-handoff/bin/AetherSDR",
+        "bytes": 833353552,
+        "sha256": "360fc9ae16cd6ff973ad263f3de040ef6b6da621818331700222296a9ea903c9"
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-handoff/bin/aetherd",
+        "bytes": 413577712,
+        "sha256": "49a824fbd666a86b67bb688f01a7824b32942570cc15ef19405d80493297a263"
+      }
+    }
+  },
+  "affected_tests": {
+    "passed": true,
+    "exit_code": 0,
+    "test_count": 8,
+    "radio_actions": []
+  },
+  "mutations_and_sanitizers": {
+    "mutation_tests": [
+      {
+        "mutation": "binding-disabled",
+        "build_exit": 0,
+        "test_exit": 1,
+        "observed_failures": [
+          "[FAIL] binding before or after readback qualifies only the recorded desktop lifecycle without another command",
+          "[FAIL] fresh analyzer actor can acquire after confirmed desktop release without automatic keying",
+          "[FAIL] binding before or after readback qualifies only the recorded desktop lifecycle without another command",
+          "[FAIL] fresh analyzer actor can acquire after confirmed desktop release without automatic keying",
+          "[FAIL] binding before or after readback qualifies only the recorded desktop lifecycle without another command",
+          "[FAIL] fresh analyzer actor can acquire after confirmed desktop release without automatic keying",
+          "[FAIL] binding before or after readback qualifies only the recorded desktop lifecycle without another command",
+          "[FAIL] fresh analyzer actor can acquire after confirmed desktop release without automatic keying",
+          "[FAIL] binding before or after readback qualifies only the recorded desktop lifecycle without another command",
+          "[FAIL] fresh analyzer actor can acquire after confirmed desktop release without automatic keying"
+        ],
+        "changed_file_sha256": "c89a2c29cdf462632a91a69948a80814d00b9cf2f2a4aba217fa3d05fd437d5e"
+      },
+      {
+        "mutation": "token-rebind",
+        "build_exit": 0,
+        "test_exit": 1,
+        "observed_failures": [
+          "[FAIL] superseded desktop stop token cannot reuse the earlier terminal off write"
+        ],
+        "changed_file_sha256": "0af18a38a4a748f6262db9424aa0f59d0c54bb9f94a31dca7c73eec8df25a907"
+      }
+    ],
+    "restored_ASan_UBSan_LSan_wire_test_passed": true,
+    "production_files_mutated": false,
+    "radio_actions": [],
+    "production_ready": false
+  },
+  "source_files_sha256": {
+    "docs/aetherd-flex-ptt-stop-evidence.md": "0741055e22b5f1fc6083b86ae599d8de6ab8f6b7485b21a6e7c9385198354ac7",
+    "docs/user/docs/tailscale-remote-access.md": "1b309aa0d7e078b697f23513db38090112ba33eba3cee409d48147e697d1792a",
+    "src/core/backends/flex/FlexPttStopTracker.cpp": "17dc2298059d84bd17dccbd5cfcc0df87722ac8c92a441de804fa409843115f0",
+    "src/core/backends/flex/FlexPttStopTracker.h": "03ea7e1be6e1791ff83f8d8cc44e8b46726dcdcf714f06c15fe4386472c4d8c4",
+    "src/core/backends/flex/FlexPttWireSession.cpp": "61436dec9938683a8fad3cd157d05eb3e8ff90603254f69ce6bda5e65e96ffa1",
+    "src/core/backends/flex/FlexPttWireSession.h": "2d6b24a2f0b1af8f775cc233e321986eeb35af8a5548fe262a665c84fd1a74d8",
+    "src/core/backends/flex/RadioConnection.cpp": "be02070de29bbbc57758df8ea196378f5598dde24f8ac28f73d1b3b9aabd999d",
+    "src/core/backends/flex/RadioConnection.h": "2e7e8001c3c5f8f2ecfafde1443049231f77b8fa126c1ff8bad80dc5cd070dc8",
+    "src/models/RadioModel.cpp": "24c39bc522463241000834cc1a34cf9d558e41a3155affadf6607012533c7722",
+    "src/models/RadioModel_TxCoordinator.cpp": "e0d4e2e8fea4011cf4a687443a4f11ca9d4f85e1102e2e14c60c56c09b9919e9",
+    "tests/flex_ptt_wire_session_test.cpp": "ab3aaa1882cee885601f16f8f5ac7e7ba8fa25751f1081124d60bdbf4d21324a",
+    "tests/tx_operation_integration_test.cpp": "4e98bed84d5ef8a05fdb9ca804402fd1c3968d90f4129d8b85345054c16929e0"
+  },
+  "build_source_base": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+  "build_source_patch_sha256": "6352f76b605acb05d1763ff285d4cf8dc7fe4e07a500f55ff39ec8b28ae005dc",
+  "change": "Retain the admitted desktop software-PTT operation at both existing terminal writes. Record its complete acknowledged release, then bind exactly one original-operation stop token after local contributors and queues drain. No extra RF command, new grant, timer-as-idle or anonymous no-dispatch certificate.",
+  "regressions": [
+    "Original stop token binds before or after ordered release readback.",
+    "Full key/off write receipts, matching replies, owned transitions and owner-clear remain mandatory.",
+    "Missing transitions/replies, partial writes, anonymous cleanup, superseded tokens, expiry and contradictions refuse handoff.",
+    "Fresh independent admission requires model confirmation and sends no automatic key command."
+  ],
+  "fixture_failure": "Initial complete model test aborted because its pre-existing linearity fixture omitted the required same-packet directional pair, then dereferenced a missing result. Added distinct TX sensor definitions, an actual paired batch, a pair assertion and guarded result access; retained the failure log. Production SWR policy unchanged.",
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/desktop-handoff-offline-components.tar.gz",
+    "bytes": 328355,
+    "sha256": "72f266510956d43b59f9f4c8f892bac2b27b9586fa55f01f8c40f4e009f29063",
+    "members": 51,
+    "all_members_verified": true
+  },
+  "radio_actions": [],
+  "production_ready": false,
+  "scope_limits": [
+    "The newly built desktop has not yet performed the live handoff test.",
+    "MOX-only desktop operations are eligible; mixed CW/TUNE/ATU and incomplete or ambiguous lifecycles keep their handoff barrier.",
+    "The new wire composition passed ASan/UBSan/LSan; this is not a sanitizer qualification of the entire desktop process graph.",
+    "Windows/macOS artifact evidence at ec6dc102e predates this change and does not qualify this new desktop behavior.",
+    "All remaining P1-P10 RF, sustained recovery, stock APD, actual6300 and release gates remain open."
+  ]
+}

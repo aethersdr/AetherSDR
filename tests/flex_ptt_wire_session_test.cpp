@@ -373,6 +373,139 @@ void partialAndStale()
           && !delayed.evidence.valid(delayed.now + FlexPttStopTracker::kTransitionTimeoutMs),
           "receiver rejects expired certificate even before transport timer delivery");
 }
+
+struct DesktopHarness {
+    qint64 now{100};
+    QStringList commands;
+    bool fullWrite{true};
+    TxStopEvidence evidence;
+    TxCoordinator coordinator{[](const auto&, auto) {}, [this] { return now; }};
+    TxCoordinator::Actor actor{coordinator.registerActor({true, 0})};
+    TxCoordinator::Actor competitor{coordinator.registerActor({true, 10000, 100000, 1, true})};
+    TxCoordinator::Operation operation{coordinator.acquire(actor, now).operation};
+    FlexPttWireSession wire{[this](quint32, const QString& text) {
+        commands.append(text);
+        return fullWrite;
+    }, [this](const TxStopEvidence& proof) { evidence = proof; }};
+    DesktopHarness() { wire.reset(1, 0x12345678); feed(kIdle); }
+    void feed(QStringView line) { wire.observe(line, now); }
+    void edge(bool keying, const TxCoordinator::Operation& original)
+    {
+        const TxCoordinator::Dispatch entered = original.beginDispatch(now, keying);
+        if (entered) {
+            wire.desktopPtt(keying ? 101 : 102, {original, keying}, now);
+        }
+    }
+    void key() { edge(true, operation); feed(u"R101|0|"); feed(kRequested); feed(kTransmitting); }
+    TxCoordinator::StopRequest bind()
+    {
+        check(coordinator.finishLocalIntent(operation), "desktop local completion fences its original operation");
+        const TxCoordinator::StopRequest request = coordinator.requestStopConfirmation(operation);
+        wire.stop(999, operation, request, now);
+        return request;
+    }
+};
+
+void desktopReleaseBinding()
+{
+    const QList<QStringView> release{u"R102|0|", kUnkey, kReadyOwned, kIdle};
+    for (int bindAfter = 0; bindAfter <= release.size(); ++bindAfter) {
+        DesktopHarness h;
+        h.key(); h.edge(false, h.operation);
+        TxCoordinator::StopRequest request;
+        if (bindAfter == 0) { request = h.bind(); }
+        for (int index = 0; index < release.size(); ++index) {
+            h.feed(release[index]);
+            if (index + 1 < release.size() || !request.valid()) {
+                check(!h.evidence.valid(h.now) && h.coordinator.hasOwnership(),
+                      "desktop handoff needs original stop token and every terminal release observation");
+            }
+            if (index + 1 == bindAfter) { request = h.bind(); }
+        }
+        check(h.evidence.valid(h.now) && h.evidence.request.sameRequest(request)
+              && h.commands == QStringList{"xmit 1", "xmit 0"},
+              "binding before or after readback qualifies only the recorded desktop lifecycle without another command");
+        check(h.coordinator.acquire(h.competitor, h.now).refusal == TxCoordinator::Refusal::Busy,
+              "wire certificate alone retains desktop ownership until model confirmation");
+        check(h.coordinator.confirmStopped(request) && h.operation.hasConfirmedStop(),
+              "exact desktop operation accepts full qualified stop proof");
+        h.wire.poll(++h.now);
+        check(h.wire.ready() && h.coordinator.acquire(h.competitor, h.now).accepted()
+              && h.commands.size() == 2,
+              "fresh analyzer actor can acquire after confirmed desktop release without automatic keying");
+    }
+}
+
+void desktopReleaseRefusals()
+{
+    for (int omitted = 0; omitted < 7; ++omitted) {
+        DesktopHarness h;
+        const QList<QStringView> readback{u"R101|0|", kRequested, kTransmitting,
+                                         u"R102|0|", kUnkey, kReadyOwned, kIdle};
+        h.edge(true, h.operation);
+        for (int index = 0; index < readback.size(); ++index) {
+            if (index == 3) { h.edge(false, h.operation); (void)h.bind(); }
+            if (index != omitted) { h.feed(readback[index]); }
+        }
+        check(!h.evidence.valid(h.now) && h.coordinator.hasOwnership(),
+              "desktop release cannot omit any key/stop acknowledgment or ownership transition");
+    }
+    for (int failedEdge : {0, 1}) {
+        DesktopHarness h;
+        h.fullWrite = failedEdge != 0;
+        h.key();
+        h.fullWrite = failedEdge != 1;
+        h.edge(false, h.operation); (void)h.bind();
+        h.feed(u"R102|0|"); h.feed(kUnkey); h.feed(kReadyOwned); h.feed(kIdle);
+        check(!h.evidence.valid(h.now) && h.commands == QStringList{"xmit 1", "xmit 0"},
+              "partial desktop writes preserve ordinary PTT commands but refuse handoff evidence");
+    }
+    DesktopHarness anonymous;
+    anonymous.key();
+    anonymous.edge(false, anonymous.coordinator.cleanupFence());
+    (void)anonymous.bind();
+    anonymous.feed(u"R102|0|"); anonymous.feed(kUnkey); anonymous.feed(kReadyOwned); anonymous.feed(kIdle);
+    check(!anonymous.evidence.valid(anonymous.now), "anonymous cleanup cannot borrow a desktop operation's key history");
+
+    DesktopHarness noDispatch;
+    check(noDispatch.coordinator.finishLocalIntent(noDispatch.operation), "unwritten desktop operation locally completes");
+    const auto request = noDispatch.coordinator.requestStopConfirmation(noDispatch.operation);
+    noDispatch.wire.stop(102, noDispatch.operation, request, noDispatch.now);
+    check(noDispatch.commands.isEmpty() && !noDispatch.evidence.valid(noDispatch.now),
+          "desktop operations never inherit independent local no-dispatch proof");
+
+    DesktopHarness expiry;
+    expiry.key(); expiry.edge(false, expiry.operation);
+    expiry.feed(u"R102|0|"); expiry.feed(kUnkey); expiry.feed(kReadyOwned); expiry.feed(kIdle);
+    expiry.now += FlexPttStopTracker::kTransitionTimeoutMs;
+    (void)expiry.bind();
+    check(!expiry.evidence.valid(expiry.now), "delayed desktop token cannot renew the original off-write deadline");
+
+    DesktopHarness stale;
+    stale.key(); stale.edge(false, stale.operation); (void)stale.bind();
+    stale.feed(u"R102|0|"); stale.feed(kUnkey); stale.feed(kReadyOwned); stale.feed(kIdle);
+    const TxStopEvidence proof = stale.evidence;
+    stale.wire.disconnect();
+    check(!proof.valid(stale.now), "desktop certificate is revoked at transport teardown before model delivery");
+
+    DesktopHarness superseded;
+    superseded.key(); superseded.edge(false, superseded.operation);
+    (void)superseded.bind();
+    const auto replacement = superseded.coordinator.requestStopConfirmation(superseded.operation);
+    superseded.wire.stop(103, superseded.operation, replacement, superseded.now);
+    superseded.feed(u"R102|0|"); superseded.feed(kUnkey); superseded.feed(kReadyOwned); superseded.feed(kIdle);
+    check(!superseded.evidence.valid(superseded.now),
+          "superseded desktop stop token cannot reuse the earlier terminal off write");
+
+    DesktopHarness lateContradiction;
+    lateContradiction.key(); lateContradiction.edge(false, lateContradiction.operation);
+    lateContradiction.feed(u"R102|0|"); lateContradiction.feed(kUnkey);
+    lateContradiction.feed(kReadyOwned); lateContradiction.feed(kIdle);
+    lateContradiction.feed(u"S0|interlock tx_client_handle=0x87654321 state=TRANSMITTING reason= source=SW tx_allowed=1");
+    (void)lateContradiction.bind();
+    check(!lateContradiction.evidence.valid(lateContradiction.now),
+          "contradiction before desktop token binding invalidates the recorded release sequence");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -388,5 +521,7 @@ int main(int argc, char** argv)
     independentReleaseOverlapsStop();
     independentReleaseRefusals();
     partialAndStale();
+    desktopReleaseBinding();
+    desktopReleaseRefusals();
     return failures ? 1 : 0;
 }

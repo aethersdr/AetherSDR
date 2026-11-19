@@ -725,7 +725,10 @@ bool RadioModel::transmitConfigurationIdle() const
 
 void RadioModel::requestIndependentTxStop(const TxCoordinator::Operation& operation)
 {
-    if (!operation.independent() || !operation.permitsCleanup()
+    if ((!operation.independent()
+            && (m_txOperationActivities != static_cast<unsigned>(TxActivity::Mox)
+                || !m_backend || m_backend->independentTxControl().activities == 0))
+        || !operation.permitsCleanup()
         || !m_backend || m_independentStop.matchesOperation(operation)) {
         return;
     }

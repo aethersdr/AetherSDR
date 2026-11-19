@@ -21,6 +21,9 @@ public:
     // Reject changed/malformed prologue without losing the original unkey path.
     void rejectProtocol();
     void key(quint32 sequence, const TxCoordinator::Command& command, qint64 now);
+    // Called at the existing desktop terminal writer with its original fence.
+    // Tracking can refuse evidence without suppressing an authorized PTT edge.
+    void desktopPtt(quint32 sequence, const TxCoordinator::Command& command, qint64 now);
     void stop(quint32 sequence, const TxCoordinator::Operation& operation,
               const TxCoordinator::StopRequest& request, qint64 now);
     void observe(QStringView line, qint64 now);

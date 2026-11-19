@@ -22,7 +22,8 @@ public:
         AwaitPttRequested, AwaitTransmitting, Transmitting, AwaitStopWrite,
         AwaitStopReply, AwaitUnkey, AwaitReady, AwaitOwnerClear,
         AwaitExternalReady, AwaitExternalOwnerClear, ExternalReleased,
-        AwaitRecoveryStopWrite, AwaitRecoveryStopReply, AwaitRecoveryIdle, Confirmed, Failed
+        AwaitRecoveryStopWrite, AwaitRecoveryStopReply, AwaitRecoveryIdle,
+        AwaitStopBinding, Confirmed, Failed
     };
     enum class Failure {
         None, InvalidInput, Ordering, Timeout, Write, Reply, State,
@@ -45,6 +46,13 @@ public:
     [[nodiscard]] bool requestStop(const TxCoordinator::Operation& operation,
                                    const TxCoordinator::StopRequest& request,
                                    quint32 stopSequence, qint64 nowMs);
+    // Desktop PTT keeps its normal terminal writer. Retain that operation's
+    // exact off write/readback until local contributors drain and the owner
+    // supplies its stop token. Neither queue completion nor READY alone binds it.
+    [[nodiscard]] bool desktopStop(const TxCoordinator::Operation& operation,
+                                  quint32 stopSequence, qint64 nowMs);
+    [[nodiscard]] bool bindDesktopStop(const TxCoordinator::Operation& operation,
+                                      const TxCoordinator::StopRequest& request, qint64 nowMs);
     // Only a full terminal write of the exact PTT command may report success.
     // Sequence zero is reserved. Unexpected TX writes poison this attempt;
     // ordinary non-TX commands are not inputs to this method.
@@ -69,6 +77,11 @@ private:
     void fail(Failure failure);
     void interlock(QStringView body, quint32 envelopeHandle);
     void response(QStringView body);
+    [[nodiscard]] bool startStop(const TxCoordinator::Operation& operation,
+                                 const TxCoordinator::StopRequest& request,
+                                 quint32 stopSequence, qint64 nowMs, bool desktop);
+    [[nodiscard]] bool stopRecorded() const;
+    void completeRelease();
 
     QThread* const m_thread{QThread::currentThread()};
     quint64 m_session{0};
@@ -85,6 +98,7 @@ private:
     TxCoordinator::StopRequest m_stop;
     bool m_stopWritten{false};
     bool m_stopReplied{false};
+    bool m_desktopStop{false};
 };
 
 } // namespace AetherSDR

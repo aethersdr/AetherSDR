@@ -5541,12 +5541,14 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
             return true;
         }
     }
-    // Grant cancellation also arrives through the unscoped model stop route.
-    // Retain its original operation so the backend uses the qualified stop
-    // writer, not a legacy unkey that would invalidate the stop certificate.
+    // Retain an admitted PTT operation at the terminal unkey writer. Its exact
+    // write/readback can qualify release; an anonymous cleanup cannot. An
+    // operator Stop without an admitted PTT still uses the cleanup-only fence.
     const TxCoordinator::Operation cleanup = tx ? TxCoordinator::Operation{}
         : request ? m_txCoordinator.requestOperation(*request)
-        : m_txOperation.independent() && m_txOperation.permitsCleanup()
+        : (m_txOperation.independent()
+            || m_txOperationActivities == static_cast<unsigned>(TxActivity::Mox))
+            && m_txOperation.permitsCleanup()
             ? m_txOperation : m_txCoordinator.cleanupFence();
     if (tx) {
         // F2 (#4448): refuse keying on a backend that cannot transmit. The
@@ -6136,7 +6138,7 @@ bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::O
             const TxCoordinator::Dispatch dispatch = operation.beginDispatch(txMonotonicMs(), keying);
             dispatched = connection && dispatch && permitted();
             if (dispatched) {
-                connection->writeCommand(seq, command);
+                connection->writeTxCommand(seq, command, operation, keying);
             }
         }
         if (receiver) {

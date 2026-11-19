@@ -130,7 +130,16 @@ void FlexPttWireSession::key(quint32 sequence, const TxCoordinator::Command& com
 void FlexPttWireSession::stop(quint32 sequence, const TxCoordinator::Operation& operation,
                              const TxCoordinator::StopRequest& request, qint64 now)
 {
-    if (m_session == 0 || !operation.independent() || !request.matchesOperation(operation)) {
+    if (m_session == 0 || !request.matchesOperation(operation)) {
+        return;
+    }
+    if (!operation.independent()) {
+        // The desktop's off edge was already written and recorded. Binding its
+        // drained operation adds no command and cannot create no-dispatch proof.
+        if (m_operation.sameOperation(operation) && m_enteredKeyWrite) {
+            (void)m_tracker.bindDesktopStop(operation, request, now);
+            publish(now);
+        }
         return;
     }
     if (!m_operation.sameOperation(operation)) {
@@ -159,6 +168,38 @@ void FlexPttWireSession::stop(quint32 sequence, const TxCoordinator::Operation& 
     }
     // Always attempt authorized unkey, even if evidence has already failed.
     // Never turn that write, or its local completion, into an idle claim.
+    publish(now);
+}
+
+void FlexPttWireSession::desktopPtt(quint32 sequence, const TxCoordinator::Command& command, qint64 now)
+{
+    if (command.operation.independent() || !command.permitsDispatch(now)) {
+        return;
+    }
+    bool tracked = false;
+    if (command.keying) {
+        if (!m_operation.sameOperation(command.operation) && !m_operation.permitsCleanup()) {
+            invalidateEvidence();
+            m_operation = command.operation;
+            m_enteredKeyWrite = false;
+            m_localStop = {};
+        }
+        if (m_session != 0 && m_operation.sameOperation(command.operation)) {
+            tracked = m_tracker.begin(command.operation, sequence, now);
+            m_enteredKeyWrite = true;
+        }
+    } else if (m_session != 0 && m_operation.sameOperation(command.operation) && m_enteredKeyWrite) {
+        tracked = m_tracker.desktopStop(command.operation, sequence, now);
+    }
+    if (!tracked) {
+        otherCommand(command.keying ? QStringLiteral("xmit 1") : QStringLiteral("xmit 0"), now);
+    }
+    // Caller retains its entered Dispatch across this terminal writer. A
+    // missing idle history must not change ordinary desktop PTT semantics.
+    const bool written = m_writer(sequence, command.keying ? QStringLiteral("xmit 1") : QStringLiteral("xmit 0"));
+    if (tracked) {
+        m_tracker.commandWritten(stamp(), sequence, command.keying, written, now);
+    }
     publish(now);
 }
 

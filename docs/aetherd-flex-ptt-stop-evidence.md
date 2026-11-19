@@ -200,6 +200,30 @@ that enumeration is not a claim of hardware coverage for every placement.
 
 ## Production composition and qualification
 
+### Desktop software-PTT handoff
+
+The LAN desktop writer records an admitted MOX operation's existing `xmit 1`
+and `xmit 0` writes, preserving the original operation through unscoped PTT
+release. This does not route desktop keying through independent-client grants
+or add a second off command. Tracking failure preserves the authorized desktop
+PTT edges and refuses handoff evidence.
+
+The desktop's contributors and terminal queues may finish before or after the
+radio's release sequence. The tracker retains the exact off sequence and its
+readback while waiting for the coordinator's original-operation stop token.
+That token can bind only once, after the off writer has entered, and cannot
+renew the original transition deadline. The same complete key-on, acknowledged
+off, owned UNKEY_REQUESTED, owned READY and unowned READY sequence is required.
+A later token cannot attach to an ambient idle report or inherit a superseded
+token's write. Contradiction or disconnect revokes pending evidence.
+
+Only a MOX-only desktop operation requests this confirmation. Mixed CW, TUNE,
+ATU and other generators retain their existing handoff barriers. Unwritten
+desktop operations cannot use the independent path's local no-dispatch proof.
+The coordinator still checks the exact stop token and entered-writer barrier.
+These are implementation and socket-free test claims; qualification on the
+installed radio and ordinary desktop remains a separate gate.
+
 `RadioConnection` constructs the wire session on its existing worker thread.
 The session observes raw lines before presentation parsing, uses that
 transport's connection generation, and records complete writes from the common

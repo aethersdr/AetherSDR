@@ -573,6 +573,19 @@ bool RadioConnection::independentPttSupported() const
         && m_pttProtocol.load() == PttProtocol::Supported;
 }
 
+void RadioConnection::writeTxCommand(quint32 seq, const QString& command,
+                                     const TxCoordinator::Operation& operation, bool keying)
+{
+    if (!m_commandSinkForTest && independentPttSupported() && m_independentPtt
+        && !operation.independent()
+        && command == (keying ? QLatin1String("xmit 1") : QLatin1String("xmit 0"))) {
+        m_independentPtt->desktopPtt(seq, {operation, keying}, TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+        return;
+    }
+    writeCommand(seq, command);
+}
+
 bool RadioConnection::independentPttReady() const
 {
     return independentPttSupported() && m_independentPtt && m_independentPtt->ready();
