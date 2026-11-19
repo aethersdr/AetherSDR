@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T07:33:34.962234+00:00",
+  "recorded_utc": "2026-11-19T08:00:52.027664+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "d7ad58962dda972d3b186ad7eeed4044327f2104bac9e6cdae747b388a919c07",
@@ -100,16 +100,17 @@
         "FIT-REJECTION-DIAGNOSTICS-QUALIFICATION.json",
         "CURRENT-UNKEY-API-LOSS-QUALIFICATION.json",
         "PHASE-TRACKER-REPLAY-QUALIFICATION.json",
-        "LOWESS-MANAGED-QUALIFICATION.json"
+        "LOWESS-MANAGED-QUALIFICATION.json",
+        "FRESH-PROCESS-IQ-CAPTURE-QUALIFICATION.json"
       ],
-      "limits": "Five-field rejection reporting fixed and installed in current d7 diagnostic, which has finite normal RF and keyed owned-unkey API-loss passes. Successful actual raw acquisition/phase/EQ replay now anchored; controlled pre-acquisition28degree/50Hz phase modulation reproduces poorEQ/phase rejection while coherence guard stays satisfied, including512sample calibration calls. This does not identify the actual cold-start or natural128sample cause; failed-run raw data remains unavailable. No acceptance/readiness thresholds changed."
+      "limits": "Five-field rejection reporting fixed and installed in current d7 diagnostic, which has finite normal RF and keyed owned-unkey API-loss passes. Successful actual raw acquisition/phase/EQ replay now anchored; controlled pre-acquisition28degree/50Hz phase modulation reproduces poorEQ/phase rejection while coherence guard stays satisfied, including512sample calibration calls. This does not identify the actual cold-start or natural128sample cause; failed-run raw data remains unavailable. No acceptance/readiness thresholds changed. One later fresh-process first-key d7 diagnostic run corrected; actual second raw capture also matches acquisition/phase/EQ replay. It did not reproduce the failure and was not repeated."
     }
   ],
   "next_available_case": {
-    "purpose": "Prepare one separately dispatched cold-start diagnostic capture using the installed buffered runtime, preserving outcomes whether it corrects or bypasses. Analyze any actual failed raw/aligned pairs with this verified acquisition/phase/EQ replay before changing the algorithm. No automatic RF retry or calibration rearm. Continue remaining P5 and fullP1-P10 requirements.",
-    "state": "verified_offline_phase_replay_possible_mechanism_only_actual_cold_failure_capture_needed",
-    "evidence": "PHASE-TRACKER-REPLAY-QUALIFICATION.json",
-    "authority_constraint": "Separately prepared bounded GUI case with independent guards; preserve failure, no automatic RF retry/rearm or software reboot."
+    "purpose": "Qualify receive-only loss of the DSP inherited API lease as a distinct P5 fault. First validate a fixed socket duplicate tied to the exact native process and lease guardian, drop privileges before any shutdown action, and require cleanup plus explicit IQ recovery. A separately prepared bounded keyed case may follow only after receive-only proof. Preserve the unreproduced cold/natural128 cases and all P1-P10 requirements.",
+    "state": "fresh_process_capture_succeeded_no_cold_reproduction_next_receive_only_DSP_API_lease_fault",
+    "evidence": "FRESH-PROCESS-IQ-CAPTURE-QUALIFICATION.json",
+    "authority_constraint": "Receive-only preflight first, exact owned socket only and privilege drop before shutdown. No automatic RF retry/rearm or software reboot."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
