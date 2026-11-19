@@ -4130,16 +4130,17 @@ QString TciServer::hl2SetRefusal() const
     return {};
 }
 
-// Logged every time; shown to the operator once per transmit state, so a
-// client repeating a refused set cannot keep the status bar from clearing.
-// The latch clears on any key or unkey (onHl2TransmitStateChanged) and on a
-// set that is applied.
+// Warned and shown to the operator once per transmit state, repeats logged at
+// debug, so a client repeating a refused set neither floods the log nor keeps
+// the status bar from clearing. The latch clears on any key or unkey
+// (onHl2TransmitStateChanged) and on a set that is applied.
 void TciServer::warnHl2SetRefused(const QString& refusal)
 {
-    qCWarning(lcCat).noquote() << refusal;
     if (m_hl2RefusalWarned.contains(refusal)) {
+        qCDebug(lcCat).noquote() << refusal;
         return;
     }
+    qCWarning(lcCat).noquote() << refusal;
     m_hl2RefusalWarned.insert(refusal);
     emit m_model->configurationWarning(refusal);
 }
