@@ -317,3 +317,14 @@ the PR with their tested revisions. The later shared-API eligibility update
 removes the model/build restriction, not any stop-recognition requirement.
 That update's tests are recorded separately in the PR; this earlier hardware
 run is not represented as a test of the updated binary or additional radios.
+
+The release-only missing-receiver exception has one separate FLEX-8600
+qualification with on-radio AetherPD and FDX disabled. At the 5 W setting, the
+radio reached idle while the desktop was paused after a fixed DSP API-socket
+fault. Its connection log received owned READY and unowned RECEIVE before the
+desktop's unkey write; the analyzer then reported the interrupted measurement
+and released its operation. Explicit original USB receive restoration, two fresh
+local DAX IQ captures and exact resource cleanup passed. The
+[case report](../tools/pd-waveform/DSP-API-LOSS-FIXED-DESKTOP-QUALIFICATION.json)
+pins the binaries, retained failures and scope. This single fault case does not
+qualify other ownership orderings, sustained RF or FLEX-6000 operation.

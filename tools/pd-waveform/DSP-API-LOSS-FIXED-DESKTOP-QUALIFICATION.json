@@ -1,0 +1,454 @@
+{
+  "recorded_utc": "2026-11-19T15:53:41.064598+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "passed_one_scoped_case": true,
+  "status": "One explicitly authorized 5 W inherited-DSP API-loss case now passes independent release while the fixed desktop is paused, interrupted-measurement completion, explicit original USB receive recovery, fresh DAX IQ successor and exact resource retirement. The earlier desktop-completion failure remains failed. This is not sustained RF or full P5 qualification.",
+  "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "desktop": {
+    "pid": 3233869,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+    "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+    "development_native_origin": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "desktop_fix_commit": "276e9d37ab24da35b57df702e6c9ddb171776704",
+  "bench": {
+    "frequency_mhz": 7.15,
+    "nominal_watts": 5,
+    "configured_max_watts": 10,
+    "TX": "ANT1 dummy load/sampler",
+    "feedback": "RX_A local DAX IQ channel4",
+    "FDX": false,
+    "stock_APD": false
+  },
+  "authorization": "start the prepared single 5 W API-loss test",
+  "cumulative_positive_GUI_keys": 1,
+  "cumulative_source_arms": 1,
+  "fault_injections": 1,
+  "pre_fault_observed_corrected_tone_plateau_ms": 453.6457959911786,
+  "host_fault_request_to_observed_idle_ms": 510.418542,
+  "host_key_intent_to_observed_idle_ms": 7055.026227,
+  "desktop_pause_ms": 511.272009,
+  "LP_reported_peak_watts": 3.66,
+  "LP_reported_max_SWR": 1.09,
+  "LP_power_basis": [
+    "meter_configured_forward_or_net_unknown"
+  ],
+  "GUI_result": "Test transmission ended before capture completed",
+  "same_connection_idle_before_GUI_unkey": {
+    "passed": true,
+    "original_wire_sha256": "52e7b81d112e76e3d9a8f8fec86c0a3964912b5bdf39c94cb6a42f3496883991",
+    "one_GUI_key_write": [
+      {
+        "cat": "aether.connection",
+        "lvl": "D",
+        "mono_us": 17578441824,
+        "msg": "TX: \"C17650|xmit 1\"",
+        "seq": 5287,
+        "t": "07:42:14.201",
+        "type": "log"
+      }
+    ],
+    "radio_idle_reports_before_GUI_unkey": [
+      {
+        "cat": "aether.connection",
+        "lvl": "D",
+        "mono_us": 17584967217,
+        "msg": "RX: \"S0|interlock tx_client_handle=0x164AD64F state=READY reason= source= tx_allowed=1 amplifier= \"",
+        "seq": 5411,
+        "t": "07:42:20.726",
+        "type": "log"
+      },
+      {
+        "cat": "aether.connection",
+        "lvl": "D",
+        "mono_us": 17584967242,
+        "msg": "RX: \"S3187E4A4|interlock tx_client_handle=0x00000000 state=RECEIVE reason=NO_TX_ASSIGNED source= tx_allowed=0 amplifier= \"",
+        "seq": 5413,
+        "t": "07:42:20.726",
+        "type": "log"
+      },
+      {
+        "cat": "aether.connection",
+        "lvl": "D",
+        "mono_us": 17584967415,
+        "msg": "RX: \"S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason=NO_TX_ASSIGNED source= tx_allowed=0 amplifier= \"",
+        "seq": 5437,
+        "t": "07:42:20.727",
+        "type": "log"
+      }
+    ],
+    "one_GUI_unkey_write": [
+      {
+        "cat": "aether.connection",
+        "lvl": "D",
+        "mono_us": 17584968904,
+        "msg": "TX: \"C17657|xmit 0\"",
+        "seq": 5439,
+        "t": "07:42:20.728",
+        "type": "log"
+      }
+    ],
+    "scope": "Same desktop connection sequence/log clock proves radio READY and unowned RECEIVE were read before GUI xmit0. Cross-host clock synchronization is unnecessary.",
+    "RF_commands": []
+  },
+  "native_exit7_and_API_lease_failure_verified": true,
+  "explicit_28_field_USB_restore": {
+    "passed": true,
+    "fields": {
+      "frequency": 7.15,
+      "mode": "USB",
+      "rxAntenna": "RX_A",
+      "txAntenna": "ANT1",
+      "rfGain": 0,
+      "filterLow": 100,
+      "filterHigh": 2800,
+      "flexAgcMode": "med",
+      "flexAgcThreshold": 60,
+      "flexAgcOffLevel": 10,
+      "audioGain": 50,
+      "audioMute": false,
+      "audioPan": 50,
+      "nb": false,
+      "nbLevel": 50,
+      "nr": false,
+      "nrLevel": 50,
+      "anf": false,
+      "apf": false,
+      "apfLevel": 30,
+      "daxChannel": 0,
+      "squelch": false,
+      "squelchLevel": 20,
+      "ritOn": false,
+      "ritFreq": 0,
+      "xitOn": false,
+      "xitFreq": 0,
+      "txSlice": true
+    }
+  },
+  "fresh_successor_captures": [
+    {
+      "metadata": {
+        "capture_id": "2380bfb8bdd89a26c9b9e7952b3e8e54",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 374003279,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "83876599271434",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "83876940268573",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "d62373bcebe333fdca0a5a8d569c6ae1cf389e7517afe968c2bf20d17151cfc4",
+      "file": "IQ-1.f32le"
+    },
+    {
+      "metadata": {
+        "capture_id": "849836c51bfc1327e6be90a2369c16c7",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 374003279,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "83877068264271",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "83877409276595",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "b706559369c9aff845c5a8d6a5e7ae750db2b709697bd73f229ace1df5834dea",
+      "file": "IQ-2.f32le"
+    }
+  ],
+  "cleanup": {
+    "fault": {
+      "original_workers_absent_including_zombies": 11,
+      "ordinary_controls_remaining": 3
+    },
+    "recovery": {
+      "original_workers_absent_including_zombies": 10,
+      "ordinary_controls_remaining": 3
+    }
+  },
+  "all_four_fault_buffers_empty_and_discarded": true,
+  "final_idle_state": {
+    "passed": true,
+    "state": {
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      },
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": true,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      },
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ],
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.058031,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x164ad64f",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 20,
+          "minDbm": -137.17999267578125,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "native": {
+      "available": false,
+      "state": "stopped"
+    },
+    "RF_commands": [],
+    "scope": "Idle-state assertions are independent of the retained supplemental clock-correlation failure; wire ordering supplies the causal GUI-unkey proof."
+  },
+  "negative_evidence_retained": [
+    "Initial setup failed on a stale lease-guardian GUI literal before any source arm, key or fault action. It stopped normally; its temporary job was deleted, diagnostic files preserved/removed and exact graph cleanup audited. The same still-unused one-key operator authorization was carried forward after correcting only the pinned handle check, nonce and case identity.",
+    "Supplemental host/app clock-marker intervals were too asymmetric to prove a 2 ms GUI-unkey-after-resume ordering. Both unsuccessful marker attempts remain preserved and are not represented as passes. The direct connection log instead proves owned READY and unowned RECEIVE preceded GUI xmit0 on the same sequence/clock.",
+    "The original earlier keyed desktop-completion failure in DSP-API-LOSS-RELEASE-QUALIFICATION.json remains failed and unchanged."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/fixed-desktop-DSP-API-loss-components.tar.gz",
+    "bytes": 217048,
+    "sha256": "4288d808dd49b8b402159369eb8fd2015c89d7aee933a277440dd51e6b553e08",
+    "members": 158,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "Single bounded fault case after 454 ms of observed correcting tones. No repeated, sustained, speech, stock comparison or natural alignment/cold-start cause claim.",
+    "510 ms is host fault-request to host-observed idle, including SSH/control transport and observation delay; it is not FPGA latency or synchronized intrinsic radio shutdown latency.",
+    "Analyzer interruption is expected: fault buffers are invalid/empty and no new IMD improvement is claimed.",
+    "LP integration remains deferred; these are bench meter readings in its configured mode, not independently calibrated forward watts or ADC headroom.",
+    "Existing broadly privileged diagnostic bootstrap was used only for fixed-target fault injection and read/cleanup audits, with all temporary jobs removed. It was not the runtime/session installer and is not shipped.",
+    "All remaining P1-P10 gates, including other current-graph faults, natural alignment/cold-start, repeated/raw/extended RF, final stock comparison, production publisher, actual6300 adapter/hardware and independent review remain open."
+  ],
+  "radio_reboots": [],
+  "root_RF_commands": [],
+  "processing_settings_restored": false,
+  "AetherTX_launched": false
+}

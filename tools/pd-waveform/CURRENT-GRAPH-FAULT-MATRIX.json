@@ -1,5 +1,5 @@
 {
-  "recorded_utc": "2026-11-19T12:28:11.459756+00:00",
+  "recorded_utc": "2026-11-19T15:53:41.064598+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
@@ -117,9 +117,12 @@
     },
     {
       "case": "Exact83d6 inherited DSP API loss while corrected and desktop paused",
-      "state": "physical_unkey_exit7_explicit_USB_recovery_and_cleanup_passed_OVERALL_DESKTOP_COMPLETION_FAILED",
-      "evidence": "DSP-API-LOSS-RELEASE-QUALIFICATION.json",
-      "limits": "One5W source/key,408ms observed corrected plateau,447ms host fault request to idle; no fault IMD/fit data. Old desktop rejects RECEIVE after owned UNKEY/READY. Release-only causal fix passes433checks and registered wire tests, builds separately; live completion remains unqualified."
+      "state": "one_current_fixed_desktop_keyed_case_explicit_USB_recovery_and_exact_cleanup_passed",
+      "evidence": [
+        "DSP-API-LOSS-FIXED-DESKTOP-QUALIFICATION.json",
+        "DSP-API-LOSS-RELEASE-QUALIFICATION.json"
+      ],
+      "limits": "One authorized5W case after454ms correcting tones;510ms host fault-request to observed idle while desktop paused, GUI interrupted-measurement completion and causal wire ordering pass. Native exit7 retained; explicit28field USB restore,2freshIQ frames and exact11/10worker cleanup pass. Earlier keyed UI failure and zero-RF stale-handle setup failure remain preserved. No fullP5 or repeated/sustained RF claim."
     },
     {
       "case": "Foreign fixed-entry conflicts, replacement and ownership-preserving cleanup",
@@ -129,13 +132,12 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Wait for explicit operator keying approval for the concrete prepared one5W follow-up. Re-attest the exact GUI/installation/bench guards before dispatch; no automatic repeat. Continue independent non-RF production work while pending.",
-    "state": "fixed_desktop_running_receive_only_passed_concrete_one_key_followup_prepared_operator_approval_pending",
+    "state": "authorized_single_key_complete_no_further_RF_authorized",
+    "purpose": "Continue remaining installation/failure/qualification work within existing authorization. Any further positive key/source arm requires a distinct operator instruction; the single approved transmission is consumed.",
     "evidence": [
-      "DSP-API-LOSS-RELEASE-QUALIFICATION.json",
-      "RECEIVE-RELEASE-DESKTOP-QUALIFICATION.json"
+      "DSP-API-LOSS-FIXED-DESKTOP-QUALIFICATION.json"
     ],
-    "authority_constraint": "No automatic RF retry/source rearm or software reboot. The last recorded radio state is the prepared unkeyed native session; re-attest GUI, runtime, session identity and bench guards before using any later specific operator approval."
+    "authority_constraint": "No automatic RF retry, source rearm or software reboot. Radio is USB receive with native session stopped."
   },
   "remaining_other_phases": [
     "P3 historical natural128sample and unexplained cold all-bypass causes",
