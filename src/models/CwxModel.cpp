@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QScopeGuard>
 #include <QPointer>
+#include <QRegularExpression>
 #include <algorithm>
 #include <iterator>
 #include <limits>
@@ -39,6 +40,89 @@ QString CwxModel::macro(int idx) const
 {
     if (idx < 0 || idx >= 12) return {};
     return m_macros[idx];
+}
+
+void CwxModel::setDxCall(const QString& call)
+{
+    QString kept;
+    for (const QChar ch : call.toUpper()) {
+        const ushort c = ch.unicode();
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/') {
+            kept += ch;
+            if (kept.size() == kMaxDxCallLength) { break; }
+        }
+    }
+    if (kept == m_dxCall) { return; }
+    m_dxCall = kept;
+    emit dxCallChanged(m_dxCall);
+}
+
+namespace {
+// {CALL} is the only placeholder. Any other {...} pair is text and is keyed
+// as typed, as is a brace without its partner.
+const QRegularExpression& callPlaceholder()
+{
+    static const QRegularExpression re(QStringLiteral("\\{\\s*CALL\\s*\\}"),
+                                       QRegularExpression::CaseInsensitiveOption);
+    return re;
+}
+}
+
+bool CwxModel::hasCallPlaceholder(const QString& text)
+{
+    return callPlaceholder().match(text).hasMatch();
+}
+
+QString CwxModel::withoutCallPlaceholder(const QString& text)
+{
+    QString out;
+    qsizetype copied = 0;
+    QRegularExpressionMatchIterator it = callPlaceholder().globalMatch(text);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        out += QStringView(text).mid(copied, match.capturedStart() - copied);
+        copied = match.capturedEnd();
+        const bool atEnd = copied >= text.size();
+        const bool spaceAfter = !atEnd && text[copied] == QLatin1Char(' ');
+        if (spaceAfter && (out.isEmpty() || out.endsWith(QLatin1Char(' ')))) {
+            ++copied;
+        } else if (atEnd && out.endsWith(QLatin1Char(' '))) {
+            out.chop(1);
+        }
+    }
+    out += QStringView(text).mid(copied);
+    return out;
+}
+
+std::optional<QString> CwxModel::resolvePlaceholders(const QString& text, QString* reason) const
+{
+    QString resolved;
+    qsizetype copied = 0;
+    QRegularExpressionMatchIterator it = callPlaceholder().globalMatch(text);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        if (m_dxCall.isEmpty()) {
+            if (reason) { *reason = tr("CWX send refused: {CALL} needs a DX call, and none is set."); }
+            return std::nullopt;
+        }
+        resolved += QStringView(text).mid(copied, match.capturedStart() - copied);
+        resolved += m_dxCall;
+        copied = match.capturedEnd();
+    }
+    if (copied == 0) { return text; }
+    resolved += QStringView(text).mid(copied);
+    return resolved;
+}
+
+std::optional<QString> CwxModel::resolveForSend(const QString& text)
+{
+    QString reason;
+    std::optional<QString> resolved = resolvePlaceholders(text, &reason);
+    if (!resolved) {
+        qCWarning(lcCw) << reason;
+        emit requestRejected(reason);
+    }
+    return resolved;
 }
 
 QVector<CwxModel::SpeedSegment>
@@ -353,11 +437,17 @@ void CwxModel::sendMacro(int idx)
 void CwxModel::sendMacro(int idx, const TransmissionRoute& route)
 {
     if (idx < 1 || idx > 12) return;
+    // Resolve before admission: a macro whose placeholder cannot be filled
+    // must not acquire TX.
+    const std::optional<QString> resolved = resolveForSend(m_macros[idx - 1]);
+    if (!resolved) {
+        return;
+    }
     const TransmissionPermit permit = admitTransmission(route);
     if (!permit) {
         return;
     }
-    const QString text = m_macros[idx - 1];
+    const QString text = *resolved;
     if (text.isEmpty()) {
         // Local copy not yet synced (the macroN= status is still pending in the
         // first seconds after connect) — fall back to radio-side expansion so an
@@ -392,7 +482,16 @@ void CwxModel::sendMacro(int idx, const TransmissionRoute& route)
 void CwxModel::saveMacro(int idx, const QString& text)
 {
     if (idx < 0 || idx >= 12) return;
-    m_macros[idx] = text;   // keep the raw +/- text for our own client-side expansion
+    m_macros[idx] = text;   // keep the raw +/- and {CALL} text for our own client-side expansion
+    const CwTextRequest request{CwTextRequest::Field::SaveMacro, idx, portableMacroText(text)};
+    if (m_macroTemplates.save && request.valid()) {
+        m_macroTemplates.save(idx, hasCallPlaceholder(text) ? text : QString());
+    }
+    dispatchRequest(request, m_drainEpoch, -1);
+}
+
+QString CwxModel::portableMacroText(const QString& typed) const
+{
     // Strip the client-only +/- speed-modifier prefixes before writing to the
     // radio's shared macro store. The +/- syntax is an AetherSDR extension; a
     // Multi-Flex peer (SmartSDR/Maestro) that plays this stored slot would key a
@@ -401,10 +500,25 @@ void CwxModel::saveMacro(int idx, const QString& text)
     // (Principle VII: sanitise at the boundary where the bytes leave.) The strip
     // reuses expandSpeedModifiers — its segment text has the modifier prefixes
     // already removed; joining the segments reconstructs the plain message.
+    // {CALL} goes the same way: another client would key it as characters.
     QString plain;
-    for (const auto& seg : expandSpeedModifiers(text, m_speed, m_speedStep))
+    for (const auto& seg : expandSpeedModifiers(typed, m_speed, m_speedStep))
         plain += seg.text;
-    dispatchRequest({CwTextRequest::Field::SaveMacro, idx, plain}, m_drainEpoch, -1);
+    return withoutCallPlaceholder(plain);
+}
+
+QString CwxModel::macroTextFor(int idx, const QString& reported)
+{
+    const QString typed = m_macroTemplates.load ? m_macroTemplates.load(idx) : QString();
+    if (typed.isEmpty() || !hasCallPlaceholder(typed)) { return reported; }
+    // A reported slot arrives with '*' read as '=' (the radio's BT alias), so
+    // the typed text is compared the same way.
+    QString expected = portableMacroText(typed);
+    expected.replace(QLatin1Char('*'), QLatin1Char('='));
+    // A slot that differs was changed elsewhere, or belongs to another client
+    // identity (the radio keeps a set of slots per GUI client): the radio's
+    // text stands. The saved text is left alone; only saveMacro() replaces it.
+    return expected == reported ? typed : reported;
 }
 
 void CwxModel::erase(int numChars)
@@ -586,8 +700,8 @@ void CwxModel::applyStatusDelta(const CwxStatusDelta& d)
         if (!self) { return; }
     }
     for (const auto& [index, text] : d.macros) {
-        m_macros[index] = text;
-        emit macroChanged(index, text);
+        m_macros[index] = macroTextFor(index, text);
+        emit macroChanged(index, m_macros[index]);
         if (!self) { return; }
     }
     if (d.qsk && *d.qsk != m_qsk) {

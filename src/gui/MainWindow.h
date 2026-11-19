@@ -675,7 +675,7 @@ private:
     // One status-bar notice per connect session for a control this radio
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
-    void showUnsupportedControlNotice();
+    void showUnsupportedControlNotice(const QString& message = {});
     // An antenna button or combo refused a pick because the radio published no
     // port to choose (AntennaChoiceGate.h). Log it and say so, once a session.
     void announceAntennaChoiceRefused(bool tx);
