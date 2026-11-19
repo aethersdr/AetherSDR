@@ -33,7 +33,12 @@ int main()
           "and with no route reported");
     check(MetisClient::sessionBindAddress(QHostAddress(QStringLiteral("127.0.0.2")), lan)
               == QHostAddress(QHostAddress::LocalHost),
-          "any 127/8 target is loopback");
+          "a 127.0.0.2 target binds 127.0.0.1 too (the bind only: its replies come from "
+          "127.0.0.1, so that session still fails the sender filter)");
+    // IPv6 loopback is not mapped to an IPv4 bind that cannot reach it.
+    check(MetisClient::sessionBindAddress(QHostAddress(QHostAddress::LocalHostIPv6), {})
+              == QHostAddress(QHostAddress::AnyIPv4),
+          "::1 keeps the wildcard bind, never an IPv4 127.0.0.1 one");
     // A radio on the network: exactly as before.
     check(MetisClient::sessionBindAddress(radio, nic) == nic,
           "a radio on the LAN binds the interface discovery found");
