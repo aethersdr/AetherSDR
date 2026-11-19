@@ -7,7 +7,8 @@
 //      reply's registers are shown in the status line;
 //   3. "No IO board answered." reads as no board, any other error as "Not read";
 //   4. the button is dimmed while a read is pending and while disconnected;
-//   5. a screen reader gets the reading itself, not only the line's label.
+//   5. a screen reader gets the reading itself, not only the line's label;
+//   6. a connection change forgets the reading and drops a pending read's answer.
 //
 // No socket and no radio: an injected backend that declares the hl2
 // extension and answers ioboard.status with the shape Hl2Backend replies with.
@@ -271,6 +272,37 @@ private slots:
         backend->finish();
         QVERIFY(page.status->text().startsWith(QStringLiteral("Firmware major: 1")));
         QVERIFY(page.read->isEnabled());
+    }
+
+    void connectionChangeForgetsTheReading()
+    {
+        RadioModel model;
+        install(model, IoBoardBackend::Answer::Board);
+        RadioSetupDialog dialog(&model);
+        const Page page = openPage(dialog);
+        QVERIFY2(page.read && page.status, "IO board button and status line found");
+        page.read->click();
+        QVERIFY(page.status->text().startsWith(QStringLiteral("Firmware major: 1")));
+        emit model.connectionStateChanged(true);
+        QCOMPARE(page.status->text(), QStringLiteral("Not read."));
+        QCOMPARE(spokenName(page.status), QStringLiteral("IO board status: Not read."));
+        QVERIFY(page.read->isEnabled());
+    }
+
+    // The previous connection's answer must not land after "Not read.".
+    void lateAnswerAfterAConnectionChangeIsDropped()
+    {
+        RadioModel model;
+        IoBoardBackend* backend = install(model, IoBoardBackend::Answer::Later);
+        RadioSetupDialog dialog(&model);
+        const Page page = openPage(dialog);
+        QVERIFY2(page.read && page.status, "IO board button and status line found");
+        page.read->click();
+        QCOMPARE(page.status->text(), QStringLiteral("Reading…"));
+        emit model.connectionStateChanged(true);
+        QVERIFY2(page.read->isEnabled(), "a new connection can be read");
+        backend->finish();
+        QCOMPARE(page.status->text(), QStringLiteral("Not read."));
     }
 
     // CONTROL: nothing to read from a radio that is not connected.

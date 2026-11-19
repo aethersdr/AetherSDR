@@ -4722,14 +4722,18 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
                 && m_model->backendDeclaresExtension(QStringLiteral("hl2")));
     };
     refreshIoRead();
-    // After a connection change the last reading is not this radio's.
+    // The pending read's handlers; deleting it disconnects them.
+    const auto ioPending = std::make_shared<QPointer<QObject>>();
+    // After a connection change the last reading, and a pending read's late
+    // answer, are not this radio's.
     connect(m_model, &RadioModel::connectionStateChanged, ioStatusLbl,
-            [refreshIoRead, showIoStatus] {
+            [ioPending, refreshIoRead, showIoStatus] {
+        delete ioPending->data();
         refreshIoRead();
         showIoStatus(QStringLiteral("Not read."), Tone::Value);
     });
     connect(ioReadBtn, &QPushButton::clicked, ioStatusLbl,
-            [this, ioReadGuard, showIoStatus, refreshIoRead] {
+            [this, ioPending, ioReadGuard, showIoStatus, refreshIoRead] {
         IRadioBackend* backend = m_model->backend();
         if (!backend)
             return;
@@ -4740,6 +4744,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         static quint64 nextIoId = kIoRequestIdBase;
         const quint64 requestId = nextIoId++;
         auto* guard = new QObject(this);
+        *ioPending = guard;
         if (ioReadGuard)
             ioReadGuard->setEnabled(false);
         showIoStatus(QStringLiteral("Reading…"), Tone::Value);
