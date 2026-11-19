@@ -1,0 +1,226 @@
+{
+  "recorded_utc": "2026-11-19T00:33:38.916760+00:00",
+  "status": "Current desktop handoff candidate passes one ordinary integrated-analyzer10W setting OFF/ON pair, declared matching/IMD3 gates, exports and independent guards.",
+  "production_ready": false,
+  "desktop_implementation_commit": "f5777d5ea936603af41e9ad84aff6cbacbe0f81d",
+  "desktop_sha256": "360fc9ae16cd6ff973ad263f3de040ef6b6da621818331700222296a9ea903c9",
+  "installed_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "comparison": {
+    "production_ready": false,
+    "scope": "One finite10W-setting pair on the desktop handoff candidate; four native local-DAX-IQ frames each, FDX off.",
+    "desktop_implementation_commit": "f5777d5ea936603af41e9ad84aff6cbacbe0f81d",
+    "desktop_sha256": "360fc9ae16cd6ff973ad263f3de040ef6b6da621818331700222296a9ea903c9",
+    "installed_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+    "FDX": false,
+    "capture_source": "local-dax-iq",
+    "matching_station_fields": [
+      "radio_serial",
+      "mode",
+      "transmit_antenna",
+      "nominal_power_setting_w",
+      "forward_power_limit_w",
+      "center_hz",
+      "sample_rate_hz",
+      "requested_tone1_hz",
+      "requested_tone2_hz",
+      "window",
+      "requested_averages",
+      "transmit_authorization_timeout_ms"
+    ],
+    "cases": [
+      {
+        "case": "baseline-10W-01",
+        "LP_peak_W": 7.49,
+        "observed_RF_seconds": 5.94977795,
+        "independent_guard_passed": true,
+        "exports": [
+          {
+            "file": "measurement.json",
+            "bytes": 1239176,
+            "sha256": "856821e7e13c81a88085800f44a242affb9af291aa37d88a2509dfe3b28f729f"
+          },
+          {
+            "file": "measurement.csv",
+            "bytes": 7054,
+            "sha256": "a340bd5ec5ea23cd9dfb6ac38a031bac8899b6eb9fb0ed80e9616f57cc71518a"
+          },
+          {
+            "file": "measurement.png",
+            "bytes": 112464,
+            "sha256": "47e53fc7f5c3cdcccd10dac8a9916e151856031ec14a8c925172cf6089766a61"
+          }
+        ],
+        "max_independent_spectrum_error_dB": 3.55205057189778e-06
+      },
+      {
+        "case": "corrected-10W-01",
+        "LP_peak_W": 7.56,
+        "observed_RF_seconds": 7.392864434,
+        "independent_guard_passed": true,
+        "exports": [
+          {
+            "file": "measurement.json",
+            "bytes": 1239175,
+            "sha256": "42b2f7388e7a795e08f1a918af86c4b6f15a299ef67d6224e7d6c4ad06ed7ccf"
+          },
+          {
+            "file": "measurement.csv",
+            "bytes": 7048,
+            "sha256": "dcfa9e36b835474039a83f870f3160d9b885cad3994fc0e0c2a93bcfb21a57ab"
+          },
+          {
+            "file": "measurement.png",
+            "bytes": 111973,
+            "sha256": "d06675900706dd8c48a4d68f8b6d09820d8d0122e8746b665374d90c2df919bd"
+          }
+        ],
+        "max_independent_spectrum_error_dB": 3.569512884382675e-06
+      }
+    ],
+    "fundamental_PEP_change_dB": 0.34564903649308576,
+    "products": [
+      {
+        "order": 3,
+        "upper": false,
+        "OFF_dBc_fundamental_PEP": -33.36622543792431,
+        "ON_dBc_fundamental_PEP": -49.38099517404114,
+        "improvement_dB": 16.014769736116833,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 3,
+        "upper": true,
+        "OFF_dBc_fundamental_PEP": -32.829774112281385,
+        "ON_dBc_fundamental_PEP": -59.39577677446804,
+        "improvement_dB": 26.566002662186655,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 5,
+        "upper": false,
+        "OFF_dBc_fundamental_PEP": -45.31682530918616,
+        "ON_dBc_fundamental_PEP": -60.29086297689301,
+        "improvement_dB": 14.974037667706853,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 5,
+        "upper": true,
+        "OFF_dBc_fundamental_PEP": -45.50351686567553,
+        "ON_dBc_fundamental_PEP": -66.61916711332776,
+        "improvement_dB": 21.115650247652233,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 7,
+        "upper": false,
+        "OFF_dBc_fundamental_PEP": -54.69194856563058,
+        "ON_dBc_fundamental_PEP": -73.79873077391105,
+        "improvement_dB": 19.106782208280464,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      },
+      {
+        "order": 7,
+        "upper": true,
+        "OFF_dBc_fundamental_PEP": -54.71762100819818,
+        "ON_dBc_fundamental_PEP": -66.64165981232142,
+        "improvement_dB": 11.924038804123242,
+        "OFF_noise_limited": false,
+        "ON_noise_limited": false
+      }
+    ],
+    "predeclared_pair_gate_passed": true,
+    "raw_IQ_checksums_and_owned_binding_verified": true,
+    "stock_APD_compared": false,
+    "actual_6300_qualified": false,
+    "extra_baseline_launch_check_errors_preserved": true
+  },
+  "new_RF_keys": 2,
+  "root_bridge_used": false,
+  "radio_reboots": 0,
+  "AetherTX_launched": false,
+  "processing_settings_restored": false,
+  "initial_launch_errors": "An extra prelaunch check used a wrong relative parent path. Its shell did not stop the driver after that exception. The driver independently attested its actual process, recipes and guards, then completed one successful baseline. A sandboxed follow-up could not see the host PID; a host-visible read-only attestation confirmed the exact reviewed executable. Both errors are preserved. The corrected counterpart used one fail-closed Python launcher and was not retried.",
+  "native_builds": {
+    "source_commit": "538fc85d501c07e2510636705d306968d85d4556",
+    "started_utc": "2026-11-19T00:25:58.113450+00:00",
+    "runs": [
+      {
+        "workflow": "windows-installer.yml",
+        "command": [
+          "gh",
+          "workflow",
+          "run",
+          "windows-installer.yml",
+          "--ref",
+          "feat/aetherpd-shim-integration",
+          "-f",
+          "qualify_credentials=true",
+          "-f",
+          "publish_store_flight=false",
+          "-f",
+          "dev_overrides=false"
+        ],
+        "dispatch_exit": 0,
+        "dispatched": true,
+        "run_id": 44428947403,
+        "url": "https://github.com/aethersdr/AetherSDR/actions/runs/44428947403",
+        "observed_run": {
+          "createdAt": "2026-11-19T00:25:59Z",
+          "databaseId": 44428947403,
+          "headSha": "538fc85d501c07e2510636705d306968d85d4556",
+          "status": "queued",
+          "url": "https://github.com/aethersdr/AetherSDR/actions/runs/44428947403"
+        }
+      },
+      {
+        "workflow": "macos-dmg.yml",
+        "command": [
+          "gh",
+          "workflow",
+          "run",
+          "macos-dmg.yml",
+          "--ref",
+          "feat/aetherpd-shim-integration",
+          "-f",
+          "qualify_credentials=true"
+        ],
+        "dispatch_exit": 0,
+        "dispatched": true,
+        "run_id": 44428960879,
+        "url": "https://github.com/aethersdr/AetherSDR/actions/runs/44428960879",
+        "observed_run": {
+          "createdAt": "2026-11-19T00:26:05Z",
+          "databaseId": 44428960879,
+          "headSha": "538fc85d501c07e2510636705d306968d85d4556",
+          "status": "in_progress",
+          "url": "https://github.com/aethersdr/AetherSDR/actions/runs/44428960879"
+        }
+      }
+    ],
+    "publication_requested": false,
+    "credential_writes_requested": true,
+    "credential_scope": "Disposable qualification entries only on ephemeral native CI runners; no radio credentials or RF."
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/integrated-current-10W-components.tar.gz",
+    "bytes": 1451556,
+    "sha256": "8aacb83ef12e4de1ee5dd2e20770fb20739ed7561ffff5363f10a3be92ff252a",
+    "members": 68,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "One finite pair at10W setting, four native frames each; raw/sustained speech, repeatability and remaining duty/recovery qualification remain open.",
+    "LP peaks are whole-run readings, including training; they are not frame-specific tone PEP. Fundamental-derived relative PEP matched within0.346dB.",
+    "All IQ sample checksums, bindings, frame ordering and spectrum bins were independently checked. Raw IQ scale and ADC headroom remain uncalibrated.",
+    "The PNG export was visually checked. Upper IMD5/IMD7 annotations overlap at similar levels; that readability defect remains to address.",
+    "New Windows/macOS credential/window qualification builds at538fc85d5 are in flight; prior ec6dc102e packages do not qualify the new handoff behavior.",
+    "No post-Stop root process/ARP audit; ordinary sessionStopped and independent RF-idle evidence are retained.",
+    "Final stock APD comparison, actual6300 hardware and full P1-P10 production/release gates remain open."
+  ]
+}
