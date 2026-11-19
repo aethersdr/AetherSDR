@@ -1,0 +1,1419 @@
+{
+  "recorded_utc": "2026-11-19T01:28:17.828Z",
+  "source_commit": "538fc85d501c07e2510636705d306968d85d4556",
+  "status": "All six selected native build/package jobs succeeded. Publication, Store and signing/notarization jobs skipped.",
+  "scope_limits": [
+    "This source predates the extra-Stop repair2a6dce4d5; these jobs do not establish native build coverage of that newer implementation.",
+    "Credential and controlled setup-window result ZIPs were downloaded, digest/CRC-checked and independently inspected. Installer/app payloads from these runs have not been downloaded or executed; earlier ec6 payload inspection remains separately attributed.",
+    "Native test-window success does not establish ordinary full desktop or live-radio installation qualification. No publication requested."
+  ],
+  "production_ready": false,
+  "runs": [
+    {
+      "run_id": 44428947403,
+      "recorded_utc": "2026-11-19T01:28:03.567Z",
+      "jobs": {
+        "jobs": [
+          {
+            "id": 135241014337,
+            "name": "build-windows",
+            "status": "completed",
+            "conclusion": "success",
+            "run_id": 44428947403,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Plan Authenticode signing",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3
+              },
+              {
+                "name": "Plan Store build",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Check Store packaging policy",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5
+              },
+              {
+                "name": "Set up MSVC",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6
+              },
+              {
+                "name": "Prepare Qt extraction directory",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 7
+              },
+              {
+                "name": "Install Qt6",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8
+              },
+              {
+                "name": "Install Ninja and LLVM",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 9
+              },
+              {
+                "name": "Cache Opus",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10
+              },
+              {
+                "name": "Setup Opus (SmartLink audio codec)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 11
+              },
+              {
+                "name": "Cache FFTW3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12
+              },
+              {
+                "name": "Setup FFTW3 float (NR4 dependency)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 13
+              },
+              {
+                "name": "Cache RTL-SDR and libusb",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14
+              },
+              {
+                "name": "Setup RTL-SDR and libusb",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 15
+              },
+              {
+                "name": "Cache hidapi",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16
+              },
+              {
+                "name": "Setup hidapi (USB HID device support)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 17
+              },
+              {
+                "name": "Cache PortAudio",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 18
+              },
+              {
+                "name": "Setup PortAudio (CW sidetone callback sink)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 19
+              },
+              {
+                "name": "Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 20
+              },
+              {
+                "name": "Setup DeepFilterNet3 (DFNR)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 21
+              },
+              {
+                "name": "Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 22
+              },
+              {
+                "name": "Setup qtkeychain (SmartLink credential persistence)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 23
+              },
+              {
+                "name": "Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 24
+              },
+              {
+                "name": "Setup sherpa-onnx (non-whisper ASR backend)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 25
+              },
+              {
+                "name": "Cache Vulkan SDK",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 26
+              },
+              {
+                "name": "Setup Vulkan SDK (whisper GPU backend)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 27
+              },
+              {
+                "name": "Configure",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 28
+              },
+              {
+                "name": "Qualify native credential persistence (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 29
+              },
+              {
+                "name": "Preserve native credential result",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 30
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually enabled",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 31
+              },
+              {
+                "name": "Assert PortAudio sidetone sink actually enabled",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 32
+              },
+              {
+                "name": "Build Opus (RADE dependency)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 33
+              },
+              {
+                "name": "Build whisper + ggml-vulkan (vendored ASR engine)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 34
+              },
+              {
+                "name": "Build",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 35
+              },
+              {
+                "name": "Qualify native setup window lifetime (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 36
+              },
+              {
+                "name": "Preserve native setup window result",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 37
+              },
+              {
+                "name": "Deploy Qt",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 38
+              },
+              {
+                "name": "Stage application and Qt debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 39
+              },
+              {
+                "name": "Verify DPI awareness manifest",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 40
+              },
+              {
+                "name": "Stage MSVC runtime for installer",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 41
+              },
+              {
+                "name": "Verify deploy payload is self-contained",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 42
+              },
+              {
+                "name": "Verify required debug symbols present",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 43
+              },
+              {
+                "name": "Upload debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 44
+              },
+              {
+                "name": "Package debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 45
+              },
+              {
+                "name": "Upload symbol archive",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 46
+              },
+              {
+                "name": "Upload unsigned payload for packaging",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 47
+              },
+              {
+                "name": "Post Cache Vulkan SDK",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 85
+              },
+              {
+                "name": "Post Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 86
+              },
+              {
+                "name": "Post Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 87
+              },
+              {
+                "name": "Post Cache PortAudio",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 88
+              },
+              {
+                "name": "Post Cache hidapi",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 89
+              },
+              {
+                "name": "Post Cache RTL-SDR and libusb",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 90
+              },
+              {
+                "name": "Post Cache FFTW3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 91
+              },
+              {
+                "name": "Post Cache Opus",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 92
+              },
+              {
+                "name": "Post Install Qt6",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 93
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 94
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 95
+              }
+            ]
+          },
+          {
+            "id": 135264195239,
+            "name": "package-windows",
+            "status": "completed",
+            "conclusion": "success",
+            "run_id": 44428947403,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Download unsigned payload",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3
+              },
+              {
+                "name": "Download debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Azure login for Authenticode signing",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 5
+              },
+              {
+                "name": "Set up Authenticode signing tools",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 6
+              },
+              {
+                "name": "Sign payload",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7
+              },
+              {
+                "name": "Create portable ZIP",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8
+              },
+              {
+                "name": "Create installer (Inno Setup)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 9
+              },
+              {
+                "name": "Create MSIX package",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10
+              },
+              {
+                "name": "Verify Authenticode signatures",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 11
+              },
+              {
+                "name": "End the signing session",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 12
+              },
+              {
+                "name": "Verify Store symbol package topology",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13
+              },
+              {
+                "name": "Upload artifacts",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 28
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 29
+              }
+            ]
+          },
+          {
+            "id": 135266151909,
+            "name": "Publish Microsoft Store production",
+            "status": "completed",
+            "conclusion": "skipped",
+            "run_id": 44428947403,
+            "logs_url": null,
+            "steps": null
+          },
+          {
+            "id": 135266152727,
+            "name": "Fully submit developer Store flight",
+            "status": "completed",
+            "conclusion": "skipped",
+            "run_id": 44428947403,
+            "logs_url": null,
+            "steps": null
+          },
+          {
+            "id": 135266152761,
+            "name": "release-windows",
+            "status": "completed",
+            "conclusion": "skipped",
+            "run_id": 44428947403,
+            "logs_url": null,
+            "steps": null
+          }
+        ]
+      },
+      "artifacts": {
+        "artifacts": [
+          {
+            "id": 14489245961,
+            "name": "Windows-Payload",
+            "size_in_bytes": 168720004,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14489245961",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14489245961/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:17:30Z",
+            "expires_at": "2026-11-26T01:17:20Z",
+            "updated_at": "2026-11-19T01:17:30Z",
+            "digest": "sha256:18c452ff78c2a616ff2c42789bf9aabcd585619011d9073f4d84490070249d7b",
+            "workflow_run": {
+              "id": 44428947403,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14488597623,
+            "name": "Windows-Symbols-archive",
+            "size_in_bytes": 150094788,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488597623",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488597623/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:17:20Z",
+            "expires_at": "2027-02-17T00:26:01Z",
+            "updated_at": "2026-11-19T01:17:20Z",
+            "digest": "sha256:ad462ed51e9c0ae56a675b4955f6f6ee1ec3ca24bb5e86ca147bb72147a3189b",
+            "workflow_run": {
+              "id": 44428947403,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14488142226,
+            "name": "Windows-Symbols",
+            "size_in_bytes": 277161666,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488142226",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488142226/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:15:25Z",
+            "expires_at": "2027-02-17T00:26:01Z",
+            "updated_at": "2026-11-19T01:15:25Z",
+            "digest": "sha256:20c88b6ea788d0f89b67f41e26c5f1b757d82894dc8918b2549062bf53b8d19c",
+            "workflow_run": {
+              "id": 44428947403,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14487942424,
+            "name": "native-enrollment-windows",
+            "size_in_bytes": 3870,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14487942424",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14487942424/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:14:47Z",
+            "expires_at": "2027-02-17T00:26:01Z",
+            "updated_at": "2026-11-19T01:14:47Z",
+            "digest": "sha256:b1754450e59f74a67ca5192364ac9c5381f60cc3e0b8bdce91513c0111c1e52d",
+            "workflow_run": {
+              "id": 44428947403,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14487883600,
+            "name": "Windows-Installer",
+            "size_in_bytes": 1132192392,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14487883600",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14487883600/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:22:07Z",
+            "expires_at": "2027-02-17T00:26:01Z",
+            "updated_at": "2026-11-19T01:22:07Z",
+            "digest": "sha256:f4293c36693ceba69601eff632ae6f6c1548216f1459ab82868a845f803e2179",
+            "workflow_run": {
+              "id": 44428947403,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14485214226,
+            "name": "native-credential-windows",
+            "size_in_bytes": 3213,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14485214226",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14485214226/zip",
+            "expired": false,
+            "created_at": "2026-11-19T00:29:53Z",
+            "expires_at": "2027-02-17T00:26:01Z",
+            "updated_at": "2026-11-19T00:29:53Z",
+            "digest": "sha256:e81f9856ff8ab1b461bea4e86b665f2905d8144c73ab9ffcd46c43de86e3a512",
+            "workflow_run": {
+              "id": 44428947403,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "run_id": 44428960879,
+      "recorded_utc": "2026-11-19T01:28:03.476Z",
+      "jobs": {
+        "jobs": [
+          {
+            "id": 135241058214,
+            "name": "build-dmg (macos-15-intel, intel, x86_64, 14.4)",
+            "status": "completed",
+            "conclusion": "success",
+            "run_id": 44428960879,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Install dependencies via Homebrew",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3
+              },
+              {
+                "name": "Install Qt LTS via aqtinstall",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Assert no Homebrew Qt is discoverable",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5
+              },
+              {
+                "name": "Cache macOS deps (fftw, portaudio, hidapi)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6
+              },
+              {
+                "name": "Build macOS deps at the deployment target",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7
+              },
+              {
+                "name": "Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8
+              },
+              {
+                "name": "Setup qtkeychain (SmartLink credential persistence)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 9
+              },
+              {
+                "name": "Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10
+              },
+              {
+                "name": "Setup DeepFilterNet3 (DFNR)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 11
+              },
+              {
+                "name": "Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 12
+              },
+              {
+                "name": "Setup sherpa-onnx (non-whisper ASR backend)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 13
+              },
+              {
+                "name": "Set up ccache",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14
+              },
+              {
+                "name": "Ensure offline Metal toolchain",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 15
+              },
+              {
+                "name": "Configure",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16
+              },
+              {
+                "name": "Qualify native credential persistence (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 17
+              },
+              {
+                "name": "Preserve native credential result",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 18
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually enabled",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 19
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually disabled",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 20
+              },
+              {
+                "name": "Build",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 21
+              },
+              {
+                "name": "Split debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 22
+              },
+              {
+                "name": "Qualify native setup window lifetime (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 23
+              },
+              {
+                "name": "Preserve native setup window result",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 24
+              },
+              {
+                "name": "Bundle DFNR model",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 25
+              },
+              {
+                "name": "Build DAX audio driver",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 26
+              },
+              {
+                "name": "Verify binaries",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 27
+              },
+              {
+                "name": "Bundle Qt frameworks",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 28
+              },
+              {
+                "name": "Assert the bundled Qt is the pinned Qt",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 29
+              },
+              {
+                "name": "Assert nothing in the bundle outranks the deployment target",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 30
+              },
+              {
+                "name": "Stage the unsigned bundle for signing",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 31
+              },
+              {
+                "name": "Upload unsigned bundle",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 32
+              },
+              {
+                "name": "Post Set up ccache",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 60
+              },
+              {
+                "name": "Post Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 61
+              },
+              {
+                "name": "Post Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 62
+              },
+              {
+                "name": "Post Cache macOS deps (fftw, portaudio, hidapi)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 63
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 64
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 65
+              }
+            ]
+          },
+          {
+            "id": 135241058532,
+            "name": "build-dmg (macos-15, apple-silicon, arm64, 14.4)",
+            "status": "completed",
+            "conclusion": "success",
+            "run_id": 44428960879,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Install dependencies via Homebrew",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 3
+              },
+              {
+                "name": "Install Qt LTS via aqtinstall",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Assert no Homebrew Qt is discoverable",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5
+              },
+              {
+                "name": "Cache macOS deps (fftw, portaudio, hidapi)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6
+              },
+              {
+                "name": "Build macOS deps at the deployment target",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 7
+              },
+              {
+                "name": "Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 8
+              },
+              {
+                "name": "Setup qtkeychain (SmartLink credential persistence)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 9
+              },
+              {
+                "name": "Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 10
+              },
+              {
+                "name": "Setup DeepFilterNet3 (DFNR)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 11
+              },
+              {
+                "name": "Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 12
+              },
+              {
+                "name": "Setup sherpa-onnx (non-whisper ASR backend)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 13
+              },
+              {
+                "name": "Set up ccache",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 14
+              },
+              {
+                "name": "Ensure offline Metal toolchain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 15
+              },
+              {
+                "name": "Configure",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16
+              },
+              {
+                "name": "Qualify native credential persistence (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 17
+              },
+              {
+                "name": "Preserve native credential result",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 18
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually enabled",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 19
+              },
+              {
+                "name": "Assert GPU spectrum rendering actually disabled",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 20
+              },
+              {
+                "name": "Build",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 21
+              },
+              {
+                "name": "Split debug symbols",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 22
+              },
+              {
+                "name": "Qualify native setup window lifetime (explicit opt-in)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 23
+              },
+              {
+                "name": "Preserve native setup window result",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 24
+              },
+              {
+                "name": "Bundle DFNR model",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 25
+              },
+              {
+                "name": "Build DAX audio driver",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 26
+              },
+              {
+                "name": "Verify binaries",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 27
+              },
+              {
+                "name": "Bundle Qt frameworks",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 28
+              },
+              {
+                "name": "Assert the bundled Qt is the pinned Qt",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 29
+              },
+              {
+                "name": "Assert nothing in the bundle outranks the deployment target",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 30
+              },
+              {
+                "name": "Stage the unsigned bundle for signing",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 31
+              },
+              {
+                "name": "Upload unsigned bundle",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 32
+              },
+              {
+                "name": "Post Set up ccache",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 60
+              },
+              {
+                "name": "Post Cache DeepFilterNet3",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 61
+              },
+              {
+                "name": "Post Cache qtkeychain",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 62
+              },
+              {
+                "name": "Post Cache macOS deps (fftw, portaudio, hidapi)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 63
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 64
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 65
+              }
+            ]
+          },
+          {
+            "id": 135265609681,
+            "name": "App update tarball (apple-silicon)",
+            "status": "completed",
+            "conclusion": "success",
+            "run_id": 44428960879,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Download the signed DMG",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 3
+              },
+              {
+                "name": "Download the unsigned bundle (dry run)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Take the app out",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5
+              },
+              {
+                "name": "Build the app tarball",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6
+              },
+              {
+                "name": "Upload artifact",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 7
+              },
+              {
+                "name": "Attach to release",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 8
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 17
+              }
+            ]
+          },
+          {
+            "id": 135265609705,
+            "name": "App update tarball (intel)",
+            "status": "completed",
+            "conclusion": "success",
+            "run_id": 44428960879,
+            "logs_url": null,
+            "steps": [
+              {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 1
+              },
+              {
+                "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 2
+              },
+              {
+                "name": "Download the signed DMG",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 3
+              },
+              {
+                "name": "Download the unsigned bundle (dry run)",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 4
+              },
+              {
+                "name": "Take the app out",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 5
+              },
+              {
+                "name": "Build the app tarball",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 6
+              },
+              {
+                "name": "Upload artifact",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 7
+              },
+              {
+                "name": "Attach to release",
+                "status": "completed",
+                "conclusion": "skipped",
+                "number": 8
+              },
+              {
+                "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 16
+              },
+              {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "number": 17
+              }
+            ]
+          },
+          {
+            "id": 135265611205,
+            "name": "Sign and notarize (${{ matrix.label }})",
+            "status": "completed",
+            "conclusion": "skipped",
+            "run_id": 44428960879,
+            "logs_url": null,
+            "steps": null
+          }
+        ]
+      },
+      "artifacts": {
+        "artifacts": [
+          {
+            "id": 14489540452,
+            "name": "native-enrollment-macos-intel",
+            "size_in_bytes": 3770,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14489540452",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14489540452/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:18:48Z",
+            "expires_at": "2027-02-17T00:26:06Z",
+            "updated_at": "2026-11-19T01:18:48Z",
+            "digest": "sha256:cbada0d9958992ca6950658f5c4716c0287113c568c94603fb8a34f37cb8fc45",
+            "workflow_run": {
+              "id": 44428960879,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14489217185,
+            "name": "macOS-unsigned-intel",
+            "size_in_bytes": 322160800,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14489217185",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14489217185/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:20:23Z",
+            "expires_at": "2026-11-20T01:19:50Z",
+            "updated_at": "2026-11-19T01:20:23Z",
+            "digest": "sha256:0f5ba719f27af94670bf7644a9e9b410b333005647bc0332a0f58b825fe4be09",
+            "workflow_run": {
+              "id": 44428960879,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14488705170,
+            "name": "macOS-unsigned-apple-silicon",
+            "size_in_bytes": 345195430,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488705170",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488705170/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:03:37Z",
+            "expires_at": "2026-11-20T01:03:02Z",
+            "updated_at": "2026-11-19T01:03:37Z",
+            "digest": "sha256:40a17e9a765e8a9d58e5bdab7e24dd6762bae2fea50a10f1f74546f4a06c317b",
+            "workflow_run": {
+              "id": 44428960879,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14488693365,
+            "name": "macOS-app-tarball-intel",
+            "size_in_bytes": 105789968,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488693365",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488693365/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:22:48Z",
+            "expires_at": "2027-02-17T00:26:06Z",
+            "updated_at": "2026-11-19T01:22:48Z",
+            "digest": "sha256:1f9efa9ba71ec854dc20f7d3a1d170b7291fa3f4dfad311c8dc72209940831c0",
+            "workflow_run": {
+              "id": 44428960879,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14488200448,
+            "name": "native-enrollment-macos-apple-silicon",
+            "size_in_bytes": 3774,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488200448",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14488200448/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:02:00Z",
+            "expires_at": "2027-02-17T00:26:06Z",
+            "updated_at": "2026-11-19T01:02:00Z",
+            "digest": "sha256:5d16663be14ce150047fc99df4581b0ba3ef4ec4d01eb7769f462053d0c74ce8",
+            "workflow_run": {
+              "id": 44428960879,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14487813987,
+            "name": "macOS-app-tarball-apple-silicon",
+            "size_in_bytes": 120080866,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14487813987",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14487813987/zip",
+            "expired": false,
+            "created_at": "2026-11-19T01:22:04Z",
+            "expires_at": "2027-02-17T00:26:06Z",
+            "updated_at": "2026-11-19T01:22:04Z",
+            "digest": "sha256:4af10bdfb916c84aa98eceb6569fc491e8199ae0b54ddd00ac461448e97c7200",
+            "workflow_run": {
+              "id": 44428960879,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14486196142,
+            "name": "native-credential-macos-intel",
+            "size_in_bytes": 3203,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14486196142",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14486196142/zip",
+            "expired": false,
+            "created_at": "2026-11-19T00:32:08Z",
+            "expires_at": "2027-02-17T00:26:06Z",
+            "updated_at": "2026-11-19T00:32:08Z",
+            "digest": "sha256:f996c1f14663c456ce3ae7fc77dcdcff2e7c198a5e5b33255f20982b8a0ecb03",
+            "workflow_run": {
+              "id": 44428960879,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          },
+          {
+            "id": 14485970764,
+            "name": "native-credential-macos-apple-silicon",
+            "size_in_bytes": 3154,
+            "url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14485970764",
+            "archive_download_url": "https://api.github.com/repos/aethersdr/AetherSDR/actions/artifacts/14485970764/zip",
+            "expired": false,
+            "created_at": "2026-11-19T00:30:04Z",
+            "expires_at": "2027-02-17T00:26:06Z",
+            "updated_at": "2026-11-19T00:30:04Z",
+            "digest": "sha256:51ff487929b59ad941bdc3fa60466d8374fc3481ccf018496da9bde50e5cbbdd",
+            "workflow_run": {
+              "id": 44428960879,
+              "repository_id": 1180091786,
+              "head_repository_id": 1180091786,
+              "head_branch": "feat/aetherpd-shim-integration",
+              "head_sha": "538fc85d501c07e2510636705d306968d85d4556"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

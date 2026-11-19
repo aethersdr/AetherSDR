@@ -1,0 +1,319 @@
+{
+  "recorded_utc": "2026-11-19T01:25:58.041660+00:00",
+  "source_commit": "538fc85d501c07e2510636705d306968d85d4556",
+  "status": "Production Remote Access setup window/client passes14controlled cases each on Windows, Intel macOS and Apple Silicon, using real OS credential storage and process locks; all fixture primary/version keys verified absent after cleanup.",
+  "platforms": [
+    {
+      "artifact_id": 14487942424,
+      "run_id": 44428947403,
+      "platform": "Windows-2025Server-10.0.26100-SP0",
+      "system": "Windows",
+      "machine": "AMD64",
+      "probe_binary_sha256": "95001ba4013849e515a9abf289e2db6dcac9063129db7b38a56338be80200932",
+      "success": true,
+      "cases": [
+        {
+          "kind": "live_request",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "closed_window",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "pending_backend",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "explicit_retry",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "failed_request",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "different_radio",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "caller_crash",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "live_request",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "closed_window",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "pending_backend",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "explicit_retry",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "failed_request",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "different_radio",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "caller_crash",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        }
+      ],
+      "scope": "Production Remote Access window/client/token persistence with injected HTTP only; real OS keychain and same-user process locks. Private settings, production cache/lock location. No real radio, Tailscale request or RF.",
+      "macos_core_loop_control": null,
+      "archive_sha256": "b1754450e59f74a67ca5192364ac9c5381f60cc3e0b8bdce91513c0111c1e52d"
+    },
+    {
+      "artifact_id": 14489540452,
+      "run_id": 44428960879,
+      "platform": "macOS-15.7.9-x86_64-i386-64bit-Mach-O",
+      "system": "Darwin",
+      "machine": "x86_64",
+      "probe_binary_sha256": "71de79f0104ecb14bb67ef83f81834f711a382cd755ebc6b1f48c83466cc5ce6",
+      "success": true,
+      "cases": [
+        {
+          "kind": "live_request",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "closed_window",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "pending_backend",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "explicit_retry",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "failed_request",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "different_radio",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "caller_crash",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "live_request",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "closed_window",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "pending_backend",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "explicit_retry",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "failed_request",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "different_radio",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "caller_crash",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        }
+      ],
+      "scope": "Production Remote Access window/client/token persistence with injected HTTP only; real OS keychain and same-user process locks. Private settings, production cache/lock location. No real radio, Tailscale request or RF.",
+      "macos_core_loop_control": null,
+      "archive_sha256": "cbada0d9958992ca6950658f5c4716c0287113c568c94603fb8a34f37cb8fc45"
+    },
+    {
+      "artifact_id": 14488200448,
+      "run_id": 44428960879,
+      "platform": "macOS-15.8.2-arm64-arm-64bit-Mach-O",
+      "system": "Darwin",
+      "machine": "arm64",
+      "probe_binary_sha256": "9fcf30f335dbe52069fc8eae2ae9464ebb7cd2c4177276381319b270be072227",
+      "success": true,
+      "cases": [
+        {
+          "kind": "live_request",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "closed_window",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "pending_backend",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "explicit_retry",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "failed_request",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "different_radio",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "caller_crash",
+          "managed_owner": false,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "live_request",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "closed_window",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "pending_backend",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "explicit_retry",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "failed_request",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "different_radio",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        },
+        {
+          "kind": "caller_crash",
+          "managed_owner": true,
+          "passed": true,
+          "primary_and_metadata_absence_verified": true
+        }
+      ],
+      "scope": "Production Remote Access window/client/token persistence with injected HTTP only; real OS keychain and same-user process locks. Private settings, production cache/lock location. No real radio, Tailscale request or RF.",
+      "macos_core_loop_control": null,
+      "archive_sha256": "5d16663be14ce150047fc99df4581b0ba3ef4ec4d01eb7769f462053d0c74ce8"
+    }
+  ],
+  "total_passed_cases": 42,
+  "production_ready": false,
+  "radio_actions": [],
+  "publication_requested": false,
+  "controlled_native_setup_window_qualification_complete": true,
+  "scope_limits": [
+    "Production Remote Access window/client and credential persistence with injected HTTP, real OS backends and independent processes on the recorded runner OS versions; seven legacy and seven managed-owner cases per platform.",
+    "Only random disposable fixture keys were written. No existing radio credential was enumerated or accessed; no insecure fallback.",
+    "These controlled window receipts do not qualify full ordinary desktop operation, live-radio enrollment/installation, RF behavior or the complete release.",
+    "Native build/packaging status is recorded separately. This source538fc85d5 predates the extra-Stop implementation2a6dce4d5; no latest-binary or release claim."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-enrollment-current-components.tar.gz",
+    "bytes": 14248,
+    "sha256": "695f9368a9b816cac3f13d8c58999cb45c6e97b4b4ef0d3c4a215c90a0eea8d1",
+    "members": 8,
+    "all_members_verified": true
+  }
+}
