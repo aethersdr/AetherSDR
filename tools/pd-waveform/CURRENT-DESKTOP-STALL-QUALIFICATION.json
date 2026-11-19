@@ -1,0 +1,185 @@
+{
+  "recorded_utc": "2026-11-19T02:21:58.529999+00:00",
+  "production_ready": false,
+  "source_parent": "e4fb417a7f21a216d6c40f3e1043c9870c994241",
+  "desktop_implementation": "e25ec9af1e9a8f5a7bbfcf94424d466ad4cb66fe",
+  "desktop": {
+    "pid": 2390136,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "d7a80aacee76fc25c5f75f11b1dbcafebe9f4ce727bf682ec3fef7b0ce84128f",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0,
+    "source_patch_sha256": "1f06e6e015c064cb96a73021d560aceb0f33f29c4484610f72ce10ce56e8c73f"
+  },
+  "runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "runtime_source": "f75063713186512a38e4e895a8598693b8018a91",
+  "status": "One corrected-tone desktop-only stall on the current installed graph passes radio-side release observation, partial owned-READY recovery, exact terminal stop acknowledgment, cleanup audit and explicit ordinary-USB DAX-IQ recovery.",
+  "new_positive_GUI_key_requests": 2,
+  "new_observed_TX_intervals": 1,
+  "software_radio_reboots": 0,
+  "FDX": false,
+  "nominal_W": 5,
+  "configured_max_W": 10,
+  "LP_whole_run_peak_W": 3.61,
+  "qualified_fault": {
+    "kind": "desktop SIGSTOP after observed corrected tones; native DSP not signaled",
+    "source_armed_once": true,
+    "GUI_key_requests": 1,
+    "paused_ms": 2965.492886,
+    "TRANSMITTING_readback_span_while_paused_ms": 2930.37406,
+    "pause_to_unkey_observation_ms": 2946.465851,
+    "owned_READY_packet_receipt_to_resume_request_ms": 10.126241,
+    "decision_to_resume_request_ms": 0.046285,
+    "radio_observer_TX_to_UNKEY_ms": 9019.746445,
+    "desktop_key_write_to_unkey_write_ms": 9090.365,
+    "wire_order": [
+      "C1288 xmit1, ACK, own PTT_REQUESTED, own TRANSMITTING",
+      "independent UNKEY and own READY observed while desktop stopped",
+      "desktop resumed: own UNKEY, own READY, C1295 xmit0, R1295 success, original-connection unowned READY"
+    ],
+    "additional_key_writes": 0,
+    "measurement_result": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 correction unknown\nTransmit authorization timeout 10 s\nDAX IQ stream identity not reported\nIQ capture session is no longer current\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+    "measurement_export_available_after_release": true,
+    "native_faults_after": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "alignment_reset_count_after": 0,
+    "native_session_stopped": true,
+    "cleanup_errors": []
+  },
+  "resource_audit": {
+    "passed": true,
+    "expected_runtime_hashes_verified": 12,
+    "remaining_control_processes": 3,
+    "no_role_zombies": true,
+    "all_remaining_UID78666_GID20_caps_zero_NNP1": true,
+    "no_packet_FDs": true,
+    "owned_ARP_absent": true,
+    "ARP_journal_bytes": 0,
+    "accept_local": 0,
+    "control_service": {
+      "MainPID": "6196",
+      "NRestarts": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "boot_id": "258f9d41-61b1-4d4f-ae6c-8116cc178094",
+    "temporary_audit_containers_and_dirs_removed": true,
+    "temporary_native_waveform_absent": true,
+    "temporary_native_helper_port_closed": true,
+    "rootfd_receivers_and_listeners_absent": true,
+    "privileged_instrumentation": "Existing lab bridge used for two read-only post-fault audit jobs; first role expectation refused, corrected role check passed. Both jobs/dirs and diagnostic waveform retired. No lab host-root bridge was used for RF or ordinary receive recovery."
+  },
+  "ordinary_receive_recovery": {
+    "passed": true,
+    "mode": "USB",
+    "same_desktop_pid": 2390136,
+    "RF_keys": 0,
+    "calibration_arms": 0,
+    "captures": [
+      {
+        "metadata": {
+          "capture_id": "9712a12b2c8c34715991f5491c57df69",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 612917014,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "35531626265194",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "35531967261798",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "10",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        },
+        "bytes": 131072,
+        "sha256": "73120d892453768faaf1d7be074f11fa364aa9fc997236e1debc3fbcaf1444b7",
+        "finite_nonzero": true,
+        "file": "IQ-1.f32le"
+      },
+      {
+        "metadata": {
+          "capture_id": "4ec78e3c748dd5b1d9e70d6b97211516",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 612917014,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "35532121263653",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "35532462405516",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "10",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        },
+        "bytes": 131072,
+        "sha256": "ec8a09961831a7665c9669f2c195a0c02c6a11776ac1c07b4c69afedf941c5fe",
+        "finite_nonzero": true,
+        "file": "IQ-2.f32le"
+      }
+    ],
+    "capture_reply_codes": [
+      200,
+      200
+    ],
+    "native_session_stopped": true,
+    "diagnostic_helper_absent_before_Start": true
+  },
+  "preserved_negative_cases": [
+    "First receive-only signal probe read state immediately after asynchronous SIGSTOP; it refused and resumed safely. Corrected probe waits for stopped state and passes.",
+    "First attempted analyzer case occupied the sole native unkey slot with a separate14s helper. Analyzer refused without xmit1/RF; receive-only probe confirms second begin returns409test_busy while the first remains current. Revised meter guard resumes the pinned desktop before its existing GUI Stop; analyzer owns its one helper.",
+    "First audit incorrectly required three Go executables; actual expected roles are one pd-boot manager and two Go control/status frontends, all unprivileged and hash-matched. Corrected audit passes without runtime changes.",
+    "First diagnostic-retirement check required an installed_list row; firmware can omit an empty native list. The existing first-install inventory policy, two successful subscriptions, ready WFP and closed helper port verify retirement.",
+    "First immediate USB snapshot returned503 during a mode transition. Exact cause is not proved. Separate receive-only case waits300ms and obtains two fresh same-generation, nonzero finite snapshots with200responses; no RF retry or source rearm."
+  ],
+  "scope_limits": [
+    "One current-graph desktop-only fault during observed corrected tones. Not the full process/API/credential/partial-allocation/combined-owner failure matrix, and no new IMD/ACPR or sustained-duty comparison. The stalled capture is correctly unusable and is not restarted.",
+    "Times are host receipt/decision/write observations, not calibrated physical RF-stop latency. The LP-100A is peak-held, so its readback does not timestamp instantaneous RF cessation. Radio release occurred while the desktop was stopped; no exclusive attribution to one native guardian is claimed.",
+    "No stop-certificate internals were directly inspected; exact wire ordering and completed controller release are observed under the already tested lease/coordinator contract. Partial release is qualified for this captured owned-READY ordering only.",
+    "Root cleanup audit precedes the explicit ordinary receive recovery; its process/ARP conclusions are scoped to the post-fault Stop. The subsequent USB cycle has successful public Stop and fresh IQ evidence, without another host-root delegation.",
+    "Historical natural128sample and all-bypass cold-start causes remain unresolved. This desktop stall does not pause the radio DSP and is not a reproduction of either defect.",
+    "Earlier control-budget physical recovery already has its own50ca57748 evidence and is not reopened here. Actual6300 hardware, final native candidate coverage, final graph failures, extended/raw speech, integrated stock comparison and independent release gates remain."
+  ],
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/current-desktop-stall-components.tar.gz",
+    "bytes": 265488,
+    "sha256": "d1f0e939cd0cc460dcc6f4a68f708aedda735de47f700878f7fbf7ccda4c12a7",
+    "members": 117,
+    "all_members_verified": true
+  }
+}

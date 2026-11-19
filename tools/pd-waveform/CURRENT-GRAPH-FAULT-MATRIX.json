@@ -1,0 +1,90 @@
+{
+  "recorded_utc": "2026-11-19T02:22:47.472825+00:00",
+  "production_ready": false,
+  "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
+  "current_runtime_release": "ab0789de82d9fa6b9096d2921264fb23d224430be60fa1efbc05a90e74da667e",
+  "current_desktop_implementation": "e25ec9af1e9a8f5a7bbfcf94424d466ad4cb66fe",
+  "cases": [
+    {
+      "case": "Desktop stalls during corrected tones; Stop arrives after own READY and before owner clear",
+      "state": "passed_one_current_graph_case",
+      "evidence": "CURRENT-DESKTOP-STALL-QUALIFICATION.json",
+      "limits": "One captured ordering; invalidated capture is not retried. Not every scheduling/ownership interleaving."
+    },
+    {
+      "case": "Competing bounded-unkey allocation",
+      "state": "passed_current_graph_receive_only",
+      "evidence": "CURRENT-DESKTOP-STALL-QUALIFICATION.json",
+      "limits": "Second begin409test_busy preserves the original helper. This is not arbitrary partial-allocation/crash coverage."
+    },
+    {
+      "case": "Post-fault workers, capabilities, packet FDs, owned ARP and temporary lab authority cleanup",
+      "state": "passed_current_graph_after_desktop_stall_Stop",
+      "evidence": "CURRENT-DESKTOP-STALL-QUALIFICATION.json",
+      "limits": "No DSP/ARP-owner was killed in this case. Later ordinary USB recovery has public Stop evidence; root inventory precedes it."
+    },
+    {
+      "case": "Ordinary USB receive-only local IQ after fault and helper retirement",
+      "state": "passed_two_fresh_current_graph_snapshots",
+      "evidence": "CURRENT-DESKTOP-STALL-QUALIFICATION.json",
+      "limits": "One immediate mode-transition snapshot returned503; two later snapshots200 share source generation and have fresh sample times. Cause of the initial503 is not proved."
+    },
+    {
+      "case": "DSP death during steady corrected tones while desktop is paused",
+      "state": "pending_current_graph",
+      "earlier_evidence": "DESKTOP-STALL-KEYED-QUALIFICATION.json",
+      "earlier_scope": "Runtime489b1ed5, DSP death about2s into startup, directional peak0.926W. Do not substitute for current steady-tone case."
+    },
+    {
+      "case": "DSP scheduling stall, stale model retirement and validated recent-model recovery",
+      "state": "pending_final_graph_RF",
+      "earlier_evidence": [
+        "RECEIVE-STALL-QUALIFICATION.json",
+        "ALIGNMENT-EVIDENCE-RECONCILIATION.json"
+      ],
+      "earlier_scope": "Receive-only150ms stall and separately controlled20ms transport diagnostic exist; neither attributes the historical natural128sample event."
+    },
+    {
+      "case": "IQ broker and both ARP-owner deaths, simultaneous cleanup-owner failures",
+      "state": "pending_final_graph_keyed_matrix",
+      "earlier_evidence": "INSTALLED-RESOURCE-FAILURES-QUALIFICATION.json",
+      "earlier_scope": "Earlier installed0d receive-only full resource retirement/restart is preserved; not current final keyed graph."
+    },
+    {
+      "case": "Primary/control failure, restart budget and physical recovery",
+      "state": "earlier_installed_component_qualified_final_scope_separate",
+      "earlier_evidence": [
+        "CONTROL-RECOVERY-COLD-QUALIFICATION.json",
+        "CONTROL-RECOVERY-BUDGET-COLD-QUALIFICATION.json"
+      ],
+      "earlier_scope": "Physical cycle after exhausted budget was already qualified at50ca57748 on release622. Do not reopen as missing evidence. Current restart policy unchanged; this desktop-stall case did not crash the control service."
+    },
+    {
+      "case": "API loss, successful owner credential revocation, malformed status, partial startup/allocation",
+      "state": "remaining_full_scope",
+      "earlier_evidence": [
+        "INSTALLED-FAILURE-QUALIFICATION.json",
+        "NATIVE-CREDENTIAL-CURRENT-QUALIFICATION.json",
+        "NATIVE-ENROLLMENT-CURRENT-QUALIFICATION.json"
+      ],
+      "earlier_scope": "Native storage/window tests do not qualify on-radio credential-loss/RF behavior."
+    },
+    {
+      "case": "Operator-confirmed whole-radio software-reboot hang",
+      "state": "unresolved",
+      "next_requirement": "Bounded live shutdown trace before any further software-reboot qualification; preserve successful physical cold boots separately."
+    }
+  ],
+  "next_available_case": {
+    "purpose": "Current same-UID DSP-death test during corrected tones with desktop paused, independently bounded unkey/LP guards, exact process identity, no automatic restart and explicit receive recovery.",
+    "state": "not_prepared_or_executed_by_this_report",
+    "authority_constraint": "Any lab injection must be a concrete reviewed temporary job; do not add a shipping arbitrary-execution or signaling endpoint or persistent privileges."
+  },
+  "remaining_other_phases": [
+    "P3 historical natural128sample and unexplained cold all-bypass causes",
+    "P7 final repeated tones/raw speech/extended duty and resource/recovery gates",
+    "P8 integrated stock APD workflow and final matched comparison",
+    "Actual FLEX6300 teammate hardware and disk qualification",
+    "Final native candidate packaging, production publisher/catalogue and independent release review"
+  ]
+}
