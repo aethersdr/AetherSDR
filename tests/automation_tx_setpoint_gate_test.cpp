@@ -52,6 +52,18 @@ using namespace AetherSDR;
 
 namespace {
 
+// A host with no automation handler: the bridge falls back to these, which
+// answer as MainWindow does for a drive action fired without TX permission.
+class FallbackMainWindow : public QMainWindow {
+    Q_OBJECT
+public:
+    Q_INVOKABLE int fireShortcutAction(const QString&, bool) { return 5; }
+    Q_INVOKABLE int injectKeyEventForAutomation(const QString&, bool press, bool)
+    {
+        return press ? 6 : 0;
+    }
+};
+
 int failures = 0;
 
 void check(bool ok, const QByteArray& what)
@@ -298,6 +310,25 @@ int main(int argc, char** argv)
               "keyevent: TX allowed, ceiling off: an rf_power_up press is delivered (unchanged)");
         server.setShortcutAutomationHandler({});
         server.setKeyEventAutomationHandler({});
+        {
+            // No handler, TX allowed, no ceiling: the cause is the fallback,
+            // not a ceiling of -1 and not a missing permission.
+            window.hide();
+            FallbackMainWindow fallback;
+            fallback.show();
+            const auto noHandler = [](const QJsonObject& r) {
+                const QString e = r.value(QStringLiteral("error")).toString();
+                return !ok(r) && e.contains(QStringLiteral("no automation handler"))
+                    && !e.contains(QStringLiteral("power ceiling"));
+            };
+            check(noHandler(shortcut()),
+                  "shortcut: no handler, TX allowed: the refusal names the fallback, not the ceiling");
+            check(noHandler(cmd(server, QStringLiteral("keyevent"), {}, QStringLiteral("press"),
+                                QStringLiteral("rf_power_up"))),
+                  "keyevent: no handler, TX allowed: the refusal names the fallback, not the ceiling");
+            fallback.hide();
+            window.show();
+        }
         server.setTxAllowed(false);
     }
 
@@ -391,8 +422,15 @@ int main(int argc, char** argv)
                   QStringLiteral("blocked: 'tci send drive:0,50' would set transmit drive past "
                                  "the power ceiling (AETHER_AUTOMATION_TX_MAX_POWER=10)")),
               "TX allowed, ceiling 10: tci send drive:0,50 is refused as past the ceiling");
-        check(ceilingBlocked(tciSend(QStringLiteral("tune_drive:0,11"))),
+        const QJsonObject tuneOver = tciSend(QStringLiteral("tune_drive:0,11"));
+        check(ceilingBlocked(tuneOver),
               "TX allowed, ceiling 10: tci send tune_drive:0,11 is refused");
+        check(over.value(QStringLiteral("error")).toString()
+                      .endsWith(QStringLiteral("Use `transmit rfpower <n>`, which clamps."))
+                  && tuneOver.value(QStringLiteral("error")).toString()
+                         .endsWith(QStringLiteral("Use `transmit tunepower <n>`, which clamps.")),
+              "TX allowed, ceiling 10: a refused drive SET names transmit rfpower, tune_drive "
+              "names transmit tunepower");
         check(ceilingBlocked(tciSend(QStringLiteral("vfo:0,0,14074000; drive:0,90;"))),
               "TX allowed, ceiling 10: a drive SET later in the payload is refused");
         check(ceilingBlocked(tciSend(QStringLiteral("drive:0,5,5;")))
@@ -592,3 +630,5 @@ int main(int argc, char** argv)
                 failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }
+
+#include "automation_tx_setpoint_gate_test.moc"
