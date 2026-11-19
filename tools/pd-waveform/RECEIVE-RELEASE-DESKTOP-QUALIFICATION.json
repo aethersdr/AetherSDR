@@ -1,0 +1,284 @@
+{
+  "recorded_utc": "2026-11-19T10:57:17.000947+00:00",
+  "production_ready": false,
+  "shipping_candidate": false,
+  "status": "Signed276e9 release-only desktop fix is now running; receive-only explicit IQ selection, ordinary Start, two fresh local DAX IQ captures and Stop pass with FDX off. Fixed diagnostic capture files preserved, hash-pinned removed, temporary carriers retired. New one-key follow-up prepared but not dispatched; operator keying approval remains pending. Original keyed failure remains failed.",
+  "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+  "runtime_release_unchanged": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+  "desktop_instance": {
+    "pid": 3233869,
+    "socket": "/tmp/aetherpd-native-durability",
+    "binary_sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a",
+    "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+    "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+    "development_native_origin": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "txAllowed": true,
+    "positive_key_actions": 0
+  },
+  "build": {
+    "passed": true,
+    "base_source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+    "feature_parent": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+    "tracker_sources": {
+      "src/core/backends/flex/FlexPttStopTracker.cpp": "27ca210e827236020e8a83dfcb842b4783502e1ee77b1a9aec613715764b6658",
+      "src/core/backends/flex/FlexPttStopTracker.h": "a7e2300f24375daa80398a6c687ca3c68087714a1f1944bdfbf48d1ee36d3dfe",
+      "tests/flex_ptt_stop_tracker_test.cpp": "b82abb5f7d3d04c2d33dc6927a4b605ea2606ed59c8dd0310d2512e324eda2fe"
+    },
+    "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+    "base_source_archive_sha256": "f1f976916d7000376d50daffa7337b1bd2878900d29b90771080f23e5efae47e",
+    "untracked_source": {
+      "tools/pd-waveform/fit_rejection_test.c": "dc7958ee74eff45b3d8efebc11eb7875828a2d033b335ba3bbe72a1fe3bc8f23",
+      "tools/pd-waveform/lowess_window_test.c": "bec187dd653273bd4cdfb20a709bbe89781b8339a203c502f75dd55255221665"
+    },
+    "binaries": {
+      "AetherSDR": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/receive-owner-clear-desktop/bin/AetherSDR",
+        "bytes": 833358152,
+        "sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a"
+      },
+      "aetherd": {
+        "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/receive-owner-clear-desktop/bin/aetherd",
+        "bytes": 413586416,
+        "sha256": "ee9003aa7c35f4e578deefff243ad0442533c6b800296051feba16aac0ccf8d8"
+      }
+    },
+    "runtime_release_unchanged": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+    "development_selection": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/api-exit-preserving-candidate/distributions/short/arm64/selection.json",
+    "previous_binaries_preserved": true,
+    "new_desktop_launched": false,
+    "radio_updated": false,
+    "RF_commands": []
+  },
+  "new_positive_GUI_key_requests": 0,
+  "new_observed_TX_intervals": 0,
+  "source_arm_actions": 0,
+  "radio_updates": [],
+  "radio_reboots": [],
+  "processing_settings_restored": false,
+  "new_desktop_launched_once": true,
+  "old_desktop_closed_normally": true,
+  "receive_only": {
+    "passed": true,
+    "fresh_captures": [
+      {
+        "metadata": {
+          "capture_id": "c3f2842cc390e5332e6619b87a1501a3",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 374003279,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "66367274281172",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "66367615245057",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "6",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        },
+        "file": "IQ-1.f32le",
+        "bytes": 131072,
+        "sha256": "6ae4842882cb7da4b5d8391424ee6b152dff88382e41ded0c9f730d9ef306be8"
+      },
+      {
+        "metadata": {
+          "capture_id": "f0b9aa225f97be4fa9c18d400606d64d",
+          "center_hz": 7150000,
+          "chunk_samples": 512,
+          "correcting": false,
+          "feedback_binding": {
+            "channel": 4,
+            "failed": false,
+            "gui_handle": 374003279,
+            "pan": 1073741824,
+            "transport": "local_dax_iq",
+            "valid": true
+          },
+          "first_receive_ns": "66367751253832",
+          "format": "f32le-iq-v1",
+          "keyed": false,
+          "last_receive_ns": "66368092250105",
+          "measurement": {
+            "source_id": "0000000000000000",
+            "tones": false
+          },
+          "sample_count": 16384,
+          "sample_rate_hz": 48000,
+          "source": {
+            "generation": "6",
+            "kind": "local_dax_iq",
+            "stream_id": 536870912
+          }
+        },
+        "file": "IQ-2.f32le",
+        "bytes": 131072,
+        "sha256": "b4e8ca2ece71f3191916d57efa4f490362c1f4906567567c1ad223bf15bdadde"
+      }
+    ],
+    "normal_Stop_passed": true,
+    "original_USB_profile_preserved": true,
+    "FDX": false,
+    "stock_APD": false,
+    "capture_retirement": {
+      "passed": true,
+      "files": {
+        "lab-unmatched.f32le": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "lab-aligned.f32le": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "lab-tx.csv": {
+          "bytes": 205,
+          "sha256": "a9812e336670ec0715ba375ac0f22193dbec491cf6c6c1a79292ca6392748f04"
+        },
+        "lab-fit.jsonl": {
+          "bytes": 191,
+          "sha256": "b5e6dbe36e0c3759c6fd48945bad15b83c5ad65bdb483f9eda73b2550b013231"
+        }
+      },
+      "completion": {
+        "event": "complete",
+        "pid": 28402,
+        "unmatched_bytes": 0,
+        "aligned_bytes": 0,
+        "trace_bytes": 205,
+        "fit_records": 0,
+        "fit_records_dropped": 0,
+        "deferred_flushes": 0,
+        "deferred_closes": 1,
+        "unowned_READY": true
+      },
+      "file_operator": {
+        "UID": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "GID": [
+          "20",
+          "20",
+          "20",
+          "20"
+        ],
+        "NNP": "1",
+        "caps": {
+          "CapEff": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        }
+      },
+      "local_files_fsynced_and_verified": true,
+      "radio_files_removed": true,
+      "temporary_lab_jobs_and_carriers_retired": true,
+      "known_session_helpers_absent_at_READ_and_CLEAN": true,
+      "owned_ARP_absent_and_journal_empty_at_READ_and_CLEAN": true,
+      "RF_commands": [],
+      "source_arms": [],
+      "scope": "Receive-only desktop smoke test, not an exact observed-worker-cohort fault audit or keyed completion proof."
+    }
+  },
+  "harness_failures_preserved": [
+    {
+      "file": "restart-result.json",
+      "status": "failed",
+      "cause": "Harness required stopped across GUI-owner connection change. Read-only inspection found the exact new GUI idle/USB and unchanged installation with normal503/unavailable before first Start. The running process was adopted after revalidation; no extra launch."
+    },
+    {
+      "file": "receive-only-01/result.json",
+      "status": "failed_before_any_Start_arm_or_key",
+      "cause": "Harness omitted explicit IQ feedback combo selection. GUI correctly refused Start. Separate receive-only-02 performs normal channel4 selection and passes. The original false result remains unchanged."
+    }
+  ],
+  "live_keyed_completion_qualified": false,
+  "prepared_followup": {
+    "directory": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/receive-release-keyed-followup",
+    "protocol": {
+      "purpose": "Separately authorized live qualification of causal release-only desktop fix after missing-receiver DSP API loss",
+      "runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
+      "desktop": {
+        "pid": 3233869,
+        "socket": "/tmp/aetherpd-native-durability",
+        "binary_sha256": "e51953dfb1ca9c3082f6c24724d372fd957ec4a032386c8421b296503036402a",
+        "source_commit": "e26ce672782520b7b627173cfd92cd77ad45b93e",
+        "source_patch_sha256": "c1d773e4b13c0cc7ebf2fa52ae866c8f9f9a7a943cb4db89472605019af21353",
+        "desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
+        "development_native_origin": "fd49ae7ef872d012d0ed3795b3c25dbceefc8765",
+        "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+        "txAllowed": true,
+        "positive_key_actions": 0
+      },
+      "frequency_MHz": 7.15,
+      "nominal_W": 5,
+      "configured_max_W": 10,
+      "TX_antenna": "ANT1 dummy load/sampler",
+      "feedback": "RXA/local_dax_iq channel4",
+      "FDX": false,
+      "stock_APD": false,
+      "source_duration_s": 8,
+      "native_cutoff_s": 9,
+      "analyzer_timeout_s": 10,
+      "LP_limit_W": 6,
+      "LP_SWR_limit": 1.5,
+      "coherent_directional_SWR_limit": 2,
+      "minimum_corrected_plateau_ms": 350,
+      "positive_GUI_key_actions_limit": 1,
+      "source_arm_actions_limit": 1,
+      "fault_actions_limit": 1,
+      "fault": "shutdown only exact DSP inherited API socket after full privilege drop",
+      "automatic_RF_retry": false,
+      "automatic_source_rearm": false,
+      "radio_reboots": [],
+      "root_RF_commands": [],
+      "root_persistent_mutations": [],
+      "prepared_only": true,
+      "case_label": "receive-release-fixed-5W-01",
+      "GUI": 374003279,
+      "operator_keying_approval_received": false,
+      "original_failed_case_unchanged": true
+    },
+    "prekey_recipe_manifest_sha256": "55f9451c82ce3a56e213330af5d680991e3cc1e10d9f8f8f1c7f0c9dadb67ede",
+    "GUI_preparation_passed": true,
+    "source_armed": false,
+    "radio_keyed": false,
+    "operator_keying_approval_received": false,
+    "new_RF_dispatches": 0
+  },
+  "archive": {
+    "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/receive-release-desktop-deployment-components.tar.gz",
+    "bytes": 128558,
+    "sha256": "13c49f40404c78fea2a87485124798ddcebb9951a14610670f83621bd47b4741",
+    "members": 75,
+    "all_members_verified": true
+  },
+  "scope_limits": [
+    "No new RF or calibration arm occurred. Live keyed completion is not proved by the receive-only smoke test.",
+    "The original83d6 keyed case remains overall failed, with separate positive physical-unkey, exit7, explicit receive recovery and exact cleanup evidence in DSP-API-LOSS-RELEASE-QUALIFICATION.json.",
+    "Capture READ/CLEAN verifies known session helpers absent, owned ARP absent and journal empty; this smoke test does not add an exact observed-PID-cohort fault audit.",
+    "Initial pre-start503 status and missing explicit IQ selection are harness/preparation failures, not evidence of a new product bug. Their original false reports remain saved.",
+    "Current radio has the prepared receive-only PD session running and source unarmed while awaiting a new explicit keying instruction. No automatic retry/rearm or software reboot.",
+    "Full P1-P10 remains active: natural128/cold-start cause, remaining failure/foreign/credential/stale-cache scopes, repeated/raw/extended RF, final matched stock comparison, actual6300/disk/kernel/native and independent release gates remain open."
+  ],
+  "next_step": "Wait for explicit operator keying approval for the concrete prepared one5W follow-up. Re-attest the exact GUI/installation/bench guards before dispatch; no automatic repeat. Continue independent non-RF production work while pending."
+}

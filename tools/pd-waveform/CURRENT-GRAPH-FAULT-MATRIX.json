@@ -1,9 +1,9 @@
 {
-  "recorded_utc": "2026-11-19T10:45:35.517064+00:00",
+  "recorded_utc": "2026-11-19T10:57:17.000947+00:00",
   "production_ready": false,
   "scope": "P5 coverage ledger; earlier runtime evidence remains separately attributed. A passing row does not close P5.",
   "current_runtime_release": "83d6f6b35d74f84f6941c33af5c0922863c99067ec73780a5761d2e20833addc",
-  "current_desktop_implementation": "fcebaa7e6cb646b89881d963239c5f59d447657f",
+  "current_desktop_implementation": "276e9d37ab24da35b57df702e6c9ddb171776704",
   "cases": [
     {
       "case": "Desktop stalls during corrected tones; Stop arrives after own READY and before owner clear",
@@ -123,10 +123,11 @@
     }
   ],
   "next_available_case": {
-    "purpose": "Preserve and sign the causal desktop fix and all negative evidence, checkpoint the built candidate separately, then qualify new desktop completion as a separate test. Do not retry the original RF case or reinterpret it as passed.",
-    "state": "causal_desktop_fix_built_host_tested_not_live_qualified",
+    "purpose": "Wait for explicit operator keying approval for the concrete prepared one5W follow-up. Re-attest the exact GUI/installation/bench guards before dispatch; no automatic repeat. Continue independent non-RF production work while pending.",
+    "state": "fixed_desktop_running_receive_only_passed_concrete_one_key_followup_prepared_operator_approval_pending",
     "evidence": [
-      "DSP-API-LOSS-RELEASE-QUALIFICATION.json"
+      "DSP-API-LOSS-RELEASE-QUALIFICATION.json",
+      "RECEIVE-RELEASE-DESKTOP-QUALIFICATION.json"
     ],
     "authority_constraint": "No automatic RF retry/source rearm or software reboot. New live proof is separately scoped; current radio USB/nativeStopped."
   },
