@@ -676,7 +676,7 @@ private:
     // One status-bar notice per connect session for a control this radio
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
-    void showUnsupportedControlNotice();
+    void showUnsupportedControlNotice(const QString& message = {});
     // An antenna button or combo refused a pick because the radio published no
     // port to choose (AntennaChoiceGate.h). Log it and say so, once a session.
     void announceAntennaChoiceRefused(bool tx);
@@ -920,6 +920,7 @@ private:
     // connection when either endpoint dies, and the old backend is destroyed before
     // the new one is built, so no duplicates. Guarded anyway - see the body.
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
+    void wirePureSignalApplet(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
     // Display panel → "Clone to all Pans". Copies every Display setting from
@@ -1314,6 +1315,11 @@ private:
     void pushCwPaddleState(const QString& source = {},
                            quint64 traceId = 0, quint64 sourceMs = 0);
     bool handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // The CW, PTT-hold and Monitor-hold handlers, in that order.
+    bool dispatchMomentaryKey(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // A sided Ctrl/Shift/Alt event as per-side edges through
+    // dispatchMomentaryKey(); nullopt when the side is unknown (#7354).
+    std::optional<bool> handleSidedModifierEvent(QKeyEvent* keyEvent, QEvent::Type eventType);
     bool handleScopedCwMomentaryShortcut(const QString& action, bool press,
                                          const std::shared_ptr<TxController>& controller,
                                          bool keyboard = true);
@@ -1573,6 +1579,17 @@ private:
     // spot id, so an "add" for a callsign already on this band updates the
     // existing spot instead of minting a duplicate (#2906).
     QHash<QString, int> m_n1mmSpotIdByKey;
+
+    // WSJT-X Rx/Tx frequency overlay (#4526). One live entry per WSJT-X
+    // instance id — a second instance on another slice/band gets its own
+    // marker, same per-instance keying #3595 established for spot placement.
+    // Swept by the existing passiveSpotExpiryTimer (MainWindow_Spots.cpp):
+    // an instance that stops reporting Status (exited without a clean Close,
+    // network dropped) has its marker cleared rather than sitting on a stale
+    // frequency forever.
+    QHash<QString, WsjtxStatus> m_wsjtxInstances;
+    QHash<QString, qint64> m_wsjtxInstanceLastSeenMs;
+    void rebuildWsjtxMarkers();
     // External controllers run on a dedicated worker thread (#502)
     QThread*             m_extCtrlThread{nullptr};
 #ifdef HAVE_SERIALPORT
@@ -2236,6 +2253,7 @@ private:
     bool m_serialCwPaddleHeld{false};
     void captureLocalCwPaddleInput(bool held);
     bool m_cwRightPaddleActive{false};
+    ShortcutSidedModifierTracker m_sidedModifiers;
     QPointer<QWidget> m_sliderShortcutLease;
     QTimer m_sliderShortcutLeaseTimer;
     struct SwrSweepSample {

@@ -156,6 +156,14 @@ Cc ccRxGain(int db) noexcept
     return {kC0AdcGain, 0x00, 0x00, 0x00, static_cast<std::uint8_t>(0x40 | code)};
 }
 
+Cc ccGain(int db, bool pureSignal) noexcept
+{
+    Cc b = ccRxGain(db);
+    if (pureSignal)
+        b[2] |= kGainPureSignal;
+    return b;
+}
+
 Cc ccAdcAssign() noexcept
 {
     // RX1..RX7 -> ADC0, TX attenuation 0. All-zero payload is the correct value

@@ -291,6 +291,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
     caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    caps.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     caps.dspParameterReset = std::nullopt;
     caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
     caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
@@ -397,6 +398,7 @@ RadioCapabilities SimBackend::capabilities() const
     // a simulator that cannot key has nothing to be full duplex about.
     caps.hasRadioSideCwKeyer = false;
     caps.cwTextControl = std::nullopt;
+    caps.hostCwKeyingControl = std::nullopt;
     caps.hasVoiceKeyer = false;
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;

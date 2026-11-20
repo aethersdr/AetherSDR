@@ -9,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <QThread>
 #include <QTimer>
@@ -20,6 +21,7 @@
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2HardwareOptions.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
+#include "core/backends/hl2/Hl2PureSignal.h"
 #include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
 #include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
 #include "core/backends/hl2/Hl2TelemetrySource.h"   // the shared attribution rule
@@ -41,6 +43,7 @@ namespace AetherSDR::hl2 {
 class MetisClient;
 class Hl2RxDsp;
 class Hl2TxDsp;
+class Hl2PureSignal;
 
 // The IQ rates the HL2's DDC can run, ascending. One list serves as the
 // capability advertisement (sampleRatesHz), the pan zoom limits and the snap set
@@ -117,6 +120,7 @@ public:
     // other token is refused; when called, both republish the slice so the
     // button shows ANT. RadioModel refuses a token outside the list before this.
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
+    bool setSliceIqTap(int sliceId, bool on) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
@@ -293,6 +297,27 @@ public:
         setTelemetryService(dynamic_cast<Hl2TelemetryService*>(src));
     }
 
+    // ---- PureSignal (docs/HERMES.md §11) -----------------------------------
+    // GUI thread. Each forwards to Hl2PureSignal on the I/O thread; the result
+    // comes back as extensionStatus("hl2", "puresignal", fields). Clients above
+    // the radio seam reach these only through invokeExtension("hl2",
+    // "puresignal.*") -- see invokePureSignal(). Enabling claims DDC 2 and 3
+    // (feedback and TX DAC reference), so it needs a 4-receiver board, a span
+    // whose link budget carries four, and at most two receivers open — and
+    // while it is on the receiver ceiling is two.
+    [[nodiscard]] const Hl2PureSignalStatus& pureSignalStatus() const noexcept { return m_psStatus; }
+    // False, with the reason in pureSignalBlocker(), when PureSignal cannot run.
+    bool setPureSignalEnabled(bool on);
+    void setPureSignalAutoCalibrate(bool on);
+    void pureSignalCalibrateOnce();
+    // Single, Reset and Restore end Auto: drops and persists the switch.
+    void clearPureSignalAutoCalibrate();
+    void pureSignalResetCorrection();
+    void setPureSignalAutoAttenuate(bool on);
+    void setPureSignalAttenuationDb(int att);
+    void savePureSignalCorrection(const QString& path);
+    void restorePureSignalCorrection(const QString& path);
+
 signals:
     // Connect-time progress for the client-side WDSP build; not on the seam because
     // WDSP is this family's alone. `stage` is operator-facing text without a counter;
@@ -333,6 +358,7 @@ private:
     // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
     friend struct Hl2AutoGainLawTestAccess;
     friend struct Hl2SessionMemoryTestAccess;
+    friend struct Hl2PureSignalBackendTestAccess;
     // Installs MetisClient's start() stand-in and injects the link edge, so a
     // real connectRadio() runs without a socket (hl2_persist_*_test).
     friend struct Hl2PersistTestAccess;
@@ -342,9 +368,12 @@ private:
     friend struct Hl2TxRouteTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
-    void onRadioPttChanged(bool keyed);
-    // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes, and only then.
-    void publishTransmitState();
+    // A rising edge is offered to RadioModel as TransmitDelta::radioPtt only when
+    // keyRequest is set; a PTT held since the stream began rides mox alone.
+    void onRadioPttChanged(bool keyed, bool keyRequest = false);
+    // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes. A radio PTT
+    // edge passes radioPtt, which is published with or without a mox change.
+    void publishTransmitState(std::optional<bool> radioPtt = std::nullopt);
     // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
     // held slice peak on either side of kSliceStaleMs without waiting.
     friend struct Hl2AdcAgeTestAccess;
@@ -511,6 +540,39 @@ private:
 
     MetisClient* m_metis = nullptr;
     Hl2TxDsp* m_txDsp = nullptr;
+    // I/O thread, like m_txDsp; deleted before it in the destructor.
+    Hl2PureSignal* m_pureSignal = nullptr;
+    bool m_psEnabled = false;            // GUI thread: DDC 2/3 are claimed
+    bool m_psAvailable = false;          // last availability sent to m_pureSignal
+    QString m_psUnavailableReason;
+    int m_psFeedbackRateHz = 0;
+    Hl2PureSignalStatus m_psStatus;
+    quint64 m_psGeneration = 0;
+    bool m_psAdcOverload = false;
+    // The operator's PureSignal preferences. GUI thread; the backend owns them
+    // and persists them per radio as the "PureSignal" radio_settings document
+    // (one coupler, one feedback attenuation), loaded on every connect.
+    bool m_psAutoCalibrate = true;
+    bool m_psAutoAttenuate = true;
+    int m_psAttenuationDb = Hl2PsGain::kAttMax;
+    // The operator's last PureSignal on/off, as puresignal.enable set it.
+    // Turned back on at link-up when the radio allows it. Not m_psEnabled:
+    // an automatic off (PureSignal became unavailable) does not change it.
+    bool m_psWanted = false;
+    void restorePureSignalEnabled();
+    void loadPureSignalPreferences();
+    void savePureSignalPreferences();
+    // Why PureSignal cannot run right now, or empty when it can.
+    [[nodiscard]] QString pureSignalBlocker() const;
+    // The "hl2" extension's puresignal.* verbs (get, enable, auto, single,
+    // reset, autoatt, att, save, restore). Replies with the status map, or
+    // with extensionError carrying the reason a request was refused.
+    void invokePureSignal(const QString& verb, quint64 requestId, const QVariant& arg);
+    [[nodiscard]] QVariantMap pureSignalFields() const;
+    // Re-derive availability after a connect, rate or receiver change; turns
+    // PureSignal off if the change took away what it needs.
+    void refreshPureSignalAvailability();
+    void applyPureSignalWire(bool on);
     bool m_connected = false;
 
     // Stream-free telemetry: reads the radio over the alternate control port, on its
@@ -768,6 +830,9 @@ private:
     // open: receiver A's extras, and the whole entry for any a numRx param opened.
     void seedOpenReceiversFromMemory();
     void seedReceiverExtras(Receiver& r, const Receiver& memory) const;
+    // The pan centre r comes up on: `ncoHz` while r listens inside its usable
+    // window at the current rate, else r's tuned frequency.
+    [[nodiscard]] double panCentreKeptOrRecentred(const Receiver& r, double ncoHz) const;
     [[nodiscard]] static QJsonObject receiverMemoryJson(const Receiver& r);
     // Nullopt for an entry with no usable frequency or mode; other bad fields drop alone.
     [[nodiscard]] std::optional<Receiver> receiverFromMemory(const QJsonObject& o) const;
@@ -917,6 +982,9 @@ private:
     // kEp6LinkBudgetFraction / maxReceiversAtRate() (4 RX at 384 kHz is ~89 Mbit/s
     // on 100BASE-T, refused).
     int m_sampleRateHz = 48000;
+    // UI numbers whose IQ a TCI client wants. Kept here, not only on the DSP,
+    // so a chain rebuilt by a rate change or a reopen starts with its tap set.
+    QSet<int> m_iqTapUis;
     // Receivers to run: operator request (Hl2Settings), clamped by discovery byte
     // 0x13 and the link budget. Never hardcoded: skimmer gateware reports 9..12,
     // hl2b5up_main reports 4.

@@ -711,7 +711,8 @@ bool testSimBackendEndToEnd()
                                       "receiveFilterControl", "receiveAudioControl",
                                       "receivePanCenterControl", "receivePanBandwidthControl",
                                       "receiveCwPitchControl", "receiveDspControl",
-                                      "receivePanRfGainControl", "radioSpeakerControl"})
+                                      "receivePanRfGainControl", "radioSpeakerControl",
+                                      "receiveAudioPlayout"})
                    && hasExactlyKeys(sliceValue,
                                      {"id", "letter", "panadapterId", "owned",
                                       "frequencyHz", "frequencyObservation", "mode", "filter", "active",

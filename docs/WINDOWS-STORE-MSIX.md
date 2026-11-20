@@ -141,9 +141,11 @@ The Windows installer workflow produces this automatically:
    alongside the other Windows-Installer artifacts. Maintainers therefore get
    the same AetherSDR and Qt PDB set for local WinDbg/Visual Studio debugging
    without unpacking a `.msixupload`. On a tag, the same set plus the waveform
-   helper's PDB is also attached to the release as
+   helper's PDB is also published as
    `AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz`, which does not expire
-   ([debugging-crashes.md](debugging-crashes.md)).
+   ([debugging-crashes.md](debugging-crashes.md)). From v26.11.4 it is at
+   `https://updates.aethersdr.com/releases/vX.Y.Z/`; through v26.11.3 it is
+   attached to the GitHub release.
 
 The Qt-provided PDBs are packaged unchanged. `windeployqt` selects them from
 the same exact Qt installation that supplied the deployed DLLs; `pdbcopy` is
@@ -173,9 +175,12 @@ works cross-platform against the same PDB:
    privately, for a crash a minidump cannot explain. Store Partner Center TSVs
    are unsymbolized — request the `.dmp`.
 2. **Get the matching PDBs** — they must be from the *exact* build that crashed
-   or the debug-ids won't match. For a release, download its symbol archive:
-   `gh release download vX.Y.Z -R aethersdr/AetherSDR -p '*-Windows-x64-symbols.tar.xz'`
-   and extract it with `tar -xJf`. For a branch build, or a release older than
+   or the debug-ids won't match. For a release, download its symbol archive.
+   From v26.11.4:
+   `curl -O https://updates.aethersdr.com/releases/vX.Y.Z/AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz`;
+   through v26.11.3:
+   `gh release download vX.Y.Z -R aethersdr/AetherSDR -p '*-Windows-x64-symbols.tar.xz'`.
+   Extract it with `tar -xJf`. For a branch build, or a release older than
    those archives, pull the `Windows-Symbols` artifact from that
    `windows-installer.yml` run within its 90 days:
    `gh run download <run-id> -R aethersdr/AetherSDR -n Windows-Symbols`.
