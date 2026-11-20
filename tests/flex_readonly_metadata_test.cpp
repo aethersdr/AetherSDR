@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 #include "FlexRadioStatusTestSupport.h"
 #include "FlexSliceStatusTestSupport.h"
 // Published FlexLib Slice.ChainMode and Radio.UpdateInfo metadata through the
@@ -85,11 +86,12 @@ public:
         radio.m_sessionCommands = SessionCommandGuard::create();
         radio.m_sessionWire = radio.m_connection;
         radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+        FlexCommandTestAccess::session(radio);
     }
     static void requestInfo(RadioModel& radio) { radio.requestRadioInfo(); }
     static RadioConnection::ResponseCallback callback(RadioModel& radio, quint32 seq)
     {
-        return radio.m_pendingCallbacks.value(seq);
+        return FlexCommandTestAccess::reply(FlexCommandTestAccess::session(radio), seq);
     }
     static quint64 session(const RadioModel& radio) { return radio.m_sessionGeneration; }
     static quint64 modelGeneration(const RadioModel& radio) { return radio.m_sessionModelGeneration; }
@@ -143,7 +145,7 @@ struct Fixture {
             return false;
         }
         attach();
-        backend->setSliceCommandSink([this](const QString& command) {
+        backend->setSliceCommandSinkForTest([this](const QString& command) {
             sliceCommands.append(command);
         });
         applyFlexSliceStatus(radio, 0, sliceStatus());
@@ -177,12 +179,12 @@ struct Fixture {
     void reply(quint32 seq, int code, const QString& body)
     {
         RadioConnectionSessionTestAccess::reply(*backend->connection(), seq, code, body);
-        QCoreApplication::sendPostedEvents(&radio, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(&FlexCommandTestAccess::session(radio), QEvent::MetaCall);
     }
     void detach()
     {
         if (backend) {
-            backend->setSliceCommandSink({});
+            backend->setSliceCommandSinkForTest({});
             RadioConnectionSessionTestAccess::capture(*backend->connection(), nullptr);
             backend = nullptr;
         }

@@ -1,4 +1,5 @@
 #pragma once
+#include "FlexCommandTestSupport.h"
 
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
@@ -34,8 +35,9 @@ public:
     static void audioTransport(RadioModel& radio, RadioConnection& connection, FlexBackend& backend,
                                std::function<void(quint32, const QString&)> writer)
     {
+        connection.m_state.store(ConnectionState::Connected);
         connection.m_commandSinkForTest = std::move(writer);
-        backend.setAudioCommandSink(radio.audioCommandSink());
+        FlexCommandTestAccess::bind(radio, backend);
     }
     static void acceptGuiRegistration(RadioModel& radio)
     {
@@ -60,14 +62,14 @@ public:
     RecordingPanBackend()
     {
         setModelProvider([] { return QStringLiteral("FLEX-6700"); });
-        setSetupCommandSink([this](const QString& command, const RadioControlCompletion& completion) {
+        setSetupCommandSinkForTest([this](const QString& command, const RadioControlCompletion& completion) {
             if (!admit) { return false; }
             writes.push_back({command, completion});
             const auto callback = onWrite;
             if (callback) { callback(command); }
             return true;
         });
-        setAudioCommandSink([this](const QString& command, CommandReply reply, const AudioControlGuard& guard) {
+        setAudioCommandSinkForTest([this](const QString& command, CommandReply reply, const AudioControlGuard& guard) {
             if (!admit || !guard.permits()) { return false; }
             writes.push_back({command, [reply](const RadioControlReply& result) {
                 if (reply) { reply(result.code, result.message); }

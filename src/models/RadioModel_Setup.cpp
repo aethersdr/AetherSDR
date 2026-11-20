@@ -16,7 +16,7 @@ RadioControlSession RadioModel::controlSession() const
 bool RadioModel::controlSessionCurrent(const RadioControlSession& session) const
 {
     return session == controlSession() && isConnected() && !m_txSessionClosing
-        && !m_expiringPendingCallbacks;
+       ;
 }
 
 RadioSetupCompletion RadioModel::fencedSetupCompletion(
@@ -251,7 +251,7 @@ ReceiveDispatch RadioModel::dispatchTxBand(const TxBandRequest& request,
     }
     const bool restoring = origin == TxBandWrite::Restore;
     const bool admitted = restoring
-        ? isConnected() && !m_expiringPendingCallbacks
+        ? isConnected()
         : controlSessionCurrent(session);
     const auto sessionAlive = m_transmitServiceSession;
     // An owned restore is queued to the original transport before its ordered
@@ -263,7 +263,8 @@ ReceiveDispatch RadioModel::dispatchTxBand(const TxBandRequest& request,
     };
     const ReceiveDispatch result = m_backend && admitted
         && request.valid() && m_txBandSettings.contains(request.bandId)
-        ? m_backend->requestTxBand(request, reply, current) : ReceiveDispatch::Unsupported;
+        ? m_backend->requestTxBand(request, reply, restoring ? current.forCleanup() : current)
+        : ReceiveDispatch::Unsupported;
     if (alive && session == controlSession()) {
         if (result == ReceiveDispatch::Unsupported && reply) {
             reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("TX band setting not dispatched")});

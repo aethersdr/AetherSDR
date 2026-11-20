@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Socket-free: the Flex status ingress fence and its wire order, with real
 // transports that are never opened, plus RadioModel's production binding.
 #include "TestSettingsProfile.h"
@@ -23,20 +24,25 @@
 namespace AetherSDR {
 class RadioConnectionSessionTestAccess {
 public:
-    static void beginSession(RadioConnection& connection)
+    class NoDialSocket final : public QTcpSocket {
+    public:
+        explicit NoDialSocket(QObject* parent) : QTcpSocket(parent) {}
+        void connectToHost(const QString&, quint16, OpenMode = ReadWrite,
+                           NetworkLayerProtocol = AnyIPProtocol) override {}
+    };
+    static void installNoDialSocket(RadioConnection& connection)
     {
-        if (connection.thread() == QThread::currentThread()) {
-            connection.resetSessionState();
-            return;
-        }
-        QMetaObject::invokeMethod(&connection, [&connection] { connection.resetSessionState(); },
-                                  Qt::BlockingQueuedConnection);
+        QMetaObject::invokeMethod(&connection, [&connection] {
+            connection.m_socket->disconnect(&connection);
+            connection.m_socket->deleteLater();
+            connection.m_socket = new NoDialSocket(&connection);
+        }, Qt::BlockingQueuedConnection);
     }
 };
 class WanConnectionTestAccess {
 public:
     static void expect(WanConnection& wan, quint32 sequence, std::function<void()> onReply)
-    { wan.m_pendingCallbacks.insert(sequence, [onReply](int, const QString&) { onReply(); }); }
+    { FlexCommandTestAccess::insertReply(wan, sequence, [onReply](int code, const QString&) { if (code == 0) { onReply(); } }); }
     static void feed(WanConnection& wan, const QString& raw) { wan.processLine(raw); }
 };
 class SessionControlTestAccess {
@@ -368,12 +374,16 @@ private slots:
     {
         FlexBackend backend;
         RadioConnection* connection = backend.connection();
-        RadioConnectionSessionTestAccess::beginSession(*connection);
+        RadioConnectionSessionTestAccess::installNoDialSocket(*connection);
         QStringList order;
         connect(backend.statusIngress(), &FlexStatusIngress::lineAccepted, this, [&order](const ParsedMessage& m) {
             order << (m.type == MessageType::Handle ? QStringLiteral("H") : m.object);
         });
         connect(&backend, &IRadioBackend::connected, this, [&order] { order << QStringLiteral("connected"); });
+        RadioConnectRequest request;
+        request.host = QStringLiteral("192.0.2.1");
+        request.port = 4992;
+        backend.connectRadio(request); // admits the session; NoDialSocket never opens a transport
         QMetaObject::invokeMethod(connection, [connection] {
             emit connection->lineReceived(line("H00000071"), connection->lineEpoch());
             emit connection->connected();
@@ -426,14 +436,21 @@ private slots:
     void wanReplyDiesWithItsSession()
     {
         WanConnection wan;
-        bool answered = false;
-        WanConnectionTestAccess::expect(wan, 4, [&answered] { answered = true; });
+        int completions = 0;
+        int result = 0;
+        FlexCommandTestAccess::insertReply(wan, 4, [&](int code, const QString&) {
+            ++completions;
+            result = code;
+        });
         WanConnectionTestAccess::feed(wan, QStringLiteral("R4|0|"));
-        wan.disconnectFromRadio();   // resets the session before the reply runs
+        wan.disconnectFromRadio();   // resets the session before the queued reply runs
+        QCOMPARE(completions, 1);
+        QCOMPARE(result, -1); // Written, but no accepted reply before retirement: unknown.
         bool misrouted = false;   // the next session reuses the sequence
         WanConnectionTestAccess::expect(wan, 4, [&misrouted] { misrouted = true; });
         QCoreApplication::sendPostedEvents();
-        QVERIFY(!answered);
+        QCOMPARE(completions, 1);
+        QCOMPARE(result, -1);
         QVERIFY(!misrouted);
     }
 

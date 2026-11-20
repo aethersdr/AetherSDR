@@ -14,7 +14,7 @@ inline std::unique_ptr<AetherSDR::FlexBackend> modelControlEncoder(
     AetherSDR::TransmitModel* model, std::function<void(const QString&)> sink)
 {
     auto backend = std::make_unique<AetherSDR::FlexBackend>();
-    backend->setCommandSink(std::move(sink));
+    backend->setCommandSinkForTest(std::move(sink));
     QObject::connect(model, &AetherSDR::TransmitModel::controlRequested, backend.get(),
                      [target = backend.get()](const AetherSDR::TransmitControlRequest& request) {
         target->requestTransmitControl(request);
@@ -26,7 +26,7 @@ inline std::unique_ptr<AetherSDR::FlexBackend> modelControlEncoder(
     AetherSDR::SliceModel* model, std::function<void(const QString&)> sink)
 {
     auto backend = std::make_unique<AetherSDR::FlexBackend>();
-    backend->setSliceCommandSink(std::move(sink));
+    backend->setSliceCommandSinkForTest(std::move(sink));
     QObject::connect(model, &AetherSDR::SliceModel::controlRequested, backend.get(),
                      [target = backend.get(), id = model->sliceId()](const AetherSDR::SliceControlRequest& request) {
         target->requestSliceControl(id, request);

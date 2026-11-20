@@ -1,63 +1,12 @@
 #!/usr/bin/env python3
-"""Raw Flex command-plane ratchet above the seam — #5262 M4.
+"""Prevent raw Flex command routing from returning above the backend seam.
 
-WHY THIS EXISTS. M4 converts the dual command plane: models still emit Flex wire
-text that is SILENTLY DROPPED on HL2/Icom/ANAN/RTL (RadioModel::sendCmd()'s
-no-command-plane path), so every unconverted control is a live-looking dead
-control on those radios. M0 made that drop loud (#5265: qCWarning + a one-shot
-operator notice), which turned the backlog visible — a live IC-7300MK2 connect
-dropped 14 SmartSDR commands, each one a conversion site.
-
-M4's first checklist item is this ratchet, and it comes first for a reason: the
-conversion is long (hundreds of call sites, by subsystem), and without a floor
-under it new controls keep arriving on the old plane faster than old ones leave.
-
-WHAT COUNTS, AND WHY RESOLVING THE RECEIVER IS THE WHOLE PROBLEM.
-
-The obvious matcher — `emit commandReady(` in models, `sendCommand(` in gui —
-is wrong in both directions, and the first version of this checker shipped with
-exactly that bug (#5619 review):
-
-  * IT UNDER-COUNTS. SliceModel::sendCommand() is a ONE-LINE HELPER whose body
-    is `emit commandReady(cmd);`, and ~62 call sites behind it carry raw wire
-    text (`slice tune`, `filt %1 %2 %3`, `slice set %1 rxant=`). Counting only
-    the literal emit saw 2 — freezing the milestone's LARGEST conversion target
-    (#5262 names SliceModel at 60 sites) at a number a new control could grow
-    under without tripping anything. A ratchet that reads green while the
-    biggest target grows is worse than no ratchet, because the next change
-    cites it as coverage.
-
-  * IT OVER-COUNTS. `sendCommand` is not one protocol. AntennaGeniusModel has
-    its own method of that name that writes to ITS OWN TCP SOCKET
-    (AntennaGeniusModel.cpp:411), and TunerModel reaches a separate device
-    through `m_directConn->sendCommand(...)`. Neither is the Flex command plane
-    and neither should be frozen here.
-
-So the receiver is resolved explicitly rather than guessed from the directory:
-
-  1. `emit commandReady(` — the plane's own signal. Always counts.
-  2. `sendCmd(` — RadioModel's internal sink name. Always counts.
-  3. `sendCommand(` — counts UNLESS the receiver is a known foreign device,
-     which the two exclusions below name. Helper DEFINITIONS are not call
-     sites and are subtracted.
-
-WHERE IT LOOKS. The same above-seam definition check_engine_boundary.py uses
-(src/gui + src/core + src/models, plus the src/ root shell files), minus
-src/core/backends/ — that is where the wire text is SUPPOSED to live, and M4's
-direction is moving encode there. The first version scanned only models and gui,
-which missed WfmDemodulator.cpp's two live emissions in src/core/ and made the
-"backends/flex is excluded" claim describe an exclusion that did not exist,
-since nothing under src/core/ was read at all.
-
-PER-FILE, NOT A TOTAL. A total lets one subsystem's conversion pay for another's
-regression; per-file means a converted file cannot quietly refill. A file absent
-from the baseline must stay at zero, so a NEW control on the old plane fails
-even while the old ones are still being migrated — which is the point.
-
-ANTI-VACUITY. A missing root is an ERROR, not an empty scan. The first version
-returned "every file is clear" and exit 0 when run from the wrong directory;
-check_engine_boundary.py carries ABOVE_SEAM_DIR_FLOOR for exactly this failure
-mode and this now does too.
+Typed controls replaced the legacy model and GUI command plane. The empty
+baseline means every new above-seam raw call is a regression. Known commands
+to separate devices (amplifiers, tuners and Antenna Genius) remain excluded.
+The legacy method and signal matchers are retained to catch reintroductions,
+including hidden one-line wrappers and root-level engine entry points.
+Missing source roots are errors rather than vacuously clean scans.
 
 Usage:
     python tools/check_command_plane.py            # report
@@ -73,12 +22,7 @@ from pathlib import Path
 #
 # Convert by subsystem with the claim protocol + verify_slice0_rx.py recipe, and
 # drop the number here in the same commit. When a file reaches 0, delete its row.
-BASELINE = {
-    # ---- models ----
-    "src/models/RadioModel.cpp": 10,
-    # ---- core (above the seam; backends/ is excluded) ----
-    "src/core/AutomationServer.cpp": 1,
-}
+BASELINE = {}
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -127,7 +71,7 @@ ABOVE_SEAM_DIR_FLOOR = 20
 #     modelGuard     4x sendCommand
 #     this           1x sendCmd
 # Receivers that are OTHER DEVICES, each its own wire:
-#     client / m_dxCluster (DX cluster + RBN telnet), m_wanConn (SmartLink WAN),
+#     client / m_dxCluster (DX cluster + RBN telnet),
 #     m_pgxlConn (PGXL amp), m_directConn (tuner), connection
 # Files whose UNQUALIFIED send* calls route to the Flex plane. Everything else
 # unqualified belongs to the object that defines it — AntennaGeniusModel writes
@@ -142,7 +86,7 @@ PLANE_HELPER_FILES = {
     "src/models/SliceModel.cpp",
 }
 
-RADIO_MODEL_RECEIVERS = ("m_radioModel", "m_model", "model", "modelGuard", "this")
+RADIO_MODEL_RECEIVERS = ("m_radioModel", "m_model", "model", "modelGuard", "this", "m_wanConn")
 
 # ACCESSOR-CALL receivers: `radioModel().sendCommand(...)`. Real API on two
 # classes — MainWindow::radioModel() and RadioSession::radioModel() — so any
@@ -157,13 +101,6 @@ RADIO_MODEL_ACCESSORS = ("radioModel", "model", "radio")
 # error rather than a guess — see UNKNOWN_RECEIVER below.
 FOREIGN_RECEIVERS = (
     "client", "m_client", "m_rbnClient", "m_dxCluster",   # DX cluster + RBN telnet
-    # WanConnection speaks the SAME V/H/R/S/M protocol as RadioConnection, over
-    # TLS — it is the Flex plane, not a foreign device. It is listed here anyway
-    # because RadioModel's calls THROUGH it are transport dispatch of a command
-    # some other site already produced; counting them would double-count. Its own
-    # internal sendCommand("ping") is SmartLink keepalive on its own socket.
-    # Right answer, different reason than "foreign" suggests.
-    "m_wanConn",
     "m_pgxlConn", "m_tgxlConn",                           # PGXL / TGXL amp + tuner
     "m_directConn",                                       # tuner direct connection
     "connection",
@@ -195,10 +132,6 @@ WIRE_TEXT_HELPERS = ("sendSet", "sendSetBit", "sendRemove")
 # The plane's own signal. Always a site, wherever it appears above the seam.
 EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+commandReady\s*\(")
 REPLY_EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+replyCommandReady\s*\(")
-# CWX's two existing reply-aware sites belong to the separately claimed #6646
-# conversion. Only those two sites are grandfathered; additional reply sites
-# increase its ordinary frozen count. Every other file has zero allowance.
-REPLY_MIGRATION_PENDING = {"src/models/CwxModel.cpp": 2}
 # A qualified call on one of the RadioModel receivers. sendCmdPublic is included
 # explicitly: it forwards straight to sendCmd(), and an earlier matcher of
 # `\bsendCmd\s*\(` did not match it, hiding ~26 call sites.
@@ -274,7 +207,7 @@ def count_for(path: Path) -> int:
          + len(QUALIFIED_RE.findall(text))
          + len(ACCESSOR_RE.findall(text))
          + len(HELPER_RE.findall(text)))
-    n += max(0, len(REPLY_EMIT_RE.findall(text)) - REPLY_MIGRATION_PENDING.get(rel, 0))
+    n += len(REPLY_EMIT_RE.findall(text))
     if rel in PLANE_HELPER_FILES:
         n += len(UNQUALIFIED_RE.findall(text)) - len(DEF_RE.findall(text))
     return max(n, 0)

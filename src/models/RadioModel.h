@@ -686,10 +686,8 @@ public:
     void buildBackend();   // RFC #4288 Route A: create + wire m_backend (Sim/Flex)
     void resetPanState();
 
-    // True when a text command issued through sendCmd() can actually reach the
-    // radio. False for a backend that owns no RadioConnection (HL2 and any
-    // other family that takes typed intents through the IRadioBackend seam) —
-    // there, Flex wire text has nowhere to go and is dropped at the sink.
+    // Whether this session has a Flex transport. All controls still enter
+    // through typed backend intents; this does not expose a wire writer.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
     // The slice's tuning step, applied on the client when the radio has no
     // command plane to carry `slice set <n> step=`. Returns false, doing
@@ -721,16 +719,6 @@ public:
     // latches and records nothing.
     bool radioSideRecordingReachable() const { return hasCommandPlane(); }
 
-    // ── Memory command routing ──────────────────────────────────────────────
-    //
-    // Answer a `memory …` command from the local bank or a native writable
-    // radio. Returns the sequence number sendCmd() would have returned
-    // (non-zero — sendCommand() reads that as "dispatched"), or nullopt when a
-    // writable/native radio backend must take its normal path.
-    // (spelled out rather than the ResponseCallback alias — that is declared
-    // further down this class.)
-    std::optional<quint32> tryMemoryCommand(
-        const QString& command, const RadioConnection::ResponseCallback& cb);
     // Settle which store owns the memory cache for the session being started.
     // Read-only radio snapshots are ingested into the local bank; only a native
     // writable store takes exclusive ownership.
@@ -1167,8 +1155,7 @@ public:
     void setPanDbmRange(float minDbm, float maxDbm);
 
     // The only supported way for a user-intent path to write pan center/
-    // bandwidth/band (#4142). During the profile-load hold (where sendCmd drops
-    // these, #3563) it defers: coalesced per pan and field, model not advanced,
+    // bandwidth/band (#4142). During the profile-load hold it defers: coalesced per pan and field, model not advanced,
     // replayed later. Returns true only if the radio matches the request;
     // optimistic callers must gate on it. bandwidthMhz > 0 sends center+bandwidth
     // as one command. Drag retunes a VFO-slaved scope (Icom); default Range cannot.
@@ -1673,11 +1660,6 @@ signals:
     void radioMessageReceived(const QString& text, MessageSeverity severity);
 
 public:
-    // Send a raw command to the radio. Returns false when the foreign-owner
-    // gate (#3977) or profile-load hold (#4142) drops it, or WAN is down; a
-    // write onto a dead LAN socket still reports dispatched. Callers that
-    // advance local state to match MUST gate on this return.
-    bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
@@ -1718,12 +1700,7 @@ public:
     // .extensionNamespaces"), and a family-string comparison asks a subtly
     // different question. (#5262 M1)
     [[nodiscard]] bool backendDeclaresExtension(const QString& ns) const;
-    // True when the radio speaks the SmartSDR text-command plane — the only
-    // family where sendCmd() reaches anything and a command has a response to
-    // await. Every other backend takes typed intents through the IRadioBackend
-    // seam and settles synchronously in the model, so a caller that awaits a
-    // sendCmd() callback there waits forever. Callers that must work on both
-    // planes branch on this rather than on the family name.
+    // Flex-specific model policy retained until capability routing replaces it.
     bool usesFlexCommandPlane() const { return m_family == QLatin1String("flex"); }
 
     // True when the ENGINE owns display rate shaping rather than the radio —
@@ -1774,7 +1751,6 @@ public:
     void setLineOutPcAudioOffConsent(bool enabled);
 
     // True only when dispatched; the callback reports the later radio reply.
-    bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
     void refreshProfiles();
     bool isProfileTransferBlocked() const;
     bool profileDatabaseImporting() const { return m_profileDatabaseImporting; }
@@ -1952,9 +1928,8 @@ private:
     // Sends the radio auto_black flag from the combined auto-black on/off +
     // client/radio-source state (auto_black=1 only when both select radio-side).
     void applyWaterfallAutoBlack();
-    // The one wire site per key. Without a command plane the text reaches
-    // sendCmd(), which reports it as dropped, only when reportDrop is set: an
-    // operator moved the control and the client did not draw it.
+    // Report unsupported remote controls only for operator intent; client-side
+    // rendering can still apply these values locally.
     void sendWaterfallColorGain(const QString& panId, int gain, bool reportDrop);
     void sendWaterfallBlackLevel(const QString& panId, int level, bool reportDrop);
     bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
@@ -2020,13 +1995,7 @@ private:
     void disconnectClientHandlesThen(const QList<quint32>& handles,
                                      std::function<void()> continuation = {});
 
-    // Route command to active connection (LAN or WAN)
-    using ResponseCallback = RadioConnection::ResponseCallback;
     void requestRadioInfo();
-    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr,
-                    std::optional<SessionCommandGuard> guard = {},
-                    std::function<bool()> dispatchAllowed = {},
-                    bool expireReply = false);
     ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
                                          const SessionControlCompletion& completion = {});
     // `sub dvk all`, reading the radio's answer for a firmware with no DVK API.
@@ -2174,8 +2143,6 @@ private:
     RadioConnection*  m_connection{nullptr};   // non-owning — owned by m_backend
     // Sequence counter and callback map — owned by RadioModel on main thread.
     // RadioConnection no longer manages callbacks. (#502)
-    std::atomic<quint32> m_seqCounter{1};
-    QMap<quint32, ResponseCallback> m_pendingCallbacks;
     PanadapterStream* m_panStream{nullptr};    // non-owning — owned by m_backend
     // The single live producer feeding rxDemodAudioReady. Held so re-entry can
     // drop the previous one: connecting both producers is the double-feed that
@@ -2289,6 +2256,7 @@ private:
     friend class TuneOutputControlTestAccess;
     friend class TuneOutputDialogTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    friend class FlexCommandTestAccess;
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
@@ -2300,19 +2268,15 @@ private:
         RadioControlFence current;
         RadioControlCompletion completion;
         std::function<void()> written;
-        QPointer<QTimer> deadline;
-        QPointer<WanConnection> wan;
-        quint64 wireGeneration{0};
-        quint32 sequence{0};
         bool delivered{false};
     };
     struct CwAutoTuneOperation;
-    bool dispatchAdministrationCommand(const QString& command,
-        const RadioControlCompletion& completion, const RadioControlFence& current,
-        const std::function<void()>& written);
+    ReceiveDispatch dispatchAdministrationRequest(const RadioControlCompletion& completion,
+        const RadioControlFence& current, const std::function<void()>& written,
+        const std::function<ReceiveDispatch(const RadioControlCompletion&, const RadioControlFence&,
+                                           const std::function<void()>&)>& dispatch);
     void finishAdministrationWrite(quint64 ticket, const RadioControlReply& reply);
     void administrationWriteResult(quint64 ticket, bool written);
-    void forgetAdministrationReply(const PendingAdministrationWrite& operation);
     void reconcileAdministration();
     void resetAdministration(bool notify = true);
     ReceiveDispatch requestAdministrationSetting(const RadioSetupRequest& request,
@@ -2333,12 +2297,7 @@ private:
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
     friend class TransmitDaxHoldTestAccess;
-    void expirePendingCallbacks(const QString& reason);
 
-    // True only while expirePendingCallbacks() is invoking the drained
-    // callbacks. sendCmd() refuses for the duration so an expiring callback
-    // cannot repopulate the map being drained. (#5653 review)
-    bool m_expiringPendingCallbacks{false};
     // Whether this session's path to the radio runs over Tailscale, decided
     // once at GUI-client registration on this thread (networkMtuParam).
     bool m_pathOverTailnet{false};
@@ -2412,22 +2371,11 @@ private:
     RadioSetupCompletion fencedSetupCompletion(QObject* context,
                                                const RadioSetupCompletion& completion,
                                                bool requiresLiveSession = true);
-    using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
-    using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
     // dispatchAllowed, when given, is checked again at the final write.
-    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {},
-                                      std::function<bool()> dispatchAllowed = {});
-    using TransferCommandWriter = std::function<bool(const QString&, const FileTransferGuard&, ResponseCallback)>;
-    using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&, const RadioControlCompletion&)>;
-    TransferCommandSink transferCommandSink(const TransferCommandWriter& writer = {});
     bool fileTransferEligible(FileTransferPurpose purpose, bool holdingReservation) const;
     FileTransferHandle m_fileTransferOperation;
-    using AudioCommandSink = std::function<bool(const QString&, ResponseCallback, const AudioControlGuard&)>;
-    AudioCommandSink audioCommandSink();
     // A transverter or USB cable write, refused at the final write once the
     // entity it was aimed at has been removed or replaced.
-    bool sendSetupEntityCommand(const QString& command, const RadioSetupCompletion& completion,
-                                const std::shared_ptr<SetupStatusLifetime>& identity);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
@@ -2463,7 +2411,6 @@ private:
     quint64 m_navtexTxRequest{0};
     TxCoordinator::Intent m_dvkTxIntent;
     TxCoordinator::Intent m_navtexTxIntent;
-    void wireFlexTransmitServices(FlexBackend* backend);
     void dispatchDvk(const DvkRequest& request, quint64 requestId);
     void dispatchNavtex(const NavtexRequest& request, quint64 requestId);
     TransmitServiceCompletion transmitServiceCompletion(const TransmitServiceCompletion& completion,
@@ -2513,22 +2460,16 @@ private:
     void acknowledgeIndependentTxStop(const TxStopEvidence& evidence);
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
-    bool sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
     ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
                                        int epoch, int nChars, RadioControlFence current);
     bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
-    bool sendCwxConfigurationCommand(const QString& command, RadioControlFence current);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();
     void applyBackendTransmitDelta(const TransmitDelta& delta);
-    bool sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
-                          bool keying, std::function<void()> delivered,
-                          ResponseCallback reply = {}, std::function<bool()> currentBatch = {},
-                          int replyTimeoutMs = 0);
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
@@ -2837,7 +2778,6 @@ private:
     bool transmitStartBlockedByKeyObjection(const QString& gate);
     void emitKeyObjectionNotice(const QString& message, const QString& gate);
     void noteLocalTxSliceEnableIntent(int sliceId);
-    void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
     QString radioInterlockNotificationMessage(const QString& reason, const QString& state) const;
@@ -3109,6 +3049,7 @@ private:
     // See isConnectAttemptInFlight(). Set by the connect entry points, cleared
     // by every way an attempt can end.
     bool      m_connectAttemptActive{false};
+    quint64   m_connectionIntentRevision{0};
     bool      m_forcedDisconnectInProgress{false};
     GuiClientRegistrationState m_guiClientRegistrationState;
     // Suppress connection-error toasts between rebootRadio() and the next

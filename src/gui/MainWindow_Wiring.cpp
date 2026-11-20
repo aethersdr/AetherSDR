@@ -88,7 +88,7 @@
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
-#include "models/ProfileLoadCommand.h"
+#include "models/ProfileLoadPolicy.h"
 #include "models/RadioModel.h"
 #include "models/SliceLinkPolicy.h"
 #include "models/SliceModel.h"

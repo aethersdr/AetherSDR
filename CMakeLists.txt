@@ -912,6 +912,9 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexReceiveData.cpp
     src/core/backends/flex/FlexBackend_ReceiveData.cpp
     src/core/backends/flex/FlexDisplayStatus.cpp
+    src/core/backends/flex/FlexLanSession.cpp
+    src/core/backends/flex/FlexCommandSession.cpp
+    src/core/backends/flex/FlexBackend_Commands.cpp
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexRadioStatus.cpp
     src/core/backends/flex/FlexCwControls.cpp

@@ -5,7 +5,7 @@
 
 namespace AetherSDR {
 
-enum class WaveformAction { Uninstall, RemoveContainer, Restart };
+enum class WaveformAction { Uninstall, RemoveContainer, Restart, Unregister };
 struct WaveformControl {
     QSet<WaveformAction> actions;
     bool supports(WaveformAction action) const { return actions.contains(action); }
@@ -15,7 +15,7 @@ struct WaveformRequest {
     QString name;
     bool valid() const
     {
-        return action >= WaveformAction::Uninstall && action <= WaveformAction::Restart
+        return action >= WaveformAction::Uninstall && action <= WaveformAction::Unregister
             && waveformNameTokenValid(name);
     }
 };
@@ -25,6 +25,7 @@ inline QString waveformActionVerb(WaveformAction action)
     switch (action) {
     case WaveformAction::Uninstall: return QStringLiteral("uninstall");
     case WaveformAction::RemoveContainer: return QStringLiteral("remove_container");
+    case WaveformAction::Unregister: return QStringLiteral("unregister");
     case WaveformAction::Restart: break;
     }
     return QStringLiteral("restart");

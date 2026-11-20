@@ -42,8 +42,17 @@ class OpusCodec;
 //   0x8003 FFT, 0x8004 waterfall tiles and 0x8002 meters → the backend's
 //   FlexReceiveData (spectrumReady()/waterfallRowReady()/meterDataReady() only
 //   for a stream built without one); DAX audio/IQ by stream id; others dropped.
-// start(conn) binds a local UDP port; RadioModel registers it with
+// start(endpoint) binds a local UDP port; RadioModel registers it with
 // "client udpport <port>".
+
+struct FlexLanEndpoint {
+    QHostAddress remoteAddress;
+    QHostAddress localTcpAddress;
+    QHostAddress preferredLocalAddress;
+    QHostAddress explicitLocalAddress;
+    bool requireExplicitLocalBind{false};
+    bool synthetic{false};
+};
 
 class PanadapterStream : public QObject {
     Q_OBJECT
@@ -69,9 +78,11 @@ public:
     Q_INVOKABLE void init();
 
     // Bind a local UDP port (OS-chosen) and register it with the radio.
-    // conn must remain valid for the lifetime of this stream.
+    // The compatibility overload copies connection metadata during this call.
     // Q_INVOKABLE: must run on the network worker thread (#502)
     Q_INVOKABLE bool start(RadioConnection* conn);
+    bool start(const FlexLanEndpoint& endpoint);
+    bool rebindToEphemeralPort(const FlexLanEndpoint& endpoint);
     // Rebind to an OS-assigned LAN UDP port after the radio rejects our
     // selected port/IP pair as already registered by another client.
     Q_INVOKABLE bool rebindToEphemeralPort(RadioConnection* conn);
@@ -428,7 +439,7 @@ private:
     quint64 m_nextDbmRangeGeneration{0};
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
-    RadioConnection* m_conn{nullptr};
+
     QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly; m_streamMutex
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     QSet<quint32> m_pendingRxStreams; // non-empty reorder windows; m_statsMutex

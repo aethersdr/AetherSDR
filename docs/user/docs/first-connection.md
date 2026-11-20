@@ -58,6 +58,12 @@ After connecting, you'll see:
 
 Controls that the connected radio cannot use are hidden or dimmed with a reason. Continue with [Your First Session](./your-first-session.md).
 
+To disconnect, click **Disconnect** in the connection window. On a local Flex
+connection, AetherSDR asks the radio to disable the old session's keepalive and
+waits for confirmation before closing. This prevents a delayed session timeout
+from interrupting your next connection. If the radio does not answer, this
+cleanup step waits at most two seconds before shutdown continues.
+
 ## Other Ways to Connect
 
 ### Auto-connect
@@ -92,6 +98,10 @@ Discovery broadcasts do not cross routers or most VPNs, and guest Wi-Fi isolatio
 ### The radio refuses the connection
 
 The radio rejected AetherSDR's client registration (for example with error `F3000001`). AetherSDR closes the connection, does not retry on its own, and returns to the Connect to Radio window with the radio's error.
+
+The window stays responsive while an interrupted or canceled connection finishes
+closing. If you reconnect during that cleanup, the new connection waits until
+the old connection has closed.
 
 1. Follow the message shown: typically another client must disconnect first, or the radio needs a restart.
 2. If the **Connected Stations** dialog appears, select a station and click **Disconnect Station**; see [Multi-Flex](./multi-flex.md).

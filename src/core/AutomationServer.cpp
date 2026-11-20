@@ -6583,9 +6583,8 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
         QPointer<AutomationServer> self(this);
         const QPointer<RadioModel> originalRadio(m_radioModel);
         const RadioControlSession refreshSession = m_radioModel->controlSession();
-        m_radioModel->sendCmdPublic(
-            QStringLiteral("waveform remove %1").arg(name),
-            [self, name, originalRadio, refreshSession](int code, const QString& body) {
+        m_radioModel->requestWaveform({WaveformAction::Unregister, name}, this,
+            [self, name, originalRadio, refreshSession](const RadioControlReply& reply) {
                 if (!self || !originalRadio || self->m_radioModel != originalRadio
                     || !originalRadio->controlSessionCurrent(refreshSession)) {
                     return;
@@ -6594,11 +6593,11 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
                     {QStringLiteral("action"), QStringLiteral("unregister")},
                     {QStringLiteral("name"), name},
                     {QStringLiteral("pending"), false},
-                    {QStringLiteral("code"), code},
-                    {QStringLiteral("body"), body},
+                    {QStringLiteral("code"), reply.code},
+                    {QStringLiteral("body"), reply.message},
                     {QStringLiteral("timestampMs"), QDateTime::currentMSecsSinceEpoch()}
                 };
-                if (code == 0 && self->m_radioModel
+                if (reply.kind == RadioControlReply::Kind::Accepted && self->m_radioModel
                         && self->m_radioModel->isConnected()) {
                     self->m_radioModel->requestSliceInventoryRefresh(refreshSession);
                 }

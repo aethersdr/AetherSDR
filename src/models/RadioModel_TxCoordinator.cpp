@@ -800,27 +800,6 @@ TxCoordinator::Completion RadioModel::trackTxQueue(const TxCoordinator::Operatio
     });
 }
 
-bool RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence)
-{
-    const TxCoordinator::Operation operation = fence.operation;
-    const auto completed = [completion = fence.completion] { completion.finish(); };
-    if (fence.keying) {
-        if (!sendTxTcpCommand(command, operation, true, completed)) {
-            completed();
-            return false;
-        }
-        return true;
-    }
-    // Retain a short, normally released operation until its queued key-up is
-    // consumed, just as NetCW does. Otherwise completion cancels an earlier
-    // key-on before the transport has had a chance to consume either edge.
-    // This is local queue completion, not qualified radio-idle evidence.
-    if (!sendTxTcpCommand(command, operation, false, completed)) {
-        completed();
-        return false;
-    }
-    return true;
-}
 
 bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const QString& text,
                                    std::function<void()> onAdmitted, int macroIndex, bool live)
@@ -899,7 +878,7 @@ ReceiveDispatch RadioModel::dispatchCwxRequest(const CwTextRequest& request,
         return ReceiveDispatch::Unsupported;
     }
     if (request.configuration() && !isConnected()) { return ReceiveDispatch::LocalOnly; }
-    if (!m_backend || !isConnected() || m_txSessionClosing || m_expiringPendingCallbacks) {
+    if (!m_backend || !isConnected() || m_txSessionClosing) {
         return ReceiveDispatch::Unsupported;
     }
     const RadioCapabilities caps = backendCapabilities();
@@ -919,7 +898,11 @@ ReceiveDispatch RadioModel::dispatchCwxRequest(const CwTextRequest& request,
     }
     if (!caps.cwTextControl->supports(request.field)) { return ReceiveDispatch::Unsupported; }
     if (request.configuration()) {
-        return m_backend->requestCwTextControl(request, {{}, false}, current);
+        const auto session = m_cwxSessionValid;
+        const RadioControlFence permitted = [session, current] {
+            return session->load(std::memory_order_acquire) && (!current || current());
+        };
+        return m_backend->requestCwTextControl(request, {{}, false}, permitted);
     }
     const bool batchSpeed = request.origin != CwTextRequest::Origin::Operator;
     if (request.keys() && !operation.permitsDispatch(txMonotonicMs())) { return ReceiveDispatch::Unsupported; }

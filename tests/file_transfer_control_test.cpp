@@ -37,14 +37,10 @@ struct Fixture {
     Fixture()
     {
         RadioSetupControlTestAccess::peer(model, QHostAddress(QStringLiteral("192.0.2.1")));
-        backend->setTransferCommandSink(RadioSetupControlTestAccess::productionTransferSink(model,
-            [this](const QString& command, const FileTransferGuard& guard,
-                   const std::function<void(int, const QString&)>& reply) {
-                if (!guard.current()) { return false; }
-                commands << command;
-                replies << reply;
-                return true;
-            }));
+        FlexCommandTestAccess::record(*backend, [this](const QString& command, FlexCommandTestAccess::Reply reply) {
+            commands << command;
+            replies << std::move(reply);
+        });
     }
     FileTransferHandle begin(FileTransferPurpose purpose)
     { return model.beginFileTransfer(purpose, &owner, model.controlSession(), 30000); }
@@ -267,10 +263,12 @@ private slots:
     void waveformActions()
     {
         Fixture f;
-        for (const auto action : {WaveformAction::Restart,WaveformAction::Uninstall,WaveformAction::RemoveContainer}) {
+        for (const auto action : {WaveformAction::Restart,WaveformAction::Uninstall,
+                                 WaveformAction::RemoveContainer,WaveformAction::Unregister}) {
             QCOMPARE(f.model.requestWaveform({action,"ThumbDV"}, &f.owner, {}), ReceiveDispatch::Dispatched);
         }
-        QCOMPARE(f.commands, QStringList({"waveform restart ThumbDV", "waveform uninstall ThumbDV", "waveform remove_container ThumbDV"}));
+        QCOMPARE(f.commands, QStringList({"waveform restart ThumbDV", "waveform uninstall ThumbDV",
+            "waveform remove_container ThumbDV", "waveform remove ThumbDV"}));
         QCOMPARE(f.model.requestWaveform({WaveformAction::Restart,"bad\nname"}, &f.owner, {}), ReceiveDispatch::Unsupported);
     }
     // An answered waveform action leaves no connection behind on its owner.

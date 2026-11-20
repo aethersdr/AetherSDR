@@ -155,7 +155,7 @@ private slots:
         QObject::connect(&rebuilt, &VfoWidget::autotuneRequested, &radio,
             [&](bool on) { radio.requestCwAutoTune(slice, on ? CwAutoTuneAction::Start : CwAutoTuneAction::Stop); });
         // A synchronous refusal keeps cleanup available, even after a lock.
-        backend->setAdministrationCommandSink([](const QString&, const RadioControlCompletion& reply,
+        backend->setAdministrationCommandSinkForTest([](const QString&, const RadioControlCompletion& reply,
             const RadioControlFence&, const std::function<void()>&) {
             reply({RadioControlReply::Kind::Failed, 1, QStringLiteral("rejected")});
             return true;
@@ -170,7 +170,7 @@ private slots:
         QVERIFY(once && !once->isEnabled());
         RadioAdministrationTestAccess::license(radio, {});
         QCoreApplication::processEvents();
-        backend->setAdministrationCommandSink([](const QString&, const RadioControlCompletion& reply,
+        backend->setAdministrationCommandSinkForTest([](const QString&, const RadioControlCompletion& reply,
             const RadioControlFence&, const std::function<void()>&) {
             reply({RadioControlReply::Kind::Accepted, 0, {}});
             return true;

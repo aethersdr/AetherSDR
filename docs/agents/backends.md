@@ -121,6 +121,68 @@ notices keep the original client incarnation. Demo relays client, oscillator
 and static-network reports and keeps its own radio-global values. No daemon
 method or TX authority is added by this status migration.
 
+## Flex LAN session ownership
+
+`FlexLanSession`, private to the backend, coordinates the existing TCP and UDP
+workers. `IRadioBackend::connectRadio` takes the selected endpoint and bind
+preferences; `connectionSessionStarting` opens the model's observation session
+before the dial is queued. Lifecycle notifications capture their epoch on the
+transport thread and cross the same single queued hop as status. Cancellation
+retires that epoch before draining TCP cleanup and stopping UDP, so an abandoned
+attempt cannot connect, publish status, or close its replacement.
+
+The backend publishes a copied `ConnectionSession` at the accepted handshake.
+Endpoint classification and receive startup use that snapshot rather than
+borrowing mutable TCP-worker fields. `startReceiveTransport` returns the bound
+port after startup or rebind. Disconnect retires ordinary command admission,
+waits up to two seconds for a sequenced keepalive-disable acknowledgment, then
+removes only the supplied session-owned receive stream and closes TCP. Cleanup
+uses the existing shared sequence allocator; backend destruction also retires
+keepalive before closing its transport. A missing or refused cleanup reply is
+logged, and shutdown remains bounded. Receive registrations are cleared before
+announcing the session's end.
+
+Forced, terminal and Multi-Flex-cancel disconnects request deferred TCP cleanup:
+the session and receive deliveries retire immediately, and `isConnected()` is
+false while the worker drains. Replacement dials wait for that drain to finish,
+including its nested event loops. The default disconnect and backend destruction
+wait for actual cleanup completion, even after a deferred close was requested.
+
+RadioModel retains GUI registration, settings, presentation, and desktop retry
+policy. The daemon's connection target requires fresh intent after failure.
+SmartLink retains its existing transport owner; selecting another route retires
+the previous session. Demo uses the same lifecycle coordinator for its selected
+synthetic transport, while its native engine API remains socket-free. Neither
+worker topology nor TX authority changes.
+
+## Flex command and reply ownership
+
+`FlexCommandSession` owns each transport session's sequence allocator, pending
+replies and expiry timer. `FlexBackend` installs its own typed-control routes;
+`RadioModel` supplies policy and receives results, without a raw command writer
+or reply map. The `ForTest` sink setters are encoding and transport injections
+only. LAN queues immutable writes to its existing worker. SmartLink retains its
+transport owner and uses the same ledger for controls and heartbeat sequencing.
+
+Register a pending reply before invoking the writer: Demo can answer immediately.
+LAN replies capture their original epoch on the producer and cross one queued
+hop, preserving status-before-reply order. A write receipt means only that the
+local transport accepted the bytes; it does not confirm execution or radio idle.
+Cancellation before dispatch is distinct from an unknown result after a partial
+or completed write. Nothing is replayed on reconnect.
+
+Entries expire after 30 seconds by default. Ordinary admission is capped at
+4096 pending entries, with 64 reserved for classified cleanup. Closing admission
+revokes ordinary writes immediately; already-queued cleanup may drain through
+the original transport before retirement cancels it too. TX requests retain
+their original `TxCoordinator` operation and deadlines at the final writer.
+Sequence exhaustion refuses further admission until a new transport epoch.
+
+Profile-load timing, deferred pan intent, local memory storage, registration and
+administrative intent remain model policy. The backend enforces the profile
+write hold after encoding. Full SmartLink ownership, DSP relocation and process
+isolation remain separate work.
+
 ## Display status observations
 
 `FlexStatusIngress` decodes Flex panadapter/waterfall reports, LAN and WAN
@@ -391,8 +453,8 @@ connection.
   signal.
 - **One fence.** The ingress takes each line over one queued hop on the
   owner's thread and accepts it only from its current route and epoch.
-  `RadioModel` stamps a fresh epoch on the transport inside the same call that
-  starts a connect (`beginStatusSession()`), so a line from an abandoned
+  The backend's `FlexLanSession` opens a fresh epoch before queueing a dial and
+  stamps it on the transport immediately before connecting, so a line from an abandoned
   attempt or a retired session never reaches the model. SmartLink binds with
   `bindLive()`; its lifecycle signals and its command replies take the same
   queued hop, fenced per bind, so a reply never overtakes status read ahead

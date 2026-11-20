@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Socket-free production model/encoder and routing checks. No radio peer or TX.
 #include "TestSettingsProfile.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -72,7 +73,7 @@ void transmitEncoding()
     };
     FlexBackend backend;
     QStringList commands;
-    backend.setCommandSink([&](const QString& command) { commands.append(command); });
+    FlexCommandTestAccess::record(backend, [&](const QString& command, FlexCommandTestAccess::Reply) { commands.append(command); });
     for (const TxCase& test : cases) {
         TransmitModel model;
         QSignalSpy raw(&model, &TransmitModel::commandReady);
@@ -150,7 +151,7 @@ void sliceEncoding()
     };
     FlexBackend backend;
     QStringList commands;
-    backend.setSliceCommandSink([&](const QString& command) { commands.append(command); });
+    backend.setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
     for (const SliceCase& test : cases) {
         SliceModel model(7);
         QSignalSpy raw(&model, &SliceModel::commandReady);
@@ -165,7 +166,7 @@ void sliceEncoding()
         check(raw.isEmpty(), "model emits no raw slice wire text");
     }
     commands.clear();
-    backend.setCommandSink([&](const QString& command) { commands.append(command); });
+    backend.setCommandSinkForTest([&](const QString& command) { commands.append(command); });
     check(backend.requestSliceControl(7, {SliceControlRequest::Field::TxAntenna,
               QStringLiteral("ANT1\ntransmit mox 1")}) == ReceiveDispatch::Unsupported,
           "antenna values cannot introduce a second command");
@@ -196,8 +197,8 @@ void routingAndReentrancy()
     auto owned = std::make_unique<ConnectedBackend>();
     ConnectedBackend* backend = owned.get();
     QStringList commands;
-    backend->setCommandSink([&](const QString& cmd) { commands.append(cmd); });
-    backend->setSliceCommandSink([&](const QString& cmd) { commands.append(cmd); });
+    backend->setCommandSinkForTest([&](const QString& cmd) { commands.append(cmd); });
+    backend->setSliceCommandSinkForTest([&](const QString& cmd) { commands.append(cmd); });
     radio.setBackendForTest(std::move(owned), QStringLiteral("model-control-test"));
     SliceDelta delta;
     delta.inUse = true; delta.frequency = 14.2; delta.mode = QStringLiteral("USB");
@@ -269,7 +270,7 @@ void heldDelayReentrancy()
     QStringList commands;
     QObject::connect(&model, &TransmitModel::controlRequested, &backend,
                      [&](const TransmitControlRequest& request) { backend.requestTransmitControl(request); });
-    backend.setCommandSink([&](const QString& command) { commands.append(command); });
+    backend.setCommandSinkForTest([&](const QString& command) { commands.append(command); });
     model.setHoldBreakInDelay(true);
     bool nested = false;
     QObject::connect(&model, &TransmitModel::phoneStateChanged, &model, [&] {
@@ -319,12 +320,14 @@ static void answeredVoxEncoding()
 {
     TransmitModel model;
     FlexBackend backend;
-    check(!backend.answersTransmitControl(), "without a reply-aware sink the encoder says it cannot answer");
+    check(backend.answersTransmitControl(), "the backend owns its default reply-aware transport");
+    backend.setAnsweredCommandSinkForTest({});
+    check(!backend.answersTransmitControl(), "removing the test transport disables reply support");
     QStringList plain;
     QStringList answered;
     std::function<void(bool)> reply;
-    backend.setCommandSink([&plain](const QString& command) { plain << command; });
-    backend.setAnsweredCommandSink([&answered, &reply](const QString& command,
+    backend.setCommandSinkForTest([&plain](const QString& command) { plain << command; });
+    backend.setAnsweredCommandSinkForTest([&answered, &reply](const QString& command,
                                                        std::function<void(bool)> done) {
         answered << command;
         reply = std::move(done);

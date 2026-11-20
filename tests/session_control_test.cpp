@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Inject production command sinks and socket state; no descriptors or peers.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -56,20 +57,19 @@ public:
     static void startMonitor(RadioModel& model) { model.startNetworkMonitor(); }
     static void changeTransport(RadioModel& model) { ++model.m_connection->m_sessionGeneration; }
     static SessionCommandGuard sessionRequest(RadioModel& model) { return model.m_sessionCommands.request(); }
-    static RadioModel::TransferCommandSink transferSink(RadioModel& model) { return model.transferCommandSink(); }
     static quint32 send(RadioModel& model, const QString& command, const SessionCommandGuard& guard)
-    { return model.sendCmd(command, {}, guard); }
-    static quint32 sendAnswered(RadioModel& model, const QString& command, bool expireReply,
-                                RadioModel::ResponseCallback reply)
-    { return model.sendCmd(command, std::move(reply), model.m_sessionCommands.request(), {}, expireReply); }
-    static bool answer(RadioModel& model, quint32 seq)
     {
-        const auto callback = model.m_pendingCallbacks.take(seq);
-        if (callback) { callback(0, {}); }
-        return bool(callback);
+        FlexCommandSession::Options options;
+        options.guard = guard; options.guarded = true;
+        return FlexCommandTestAccess::send(model, command, {}, options);
     }
-    static QTimer* replyExpiry(RadioModel& model)
-    { return model.findChild<QTimer*>(QStringLiteral("sessionReplyExpiry"), Qt::FindDirectChildrenOnly); }
+    static bool transfer(RadioModel& model, const FileTransferGuard& guard)
+    {
+        auto* backend = static_cast<FlexBackend*>(model.backend());
+        FlexCommandTestAccess::bind(model, *backend);
+        return backend->requestFileTransfer({FileTransferPurpose::ProfileExport, 0, {}, 0}, {}, guard,
+            [] { return true; }) == ReceiveDispatch::Dispatched;
+    }
     static void closeTransport(RadioModel& model, ConnectionState state)
     {
         model.m_connection->m_state.store(state);
@@ -84,7 +84,7 @@ public:
         connection.m_commandSinkForTest = std::move(writer);
     }
     static void replaceTransport(RadioConnection& connection) { ++connection.m_sessionGeneration; }
-    static void prepareWan(WanConnection& connection) { connection.m_connected = true; }
+    static void prepareWan(WanConnection& connection) { FlexCommandTestAccess::prepareWan(connection); }
     static void replaceWan(WanConnection& connection) { ++connection.m_sessionGeneration; }
 };
 }
@@ -99,13 +99,13 @@ public:
     bool isConnected() const override { return true; }
     RecordingSessionBackend()
     {
-        setSessionCommandSink([this](const QString& text, const SessionCommandGuard& guard,
+        setSessionCommandSinkForTest([this](const QString& text, const SessionCommandGuard& guard,
                                      const RadioControlCompletion& reply) {
             commands.push_back({text, guard, reply});
             if (onCommand) { onCommand(text); }
             return accept;
         });
-        setSetupCommandSink([this](const QString& text, const RadioSetupCompletion&) {
+        setSetupCommandSinkForTest([this](const QString& text, const RadioSetupCompletion&) {
             setupCommands.append(text);
             return true;
         });
@@ -237,8 +237,7 @@ private slots:
             const FileTransferGuard guard(change == Change::Expire ? 50 : 30000);
             QSemaphore hold;
             QMetaObject::invokeMethod(connection, [&hold] { hold.acquire(); });
-            QVERIFY(SessionControlTestAccess::transferSink(model)(
-                QStringLiteral("file download db_package"), guard, {}));
+            QVERIFY(SessionControlTestAccess::transfer(model, guard));
             if (change == Change::Cancel) { guard.cancel(); }
             if (change == Change::Expire) { QThread::msleep(80); }
             if (change == Change::Replace) { SessionControlTestAccess::changeTransport(model); }
@@ -247,27 +246,24 @@ private slots:
             QCOMPARE(writes.load(), change == Change::None ? 1 : 0);
         }
     }
-    // Only session controls drop an unanswered reply after 30 s; a guarded
-    // setup write keeps waiting for its reply, as an unguarded command does.
-    void onlySessionControlsExpireReplies()
+    // All backend reply entries now have bounded lifetimes, including setup.
+    void everyCommandReplyExpires()
     {
         RadioModel model;
         RecordingSessionBackend* backend = install(model);
         SessionControlTestAccess::installWriter(*backend->connection(), [](quint32, const QString&) {});
         int answered = 0;
-        const quint32 setup = SessionControlTestAccess::sendAnswered(model, QStringLiteral("radio set foo=1"), false,
-            [&answered](int, const QString&) { ++answered; });
-        QVERIFY(setup != 0);
-        QVERIFY(!SessionControlTestAccess::replyExpiry(model));
-        QVERIFY(SessionControlTestAccess::answer(model, setup));
-        QCOMPARE(answered, 1);
-        const quint32 session = SessionControlTestAccess::sendAnswered(model, QStringLiteral("ping"), true,
-            [&answered](int, const QString&) { ++answered; });
-        QTimer* expiry = SessionControlTestAccess::replyExpiry(model);
-        QVERIFY(session != 0 && expiry);
-        QVERIFY(QMetaObject::invokeMethod(expiry, "timeout", Qt::DirectConnection));
-        QVERIFY(!SessionControlTestAccess::answer(model, session));
-        QCOMPARE(answered, 1);
+        for (const QString& text : {QStringLiteral("radio set foo=1"), QStringLiteral("ping")}) {
+            QVERIFY(FlexCommandTestAccess::send(model, text, [&answered](int code, const QString&) {
+                QVERIFY(code != 0);
+                ++answered;
+            }) != 0);
+        }
+        QMetaObject::invokeMethod(backend->connection(), [] {}, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents();
+        FlexCommandTestAccess::expireAll(FlexCommandTestAccess::session(model));
+        QCOMPARE(answered, 2);
+        QCOMPARE(FlexCommandTestAccess::pending(model), 0);
     }
     void wanRejectsCancelledAndReplacedSession()
     {
