@@ -779,6 +779,54 @@ void testRemoteKeyDoesNotTakeOver()
     pumpFor(50);
 }
 
+// Review nit 4 on #7347: a waiting sender whose run cannot start (no free
+// producer) is dropped alone; the senders behind it keep their text. B's text
+// request is dispatched just before its run starts; there the test takes the
+// last free producer, and gives every one back once B has been dropped.
+void testFailedStartDropsOnlyItsSender()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    Sender b(f.radio);
+    Sender c(f.radio);
+    std::vector<TxCoordinator::Producer> fillers;
+    bool armed = false;
+    int dropped = 0;
+    const auto exhaust = [&](const CwTextRequest& request) {
+        while (armed && request.field == CwTextRequest::Field::Send) {
+            TxCoordinator::Producer p = f.radio.registerTxProducer();
+            if (!p.valid()) {
+                break;
+            }
+            fillers.push_back(std::move(p));
+        }
+    };
+    QObject::connect(&f.radio.cwxModel(), &CwxModel::controlRequested, exhaust);
+    QObject::connect(&f.radio.cwxModel(), &CwxModel::replyControlRequested,
+                     [&](const CwTextRequest& request, int, int) { exhaust(request); });
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         if (key == QLatin1String("cw-text-queued-dropped")) {
+                             ++dropped;
+                             armed = false;
+                             for (TxCoordinator::Producer& p : fillers) {
+                                 p.invalidate();   // capacity is back for C's turn
+                             }
+                         }
+                     });
+    f.radio.transmitModel().setCwSpeed(30);
+    check("failed start: A plays, B and C wait",
+          a.send(QStringLiteral("E")) && b.send(QStringLiteral("E")) && c.send(QStringLiteral("E")));
+    armed = true;
+    const bool keyed = pumpUntil([&] { return f.edges.size() >= 4; }, 3000);
+    pumpFor(200);
+    std::printf("       failed start: %zu producers taken, %d dropped, %zu edges\n",
+                fillers.size(), dropped, f.edges.size());
+    check("failed start: B could not start and was dropped with one notice", !fillers.empty() && dropped == 1);
+    check("failed start: C's text still keys after B's failed start",
+          keyed && f.edges.size() == 4 && alternates(f.edges));
+}
+
 // A waiting message that is refused when its turn comes is dropped with a notice.
 void testWaitingRefusedAtItsTurn()
 {
@@ -904,6 +952,7 @@ int main(int argc, char** argv)
     testPaddleTakesOver();
     testRemoteKeyDoesNotTakeOver();
     testWaitingRefusedAtItsTurn();
+    testFailedStartDropsOnlyItsSender();
     testKeyObjectionOncePerMessage();
     testRoutelessSendRefused();
     testRadioSideKeyerUnchanged();

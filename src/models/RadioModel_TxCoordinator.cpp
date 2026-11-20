@@ -997,7 +997,13 @@ bool RadioModel::dispatchHostCwText(const TxCoordinator::Request& request, const
         return false;
     }
     // The sender's Cwx intent lasts until the engine has keyed this segment.
-    return m_hostCwText->play(request, text, wpm, trackCwxQueue(operation));
+    if (m_hostCwText->play(request, text, wpm, trackCwxQueue(operation))) {
+        return true;
+    }
+    // Only this sender ends: its closed request stops CwxModel from clearing
+    // the buffer, which would drop every other sender's waiting text.
+    abortProducerCwx(request);
+    return false;
 }
 
 void RadioModel::startWaitingHostCwx()
