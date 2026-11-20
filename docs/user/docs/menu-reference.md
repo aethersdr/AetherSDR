@@ -39,7 +39,6 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 | **multiFLEX...** | The multi-client dashboard. See [Multi-Flex](./multi-flex.md). |
 | **TX Band Settings...** | Per-band RF power, tune power and inhibit choices. |
 | **Inhibit during TUNE ▸** | Selects ACC TX inhibition during TUNE. On Flex firmware 4.2 and older, also selects TX1/TX2/TX3. On 4.3 and later, the submenu contains **ACC TX** and **Configure RCA suppression…**, which opens **TX Band Settings** directly for per-band RCA suppression. |
-| **AetherRX...** | The receive audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **Settings Browser...** | Browse and edit stored settings. See [Settings and Backups](./settings-and-backups.md). |
 | **Autostart CAT with AetherSDR** / **Autostart TCI…** / **Autostart DAX…** | Start those services automatically. |
 | **Reset Settings...** | Restores application settings after confirmation. A backup is written first. |
@@ -65,6 +64,7 @@ See [Profile Management](./profile-management.md).
 | Item | What it does |
 |------|-------------|
 | **Add Panadapter...** | Opens the layout picker and adds a pan if the radio has capacity. |
+| **AetherRX...** | Opens the receive audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **AetherTX...** | Checkable. Shows the transmit audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **CW Keyer** | Checkable. Shows the CW keyer panel. See [CWX Panel](./cwx-panel.md). |
 | **Copy Assist** | Checkable. Speech-to-text panel (builds with speech-to-text only). See [Copy Assist](./copy-assist.md). |

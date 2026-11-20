@@ -3155,6 +3155,13 @@ void MainWindow::wireCatPorts()
         applyMasterVolume(pct);
     });
 
+    // A TCI RX-antenna set releases a KiwiSDR virtual antenna first, as the
+    // RX applet, VFO and overlay menus do (flexRxAntennaSelected). Direct:
+    // the clear must run before the set. Only when something is held: a peer
+    // may send many sets, and the clear logs and resyncs the UI every time.
+    connect(tciServer(), &TciServer::rxAntennaSetByTci,
+            this, &MainWindow::clearKiwiSdrVirtualAntennaIfHeld, Qt::DirectConnection);
+
     // Wire slice state changes -> TCI broadcasts. TCI receivers are contiguous
     // indexes within our owned slice list; Flex slice ids can be non-zero when
     // another client owns lower-numbered slices.

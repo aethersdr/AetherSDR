@@ -59,6 +59,12 @@ struct MetisClientTestAccess {
     }
     static bool holdsSocket(const MetisClient& c) { return c.m_socket != nullptr; }
     static Cc txFreqCc(const MetisClient& c) { return c.m_ccTxFreq; }
+    static Cc rxFreqCc(const MetisClient& c, int ddc)
+    {
+        return ddc >= 0 && ddc < static_cast<int>(c.m_ccRxFreq.size())
+                   ? c.m_ccRxFreq[static_cast<std::size_t>(ddc)]
+                   : Cc{};
+    }
 };
 
 struct Hl2PersistTestAccess {
@@ -120,6 +126,31 @@ struct Hl2PersistTestAccess {
         return out;
     }
     static Cc expectedTxCc(const Hl2Backend& b, double hz) { return ccTxFreq(b.ncoCommandHz(hz)); }
+    // Receiver `ddc`'s NCO register as MetisClient holds it, and the word a
+    // true-RF frequency should produce there.
+    static Cc rxNcoCc(Hl2Backend& b, int ddc)
+    {
+        Cc out{};
+        QMetaObject::invokeMethod(b.m_metis, [metis = b.m_metis, ddc, &out] {
+            out = MetisClientTestAccess::rxFreqCc(*metis, ddc);
+        }, Qt::BlockingQueuedConnection);
+        return out;
+    }
+    static Cc expectedRxCc(const Hl2Backend& b, int ddc, double hz)
+    {
+        return ccRxFreq(ddc, b.ncoCommandHz(hz));
+    }
+    static double ncoHz(const Hl2Backend& b, int ddc)
+    {
+        const Hl2Backend::Receiver* r = b.rx(ddc);
+        return r ? r->ncoHz : 0.0;
+    }
+    static double sliceHz(const Hl2Backend& b, int ddc)
+    {
+        const Hl2Backend::Receiver* r = b.rx(ddc);
+        return r ? r->sliceFreqHz : 0.0;
+    }
+    static int sampleRateHz(const Hl2Backend& b) { return b.m_sampleRateHz; }
     static QString panIdOf(const Hl2Backend& b, int ddc)
     {
         const Hl2ReceiverIds* ids = b.m_ids.byDdc(ddc);

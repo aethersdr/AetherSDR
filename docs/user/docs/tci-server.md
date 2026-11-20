@@ -340,11 +340,22 @@ aethersdr_ext_enable:true;
 
 The server answers with the set's version and the items this radio offers,
 then the current state of the offered items. An item sends as many state lines
-as it needs, and may send none:
+as it needs, and may send none. On a Hermes-Lite 2 with one receiver, for
+example:
 
 ```
-aethersdr_ext:1;
+aethersdr_ext:1,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_rx_antennas:0,ANT;
+aethersdr_rx_antenna:0,ANT;
+aethersdr_tx_antennas:0,ANT,RF1;
+aethersdr_tx_antenna:0,ANT;
+aethersdr_rx_rf_gain_range:0,-12,48,1;
+aethersdr_rx_rf_gain:0,20;
+aethersdr_rx_auto_rf_gain:false;
+aethersdr_rx_overload:clean,false,0;
 ```
+
+On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
 
 - Every command of the set starts with `aethersdr_`. Before the enable, the
   server ignores them without a reply, like any unknown command.
@@ -356,15 +367,46 @@ aethersdr_ext:1;
 - The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
   `rx_ctun_ex`) work without the enable, as before.
 
-On a Hermes-Lite 2 with one receiver, for example, the answer is:
+#### Antennas: `rx_antenna` and `tx_antenna`
+
+`rx_antenna` is offered while a receiver of the connected radio has a receive
+antenna list, `tx_antenna` while one has a transmit antenna list and the radio
+can transmit. A Flex publishes its ports (for example `ANT1`, `ANT2`, `RX_A`);
+a Hermes-Lite 2 receives on `ANT` and transmits on `ANT` or `RF1`. An RTL-SDR
+is not offered `tx_antenna`.
 
 ```
-aethersdr_ext:1,rx_rf_gain,rx_auto_rf_gain,rx_overload;
-aethersdr_rx_rf_gain_range:0,-12,48,1;
-aethersdr_rx_rf_gain:0,20;
-aethersdr_rx_auto_rf_gain:false;
-aethersdr_rx_overload:clean,false,0;
+aethersdr_rx_antennas:0;          # read: aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;
+aethersdr_rx_antenna:0;           # read: aethersdr_rx_antenna:0,ANT1;
+aethersdr_rx_antenna:0,ANT2;      # set
+aethersdr_tx_antennas:0;          # read: aethersdr_tx_antennas:0,ANT,RF1;
+aethersdr_tx_antenna:0,RF1;       # set
 ```
+
+- `<trx>` is the TCI receiver. A receiver without a list is ignored.
+- A set names an antenna from that receiver's list, in any case; the answer
+  uses the list's spelling. A name not in the list gets no answer. A set naming
+  the antenna already in use changes nothing and is answered with it, to the
+  sender only. A name with `:`, `,` or `;` is left out of the list.
+- The set goes the way the RX applet's antenna menus set it, so the radio's
+  own rules still apply. The answer, sent to every client that enabled the set,
+  is the antenna in use afterwards: if the radio refused, it is the old one.
+- Every change is sent the same way, whoever made it, and so is a list that
+  changes. When transmit moves to another receiver, its `aethersdr_tx_antenna`
+  line is sent again.
+- The receive antenna may change while transmitting. The transmit antenna may
+  not: while the radio transmits or tunes, a set is answered with the antenna in
+  use, to the sender only, and AetherSDR shows the reason in its status bar
+  once per transmission. On a Hermes-Lite 2, in the short tail after it stops
+  transmitting, the refusal comes from its backend instead, and the old antenna
+  is sent to every client that enabled the set. This is stricter than the RX
+  applet on a Flex. On a Hermes-Lite 2, `RF1` turns the PA off and has its own
+  drive, which the `drive:` line reports.
+- KiwiSDR receivers that the RX applet lists as antennas are not in the list.
+  While one is assigned to a receiver, `aethersdr_rx_antenna` still reports the
+  radio's port, although what you hear comes from the KiwiSDR. A
+  receive-antenna set releases the KiwiSDR receiver, as choosing a port in the
+  RX applet does, even when it names the port in use.
 
 #### Receive RF gain: `rx_rf_gain`
 
