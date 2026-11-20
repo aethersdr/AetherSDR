@@ -1867,7 +1867,7 @@ keeps both workflows consistent:
   0..100 ms, default 40; `cwlead.get` / `cwlead.set`, #7245): applied at once
   between overs and when the over ends during one, so an over never changes
   lead. 0 is safe (a late edge shifts the over, lengths exact); 100 keeps the
-  lead plus the largest shift inside the 32-edge schedule at 60 WPM. A key-down also
+  lead plus the largest shift inside the 32-edge schedule at host text's 100 WPM. A key-down also
   carries its own key-up instant (`CwControlRequest::releaseAt`), so both edges
   are scheduled when the element is admitted and its length never depends on
   the key-up's own GUI hop. A key-down that arrives after its sample is never
@@ -1882,8 +1882,23 @@ keeps both workflows consistent:
   `releaseAt`; the HL2 keys up there. The break-in hang counts from the shifted key-up's wire
   instant. A late key-up without a release is applied at once; a scheduled
   key-down is forced up after a 5 WPM dah plus the default lead. Admission of each
-  element stays on the engine-owning thread. Edges without an instant
-  (straight key, TCI `keyer:`) take effect on the next frame built, as before;
+  element stays on the engine-owning thread. A scheduled key-up carries the
+  element's completion, and `MetisClient` holds it until that key-up (or the
+  element's own release) is written to EP2, so the model ends the element's
+  intent only once it is on the wire; a flush drops it. A key-up written while
+  a later edge is pending keeps the held CW operation the next key-down
+  entered with, so a host-text element's 5 ms fall is never cut by its own
+  completion. Edges without an instant (straight key, TCI `keyer:`) take
+  effect on the next frame built: an unscheduled key-down flushes pending
+  scheduled edges and is a hold of its own, kept while its own operation
+  permits dispatch, so a paddle's release clears only the paddle's
+  contribution; an unscheduled key-up ends every hold. Unkeying manual
+  MOX/PTT (break-in off) flushes the schedule at once: the operator's unkey
+  wins, so an element still inside the lead (plus any shift) is cut or not
+  sent. The
+  `cwlead.get` / `cwlead.set` requests from the HL2 Hardware page use their
+  own request-id range, `0x08…` (`hl2_cw_element_completion_test` pins the
+  completion, hold and fall behaviour);
 - CW owns the IQ payload until that PTT envelope ends, so queued microphone IQ
   cannot leak into inter-element spaces;
 - both MOX and carrier generation remain behind `MetisClient`'s final
