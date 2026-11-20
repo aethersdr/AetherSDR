@@ -310,25 +310,29 @@ int main(int argc, char** argv)
               "keyevent: TX allowed, ceiling off: an rf_power_up press is delivered (unchanged)");
         server.setShortcutAutomationHandler({});
         server.setKeyEventAutomationHandler({});
-        {
-            // No handler, TX allowed, no ceiling: the cause is the fallback,
-            // not a ceiling of -1 and not a missing permission.
-            window.hide();
-            FallbackMainWindow fallback;
-            fallback.show();
-            const auto noHandler = [](const QJsonObject& r) {
-                const QString e = r.value(QStringLiteral("error")).toString();
-                return !ok(r) && e.contains(QStringLiteral("no automation handler"))
-                    && !e.contains(QStringLiteral("power ceiling"));
-            };
-            check(noHandler(shortcut()),
-                  "shortcut: no handler, TX allowed: the refusal names the fallback, not the ceiling");
-            check(noHandler(cmd(server, QStringLiteral("keyevent"), {}, QStringLiteral("press"),
-                                QStringLiteral("rf_power_up"))),
-                  "keyevent: no handler, TX allowed: the refusal names the fallback, not the ceiling");
-            fallback.hide();
-            window.show();
-        }
+        server.setTxAllowed(false);
+    }
+
+    // No handler, TX allowed, no ceiling: the bridge falls back to the main
+    // window's methods, which fire without permission. The refusal names that
+    // cause, not a ceiling of -1. The only main window alive is this one.
+    {
+        FallbackMainWindow fallback;
+        fallback.show();
+        server.setTxAllowed(true);
+        AutomationServerTestAccess::setTxMaxPower(server, -1);
+        const auto noHandler = [](const QJsonObject& r) {
+            const QString e = r.value(QStringLiteral("error")).toString();
+            return !ok(r) && e.contains(QStringLiteral("no automation handler"))
+                && !e.contains(QStringLiteral("power ceiling"));
+        };
+        check(noHandler(AutomationServerTestAccess::request(server,
+                  QJsonObject{{QStringLiteral("cmd"), QStringLiteral("shortcut")},
+                              {QStringLiteral("target"), QStringLiteral("rf_power_up")}})),
+              "shortcut: no handler, TX allowed: the refusal names the fallback, not the ceiling");
+        check(noHandler(cmd(server, QStringLiteral("keyevent"), {}, QStringLiteral("press"),
+                            QStringLiteral("rf_power_up"))),
+              "keyevent: no handler, TX allowed: the refusal names the fallback, not the ceiling");
         server.setTxAllowed(false);
     }
 
