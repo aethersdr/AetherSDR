@@ -1576,6 +1576,13 @@ target_include_directories(anan_rxdsp_handedness_test PRIVATE src)
 target_link_libraries(anan_rxdsp_handedness_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_rxdsp_handedness_test COMMAND anan_rxdsp_handedness_test)
 
+# ANAN FM receive is bounded by WDSP's FM limiter with the panel at unity in FM
+# only (#7252): built, live, mid-rebuild, and USB unchanged. Offline, no socket.
+add_executable(anan_rxdsp_fm_limiter_test tests/anan_rxdsp_fm_limiter_test.cpp)
+target_include_directories(anan_rxdsp_fm_limiter_test PRIVATE src)
+target_link_libraries(anan_rxdsp_fm_limiter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_rxdsp_fm_limiter_test COMMAND anan_rxdsp_fm_limiter_test)
+
 # ANAN backend -- IRadioBackend implementor. Pieces testable without a live
 # radio: capabilities() defaults, mode-string parsing, CW BFO math, and the
 # passband-reset-only-on-actual-mode-change idempotence rule.
