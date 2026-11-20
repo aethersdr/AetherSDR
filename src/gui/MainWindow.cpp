@@ -4838,8 +4838,7 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
 #else
         auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, nullptr, floorFn, this);
 #endif
-        // No WA_DeleteOnClose — the dialog persists so Auto-Adapt keeps
-        // running in the background after the panel is closed.
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_agcCalibrationDialog = dlg;
     }
     m_agcCalibrationDialog->setSlice(slice);
