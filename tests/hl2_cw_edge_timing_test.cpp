@@ -986,6 +986,13 @@ static void testBackendLeadVerbsPersist()
               "lead verbs: cwlead.set 15 ms is stored");
         check(Hl2TxGateTestAccess::lead(backend) == std::pair<int, int>{15, 15},
               "lead verbs: and reaches the client");
+        QString error;
+        QObject::connect(&backend, &IRadioBackend::extensionError, &backend,
+                         [&error](quint64 id, const QString& reason) { if (id == 9) error = reason; });
+        backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("cwlead.set"), 9,
+                                QVariantMap{{QStringLiteral("edgeLeadMs"), QStringLiteral("forty")}});
+        check(!error.isEmpty() && Hl2Settings::cwEdgeLeadMs() == 15,
+              "lead verbs: cwlead.set with a non-number is refused, 15 ms kept");
     }
     {
         Hl2Backend backend;

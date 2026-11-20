@@ -6891,12 +6891,14 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             int ms = Hl2Settings::cwEdgeLeadMs();
             if (verb == QLatin1String("cwlead.set")) {
                 const QVariant v = arg.toMap().value(QStringLiteral("edgeLeadMs"));
-                if (!v.canConvert<int>()) {
+                bool ok = false;
+                const int asked = v.toInt(&ok);
+                if (!v.isValid() || !ok) {
                     if (requestId != 0)
                         emit extensionError(requestId, QStringLiteral("cwlead.set needs edgeLeadMs"));
                     return;
                 }
-                ms = Hl2Settings::setCwEdgeLeadMs(v.toInt());
+                ms = Hl2Settings::setCwEdgeLeadMs(asked);
                 if (m_metis) {
                     QMetaObject::invokeMethod(m_metis, "setCwEdgeLeadMs", Qt::QueuedConnection,
                                               Q_ARG(int, ms));
