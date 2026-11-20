@@ -9455,7 +9455,7 @@ QJsonObject AutomationServer::doTransmit(const QString& action, const QString& a
             tx.setTunePower(applied);
 
         qCInfo(lcAutomation).noquote()
-            << "transmit" << a << applied << "(ALLOW_TX)";
+            << "transmit" << a << applied << "(drive; no TX permission needed)";
         QJsonObject reply{{QStringLiteral("ok"), true},
                           {QStringLiteral("transmit"), a},
                           {QStringLiteral("rfPower"), tx.rfPower()},

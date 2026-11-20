@@ -11393,8 +11393,9 @@ add_test(NAME phone_applet_vox_disarm_test COMMAND phone_applet_vox_disarm_test)
 set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Without TX permission the bridge refuses to change RF/Tune power on every
-# surface, as `transmit rfpower` does (#5851). Real TxApplet, offscreen, no radio.
+# RF/Tune power are drive, not keying (#5851): every bridge surface sets them
+# without TX permission, and the power ceiling bounds them. Real TxApplet,
+# offscreen, no radio.
 add_executable(automation_tx_setpoint_gate_test
     tests/automation_tx_setpoint_gate_test.cpp
     src/gui/TxApplet.cpp
