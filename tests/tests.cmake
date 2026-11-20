@@ -6982,6 +6982,23 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME rtl_package_closure_test
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_rtl_package.py)
+    # not registered: opt-in reproducer for the RTL async cancellation
+    # lifetime fix (#7397). It compiles the pinned, patched librtlsdr.c
+    # against an injected libusb (no device, no socket), and only the release
+    # recipes fetch that source into .rtl-deps-build. Build this target by
+    # name after scripts/setup/setup-rtl-deps.* has run; it exits 77 without
+    # the sources. See docs/rtl-release-packaging.md.
+    set(rtl_async_sanitizer)
+    if(NOT WIN32)
+        set(rtl_async_sanitizer --sanitize)
+    endif()
+    add_custom_target(rtl_async_cancellation_test
+        COMMAND ${PYTHON3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup/test-rtl-async-cancellation.py
+                ${rtl_async_sanitizer}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        USES_TERMINAL
+        VERBATIM)
     add_test(NAME capability_record_parser
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_capability_records.py)
