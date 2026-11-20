@@ -7449,6 +7449,7 @@ void RadioModel::stageSessionModelsForReconnect()
             unavailableWfm.chainMode = QString();
             unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
             unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+            unavailableWfm.squelchGate = SquelchGateState::Unavailable;
             slice->applyChanges(unavailableWfm);
             m_staleSlices.insert(slice->sliceId(), slice);
         }

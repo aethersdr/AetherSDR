@@ -20,8 +20,11 @@ The slider level L (0..100) maps to `tail_thresh = 10^(−2·L_eff/100)`, where
 
 With noise alone at the input, `avnoise` grows as the receive filter narrows, so
 without compensation one slider position closes on noise at ±8000 Hz and stays open
-on noise at ±2500 Hz. The offset moves the level so that noise alone reaches its
+on noise at ±2500 Hz. The offset aims to move the level so that noise alone reaches its
 50 % duty point (closed half the time) at the same slider position at every width.
+It narrows the spread rather than removing it: `wdsp_channel_test` pins that at
+level 15 the gate is open in at most half the blocks at every width from ±1500 to
+±6000 Hz, and a narrower filter still needs a few more levels than a wide one.
 
 `W` is the filter half-width, `(high − low) / 2`. With `u = log10(W / 3000 Hz)`, the
 uncompensated level at which noise alone has 50 % duty is
@@ -29,7 +32,10 @@ uncompensated level at which noise alone has 50 % duty is
     N(W) = 22.59 − 98.64·u + 75.02·u²
 
 fitted offline over 1500..6000 Hz to the median of 8 noise seeds per width (max
-residual 1.1 levels, rms 0.6). The offset is `N(W) − N(6000)`, so it is 0 at
+residual 1.1 levels, rms 0.6). That residual is the fit against those medians, not
+the alignment after compensation. Duty there is the full HL2 receive chain, 20 s of
+noise per level after a 2 s settle; a 2 ms window counts as not muted when its
+audio is at least 1 % (−40 dB) of the same noise with the squelch off. The offset is `N(W) − N(6000)`, so it is 0 at
 ±6000 Hz and grows as the filter narrows: +4.7 at ±5000, +31.2 at ±2500, +59.4 at
 ±1500. `L_eff = L + offset` is not clamped to 100, so the slider keeps its full
 travel above the noise point at a narrow filter.

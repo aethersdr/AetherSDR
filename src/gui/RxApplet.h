@@ -247,7 +247,6 @@ private:
     // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
     std::optional<SquelchLevelScale> m_exclusiveSquelch;
     QStringList m_squelchGateModes;
-    SquelchGateState m_paintedSquelchGate{SquelchGateState::Unavailable};
     QString m_paintedSquelchGateLine;
     QPushButton* m_filterUnavailable{nullptr};
     KiwiSdrManager* m_kiwiSdrManager{nullptr};

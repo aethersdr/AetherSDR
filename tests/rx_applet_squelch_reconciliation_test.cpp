@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QDate>
 #include <QDateTime>
+#include <QImage>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
@@ -315,14 +316,18 @@ private slots:
         QCOMPARE(sql->property("squelchGate").toString(), QString());
         QVERIFY(!sql->toolTip().contains(QStringLiteral("Gate ")));
         const QString unreportedStyle = sql->styleSheet();
+        sql->resize(200, 20);
+        const QImage unreportedFill = sql->grab().toImage();
 
         report(SquelchGateState::Closed);
         QCOMPARE(rx.shownSquelchGate(), SquelchGateState::Closed);
         QCOMPARE(sql->property("squelchGate").toString(), QStringLiteral("closed"));
         QVERIFY(sql->toolTip().endsWith(QStringLiteral("\nGate closed: audio muted.")));
         QVERIFY(sql->accessibleDescription().endsWith(QStringLiteral(" Gate closed: audio muted.")));
-        const QString closedStyle = sql->styleSheet();
-        QVERIFY(closedStyle != unreportedStyle);   // the fill dims
+        // The fill dims, by the sheet's property rule: the sheet itself is not
+        // rewritten on a gate flip.
+        QCOMPARE(sql->styleSheet(), unreportedStyle);
+        QVERIFY(sql->grab().toImage() != unreportedFill);
 
         report(SquelchGateState::Open);
         QCOMPARE(sql->property("squelchGate").toString(), QStringLiteral("open"));
@@ -330,6 +335,7 @@ private slots:
         QCOMPARE(sql->toolTip().count(QStringLiteral("Gate ")), 1);   // replaced, not stacked
         QCOMPARE(sql->accessibleDescription().count(QStringLiteral("Gate ")), 1);
         QCOMPARE(sql->styleSheet(), unreportedStyle);
+        QCOMPARE(sql->grab().toImage(), unreportedFill);
 
         // A mode the backend does not report the gate in shows none, whatever
         // the slice last held.

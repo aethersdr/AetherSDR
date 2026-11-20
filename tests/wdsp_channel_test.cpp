@@ -4015,6 +4015,63 @@ bool runFmSquelchWidthChannelTest()
                      "the FM squelch gate did not read closed on muted noise") && ok;
         ok = require(!off.gate.has_value(), "a gate was read with FM squelch off") && ok;
     }
+    // Low in the travel, where the docs' "same slider position" is tested:
+    // noise alone, the gate open at most half the blocks at level 15 at every
+    // width from +-1500 to +-6000 Hz, so each width's 50 % point is at or below
+    // 15 (+-6000 Hz: below 1). On the plain map +-1500 Hz opens up to ~60.
+    // Fraction of 256-sample blocks whose gate reads open, from 0.5 s to 4 s.
+    const auto openFraction = [&](double halfWidth, int level, std::uint64_t seed) {
+        WdspChannel::Config config;
+        config.inputBlockSize = kBlock;
+        config.dspBlockSize = kBlock;
+        config.mode = WdspChannel::Mode::Fm;
+        config.filterLowHz = -halfWidth;
+        config.filterHighHz = halfWidth;
+        config.agcMode = 3;
+        config.maximumAgcGainDb = 39.0;
+        config.blockForOutput = true;
+        config.squelchEnabled = true;
+        config.squelchLevel = level;
+        std::string error;
+        auto ch = WdspChannel::create(config, &error);
+        if (!ch) {
+            return -1.0;
+        }
+        PortableNoise noise{seed};
+        std::vector<float> i(kBlock), q(kBlock), left(ch->outputBlockSize()),
+            right(ch->outputBlockSize());
+        constexpr std::size_t kBlocks = 4 * 48000 / kBlock;
+        constexpr std::size_t kFrom = 48000 / 2 / kBlock;
+        std::size_t open = 0;
+        for (std::size_t block = 0; block < kBlocks; ++block) {
+            for (std::size_t n = 0; n < kBlock; ++n) {
+                const auto [gi, gq] = noise.complexGauss();
+                i[n] = static_cast<float>(0.01 * gi);
+                q[n] = static_cast<float>(0.01 * gq);
+            }
+            if (ch->processIq(i, q, left, right) != WdspChannel::ProcessResult::Ok) {
+                return -1.0;
+            }
+            if (block >= kFrom && ch->fmSquelchGateOpen().value_or(false)) {
+                ++open;
+            }
+        }
+        return static_cast<double>(open) / static_cast<double>(kBlocks - kFrom);
+    };
+    constexpr int kLowLevel = 15;
+    constexpr double kMaxOpen = 0.5;
+    for (const double halfWidth : {1500.0, 2000.0, 2500.0, 3000.0, 4000.0, 5000.0, 6000.0}) {
+        double worst = 0.0;
+        for (const std::uint64_t seed : {0x6552u, 0x6553u}) {
+            const double f = openFraction(halfWidth, kLowLevel, seed + static_cast<std::uint64_t>(halfWidth));
+            worst = f < 0.0 ? 1.0 : std::max(worst, f);
+        }
+        std::cout << "FM squelch " << kLowLevel << " at +-" << halfWidth
+                  << " Hz, noise alone: gate open in " << 100.0 * worst << " % of blocks\n";
+        ok = require(worst <= kMaxOpen, "noise alone opened the FM gate in more than half the "
+                                        "blocks at level 15 at one of +-1500..6000 Hz") && ok;
+    }
+
     // A quieting carrier opens it at the same slider position, narrow filter.
     const Run carrier = run(2500.0, true, 40, 0.5, 0x6552u);
     const Run carrierOff = run(2500.0, false, 40, 0.5, 0x6552u);

@@ -1052,6 +1052,12 @@ void RxApplet::buildUI()
             return QString::number(v);
         });
         applyPrimarySliderStyle(m_sqlSlider);
+        // A closed squelch gate dims the fill. One sheet with a property rule:
+        // a gate flip re-polishes rather than re-resolving it (#6552).
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_sqlSlider,
+            primarySliderStyleTemplate() + QStringLiteral(
+                "QSlider[squelchGate=\"closed\"]::sub-page:horizontal"
+                " { background: {{color.slider.foreground.disabled}}; }"));
         row->addWidget(m_sqlSlider, 1);
 
         applySqlModeVisuals();
@@ -1503,15 +1509,16 @@ void RxApplet::applySqlGateVisuals()
         return;
     }
     const SquelchGateState gate = shownSquelchGate();
-    if (gate != m_paintedSquelchGate) {
-        // Closed takes the dimmed fill; open and unreported keep the applet's.
-        applyPrimarySliderStyle(m_sqlSlider, gate == SquelchGateState::Closed
-            ? QStringLiteral("color.slider.foreground.disabled")
-            : QStringLiteral("color.slider.foreground"));
-        m_paintedSquelchGate = gate;
+    // Closed takes the dimmed fill (the sheet's squelchGate rule); open and
+    // unreported keep the applet's.
+    const QString gateName = gate == SquelchGateState::Open ? QStringLiteral("open")
+        : gate == SquelchGateState::Closed ? QStringLiteral("closed") : QString();
+    if (m_sqlSlider->property("squelchGate").toString() != gateName) {
+        m_sqlSlider->setProperty("squelchGate", gateName);
+        m_sqlSlider->style()->unpolish(m_sqlSlider);
+        m_sqlSlider->style()->polish(m_sqlSlider);
+        m_sqlSlider->update();
     }
-    m_sqlSlider->setProperty("squelchGate", gate == SquelchGateState::Open ? QStringLiteral("open")
-        : gate == SquelchGateState::Closed ? QStringLiteral("closed") : QString());
     QString line;
     if (gate == SquelchGateState::Open) {
         line = tr("Gate open: audio passes.");

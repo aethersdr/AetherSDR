@@ -253,6 +253,7 @@ public:
         unsigned applications = 0;
         // Fm only: the filter half-width the threshold was compensated for and
         // the level it was mapped from (slider level + width offset); 0 otherwise.
+        // Recorded whether or not fmRun: level 0 still writes the threshold.
         double fmHalfWidthHz = 0.0;
         double fmEffectiveLevel = 0.0;
     };
