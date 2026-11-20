@@ -44,8 +44,8 @@ New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
 if (-not (Test-Path $ZipFile)) {
     Write-Host "Downloading ONNX Runtime ${OrtVersion} prebuilt package..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $OrtUrl -OutFile $ZipFile
-    Confirm-Sha256 -Path $ZipFile -Expected $OrtSha256
 }
+Confirm-Sha256 -Path $ZipFile -Expected $OrtSha256
 
 # ── Extract ──────────────────────────────────────────────────────────────
 Write-Host "Extracting..." -ForegroundColor Cyan
