@@ -4176,9 +4176,12 @@ TciExtensionSet::Result TciServer::handleRxGain(const QString& name, const QStri
     }
     // The backend's echo (rfGainChanged) notifies every enabled client. A set
     // the range or step moved onto the current value is answered to the sender.
+    // The write is skipped only where the backend says a repeat is a no-op.
     const int wanted = snap(request->db, range);
     const bool unchanged = wanted == pan->rfGain();
-    m_model->setPanRfGainFor(pan->panId(), wanted);
+    if (!rfGainRepeatIsNoop(m_model->backendCapabilities(), *pan, wanted)) {
+        m_model->setPanRfGainFor(pan->panId(), wanted);
+    }
     if (unchanged && wanted != request->db) {
         result.reply = gainLine(request->trx, wanted);
     }
