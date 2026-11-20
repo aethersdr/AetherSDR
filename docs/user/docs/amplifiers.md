@@ -191,6 +191,7 @@ The button appears after a valid amplifier reply, not just an open connection.
 Once detected, it stays available while that connection remains open, including during
 power-off or lost replies, so you can wake the amp or inspect **Debug**. Closing
 the connection hides the button; reconnecting requires a fresh reply.
+
 The main-window status bar also shows a passive **KPA** indicator beside the
 PGXL indicator. It appears after amplifier detection and stays visible when
 the radio disconnects. Closing the amplifier connection hides it.
