@@ -90,6 +90,8 @@ public:
     void setBirdieRfOffsetHz(double hz) { m_birdieRfOffsetHz = hz; }   // unset: drawn at its pitch
     void setRttyTones(double upperAudioHz, double lowerAudioHz,
                       double upperRfOffsetHz, double lowerRfOffsetHz);
+    // The RTTY stations' shift: the lower tone sits this far below the upper in RF.
+    static constexpr double kRttyShiftHz = 170.0;
 
     // ---- generation ----
     // One 24 kHz mono float frame (kFrameLen samples) of the summed, notched,
@@ -173,7 +175,7 @@ private:
     double m_birdieRfOffsetHz = std::numeric_limits<double>::quiet_NaN();   // NaN: no owner geometry
     RttyKeyer m_rtty, m_rttyReversed;
     double m_rttyUpperAudioHz = 0.0, m_rttyLowerAudioHz = 0.0;
-    double m_rttyUpperRfHz = 0.0, m_rttyLowerRfHz = -170.0;
+    double m_rttyUpperRfHz = 0.0, m_rttyLowerRfHz = -kRttyShiftHz;
     qint64 m_hashPhase = 0, m_woodPhase = 0;  // sample counters; long overflows in ~25 h on LLP64 (#4618)
 
     // RNG (own stream; Box-Muller spare)
