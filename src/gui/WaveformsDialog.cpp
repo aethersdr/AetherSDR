@@ -2660,8 +2660,15 @@ void WaveformsDialog::refreshWaveformList()
             });
         }
 
+        // Dimmed with the reason on a radio whose firmware refuses the command
+        // (FLEX-6000, #6990). It is presented like Environment… above, but the
+        // gate is the radio platform here, not a backend capability.
         auto* restartBtn = new QPushButton(tr("Restart"), actionWidget);
         restartBtn->setAccessibleName(tr("Restart waveform %1").arg(name));
+        const QString restartUnavailable = waveformRestartUnavailableReason(
+            m_radioModel ? m_radioModel->capabilities().platform : RadioPlatform::Unknown);
+        restartBtn->setToolTip(restartUnavailable);
+        restartBtn->setAccessibleDescription(restartUnavailable);
         connect(restartBtn, &QPushButton::clicked, this, [this, name]() {
             setRowNotice(name, tr("Restarting…"), QStringLiteral("pending"), true);
             m_radioModel->flexWaveformModel().requestRestart(name);
@@ -2687,7 +2694,7 @@ void WaveformsDialog::refreshWaveformList()
             }
         });
 
-        restartBtn->setEnabled(!rowPending);
+        restartBtn->setEnabled(restartUnavailable.isEmpty() && !rowPending);
         removeBtn->setEnabled(!rowPending);
         const int actionButtonWidth = std::max({
             installedWaveformActionButtonWidth(restartBtn, removeBtn),

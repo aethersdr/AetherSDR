@@ -31,6 +31,7 @@
 #include <QSet>
 #include <QString>
 #include <QVector>
+#include <array>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -85,7 +86,9 @@ class TciServer : public QObject {
     friend class TciHostIqTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
+    friend class TciAntennaExtensionTest;
     friend class TciExtensionSetTest;
+    friend class TciRxGainExtensionTest;
     friend class TciSpanExtensionTest;
 
 public:
@@ -215,6 +218,10 @@ signals:
     // master volume slider — m_audio->setRxVolume() (or lineout when PC
     // audio is off) plus persistence to AppSettings.
     void masterVolumeRequested(int pct);
+    // An `aethersdr_rx_antenna` set names a listed port for this slice, even
+    // the one in use: emitted before the set, as the RX antenna menus emit
+    // flexRxAntennaSelected, so MainWindow releases a KiwiSDR virtual antenna.
+    void rxAntennaSetByTci(int sliceId);
 
 private slots:
     void onClientOpened(std::shared_ptr<TciClientLifetime> lifetime, QHostAddress address, quint16 endpointPort);
@@ -267,10 +274,26 @@ private:
     bool announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
-    // Keyed, for the extension set's refusals: transmit ownership held, the
-    // radio transmitting, TransmitModel transmitting, tuning or in MOX, or a
-    // TCI key held.
-    bool extensionKeyed() const;
+    // Extension groups `rx_rf_gain`, `rx_auto_rf_gain`, `rx_overload`
+    // (TciRxGainExtension.h).
+    void registerRxGainGroups();
+    void wireRxGainPan(PanadapterModel* pan);
+    void wireRxGainSlice(SliceModel* slice);
+    bool rxGainOffered() const;
+    bool rxAutoGainOffered() const;
+    bool rxOverloadOffered() const;
+    // The trx's pan, while it has a published dB range.
+    PanadapterModel* rxGainPanForTrx(int trx) const;
+    QList<int> rxGainTrxs() const;
+    QStringList rxGainStateLines() const;
+    TciExtensionSet::Result handleRxGain(const QString& name, const QStringList& args);
+    TciExtensionSet::Result handleRxAutoGain(const QStringList& args);
+    void queueRxGainNotice(const QString& panId, bool range);
+    void queueRxGainTrxNotice(int trx);
+    bool broadcastRxGain();
+    bool broadcastRxAutoGain();
+    bool broadcastRxOverload();
+    bool anyExtensionClient() const;
     // Extension group `rx_span` (TciSpanExtension.h).
     void registerSpanGroup();
     void wireSpanSlice(SliceModel* slice);
@@ -288,6 +311,34 @@ private:
     bool broadcastSpan();
     void armSpanAnswerTimer();
     void broadcastBinary(const QByteArray& data);
+    // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
+    enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
+    static constexpr int kAntennaLineKinds = 4;
+    static_assert(static_cast<int>(AntennaLine::TxSelection) + 1 == kAntennaLineKinds);
+    void registerAntennaGroups();
+    void wireSliceAntennas(SliceModel* slice);
+    TciExtensionSet::Result handleAntenna(bool tx, const QString& name,
+                                          const QStringList& args);
+    bool antennaOffered(bool tx) const;
+    QStringList antennaWireList(bool tx, const SliceModel* slice) const;
+    QStringList antennaStateLines(bool tx) const;
+    QString antennaLine(AntennaLine kind, int trx) const;
+    // Keyed, for the extension set's refusals: a transmit operation still
+    // held (a finished over awaiting stop evidence is not, once fresh RX is
+    // seen: RadioModel::transmitIdleForSelection()), the radio transmitting,
+    // TransmitModel transmitting, tuning or in MOX, or a TCI key held. Unlike ReceiveControlGuard::checkTransmit() it
+    // has no radio-confirmed idle term: in the HL2 transmit tail the backend
+    // refuses (requestTxRoute).
+    bool extensionKeyed() const;
+    // Clears the refusal latch once nothing is keyed any more.
+    void rearmTxAntennaRefusal();
+    // Every end of a TCI key goes through here, so the latch is re-armed.
+    void clearTciPttClient();
+    // A slice's list moved: a resend to every enabled client carries it,
+    // else the one line is queued.
+    void antennaListMoved(AntennaLine kind, SliceModel* slice);
+    void queueAntennaNotice(AntennaLine kind, int trx);
+    bool broadcastAntennas();
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
     SliceModel* sliceForTrxStrict(int trx) const;
@@ -500,6 +551,12 @@ private:
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
     TciExtensionSet m_extensions;
+    // Receive gain group notices: the trxs whose range or gain line is due.
+    QSet<int> m_rxGainRangeDue;
+    QSet<int> m_rxGainDue;
+    std::unique_ptr<TciExtensionNotice> m_rxGainNotice;
+    std::unique_ptr<TciExtensionNotice> m_rxAutoGainNotice;
+    std::unique_ptr<TciExtensionNotice> m_rxOverloadNotice;
     std::function<void(int, bool)> m_centerLockSet;
     std::function<bool(int)> m_centerLockQuery;
     // #6352: the newest removal per slice id. A close timer that finds a newer
@@ -565,6 +622,11 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Extension set, antenna notices: per line kind, the trx numbers pending.
+    std::array<QSet<int>, kAntennaLineKinds> m_antennaPending;
+    std::unique_ptr<TciExtensionNotice> m_antennaNotice;
+    // A refused keyed TX-antenna set warns once per keyed period; cleared on unkey.
+    bool              m_txAntennaRefusalWarned{false};
     // Extension set, span notice. The last values sent to enabled clients, so
     // a notice carries what moved; a dispatched set owes its trx a line even
     // when the radio kept the span it had.

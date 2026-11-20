@@ -1,7 +1,7 @@
 // What a Hermes-Lite 2 comes back with after a restart, driven through the
 // operator's own setters and read back through the production store and load.
 //
-// Three things are pinned that the neighbouring tests only pin in halves:
+// Four things are pinned that the neighbouring tests only pin in halves:
 //
 //  1. Every mode the menu offers, with the passband the operator left it on,
 //     survives capture -> RadioStateMemory store -> load -> a NEW backend ->
@@ -22,6 +22,11 @@
 //     reconnect whose receivers kept their live mode, with transmit on A and
 //     on B.
 //
+//  4. The pan centre across a same-radio reconnect: an off-centre slice keeps
+//     its centre while it still listens inside the usable window at the new
+//     rate, and re-centres otherwise; another radio and a restart take theirs
+//     from the document.
+//
 // No socket: see Hl2PersistHarness.h. The radio is never keyed (the drive is a
 // setpoint; the transmit gate stays shut). The settings profile is isolated.
 //
@@ -35,6 +40,8 @@
 
 #include <QCoreApplication>
 
+#include <cmath>
+
 using namespace AetherSDR;
 using namespace AetherSDR::persist;
 
@@ -45,6 +52,8 @@ constexpr double k40m = 7'074'000.0;
 constexpr double k10m = 28'074'000.0;
 constexpr double k15m = 21'074'000.0;
 constexpr double k40mB = 7'150'000.0;   // receiver B's own frequency
+constexpr double kPanCentre = 7'150'000.0;   // d265 leg g: pan 7.150, slice 7.162
+constexpr double kOffCentre = 7'162'000.0;
 
 QString serialFor(int n)
 {
@@ -468,6 +477,129 @@ int main(int argc, char** argv)
                   .arg(tx.mode == WdspChannel::Mode::Lsb ? QStringLiteral("LSB")
                                                          : QStringLiteral("not LSB"))
                   .arg(txPassbandAfter));
+    }
+
+    // ======================================================================
+    // 6. The pan centre across a same-radio reconnect
+    // ======================================================================
+    {
+        using A = Session::Access;
+        // The centre the backend holds, the initial NCO register, and the
+        // centre published for receiver A's pan after the link-up.
+        const auto centreIs = [](Session& s, QSignalSpy& pans, double hz, const QString& what) {
+            double published = 0.0;
+            for (const QList<QVariant>& args : pans) {
+                if (args.at(0).toString() == s.panId)
+                    published = args.at(1).toDouble() * 1.0e6;
+            }
+            check(A::ncoHz(s.backend, 0) == hz
+                      && A::rxNcoCc(s.backend, 0) == A::expectedRxCc(s.backend, 0, hz)
+                      && std::abs(published - hz) < 1.0,
+                  QStringLiteral("%1: centre %2 Hz, got NCO %3, published %4")
+                      .arg(what).arg(hz, 0, 'f', 0)
+                      .arg(A::ncoHz(s.backend, 0), 0, 'f', 0).arg(published, 0, 'f', 0));
+        };
+        const QString serial = serialFor(206);
+        const RadioSettingsScope scope(QStringLiteral("hl2"), serial);
+        Session s(serial, RestoredRadioState{}, kPanCentre);
+        s.backend.setSliceFrequency(A::sliceIdOf(s.backend, 0), kOffCentre);
+        check(A::ncoHz(s.backend, 0) == kPanCentre && A::sampleRateHz(s.backend) == 48'000,
+              "pan centre setup: at 48 kHz a 12 kHz tune leaves the centre on 7.150");
+        RestoredRadioState remembered =
+            throughDisk(scope, caps, s.backend.currentOperatingState());
+
+        // Inside the window: 12 kHz from the centre, usable is 0.8 x 24 kHz.
+        s.disconnect();
+        {
+            QSignalSpy pans(&s.backend, &hl2::Hl2Backend::panCenterBandwidthChanged);
+            s.connect(serial, remembered, kPanCentre);
+            check(A::sliceHz(s.backend, 0) == kOffCentre,
+                  "pan centre, reconnect: the slice comes back on 7.162");
+            centreIs(s, pans, kPanCentre, "pan centre, reconnect inside the window");
+        }
+
+        // A restart (control): a new backend takes the centre from the document.
+        {
+            Session fresh(serial, throughDisk(scope, caps, remembered), kPanCentre);
+            check(A::ncoHz(fresh.backend, 0) == kPanCentre
+                      && A::sliceHz(fresh.backend, 0) == kOffCentre,
+                  "pan centre, restart (control): centre 7.150, slice 7.162");
+        }
+
+        // Outside the window at the NEW rate: 30 kHz off fits 96 kHz (usable
+        // 38.4 kHz) but not 48 kHz (19.2 kHz), so it re-centres on the slice.
+        const QVariantMap at96{{QStringLiteral("sampleRateHz"), 96'000}};
+        const QVariantMap at48{{QStringLiteral("sampleRateHz"), 48'000}};
+        s.disconnect();
+        s.connect(serial, remembered, kPanCentre, at96);
+        s.backend.setSliceFrequency(A::sliceIdOf(s.backend, 0), kPanCentre + 30'000.0);
+        check(A::sampleRateHz(s.backend) == 96'000 && A::ncoHz(s.backend, 0) == kPanCentre,
+              "pan centre setup: at 96 kHz a 30 kHz tune leaves the centre on 7.150");
+        remembered = throughDisk(scope, caps, s.backend.currentOperatingState());
+        s.disconnect();
+        {
+            QSignalSpy pans(&s.backend, &hl2::Hl2Backend::panCenterBandwidthChanged);
+            s.connect(serial, remembered, kPanCentre, at96);
+            centreIs(s, pans, kPanCentre, "pan centre, reconnect at the same 96 kHz");
+        }
+        s.disconnect();
+        {
+            QSignalSpy pans(&s.backend, &hl2::Hl2Backend::panCenterBandwidthChanged);
+            s.connect(serial, remembered, kPanCentre, at48);
+            check(A::sampleRateHz(s.backend) == 48'000,
+                  "pan centre: the reconnect runs at 48 kHz");
+            centreIs(s, pans, kPanCentre + 30'000.0,
+                     "pan centre, reconnect at 48 kHz: outside the window, re-centred");
+        }
+
+        // Another radio on the same backend takes its own remembered centre.
+        const QString other = serialFor(207);
+        RestoredRadioState otherDoc;
+        {
+            Session o(other, RestoredRadioState{}, k20m);
+            o.backend.setSliceFrequency(A::sliceIdOf(o.backend, 0), k20m + 6'000.0);
+            otherDoc = throughDisk(RadioSettingsScope(QStringLiteral("hl2"), other), caps,
+                                   o.backend.currentOperatingState());
+        }
+        s.disconnect();
+        {
+            QSignalSpy pans(&s.backend, &hl2::Hl2Backend::panCenterBandwidthChanged);
+            s.connect(other, otherDoc, k20m);
+            check(A::sliceHz(s.backend, 0) == k20m + 6'000.0,
+                  "pan centre, another radio: its slice 14.080");
+            centreIs(s, pans, k20m, "pan centre, another radio: its own centre 14.074");
+        }
+
+        // A receiver opened at the connect keeps its own centre, on its own
+        // NCO register rather than the one start() gives every DDC (A's).
+        {
+            const QString two = serialFor(208);
+            const RadioSettingsScope twoScope(QStringLiteral("hl2"), two);
+            const QVariantMap twoRx{{QStringLiteral("numRx"), 2}};
+            Session t(two, RestoredRadioState{}, kPanCentre, twoRx);
+            const int b = A::sliceIdOf(t.backend, 1);
+            t.backend.setSliceFrequency(b, kPanCentre + 30'000.0);   // B re-centres
+            t.backend.setSliceFrequency(b, kPanCentre + 15'000.0);   // and stays
+            t.backend.setSliceFrequency(A::sliceIdOf(t.backend, 0), kOffCentre);
+            check(A::ncoHz(t.backend, 0) == kPanCentre
+                      && A::ncoHz(t.backend, 1) == kPanCentre + 30'000.0,
+                  "pan centre setup, numRx=2: A centred on 7.150, B on 7.180");
+            const RestoredRadioState twoDoc =
+                throughDisk(twoScope, caps, t.backend.currentOperatingState());
+            t.disconnect();
+            t.connect(two, twoDoc, kPanCentre, twoRx);
+            std::printf("[INFO] numRx=2 reconnect: B slice %.0f, NCO %.0f\n",
+                        A::sliceHz(t.backend, 1), A::ncoHz(t.backend, 1));
+            check(A::ncoHz(t.backend, 0) == kPanCentre
+                      && A::ncoHz(t.backend, 1) == kPanCentre + 30'000.0,
+                  QStringLiteral("pan centre, numRx=2 reconnect: A on 7.150 and B on 7.180, got "
+                                 "%1 and %2")
+                      .arg(A::ncoHz(t.backend, 0), 0, 'f', 0)
+                      .arg(A::ncoHz(t.backend, 1), 0, 'f', 0));
+            check(A::rxNcoCc(t.backend, 1)
+                      == A::expectedRxCc(t.backend, 1, kPanCentre + 30'000.0),
+                  "pan centre, numRx=2 reconnect: B's NCO register is on B's 7.180");
+        }
     }
 
     std::printf("hl2_persist_restart_test: %s\n", g_failures == 0 ? "all checks passed" : "FAILED");
