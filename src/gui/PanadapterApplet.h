@@ -96,6 +96,11 @@ public:
     int pitchRangeHigh()  const;
     // Sets both decoder range sliders to the saved shared ranges.
     void restoreCwRanges();
+    // Sets the Sens slider and its threshold to the selected decoder's saved
+    // value, unless the slider holds a change that is not saved yet.
+    void restoreCwSens();
+    // Saves a Sens change that is still waiting for its debounced save.
+    void flushCwSens();
 
     // RTTY decode panel
     void  setRttyPanelVisible(bool visible);

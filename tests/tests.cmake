@@ -3228,6 +3228,21 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     set_tests_properties(spectrum_trace_bins_widget_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
 
+    # #7314: the CW decoder's Sens follows it to another pan.
+    add_executable(cw_sens_pan_move_test
+        tests/cw_sens_pan_move_test.cpp ${_spectrum_gesture_sources})
+    target_include_directories(cw_sens_pan_move_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(cw_sens_pan_move_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_DEFINITIONS>)
+    target_compile_options(cw_sens_pan_move_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_OPTIONS>)
+    target_link_libraries(cw_sens_pan_move_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,LINK_LIBRARIES>)
+    add_test(NAME cw_sens_pan_move_test COMMAND cw_sens_pan_move_test)
+    set_tests_properties(cw_sens_pan_move_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+
     # #5204: the TX waterfall mask must follow the TX slice's filter even when
     # the radio's echo lands mid-drag. Its own executable rather than another
     # mode of the gesture binary: that one links RtlSdrBackend unconditionally,
@@ -11856,6 +11871,7 @@ set(AETHER_SETTINGS_CONSUMERS
     kxpa100_advanced_widget_test
     kat500_advanced_widget_test
     panadapter_header_test
+    cw_sens_pan_move_test
     theme_seed_test
     panadapter_message_overlay_test
     app_settings_safety_test
