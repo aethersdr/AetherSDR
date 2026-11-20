@@ -192,8 +192,8 @@ public:
     // A peer on this host (hpsdrsim at 127.0.0.1) replies from the address it was
     // sent from: from a LAN-bound socket, the LAN address, which onReadyRead()'s
     // sender filter (m_host:m_port only) drops. So a loopback target is probed
-    // from loopback interfaces only and its session binds loopback; every other
-    // target is unchanged.
+    // from loopback interfaces only, and an IPv4 loopback target's session binds
+    // 127.0.0.1 (::1 keeps the wildcard bind); every other target is unchanged.
     [[nodiscard]] static bool discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
                                                       const QHostAddress& target);
     [[nodiscard]] static QHostAddress sessionBindAddress(const QHostAddress& host,
