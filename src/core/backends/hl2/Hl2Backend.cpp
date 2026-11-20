@@ -2679,8 +2679,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
     c.hasPaTemperatureTelemetry = true;
-    // Calibrated by hl2PaCurrentAmps() from the schematic, not by an ammeter.
-    c.hasPaCurrentTelemetry = true;
+    // hl2PaCurrentAmps() uses schematic values; not declared calibrated until
+    // a keyed ammeter run confirms it. RAD:PACURRENT is published either way.
+    c.hasPaCurrentTelemetry = false;
     // PROC runs in this host's ClientComp (hostModulates), not in the radio.
     c.speechProcessorControl = std::nullopt;
     c.voxControl = std::nullopt;

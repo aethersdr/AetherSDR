@@ -273,7 +273,8 @@ static void capabilitiesSeam()
 static void paCurrentMeter()
 {
     Hl2Backend b;
-    check(b.capabilities().hasPaCurrentTelemetry, "declares calibrated PA current");
+    check(!b.capabilities().hasPaCurrentTelemetry,
+          "does not declare calibrated PA current before an ammeter run");
     check(hl2::hl2PaCurrentAmps(0) == 0.0, "0 counts is 0 A");
     check(std::abs(hl2::hl2PaCurrentAmps(1000) - 0.5053955078125) < 1e-9,
           "1000 counts is 0.5054 A, the divider included (0.3979 A without it)");
