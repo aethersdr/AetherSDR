@@ -13,7 +13,7 @@ platforms: ["Linux", "Windows", "macOS (Apple Silicon)"]
 
 :::
 
-Copy Assist is on-device speech-to-text for received voice. It transcribes what you are hearing on SSB, AM or FM into a live, scrolling text panel docked under the waterfall — an aid for weak or noisy copy, for accessibility, and for following nets and contests. It runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) on your own computer, is **receive-only**, and never keys the transmitter.
+Copy Assist is on-device speech-to-text for received voice. It transcribes what you are hearing on SSB, AM or FM into a live, scrolling text panel docked under the waterfall — an aid for weak or noisy copy, for accessibility, and for following nets and contests. It runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) on your own computer (and, for the [live preview](#live-preview), sherpa-onnx or Apple's on-device recognizer), is **receive-only**, and never keys the transmitter.
 
 Copy Assist is host-side, so it works with every supported radio family, including receive-only setups and sessions with TX disabled.
 
@@ -28,7 +28,7 @@ Copy Assist is host-side, so it works with every supported radio family, includi
 
 ### Models
 
-Model weights are **not bundled**. The selected model downloads the first time you enable Copy Assist — from Hugging Face, with AetherSDR's GitHub release as a fallback — and is SHA-256 verified before use. Models are cached in the app data folder (on Linux, `~/.local/share/AetherSDR/models/`).
+Model weights are **not bundled**. The selected model downloads the first time you enable Copy Assist — from Hugging Face, with AetherSDR's GitHub release as a fallback (the live preview's Kroko model comes from Hugging Face only) — and is SHA-256 verified before use. Models are cached in the app data folder (on Linux, `~/.local/share/AetherSDR/models/`).
 
 | Model | Size | Notes |
 |---|---|---|
@@ -132,7 +132,7 @@ Copy Assist can show a quick first look at what is being said while the selected
 
 **Preview recognizer** picks what draws the gray text:
 
-- **Kroko streaming, English (sherpa-onnx)** is the default, on Windows, Linux and Apple-silicon Macs. It is English only: with any other **Language** set, the status line adds "Live preview understands English only". The first time you press **Enable** with the preview on, Copy Assist downloads its model (about 71 MB, checked against a pinned SHA-256) into the models folder; the status line shows the progress.
+- **Kroko streaming, English (sherpa-onnx)** is the default, on Windows, Linux and Apple-silicon Macs. It is English only: with any other **Language** set, the status line adds "Live preview understands English only". The first time you press **Enable** with the preview on, Copy Assist downloads its model (about 71 MB, checked against a pinned SHA-256) into the models folder; the status line shows the progress. The Kroko model is Banafo's [Kroko ASR](https://huggingface.co/Banafo/Kroko-ASR) English community model, in the [sherpa-onnx conversion](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06) by the k2-fsa project, used unchanged under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). It is provided as-is, without warranties; see `THIRD_PARTY_LICENSES` for the full notice.
 - **Apple speech recognition** is available on macOS 26 and later. It follows the **Language** setting, so there is no separate preview language to set. The accent it expects comes from the Mac's region (System Settings → General → Language & Region) where Apple supports that pairing: Spanish on a Mac set to the United States uses US Spanish. It understands English, Spanish, French, German, Italian, Portuguese, Chinese (Mandarin and Cantonese), Japanese and Korean, in their main regional variants. The first use of a language may download Apple's speech model for it; the status line says so while it does. For any other language the status line says it is not supported and no gray text appears; the colored transcript is unaffected.
 
 Apple speech recognition is listed on Macs only. A listed recognizer your computer cannot run is shown dimmed, with the reason.

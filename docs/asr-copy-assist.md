@@ -469,7 +469,9 @@ not a reload; the controller keeps the factory while the sherpa preview stays
 on, so engine rebuilds reuse it too. The model is
 `sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06` (sherpa-onnx's packaging
 of Banafo's Kroko community model; the model card at
-huggingface.co/Banafo/Kroko-ASR gives the licence as CC-BY-SA), fetched by
+huggingface.co/Banafo/Kroko-ASR gives the license as CC-BY-SA with no version;
+AetherSDR applies CC BY-SA 4.0, with the attribution in `THIRD_PARTY_LICENSES`
+entry 39 and the user guide), fetched by
 `AsrModelManager::ensureBundle` from
 `AsrModelCatalog::sherpaLivePreviewModel()`: each file pinned by size and
 SHA-256 and verified like the whisper tiers.

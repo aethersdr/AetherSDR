@@ -80,7 +80,8 @@ const QVector<AsrModelTier>& tiers()
 const QVector<AsrModelTier>& sherpaLivePreviewModel()
 {
     // The model card (huggingface.co/Banafo/Kroko-ASR) puts the community models
-    // under CC-BY-SA; the folder's README points there. Sizes + SHA-256 are the
+    // under CC-BY-SA with no version; AetherSDR applies CC BY-SA 4.0, attributed in
+    // THIRD_PARTY_LICENSES entry 39. The folder's README points there. Sizes + SHA-256 are the
     // Hugging Face LFS values. Single source, no mirror.
     static const QVector<AsrModelTier> kModel = [] {
         const QString folder =
