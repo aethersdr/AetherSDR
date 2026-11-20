@@ -6971,7 +6971,13 @@ if(PYTHON3_EXECUTABLE)
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
     # Tailnet shim discovery helper: relay framing over a socket pair, and a
-    # loopback broadcast. No shim or radio.
+    # loopback broadcast. No shim or radio. Sockets, all on ephemeral ports
+    # and none reaching beyond this machine: a UDP 127.0.0.1 listener; TCP
+    # 127.0.0.1 listeners, one in a subprocess standing in for the shim's
+    # feed (a hello and its answer, no radio protocol); on Windows only, two
+    # UDP 0.0.0.0 listeners sharing one port (SO_REUSEADDR) for a
+    # 127.255.255.255 broadcast. A failed bind raises at once and each read
+    # has a timeout (2 s; 10 s for the subprocess), so it fails fast.
     add_test(NAME tailnet_discovery_helper
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/test_discovery_helper.py)
