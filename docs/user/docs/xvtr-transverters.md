@@ -62,12 +62,13 @@ to check transverter drive with a carrier; set the transverter's **Max Power
 
 On a single-receiver networked Icom, **Settings → Radio Setup... →
 Transverters** shows a table that AetherSDR stores for that radio. (The
-dual-receiver IC-7610, IC-7760 and IC-7851 are not served.) The radio only ever tunes the IF;
+dual-receiver IC-7610, IC-7760, IC-7851 and IC-9700 are not served.) The radio only ever tunes the IF;
 AetherSDR adds the LO, so the VFO, the panadapter, spots, TCI and CAT show the
 operating (RF) frequency.
 
 1. Click **Add** and fill in the row:
-   - **Name** — the band button's label, e.g., "QO-100"
+   - **Name** — the band button's label, e.g., "QO-100". Each row needs its own name;
+     **Apply** refuses two rows with the same name
    - **IF low (MHz)** / **IF high (MHz)** — the part of the radio's range the
      transverter uses, e.g., 28.500 to 29.000
    - **RX LO (MHz)** — receive LO; RF = IF + LO, e.g., 10461.000

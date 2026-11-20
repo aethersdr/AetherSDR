@@ -7049,7 +7049,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 bandApplet->setDeclaredBands(declaredBands, declaredBandRanges);
                 QVector<BandApplet::XvtrBand> appletXvtrBands;
                 for (const auto& x : xvtrBands) {
-                    appletXvtrBands.append({x.name, x.rfFreqMhz, x.stackKey});
+                    appletXvtrBands.append({x.name, x.rfFreqMhz, x.stackKey, x.clientOwned});
                 }
                 bandApplet->setXvtrBands(appletXvtrBands);
                 applyTuningRangeToBandApplet();

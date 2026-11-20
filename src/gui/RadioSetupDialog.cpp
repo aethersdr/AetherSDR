@@ -6269,9 +6269,20 @@ QWidget* RadioSetupDialog::buildClientXvtrTab()
     buttons->addWidget(applyBtn);
     vbox->addLayout(buttons);
 
-    connect(addBtn, &QPushButton::clicked, page, [addRow, table] {
+    connect(addBtn, &QPushButton::clicked, page, [addRow, readRow, table] {
+        // The first unused "XVTR n": the name identifies the row, and Add,
+        // Remove, Add would otherwise hand out the same one twice.
+        QSet<QString> names;
+        for (int r = 0; r < table->rowCount(); ++r) {
+            names.insert(readRow(r).name);
+        }
         ClientTransverter t;
-        t.name = QStringLiteral("XVTR %1").arg(table->rowCount() + 1);
+        for (int n = table->rowCount() + 1; ; ++n) {
+            t.name = QStringLiteral("XVTR %1").arg(n);
+            if (!names.contains(t.name)) {
+                break;
+            }
+        }
         addRow(t);
     });
     connect(removeBtn, &QPushButton::clicked, page, [table] {
@@ -6288,6 +6299,17 @@ QWidget* RadioSetupDialog::buildClientXvtrTab()
                 ++unusable;
             }
             list.append(t);
+        }
+        // The active transverter, its band button and its notices are all
+        // followed by name.
+        QSet<QString> names;
+        for (const ClientTransverter& t : std::as_const(list)) {
+            if (names.contains(t.name)) {
+                status->setText(tr("Two rows are named \"%1\"; nothing was saved").arg(t.name));
+                setTone(status, Tone::Error);
+                return;
+            }
+            names.insert(t.name);
         }
         if (!m_model->setClientTransverters(list)) {
             status->setText(tr("Not available on this radio; nothing was saved"));

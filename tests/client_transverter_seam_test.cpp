@@ -9,6 +9,7 @@
 #include "TestSettingsProfile.h"
 #include "core/backends/PanDisplayRequest.h"
 #include "models/ClientTransverter.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -27,6 +28,10 @@ namespace AetherSDR {
 struct RadioModelWakeTestAccess {
     static void identity(RadioModel& radio, const QString& serial) { radio.m_lastInfo.serial = serial; }
     static void reload(RadioModel& radio) { radio.loadClientTransverters(); }
+    static PanadapterModel* pan(RadioModel& radio, const QString& modelPanId)
+    {
+        return radio.ensureOwnedPanadapter(modelPanId, nullptr);
+    }
 };
 } // namespace AetherSDR
 
@@ -83,6 +88,18 @@ public:
     void setAtu(bool start, const AetherSDR::TxCoordinator::Operation&,
                 const AetherSDR::TxCoordinator::Completion&) override { atuStarts += start; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+    // The confirmed (wheel-step) tune path, off unless a case turns it on.
+    ReceiveControlPolicy policy{ReceiveControlPolicy::Optimistic};
+    bool admitReceiveTune{true};
+    int receiveTunes{0};
+    double lastReceiveTuneHz{0.0};
+    ReceiveControlPolicy receiveControlPolicy() const override { return policy; }
+    bool requestReceiveTune(int, double hz, ReceiveTuneView) override
+    {
+        ++receiveTunes;
+        lastReceiveTuneHz = hz;
+        return admitReceiveTune;
+    }
 
     void reportFrequency(double mhz)
     {
@@ -158,6 +175,19 @@ struct Fixture {
             interlocks << key;
         });
         radio.setClientTransverters({qo100(), twoMetres()});
+    }
+
+    // A pan for backend pan "0", with the slice on it: the confirmed tune
+    // path and the inbound pan geometry both resolve a PanadapterModel.
+    PanadapterModel* addPan()
+    {
+        const int index = radio.panIndexForBackendIdForTest(QStringLiteral("0"));
+        const QString panId = RadioModel::neutralPanIdStringForTest(index);
+        PanadapterModel* pan = RadioModelWakeTestAccess::pan(radio, panId);
+        SliceDelta delta;
+        delta.panId = panId;
+        slice->applyChanges(delta);
+        return pan;
     }
 
     bool active(const char* name) const
@@ -392,6 +422,102 @@ static void qualificationFollowsTheIdentifiedModel()
           "a backend that qualifies again gets this radio's stored list back");
 }
 
+// Review finding 4: Add, Remove, Add in the dialog used to produce two rows
+// with one name, and the first namesake took the active transverter's place.
+static void aNamesakeDoesNotTakeOverTheActiveTransverter()
+{
+    Fixture f;
+    ClientTransverter namesake = twoMetres();
+    namesake.name = QStringLiteral("QO-100");
+    f.radio.setClientTransverters({qo100(), namesake});
+    f.slice->setFrequency(144.300);
+    f.backend->reportFrequency(28.300);
+    check(f.radio.clientTransverters().activeIndex() == 1, "the second namesake is active");
+    f.radio.setClientTransverters({qo100(), namesake});
+    check(f.radio.clientTransverters().activeIndex() == 1 && near(f.slice->frequency(), 144.300),
+          "re-applying the same list keeps the same row active and the slice on RF");
+    f.radio.transmitModel().setMox(true);
+    check(f.backend->keys == 0, "and the receive-only refusal still holds");
+}
+
+// Review finding 5: a wheel step the backend refuses must not leave a
+// transverter active that the radio never reached.
+static void aRefusedConfirmedTuneActivatesNothing()
+{
+    Fixture f;
+    check(f.addPan() != nullptr, "the fixture has a pan");
+    f.backend->policy = ReceiveControlPolicy::Confirmed;
+    f.backend->admitReceiveTune = false;
+    const bool sent = f.radio.requestConfirmedReceiveTune(
+        0, 10489.540, IRadioBackend::ReceiveTuneView::Preserve);
+    check(f.backend->receiveTunes == 1 && near(f.backend->lastReceiveTuneHz, 28.540e6),
+          "the confirmed tune reaches the backend as the IF");
+    check(!sent && f.active(nullptr), "a tune the backend refuses leaves no transverter active");
+    check(f.radio.settingsScope().feature(QStringLiteral("ClientTransverters"))
+              .value(QStringLiteral("active")).toInt(-1) == -1,
+          "and none is stored as active");
+
+    f.backend->admitReceiveTune = true;
+    check(f.radio.requestConfirmedReceiveTune(0, 10489.540,
+                                              IRadioBackend::ReceiveTuneView::Preserve)
+              && f.active("QO-100"),
+          "an admitted one activates it");
+    const int before = f.backend->receiveTunes;
+    check(!f.radio.requestConfirmedReceiveTune(0, 1296.200,
+                                               IRadioBackend::ReceiveTuneView::Preserve)
+              && f.backend->receiveTunes == before && f.active("QO-100"),
+          "a request nothing reaches is refused before the backend and changes nothing");
+}
+
+// Review finding 6: turning VOX on is a client command.
+static void voxCannotBeTurnedOnOnATransverter()
+{
+    Fixture f;
+    f.slice->setFrequency(10489.540);
+    f.radio.transmitModel().setVoxEnable(true);
+    check(!f.radio.transmitModel().voxEnable(), "VOX is not turned on on a transverter band");
+    bool told = false;
+    for (const QString& key : std::as_const(f.interlocks)) {
+        told = told || key.endsWith(QStringLiteral("vox-enable"));
+    }
+    check(told, "the operator is told why");
+    f.slice->setFrequency(14.074);
+    f.radio.transmitModel().setVoxEnable(true);
+    check(f.radio.transmitModel().voxEnable(), "off the transverter band VOX turns on");
+}
+
+// Review finding 8: 0/0 is "not known yet", not a centre to shift.
+static void anUnknownPanCentreIsNotShifted()
+{
+    Fixture f;
+    f.slice->setFrequency(10489.540);
+    PanadapterModel* pan = f.addPan();
+    check(pan != nullptr, "the fixture has a pan");
+    if (!pan) {
+        return;
+    }
+    emit f.backend->panCenterBandwidthChanged(QStringLiteral("0"), 28.750, 0.2);
+    check(near(pan->centerMhz(), 10489.750), "a known centre is shifted to RF");
+    emit f.backend->panCenterBandwidthChanged(QStringLiteral("0"), 0.0, 0.0);
+    check(!near(pan->centerMhz(), 10461.0),
+          "an unknown centre is not turned into the LO frequency");
+}
+
+// Review finding 9: the radio's own range is cached, and follows the backend.
+static void theNativeRangeFollowsTheBackend()
+{
+    Fixture f;
+    f.backend->reportFrequency(14.200);
+    const int tunes = f.backend->tunes;
+    f.slice->setFrequency(1296.200);
+    check(f.backend->tunes == tunes, "1296.200 is outside a 470 MHz radio and is not sent");
+    f.backend->caps.tuningMaxHz = 1300.0e6;
+    emit f.backend->capabilitiesChanged();
+    f.slice->setFrequency(1296.200);
+    check(f.backend->tunes == tunes + 1 && near(f.backend->lastTuneHz, 1296.200e6),
+          "once the backend reports a wider range the same tune is sent raw");
+}
+
 static void internalTunerIsLockedOut()
 {
     Fixture f;
@@ -566,6 +692,11 @@ int main(int argc, char** argv)
     tuningOntoATransverterDuringTuneIsRefused();
     theNextBackendInheritsNothing();
     qualificationFollowsTheIdentifiedModel();
+    aNamesakeDoesNotTakeOverTheActiveTransverter();
+    aRefusedConfirmedTuneActivatesNothing();
+    voxCannotBeTurnedOnOnATransverter();
+    anUnknownPanCentreIsNotShifted();
+    theNativeRangeFollowsTheBackend();
     internalTunerIsLockedOut();
     headlessTargetsUseTheSameSeam();
     editingTheListKeepsTheRadioOnItsIf();

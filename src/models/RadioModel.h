@@ -2940,6 +2940,13 @@ private:
     // Empty when the radio cannot reach the request; the operator is told and
     // nothing is sent.
     std::optional<double> clientTransverterRadioMhz(double requestedMhz);
+    // The same judgement on a copy, for a caller with admission checks of its
+    // own to run before anything changes; commit applies an admitted probe.
+    std::optional<double> probeClientTransverterRadioMhz(double requestedMhz,
+                                                         ClientTransverterSet& probe);
+    void commitClientTransverterProbe(const ClientTransverterSet& probe);
+    void cacheClientTransverterNativeRange();
+    QString clientTransverterReceiveOnlyMessage(const ClientTransverter& t) const;
     // The record, on a backend with one receiver: the active transverter is a
     // single model-wide state.
     bool backendQualifiesForClientTransverters() const;
