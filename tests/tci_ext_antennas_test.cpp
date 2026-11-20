@@ -416,13 +416,19 @@ void serverBehaviour()
           "a read is answered to the requester only");
     a.send("aethersdr_rx_antennas:5;aethersdr_rx_antenna:5,ANT1;aethersdr_rx_antennas:0,ANT1;"
            "aethersdr_rx_antenna;aethersdr_rx_antenna:x,ANT1;aethersdr_tx_antenna:0,ANT9;"
-           "aethersdr_rx_antenna:0,bad,name;aethersdr_tx_antenna:0,ANT1;");
+           "aethersdr_rx_antenna:0,bad,name;");
     settle();
     check(a.takeExtension().isEmpty() && backend->rxRequests.isEmpty()
               && backend->txRequests.isEmpty(),
-          "an unknown trx, a malformed line, an unlisted name or the antenna in use: no reply, "
-          "nothing written");
+          "an unknown trx, a malformed line or an unlisted name: no reply, nothing written");
     check(kiwiReleases.isEmpty(), "and no KiwiSDR release for any of them");
+    // A set naming the antenna already in use is answered with the selection
+    // line, to the sender only, and writes nothing (ruling on #7197's N3).
+    a.send("aethersdr_tx_antenna:0,ant1;");
+    settle();
+    check(a.takeExtension() == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
+              && c.takeExtension().isEmpty() && backend->txRequests.isEmpty() && warnings == 0,
+          "a TX set naming the antenna in use is answered to the sender, nothing written");
 
     // RX set: through SliceModel to the backend, then the notice to enabled clients.
     a.send("aethersdr_rx_antenna:0,rx_a;");
@@ -443,9 +449,11 @@ void serverBehaviour()
     a.send("aethersdr_rx_antenna:0,RX_A;");
     settle();
     check(kiwiReleases.size() == 2 && kiwiReleases.last().sliceId == 0
-              && backend->rxRequests.size() == 1 && a.takeExtension().isEmpty(),
-          "an RX set naming the antenna in use still releases a KiwiSDR antenna, nothing else");
-    c.take();
+              && backend->rxRequests.size() == 1
+              && a.takeExtension() == QStringList({QStringLiteral("aethersdr_rx_antenna:0,RX_A;")})
+              && c.takeExtension().isEmpty(),
+          "an RX set naming the antenna in use still releases a KiwiSDR antenna, writes nothing "
+          "else, and is answered to the sender");
 
     // The RX antenna may change while transmitting, as in the GUI.
     model.transmitModel().setTransmitting(true);
@@ -471,6 +479,12 @@ void serverBehaviour()
                                           QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
               && c.take().isEmpty() && warnings == 1,
           "repeated refusals in the same keyed period are each answered, and noticed once");
+    a.send("aethersdr_tx_antenna:0,ANT1;");
+    settle();
+    check(backend->txRequests.isEmpty()
+              && a.take() == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
+              && c.take().isEmpty() && warnings == 1,
+          "a keyed TX set naming the antenna in use is answered, and is no refusal");
     model.transmitModel().setTransmitting(false);
     TransmitDelta tune;
     tune.tune = true;
@@ -658,6 +672,9 @@ void txSetAfterAnOver()
     server.wireSlice(s0->sliceId(), s0);
     Wire a;
     TciAntennaExtensionTest::attach(server, a.client, model);
+    int warnings = 0;
+    QObject::connect(&model, &RadioModel::configurationWarning,
+                     [&warnings](const QString&) { ++warnings; });
     settle(600);
     a.take();
     a.send("aethersdr_ext_enable:true;");
@@ -678,15 +695,15 @@ void txSetAfterAnOver()
     interlock("TRANSMITTING");
     check(backend->keyEdges == QList<bool>({true}) && model.transmitModel().isTransmitting(),
           "over: desktop MOX keys the backend");
-    check(setTo("ANT2") == stays1 && backend->txRequests.isEmpty(),
-          "over: a TX set while keyed is refused");
+    check(setTo("ANT2") == stays1 && backend->txRequests.isEmpty() && warnings == 1,
+          "over: a TX set while keyed is refused, and noticed");
     model.setTransmit(false);
     interlock("UNKEY_REQUESTED");
     check(backend->keyEdges == QList<bool>({true, false}) && model.transmitOwnershipPending()
               && !model.transmitModel().isTransmitting() && !model.isRadioTransmitting(),
           "over: after the key-up the over's TX ownership is retained, unconfirmed");
-    check(setTo("ANT2") == stays1 && backend->txRequests.isEmpty(),
-          "over: a TX set before fresh settled RX is refused");
+    check(setTo("ANT2") == stays1 && backend->txRequests.isEmpty() && warnings == 1,
+          "over: a TX set before fresh settled RX is refused, in the same keyed period");
     interlock("READY");
     const QStringList moved = setTo("ANT2");
     check(model.transmitOwnershipPending() && backend->txRequests.size() == 1
@@ -702,15 +719,25 @@ void txSetAfterAnOver()
     backend->holdKeyUp = true;
     model.setTransmit(true);
     interlock("TRANSMITTING");
-    check(setTo("ANT1").size() == 1 && backend->txRequests.size() == 1,
-          "over: the next over refuses a TX set again");
+    check(setTo("ANT1").size() == 1 && backend->txRequests.size() == 1 && warnings == 2,
+          "over: the next over refuses a TX set again, and the notice re-armed on settled RX");
     model.setTransmit(false);
     interlock("READY");
-    check(setTo("ANT1").size() == 1 && backend->txRequests.size() == 1,
+    check(setTo("ANT1").size() == 1 && backend->txRequests.size() == 1 && warnings == 2,
           "over: a TX set while the key-up is still being delivered is refused");
     backend->holdKeyUp = false;
     backend->heldKeyUp.finish();
     backend->heldKeyUp = {};
+    settle();
+
+    // The delivery finishing is the edge that ends that keyed period: with no
+    // accepted set in between, the next over's refusal is noticed again.
+    model.setTransmit(true);
+    interlock("TRANSMITTING");
+    check(setTo("ANT1").size() == 1 && backend->txRequests.size() == 1 && warnings == 3,
+          "over: after a delayed key-up delivery, the next over's refusal is noticed again");
+    model.setTransmit(false);
+    interlock("READY");
     setTo("ANT1");
     check(model.transmitOwnershipPending() && backend->txRequests.size() == 2
               && s0->txAntenna() == QStringLiteral("ANT1"),
