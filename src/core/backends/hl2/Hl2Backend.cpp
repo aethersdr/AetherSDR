@@ -3069,9 +3069,15 @@ void Hl2Backend::startConnect(const RadioConnectRequest& request)
     // back, with mode, passband and TX NCO, to the receiver that held it.
     m_txDdc = 0;
     buildReceivers(actualNumRx);
+    // A same-radio reconnect keeps each receiver's carried pan centre where the
+    // fresh-start rule would keep a remembered one; seeding sets it otherwise.
+    const bool seedFromMemory =
+        request.serial != m_agcSeededSerial || !m_rxCarriedState;
     for (Receiver& r : m_rx) {
+        const double carriedNcoHz = r.ncoHz;
         r.sliceFreqHz = startFreqHz;
-        r.ncoHz = startFreqHz;
+        r.ncoHz = seedFromMemory ? startFreqHz
+                                 : panCentreKeptOrRecentred(r, carriedNcoHz);
     }
 
     // Seed the remembered AGC (#4909); the only place receivers are seeded
@@ -3080,13 +3086,13 @@ void Hl2Backend::startConnect(const RadioConnectRequest& request)
     // radio (keyed on serial), or when receivers have no carried state (after
     // tearDownReceivers()). Not on a same-radio reconnect whose receivers kept
     // their live per-receiver AGC.
-    if (request.serial != m_agcSeededSerial || !m_rxCarriedState) {
+    if (seedFromMemory) {
         m_agcSeededSerial = request.serial;
         seedReceiverAgc();
         seedOpenReceiversFromMemory();
-        if (!m_rx.empty()) {
-            mp.rxFrequencyHz = ncoCommandHz(m_rx.front().ncoHz);
-        }
+    }
+    if (!m_rx.empty()) {
+        mp.rxFrequencyHz = ncoCommandHz(m_rx.front().ncoHz);
     }
 
     Hl2RxDsp::Config dc;
@@ -3465,6 +3471,12 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
         emit connectionError(QStringLiteral("HL2: could not open the UDP socket"));
         emit dspSetupFinished();
         return;
+    }
+    // start() puts every DDC on receiver A's NCO; the others carry their own.
+    for (std::size_t i = 1; i < m_rx.size(); ++i) {
+        QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
+            Q_ARG(int, static_cast<int>(i)),
+            Q_ARG(std::uint32_t, ncoCommandHz(m_rx[i].ncoHz)));
     }
 
     // Assert a known TX drive rather than inheriting whatever the board held.
@@ -8276,13 +8288,14 @@ void Hl2Backend::seedReceiverExtras(Receiver& r, const Receiver& memory) const
     r.audioGain = memory.audioGain;
     r.audioPanPercent = memory.audioPanPercent;
     r.nbEchoPending = true;
-    // The pan centre only where the receiver still listens inside it.
+    r.ncoHz = panCentreKeptOrRecentred(r, memory.ncoHz);
+}
+
+double Hl2Backend::panCentreKeptOrRecentred(const Receiver& r, double ncoHz) const
+{
     const double usableHz = m_sampleRateHz / 2.0 * kUsablePassbandFraction;
-    if (std::abs(rxTunedHz(r) - memory.ncoHz) <= usableHz) {
-        r.ncoHz = memory.ncoHz;
-    } else {
-        r.ncoHz = rxTunedHz(r);
-    }
+    const double tunedHz = rxTunedHz(r);
+    return std::abs(tunedHz - ncoHz) <= usableHz ? ncoHz : tunedHz;
 }
 
 void Hl2Backend::replayRestoredSession()

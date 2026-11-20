@@ -830,6 +830,9 @@ private:
     // open: receiver A's extras, and the whole entry for any a numRx param opened.
     void seedOpenReceiversFromMemory();
     void seedReceiverExtras(Receiver& r, const Receiver& memory) const;
+    // The pan centre r comes up on: `ncoHz` while r listens inside its usable
+    // window at the current rate, else r's tuned frequency.
+    [[nodiscard]] double panCentreKeptOrRecentred(const Receiver& r, double ncoHz) const;
     [[nodiscard]] static QJsonObject receiverMemoryJson(const Receiver& r);
     // Nullopt for an entry with no usable frequency or mode; other bad fields drop alone.
     [[nodiscard]] std::optional<Receiver> receiverFromMemory(const QJsonObject& o) const;
