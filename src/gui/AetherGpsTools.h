@@ -32,6 +32,8 @@ public:
     // Waits for the list to show the install or the removal (restarting the
     // 30 s); nothing to wait for when it already does.
     void start(bool installing);
+    // The radio refused the change: nothing is coming to wait for.
+    void cancel();
 
 signals:
     void changed();
@@ -39,7 +41,6 @@ signals:
 private:
     explicit AetherGpsSettle(FlexWaveformModel& waveforms);
     bool listed() const;
-    void end();
 
     FlexWaveformModel& m_waveforms;
     State m_state{State::None};
@@ -72,10 +73,11 @@ public:
     void install();
     void remove();
 
-    // The Waveforms window installed (`installed`) or removed AetherGPS and
-    // the radio accepted it: wait for its list to agree, as after install()
-    // and remove().
+    // The Waveforms window installed (`installed`) or is removing AetherGPS:
+    // wait for the radio's list to agree, as install() and remove() do.
+    // stopWaiting() when the radio refuses the change.
     void awaitListing(bool installed);
+    void stopWaiting();
 
     // Writes the bundled package for a radio that takes the container
     // (`docker`) or the legacy waveform to the cache, for an installer.

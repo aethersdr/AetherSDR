@@ -44,15 +44,15 @@ AetherGpsSettle::AetherGpsSettle(FlexWaveformModel& waveforms)
 {
     m_timer.setSingleShot(true);
     m_timer.setInterval(30'000);
-    connect(&m_timer, &QTimer::timeout, this, &AetherGpsSettle::end);
+    connect(&m_timer, &QTimer::timeout, this, &AetherGpsSettle::cancel);
     connect(&waveforms, &FlexWaveformModel::waveformsChanged, this, [this] {
         if ((m_state == State::Install && listed()) || (m_state == State::Removal && !listed())) {
-            end();
+            cancel();
         }
     });
     // A reply that will never come (the session ended) must not leave the
     // install controls disabled.
-    connect(&waveforms, &FlexWaveformModel::cleared, this, &AetherGpsSettle::end);
+    connect(&waveforms, &FlexWaveformModel::cleared, this, &AetherGpsSettle::cancel);
 }
 
 void AetherGpsSettle::start(bool installing)
@@ -75,7 +75,7 @@ bool AetherGpsSettle::listed() const
     return false;
 }
 
-void AetherGpsSettle::end()
+void AetherGpsSettle::cancel()
 {
     m_timer.stop();
     if (m_state == State::None) {
@@ -248,6 +248,13 @@ void AetherGpsTools::awaitListing(bool installed)
 {
     if (m_settle) {
         m_settle->start(installed);
+    }
+}
+
+void AetherGpsTools::stopWaiting()
+{
+    if (m_settle) {
+        m_settle->cancel();
     }
 }
 

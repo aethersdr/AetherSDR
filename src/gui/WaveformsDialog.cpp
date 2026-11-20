@@ -1637,25 +1637,19 @@ void WaveformsDialog::updateInstallButtonState()
         m_installWsprAction->setStatusTip(wsprTip);
     }
     if (m_installAetherGpsAction) {
-        // The same gate as AetherGPS's checkbox: the container on a radio with
-        // a Waveform Processor, under the Docker gate; any other, the legacy waveform.
-        const bool hasWaveforms = connected && m_radioModel->backendCapabilities().hasWaveforms;
-        const bool native = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Native;
-        bool installed = false;
-        for (const FlexWaveformEntry& w : wfModel.waveforms()) {
-            installed = installed || isAetherGpsWaveform(w.name);
-        }
-        const bool runtimeReady = native || dockerReady;
-        // Also busy while the radio has yet to list an AetherGPS change from
-        // either window.
+        // AetherGPS's checkbox's own gate: the container on a radio with a
+        // Waveform Processor, under the Docker gate; any other, the legacy
+        // waveform. Busy also covers an AetherGPS change from either window
+        // that the radio has yet to list.
         const bool gpsBusy = busy || (m_gpsTools && m_gpsTools->busy());
-        m_installAetherGpsAction->setEnabled(!gpsBusy && hasWaveforms && runtimeReady && !installed);
+        const bool blocked = !m_gpsTools || m_gpsTools->blocker() != AetherGpsBlocker::None;
+        const bool installed = m_gpsTools && m_gpsTools->installed();
+        m_installAetherGpsAction->setEnabled(!gpsBusy && !blocked && !installed);
         const QString gpsTip = busy ? tr("A waveform install is already in progress.")
             : gpsBusy               ? tr("Waiting for the radio to finish the last AetherGPS change.")
-            : !connected            ? tr("Connect to a radio before installing AetherGPS.")
-            : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
+            : !m_gpsTools           ? tr("Connect to a radio before installing AetherGPS.")
+            : blocked               ? m_gpsTools->blockerReason()
             : installed             ? tr("AetherGPS is already installed on this radio.")
-            : !runtimeReady         ? dockerBlocker
                                     : tr("Install AetherGPS (version %1), which shares the radio's GPS "
                                          "on your network.")
                                           .arg(QString::fromLatin1(AetherGpsPackage::kVersion));
@@ -2756,6 +2750,9 @@ void WaveformsDialog::refreshWaveformList()
                 || !model->controlSessionCurrent(session)) { return; }
             setRowNotice(name, isContainer ? tr("Removing…") : tr("Uninstalling…"),
                          QStringLiteral("pending"), true);
+            if (isAetherGpsWaveform(name) && m_gpsTools) {
+                m_gpsTools->awaitListing(false);   // holds the AetherGPS checkbox too
+            }
             if (isContainer) {
                 m_radioModel->flexWaveformModel().requestRemoveContainer(name);
             } else {
@@ -2897,6 +2894,9 @@ void WaveformsDialog::onWaveformCommandFinished(const QString& action, const QSt
     } else if (!ok) {
         // A successful removal takes the row away; only a failure needs words.
         setRowNotice(name, tr("Remove failed: %1").arg(why), QStringLiteral("error"), false);
+        if (isAetherGpsWaveform(name) && m_gpsTools) {
+            m_gpsTools->stopWaiting();
+        }
     } else {
         m_rowNotices.remove(name);
         refreshWaveformList();

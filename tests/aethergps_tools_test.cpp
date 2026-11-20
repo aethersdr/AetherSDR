@@ -17,7 +17,9 @@
 namespace AetherSDR {
 class WaveformInstallerTestAccess {
 public:
-    // An upload in flight, as after the radio granted the transfer.
+    // An upload in flight, as after the radio granted the transfer. The emit
+    // stands in for beginInstall()'s, which needs a connected session to
+    // reach; only the end-of-upload emits are pinned here.
     static void begin(WaveformInstaller& installer)
     {
         installer.m_activeGeneration = installer.m_uploadState.begin(4);
@@ -83,6 +85,18 @@ private slots:
         settle->start(false);
         QCOMPARE(settle->state(), AetherGpsSettle::State::Removal);
         list(waveforms, false);
+        QVERIFY(!settle->active());
+    }
+
+    // A refused removal (or install) ends the wait at once.
+    void refusalEndsIt()
+    {
+        FlexWaveformModel waveforms;
+        list(waveforms, true);
+        AetherGpsSettle* settle = AetherGpsSettle::of(waveforms);
+        settle->start(false);
+        QVERIFY(settle->active());
+        settle->cancel();
         QVERIFY(!settle->active());
     }
 
