@@ -343,8 +343,12 @@ private slots:
             QCOMPARE(model.txTimeoutSettings().timeoutS, 300);
         }
         RadioModel again;
+        // The document loads on connectionStateChanged(true), which can follow
+        // isConnected() by an event-loop turn: wait for the signal itself.
+        QSignalSpy connected(&again, &RadioModel::connectionStateChanged);
         connectDemo(again);
-        QTRY_VERIFY_WITH_TIMEOUT(again.isConnected(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(again.isConnected() && !connected.isEmpty()
+                                     && connected.last().at(0).toBool(), 5000);
         const TxTimeoutSettings loaded = again.txTimeoutSettings();
         QVERIFY(loaded.enabled);
         QCOMPARE(loaded.timeoutS, 300);
