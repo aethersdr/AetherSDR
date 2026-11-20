@@ -6,6 +6,7 @@
 
 #include <QMetaObject>
 
+#include <algorithm>
 #include <chrono>
 #include <utility>
 
@@ -58,17 +59,24 @@ bool HostCwTextEngine::play(const TxCoordinator::Request& sender, const QString&
         m_sender = sender;
         m_run = std::make_shared<char>();
         m_keyer = std::make_unique<CwxLocalKeyer>();
+        // Word spacing between runs: 7 units at this run's speed after the last key-up.
+        if (m_lastKeyUp != std::chrono::steady_clock::time_point{}) {
+            m_keyer->setNotBefore(m_lastKeyUp + std::chrono::milliseconds(7 * std::max(1, int(1200.0 / wpm))));
+        }
+        m_runKeyUp = std::make_shared<std::atomic<std::chrono::steady_clock::rep>>(0);
         const std::weak_ptr<char> run = m_run;
         // Model thread. A live run token means `this` is alive: endRun() drops it before the keyer goes.
         const std::function<void()> onRefused = [this, run] { if (!run.expired()) { refused(run); } };
         RadioModel* model = m_model.data();
         // Worker thread: derive() and the queued hops take no model state.
         m_keyer->setOnKeyDownChange(
-            [model, input = m_input, sender, onRefused, element = TxCoordinator::Request{}](
+            [model, input = m_input, sender, onRefused, keyUp = m_runKeyUp, element = TxCoordinator::Request{}](
                 bool down, std::chrono::steady_clock::time_point when) mutable {
                 if (down) {
                     // A sender whose producer was invalidated keys nothing more.
                     element = sender.valid() ? input.derive() : TxCoordinator::Request{};
+                } else {
+                    keyUp->store(when.time_since_epoch().count(), std::memory_order_relaxed);
                 }
                 model->queueProducerCwKeyEdge(element, down, QStringLiteral("host-cw-text"), 0, 0, when,
                                               /*hostTextGates=*/true,
@@ -128,6 +136,12 @@ void HostCwTextEngine::endRun()
     m_run.reset();
     m_input = {};
     m_keyer.reset();   // joins the worker; its last key-up finds a closed request
+    if (m_runKeyUp) {
+        if (const auto up = m_runKeyUp->load(std::memory_order_relaxed); up != 0) {
+            m_lastKeyUp = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(up));
+        }
+        m_runKeyUp.reset();
+    }
     if (m_model) {
         m_model->abortTxProducerInputs(m_producer, TransmitModel::PttSource::Mox);
     }

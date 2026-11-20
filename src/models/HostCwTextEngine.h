@@ -6,6 +6,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -78,6 +80,9 @@ private:
     TxCoordinator::Request m_input;
     std::unique_ptr<CwxLocalKeyer> m_keyer;
     std::shared_ptr<char> m_run;         // this run's identity for worker callbacks
+    // This run's last key-up (steady_clock ticks, 0 = none), written on the worker.
+    std::shared_ptr<std::atomic<std::chrono::steady_clock::rep>> m_runKeyUp;
+    std::chrono::steady_clock::time_point m_lastKeyUp{};   // the previous run's
     std::vector<TxCoordinator::Completion> m_done;
     QList<Waiting> m_waiting;
     bool m_closed{false};

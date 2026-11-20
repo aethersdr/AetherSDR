@@ -4,6 +4,9 @@
 
 #include <QHash>
 
+#include <algorithm>
+#include <utility>
+
 namespace AetherSDR {
 
 namespace {
@@ -132,6 +135,7 @@ void CwxLocalKeyer::encode(const QString& text, int wpm)
 
     const auto& tbl = morseTable();
     bool firstChar = true;
+    bool endsOnWordGap = false;
     for (QChar ch : text.toUpper()) {
         if (ch == ' ') {
             // Word gap = 7 units total = WordGap (4u, added here) +
@@ -144,6 +148,7 @@ void CwxLocalKeyer::encode(const QString& text, int wpm)
             // also matches standard CW timing for the local sidetone
             // listener.
             m_elements.enqueue(Element::WordGap);
+            endsOnWordGap = true;
             continue;
         }
         const auto it = tbl.find(ch);
@@ -151,6 +156,7 @@ void CwxLocalKeyer::encode(const QString& text, int wpm)
         if (!firstChar)
             m_elements.enqueue(Element::CharGap);
         firstChar = false;
+        endsOnWordGap = false;
         const QString& pattern = it.value();
         for (int i = 0; i < pattern.size(); ++i) {
             if (i > 0)
@@ -158,6 +164,7 @@ void CwxLocalKeyer::encode(const QString& text, int wpm)
             m_elements.enqueue(pattern[i] == '.' ? Element::Dit : Element::Dah);
         }
     }
+    m_owesCharGap = endsOnWordGap && !firstChar;
 }
 
 void CwxLocalKeyer::scheduleNext()
@@ -188,11 +195,27 @@ void CwxLocalKeyer::scheduleNext()
         // encoded character is always Dit or Dah, leaving m_currentlyDown=true
         // here; without an explicit gap the key stays down continuously and
         // adjacent characters merge into undecodable noise (#2473).
-        if (m_currentlyDown)
+        // A speed segment that ended on a word gap leaves the key up, so the
+        // key-down test misses it; the next entry's letter still owes the
+        // CharGap that completes the 7u word gap (#2417).
+        if (m_currentlyDown || m_owesCharGap)
             m_elements.enqueue(Element::CharGap);
         encode(p.text, p.wpm);
         if (m_elements.isEmpty()) {
             scheduleNext();
+            return;
+        }
+    }
+
+    // A run's first element waits for its not-before time, if one was set.
+    if (!m_epochValid && m_notBefore != std::chrono::steady_clock::time_point{}) {
+        const auto notBefore = std::exchange(m_notBefore, {});
+        if (notBefore > std::chrono::steady_clock::now()) {
+            startEpoch();
+            m_nextEdgeMs = std::max<qint64>(
+                0, std::chrono::ceil<std::chrono::milliseconds>(notBefore - m_epoch).count());
+            m_running = true;
+            armTimer(static_cast<int>(std::max<qint64>(1, m_nextEdgeMs)));
             return;
         }
     }
@@ -257,6 +280,7 @@ void CwxLocalKeyer::resetEpoch()
 {
     m_epochValid = false;
     m_nextEdgeMs = 0;
+    m_owesCharGap = false;
 }
 
 void CwxLocalKeyer::startEpoch()

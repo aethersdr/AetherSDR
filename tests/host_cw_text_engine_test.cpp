@@ -283,6 +283,12 @@ void testSpeedModifierSegments()
         check("segments: the modified word keys at 24 WPM", downs[0] < 225.0);
         check("segments: the next word keys at the base 12 WPM", downs[1] > 225.0);
     }
+    if (f.edges.size() >= 3) {
+        // WordGap at 24 WPM (4 x 50 ms), then the next letter's CharGap at 12 WPM (3 x 100 ms).
+        const double gap = ms(f.edges[2].at - f.edges[1].at);
+        std::printf("       word gap %.1f ms, expected 500 ms\n", gap);
+        check("segments: a whole word gap between the segments (-20 % / +40 %)", gap > 400.0 && gap < 700.0);
+    }
 }
 
 // Design point 2 of #7146: an element's key-up, a CwKey edge, is not swallowed
@@ -550,6 +556,11 @@ void testQueueBehindPlaying()
     check("queue: A's TEST keys whole first", pattern(first, unitMs) == QLatin1String("- . ... -"));
     check("queue: then B's dit", f.edges.size() == 14
               && ms(f.edges[13].at - f.edges[12].at) < 2.0 * unitMs);
+    if (f.edges.size() >= 13) {
+        const double gap = ms(f.edges[12].at - f.edges[11].at);
+        std::printf("       gap before B %.1f ms, expected %.1f ms\n", gap, 7 * unitMs);
+        check("queue: a word gap before B's dit (-20 % / +40 %)", gap > 7 * unitMs * 0.80 && gap < 7 * unitMs * 1.40);
+    }
 }
 
 // The same sender's messages stay together, ahead of a sender that queued

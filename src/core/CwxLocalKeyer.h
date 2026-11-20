@@ -41,6 +41,9 @@ public:
     // Install before start(). Called on the worker thread after a run's last
     // key-up when the queue has drained, never after stop(); lock-free receiver.
     void setOnDrained(std::function<void()> cb);
+    // Install before start(). The run's first key-down waits until `t`, so a
+    // new run keeps its distance from the previous run's last key-up.
+    void setNotBefore(std::chrono::steady_clock::time_point t) { m_notBefore = t; }
 
     // True when the whole message can be keyed with this encoder.
     static bool canEncode(const QString& text);
@@ -98,6 +101,10 @@ private:
     int           m_unitMs{60};   // 60 ms = 20 WPM
     bool          m_running{false};
     bool          m_currentlyDown{false};
+    // The last entry ended on a word gap after a letter: the next letter owes
+    // its CharGap, as it would inside one entry (4u + 3u = 7u, #2417).
+    bool          m_owesCharGap{false};
+    std::chrono::steady_clock::time_point m_notBefore{};
     // Drift-corrected scheduling: an absolute target edge time vs an elapsed
     // reference, so a late wake is followed by a correspondingly shorter wait.
     // Without this, scheduler jitter would push each successive edge later and
