@@ -1533,20 +1533,12 @@ QString txCeilingBlockedError(const QString& target, int ceiling, const QString&
 }
 
 // A drive-blocked result from a host with no automation handler: the fallback
-// fires without TX permission, whatever this session holds.
+// cannot be handed the power ceiling, so it refuses drive as if it were armed.
 QString txDriveNoHandlerError(const QString& target)
 {
     return QStringLiteral("blocked: '") + target
-        + QStringLiteral("' sets transmit drive, and this host passes no TX "
-                         "permission to it (no automation handler is installed).");
-}
-
-QString txSetpointBlockedError(const QString& target)
-{
-    return QStringLiteral("blocked: '") + target
-        + QStringLiteral("' sets transmit drive, like `transmit rfpower` "
-                         "(TX-safety guard). Enable \"Allow TX via MCP\" in Radio "
-                         "Setup → Network (or set AETHER_AUTOMATION_ALLOW_TX=1) to override.");
+        + QStringLiteral("' sets transmit drive, and this host cannot pass the "
+                         "power ceiling to it (no automation handler is installed).");
 }
 
 bool hasOwnTransmitMarker(const QObject* object)
@@ -10018,14 +10010,12 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
     case 5:  // ShortcutFireTxDriveBlocked
         qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint shortcut" << id;
-        if (!viaHandler && allowTx) {
+        if (!viaHandler) {
             return err(txDriveNoHandlerError(id));
         }
-        return err(allowTx && txCeilingArmed
-                       ? txCeilingBlockedError(id, m_txMaxPower,
-                                               QStringLiteral("`invoke 'RF power' setValue <n>` "
-                                                              "or `transmit rfpower <n>`, which clamp"))
-                       : txSetpointBlockedError(id));
+        return err(txCeilingBlockedError(id, m_txMaxPower,
+                                         QStringLiteral("`invoke 'RF power' setValue <n>` "
+                                                        "or `transmit rfpower <n>`, which clamp")));
     default:
         return err(QStringLiteral("unexpected fireShortcutAction result for '")
                    + id + QStringLiteral("'"));
@@ -10119,15 +10109,13 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
     case 6:  // KeyInjectTxDriveBlocked
         qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint key press" << spec;
-        if (!viaHandler && m_txAllowed) {
+        if (!viaHandler) {
             return err(txDriveNoHandlerError(spec));
         }
-        return err(m_txAllowed && m_txMaxPower >= 0
-                       ? txCeilingBlockedError(spec, m_txMaxPower,
-                                               QStringLiteral("`invoke '<slider>' setValue <n>`, "
-                                                              "`transmit rfpower <n>` or "
-                                                              "`transmit tunepower <n>`, which clamp"))
-                       : txSetpointBlockedError(spec));
+        return err(txCeilingBlockedError(spec, m_txMaxPower,
+                                         QStringLiteral("`invoke '<slider>' setValue <n>`, "
+                                                        "`transmit rfpower <n>` or "
+                                                        "`transmit tunepower <n>`, which clamp")));
     case 3:  // KeyInjectNotConsumed — delivered, but the momentary handler's own
              // gates (shortcuts disabled, text entry focused, radio disconnected)
              // declined it. A real result, not an error: report it.
@@ -12611,15 +12599,9 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         QString command = value;
         const QString simId = takeSimId(command);
         // Before the simulator lookup: a refused SET is refused whether or not
-        // a simulator is connected.
-        if (!m_txAllowed) {
-            if (const QString set = tciDriveSetCommand(command); !set.isEmpty()) {
-                qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint tci send" << set;
-                return err(txSetpointBlockedError(QStringLiteral("tci send ") + set));
-            }
-        }
-        // With permission too: the payload is sent as written, so a SET above
-        // the armed ceiling is refused rather than rewritten (#5851).
+        // a simulator is connected. Drive is bounded by the ceiling, not by TX
+        // permission; the payload is sent as written, so a SET above the armed
+        // ceiling is refused rather than rewritten (#5851).
         if (m_txMaxPower >= 0) {
             if (const QString set = tciDriveSetAboveCeiling(command, m_txMaxPower);
                 !set.isEmpty()) {

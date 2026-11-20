@@ -747,13 +747,10 @@ popup at a time and only while it is open; an empty combo is refused up front
 > (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`). They never key, so
 > TX permission does not gate them (#5851): `invoke`, the pointer verbs and
 > `transmit rfpower|tunepower` set them without it. What bounds drive is the
-> power ceiling, `AETHER_AUTOMATION_TX_MAX_POWER`, below. The `rf_power_up` /
-> `rf_power_down` shortcuts through `shortcut` and `keyevent`, a `keyevent`
-> press of an arrow, PageUp/PageDown or Home/End key while one of the two
-> sliders holds the keyboard lease, bound or not, and a `tci send` of
-> `drive:<trx>,<value>` or `tune_drive:<trx>,<value>` are refused without TX
-> permission. Other setpoints like `VOX level` or `Microphone gain` are not
-> blocked.
+> power ceiling, `AETHER_AUTOMATION_TX_MAX_POWER`, below. The same holds for
+> the `rf_power_up` / `rf_power_down` shortcuts, the slider keyboard-lease keys
+> and `tci send` of `drive:` / `tune_drive:`: none needs TX permission. Other
+> setpoints like `VOX level` or `Microphone gain` are not blocked either.
 >
 > **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
 > without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
@@ -782,7 +779,12 @@ popup at a time and only while it is open; an empty combo is refused up front
 > refused instead. Where it does not know the value it refuses while armed:
 > pointer input on a setpoint, `invoke … wheel`, the `rf_power_up` /
 > `rf_power_down` shortcuts through `shortcut` and `keyevent`, and a `keyevent`
-> lease key (arrows, Page, Home/End) on a focused power slider.
+> lease key (arrows, Page, Home/End) on a focused power slider. These are
+> refused in both directions: `rf_power_down`, Down/Left, PageDown and Home
+> cannot raise drive, but the bridge does not tell steps apart, so a session
+> turns power down under an armed ceiling with `invoke setValue` or `transmit
+> rfpower|tunepower`. Clicking a per-band edit, which only focuses it, is
+> refused while armed for the same reason.
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -2746,9 +2748,10 @@ included) need no flag.
 
 Actions that set transmit drive without keying (`setsTxDrive`, declared with
 `transmitDrive()` in the control-action registry: `rf_power_up` and
-`rf_power_down`) are refused the same way, with the `sets transmit drive`
-wording of [`transmit rfpower`](#transmit); a `keyevent` press of their key is
-refused too. The operator's own keyboard is never gated.
+`rf_power_down`) need no TX permission (#5851). While
+`AETHER_AUTOMATION_TX_MAX_POWER` is armed they are refused, up and down alike,
+as is a `keyevent` press of their key: a step's size is unknown to the bridge.
+The operator's own keyboard is never gated.
 
 ### `midi`
 Inject one MIDI Control Change value through the same learned VFO Tune Knob
@@ -3634,12 +3637,10 @@ Removes the external-WebSocket dependency for TCI/DAX lifecycle testing.
 Requires the TCI server to be running (toggle via `invoke tciEnable click` if
 needed).
 
-Without TX permission, `send` refuses a payload that sets drive
-(`drive:<trx>,<value>` or `tune_drive:<trx>,<value>`) with the
-`sets transmit drive` error of [`transmit rfpower`](#transmit) (#5851); the
-read forms (`drive:0;`) stay open. With permission, while
-`AETHER_AUTOMATION_TX_MAX_POWER` is armed, a SET above the ceiling (or one whose
-value cannot be read as `trx,power`) is refused; at or below it, it is sent.
+A payload that sets drive (`drive:<trx>,<value>` or `tune_drive:<trx>,<value>`)
+needs no TX permission (#5851). While `AETHER_AUTOMATION_TX_MAX_POWER` is armed,
+a SET above the ceiling (or one whose value cannot be read as `trx,power`) is
+refused; at or below it, it is sent. The read forms (`drive:0;`) stay open.
 External TCI clients are not affected.
 
 ```json

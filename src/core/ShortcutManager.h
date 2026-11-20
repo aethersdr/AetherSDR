@@ -416,12 +416,12 @@ public:
     void markHoldKeyAction(const QString& actionId);
     void markTxDriveAction(const QString& actionId);
     // True when the automation bridge must refuse `action` because it sets
-    // transmit drive: without TX permission, as `transmit rfpower` refuses, and
-    // while the power ceiling (AETHER_AUTOMATION_TX_MAX_POWER) is armed, which
-    // a step of unknown size cannot respect.
-    static bool bridgeRefusesTxDrive(const Action& action, bool allowTx, bool txCeilingArmed)
+    // transmit drive while the power ceiling (AETHER_AUTOMATION_TX_MAX_POWER)
+    // is armed: a step of unknown size cannot respect it, so a step down is
+    // refused too. TX permission gates keying only (#5851).
+    static bool bridgeRefusesTxDrive(const Action& action, bool txCeilingArmed)
     {
-        return action.setsTxDrive && (!allowTx || txCeilingArmed);
+        return action.setsTxDrive && txCeilingArmed;
     }
     // Why `key` cannot trigger `action`, or empty when it can. A sided key
     // reaches only the momentary handlers, bare (#7354).

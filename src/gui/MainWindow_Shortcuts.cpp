@@ -2005,7 +2005,7 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx, bool txCeili
     if (a->keysTx && !allowTx) {
         return ShortcutFireTxBlocked;
     }
-    if (ShortcutManager::bridgeRefusesTxDrive(*a, allowTx, txCeilingArmed)) {
+    if (ShortcutManager::bridgeRefusesTxDrive(*a, txCeilingArmed)) {
         return ShortcutFireTxDriveBlocked;
     }
     if (!a->handler && !a->txHandler) {
@@ -2078,14 +2078,14 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
     const bool keysTx = a && a->keysTx;
     if (press && keysTx && (!allowTx || !controller || !controller->valid()))
         return KeyInjectTxBlocked;
-    // Drive (RF power) also gates the press only; a release moves nothing.
-    if (press && a && ShortcutManager::bridgeRefusesTxDrive(*a, allowTx, txCeilingArmed))
+    // Drive (RF power) under the ceiling gates the press only; a release moves nothing.
+    if (press && a && ShortcutManager::bridgeRefusesTxDrive(*a, txCeilingArmed))
         return KeyInjectTxDriveBlocked;
     // Any key the slider lease would apply to a focused drive slider, bound or not.
     QWidget* focus = QApplication::focusWidget();
     const bool leased = qobject_cast<QAbstractSlider*>(focus)
         && m_sliderShortcutLease.data() == focus && s_sliderShortcutLeaseActive;
-    if (press && bridgeKeyMovesTxSetpoint(leased ? focus : nullptr, seq[0].key(), allowTx,
+    if (press && bridgeKeyMovesTxSetpoint(leased ? focus : nullptr, seq[0].key(),
                                           txCeilingArmed))
         return KeyInjectTxDriveBlocked;
 
