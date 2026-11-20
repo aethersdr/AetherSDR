@@ -52,8 +52,9 @@ struct ControlAction {
     std::function<void(int)> stepBy;
     // Changes transmit setup: refused while keyed, and said so.
     bool txSetup{false};
-    // Sets transmit drive (RF power): its shortcuts need TX permission from
-    // the automation bridge, never from the operator's keyboard (#5851).
+    // Sets transmit drive (RF power): the automation bridge refuses its
+    // shortcuts while the power ceiling is armed, never the operator's
+    // keyboard; TX permission does not gate them (#5851).
     bool txDrive{false};
 
     static ControlAction trigger(QString shortcutId, QString midiId, QString name,

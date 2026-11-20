@@ -9520,11 +9520,12 @@ QJsonObject AutomationServer::doTransmit(const QString& action, const QString& a
                        + QStringLiteral(" must be an integer 0..100"));
 
         // The power-ceiling rail is WIDGET-scoped: it lives in invoke()'s
-        // setValue path and keys off accessibleName, so a verb that reaches the
-        // model directly does not inherit it. `radiocert` already had to pass
-        // m_txMaxPower down its own path for the same reason. Clamp explicitly —
-        // otherwise AETHER_AUTOMATION_TX_MAX_POWER silently stops bounding the
-        // one surface most likely to be driving a transverter or an amplifier.
+        // setValue path and keys off the markTxSetpoint() marker, so a verb
+        // that reaches the model directly does not inherit it. `radiocert`
+        // already had to pass m_txMaxPower down its own path for the same
+        // reason. Clamp explicitly — otherwise AETHER_AUTOMATION_TX_MAX_POWER
+        // silently stops bounding the one surface most likely to be driving a
+        // transverter or an amplifier.
         int applied = pct;
         if (m_txMaxPower >= 0 && applied > m_txMaxPower) {
             qCWarning(lcAutomation).noquote()

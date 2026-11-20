@@ -393,9 +393,10 @@ public:
                                   // Monitor hold); the only actions a sided
                                   // key can trigger (#7354)
         bool setsTxDrive{false};  // sets transmit drive but never keys (RF
-                                  // power): the bridge needs TX permission and
-                                  // no armed power ceiling, the operator's
-                                  // keyboard needs neither (#5851)
+                                  // power): the bridge refuses it while the
+                                  // power ceiling is armed, the operator's
+                                  // keyboard never; TX permission does not
+                                  // gate it (#5851)
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);

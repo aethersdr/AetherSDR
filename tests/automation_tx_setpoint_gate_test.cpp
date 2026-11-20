@@ -53,7 +53,8 @@ using namespace AetherSDR;
 namespace {
 
 // A host with no automation handler: the bridge falls back to these, which
-// answer as MainWindow does for a drive action fired without TX permission.
+// answer as MainWindow's meta-object entries do for a drive action: they cannot
+// see the power ceiling, so they assume it armed and refuse.
 class FallbackMainWindow : public QMainWindow {
     Q_OBJECT
 public:

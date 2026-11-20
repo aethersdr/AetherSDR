@@ -107,9 +107,10 @@ private slots:
         QCOMPARE(specs[0].get(), 42.0f);
     }
 
-    // RF power sets transmit drive: the bridge needs TX permission for both of
-    // its keys (#5851), the operator's keyboard (the handler) does not, and a
-    // level that is not drive stays unmarked.
+    // RF power sets transmit drive: the bridge refuses both of its keys while
+    // the power ceiling is armed, whatever TX permission is (#5851), the
+    // operator's keyboard (the handler) is never refused, and a level that is
+    // not drive stays unmarked.
     void transmitDriveGatesTheBridgeNotTheKeyboard()
     {
         ControlActionRegistry reg;
