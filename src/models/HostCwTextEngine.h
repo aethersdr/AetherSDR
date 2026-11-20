@@ -32,7 +32,7 @@ public:
 
     struct Waiting {
         TxCoordinator::Request sender;
-        QString text;   // the message, or the stored macro's text
+        QString text;   // the message, or the stored macro's text with {CALL} resolved
         int macroIndex{0};
         bool live{false};
     };

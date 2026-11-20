@@ -943,8 +943,18 @@ bool RadioModel::admitHostCwx(const TxCoordinator::Request& request, const QStri
     case HostCwTextRefusal::BreakInOffUnkeyed:
         return refuse(tr("CW text refused: break-in is off and transmit is not keyed."), "break-in-off");
     }
-    // No radio holds a macro here: only the local copy can be keyed.
-    const QString message = macroIndex != 0 ? m_cwxModel.macro(macroIndex - 1) : text;
+    // No radio holds a macro here: only the local copy can be keyed, and the
+    // bounds apply to it once {CALL} is resolved, as it will be keyed.
+    QString message = text;
+    if (macroIndex != 0) {
+        QString reason;
+        const std::optional<QString> resolved = m_cwxModel.resolvePlaceholders(m_cwxModel.macro(macroIndex - 1),
+                                                                                &reason);
+        if (!resolved) {
+            return refuse(reason, "placeholder");
+        }
+        message = *resolved;
+    }
     if (!m_hostCwText->admitsLength(static_cast<int>(message.size()))) {
         return refuse(tr("CW text refused: a message holds at most %1 characters, and at most %2 may wait.")
                           .arg(HostCwTextEngine::kMaxMessageChars).arg(HostCwTextEngine::kMaxPendingChars),

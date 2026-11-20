@@ -159,6 +159,13 @@ struct Sender {
         }
         return radio.requestProducerCwx(request, text);
     }
+    bool sendMacro(int index)
+    {
+        if (!request.valid()) {
+            request = producer.request();
+        }
+        return radio.requestProducerCwx(request, {}, {}, index);
+    }
     void stop()
     {
         radio.abortProducerCwx(request);
@@ -482,6 +489,31 @@ void testLengthBounds()
     const bool sentAfter = a.send(QStringLiteral("E"));
     const bool keyedAfter = pumpUntil([&] { return f.edges.size() >= 2; }, 2000);
     check("bounds: after the stop a send keys", sentAfter && keyedAfter && f.edges.size() == 2);
+}
+
+// Review nit 2 on #7347: the 511/1024 bounds apply to a stored macro once
+// {CALL} is resolved, and a waiting macro counts its resolved length.
+void testMacroBoundsAfterPlaceholder()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    Sender b(f.radio);
+    Sender c(f.radio);
+    CwxModel& cwx = f.radio.cwxModel();
+    cwx.setDxCall(QStringLiteral("ON8ST/QRP"));   // nine characters for {CALL}'s six
+    cwx.saveMacro(0, QStringLiteral("{CALL}") + QString(505, QLatin1Char('E')));   // 511 typed, 514 keyed
+    cwx.saveMacro(1, QStringLiteral("{CALL}").repeated(50));                        // 300 typed, 450 keyed
+    f.radio.transmitModel().setCwSpeed(30);
+    check("macro bounds: 511 typed, 514 once {CALL} is resolved: refused", !a.sendMacro(1));
+    pumpFor(200);
+    check("macro bounds: no edge for it", f.edges.empty());
+    check("macro bounds: A plays 511", a.send(QString(511, QLatin1Char('E'))));
+    check("macro bounds: B's 450-character macro waits", b.sendMacro(2));
+    check("macro bounds: C's 100 more refused (511 + 450 + 100 > 1024)",
+          !c.send(QString(100, QLatin1Char('E'))));
+    a.stop();
+    b.stop();
+    pumpFor(50);
 }
 
 // A key-down refused mid-message ends the message with one notice. The
@@ -839,6 +871,7 @@ int main(int argc, char** argv)
     testRefusals();
     testBreakInOffWithPttHeld();
     testLengthBounds();
+    testMacroBoundsAfterPlaceholder();
     testMidMessageRefusals();
     testInvalidatedSenderStops();
     testQueueBehindPlaying();
