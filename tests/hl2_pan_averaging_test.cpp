@@ -391,7 +391,9 @@ int main(int argc, char** argv)
                 dsp.processIqBlock(b);
             }
         };
-        feed(2e-3f, 40);                       // receive: a weak tone, ~-60 dBFS
+        // Receive: a weak tone, ~-60 dBFS, for over the 1 s DC time constant, so
+        // the receive power is out of its growing-memory phase, as it is on air.
+        feed(2e-3f, 400);
         dsp.setSpectrumTransmitting(true, 70);
         check(dsp.spectrumDcKeyedApplied() && !dsp.spectrumDcTransmittingApplied(),
               "rebuild control: a key arms the spectrum; receive DC until the keyed IQ arrives");
