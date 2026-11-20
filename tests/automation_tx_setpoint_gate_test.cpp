@@ -315,7 +315,7 @@ int main(int argc, char** argv)
         const auto noHandler = [](const QJsonObject& r) {
             const QString e = r.value(QStringLiteral("error")).toString();
             return !ok(r) && e.contains(QStringLiteral("no automation handler"))
-                && !e.contains(QStringLiteral("power ceiling"));
+                && !e.contains(QStringLiteral("AETHER_AUTOMATION_TX_MAX_POWER=-1"));
         };
         check(noHandler(AutomationServerTestAccess::request(server,
                   QJsonObject{{QStringLiteral("cmd"), QStringLiteral("shortcut")},
