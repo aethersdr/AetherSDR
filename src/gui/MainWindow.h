@@ -390,9 +390,10 @@ protected:
     void restoreNativeClientRect(const QString& role);
     // Windows 11: colour the DWM window border to color.background.app.
     void applyWindowsFrameColor();
-    // Inset the central widget and status bar by the non-client resize band,
-    // which Qt reports as zero on Windows 11 (#7077). The band is a
-    // per-monitor device-pixel figure, so this re-runs whenever it can move.
+    // Windows 11: inset the central widget and status bar by the resize band
+    // so controls stay clear of the WM_NCHITTEST resize zone, and while
+    // maximized by Qt's excess over the native client (#7077). Both are
+    // per-monitor device-pixel figures, so this re-runs whenever they can move.
     void applyNonClientBandInsets();
     // Qt delivers DevicePixelRatioChange to event(), never to changeEvent().
     bool event(QEvent* event) override;
