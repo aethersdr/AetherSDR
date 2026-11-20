@@ -2661,7 +2661,8 @@ void WaveformsDialog::refreshWaveformList()
         }
 
         // Dimmed with the reason on a radio whose firmware refuses the command
-        // (FLEX-6000, #6990), the same way Environment… is above.
+        // (FLEX-6000, #6990). It is presented like Environment… above, but the
+        // gate is the radio platform here, not a backend capability.
         auto* restartBtn = new QPushButton(tr("Restart"), actionWidget);
         restartBtn->setAccessibleName(tr("Restart waveform %1").arg(name));
         const QString restartUnavailable = waveformRestartUnavailableReason(
