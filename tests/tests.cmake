@@ -9992,6 +9992,27 @@ add_test(NAME waveform_env_control_test COMMAND waveform_env_control_test)
 set_tests_properties(waveform_env_control_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# AetherGPS install state shared by the AetherGPS window and the Waveforms
+# window: one wait-for-the-list state per radio, and every window hearing
+# when any upload ends. Injected waveform status and a RadioModel with no
+# backend; no sockets, radio or TX.
+add_executable(aethergps_tools_test
+    tests/aethergps_tools_test.cpp
+    src/gui/AetherGpsTools.cpp
+    src/gui/WaveformEnvironmentDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+)
+target_include_directories(aethergps_tools_test PRIVATE src tests)
+target_link_libraries(aethergps_tools_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(aethergps_tools_test PROPERTIES AUTOMOC ON)
+add_test(NAME aethergps_tools_test COMMAND aethergps_tools_test)
+set_tests_properties(aethergps_tools_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # SmartSDR 4.3 NTP time sources (#6953): validation, Flex capability and wire
 # text, `ntp_sources` decode, the subscription, the remove-and-create edit and
 # the Radio Setup Time page. Recording sinks and injected status; no socket.
