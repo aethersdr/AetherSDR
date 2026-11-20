@@ -1457,6 +1457,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/DiversityPairPolicy.h": {
+  "tag": "universal",
+  "note": "Pure decision logic for which two diversity slices form one receive pair (radio diversity_index, pan fallback) \u2014 no QObject, no I/O, no model access. Canonical slice state only.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/DisplayPresence.h": {
   "tag": "ui-support",
   "note": "Host display-presence probe used to choose the desktop Qt platform before QApplication; startup/rendering plumbing, not radio state.",
@@ -1472,6 +1478,12 @@
  "core/MiniPanSettings.h": {
   "tag": "ui-support",
   "note": "Client-side persistence for the mini-pan applet span; UI configuration, not radio-owned state or a daemon protocol resource.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TxOffDelaySettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side persistence for the phone-mode TX off delay (one nested AppSettings object, Principle V). The radio interlock stores key-on delays only, so there is no radio-owned value to defer to; no wire commands or vendor coupling.",
   "split": "",
   "confidence": "high"
  },

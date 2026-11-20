@@ -4,12 +4,12 @@ description: "Every control AetherSDR can map to a MIDI controller, with its ID,
 sidebar_position: 3
 custom_edit_url: null
 generated_by: "tools/docs/gen_reference.py"
-generated_from: ["src/gui/MainWindow_Controllers.cpp", "src/gui/MainWindowHelpers.h", "src/core/DigitalVoiceFeature.h", "src/core/DigitalVoiceModeRegistry.cpp", "src/core/MidiControlManager.h"]
+generated_from: ["src/gui/MainWindow_Controllers.cpp", "src/gui/MainWindow_ControlActions.cpp", "src/gui/MainWindowHelpers.h", "src/core/DigitalVoiceFeature.h", "src/core/DigitalVoiceModeRegistry.cpp", "src/core/MidiControlManager.h"]
 ---
 
 :::info[Generated page]
 
-This page is generated from `src/gui/MainWindow_Controllers.cpp`, `src/gui/MainWindowHelpers.h`, `src/core/DigitalVoiceFeature.h`, `src/core/DigitalVoiceModeRegistry.cpp`, `src/core/MidiControlManager.h` by `tools/docs/gen_reference.py`. Do not edit it by hand: change the source, then run `python3 tools/docs/gen_reference.py`.
+This page is generated from `src/gui/MainWindow_Controllers.cpp`, `src/gui/MainWindow_ControlActions.cpp`, `src/gui/MainWindowHelpers.h`, `src/core/DigitalVoiceFeature.h`, `src/core/DigitalVoiceModeRegistry.cpp`, `src/core/MidiControlManager.h` by `tools/docs/gen_reference.py`. Do not edit it by hand: change the source, then run `python3 tools/docs/gen_reference.py`.
 
 :::
 
@@ -32,7 +32,6 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | Audio Pan | `rx.audioPan` | Slider | 0 to 100 |   |
 | Noise Blanker | `rx.nbEnable` | Toggle |   |   |
 | Adaptive RX Filter | `rx.adaptiveFilter` | Toggle |   |   |
-| Noise Reduction | `rx.nrEnable` | Toggle |   |   |
 | Auto Notch | `rx.anfEnable` | Toggle |   |   |
 | Squelch Enable | `rx.squelchEnable` | Toggle |   |   |
 | Audio Mute | `rx.mute` | Toggle |   |   |
@@ -49,23 +48,55 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | VFO Tune Knob | `rx.tuneKnob` | Slider | 0 to 127 |   |
 | NR Cycle | `global.nrCycle` | Trigger |   |   |
 | AGC Cycle | `global.agcCycle` | Trigger |   |   |
+| Noise Reduction | `rx.nrEnable` | Toggle |   |   |
+| Filter Width 100 Hz | `rx.filterWidth100` | Trigger |   |   |
+| Filter Width 250 Hz | `rx.filterWidth250` | Trigger |   |   |
+| Filter Width 400 Hz | `rx.filterWidth400` | Trigger |   |   |
+| Filter Width 3 kHz | `rx.filterWidth3000` | Trigger |   |   |
+| Filter Width | `rx.filterWidth` | Slider | 0 to 100 |   |
+| APF | `rx.apfEnable` | Toggle |   |   |
+| NB Level | `rx.nbLevel` | Slider | 0 to 100 |   |
+| NR Level | `rx.nrLevel` | Slider | 0 to 100 |   |
+| ANF Level | `rx.anfLevel` | Slider | 0 to 100 |   |
+| APF Level | `rx.apfLevel` | Slider | 0 to 100 |   |
+| RIT Offset | `rx.ritOffset` | Slider | -99999 to 99999 |   |
+| RX Antenna 1 | `rx.antenna1` | Trigger |   |   |
+| RX Antenna 2 | `rx.antenna2` | Trigger |   |   |
+| RX Antenna 3 | `rx.antenna3` | Trigger |   |   |
+| RX Antenna 4 | `rx.antenna4` | Trigger |   |   |
+| Next RX Antenna | `rx.antennaNext` | Trigger |   |   |
+| WNB | `rx.wnbEnable` | Toggle |   |   |
+| WNB Level | `rx.wnbLevel` | Slider | 0 to 100 |   |
+| Binaural RX | `rx.binaural` | Toggle |   |   |
+| Diversity RX | `rx.diversity` | Toggle |   |   |
 
 ## TX
 
 | Control | ID | Type | Range | Notes |
 |---|---|---|---|---|
-| RF Power | `tx.rfPower` | Slider | 0 to 100 |   |
 | Tune Power | `tx.tunePower` | Slider | 0 to 100 |   |
 | MOX | `tx.mox` | Toggle |   |   |
 | TUNE | `tx.tune` | Toggle |   |   |
 | ATU Start | `tx.atuStart` | Trigger |   |   |
 | Two-Tone Tune | `global.twoToneTune` | Trigger |   |   |
+| RF Power | `tx.rfPower` | Slider | 0 to 100 |   |
+| XIT Offset | `tx.xitOffset` | Slider | -99999 to 99999 |   |
+| TX Antenna 1 | `tx.antenna1` | Trigger |   |   |
+| TX Antenna 2 | `tx.antenna2` | Trigger |   |   |
+| TX Antenna 3 | `tx.antenna3` | Trigger |   |   |
+| TX Antenna 4 | `tx.antenna4` | Trigger |   |   |
+| Next TX Antenna | `tx.antennaNext` | Trigger |   |   |
+| ATU Memories | `tx.atuMemories` | Toggle |   |   |
+| ACC TX Output | `tx.outputAcc` | Toggle |   |   |
+| TX1 Output | `tx.output1` | Toggle |   |   |
+| TX2 Output | `tx.output2` | Toggle |   |   |
+| TX3 Output | `tx.output3` | Toggle |   |   |
+| ATU Bypass | `tx.atuBypass` | Trigger |   |   |
 
 ## Phone/CW
 
 | Control | ID | Type | Range | Notes |
 |---|---|---|---|---|
-| Mic Level | `phone.micLevel` | Slider | 0 to 100 |   |
 | Monitor Volume | `phone.monGain` | Slider | 0 to 100 |   |
 | Speech Processor | `phone.procEnable` | Toggle |   |   |
 | DAX | `phone.daxEnable` | Toggle |   |   |
@@ -85,6 +116,25 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | Trigger CW Left Paddle | `cwdit` | Gate (held) |   |   |
 | Trigger CW Right Paddle | `cwdah` | Gate (held) |   |   |
 | PTT (hold) | `cw.ptt` | Gate (held) |   |   |
+| Mic Level | `phone.micLevel` | Slider | 0 to 100 |   |
+| CW Keyer: Iambic A | `cw.keyerIambicA` | Trigger |   |   |
+| CW Keyer: Iambic B | `cw.keyerIambicB` | Trigger |   |   |
+| CW Keyer: Straight Key | `cw.keyerStraight` | Trigger |   |   |
+| Stop CWX / Macros | `cwx.cancel` | Trigger |   |   |
+| CW Decoder | `cw.decodeRx` | Toggle |   |   |
+| Show/Hide CWX Panel | `cwx.panelToggle` | Trigger |   |   |
+| Macro F1 | `cwx.macro1` | Trigger |   |   |
+| Macro F2 | `cwx.macro2` | Trigger |   |   |
+| Macro F3 | `cwx.macro3` | Trigger |   |   |
+| Macro F4 | `cwx.macro4` | Trigger |   |   |
+| Macro F5 | `cwx.macro5` | Trigger |   |   |
+| Macro F6 | `cwx.macro6` | Trigger |   |   |
+| Macro F7 | `cwx.macro7` | Trigger |   |   |
+| Macro F8 | `cwx.macro8` | Trigger |   |   |
+| Macro F9 | `cwx.macro9` | Trigger |   |   |
+| Macro F10 | `cwx.macro10` | Trigger |   |   |
+| Macro F11 | `cwx.macro11` | Trigger |   |   |
+| Macro F12 | `cwx.macro12` | Trigger |   |   |
 
 ## EQ
 
@@ -111,14 +161,68 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | TX Button | `global.txButton` | Toggle |   |   |
 | RADE Modem | `global.rade` | Toggle |   | Only in builds with `HAVE_RADE` |
 | TNF Global | `global.tnfEnable` | Toggle |   |   |
-| Band Up | `global.bandUp` | Trigger |   |   |
-| Band Down | `global.bandDown` | Trigger |   |   |
-| Mode Up | `global.modeUp` | Trigger |   |   |
-| Mode Down | `global.modeDown` | Trigger |   |   |
 | Next Slice | `global.nextSlice` | Trigger |   |   |
 | Previous Slice | `global.prevSlice` | Trigger |   |   |
 | QSO Record | `global.qsoRecord` | Toggle |   |   |
 | QSO Playback | `global.qsoPlay` | Toggle |   |   |
+| Band Up | `global.bandUp` | Trigger |   |   |
+| Band Down | `global.bandDown` | Trigger |   |   |
+| Mode Up | `global.modeUp` | Trigger |   |   |
+| Mode Down | `global.modeDown` | Trigger |   |   |
+| Make Active Slice TX | `global.sliceSetTx` | Trigger |   |   |
+| Select Slice A | `global.sliceSelectA` | Trigger |   |   |
+| Select Slice B | `global.sliceSelectB` | Trigger |   |   |
+| Select Slice C | `global.sliceSelectC` | Trigger |   |   |
+| Select Slice D | `global.sliceSelectD` | Trigger |   |   |
+| Select Slice E | `global.sliceSelectE` | Trigger |   |   |
+| Select Slice F | `global.sliceSelectF` | Trigger |   |   |
+| Select Slice G | `global.sliceSelectG` | Trigger |   |   |
+| Select Slice H | `global.sliceSelectH` | Trigger |   |   |
+| Copy Slice A to B | `global.sliceAToB` | Trigger |   |   |
+| Copy Slice B to A | `global.sliceBToA` | Trigger |   |   |
+| Swap Slices A and B | `global.sliceSwapAB` | Trigger |   |   |
+| New Slice | `global.sliceNew` | Trigger |   |   |
+| Close Active Slice | `global.sliceClose` | Trigger |   |   |
+| Select Panadapter 1 | `global.panSelect1` | Trigger |   |   |
+| Select Panadapter 2 | `global.panSelect2` | Trigger |   |   |
+| Select Panadapter 3 | `global.panSelect3` | Trigger |   |   |
+| Select Panadapter 4 | `global.panSelect4` | Trigger |   |   |
+| Select Panadapter 5 | `global.panSelect5` | Trigger |   |   |
+| Select Panadapter 6 | `global.panSelect6` | Trigger |   |   |
+| Select Panadapter 7 | `global.panSelect7` | Trigger |   |   |
+| Select Panadapter 8 | `global.panSelect8` | Trigger |   |   |
+| Add Panadapter | `global.panAdd` | Trigger |   |   |
+| Close Active Panadapter | `global.panClose` | Trigger |   |   |
+| Panadapter Span 5 kHz | `global.panSpan5k` | Trigger |   |   |
+| Panadapter Span 10 kHz | `global.panSpan10k` | Trigger |   |   |
+| Panadapter Span 25 kHz | `global.panSpan25k` | Trigger |   |   |
+| Panadapter Span 50 kHz | `global.panSpan50k` | Trigger |   |   |
+| Panadapter Span 100 kHz | `global.panSpan100k` | Trigger |   |   |
+| Panadapter Span 200 kHz | `global.panSpan200k` | Trigger |   |   |
+| Recall Memory 1 | `global.memoryRecall1` | Trigger |   |   |
+| Recall Memory 2 | `global.memoryRecall2` | Trigger |   |   |
+| Recall Memory 3 | `global.memoryRecall3` | Trigger |   |   |
+| Recall Memory 4 | `global.memoryRecall4` | Trigger |   |   |
+| Recall Memory 5 | `global.memoryRecall5` | Trigger |   |   |
+| Recall Memory 6 | `global.memoryRecall6` | Trigger |   |   |
+| Recall Memory 7 | `global.memoryRecall7` | Trigger |   |   |
+| Recall Memory 8 | `global.memoryRecall8` | Trigger |   |   |
+| Recall Memory 9 | `global.memoryRecall9` | Trigger |   |   |
+| Recall Memory 10 | `global.memoryRecall10` | Trigger |   |   |
+| Next Memory | `global.memoryNext` | Trigger |   |   |
+| Previous Memory | `global.memoryPrev` | Trigger |   |   |
+| Load Global Profile 1 | `global.globalProfile1` | Trigger |   |   |
+| Load Global Profile 2 | `global.globalProfile2` | Trigger |   |   |
+| Load Global Profile 3 | `global.globalProfile3` | Trigger |   |   |
+| Load Global Profile 4 | `global.globalProfile4` | Trigger |   |   |
+| Load Global Profile 5 | `global.globalProfile5` | Trigger |   |   |
+| Band Stack Up | `global.bandStackUp` | Trigger |   |   |
+| Band Stack Down | `global.bandStackDown` | Trigger |   |   |
+| Open SpotHub | `global.openSpotHub` | Trigger |   |   |
+| Open AetherMap | `global.openAetherMap` | Trigger |   |   |
+| Open AetherModem | `global.openAetherModem` | Trigger |   |   |
+| Band Plan Toggle | `global.bandPlanToggle` | Trigger |   |   |
+| RTTY Decoder | `rtty.decode` | Toggle |   |   |
 
 ## Mode
 
@@ -176,6 +280,13 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 |---|---|---|---|---|
 | Tune Up 1 MHz | `global.tuneUp1mhz` | Trigger |   |   |
 | Tune Down 1 MHz | `global.tuneDown1mhz` | Trigger |   |   |
+| Tune Up (100 steps) | `global.tuneUp100` | Trigger |   |   |
+| Tune Down (100 steps) | `global.tuneDown100` | Trigger |   |   |
+| Tune Up (1 step) | `global.tuneUp1` | Trigger |   |   |
+| Tune Down (1 step) | `global.tuneDown1` | Trigger |   |   |
+| Tune Up (10 steps) | `global.tuneUp10` | Trigger |   |   |
+| Tune Down (10 steps) | `global.tuneDown10` | Trigger |   |   |
+| Go to Frequency | `global.goToFreq` | Trigger |   |   |
 
 ## Display
 
@@ -186,3 +297,4 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | Panadapter Zoom In | `global.panZoomIn` | Trigger |   |   |
 | Panadapter Zoom Out | `global.panZoomOut` | Trigger |   |   |
 | Open Memories | `global.openMemories` | Trigger |   |   |
+| Callsign Lookup | `global.callsignLookup` | Trigger |   |   |

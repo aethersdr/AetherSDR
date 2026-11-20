@@ -68,6 +68,15 @@ def _when(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+def attached_after_signing(assets: list[dict], sums: dict) -> list[str]:
+    """The build artifacts attached after SHA256SUMS.txt was, by name. The
+    source tarball is not one: the signing run makes it and uploads it just
+    after the sums. tools/offload_release_assets.py waits on this too."""
+    signed_at = _when(sums["updatedAt"])
+    return sorted(a["name"] for a in assets
+                  if a["name"].endswith(SIGNABLE_SUFFIXES) and _when(a["updatedAt"]) > signed_at)
+
+
 def plan(tag_shape: str, assets: list[dict], name: str, pdf_sha: str | None,
          sums_text: str | None) -> str:
     """Whether a Docs-triggered run signs, from what the release holds now.
@@ -85,8 +94,7 @@ def plan(tag_shape: str, assets: list[dict], name: str, pdf_sha: str | None,
         if signables:
             return "resign: build artifacts are attached and nothing has signed them"
         return "skip: no build has attached anything yet; its own signing run lists the manual"
-    signed_at = _when(sums["updatedAt"])
-    newer = sorted(a["name"] for a in signables if _when(a["updatedAt"]) > signed_at)
+    newer = attached_after_signing(assets, sums)
     if newer:
         return "resign: attached after the last signing: " + ", ".join(newer)
     if pdf_sha is not None:

@@ -231,6 +231,42 @@ CW is excluded, and the card is not available on the Hermes-Lite 2.
   not allowed) appear as notifications, only when transmit is actually
   blocked
 
+### Station key guards (software)
+
+A station device outside the radio, such as an antenna switch, can be set up
+to refuse a key-on that AetherSDR starts, for example while the switch routes
+this radio to the wrong port. This is a **software guard, not an interlock**.
+It is off unless you set up a device that provides one; no device in this
+version does.
+
+When a guard objects, AetherSDR does not key the radio and shows the guard's
+reason as a transmit notification. The guard is asked at every key-on that
+AetherSDR starts: MOX and PTT from any source (buttons, shortcuts,
+controllers, serial PTT, CAT, TCI, WSPR, the automation bridge), TUNE and
+two-tone, ATU, CW key, paddle and CW PTT, CWX, the voice keyer, NAVTEX,
+switching **VOX** on, and a Tuner Genius XL autotune. It is never asked when
+you unkey, and never while AetherSDR is already transmitting, except for
+switching VOX on, which stays armed after the over. A CW message is asked
+about once, at its first element: a guard that starts to object in the middle
+of a message lets it finish and refuses the next one. While a hardware PTT or
+the radio's own VOX holds the radio keyed, the message stays open and its
+later elements are not asked.
+
+A key guard cannot stop:
+
+- a hardware PTT, a footswitch, or a key or paddle wired to the radio;
+- another program, another client of the same radio, or a second copy of
+  AetherSDR;
+- a radio whose VOX is already on: AetherSDR refuses to switch VOX on, but it
+  does not switch an active VOX off;
+- a tuner started from its own front panel;
+- a transmission already on the air when the guard starts to object.
+  AetherSDR never unkeys by itself.
+
+On a Hermes-Lite 2 the gateware also keys from its PTT and CW inputs without
+AetherSDR. If your station must never transmit into the wrong port, use a
+hardware interlock between the switch and the radio.
+
 ### Hardware PTT and the TX source
 
 **(FlexRadio)** A hardware PTT is a footswitch or keying line on the RCA PTT
@@ -256,6 +292,35 @@ while the radio confirms your hardware PTT transmission, including when VOX
 is also active. VOX reconciliation requires VOX to be enabled.
 Another client's transmission does not open your local TX audio gate.
 These status reports do not start a transmission or send a PTT command.
+
+### TX off delay
+
+**TX Off Delay (ms):** in the **Timings (in ms)** group of
+**Settings → Radio Setup... → Transmit** keeps the radio transmitting for that
+many milliseconds after you release PTT, so the end of your last word is not
+cut off. Enter 0 to 2000 (2 seconds); 0 turns it off and is the default. AetherSDR stores
+the value on this computer, not on the radio.
+
+- It applies in voice modes only (USB, LSB, AM, FM, NFM). CW, digital modes,
+  DAX, CAT-keyed and WSPR transmissions unkey at once.
+- It applies to PTT that AetherSDR handles: **MOX**, keyboard PTT, a
+  footswitch on a computer serial port (CTS, DSR or DCD set to PTT input), the
+  RC-28 PTT button, and TCI hardware PTT such as a Stream Deck. A footswitch or
+  mic PTT wired to the radio's RCA PTT jack, ACC connector or mic jack unkeys
+  at the radio and is not delayed. To use the delay with a footswitch, connect
+  it to a computer serial port instead.
+- Pressing PTT again during the delay continues the same transmission.
+- The radio stays keyed, and **MOX** stays lit, until the delay ends. What
+  happens to your microphone depends on the mic source:
+  - With the **PC** mic source, your mic stays live for the first 300 ms after
+    release, and the rest of the delay is silent.
+  - With a mic on the radio (**MIC**, **BAL**, **LINE** or **ACC**), AetherSDR
+    cannot mute it. **Your mic stays live for the whole delay, and anything you
+    say during it goes on the air.** Keep the delay short with these mics; a few
+    hundred milliseconds is usually enough to keep your last word.
+- Pressing **TUNE** during the delay does nothing; wait for the delay to end, then press it again.
+- Disconnecting, or anything that stops transmit, ends the delay at once.
+- With **QUIN** on, the delay runs first and the outro tone follows it.
 
 ### Transmit timer
 

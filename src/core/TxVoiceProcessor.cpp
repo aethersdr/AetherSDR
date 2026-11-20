@@ -536,6 +536,9 @@ int TxVoiceProcessor::latencyFrames() const noexcept
             && rnnoise->isValid()
         ? 480
         : 0;
+    if (m_processors.finalLimiter) {
+        frames += m_processors.finalLimiter->latencyFrames();
+    }
     return frames;
 }
 

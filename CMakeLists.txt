@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.11.2 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -954,6 +954,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
+    src/core/backends/hl2/Hl2PureSignal.cpp  # PureSignal controller around WDSP calcc (HL2)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2TelemetryPoller.cpp # stream-free telemetry on port 1025 (#15)
@@ -1052,6 +1053,7 @@ set(CORE_SOURCES
     src/core/DecoderPcmAdapter.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
+    src/core/TxOffDelaySettings.cpp
     src/core/Ctr2RelaySettings.cpp
     src/core/GreenHeronProtocol.cpp
     src/core/PacketLossConcealment.cpp
@@ -1110,9 +1112,13 @@ set(CORE_SOURCES
     src/core/TciServer.cpp
     src/models/DaxReceiveModel.cpp
     src/core/TciRxConverter.cpp
+    src/core/TciIqDecimator.cpp
     src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
+    src/core/TciExtensionSet.cpp
+    src/core/TciExtensionNotice.cpp
+    src/core/TciRxGainExtension.cpp
     src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
     src/core/MqttClient.cpp
@@ -1307,6 +1313,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_AudioControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
+    src/models/HostCwTextKeyer.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
@@ -1540,6 +1547,7 @@ set(GUI_SOURCES
     src/gui/WaveformWidget.cpp
     src/gui/AetherClockApplet.cpp
     src/gui/WfmApplet.cpp
+    src/gui/PureSignalApplet.cpp
     src/gui/WfmLockScope.cpp
     src/gui/ClockAlignmentWidget.cpp
     src/gui/ClientEqApplet.cpp

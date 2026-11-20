@@ -25,21 +25,11 @@ name: Cache cleanup
 # unreachable it is never accessed again, so nothing refreshes its LRU position
 # and nothing deletes it.
 #
-# That adds up faster than it looks. Entry sizes on refs/heads/main once each
-# cache has filled to its cap, measured 2026-09-01..05 from the "Save" steps:
-#
-#   ccache-linux-build-   ~1.88 GiB     sccache-windows-   ~1.02 GiB
-#   ccache-ccache-macos-  ~0.44 GiB     ccache-sid-canary- ~0.94 GiB
-#
-# (The figures this header carried before — 1.1 / 0.38 / 0.18 / 0.57 — were
-# taken on 2026-08-15, days after #5008, while the caches were still filling.
-# ccache and sccache both compress their own objects, so the entry is ~95% of
-# the directory, not the ~55% that earlier estimate assumed.)
-#
-# So a main CI run writes ~4.3 GiB across its four compiler caches, ~9.2x/day
-# — ~40 GiB/day of entries that are unreachable within the hour. Unmanaged,
-# that pins the repo at its allowance on its own, holding a few hours of
-# caches nothing will ever read.
+# That adds up fast. Each main push saves one entry per compiler-cache prefix
+# below, ~5 GiB in all (sizes and the budget are in ci.yml's CCACHE_MAXSIZE
+# comment), several times a day, and each is unreachable once the next lands.
+# Unmanaged, that pins the repo at its allowance with caches nothing will
+# ever read.
 #
 # The other causes are caches on refs that nothing will run against again:
 # refs/pull/N/merge once the PR closes, and refs/tags/v* once the release
@@ -49,7 +39,9 @@ name: Cache cleanup
 
 on:
   workflow_run:
-    workflows: [CI]
+    # Full Suite saves ccache-linux-full- after its own build, often after CI
+    # has finished, so it triggers a prune of its own.
+    workflows: [CI, Full Suite]
     types: [completed]
   # Daily, plus on demand. See sweep-dead-refs for why this is scheduled
   # rather than fired from `pull_request: closed`.
@@ -136,6 +128,7 @@ jobs:
           # you add a run_id-keyed compiler cache in ANY workflow, add it here.
           PREFIXES="
             ccache-linux-build-
+            ccache-linux-full-
             sccache-windows-
             ccache-ccache-macos-ci-
             ccache-sid-canary-
@@ -153,10 +146,23 @@ jobs:
             # than that — the seven-day retention reaps them anyway, so this is a
             # slower cleanup rather than a leak, but it is why the limit is
             # generous relative to the ~2 entries a healthy run finds.
+            #
+            # sccache-windows- keeps KEEP entries PER MSVC VERSION, not per
+            # prefix: ci.yml keys it sccache-windows-<VCToolsVersion>-<run_id>,
+            # and while GitHub rolls out a new runner image both versions are
+            # live. One entry for the whole prefix would have each version's
+            # save delete the other's, and every run would be cold.
+            if [ "$prefix" = "sccache-windows-" ]; then
+              jq_prune='group_by(.key | sub("-[0-9]+$"; ""))
+                | map(sort_by(.createdAt) | reverse | .['"$KEEP"':])
+                | add // [] | .[].id'
+            else
+              jq_prune='.['"$KEEP"':] | .[].id'
+            fi
             listing=$(
               gh cache list --ref refs/heads/main --key "$prefix" \
                 --limit 100 --sort created_at --order desc \
-                --json id --jq ".[${KEEP}:] | .[].id"
+                --json id,key,createdAt --jq "$jq_prune"
             )
 
             if [ -z "$listing" ]; then

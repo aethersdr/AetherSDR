@@ -80,6 +80,16 @@ single-use colours snap to the nearest canonical neighbour.
 | `color.accent.warning` | `#ffb84d` | `#f2c14e` (81), `#ffd070` (9), `#e8a540` (9), `#e8b977` (7), `#ff8c00` (6), `#ffff00` (8) ≈ 120 refs |
 | `color.accent.danger` | `#ff4d4d` | `#ff4444` (12), `#ff4040` (11), `#ff6b6b` (10), `#c03030` (9), `#ff8080` (8) ≈ 50 refs |
 
+### SWR meter zones
+
+| Token | Default dark | Default light | Purpose |
+|---|---|---|---|
+| `color.meter.swr.yellow` | `{color.yellow.500}` (`#e6d000`) | `{color.yellow.500}` (`#b5a000`) | TGXL SWR 1.5-2.0 zone |
+
+The yellow primitive is distinct from the existing amber warning primitive:
+the TGXL meter displays yellow and amber as adjacent zones, so aliasing both
+to `color.amber.500` would erase their boundary.
+
 ### Borders
 
 | Token | Canonical | Refs |

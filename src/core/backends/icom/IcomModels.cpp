@@ -199,6 +199,15 @@ constexpr std::array<std::string_view, 10> kIc705Modes{
     "USB", "LSB", "CW", "CWL", "AM", "FM", "DFM", "WFM", "DIGU", "DIGL"};
 constexpr std::array<std::string_view, 1> kIc705ReceiveOnlyModes{"WFM"};
 
+// From the IC-9700 guide's 0x06 mode table. A mode is published only if it
+// round-trips under its own name (#5040). Omitted: WFM (the radio has none),
+// DV (modeToNeutral returns ""), DD (0x22 is not in CivMode), and RTTY/RTTY-R
+// (read back as DIGL/DIGU). DFM/DIGU/DIGL are the DATA forms of FM/USB/LSB.
+constexpr std::array<std::string_view, 9> kIc9700Modes{
+    "USB", "LSB", "CW", "CWL", "AM", "FM", "DFM", "DIGU", "DIGL"};
+// Every IC-9700 band is an amateur allocation, so no mode is receive-only.
+constexpr std::array<std::string_view, 0> kIc9700ReceiveOnlyModes{};
+
 // The three supported bring-up targets share the complete documented repeater
 // vocabulary. Their presentation can still differ (Basic versus Extended), but
 // no profile is permitted to pretend these registers are IC-9700-only: both
@@ -661,6 +670,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         // IC-9700 CI-V Reference Guide 2019, printed p. 8.
         .networkConfiguration = NetworkConfigurationProfile{139, 140, 141, 144},
         .preampLabels = kIc9700PreampLabels,
+        .modes = kIc9700Modes,
+        .receiveOnlyModes = kIc9700ReceiveOnlyModes,
     };
     // MK2 S-meter squelch measured against steady carriers on the estimated
     // pan axis (#6180): -195.1 + 0.584 * raw, with raw = ceil(2.55 * level).

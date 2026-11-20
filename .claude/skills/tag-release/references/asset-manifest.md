@@ -1,4 +1,4 @@
-# Asset manifest — the twenty-four files, who makes them, who signs them
+# Asset manifest — the twenty-four files, who makes them, who signs them, where they live
 
 v26.9.3 and v26.9.4 carry rows 1–15; the manual (row 16) is attached
 from the first release cut after the docs site landed, and the Linux release
@@ -33,6 +33,27 @@ tarballs (rows 18–21) from the first cut after RFC #5304 Phase 5's CI half, an
 | 24 | `AetherSDR-vX.Y.Z-macOS-intel.app.tar.zst` | macOS DMG (`app-tarball`, intel, same step) | yes (25) | same, inside row 6 | yes |
 | 25 | `AetherSDR-vX.Y.Z-macOS-intel.app.tar.zst.asc` | Sign Release Artifacts | — | — | — |
 
+## Where they live: the page, and updates.aethersdr.com from v26.11.4
+
+From v26.11.4, **Release Offload** (`release-offload.yml`, RFC #6964)
+moves the rows people don't download to
+`https://updates.aethersdr.com/releases/vX.Y.Z/<same name>` after the last
+signing run, once the maintainer approves its update-signing run:
+
+- **The page, fourteen files:** rows 1, 3, 5, 6, 7, 9, 11, 13, 14, 16, 18,
+  20, 22 and 24. That is the six installers, the source, both sums files,
+  the manual and the four full update tarballs.
+- **updates.aethersdr.com, fifteen files** (fourteen for a hotfix): the nine
+  per-file signatures (rows 2, 4, 8, 10, 12, 19, 21, 23 and 25), row 15 and
+  the five debug-symbol archives below. Patch bundles live there too, put
+  there by Update Manifest itself once `UPDATE_PAYLOAD_BASE` is `r2`.
+
+Until the offload runs, the page carries all of them, as through v26.11.3.
+`check_release_assets.py` takes the rule from
+`tools/offload_release_assets.py`. It checks the page and the files on
+`updates.aethersdr.com` by size, and it downloads the signatures it verifies
+from wherever they are.
+
 **Hotfix delta** (nonzero fourth component): row 15 is absent —
 `get-store-build-plan.ps1` returns `storeEligible = false`, the MSIX step is
 skipped, nothing is staged. Twenty-three assets. Everything else is identical.
@@ -57,10 +78,12 @@ reads the tag's own `sign-release.yml` to tell which shape to expect.
 `streamcontroller-aethersdr.zip` (+ `.asc`), which every release through
 v26.9.2 carried. Their presence on a new release is a `WARN`.
 
-## Debug-symbol archives — outside the twenty-four
+## Debug-symbol archives — outside the twenty-four, on updates.aethersdr.com from v26.11.4
 
 Each platform build also attaches one `.tar.xz` of debug symbols
-(`docs/debugging-crashes.md`). Users never download them, so they are not part
+(`docs/debugging-crashes.md`). From v26.11.4, Release Offload moves them to
+`updates.aethersdr.com/releases/vX.Y.Z/`, where they are kept with no
+expiry. Users never download them, so they are not part
 of the set above:
 
 | asset | produced by | contents |

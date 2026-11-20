@@ -76,7 +76,7 @@ AetherSDR treats an Icom differently from a FlexRadio:
 
 What you can do:
 
-- **Panadapter** from the radio's own scope. A recognized model with scope support has **one panadapter**. Until the model is identified, or if it has no supported scope, its capacity is zero: **Tools → Add Panadapter...** is unavailable, and the status-bar **Add Panadapter** shortcut reports the capacity limit without opening the layout chooser.
+- **Panadapter** from the radio's own scope. A recognized model with scope support has **one panadapter**, and the dual-receiver IC-7610, IC-7760 and IC-7851 have **two**, one for MAIN and one for SUB (see [below](#ic-7610-ic-7760-and-ic-7851)). Until the model is identified, or if it has no supported scope, its capacity is zero: **Tools → Add Panadapter...** is unavailable, and the status-bar **Add Panadapter** shortcut reports the capacity limit without opening the layout chooser.
 - **Receive and transmit:** RX audio, transmit, RF gain, preamp and attenuator (each separate from the display's RF gain), AF gain, TX monitor, VOX, RIT/XIT, manual notch and the ATU on models that have one. TUNE power changes made during a tune are kept.
 - **Filters:** the radio's real IF width is read back, the filter buttons are ordered narrow to wide for the mode, twin PBT is supported, and TX low/high cut follow what the model supports.
 - **Status bar:** the radio's **Network Radio Name** (the name set in its network settings) is shown, separate from model and callsign.
@@ -145,6 +145,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-9700
 
+- The **Mode** selector offers **USB**, **LSB**, **CW**, **CWL** (reverse CW), **AM**, **FM**, **DFM**, **DIGU** and **DIGL** for the radio.
 - Three bands with their own power ceilings (100 / 75 / 10 W).
 - CTCSS (TX and RX), DTCS, dial-lock sync, supply voltage, PA drain current, continuous compression and LAN MOD level. The **COMP** slider runs 0–100, with a numeric readout.
 - If CI-V stalls, AetherSDR tries a bounded automatic recovery before a full reconnect.

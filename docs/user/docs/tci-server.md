@@ -128,6 +128,10 @@ slice.
 
 Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz within the connected model’s [DAX IQ limits](./dax-iq-streaming.md#limits) (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`. Requests outside an identified model’s supported `iq_samplerate` rates leave the rate unchanged and return the current rate. A valid rate negotiated before model identification is remembered without starting IQ streams; it is applied within the model’s limits once the model is known. A retained 192 kHz subscription uses 96 kHz on a model limited to 96 kHz, then returns to 192 kHz when a capable model is connected.
 
+### IQ on a Hermes-Lite 2
+
+On a Hermes-Lite 2 there is no DAX IQ: the IQ comes straight from the receiver chain in AetherSDR. `iq_samplerate` accepts 24, 48, 96 or 192 kHz, and a client that does not ask gets 48 kHz. When the HL2 runs at a higher rate, the IQ is decimated to the requested rate; when it runs lower, the IQ stays at the radio’s rate and that is the rate in the frame header. Changing `iq_samplerate` while IQ is running gives a short transient in the stream. When the network cannot keep up (a 192 kHz stream is about 1.5 MB/s), IQ frames are dropped instead of the connection being closed, so a skimmer on a slow link sees gaps rather than a disconnect.
+
 ### JTDX
 
 JTDX has TCI support but is no longer maintained and can crash with some TCI servers. WSJT-X is recommended instead.
@@ -294,7 +298,7 @@ Notes:
 
 ```
 rx_sensors_enable:true;    # S-meter updates
-tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting
+tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting or tuning
 ```
 
 RX sensors broadcast each receiver's S-meter in dBm:
@@ -303,7 +307,9 @@ RX sensors broadcast each receiver's S-meter in dBm:
 rx_channel_sensors:0,0,-97.3;
 ```
 
-TX sensors broadcast during transmit, including ALC.
+TX sensors broadcast during transmit and tune, including ALC. They follow this
+station's own transmission only: on a multiFLEX radio, another station's
+transmission sends none.
 
 The SWR field is the same trusted SWR the S-meter shows. A reading taken
 without measurable forward power, for example in a speech pause, does not
@@ -321,6 +327,108 @@ cw_keyer_speed:25;                # speed
 keyer:0,true;                     # key down
 keyer:0,false;                    # key up
 ```
+
+### AetherSDR extension set
+
+AetherSDR offers its own TCI commands as one opt-in set. A client that does not
+ask for it receives exactly the same traffic as without it. To turn it on for
+one connection, the client sends:
+
+```
+aethersdr_ext_enable:true;
+```
+
+The server answers with the set's version and the items this radio offers,
+then the current state of the offered items. An item sends as many state lines
+as it needs, and may send none:
+
+```
+aethersdr_ext:1;
+```
+
+- Every command of the set starts with `aethersdr_`. Before the enable, the
+  server ignores them without a reply, like any unknown command.
+- The list holds only what the connected radio can do, and an enabled client
+  gets a new `aethersdr_ext:` line, followed again by the state lines, when
+  that changes. A command for an item not in the list is ignored.
+- The enable is per connection. `aethersdr_ext_enable:false;` stops all
+  extension traffic to that client, and so does disconnecting.
+- The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
+  `rx_ctun_ex`) work without the enable, as before.
+
+On a Hermes-Lite 2 with one receiver, for example, the answer is:
+
+```
+aethersdr_ext:1,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_rx_rf_gain_range:0,-12,48,1;
+aethersdr_rx_rf_gain:0,20;
+aethersdr_rx_auto_rf_gain:false;
+aethersdr_rx_overload:clean,false,0;
+```
+
+#### Receive RF gain: `rx_rf_gain`
+
+Offered while the connected radio has an RF Gain control on the panadapter and
+has told AetherSDR its range in dB, for example a Flex or a Hermes-Lite 2. Not
+on the simulator, and not on an Icom, whose RF gain is in percent.
+
+```
+aethersdr_rx_rf_gain_range:0;      # read the range: min, max, step in dB
+aethersdr_rx_rf_gain:0;            # read the gain
+aethersdr_rx_rf_gain:0,20;         # set the gain, dB
+```
+
+- `<trx>` is the receiver. The gain belongs to the receiver's panadapter, so
+  every receiver on that panadapter reports the same value. On a Hermes-Lite 2
+  all receivers share one front end, and a change is reported for each of them.
+- A set is limited to the range and moved to the nearest step, then applied
+  the way the panadapter's RF Gain control applies it.
+- Every change, from any source (the RF Gain control, CAT, another client), is
+  sent as `aethersdr_rx_rf_gain:<trx>,<db>;` to every client that enabled the
+  set. That is also the answer to a set. A set that the limits moved onto the
+  current value is answered to the sender only. A set that changes nothing gets
+  no answer.
+- The range line is sent again when the radio reports a new range, and both
+  lines are sent again when a receiver appears or moves to another panadapter.
+- On a Hermes-Lite 2 with automatic RF gain on, the value is the gain the radio
+  is running at, which can be below the operator's setting (see
+  `aethersdr_rx_overload`). A set still writes the operator's setting, so while
+  automatic gain holds the gain down, the value reported after a set is that
+  setting minus the `aethersdr_rx_overload` offset.
+- Allowed while transmitting.
+
+#### Automatic RF gain: `rx_auto_rf_gain`
+
+Offered while the connected radio has automatic RF gain (the Hermes-Lite 2).
+There is one switch for the whole radio, so the command has no `<trx>`.
+
+```
+aethersdr_rx_auto_rf_gain;          # read
+aethersdr_rx_auto_rf_gain:true;     # turn on (false: off)
+```
+
+- The answer, and every change from any source, is
+  `aethersdr_rx_auto_rf_gain:<bool>;` to every client that enabled the set.
+- The radio can refuse to turn it on. The answer then reads `false`, and
+  AetherSDR shows the reason on the panadapter, as it does for the Auto box.
+- Asking for the state it is already in gets no answer.
+
+#### Front-end overload: `rx_overload`
+
+Offered while the connected radio watches its converter for clipping (the
+Hermes-Lite 2). Read only.
+
+```
+aethersdr_rx_overload;                  # read
+aethersdr_rx_overload:hot,true,6;       # level, automatic gain on, dB below setting
+```
+
+- The level is `unobserved` (no reading yet), `clean`, `marginal`, `hot` or
+  `at_floor` (still clipping with the automatic gain as low as it may go).
+- The second field says whether automatic RF gain is running, and the third how
+  many dB it holds the gain below the operator's setting.
+- Every change is sent to every client that enabled the set, at most one line
+  every 100 ms. After a reconnect the level starts at `unobserved`.
 
 ## Known issues
 
