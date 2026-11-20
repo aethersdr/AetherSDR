@@ -3,9 +3,9 @@
     Download ONNX Runtime prebuilt binaries for Windows x64.
 
 .DESCRIPTION
-    Downloads the official ONNX Runtime 1.18.x prebuilt release from GitHub
-    and places headers / import library / DLL in third_party/onnxruntime/
-    ready for CMake (find_library / find_path).
+    Downloads the pinned ONNX Runtime prebuilt, hosted on this repo's
+    onnxruntime-<version> release, and places headers / import library / DLL
+    in third_party/onnxruntime/ ready for CMake (find_library / find_path).
 
     Required only for the S_History_v2-AI CNN signal classifier.
     AetherSDR compiles and runs without it — ONNX is an optional enhancement.
@@ -20,9 +20,10 @@ $ErrorActionPreference = "Stop"
 # Pinned to the ONNX Runtime that sherpa-onnx bundles so a build with both shares
 # one runtime (no symbol-version clash). Keep in sync with setup-onnxruntime.sh.
 $OrtVersion = "1.27.0"
-$OrtUrl     = "https://github.com/microsoft/onnxruntime/releases/download/v${OrtVersion}/onnxruntime-win-x64-${OrtVersion}.zip"
-# SHA256 of the release zip. Bump alongside the version.
-$OrtSha256  = "c5c81710938e68079ff1a192b04897faabe4b43830d48f39f27ecd4e16138bfc"
+# Microsoft's GitHub release is gone; this zip is rebuilt from Microsoft's signed
+# NuGet package by tools/repack_onnxruntime.py, which reproduces this pin exactly.
+$OrtUrl     = "https://github.com/aethersdr/AetherSDR/releases/download/onnxruntime-${OrtVersion}/onnxruntime-win-x64-${OrtVersion}.zip"
+$OrtSha256  = "19c99b55582fcc3e4400efab0b5a3b8be513c43c7124ca1983ae7047ecb0c2c2"
 $OutDir     = "third_party\onnxruntime"
 $ZipFile    = "third_party\onnxruntime-win-x64-${OrtVersion}.zip"
 
@@ -43,8 +44,8 @@ New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
 if (-not (Test-Path $ZipFile)) {
     Write-Host "Downloading ONNX Runtime ${OrtVersion} prebuilt package..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $OrtUrl -OutFile $ZipFile
-    Confirm-Sha256 -Path $ZipFile -Expected $OrtSha256
 }
+Confirm-Sha256 -Path $ZipFile -Expected $OrtSha256
 
 # ── Extract ──────────────────────────────────────────────────────────────
 Write-Host "Extracting..." -ForegroundColor Cyan

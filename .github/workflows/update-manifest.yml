@@ -4,17 +4,21 @@ name: Update Manifest
 # (RFC #5304 Phase 2; the format is docs/architecture/update-manifest.md).
 #
 # build    reads only: waits for the release's payload assets, extracts each
-#          payload, and writes manifest.json plus one patch bundle per payload
-#          and per earlier release (tools/build_update_manifest.py). Linux's
+#          payload, and writes manifest-v2.json, the GitHub-only manifest.json
+#          (RFC #6964; full downloads only once the bundles are on R2) and one patch bundle per payload and per earlier
+#          release (tools/build_update_manifest.py). Linux's
 #          `full` is the release tarball the AppImage build attached, once it
 #          is shown to hold exactly the payload's files. macOS's payload and
 #          `full` is the app tarball the macOS DMG build attached (Phase 4),
 #          with the DAX driver's source hash (hal-plugin/ at the tag).
 # publish  runs in the update-signing environment (main and v* tags only,
-#          maintainer approval): signs the manifest with the Ed25519 update key, verifies
-#          the signature against packaging/update-signing.pub, attaches the
-#          bundles to the release and puts the manifest on
-#          updates.aethersdr.com (an R2 bucket written by this job alone).
+#          maintainer approval): signs both manifests with the Ed25519 update
+#          key, verifies each signature against packaging/update-signing.pub,
+#          puts the bundles where manifest-v2.json names them (the release, or
+#          updates.aethersdr.com with UPDATE_PAYLOAD_BASE=r2) and puts both
+#          manifests on updates.aethersdr.com (an R2 bucket written only
+#          by jobs in the update-signing environment: this one and Release
+#          Offload's, which moves the files people don't download there).
 #
 # A dispatch with publish=false is a dry run: build only, the outputs kept as
 # a workflow artifact.
@@ -234,14 +238,26 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q squashfs-tools zstd
 
-      - name: Build the manifest and patch bundles
+      # Two manifests (RFC #6964): manifest-v2.json for the bridge client,
+      # and manifest.json, GitHub downloads only, for copies without it: the
+      # same patches while they are on the release page, full downloads only
+      # once they are on updates.aethersdr.com. The UPDATE_PAYLOAD_BASE repository variable says where
+      # manifest-v2.json puts the patch bundles: unset or "github" keeps them
+      # on the release page; "r2" puts them on updates.aethersdr.com.
+      - name: Build the manifests and patch bundles
         if: ${{ steps.plan.outputs.publish != 'already' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
           TARBALLS: ${{ steps.tarballs.outputs.expected }}
           MACOS: ${{ steps.assets.outputs.macos }}
+          PAYLOAD_BASE: ${{ vars.UPDATE_PAYLOAD_BASE }}
         run: |
+          payload_base="${PAYLOAD_BASE:-github}"
+          case "$payload_base" in
+            github|r2) ;;
+            *) echo "::error::UPDATE_PAYLOAD_BASE must be github or r2."; exit 1 ;;
+          esac
           # --fetch-from-github requires every payload: a download that still
           # fails after retries stops the run rather than leaving a platform out.
           no_tarballs=
@@ -255,7 +271,8 @@ jobs:
           # shellcheck disable=SC2086
           python3 "$RUNNER_TEMP/tool/build_update_manifest.py" --tag "$TAG" --out update-out \
             --fetch-from-github --depth 4 --work "$RUNNER_TEMP/update-work" \
-            --public-key "$RUNNER_TEMP/tool/update-signing.pub" $no_tarballs $macos
+            --public-key "$RUNNER_TEMP/tool/update-signing.pub" --payload-base "$payload_base" \
+            $no_tarballs $macos
           cp "$RUNNER_TEMP/tool/publish_update_manifest.py" "$RUNNER_TEMP/tool/build_update_manifest.py" update-out/
           ls -l update-out
 
@@ -299,10 +316,12 @@ jobs:
       # Sign, then verify against the committed public key before anything
       # is uploaded: a wrong or rotated secret fails here, loudly, instead of
       # publishing a manifest no client can verify.
-      # The key signs only a schema-1 manifest for THIS tag, with a key_id,
-      # whose every URL is one of this release's downloads; checked before
-      # the key is written to disk.
-      - name: Sign and verify the manifest
+      # The key signs only schema-1 manifests for THIS tag, with a key_id,
+      # whose every URL is one of this release's downloads. manifest.json
+      # names GitHub only: identical to manifest-v2.json while the patch
+      # bundles are on the release page, full downloads only once they are on
+      # updates.aethersdr.com. Checked before the key is written to disk.
+      - name: Sign and verify the manifests
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
           TAG: ${{ needs.build.outputs.tag }}
@@ -311,28 +330,40 @@ jobs:
           key="$RUNNER_TEMP/update-signing.pem"
           trap 'rm -f "$key"' EXIT
           ( umask 077; printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key" )
-          openssl pkeyutl -sign -rawin -inkey "$key" -in update-out/manifest.json \
-            -out update-out/manifest.json.sig
-          openssl pkeyutl -verify -rawin -pubin -inkey "$RUNNER_TEMP/update-signing.pub" \
-            -in update-out/manifest.json -sigfile update-out/manifest.json.sig
-          test "$(stat -c %s update-out/manifest.json.sig)" = 64
+          for m in manifest-v2.json manifest.json; do
+            openssl pkeyutl -sign -rawin -inkey "$key" -in "update-out/$m" \
+              -out "update-out/$m.sig"
+            openssl pkeyutl -verify -rawin -pubin -inkey "$RUNNER_TEMP/update-signing.pub" \
+              -in "update-out/$m" -sigfile "update-out/$m.sig"
+            test "$(stat -c %s "update-out/$m.sig")" = 64
+          done
 
+      # Bundles go on the release page only while manifest-v2.json names them
+      # there; with UPDATE_PAYLOAD_BASE=r2 the publish step below uploads
+      # them to updates.aethersdr.com instead, before any manifest.
       - name: Attach the patch bundles to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.build.outputs.tag }}
         run: |
+          base=$(python3 update-out/publish_update_manifest.py payload-base --tag "$TAG" --dir update-out)
+          echo "Patch bundles: $base"
+          if [ "$base" != github ]; then
+            exit 0
+          fi
           shopt -s nullglob
           bundles=(update-out/*.update.tar)
           if [ ${#bundles[@]} -gt 0 ]; then
             gh release upload "$TAG" "${bundles[@]}" --clobber
           fi
 
-      # tools/publish_update_manifest.py writes the release's pair, reads it
-      # back and verifies it, then promotes latest/ only when this is GitHub's
-      # latest release AND latest/ does not already name a newer one (re-read
-      # just before the write; this job's concurrency group closes the rest).
+      # tools/publish_update_manifest.py uploads any bundles manifest-v2.json
+      # names on updates.aethersdr.com and checks their SHA-256, writes the
+      # release's two pairs, reads them back and verifies them, then promotes
+      # both latest/ pairs only when this is GitHub's latest release AND
+      # neither latest/ manifest already names a newer one (re-read just
+      # before the write; this job's concurrency group closes the rest).
       # R2's S3 API with a token scoped to this one bucket (its id is the
       # access key, the SHA-256 of its value the secret), signed by curl
       # itself: no third-party uploader holds the credentials.

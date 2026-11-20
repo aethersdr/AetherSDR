@@ -148,6 +148,13 @@ struct ReceiveAudioExport {
     int maximumReceivers = 0;
 };
 
+// Host playback timing for the existing primary PCM queue. This is transport
+// metadata, independent of model names, monitor controls and decoder exports.
+struct ReceiveAudioPlayout {
+    int prefillMs = 0;
+    int bufferCapMs = 0;
+};
+
 // Broadcast FM controls are available only when their typed request is supported.
 struct BroadcastFmReceive {
     QVector<int> deemphasisUs;
@@ -500,6 +507,7 @@ struct RadioCapabilities {
     std::optional<ReceiveCwPitchControl> receiveCwPitchControl;
     std::optional<ReceiveDspControl> receiveDspControl;
     std::optional<ReceiveAudioExport> receiveAudioExport;
+    std::optional<ReceiveAudioPlayout> receiveAudioPlayout;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
@@ -946,10 +954,13 @@ struct RadioCapabilities {
     bool hasRadioPttReadback = false;
 
     // The backend also publishes on transmitChanged the keying the radio did by
-    // itself (its PTT or key input), which setKeying() never commanded. Observed
-    // state: it reaches radioTransmittingChanged and nothing that keys. setKeying()
-    // stays the authority for host keying, so RadioModel keeps the command-edge
-    // fallback and ORs the two. HL2: EP6 ptt_resp, which host MOX never raises.
+    // itself (its PTT or key input), which setKeying() never commanded: ORed into
+    // mox, and on its own as TransmitDelta::radioPtt. The backend keys nothing
+    // from it. setKeying() stays the authority for host keying, so RadioModel
+    // keeps the command-edge fallback and ORs the two. A host-modulated radio
+    // sends silence unless the host keys too, so RadioModel follows a radioPtt
+    // edge with a host key through the gated producer path (followRadioPtt).
+    // HL2: EP6 ptt_resp, which host MOX never raises.
     struct RadioPttObservation {};
     std::optional<RadioPttObservation> radioPttObservation;
 
@@ -1027,6 +1038,13 @@ struct RadioCapabilities {
     // the permissive disconnected rule applies; bridge/rigctl/SmartCAT return an
     // error. False means no text buffer, not no CW.
     bool hasRadioSideCwKeyer = false;
+
+    // Engaged when a host text keyer may send client-timed elements through
+    // requestCwControl(Kind::Carrier). A backend with a native text buffer may
+    // accept carrier edges for a paddle and leave this fallback absent.
+    // Asked via RadioModel::hasHostCwTextKeyer() / hasCwTextKeyer() (#7146).
+    struct HostCwKeyingControl {};
+    std::optional<HostCwKeyingControl> hostCwKeyingControl;
 
     // Shape of that text keyer. These fields keep shared callers honest when
     // two radios both accept text but expose different surrounding contracts:

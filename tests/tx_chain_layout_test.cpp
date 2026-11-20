@@ -141,13 +141,12 @@ void testFreshInstall()
 void testTodaysStages()
 {
     const QVector<AudioEngine::TxChainStage> today{
-        AudioEngine::TxChainStage::Gate, AudioEngine::TxChainStage::Eq,
-        AudioEngine::TxChainStage::DeEss, AudioEngine::TxChainStage::Comp,
-        AudioEngine::TxChainStage::Tube, AudioEngine::TxChainStage::Enh,
+        AudioEngine::TxChainStage::Tube, AudioEngine::TxChainStage::Eq,
+        AudioEngine::TxChainStage::Comp, AudioEngine::TxChainStage::Enh,
         AudioEngine::TxChainStage::Reverb};
     uint64_t packed = 0;
     const bool fits = Layout::pack(today, packed);
-    report("today's seven stages pack and round-trip",
+    report("today's five stages pack and round-trip",
            fits && Layout::unpack<QVector<AudioEngine::TxChainStage>>(packed) == today);
     report("the engine and the voice processor read the same slot count",
            AudioEngine::kMaxTxChainStages == 16 && TxVoiceProcessor::kMaxStages == 16);
@@ -161,6 +160,17 @@ void testTodaysStages()
     report("the voice processor decodes the engine's order", same);
 }
 
+void testRetiredStageIsDropped()
+{
+    using S = AudioEngine::TxChainStage;
+    const QVector<S> saved{S::Comp, S::Gate, S::Tube, S::Gate};
+    const QVector<S> kept = Layout::withoutRetired(saved, S::Gate);
+    report("a retired stage is dropped and the rest keep their order",
+           kept == QVector<S>{S::Comp, S::Tube});
+    report("an order without it is unchanged",
+           Layout::withoutRetired(kept, S::Gate) == kept);
+}
+
 }  // namespace
 
 int main()
@@ -171,6 +181,7 @@ int main()
     testDuplicatesAreDropped();
     testFreshInstall();
     testTodaysStages();
+    testRetiredStageIsDropped();
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");
     return g_failed ? 1 : 0;
 }

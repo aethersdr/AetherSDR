@@ -327,6 +327,11 @@ void MainWindow::refreshRadioTabs()
                 || path.value("id") == m_activeRadioTarget.value("path").toObject().value("id")
             : !serial.isEmpty() && entry.serial == serial && path.value("family").toString() == m_radioModel.family();
         if (connected && matchesActive && activeId.isEmpty()) {
+            const QString previousModel = entry.model;
+            entry.model = m_radioModel.model();
+            if (entry.name.isEmpty() || entry.name == previousModel) {
+                entry.name = m_radioModel.nickname().isEmpty() ? entry.model : m_radioModel.nickname();
+            }
             entry.status = m_radioSwitchPhase == QLatin1String("disconnecting") ? RadioTabStatus::Disconnecting : RadioTabStatus::Connected;
             activeId = entry.id;
             entry.canConnect = false;
@@ -1009,6 +1014,8 @@ void MainWindow::wireDiscovery()
             [this](const QString&) { scheduleRadioTabRefresh(); });
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
             [this](bool) { scheduleRadioTabRefresh(); });
+    connect(&m_radioModel, &RadioModel::infoChanged,
+            this, &MainWindow::scheduleRadioTabRefresh);
     connect(&m_smartLink, &SmartLinkClient::radioListReceived, this,
             [this](const QList<WanRadioInfo>& radios) {
         m_smartLinkRadios = radios;
@@ -1524,6 +1531,12 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::applyCapabilitiesToUi);
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, [this] { refreshPanZoomControls(); });
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, m_audio,
+            [this](bool connected, const RadioCapabilities& capabilities) {
+        const auto policy = connected ? capabilities.receiveAudioPlayout : std::nullopt;
+        m_audio->setReceiveJitterBuffer(policy ? policy->prefillMs : 0,
+                                       policy ? policy->bufferCapMs : 0);
+    });
     // Icom's connected edge precedes its verified CI-V model identity. Re-run
     // only when the canonical capability picture changes so the family-wide
     // experimental treatment can settle model-specifically without exposing a
@@ -2136,6 +2149,13 @@ void MainWindow::wireRadioModel()
 #ifdef HAVE_SERIALPORT
         QMetaObject::invokeMethod(m_serialPort, [this, tx] { m_serialPort->setTransmitting(tx); });
 #endif
+    });
+
+    connect(&m_radioModel.transmitModel(), &TransmitModel::txOffDelayMicMuteChanged,
+            this, [this](bool muted) {
+        if (m_audio) {
+            m_audio->setTxMicHeld(muted);
+        }
     });
 
     // Interlock fallback gate:
@@ -3135,6 +3155,13 @@ void MainWindow::wireCatPorts()
         applyMasterVolume(pct);
     });
 
+    // A TCI RX-antenna set releases a KiwiSDR virtual antenna first, as the
+    // RX applet, VFO and overlay menus do (flexRxAntennaSelected). Direct:
+    // the clear must run before the set. Only when something is held: a peer
+    // may send many sets, and the clear logs and resyncs the UI every time.
+    connect(tciServer(), &TciServer::rxAntennaSetByTci,
+            this, &MainWindow::clearKiwiSdrVirtualAntennaIfHeld, Qt::DirectConnection);
+
     // Wire slice state changes -> TCI broadcasts. TCI receivers are contiguous
     // indexes within our owned slice list; Flex slice ids can be non-zero when
     // another client owns lower-numbered slices.
@@ -3804,15 +3831,16 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
 // call this so a refusal reads like a drop. The latch is shared with the
 // commandDropped path: a gate refusal consumes the notice for a later real
 // drop in the same session too.
-void MainWindow::showUnsupportedControlNotice()
+void MainWindow::showUnsupportedControlNotice(const QString& message)
 {
     if (m_commandDroppedNoticeShown)
         return;
     m_commandDroppedNoticeShown = true;
-    statusBar()->showMessage(
-        tr("This radio doesn't support that control — nothing was sent to "
-           "the radio. Further unsupported controls are logged."),
-        8000);
+    const QString notice = message.isEmpty()
+        ? tr("This radio doesn't support that control — nothing was sent to "
+             "the radio. Further unsupported controls are logged.")
+        : message;
+    statusBar()->showMessage(notice, 8000);
 }
 
 

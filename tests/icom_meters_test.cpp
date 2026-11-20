@@ -320,9 +320,10 @@ static void testModelTable()
     const IcomModel* ic7610 = modelForId(0x98);
     check(ic7610 && ic7610->scopePoints == 689 && ic7610->scopeMaxAmplitude == 200,
           "the IC-7610 has a DIFFERENT scope geometry");
-    check(ic7610 && !ic7610->verified, "and is honestly marked unverified");
-    check(ic7610 && !profileFor(*ic7610).supports(IcomFeature::VfoMode),
-          "so it does not inherit the IC-705's selected-VFO 26 00 shape");
+    check(ic7610 && ic7610->verified, "its geometry is attested by the IC-7610 guide");
+    check(ic7610 && profileFor(*ic7610).dualReceiver
+              && profileFor(*ic7610).supports(IcomFeature::VfoMode),
+          "its guide explicitly attests absolute MAIN/SUB 26 rr addressing");
 
     // The IC-9700 is the case that shows the two claims are independent. Its
     // scope geometry is still ASSUMED from the IC-705, so `verified` stays
@@ -439,9 +440,12 @@ static void testModelTable()
     // up a command shape nobody checked on that radio. Naming each address here
     // keeps that guard: the flag cannot go true without a deliberate edit to
     // this list, and the comment beside it has to say what the evidence was.
-    static const std::array<std::uint8_t, 3> kAttestedVfoMode{
+    static const std::array<std::uint8_t, 6> kAttestedVfoMode{
         0xA4,  // IC-705     — its own CI-V Reference Guide documents 26 00
         0xB6,  // IC-7300MK2 — likewise, from its own guide
+        0x98,  // IC-7610 — official absolute MAIN/SUB 26 rr
+        0xB2,  // IC-7760 — official absolute MAIN/SUB 26 rr
+        0x8E,  // IC-7851 — official absolute MAIN/SUB 26 rr
         0xA2,  // IC-9700    — measured on a live radio, 2026-08-14: 26 00 read
                //              answered 26 00 05 00 01, the same three-byte
                //              mode/DATA/filter body cmdSetVfoMode writes
@@ -490,8 +494,8 @@ static void testCapabilityProfiles()
           "IC-705, IC-7300MK2 and IC-9700 are the intentional bring-up profiles");
     check(std::ranges::count_if(knownModels(), [](const IcomModel& model) {
               return profileFor(model).supportedBringup;
-          }) == 3,
-          "exactly three known models have supported command profiles");
+          }) == 6,
+          "six intentional profiles include three shared dual-receiver models");
 
     check(p705.setMenu.voxDelayItem == 359 && p705.setMenu.civTransceiveItem == 131,
           "IC-705 owns VOX delay 0359 and CI-V Transceive 0131");
@@ -577,7 +581,7 @@ static void testCapabilityProfiles()
               && controlSupported(model705, p705, *dtcs)
               && !controlSupported(modelMk2, pMk2, *dtcs),
           "DTCS write/read wiring is effective only for documented model profiles");
-    const IcomModel& identityOnly = *modelForId(0x98);
+    const IcomModel& identityOnly = *modelForId(0xAC); // IC-905 remains unprofiled
     const IcomModelProfile& identityOnlyProfile = profileFor(identityOnly);
     const ControlSpec* frequency = spec("freq");
     const ControlSpec* scopeMode = spec("scope.onoff");
@@ -698,11 +702,59 @@ static void testModeList()
 
     // The same provenance rule powerCurveFor states: a row nobody has read that
     // model's own guide for gets NOTHING, not the IC-705's list.
-    const IcomModel* ic9700 = modelForId(0xA2);
     const IcomModel* mk2 = modelForId(0xB6);
-    check(ic9700 && modeListFor(*ic9700).empty(), "another model gets no borrowed list");
     check(mk2 && modeListFor(*mk2).empty(), "including the verified IC-7300MK2");
     check(modeListFor(unknownModel()).empty(), "and nor does an unknown radio");
+
+    // The IC-9700's list comes from its own guide, so it differs from the
+    // IC-705's where the radios differ.
+    const IcomModel* ic9700 = modelForId(0xA2);
+    check(ic9700 != nullptr, "the IC-9700 is in the table");
+    if (!ic9700)
+        return;
+    const auto n9700 = modeListFor(*ic9700);
+    check(!n9700.empty(), "the IC-9700 publishes a mode list");
+
+    // The exact list, in combo order. The checks below reject a wrong entry
+    // but cannot see a missing one.
+    static constexpr std::string_view kExpected9700[] = {
+        "USB", "LSB", "CW", "CWL", "AM", "FM", "DFM", "DIGU", "DIGL"};
+    check(std::equal(n9700.begin(), n9700.end(),
+                     std::begin(kExpected9700), std::end(kExpected9700)),
+          "the IC-9700 publishes exactly its nine round-trip modes, in order");
+
+    // THE load-bearing assertion. The IC-9700 starts at 144 MHz and its 0x06
+    // table has no WFM entry; the IC-705's does. If this ever passes, somebody
+    // has pointed the IC-9700 at kIc705Modes and the radio will answer NG.
+    check(std::find(n9700.begin(), n9700.end(), std::string_view{"WFM"}) == n9700.end(),
+          "and it has NO WFM - the IC-9700 is not a broadcast receiver");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"WFM"}) != modes.end(),
+          "while the IC-705 still does - so these are two different lists");
+
+    // D-STAR and DD are deliberately absent: modeToNeutral(Dv) returns "" and
+    // 0x22 has no CivMode at all, so neither can round-trip.
+    check(std::find(n9700.begin(), n9700.end(), std::string_view{"DV"}) == n9700.end(),
+          "DV is not offered as a demodulator mode");
+    check(std::find(n9700.begin(), n9700.end(), std::string_view{"DD"}) == n9700.end(),
+          "nor is DD");
+
+    // Same round-trip contract the IC-705 list is held to above. A name the
+    // radio reports back differently makes the combo jump on confirmation.
+    for (const std::string_view m : n9700) {
+        bool data = false;
+        const auto civ = modeFromNeutral(std::string(m), data);
+        check(civ.has_value(), "every published IC-9700 mode is one the radio accepts");
+        if (!civ)
+            continue;
+        check(modeToNeutral(*civ, data) == std::string(m),
+              "and one it reports back under the same name");
+        check(std::count(n9700.begin(), n9700.end(), m) == 1, "listed exactly once");
+    }
+
+    // Every IC-9700 band is an amateur allocation, so nothing is receive-only.
+    for (const std::string_view m : n9700)
+        check(!modeIsReceiveOnly(*ic9700, m),
+              "no IC-9700 mode is receive-only, unlike the IC-705's WFM");
 }
 
 // WFM receives 76-108 MHz broadcast; the transmitter does not follow.

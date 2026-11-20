@@ -2,8 +2,6 @@
 #include "InteractionSettings.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
-#include "core/ClientGate.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientTube.h"
 #include "core/ClientPudu.h"
 #include "core/ClientReverb.h"
@@ -166,12 +164,12 @@ bool ClientChainWidget::isStageImplemented(AudioEngine::TxChainStage s) const
     switch (s) {
         case AudioEngine::TxChainStage::Eq:
         case AudioEngine::TxChainStage::Comp:
-        case AudioEngine::TxChainStage::Gate:
-        case AudioEngine::TxChainStage::DeEss:
         case AudioEngine::TxChainStage::Tube:
         case AudioEngine::TxChainStage::Enh:
         case AudioEngine::TxChainStage::Reverb:
             return true;
+        case AudioEngine::TxChainStage::Gate:   // retired: RN2 replaces it
+        case AudioEngine::TxChainStage::DeEss:  // retired
         case AudioEngine::TxChainStage::None:
             return false;
     }
@@ -188,9 +186,9 @@ bool ClientChainWidget::isStageBypassed(AudioEngine::TxChainStage s) const
         case AudioEngine::TxChainStage::Comp:
             return !(m_audio->clientCompTx() && m_audio->clientCompTx()->isEnabled());
         case AudioEngine::TxChainStage::Gate:
-            return !(m_audio->clientGateTx() && m_audio->clientGateTx()->isEnabled());
+            return true;  // retired
         case AudioEngine::TxChainStage::DeEss:
-            return !(m_audio->clientDeEssTx() && m_audio->clientDeEssTx()->isEnabled());
+            return true;  // retired
         case AudioEngine::TxChainStage::Tube:
             return !(m_audio->clientTubeTx() && m_audio->clientTubeTx()->isEnabled());
         case AudioEngine::TxChainStage::Enh:   // PUDU slot
@@ -647,19 +645,9 @@ void ClientChainWidget::toggleStageBypass(int boxIdx)
             handled = true;
             break;
         case AudioEngine::TxChainStage::Gate:
-            if (m_audio->clientGateTx()) {
-                m_audio->clientGateTx()->setEnabled(newEnabled);
-                m_audio->saveClientGateSettings();
-            }
-            handled = true;
-            break;
+            break;  // retired
         case AudioEngine::TxChainStage::DeEss:
-            if (m_audio->clientDeEssTx()) {
-                m_audio->clientDeEssTx()->setEnabled(newEnabled);
-                m_audio->saveClientDeEssSettings();
-            }
-            handled = true;
-            break;
+            break;  // retired
         case AudioEngine::TxChainStage::Tube:
             if (m_audio->clientTubeTx()) {
                 m_audio->clientTubeTx()->setEnabled(newEnabled);
@@ -726,12 +714,6 @@ void ClientChainWidget::contextMenuEvent(QContextMenuEvent* ev)
         } else if (stage == AudioEngine::TxChainStage::Comp && m_audio->clientCompTx()) {
             m_audio->clientCompTx()->setEnabled(newEnabled);
             m_audio->saveClientCompSettings();
-        } else if (stage == AudioEngine::TxChainStage::Gate && m_audio->clientGateTx()) {
-            m_audio->clientGateTx()->setEnabled(newEnabled);
-            m_audio->saveClientGateSettings();
-        } else if (stage == AudioEngine::TxChainStage::DeEss && m_audio->clientDeEssTx()) {
-            m_audio->clientDeEssTx()->setEnabled(newEnabled);
-            m_audio->saveClientDeEssSettings();
         } else if (stage == AudioEngine::TxChainStage::Tube && m_audio->clientTubeTx()) {
             m_audio->clientTubeTx()->setEnabled(newEnabled);
             m_audio->saveClientTubeSettings();

@@ -8,9 +8,9 @@ namespace AetherSDR {
 // The AetherGPS relay (tools/aether-gps), which shares the radio's gpsd on
 // the LAN: TCP 2947 (gpsd protocol, read-only) and UDP 10110 (NMEA). It ships
 // inside AetherSDR as Qt resources, a package for each kind of radio, and is
-// installed from AetherGPS's "Install AetherGPS on the radio" checkbox only if
-// the bytes match the pin. The Waveforms list hides it: the checkbox is its
-// only control, as for the radio health tools. `tools/aether-gps/build.py`
+// installed, only if the bytes match the pin, from AetherGPS's "Install
+// AetherGPS on the radio" checkbox or the Waveforms window's Install menu.
+// Either way it is listed among the installed waveforms. `tools/aether-gps/build.py`
 // rebuilds both identical files with zig 0.17.0; copy them to
 // resources/waveforms/ and bump all of this together.
 struct AetherGpsPackage {
