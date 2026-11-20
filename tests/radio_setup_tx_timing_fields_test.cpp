@@ -310,7 +310,12 @@ private slots:
             RadioSetupDialog dialog(&model);
             dialog.show();
             dialog.selectTab(QStringLiteral("Transmit"));
-            auto* enable = findByAccessibleName<QCheckBox>(dialog, QStringLiteral("Time-out enabled, stops transmission"));
+            QCheckBox* enable = nullptr;   // by its text, independent of the name checked below
+            for (QCheckBox* box : dialog.findChildren<QCheckBox*>()) {
+                if (box->text() == QStringLiteral("Stop transmitting after")) {
+                    enable = box;
+                }
+            }
             auto* timeout = findByAccessibleName<QSpinBox>(dialog, QStringLiteral("Transmit time-out (seconds)"));
             auto* warning = findByAccessibleName<QSpinBox>(
                 dialog, QStringLiteral("Transmit time-out warning (seconds before)"));
