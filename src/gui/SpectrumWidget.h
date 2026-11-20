@@ -2586,13 +2586,15 @@ private:
         }
     } m_panStats;
 
+    // SmartMTR value change: GPU builds restore and re-upload only the label
+    // band; otherwise identical to markOverlayDirty("smartMtr").
+    void invalidateSmartMtrLabels();
+    // Union of every flag's label band, in widget coordinates.
+    QRect smartMtrLabelsCoverageRect() const;
+
     // Mark the static overlay for repaint and schedule a frame update.
     // In non-GPU mode this is just update(). `cause` feeds the panstats
     // dirty-cause breakdown — annotate call sites that can fire at frame rate.
-    void invalidateSmartMtrLabels();
-
-    QRect smartMtrLabelsCoverageRect() const;
-
     void markOverlayDirty(const char* cause = nullptr, bool scheduleUpdate = true) {
 #ifdef AETHER_GPU_SPECTRUM
         // While a frequency preview is active, the drag-start overlay texture

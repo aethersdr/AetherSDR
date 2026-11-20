@@ -4,6 +4,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/MeterViewController.h"
+#include "gui/SmartMtrLabelStrip.h"
 #include "gui/SmartMtrWidget.h"
 #include "gui/VfoWidget.h"
 
@@ -11,7 +12,6 @@
 #include <QSignalSpy>
 #include <QPainter>
 #include <QFontMetricsF>
-#include <cstring>
 #include <QtTest>
 
 using namespace AetherSDR;
@@ -206,9 +206,8 @@ private slots:
         SmartMtrWidget* meter = flag.findChild<SmartMtrWidget*>();
         QVERIFY(meter);
         flag.setRelativeSignalLevel(-75);
-        QTest::qWait(80);
-        meter->grab();
-        QVERIFY(!meter->extremeLabels().isEmpty());
+        // The labels refresh when the meter paints, so poll through grab().
+        QTRY_VERIFY((meter->grab(), !meter->extremeLabels().isEmpty()));
 
         const QRect logicalCoverage = flag.smartMtrLabelsCoverageRect();
         QVERIFY2(!logicalCoverage.isEmpty(), "live labels require a redraw band");
@@ -226,15 +225,18 @@ private slots:
             p.fillRect(0, 100, spectrum.width(), 17, QColor(12, 19, 30));
         }
 
-        const QRect strip = QRectF(
-            logicalCoverage.x() * dpr, logicalCoverage.y() * dpr,
-            logicalCoverage.width() * dpr, logicalCoverage.height() * dpr)
-            .toAlignedRect().intersected(background.rect());
+        // The same band, restore and clip that SpectrumWidget::renderGpuFrame
+        // uses for a SmartMTR-only refresh.
+        const QRect strip = SmartMtrLabelStrip::devicePixels(
+            logicalCoverage, dpr, background.rect());
         QVERIFY(!strip.isEmpty());
         QVERIFY(strip.height() < framebuffer.height() / 4);
-        const QRectF alignedLogicalClip(
-            strip.x() / dpr, strip.y() / dpr,
-            strip.width() / dpr, strip.height() / dpr);
+        // Independent of the helper: the band rounds outwards to whole pixels.
+        QCOMPARE(strip, QRectF(logicalCoverage.x() * dpr, logicalCoverage.y() * dpr,
+                               logicalCoverage.width() * dpr,
+                               logicalCoverage.height() * dpr)
+                            .toAlignedRect()
+                            .intersected(background.rect()));
         const QImage savedBackgroundStrip = background.copy(strip);
 
         const auto withLabels = [&](const QImage& base) {
@@ -258,57 +260,44 @@ private slots:
 
         // Moving values must replace old glyphs, not blend over them.
         flag.setRelativeSignalLevel(-15);
-        QTest::qWait(80);
-        meter->grab();
+        QTRY_VERIFY2((meter->grab(), withLabels(background) != first),
+                     "value change must move/redraw labels");
         QCOMPARE(flag.smartMtrLabelsCoverageRect(), logicalCoverage);
         const QImage expected = withLabels(background);
-        QVERIFY2(first != expected, "value change must move/redraw labels");
         QImage partial = first.copy();
-        for (int y = 0; y < strip.height(); ++y) {
-            std::memcpy(partial.scanLine(strip.top() + y) + strip.left() * 4,
-                        savedBackgroundStrip.constScanLine(y),
-                        static_cast<size_t>(strip.width() * 4));
-        }
+        QVERIFY(SmartMtrLabelStrip::restore(partial, savedBackgroundStrip, strip));
         partial = withLabels(partial);
         QCOMPARE(partial, expected);
 
         QImage clippedPartial = first.copy();
-        for (int y = 0; y < strip.height(); ++y) {
-            std::memcpy(clippedPartial.scanLine(strip.top() + y)
-                            + strip.left() * 4,
-                        savedBackgroundStrip.constScanLine(y),
-                        static_cast<size_t>(strip.width() * 4));
-        }
-        {
-            QPainter painter(&clippedPartial);
-            painter.setClipRect(alignedLogicalClip);
-            flag.drawSmartMtrLabels(painter);
-        }
+        QVERIFY(SmartMtrLabelStrip::repaint(
+            clippedPartial, savedBackgroundStrip, strip, dpr,
+            [&](QPainter& painter) { flag.drawSmartMtrLabels(painter); }));
         QCOMPARE(clippedPartial, expected);
 
         const QImage fullForeground = withForeground(expected);
-        QImage partialForeground = firstWithForeground.copy();
-        for (int y = 0; y < strip.height(); ++y) {
-            std::memcpy(partialForeground.scanLine(strip.top() + y)
-                            + strip.left() * 4,
-                        savedBackgroundStrip.constScanLine(y),
-                        static_cast<size_t>(strip.width() * 4));
-        }
-        QImage missingForeground = partialForeground.copy();
-        {
-            QPainter painter(&missingForeground);
-            painter.setClipRect(alignedLogicalClip);
-            flag.drawSmartMtrLabels(painter);
-        }
+        QImage missingForeground = firstWithForeground.copy();
+        QVERIFY(SmartMtrLabelStrip::repaint(
+            missingForeground, savedBackgroundStrip, strip, dpr,
+            [&](QPainter& painter) { flag.drawSmartMtrLabels(painter); }));
         QVERIFY2(missingForeground != fullForeground,
                  "missing foreground repaint must change the finished pixels");
-        {
-            QPainter painter(&partialForeground);
-            painter.setClipRect(alignedLogicalClip);
-            flag.drawSmartMtrLabels(painter);
-            painter.fillRect(logicalCoverage, foregroundColor);
-        }
+        QImage partialForeground = firstWithForeground.copy();
+        QVERIFY(SmartMtrLabelStrip::repaint(
+            partialForeground, savedBackgroundStrip, strip, dpr,
+            [&](QPainter& painter) {
+                flag.drawSmartMtrLabels(painter);
+                painter.fillRect(logicalCoverage, foregroundColor);
+            }));
         QCOMPARE(partialForeground, fullForeground);
+
+        // A stale strip (wrong size) is refused, leaving the image untouched.
+        QImage untouched = first.copy();
+        QVERIFY(!SmartMtrLabelStrip::restore(
+            untouched, savedBackgroundStrip.copy(0, 0, strip.width(),
+                                                 strip.height() - 1),
+            strip));
+        QCOMPARE(untouched, first);
 
         // Clearing values may shrink the coverage to empty. A full rebuild
         // must then exactly erase the old text, including at fractional DPR.

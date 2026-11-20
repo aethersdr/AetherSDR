@@ -2,6 +2,7 @@
 #include "models/DiversityPairPolicy.h"
 #include "SpectrumTraceBins.h"
 #include "SpectrumChromeGeometry.h"
+#include "SmartMtrLabelStrip.h"
 #include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
 
@@ -14763,17 +14764,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         // Live-flag selection stays outside this render callback.
         repositionVfoFlags(specRect);
 
-        const QRect labelCoverageLogical = smartMtrLabelsCoverageRect();
-        const QRect labelCoveragePx = QRectF(
-            labelCoverageLogical.x() * dpr,
-            labelCoverageLogical.y() * dpr,
-            labelCoverageLogical.width() * dpr,
-            labelCoverageLogical.height() * dpr)
-            .toAlignedRect().intersected(m_overlayStatic.rect());
+        const QRect labelCoveragePx = SmartMtrLabelStrip::devicePixels(
+            smartMtrLabelsCoverageRect(), dpr, m_overlayStatic.rect());
         // Empty-to-live and moved flags change the restore band's geometry.
         // The saved pre-label strip is no longer valid in that case.
         if (!resizePreview && !m_frequencyPreviewActive
             && labelCoveragePx != m_smartMtrLabelStripPx) {
+            if (!m_overlayStaticDirty)
+                m_panStats.noteDirty("smartMtr");
             m_overlayStaticDirty = true;
             if (!rebuildStaticOverlay) {
                 rebuildStaticOverlay = true;
@@ -15024,7 +15022,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, freqScaleH()));
 
-
             // Save the pixels underneath the value labels before painting
             // them. Subsequent chrome must cover the labels in the same order
             // as the software renderer, including cursor and dBm readouts.
@@ -15047,48 +15044,39 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 static_cast<quint64>(panStatsOvTimer.nsecsElapsed() / 1000);
         }
 
-        if (m_smartMtrLabelsDirty && !rebuildStaticOverlay
-            && !resizePreview && !m_overlayNeedsUpload
-            && !m_smartMtrLabelStripPx.isEmpty()
-            && m_smartMtrLabelBaseStrip.size() == m_smartMtrLabelStripPx.size()) {
-            // QImage::copy yields a tightly packed strip. Restore it byte for
-            // byte so the old glyph and antialiasing pixels cannot accumulate.
-            const int bytesPerLine = m_smartMtrLabelStripPx.width() * 4;
-            for (int row = 0; row < m_smartMtrLabelStripPx.height(); ++row) {
-                std::memcpy(
-                    m_overlayStatic.scanLine(row + m_smartMtrLabelStripPx.top())
-                        + m_smartMtrLabelStripPx.left() * 4,
-                    m_smartMtrLabelBaseStrip.constScanLine(row),
-                    static_cast<size_t>(bytesPerLine));
+        // Between connection-animation ticks the strip would show a newer
+        // animation phase than the rest of the overlay; the next tick's full
+        // rebuild picks up the pending labels instead.
+        if (m_smartMtrLabelsDirty && !rebuildStaticOverlay && !resizePreview
+            && !m_overlayNeedsUpload && !m_connectionAnimationVisible) {
+            // A band that no longer matches the saved strip (it moved during a
+            // frequency preview) needs a full rebuild; a preview's commit does
+            // that rebuild, so do not schedule frames for it meanwhile.
+            const bool repainted = labelCoveragePx == m_smartMtrLabelStripPx
+                && SmartMtrLabelStrip::repaint(
+                    m_overlayStatic, m_smartMtrLabelBaseStrip,
+                    m_smartMtrLabelStripPx, dpr, [&](QPainter& labelsPainter) {
+                        drawSmartMtrValueLabels(labelsPainter);
+                        paintAboveSmartMtrLabels(labelsPainter);
+                    });
+            if (!repainted) {
+                markOverlayDirty("smartMtr", !m_frequencyPreviewActive);
+            } else {
+                m_panStats.noteDirty("smartMtrStrip");
+                const QImage changedPixels =
+                    m_overlayStatic.copy(m_smartMtrLabelStripPx);
+                QRhiTextureSubresourceUploadDescription labelsDesc(changedPixels);
+                labelsDesc.setDestinationTopLeft(m_smartMtrLabelStripPx.topLeft());
+                batch->uploadTexture(
+                    m_ovGpuTex, QRhiTextureUploadEntry(0, 0, labelsDesc));
+                m_panStats.overlayUploadBytes +=
+                    static_cast<quint64>(changedPixels.sizeInBytes());
+                if (perfEnabled) {
+                    PerfTelemetry::instance().recordGpuUpload(
+                        PerfTelemetry::GpuUploadKind::Overlay);
+                }
+                m_smartMtrLabelsDirty = false;
             }
-            {
-                QPainter labelsPainter(&m_overlayStatic);
-                // The upload band was rounded outwards to whole device
-                // pixels. Clip to that same band in logical painter units:
-                // clipping to the original logical rect drops a border row
-                // at 1.5x DPR when its top lands halfway through a pixel.
-                const QRectF alignedClip(
-                    m_smartMtrLabelStripPx.x() / dpr,
-                    m_smartMtrLabelStripPx.y() / dpr,
-                    m_smartMtrLabelStripPx.width() / dpr,
-                    m_smartMtrLabelStripPx.height() / dpr);
-                labelsPainter.setClipRect(alignedClip);
-                drawSmartMtrValueLabels(labelsPainter);
-                paintAboveSmartMtrLabels(labelsPainter);
-            }
-            const QImage changedPixels =
-                m_overlayStatic.copy(m_smartMtrLabelStripPx);
-            QRhiTextureSubresourceUploadDescription labelsDesc(changedPixels);
-            labelsDesc.setDestinationTopLeft(m_smartMtrLabelStripPx.topLeft());
-            batch->uploadTexture(
-                m_ovGpuTex, QRhiTextureUploadEntry(0, 0, labelsDesc));
-            m_panStats.overlayUploadBytes +=
-                static_cast<quint64>(changedPixels.sizeInBytes());
-            if (perfEnabled) {
-                PerfTelemetry::instance().recordGpuUpload(
-                    PerfTelemetry::GpuUploadKind::Overlay);
-            }
-            m_smartMtrLabelsDirty = false;
         }
 
         // Upload overlay texture only when content changed
@@ -17720,8 +17708,6 @@ void SpectrumWidget::invalidateSmartMtrLabels()
         return;
     }
     m_smartMtrLabelsDirty = true;
-    if (!m_overlayStaticDirty)
-        m_panStats.noteDirty("smartMtr");
     if (!deferPresentToFft())
         update();
 #else
