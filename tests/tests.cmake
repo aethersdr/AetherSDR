@@ -10474,6 +10474,14 @@ target_include_directories(slice_link_policy_test PRIVATE src)
 target_link_libraries(slice_link_policy_test PRIVATE Qt6::Core)
 add_test(NAME slice_link_policy_test COMMAND slice_link_policy_test)
 
+# Which two diversity slices form one receive pair (#4891).
+add_executable(diversity_pair_policy_test
+    tests/diversity_pair_policy_test.cpp
+)
+target_include_directories(diversity_pair_policy_test PRIVATE src)
+target_link_libraries(diversity_pair_policy_test PRIVATE Qt6::Core)
+add_test(NAME diversity_pair_policy_test COMMAND diversity_pair_policy_test)
+
 # Container system Phase 1 tests — needs QApplication + Widgets.
 add_executable(container_widget_test
     tests/container_widget_test.cpp
