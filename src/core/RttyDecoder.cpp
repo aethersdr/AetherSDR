@@ -230,19 +230,19 @@ void RttyDecoder::recalcFilterCoeffs()
     if (m_filtersValid) {
         m_markCoeffs  = designBandpass(markHz,  bw, kSampleRate);
         m_spaceCoeffs = designBandpass(spaceHz, bw, kSampleRate);
+
+        // Each filter's gain at the other tone, from the coefficients just designed.
+        const auto gainAt = [](const BiquadCoeffs& c, double hz) {
+            const std::complex<double> z1 = std::polar(1.0, -2.0 * M_PI * hz / kSampleRate);
+            return std::abs((c.b0 + c.b1 * z1 + c.b2 * z1 * z1) / (1.0 + c.a1 * z1 + c.a2 * z1 * z1));
+        };
+        const double k = 0.5 * (gainAt(m_markCoeffs, spaceHz) + gainAt(m_spaceCoeffs, markHz));
+        m_cleanShare = 0.5 + kCleanFraction * (1.0 / (1.0 + k * k) - 0.5);
     }
     m_markState   = {};
     m_spaceState  = {};
     m_markEnv     = 0;
     m_spaceEnv    = 0;
-
-    // Each filter's gain at the other tone, from the coefficients just designed.
-    const auto gainAt = [](const BiquadCoeffs& c, double hz) {
-        const std::complex<double> z1 = std::polar(1.0, -2.0 * M_PI * hz / kSampleRate);
-        return std::abs((c.b0 + c.b1 * z1 + c.b2 * z1 * z1) / (1.0 + c.a1 * z1 + c.a2 * z1 * z1));
-    };
-    const double k = 0.5 * (gainAt(m_markCoeffs, spaceHz) + gainAt(m_spaceCoeffs, markHz));
-    m_cleanShare = 0.5 + kCleanFraction * (1.0 / (1.0 + k * k) - 0.5);
 
     const int energyWindow = std::max(1, static_cast<int>(std::lround(kEnergyWindowBits * kSampleRate / baud)));
     m_eRingMark.assign(energyWindow, 0.0);
