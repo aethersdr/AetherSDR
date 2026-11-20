@@ -1470,24 +1470,6 @@ bool hasTransmitControlInChain(const QWidget* widget)
     return false;
 }
 
-const QWidget* txSetpointInChain(const QWidget* widget)
-{
-    for (const QWidget* current = widget; current; current = current->parentWidget()) {
-        if (isTxSetpointControl(current)) {
-            return current;
-        }
-    }
-    return nullptr;
-}
-
-QString txSetpointBlockedError(const QString& target)
-{
-    return QStringLiteral("blocked: '") + target
-        + QStringLiteral("' sets transmit drive, like `transmit rfpower` "
-                         "(TX-safety guard). Enable \"Allow TX via MCP\" in Radio "
-                         "Setup → Network (or set AETHER_AUTOMATION_ALLOW_TX=1) to override.");
-}
-
 bool hasOwnTransmitMarker(const QObject* object)
 {
     return object && object->property(kTxKeyingProperty).toBool();
@@ -3789,7 +3771,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("transmit", {},
-            "transmit <rfpower|tunepower> <0..100> — transmit drive (TX-gated)",
+            "transmit <rfpower|tunepower> <0..100> — transmit drive (bounded by the power ceiling)",
             parseActionValueExact,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
@@ -4639,12 +4621,6 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 
     if (transmitControl) {
         return invokeTxAction(w, target, action, value);
-    }
-
-    if (isTxSetpointControl(w) && !m_txAllowed) {
-        qCWarning(lcAutomation).noquote()
-            << "BLOCKED transmit-setpoint invoke on" << target;
-        return err(txSetpointBlockedError(target));
     }
 
     // Power-ceiling rail (#3646): clamp RF/Tune power setpoints to the
@@ -9448,14 +9424,8 @@ QJsonObject AutomationServer::doTransmit(const QString& action, const QString& a
     const QString a = action.trimmed().toLower();
 
     if (a == QLatin1String("rfpower") || a == QLatin1String("tunepower")) {
-        // TX-gated for the same reason `key` is: these set how hard the radio
-        // will drive whatever is downstream of it — a transverter or an
-        // amplifier — so a session that may not transmit may not change them
-        // either. Reading them stays ungated via `get transmit`.
-        if (!m_txAllowed)
-            return err(QStringLiteral("blocked: transmit ") + a
-                       + QStringLiteral(" sets transmit drive — set "
-                                        "AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        // Drive, not keying: TX permission gates keying only, and the power
+        // ceiling (AETHER_AUTOMATION_TX_MAX_POWER) bounds drive (#5851).
         const QString v = arg.trimmed();
         if (v.isEmpty())
             return err(QStringLiteral("transmit ") + a
@@ -10327,11 +10297,6 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
                                         "in Radio Setup → Network (or set "
                                         "AETHER_AUTOMATION_ALLOW_TX=1) to override."));
         }
-        if (const QWidget* setpoint = txSetpointInChain(widget)) {
-            qCWarning(lcAutomation).noquote()
-                << "BLOCKED transmit-setpoint" << verb << "on" << setpoint->accessibleName();
-            return err(txSetpointBlockedError(setpoint->accessibleName()));
-        }
     }
 
     if (m_txMaxPower >= 0) {
@@ -10771,16 +10736,6 @@ QJsonObject AutomationServer::doGesture(const QString& action,
         cancelGesture(sock, QStringLiteral("invalid gesture offset"));
         return err(QStringLiteral("gesture ") + normalizedAction + QLatin1Char(' ')
                    + offsetError + QStringLiteral("; gesture released"));
-    }
-    // A drive setpoint is re-checked on every phase: permission withdrawn after
-    // begin releases the gesture where it is and refuses the step (#5851).
-    if (const QWidget* setpoint = m_txAllowed ? nullptr
-                                              : txSetpointInChain(m_pointerGesture.widget)) {
-        const QString name = setpoint->accessibleName();
-        qCWarning(lcAutomation).noquote()
-            << "BLOCKED transmit-setpoint gesture" << normalizedAction << "on" << name;
-        cancelGesture(sock, QStringLiteral("TX permission withdrawn during gesture"));
-        return err(txSetpointBlockedError(name));
     }
     m_pointerGesture.offset = offset;
 
@@ -11489,11 +11444,6 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
                                         "Setup → Network (or set "
                                         "AETHER_AUTOMATION_ALLOW_TX=1) to override."));
         }
-    }
-    if (const QWidget* setpoint = m_txAllowed ? nullptr : txSetpointInChain(w)) {
-        qCWarning(lcAutomation).noquote()
-            << "BLOCKED transmit-setpoint clickAt on" << setpoint->accessibleName();
-        return err(txSetpointBlockedError(setpoint->accessibleName()));
     }
 
     // Power-ceiling rail (#3646): invoke() clamps RF/Tune power setValue to

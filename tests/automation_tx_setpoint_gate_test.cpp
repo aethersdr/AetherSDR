@@ -1,6 +1,6 @@
-// Without TX permission the bridge refuses to change RF power or Tune power on
-// every surface, as `transmit rfpower|tunepower` refuses (#5851). Reading stays
-// open, other setpoints stay free, and with permission every surface works.
+// RF power and Tune power are drive, not keying (#5851, reading B): without TX
+// permission every bridge surface still sets them, and the power ceiling, not
+// permission, bounds them. dumpTree marks them "txSetpoint".
 // No radio, no socket, no transmission: the real TxApplet on a bare RadioModel.
 
 #include "TestEventLoop.h"
@@ -36,6 +36,8 @@ public:
     {
         return server.handleLine(QJsonDocument(object).toJson(QJsonDocument::Compact), identity);
     }
+    // AETHER_AUTOMATION_TX_MAX_POWER as start() reads it; -1 disarms.
+    static void setTxMaxPower(AutomationServer& server, int ceiling) { server.m_txMaxPower = ceiling; }
 };
 } // namespace AetherSDR
 
@@ -139,48 +141,60 @@ int main(int argc, char** argv)
               && !node.value(QStringLiteral("keying")).toBool(),
           "dumpTree shows RF power as txSetpoint, not keying");
 
-    // ── No TX permission: every surface that can change the value is refused ──
+    // ── No TX permission: drive is not keying, every surface still sets it ──
+    // Reading B of #5851: TX permission gates keying only; the power ceiling
+    // bounds drive. Each verb must reach TransmitModel without permission.
     for (const Setpoint& sp : setpoints) {
         const QByteArray n = sp.name.toUtf8();
-        const int before = sp.model();
-        const int sliderBefore = sp.slider->value();
+        const int target = sp.model() == 37 ? 38 : 37;
+        check(ok(cmd(server, QStringLiteral("invoke"), sp.name, QStringLiteral("setValue"),
+                     QString::number(target)))
+                  && AetherTest::waitFor([&] { return sp.model() == target; }, 2000),
+              "TX not allowed: invoke setValue on " + n + " reaches TransmitModel");
+        const int beforeWheel = sp.model();
+        check(ok(cmd(server, QStringLiteral("invoke"), sp.name, QStringLiteral("wheel"),
+                     QStringLiteral("1")))
+                  && AetherTest::waitFor([&] { return sp.model() != beforeWheel; }, 2000),
+              "TX not allowed: invoke wheel on " + n + " moves the setpoint");
         const QString w = QString::number(sp.slider->width() - 2);
         const QString h = QString::number(sp.slider->height() / 2);
-        const auto refusedAsDrive = [](const QJsonObject& reply) {
-            return !ok(reply) && reply.value(QStringLiteral("error")).toString()
-                                     .contains(QStringLiteral("sets transmit drive"));
-        };
-        check(refusedAsDrive(cmd(server, QStringLiteral("invoke"), sp.name,
-                                 QStringLiteral("setValue"),
-                                 QString::number(before == 37 ? 38 : 37))),
-              "TX not allowed: invoke setValue on " + n + " is refused as transmit drive");
-        // 1, not 3: invoke wheel takes only -1 or 1, so 3 is refused unguarded.
-        check(refusedAsDrive(cmd(server, QStringLiteral("invoke"), sp.name,
-                                 QStringLiteral("wheel"), QStringLiteral("1"))),
-              "TX not allowed: invoke wheel on " + n + " is refused as transmit drive");
-        check(refusedAsDrive(cmd(server, QStringLiteral("clickAt"), sp.name, {},
-                                 w + QLatin1Char(' ') + h)),
-              "TX not allowed: clickAt on the " + n + " groove is refused as transmit drive");
-        check(refusedAsDrive(cmd(server, QStringLiteral("doubleClick"), sp.name, {},
-                                 w + QLatin1Char(' ') + h)),
-              "TX not allowed: doubleClick on " + n + " is refused as transmit drive");
-        check(refusedAsDrive(cmd(server, QStringLiteral("wheel"), sp.name, {},
-                                 h + QLatin1Char(' ') + h + QStringLiteral(" 3"))),
-              "TX not allowed: wheel on " + n + " is refused as transmit drive");
-        check(refusedAsDrive(cmd(server, QStringLiteral("drag"), sp.name, {},
-                                 QStringLiteral("40 0"))),
-              "TX not allowed: drag on " + n + " is refused as transmit drive");
-        AetherTest::pumpFor(100);
-        check(sp.model() == before && sp.slider->value() == sliderBefore,
-              "TX not allowed: " + n + " is unchanged in the model and on the slider");
-        const QJsonObject read = AutomationServerTestAccess::request(server, QJsonObject{
-            {QStringLiteral("cmd"), QStringLiteral("get")},
-            {QStringLiteral("model"), QStringLiteral("transmit")}});
-        check(ok(read), "TX not allowed: get transmit still reads " + n);
+        const int beforeClick = sp.model();
+        check(ok(cmd(server, QStringLiteral("clickAt"), sp.name, {}, w + QLatin1Char(' ') + h))
+                  && AetherTest::waitFor([&] { return sp.model() != beforeClick; }, 2000),
+              "TX not allowed: clickAt on the " + n + " groove moves the setpoint");
+        check(ok(cmd(server, QStringLiteral("doubleClick"), sp.name, {}, w + QLatin1Char(' ') + h)),
+              "TX not allowed: doubleClick on " + n + " is accepted");
+        check(ok(cmd(server, QStringLiteral("wheel"), sp.name, {}, h + QLatin1Char(' ') + h
+                     + QStringLiteral(" 3"))),
+              "TX not allowed: wheel on " + n + " is accepted");
+        check(ok(cmd(server, QStringLiteral("drag"), sp.name, {}, QStringLiteral("40 0"))),
+              "TX not allowed: drag on " + n + " is accepted");
     }
-    check(!ok(cmd(server, QStringLiteral("transmit"), {}, QStringLiteral("rfpower"),
-                  QStringLiteral("37"))),
-          "TX not allowed: transmit rfpower is refused (unchanged)");
+    {
+        const QJsonObject rf = cmd(server, QStringLiteral("transmit"), {}, QStringLiteral("rfpower"),
+                                   QStringLiteral("41"));
+        const QJsonObject tune = cmd(server, QStringLiteral("transmit"), {},
+                                     QStringLiteral("tunepower"), QStringLiteral("42"));
+        check(ok(rf) && ok(tune) && tx.rfPower() == 41 && tx.tunePower() == 42,
+              "TX not allowed: transmit rfpower and tunepower set drive");
+    }
+
+    // ── No TX permission, ceiling armed: the ceiling, not permission, bounds drive ──
+    AutomationServerTestAccess::setTxMaxPower(server, 10);
+    for (const Setpoint& sp : setpoints) {
+        const QByteArray n = sp.name.toUtf8();
+        check(ok(cmd(server, QStringLiteral("invoke"), sp.name, QStringLiteral("setValue"),
+                     QStringLiteral("80")))
+                  && AetherTest::waitFor([&] { return sp.model() == 10; }, 2000),
+              "TX not allowed, ceiling 10: invoke setValue 80 on " + n + " is clamped to 10");
+    }
+    {
+        const QJsonObject rf = cmd(server, QStringLiteral("transmit"), {}, QStringLiteral("rfpower"),
+                                   QStringLiteral("80"));
+        check(ok(rf) && tx.rfPower() == 10 && rf.value(QStringLiteral("clampedTo")).toInt() == 10,
+              "TX not allowed, ceiling 10: transmit rfpower 80 is clamped to 10");
+    }
+    AutomationServerTestAccess::setTxMaxPower(server, -1);
 
     // A setpoint that is not drive stays free: only the two marked sliders gate.
     {
@@ -209,7 +223,7 @@ int main(int argc, char** argv)
               "TX allowed: clickAt on " + n + " is accepted");
     }
 
-    // ── A gesture begun with permission stops when permission is withdrawn ──
+    // ── Withdrawing permission does not stop a drive gesture: drive is not keying ──
     {
         QLocalSocket owner;
         auto gesture = [&](const QString& action, const QString& target, const QString& value) {
@@ -244,18 +258,13 @@ int main(int argc, char** argv)
         check(ok(begin) && ok(move) && moved > 50 && rf->value() == moved,
               "gesture: with TX permission, begin and move drag RF power up");
 
-        // Offsets are from the press point: -60 would drag RF power well below 50.
+        // Offsets are from the press point: -60 drags RF power well below 50.
         server.setTxAllowed(false);
         const QJsonObject after = gesture(QStringLiteral("move"), {}, QStringLiteral("-60 0"));
-        check(!ok(after) && after.value(QStringLiteral("error")).toString()
-                                .contains(QStringLiteral("sets transmit drive")),
-              "gesture: after permission is withdrawn, move is refused as transmit drive");
-        check(tx.rfPower() == moved && rf->value() == moved,
-              "gesture: after permission is withdrawn, RF power stays at "
-                  + QByteArray::number(moved) + " (now " + QByteArray::number(tx.rfPower()) + ")");
-        const QJsonObject status = gesture(QStringLiteral("status"), {}, {});
-        check(ok(status) && !status.value(QStringLiteral("active")).toBool(),
-              "gesture: the refused move ended the bridge gesture");
+        check(ok(after) && tx.rfPower() < 50 && rf->value() == tx.rfPower(),
+              "gesture: after permission is withdrawn, move still drags RF power (now "
+                  + QByteArray::number(tx.rfPower()) + ")");
+        check(ok(gesture(QStringLiteral("end"), {}, {})), "gesture: and end releases it");
     }
     server.setTxAllowed(false);
 
