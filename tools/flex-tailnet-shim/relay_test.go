@@ -579,10 +579,10 @@ func TestSessionConnectingDuringSaveIsEnded(t *testing.T) {
 func TestFailedTransferReplyClearsItsWait(t *testing.T) {
 	s := &Session{relay: &Relay{}}
 	s.noteCommand([]byte("C7|file download db_package\n"))
-	if p := s.sideChannelPort([]byte("R7|50000015|\n")); p != 0 {
+	if _, p := s.handleReply([]byte("R7|50000015|\n")); p != 0 {
 		t.Fatalf("a failed reply opened port %d", p)
 	}
-	if p := s.sideChannelPort([]byte("R7|0|42607\n")); p != 0 {
+	if _, p := s.handleReply([]byte("R7|0|42607\n")); p != 0 {
 		t.Fatalf("a stale wait opened port %d", p)
 	}
 	for i := 0; i < 2*maxPendingReplies; i++ {
@@ -707,15 +707,63 @@ func (c tailnetConn) LocalAddr() net.Addr { return c.local }
 func TestFailedInfoReplyEndsItsWait(t *testing.T) {
 	s := &Session{relay: &Relay{}, client: tailnetConn{local: &net.TCPAddr{IP: net.IPv4(100, 64, 1, 2), Port: 4992}}}
 	s.noteCommand([]byte("C7|info\n"))
-	if got := string(s.rewriteInfoReply([]byte("R7|50000015|ip=192.168.0.20\n"))); got != "R7|50000015|ip=192.168.0.20\n" {
+	if got := string(reply(s, []byte("R7|50000015|ip=192.168.0.20\n"))); got != "R7|50000015|ip=192.168.0.20\n" {
 		t.Fatalf("a failed reply was rewritten: %q", got)
 	}
-	if got := string(s.rewriteInfoReply([]byte("R7|0|ip=192.168.0.20\n"))); got != "R7|0|ip=192.168.0.20\n" {
+	if got := string(reply(s, []byte("R7|0|ip=192.168.0.20\n"))); got != "R7|0|ip=192.168.0.20\n" {
 		t.Fatalf("a stale wait rewrote a later reply: %q", got)
 	}
 	s.noteCommand([]byte("C8|info\n"))
-	if got := string(s.rewriteInfoReply([]byte("R8|0|model=\"FLEX-6500\",ip=192.168.0.20,netmask=255.255.255.0\r\n"))); got != "R8|0|model=\"FLEX-6500\",ip=100.64.1.2,netmask=255.255.255.0\r\n" {
+	if got := string(reply(s, []byte("R8|0|model=\"FLEX-6500\",ip=192.168.0.20,netmask=255.255.255.0\r\n"))); got != "R8|0|model=\"FLEX-6500\",ip=100.64.1.2,netmask=255.255.255.0\r\n" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// reply passes line through handleReply and returns the line to forward.
+func reply(s *Session, line []byte) []byte {
+	out, _ := s.handleReply(line)
+	return out
+}
+
+// tailnetSession is a session whose client dialed 100.64.1.2.
+func tailnetSession() *Session {
+	return &Session{relay: &Relay{}, client: tailnetConn{local: &net.TCPAddr{IP: net.IPv4(100, 64, 1, 2), Port: 4992}}}
+}
+
+// One dispatch serves both kinds of wait: a transfer reply yields its port
+// and is forwarded unchanged, an info reply is rewritten and yields no port,
+// whichever order the replies arrive in, and a line nothing waits for passes
+// through untouched.
+func TestReplyDispatchByKind(t *testing.T) {
+	s := tailnetSession()
+	s.noteCommand([]byte("C10|info\n"))
+	s.noteCommand([]byte("C11|file upload x\n"))
+	s.noteCommand([]byte("C12|info\n"))
+	if out, p := s.handleReply([]byte("R11|0|42607\n")); p != 42607 || string(out) != "R11|0|42607\n" {
+		t.Fatalf("transfer reply: port %d, line %q", p, out)
+	}
+	if out, p := s.handleReply([]byte("R10|0|ip=192.168.0.20,netmask=255.255.255.0\n")); p != 0 || string(out) != "R10|0|ip=100.64.1.2,netmask=255.255.255.0\n" {
+		t.Fatalf("info reply: port %d, line %q", p, out)
+	}
+	if out, p := s.handleReply([]byte("R13|0|ip=192.168.0.20\n")); p != 0 || string(out) != "R13|0|ip=192.168.0.20\n" {
+		t.Fatalf("unremembered reply: port %d, line %q", p, out)
+	}
+	if out, p := s.handleReply([]byte("R12|0|42608\n")); p != 0 || string(out) != "R12|0|42608\n" {
+		t.Fatalf("an info wait opened port %d, line %q", p, out)
+	}
+	if len(s.pending) != 0 {
+		t.Fatalf("%d waits left after every reply arrived", len(s.pending))
+	}
+}
+
+// ip= inside a quoted value, such as a nickname, is not the radio's address:
+// only the reply's own ip= field is rewritten, and the quoting survives.
+func TestInfoRewriteSkipsQuotedLookalike(t *testing.T) {
+	s := tailnetSession()
+	s.noteCommand([]byte("C8|info\n"))
+	got := string(reply(s, []byte("R8|0|model=\"FLEX-6500\",name=\"shack,ip=x\",ip=192.168.0.20,netmask=255.255.255.0\r\n")))
+	if want := "R8|0|model=\"FLEX-6500\",name=\"shack,ip=x\",ip=100.64.1.2,netmask=255.255.255.0\r\n"; got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
 	}
 }
 

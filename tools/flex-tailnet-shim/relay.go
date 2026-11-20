@@ -268,14 +268,15 @@ func (s *Session) radioToClientTCP() {
 	for {
 		line, err := readLine(br, maxControlLine)
 		if len(line) > 0 {
-			if port := s.sideChannelPort(line); port > 0 && s.relay.OpenForward != nil {
+			var port int
+			line, port = s.handleReply(line)
+			if port > 0 && s.relay.OpenForward != nil {
 				if ferr := s.relay.OpenForward(port, s.id, s.clientIP, s.closed.Load); ferr != nil {
 					log.Printf("session %d: cannot forward radio port %d: %v", s.id, port, ferr)
 				} else {
 					log.Printf("session %d: forwarding radio side channel on TCP %d", s.id, port)
 				}
 			}
-			line = s.rewriteInfoReply(line)
 			if ours, accepted := s.injectedReply(line); ours {
 				if !accepted {
 					log.Printf("session %d: radio refused the MTU clamp: %s", s.id, bytes.TrimSpace(line))
@@ -300,7 +301,6 @@ var (
 	replyRe    = regexp.MustCompile(`^R(\d+)\|0+\|(\d+)\s*$`)
 	okReplyRe  = regexp.MustCompile(`^R\d+\|0+\|`)
 	anyReplyRe = regexp.MustCompile(`^R(\d+)\|`)
-	infoIPRe   = regexp.MustCompile(`([|,]ip=)[^,\s]*`)
 	verbRe     = regexp.MustCompile(`^C[A-Z]*\d+\|([a-z_]+)(?: ([a-z_]+))?`)
 )
 
@@ -347,30 +347,47 @@ func (s *Session) expectReply(seq string, what pendingReply) {
 	}
 }
 
-// takeReply reports whether the reply to command seq needs what, and if so
-// ends that wait. Any reply to the sequence number, failed ones included,
-// ends it, so a stale entry can never act on a later reply.
-func (s *Session) takeReply(seq string, what pendingReply) bool {
+// takeReply ends the wait for the reply to command seq and returns what that
+// reply needs, or 0 if nothing was waiting. Any reply to the sequence number,
+// failed ones included, ends it, so a stale entry can never act on a later
+// reply.
+func (s *Session) takeReply(seq string) pendingReply {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
-	if s.pending[seq] != what {
-		return false
+	what, ok := s.pending[seq]
+	if ok {
+		delete(s.pending, seq)
 	}
-	delete(s.pending, seq)
-	return true
+	return what
 }
 
 // maxPendingReplies bounds commands awaiting a reply the relay acts on.
 const maxPendingReplies = 64
 
-// sideChannelPort returns the port in a successful reply to a pending file
-// transfer command (`R<seq>|0|<port>`), or 0.
-func (s *Session) sideChannelPort(line []byte) int {
+// handleReply acts on a radio line that answers a remembered command, and
+// returns the line to forward. A successful reply to a file transfer command
+// (`R<seq>|0|<port>`) returns the side-channel port to open; a successful
+// reply to `info` has its ip= rewritten (rewriteInfo). Every other line is
+// returned unchanged, with port 0.
+func (s *Session) handleReply(line []byte) (out []byte, port int) {
 	body := bytes.TrimRight(line, "\r\n")
 	r := anyReplyRe.FindSubmatch(body)
-	if r == nil || !s.takeReply(string(r[1]), pendingTransfer) {
-		return 0
+	if r == nil {
+		return line, 0
 	}
+	switch s.takeReply(string(r[1])) {
+	case pendingTransfer:
+		return line, transferPort(body)
+	case pendingInfo:
+		if okReplyRe.Match(body) {
+			return s.rewriteInfo(line, body), 0
+		}
+	}
+	return line, 0
+}
+
+// transferPort returns the port in a successful file transfer reply, or 0.
+func transferPort(body []byte) int {
 	m := replyRe.FindSubmatch(body)
 	if m == nil {
 		return 0
@@ -382,20 +399,15 @@ func (s *Session) sideChannelPort(line []byte) int {
 	return port
 }
 
-// rewriteInfoReply puts the address the client dialed into a successful
-// reply to its `info` command, in place of the radio's own `ip=`. That is the
-// radio's LAN address, which a tailnet client can't reach, and a client that
-// connects to the address `info` names rather than the one it was given (as
-// SmartSDR for Mac does) would otherwise time out. Only that reply changes:
+// rewriteInfo puts the address the client dialed into a successful reply to
+// its `info` command, in place of the radio's own `ip=`. That is the radio's
+// LAN address, which a tailnet client can't reach, and a client that connects
+// to the address `info` names rather than the one it was given (as SmartSDR
+// for Mac does) would otherwise time out. Only that reply changes:
 // `radio static_net_params` status is the radio's own setting, which a client
 // may edit and send back. netmask= and gateway= are left as the radio sent
-// them.
-func (s *Session) rewriteInfoReply(line []byte) []byte {
-	body := bytes.TrimRight(line, "\r\n")
-	r := anyReplyRe.FindSubmatch(body)
-	if r == nil || !s.takeReply(string(r[1]), pendingInfo) || !okReplyRe.Match(body) {
-		return line
-	}
+// them. body is line without its line ending.
+func (s *Session) rewriteInfo(line, body []byte) []byte {
 	local, ok := addrPortOf(s.client.LocalAddr())
 	// Only an IPv4 address goes into ip=: a client that dialed the shim's
 	// Tailscale IPv6 address (fd7a:…) gets the reply as the radio sent it,
@@ -404,8 +416,36 @@ func (s *Session) rewriteInfoReply(line []byte) []byte {
 		log.Printf("session %d: client dialed %v, not an IPv4 address; info's ip= left as the radio sent it", s.id, s.client.LocalAddr())
 		return line
 	}
-	out := infoIPRe.ReplaceAll(body, []byte("${1}"+local.Addr().String()))
+	out := replaceInfoIP(body, local.Addr().String())
 	return append(out, line[len(body):]...)
+}
+
+// replaceInfoIP replaces the value of the reply's own ip= field: the first
+// one that starts a field (after `|` or `,`) outside a quoted value, so a
+// quoted value such as a nickname that contains ",ip=" is left alone. The
+// value runs to the next `,`, space or tab. body is returned unchanged when it has
+// no such field.
+func replaceInfoIP(body []byte, ip string) []byte {
+	quoted := false
+	for i, c := range body {
+		if c == '"' {
+			quoted = !quoted
+			continue
+		}
+		if quoted || (c != '|' && c != ',') || !bytes.HasPrefix(body[i+1:], []byte("ip=")) {
+			continue
+		}
+		start := i + 1 + len("ip=")
+		end := start
+		for end < len(body) && body[end] != ',' && body[end] != ' ' && body[end] != '\t' {
+			end++
+		}
+		out := make([]byte, 0, len(body)-(end-start)+len(ip))
+		out = append(out, body[:start]...)
+		out = append(out, ip...)
+		return append(out, body[end:]...)
+	}
+	return body
 }
 
 var (
