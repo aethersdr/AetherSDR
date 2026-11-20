@@ -144,10 +144,6 @@ For developers and protocol researchers:
 - When ESC is enabled, the radio sets the child slice to `audio_mute=1 audio_level=0` — the child's audio is absorbed into the parent's ESC processing
 - Feature gated by `DIV_ESC` license (status: `license feature name=DIV_ESC enabled=1 reason=PLUS`)
 
-## Known issues
-
-- Turning on DIV for a second slice silently breaks up the diversity pair that is already running, with no message ([#5352](https://github.com/aethersdr/AetherSDR/issues/5352)).
-
 ## Troubleshooting
 
 ### The DIV button isn't there
