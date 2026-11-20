@@ -247,7 +247,8 @@ bool overlaysAreAttachedDiversityPair(const SpectrumWidget::SliceOverlay* active
         return false;
     }
     // Every overlay here is on this widget's pan, so the shared rule's
-    // partner index decides, with the role test before the index arrives.
+    // partner index decides. Until both overlays carry a usable index, the
+    // same-pan fallback keeps them attached, as before #7448.
     auto view = [](const SpectrumWidget::SliceOverlay& o) {
         DiversityPairPolicy::SliceView v;
         v.sliceId = o.sliceId;
