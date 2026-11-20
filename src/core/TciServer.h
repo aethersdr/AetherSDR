@@ -604,11 +604,9 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
-    // Extension set, antenna notices: per line kind, the trx numbers pending;
-    // posted, then rate-limited like drive:.
-    QTimer*           m_antennaRateTimer{nullptr};
+    // Extension set, antenna notices: per line kind, the trx numbers pending.
     std::array<QSet<int>, kAntennaLineKinds> m_antennaPending;
-    bool              m_antennaSendPosted{false};
+    std::unique_ptr<TciExtensionNotice> m_antennaNotice;
     // A refused keyed TX-antenna set warns once per keyed period; cleared on unkey.
     bool              m_txAntennaRefusalWarned{false};
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).

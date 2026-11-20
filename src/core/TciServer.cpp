@@ -662,15 +662,6 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_powerRateTimer->start();
     });
 
-    // Extension set, antennas: the same limiter for their notices.
-    m_antennaRateTimer = new QTimer(this);
-    m_antennaRateTimer->setSingleShot(true);
-    m_antennaRateTimer->setInterval(kPowerRateLimitMs);
-    connect(m_antennaRateTimer, &QTimer::timeout, this, [this]() {
-        if (broadcastAntennas()) {
-            m_antennaRateTimer->start();
-        }
-    });
     registerAntennaGroups();
 
     // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
@@ -3924,12 +3915,11 @@ bool TciServer::antennaOffered(bool tx) const
     if (!m_model) {
         return false;
     }
+    // Through the trx map, as the state lines and sets resolve a receiver.
     bool anyList = false;
-    for (SliceModel* slice : m_model->slices()) {
-        if (slice && !antennaWireList(tx, slice).isEmpty()) {
-            anyList = true;
-            break;
-        }
+    const int count = m_trxMap.trxCount(m_model);
+    for (int trx = 0; trx < count && !anyList; ++trx) {
+        anyList = !antennaWireList(tx, sliceForTrxStrict(trx)).isEmpty();
     }
     return tx ? TciAntennaExtension::txOffered(m_model->isConnected(),
                                                m_model->backendCapabilities().canTransmit,
@@ -4226,6 +4216,9 @@ bool TciServer::extensionKeyed() const
 
 void TciServer::registerAntennaGroups()
 {
+    // The same limiter as drive:, one notice for all four line kinds.
+    m_antennaNotice = std::make_unique<TciExtensionNotice>(
+        this, kPowerRateLimitMs, [this] { return broadcastAntennas(); });
     for (const bool tx : {false, true}) {
         TciExtensionSet::Group group;
         group.token = QString::fromLatin1(tx ? TciAntennaExtension::kTxToken
@@ -4255,6 +4248,8 @@ void TciServer::registerAntennaGroups()
         connect(txModel, &TransmitModel::moxChanged, this, unkeyed);
         connect(txModel, &TransmitModel::tuneChanged, this, unkeyed);
         connect(m_model, &RadioModel::radioTransmittingChanged, this, unkeyed);
+        // A key-up still being delivered ends with no edge above.
+        connect(m_model, &RadioModel::daxTxOwnershipChanged, this, unkeyed);
     }
 }
 
@@ -4350,7 +4345,9 @@ TciExtensionSet::Result TciServer::handleAntenna(bool tx, const QString& name,
         emit rxAntennaSetByTci(slice->sliceId());
     }
     if (wanted == current) {
-        return {};
+        // Nothing to change, nothing refused: the sender hears what is in use.
+        result.reply = antennaLine(selection, request->trx);
+        return result;
     }
     if (tx && extensionKeyed()) {
         // Refused here, before any backend sees it; the HL2 would refuse again
@@ -4367,7 +4364,6 @@ TciExtensionSet::Result TciServer::handleAntenna(bool tx, const QString& name,
         return result;
     }
     if (tx) {
-        m_txAntennaRefusalWarned = false;
         slice->setTxAntenna(wanted);
     } else {
         slice->setRxAntenna(wanted);
@@ -4384,16 +4380,7 @@ void TciServer::queueAntennaNotice(AntennaLine kind, int trx)
         return;
     }
     m_antennaPending[static_cast<int>(kind)].insert(trx);
-    if (m_antennaSendPosted || m_antennaRateTimer->isActive()) {
-        return;
-    }
-    m_antennaSendPosted = true;
-    QMetaObject::invokeMethod(this, [this]() {
-        m_antennaSendPosted = false;
-        if (broadcastAntennas()) {
-            m_antennaRateTimer->start();
-        }
-    }, Qt::QueuedConnection);
+    m_antennaNotice->queue();
 }
 
 bool TciServer::broadcastAntennas()
@@ -4406,9 +4393,7 @@ bool TciServer::broadcastAntennas()
         m_antennaPending[kind].clear();
         any = any || !pending[kind].isEmpty();
     }
-    const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
-        [](const ClientState& client) { return client.extensionsEnabled; });
-    if (!any || !anyEnabled) {
+    if (!any || !anyExtensionClient()) {
         return false;
     }
     bool sent = false;

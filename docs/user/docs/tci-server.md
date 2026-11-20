@@ -385,8 +385,9 @@ aethersdr_tx_antenna:0,RF1;       # set
 
 - `<trx>` is the TCI receiver. A receiver without a list is ignored.
 - A set names an antenna from that receiver's list, in any case; the answer
-  uses the list's spelling. A name not in the list, or the antenna already in
-  use, gets no answer. A name with `:`, `,` or `;` is left out of the list.
+  uses the list's spelling. A name not in the list gets no answer. A set naming
+  the antenna already in use changes nothing and is answered with it, to the
+  sender only. A name with `:`, `,` or `;` is left out of the list.
 - The set goes the way the RX applet's antenna menus set it, so the radio's
   own rules still apply. The answer, sent to every client that enabled the set,
   is the antenna in use afterwards: if the radio refused, it is the old one.
