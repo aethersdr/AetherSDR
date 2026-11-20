@@ -21,12 +21,10 @@ struct DxSpot;
 // is the template for the shim around the decoder; what differs is the
 // 15-second cycle, the decoder, and a much smaller settings set.
 //
-// ⚠ This is deliberately a NARROW copy of the WSPR pair rather than a shared
-// abstraction. AetherSDR already talks to four programs on the radio (the
-// Remote Access shim, the radio health agent, AetherWSPR and this) with no
-// common shape, and a capability-driven configure window is proposed in
-// RFC #7114. This proves the control path against a live agent first so that
-// refactor has a second real instance to generalise from.
+// The host side shares AetherWSPR's: the request, its safety properties and
+// the polling are RadioAgentClient / RadioAgentSpotFeed (RadioAgentClient.h),
+// and SpotHub builds both receivers' tabs and keeps both receivers' settings
+// with the same code. What is FT8's own is this file: the JSON it speaks.
 //
 // RECEIVE ONLY. The agent has no transmit path: its slice is set tx=0 and the
 // vendored decoder's transmit-side encoder is not built. There is nothing in

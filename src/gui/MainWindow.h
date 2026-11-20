@@ -143,6 +143,7 @@ enum class RadioSliceSelectionSource;
 
 class AetherClockApplet;
 class Ft8SpotFeed;
+class RadioAgentClient;
 class WsprSpotFeed;
 class AetherClockEngine;
 class AetherClockModel;
@@ -1504,8 +1505,10 @@ private:
     // Reserves the WSPR receiver's slice in RadioModel when the receiver
     // at `radio` names one, then calls `done`. Waits at most
     // kWsprSliceReadMs: a radio without the receiver refuses at once.
-    void readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done);
-    void readFt8ReceiverSlice(const QHostAddress& radio, std::function<void()> done);
+    // Asks one receiver on the radio which slice is its own and reserves it
+    // under `label`. Takes ownership of `client`.
+    void readReceiverSlice(RadioAgentClient* client, const QString& label,
+                           const QHostAddress& radio, std::function<void()> done);
     static constexpr int kWsprSliceReadMs = 1000;
     static constexpr int kWsprSliceRecheckMs = 500;
     PropForecastClient*  m_propForecast{nullptr};

@@ -898,37 +898,39 @@ void MainWindow::wireSpotSubsystem()
                 proceed();
             }
         };
-        readWsprReceiverSlice(radio, answered);
-        readFt8ReceiverSlice(radio, answered);
+        readReceiverSlice(new WsprAgentClient, tr("WSPR receiver"), radio, answered);
+        readReceiverSlice(new Ft8AgentClient, tr("FT8 receiver"), radio, answered);
     });
     wspr::reserveReceiverSlice(m_wsprFeed, &m_radioModel, tr("WSPR receiver"));
     ft8::reserveReceiverSlice(m_ft8Feed, &m_radioModel, tr("FT8 receiver"));
     connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel*) {
         QTimer::singleShot(kWsprSliceRecheckMs, this, [this] {
             if (m_radioModel.isConnected()) {
-                readWsprReceiverSlice(m_radioModel.radioAddress(), {});
-                readFt8ReceiverSlice(m_radioModel.radioAddress(), {});
+                readReceiverSlice(new WsprAgentClient, tr("WSPR receiver"), m_radioModel.radioAddress(), {});
+                readReceiverSlice(new Ft8AgentClient, tr("FT8 receiver"), m_radioModel.radioAddress(), {});
             }
         });
     });
 }
 
-void MainWindow::readFt8ReceiverSlice(const QHostAddress& radio, std::function<void()> done)
+void MainWindow::readReceiverSlice(RadioAgentClient* client, const QString& label,
+                                   const QHostAddress& radio, std::function<void()> done)
 {
-    if (!ft8::reachableRadio(m_radioModel.isWan(), radio)) {
+    if (m_radioModel.isWan() || !radioAgentReachable(radio)) {
+        delete client;
         if (done) done();
         return;
     }
     // A client of its own: reads can overlap, and each ends on its own.
-    auto* client = new Ft8AgentClient(this);
+    client->setParent(this);
     client->setRadioAddress(radio);
     auto finish = std::make_shared<std::function<void(int)>>();
-    *finish = [this, client, done = std::move(done)](int sliceIndex) {
+    *finish = [this, client, label, done = std::move(done)](int sliceIndex) {
         client->disconnect(this);
         client->cancel();
         client->deleteLater();
         if (sliceIndex >= 0) {
-            m_radioModel.reserveSlice(sliceIndex, tr("FT8 receiver"));
+            m_radioModel.reserveSlice(sliceIndex, label);
         }
         if (done) done();
     };
@@ -938,43 +940,8 @@ void MainWindow::readFt8ReceiverSlice(const QHostAddress& radio, std::function<v
             run(sliceIndex);
         }
     };
-    connect(client, &Ft8AgentClient::statusReceived, this,
-            [call](const Ft8Status& status) { call(status.sliceIndex); });
-    connect(client, &Ft8AgentClient::requestFailed, this,
-            [call](const QString&, const QString&, bool) { call(-1); });
-    QTimer::singleShot(kWsprSliceReadMs, client, [call] { call(-1); });
-    // Spots from now on: none, so the reply stays small.
-    client->fetchStatus(QDateTime::currentSecsSinceEpoch());
-}
-
-void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done)
-{
-    if (m_radioModel.isWan() || !wspr::reachableAddress(radio)) {
-        if (done) done();
-        return;
-    }
-    // A client of its own: reads can overlap, and each ends on its own.
-    auto* client = new WsprAgentClient(this);
-    client->setRadioAddress(radio);
-    auto finish = std::make_shared<std::function<void(int)>>();
-    *finish = [this, client, done = std::move(done)](int sliceIndex) {
-        client->disconnect(this);
-        client->cancel();
-        client->deleteLater();
-        if (sliceIndex >= 0) {
-            m_radioModel.reserveSlice(sliceIndex, tr("WSPR receiver"));
-        }
-        if (done) done();
-    };
-    // Once: taken out before it runs, so it never runs while being destroyed.
-    auto call = [finish](int sliceIndex) {
-        if (auto run = std::exchange(*finish, nullptr)) {
-            run(sliceIndex);
-        }
-    };
-    connect(client, &WsprAgentClient::statusReceived, this,
-            [call](const WsprStatus& status) { call(status.sliceIndex); });
-    connect(client, &WsprAgentClient::requestFailed, this,
+    connect(client, &RadioAgentClient::receiverSlice, this, [call](int sliceIndex) { call(sliceIndex); });
+    connect(client, &RadioAgentClient::requestFailed, this,
             [call](const QString&, const QString&, bool) { call(-1); });
     QTimer::singleShot(kWsprSliceReadMs, client, [call] { call(-1); });
     // Spots from now on: none, so the reply stays small.

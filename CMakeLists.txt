@@ -1160,6 +1160,7 @@ set(CORE_SOURCES
     src/core/RadioHealthClient.cpp    # radio health agent readout (tools/radio-health)
     src/core/GpsdSkyClient.cpp        # AetherGPS sky view: gpsd on the radio (tools/aether-gps)
     src/core/AetherGpsPackage.cpp     # the bundled AetherGPS packages and their pins
+    src/core/RadioAgentClient.cpp     # shared client + spot feed for the receivers below
     src/core/WsprAgent.cpp            # WSPR receiver on the radio (tools/wspr-agent)
     src/core/WsprAgentClient.cpp
     src/core/Ft8Agent.cpp             # FT8 receiver on the radio (tools/ft8-agent), RFC #7114
