@@ -2906,8 +2906,7 @@ RadioModel::RadioModel(QObject* parent)
     // A receive-only client transverter refuses it too (#6472): VOX keying is
     // the radio's own, but turning VOX on is this client's command.
     m_transmitModel.setVoxAdmission([this]() {
-        if (const ClientTransverter* t =
-                usesClientTransverters() ? m_clientXvtrs.active() : nullptr) {
+        if (const ClientTransverter* t = activeClientTransverter()) {
             return clientTransverterReceiveOnlyMessage(*t);
         }
         return firstKeyObjection();
@@ -5815,7 +5814,7 @@ bool RadioModel::refuseKeyInReceiveOnlyMode()
     // power to what the transverter input takes. Covers client-originated
     // key-on only (MOX, TUNE, ATU, CW, CWX through beginTxActivity()); the
     // radio's own PTT, VOX and front-panel key cannot be intercepted.
-    if (const ClientTransverter* t = usesClientTransverters() ? m_clientXvtrs.active() : nullptr) {
+    if (const ClientTransverter* t = activeClientTransverter()) {
         return refuseKeyWithInterlock(clientTransverterReceiveOnlyMessage(*t),
                                       QStringLiteral("xvtr-rx-only:%1").arg(t->name));
     }

@@ -94,6 +94,16 @@ not yet limit the radio's RF power to what a transverter input takes. The
 radio's own PTT, VOX and front-panel key are outside AetherSDR's control: set
 the radio's power for your transverter before keying it from the radio.
 
+Receive-only follows the **active** transverter: the one whose band you tuned
+to, and only while the radio's dial stays in its IF range. On the radio's own
+bands it transmits as usual, and on an IF frequency with no transverter active
+AetherSDR has nothing to protect. This interlock is a stopgap. The real
+protection is a **Max Power** limit per transverter, which is planned as a
+follow-up and will allow transmitting on a transverter band at a safe power.
+
+TCI clients see `tx_enable:<trx>,false;` while a transverter is active, and
+`true` again when it is cleared, so a client can disable its own TX controls.
+
 While the radio is transmitting or sending a TUNE carrier, a tune onto a
 transverter band is refused with the notice "Unkey before tuning to the *name*
 transverter band", and the radio stays where it is. Unkey first, then tune.

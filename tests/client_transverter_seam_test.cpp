@@ -14,6 +14,7 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "core/AppSettings.h"
+#include "core/TciProtocol.h"
 
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -518,6 +519,28 @@ static void theNativeRangeFollowsTheBackend()
           "once the backend reports a wider range the same tune is sent raw");
 }
 
+// Maintainer ruling on #7373: TCI tx_enable is false while a transverter is
+// active. TciServer re-broadcasts tx_enable on capabilitiesChanged, which
+// every activation and deactivation publishes.
+static void tciTxEnableFollowsTheActiveTransverter()
+{
+    Fixture f;
+    int published = 0;
+    QObject::connect(&f.radio, &RadioModel::capabilitiesChanged, &f.radio,
+                     [&published](bool, const RadioCapabilities&) { ++published; });
+    f.backend->reportFrequency(14.074);
+    check(f.radio.isConnected() && TciProtocol::transmitPermitted(&f.radio, f.slice),
+          "on a native band TCI tx_enable is true");
+    f.slice->setFrequency(10489.540);
+    check(!TciProtocol::transmitPermitted(&f.radio, f.slice),
+          "on a transverter band TCI tx_enable is false");
+    check(published >= 1, "activation republishes capabilities, so tx_enable is re-broadcast");
+    const int before = published;
+    f.backend->reportFrequency(7.100);
+    check(TciProtocol::transmitPermitted(&f.radio, f.slice) && published > before,
+          "the radio's dial leaving the IF makes it true again and re-broadcasts it");
+}
+
 static void internalTunerIsLockedOut()
 {
     Fixture f;
@@ -697,6 +720,7 @@ int main(int argc, char** argv)
     voxCannotBeTurnedOnOnATransverter();
     anUnknownPanCentreIsNotShifted();
     theNativeRangeFollowsTheBackend();
+    tciTxEnableFollowsTheActiveTransverter();
     internalTunerIsLockedOut();
     headlessTargetsUseTheSameSeam();
     editingTheListKeepsTheRadioOnItsIf();

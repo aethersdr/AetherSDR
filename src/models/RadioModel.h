@@ -2912,6 +2912,13 @@ public:
     // TCI, rigctl, logging) sees RF. Receive-only: see refuseKeyInReceiveOnlyMode().
     bool usesClientTransverters() const { return m_backend && m_clientXvtrsAvailable; }
     const ClientTransverterSet& clientTransverters() const { return m_clientXvtrs; }
+    // The transverter that makes this session receive-only, or none. Every
+    // change to it republishes capabilities, so a reader bound to
+    // capabilitiesChanged (TCI tx_enable) follows it.
+    const ClientTransverter* activeClientTransverter() const
+    {
+        return usesClientTransverters() ? m_clientXvtrs.active() : nullptr;
+    }
     // False, with nothing stored or applied, when the connected backend does
     // not qualify (no capability record, or more than one receiver).
     bool setClientTransverters(const QVector<ClientTransverter>& list);

@@ -48,6 +48,9 @@ bool TciProtocol::transmitPermitted(const RadioModel* model, const SliceModel* s
     return model && slice && model->isConnected() && model->backendCanTransmit()
         && model->sliceOwnedByUs(slice->sliceId())
         && !modeIsReceiveOnly(model->backendCapabilities(), slice->mode())
+        // A client transverter is receive-only (#6472). It is one model-wide
+        // state on a single-receiver radio, so it covers every receiver.
+        && !model->activeClientTransverter()
         && model->panTransmitInhibitReason(slice->panId()).isEmpty();
 }
 
