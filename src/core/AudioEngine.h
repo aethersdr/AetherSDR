@@ -1497,7 +1497,9 @@ private:
     // instance because its input is TCI's 24 kHz, not the capture device rate,
     // and its resamplers carry state. The stage processors are shared with the
     // mic instance: both run on this thread, and onTxAudioReady() steps the mic
-    // aside while TCI audio is fresh, so their blocks never interleave.
+    // aside while TCI audio is fresh, so within an over their blocks never
+    // interleave. Between overs the mic chain may run on ambient audio, so
+    // feedTciTxAudio() resets this instance whenever the TX context changes.
     std::unique_ptr<TxVoiceProcessor>   m_tciTxVoiceProcessor;
     std::atomic<bool> m_tciTxVoiceDsp{false};
     std::atomic<bool> m_tciTxVoiceMode{false};
@@ -1507,6 +1509,13 @@ private:
     // they differ.
     std::atomic<quint32> m_tciTxVoiceDspEnables{0};
     quint32 m_tciTxVoiceDspSeenEnables{0};
+    // Audio thread only: the over the TCI chain's state belongs to.
+    TxCoordinator::Context m_tciTxVoiceContext;
+    // Audio thread only: the last TCI block went through the TCI chain, so
+    // the mic path leaves the published chain latency to feedTciTxAudio().
+    bool m_tciTxVoiceOnPath{false};
+    // Audio thread only: an egress recovery for the TCI chain is queued.
+    bool m_tciTxVoiceEgressRecoveryQueued{false};
     void setTciTxVoiceGate(std::atomic<bool>& gate, bool on)
     {
         if (on && !gate.load(std::memory_order_acquire)) {

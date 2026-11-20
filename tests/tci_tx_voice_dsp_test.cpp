@@ -4,8 +4,14 @@
 // host-modulation transport seam (txTransportPcmReady), as
 // tx_audio_context_test does. Covers the routing the ruling asks for (toggle
 // off, toggle on, DAX untouched), the digital-mode bypass with the toggle on
-// (#7379 review), and the L/R fold to mono.
+// (#7379 review), the L/R fold to mono, that the chain really changes the
+// audio and leaves the mic-only test tone out, and that no state carries from
+// one over into the next.
+#include "TestSettingsProfile.h"
+
 #include "core/AudioEngine.h"
+#include "core/ClientComp.h"
+#include "core/ClientTxTestTone.h"
 #include "core/backends/TxAudioSource.h"
 #include "core/TxCoordinator.h"
 
@@ -52,12 +58,14 @@ struct Rig {
     TxCoordinator::Context live;
     QVector<QByteArray> transport;
     TxCoordinator::Producer producer;
+    TxCoordinator::Actor actor;
+    TxCoordinator::Operation op;
 
     Rig()
         : producer(coordinator.registerProducer())
     {
-        const auto actor = coordinator.registerActor({true, 0});
-        const auto op = coordinator.acquire(actor, TxCoordinator::monotonicMs()).operation;
+        actor = coordinator.registerActor({true, 0});
+        op = coordinator.acquire(actor, TxCoordinator::monotonicMs()).operation;
         live = coordinator.mediaContext(producer, op);
         QObject::connect(&audio, &AudioEngine::txTransportPcmReady,
                          [this](const QByteArray& pcm, TxAudioSource, const TxCoordinator::Context&) {
@@ -74,7 +82,22 @@ struct Rig {
         for (const auto& b : transport) { all += b; }
         return all;
     }
+
+    // Unkey and key again: the next blocks belong to a new over, as
+    // TciIoWorker gives each over its own context.
+    void nextOver()
+    {
+        (void)coordinator.finishLocalIntent(op);
+        op = coordinator.acquire(actor, TxCoordinator::monotonicMs()).operation;
+        live = coordinator.mediaContext(producer, op);
+        transport.clear();
+    }
 };
+
+QByteArray silenceBlock()
+{
+    return QByteArray(kFrames * 2 * static_cast<int>(sizeof(float)), '\0');
+}
 
 double peakOf(const QByteArray& pcm)
 {
@@ -185,6 +208,72 @@ void modeSwitchClosesAndReopens()
           "a switch back to a voice mode runs the chain again");
 }
 
+void onChangesTheAudio()
+{
+    // A stage with an audible effect: compressor makeup below threshold is
+    // plain gain, so the chain's output must be louder than the same chain
+    // without it. A bypass that only bumped the block counter would not be.
+    Rig plain;
+    Rig comp;
+    for (Rig* r : {&plain, &comp}) {
+        r->audio.setTciTxVoiceDsp(true);
+        r->audio.setTciTxVoiceMode(true);
+    }
+    ClientComp* c = comp.audio.clientCompTx();
+    c->setThresholdDb(0.0f);
+    c->setRatio(2.0f);
+    c->setMakeupDb(6.0f);
+    c->setEnabled(true);
+    for (int b = 0; b < kBlocks; ++b) {
+        plain.audio.feedTciTxAudio(toneBlock(b, 0.2f, 0.2f), plain.live);
+        comp.audio.feedTciTxAudio(toneBlock(b, 0.2f, 0.2f), comp.live);
+    }
+    const double p = peakOf(plain.joined());
+    const double q = peakOf(comp.joined());
+    std::printf("  plain peak %.4f, with +6 dB makeup %.4f\n", p, q);
+    check(p > 0.05 && q > 1.5 * p,
+          "toggle on: a TX stage's effect (compressor makeup) is on the TCI audio");
+}
+
+void onLeavesTheTestToneOut()
+{
+    // The test tone is a mic-path feature: with it on, TCI silence through
+    // the chain must stay silence.
+    Rig rig;
+    rig.audio.clientTxTestTone()->setEnabled(true);
+    rig.audio.setTciTxVoiceDsp(true);
+    rig.audio.setTciTxVoiceMode(true);
+    for (int b = 0; b < kBlocks; ++b) {
+        rig.audio.feedTciTxAudio(silenceBlock(), rig.live);
+    }
+    check(rig.audio.tciTxVoiceBlocks() > 0 && !rig.transport.isEmpty()
+              && peakOf(rig.joined()) == 0.0,
+          "toggle on: the mic test tone never reaches TCI audio");
+}
+
+void noStateAcrossOvers()
+{
+    // Over 1 is a tone, over 2 digital silence under a new context. The
+    // chain holds back a few ms; without a reset on the new context that
+    // tail went out at the start of over 2 (#7379 review, finding 1).
+    Rig rig;
+    rig.audio.setTciTxVoiceDsp(true);
+    rig.audio.setTciTxVoiceMode(true);
+    for (int b = 0; b < kBlocks; ++b) {
+        rig.audio.feedTciTxAudio(toneBlock(b, 0.5f, 0.5f), rig.live);
+    }
+    const double firstOverPeak = peakOf(rig.joined());
+    rig.nextOver();
+    for (int b = 0; b < 5; ++b) {
+        rig.audio.feedTciTxAudio(silenceBlock(), rig.live);
+    }
+    const double secondOverPeak = peakOf(rig.joined());
+    std::printf("  first over peak %.4f, second over peak %.4f\n",
+                firstOverPeak, secondOverPeak);
+    check(firstOverPeak > 0.05 && !rig.transport.isEmpty() && secondOverPeak == 0.0,
+          "a new over starts clean: nothing of the previous over is transmitted");
+}
+
 void daxUntouched()
 {
     Rig on;
@@ -204,6 +293,11 @@ void daxUntouched()
 
 int main(int argc, char** argv)
 {
+    // Keep the engine out of the operator's config directory.
+    TestSettingsProfile profile(QStringLiteral("tci-tx-voice-dsp-test"));
+    if (!profile.isValid()) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
     foldToMono();
     offIsTheDaxPath();
@@ -211,6 +305,9 @@ int main(int argc, char** argv)
     onFoldsOneSidedClient();
     onWithDigitalModeIsTheDaxPath();
     modeSwitchClosesAndReopens();
+    onChangesTheAudio();
+    onLeavesTheTestToneOut();
+    noStateAcrossOvers();
     daxUntouched();
     return failures ? 1 : 0;
 }

@@ -9736,8 +9736,11 @@ void AudioEngine::onTxAudioReady()
         if (m_audioSource) {
             observeTxCaptureState(m_audioSource->state(), bufferedBeforeDrain);
         }
-        // TCI owns TX audio: the voice processor is not on the path.
-        TxChainLatency::publishVoiceProcessorFrames(-1);
+        // TCI owns TX audio. The mic's voice processor is not on the path;
+        // the TCI one may be, and then feedTciTxAudio() publishes its latency.
+        if (!m_tciTxVoiceOnPath) {
+            TxChainLatency::publishVoiceProcessorFrames(-1);
+        }
         return;
     }
 #ifdef Q_OS_MACOS
@@ -10560,6 +10563,7 @@ void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::C
     // A digital TX mode always bypasses the chain, even with the option on.
     if (!m_tciTxVoiceDsp.load(std::memory_order_acquire)
         || !m_tciTxVoiceMode.load(std::memory_order_acquire) || inPcm.isEmpty()) {
+        m_tciTxVoiceOnPath = false;
         feedDaxTxAudio(inPcm, context);
         return;
     }
@@ -10568,11 +10572,17 @@ void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::C
         return;
     }
     const quint32 enables = m_tciTxVoiceDspEnables.load(std::memory_order_acquire);
-    if (enables != m_tciTxVoiceDspSeenEnables) {
-        // Resampler and stage state from before the switch belong to other audio.
+    if (enables != m_tciTxVoiceDspSeenEnables
+        || !m_tciTxVoiceContext.sameContext(context)) {
+        // Resampler and stage state from before the switch, or from the
+        // previous over or the mic, belong to other audio. TciIoWorker sets one
+        // context per over, so a new context is a new over; the mic path
+        // resets its own instance the same way (setMicrophoneContext()).
         m_tciTxVoiceProcessor->reset();
         m_tciTxVoiceDspSeenEnables = enables;
+        m_tciTxVoiceContext = context;
     }
+    m_tciTxVoiceOnPath = true;
 
     QByteArray block = inPcm;
     foldTciStereoToMono(block);
@@ -10582,26 +10592,36 @@ void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::C
     m_tciTxVoiceProcessor->setMicGain(1.0f);
     m_tciTxVoiceProcessor->setRnnoiseEnabled(false);
     const bool processed = m_tciTxVoiceProcessor->processCapturedFloat32(block);
-    if (m_tciTxVoiceProcessor->egressRecoveryPending()) {
-        // Serviced outside this block, as onTxAudioReady() does for the mic.
-        QMetaObject::invokeMethod(
-            this, [this]() { m_tciTxVoiceProcessor->recoverEgressAfterMismatch(); },
+    // Per block, as for the mic: stages can be toggled mid-over. See
+    // TxChainLatency.h.
+    TxChainLatency::publishVoiceProcessorFrames(m_tciTxVoiceProcessor->latencyFrames());
+    if (m_tciTxVoiceProcessor->egressRecoveryPending()
+        && !m_tciTxVoiceEgressRecoveryQueued) {
+        // Serviced outside this block and queued once, as onTxAudioReady()
+        // does for the mic.
+        m_tciTxVoiceEgressRecoveryQueued = true;
+        const bool queued = QMetaObject::invokeMethod(
+            this,
+            [this]() {
+                m_tciTxVoiceProcessor->recoverEgressAfterMismatch();
+                m_tciTxVoiceEgressRecoveryQueued = false;
+            },
             Qt::QueuedConnection);
+        if (!queued) {
+            m_tciTxVoiceEgressRecoveryQueued = false;
+            qCWarning(lcAudio)
+                << "AudioEngine: failed to queue TCI TX egress SRC recovery";
+        }
     }
     if (!processed) {
         return;
     }
     m_tciTxVoiceBlocks.fetch_add(1, std::memory_order_relaxed);
 
-    // The chain returns 24 kHz stereo Int16; the rest of the TCI path is float.
-    const auto* i16 = reinterpret_cast<const int16_t*>(block.constData());
-    const int n = block.size() / static_cast<int>(sizeof(int16_t));
-    QByteArray f32(n * static_cast<int>(sizeof(float)), Qt::Uninitialized);
-    auto* f = reinterpret_cast<float*>(f32.data());
-    for (int i = 0; i < n; ++i) {
-        f[i] = static_cast<float>(i16[i]) / 32768.0f;
-    }
-    feedDaxTxAudioInternal(f32, true, false, TxAudioSource::ClientLeveled, context);
+    // The rest of the TCI path is float: take the chain's 24 kHz stereo float
+    // output from before its Int16 quantization, not the dithered Int16.
+    feedDaxTxAudioInternal(m_tciTxVoiceProcessor->transportFloat32Stereo(),
+                           true, false, TxAudioSource::ClientLeveled, context);
 }
 
 void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,

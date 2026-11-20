@@ -101,7 +101,9 @@ void writeRecordingSetting(const QString& key, const QJsonValue& value)
 
 // TCI feature options, one nested document under the root key "Tci"
 // (Principle V): TxVoiceDsp (bool, off by default). Absent or unreadable
-// reads as all defaults.
+// reads as all defaults. New TCI options belong in this document, not in a
+// new root key; TciRecording and the flat TciPort/TciTxGain/TciTxOverflowMode
+// keys predate it.
 QJsonObject readTciFeatureSettings()
 {
     return QJsonDocument::fromJson(
