@@ -107,7 +107,7 @@ class MultiSliceRun(Run):
         self.baselines = {}
         self.pan_expected = None
         # This scenario records per-slice observations, not the single-slice
-        # 38-control applet matrix allocated by the shared Run helpers.
+        # 40-control applet matrix allocated by the shared Run helpers.
         journal.data.pop('appletCoverage', None)
 
     def assert_ready(self, snapshot):

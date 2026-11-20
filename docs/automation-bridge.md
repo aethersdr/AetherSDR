@@ -744,20 +744,16 @@ popup at a time and only while it is open; an empty combo is refused up front
 > anyway, so the marker still covers them (#3918). The **drive setpoints**
 > `RF power`, `Tune power` and the TX Band Settings per-band RF/Tune power
 > edits carry a second marker, `markTxSetpoint()`
-> (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`): they never key, but
-> they set how hard the next transmission drives an amplifier or transverter,
-> so without TX permission `invoke`, `clickAt`, `doubleClick`, `drag`,
-> `dragAt`, `wheel` and `gesture` on them are refused, exactly as
-> `transmit rfpower|tunepower` is (#5851). A `gesture` begun with permission
-> is checked again on every `move` and `end`: once permission is withdrawn, the
-> next phase releases it where it is and is refused. The `rf_power_up` /
-> `rf_power_down` shortcuts are refused the same way through `shortcut` and
-> `keyevent`, and so is a `keyevent` press of an arrow, PageUp/PageDown or
-> Home/End key while one of the two sliders holds the keyboard lease, bound or
-> not. A `tci send` of `drive:<trx>,<value>` or `tune_drive:<trx>,<value>` is
-> refused too. Reading them stays open, and
-> `controls scrub` (which only re-asserts the current value) is not gated. Other
-> setpoints like `VOX level` or `Microphone gain` are not blocked.
+> (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`). They never key, so
+> TX permission does not gate them (#5851): `invoke`, the pointer verbs and
+> `transmit rfpower|tunepower` set them without it. What bounds drive is the
+> power ceiling, `AETHER_AUTOMATION_TX_MAX_POWER`, below. The `rf_power_up` /
+> `rf_power_down` shortcuts through `shortcut` and `keyevent`, a `keyevent`
+> press of an arrow, PageUp/PageDown or Home/End key while one of the two
+> sliders holds the keyboard lease, bound or not, and a `tci send` of
+> `drive:<trx>,<value>` or `tune_drive:<trx>,<value>` are refused without TX
+> permission. Other setpoints like `VOX level` or `Microphone gain` are not
+> blocked.
 >
 > **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
 > without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
@@ -1484,9 +1480,9 @@ manual recovery; the owned client may still be open. The runner never kills an
 unresponsive client or falls back to another radio.
 
 The expanded applet catalogue (`tools/radiocert_persist_applets.py`) exercises
-38 non-keying setting contracts through scoped real widgets (RF/Tune power are
-TX-gated, #5851): slice volume/pan/mute, manual SQL intent, AGC mode/threshold,
-mic gain, processor, phone monitor, AM carrier, VOX threshold/delay, downward expander, separate CW
+40 non-keying setting contracts through scoped real widgets: RF/Tune setpoints,
+slice volume/pan/mute, manual SQL intent, AGC mode/threshold, mic gain, processor,
+phone monitor, AM carrier, VOX threshold/delay, downward expander, separate CW
 monitor/delay/speed, and both complete eight-band radio EQ curves and enables.
 Earlier seeds remain sentinels while later controls change. Band/mode/antenna
 round trips, normal restart and guarded cleanup have separate observations.
@@ -2272,17 +2268,15 @@ testing behavior such as a delayed model/radio update arriving while
 `QAbstractSlider::isSliderDown()` is genuinely true.
 
 ```json
-→ {"cmd":"gesture","action":"begin","target":"RxApplet/AF gain"}
+→ {"cmd":"gesture","action":"begin","target":"RF power"}
 ← {"ok":true,"active":true,"sliderDown":true,"value":50,"leaseMs":60000}
 
 → {"cmd":"gesture","action":"move","value":"0 -30"}
 ← {"ok":true,"active":true,"sliderDown":true,"dx":0,"dy":-30}
 
 → {"cmd":"gesture","action":"end"}
-← {"ok":true,"active":false,"target":"RxApplet/AF gain","dx":0,"dy":-30}
+← {"ok":true,"active":false,"target":"RF power","dx":0,"dy":-30}
 ```
-
-A gesture on `RF power` or `Tune power` needs TX permission, as `transmit rfpower` does.
 
 Phases:
 
@@ -4969,8 +4963,8 @@ antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 
 ### `transmit`
 Set the transmit drive — `rfpower` (RF Power) or `tunepower` (Tune Power), 0..100.
-TX-gated like `key`, and the gate is reported **before** the value is validated so
-it cannot be probed with nonsense.
+Not TX-gated: drive never keys, so it needs no TX permission (#5851). What bounds
+it is the power ceiling.
 
 The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
 ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
@@ -4980,7 +4974,7 @@ amplifier. When a request is clamped the reply says so rather than quietly honou
 a different number than was asked for.
 
 ```json
-→ {"cmd":"transmit","action":"rfpower","value":"25"}   # gated
+→ {"cmd":"transmit","action":"rfpower","value":"25"}
 ← {"ok":true,"transmit":"rfpower","rfPower":25,"tunePower":10}
 
 → {"cmd":"transmit","action":"rfpower","value":"90"}   # ceiling of 30 in force
@@ -5339,7 +5333,7 @@ audio devices require separate hardware validation.
 | `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
-| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
+| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (bounded by the power ceiling) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |

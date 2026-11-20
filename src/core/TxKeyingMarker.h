@@ -43,9 +43,9 @@ inline void markTxKeying(QWidget* w)
 }
 
 // Marker for controls that set transmit drive but never key (RF power, Tune
-// power). Without TX permission the bridge refuses to change one, as it refuses
-// `transmit rfpower` (#5851); reads stay open, and `controls scrub` re-asserting
-// the current value is not a change. Never routes into the keying-action path.
+// power). TX permission gates keying only; the bridge's power ceiling
+// (AETHER_AUTOMATION_TX_MAX_POWER) bounds these (#5851). Shown as
+// "txSetpoint" in dumpTree; never routes into the keying-action path.
 inline constexpr char kTxSetpointProperty[] = "aetherTxSetpoint";
 
 inline void markTxSetpoint(QWidget* w)
