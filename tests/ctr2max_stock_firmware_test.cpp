@@ -9,6 +9,7 @@
 // in-memory flash; no serial port, no network.
 
 #include "Ctr2MaxRegistrationFixtures.h"
+#include "Ctr2ProxyTestBackend.h"
 #include "core/Ctr2MaxStockCatalog.h"
 #include "core/EspFirmwareCatalog.h"
 #include "core/Ctr2MaxRegistration.h"
@@ -377,7 +378,8 @@ void testWindowFlow()
     layOut(flash.get(), kRows5, 0, 1);
     std::atomic<int> opens{0};
 
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, {[devices] { return devices->loaders; },
+                                         [devices] { return devices->hid; }});
     model.setJobTargetOpener([flash, &opens](const QString&, QString*, bool*) {
         ++opens;
         // The job owns what it opens; this one shares the test's flash.
@@ -577,7 +579,8 @@ void testReleaseAndRestore()
     const QByteArray before = flash->flash;
     std::atomic<int> opens{0};
 
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, {[devices] { return devices->loaders; },
+                                         [devices] { return devices->hid; }});
     model.setJobTargetOpener([flash, &opens](const QString&, QString*, bool*) {
         ++opens;
         auto s = std::make_unique<SharedFlash>();
@@ -694,7 +697,7 @@ void testFirmwareStore()
                                    merged(app(version), rows8())}}));
         return path;
     };
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, Ctr2ProxyTestBackend::inertFirmwareSources());
     QString problem;
     check(model.openStockFirmware(download("v1.02.00n"), &problem)
               && model.openStockFirmware(download("v1.01.03"), &problem)
@@ -713,7 +716,7 @@ void testFirmwareStore()
     check(model.chooseStockFirmware(kept[2].path, &problem)
               && model.stockFirmwareName() == QStringLiteral("CTR2-Max firmware v1.01.03"),
           "an earlier version is chosen from the kept copy, its download gone");
-    FirmwareInstallModel fresh(nullptr);
+    FirmwareInstallModel fresh(nullptr, Ctr2ProxyTestBackend::inertFirmwareSources());
     fresh.begin();
     check(fresh.storedFirmware().size() == 3, "and is there the next time the window opens");
     check(!model.openStockFirmware(root.filePath(QStringLiteral("missing.zip")), &problem)
@@ -733,7 +736,8 @@ void testRestartInto()
     const QByteArray image = espImage(QByteArray("AetherCTR2", 10));
     flash->flash.replace(0x410000, image.size(), image);
     flash->flash.replace(0x10000, app().size(), app());   // the stock firmware
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, {[devices] { return devices->loaders; },
+                                         [devices] { return devices->hid; }});
     model.setJobTargetOpener([flash](const QString&, QString*, bool*) {
         auto s = std::make_unique<SharedFlash>();
         s->f = flash;
@@ -914,7 +918,7 @@ void testLynovationCatalog()
     // The window's model: the list arrives, a release downloads, is kept, chosen.
     writeFile(catalogPath + QStringLiteral(".sig"), lynovation.sign(json));
     Ctr2MaxStockCatalog::setCatalogUrlForTesting(base);
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, Ctr2ProxyTestBackend::inertFirmwareSources());
     model.begin();
     t.restart();
     while (model.stockReleases().size() != 2 && t.elapsed() < 5000)
@@ -943,7 +947,7 @@ void testLynovationCatalog()
         writeFile(wrongPath, wrongJson);
         writeFile(wrongPath + QStringLiteral(".sig"), lynovation.sign(wrongJson));
         Ctr2MaxStockCatalog::setCatalogUrlForTesting(QUrl::fromLocalFile(wrongPath));
-        FirmwareInstallModel mislabeled(nullptr);
+        FirmwareInstallModel mislabeled(nullptr, Ctr2ProxyTestBackend::inertFirmwareSources());
         mislabeled.begin();
         t.restart();
         while (mislabeled.stockReleases().isEmpty() && t.elapsed() < 5000)
@@ -969,7 +973,7 @@ void testLynovationCatalog()
 
     // No trusted key: the window fetches nothing.
     Ctr2MaxStockCatalog::setTrustedKeysForTesting({});
-    FirmwareInstallModel unkeyed(nullptr);
+    FirmwareInstallModel unkeyed(nullptr, Ctr2ProxyTestBackend::inertFirmwareSources());
     unkeyed.begin();
     check(!unkeyed.downloadingStockRelease(), "with no Lynovation key, nothing is fetched");
     QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
@@ -991,6 +995,9 @@ int main(int argc, char** argv)
     EspFirmwareCatalog::setCatalogUrlForTesting(
         QUrl::fromLocalFile(nowhere.filePath(QStringLiteral("none/catalog.json"))));
     QCoreApplication app(argc, argv);
+    // A firmware model built without its own device lists would enumerate
+    // the real serial ports and HID devices: it gets a counting tripwire.
+    Ctr2ProxyTestBackend::installFirmwareSourceTripwire();
     testReadFile();
     testInstallKeepsEverythingElse();
     testUnitLayoutMustAgree();
@@ -1000,6 +1007,8 @@ int main(int argc, char** argv)
     testRestartInto();
     testVersionOrder();
     testLynovationCatalog();
+    check(Ctr2ProxyTestBackend::firmwareSourceTripwireCalls() == 0,
+          "every firmware model polled only injected device lists, never the system's");
     if (g_failures)
         std::fprintf(stderr, "%d failure(s)\n", g_failures);
     else

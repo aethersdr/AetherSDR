@@ -24,7 +24,7 @@ The local keyer is verified on FlexRadio. On the Hermes-Lite 2 and Networked Ico
 ## Requirements
 
 - **Mode:** the DVK plays on the **transmit slice**, so it is available when the TX slice is in a **voice mode** (USB, LSB, AM, SAM, FM, NFM, DFM) that the radio can transmit. The indicator is grayed out in digital, CW and receive-only modes, and switching to one of those modes closes the panel. A local message playing when the TX slice leaves a transmittable voice mode stops at once.
-- **Radio DVK:** a FlexRadio Aurora, FLEX-8000 series or FLEX-6000 series radio licensed for the voice keyer through SmartSDR+. See [SmartSDR+ license](#smartsdr-license).
+- **Radio DVK:** a FlexRadio Aurora, FLEX-8000 series or FLEX-6000 series radio licensed for the voice keyer through SmartSDR+. See [SmartSDR+ license](#smartsdr-license). Older FLEX-6000 firmware, such as 3.9, has no DVK: AetherSDR sees this when it connects, and **Automatic** then uses **Local**.
 - **Local:** a radio AetherSDR can transmit on. Recording uses the PC microphone, so on a FlexRadio the mic source must be **PC**.
 
 The DVK indicator is hidden only on a radio that can neither transmit nor host a voice keyer, such as an RTL-SDR or an ANAN-G2.

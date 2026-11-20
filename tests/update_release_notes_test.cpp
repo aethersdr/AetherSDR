@@ -89,6 +89,46 @@ int main(int argc, char** argv)
     check(!trusted("https://github.com:8443/aethersdr/AetherSDR/releases/download/v1/a.exe"), "port refused");
     check(!trusted("https://github.com/aethersdr/AetherSDR/releases/download/v1/sub/a.exe"), "extra segment refused");
     check(!trusted("javascript:alert(1)"), "script URL refused");
+    check(!trusted("https://updates.aethersdr.com/releases/v1/a.exe"),
+          "the release-notes allowlist stays GitHub-only");
+
+    // The update payload allowlist: one file of the manifest's own release,
+    // on GitHub or on updates.aethersdr.com.
+    auto payload = [](const char* url, const char* tag = "v26.11.3") {
+        return UpdateChecker::isTrustedPayloadUrl(QUrl(QString::fromLatin1(url), QUrl::StrictMode),
+                                                  QString::fromLatin1(tag));
+    };
+    check(payload("https://github.com/aethersdr/AetherSDR/releases/download/v26.11.3/a.update.tar"),
+          "a GitHub payload of this release is trusted");
+    check(payload("https://updates.aethersdr.com/releases/v26.11.3/a.update.tar"),
+          "an R2 payload of this release is trusted");
+    for (const char* url : {
+             "https://updates.aethersdr.com/releases/v26.11.2/a.update.tar",
+             "https://github.com/aethersdr/AetherSDR/releases/download/v26.11.2/a.update.tar",
+         }) {
+        check(!payload(url), "another release's payload refused");
+    }
+    for (const char* url : {
+             "http://updates.aethersdr.com/releases/v26.11.3/a.tar",
+             "https://updates.aethersdr.com:8443/releases/v26.11.3/a.tar",
+             "https://u@updates.aethersdr.com/releases/v26.11.3/a.tar",
+             "https://updates.aethersdr.com/releases/v26.11.3/a.tar?x=1",
+             "https://updates.aethersdr.com/releases/v26.11.3/a.tar#x",
+             "https://updates.aethersdr.com/releases/v26.11.3/sub/a.tar",
+             "https://updates.aethersdr.com/releases/v26.11.3/..%2Fa.tar",
+             "https://updates.aethersdr.com/releases/v26.11.3/x%2Fa.tar",
+             "https://updates.aethersdr.com/releases/v26.11.3/",
+             "https://updates.aethersdr.com/latest/v26.11.3/a.tar",
+             "https://updates.aethersdr.com.evil.example/releases/v26.11.3/a.tar",
+             "https://evil.example/releases/v26.11.3/a.tar",
+             "https://github.com/aethersdr/AetherSDR/releases/download/v26.11.3/sub/a.tar",
+             "https://github.com/someone/AetherSDR/releases/download/v26.11.3/a.tar",
+         }) {
+        check(!payload(url), url);
+    }
+    check(!payload("https://updates.aethersdr.com/releases/v26.11.3/a.tar", ""), "no tag, no trust");
+    check(!payload("https://updates.aethersdr.com/releases/v26.11.3/a.tar", "v26.11.3/x"),
+          "a tag with a slash is refused");
 
     // Hostile and degenerate input.
     const ReleaseInfo hostile = UpdateChecker::parseRelease(QByteArrayLiteral(R"({

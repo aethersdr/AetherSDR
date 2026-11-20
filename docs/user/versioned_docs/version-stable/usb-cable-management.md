@@ -10,6 +10,11 @@ AetherSDR can configure USB-serial adapters plugged into the FlexRadio's rear-pa
 
 The radio detects USB-serial adapters on its rear USB ports and reports them in status messages. AetherSDR lists them on the **USB Cables** page of Radio Setup, where you set each cable's type, serial parameters and behavior.
 
+The list and settings follow the radio, including changes made by another client.
+Changing a cable’s type retains its name and enabled state while refreshing the
+settings for the new type. Edits from a removed or replaced cable’s old controls
+are discarded.
+
 These are the **radio's** USB ports, not your computer's. For USB-serial PTT/CW keying on your computer, see **Settings → Radio Setup... → Serial & Controllers** ([USB Control Surfaces](./usb-control-surfaces.md)). For accessories AetherSDR talks to directly, see [Peripherals](./peripherals.md).
 
 ## Setup

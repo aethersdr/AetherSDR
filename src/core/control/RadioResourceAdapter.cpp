@@ -141,6 +141,10 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
                 {QStringLiteral("minimumGain"), 0}, {QStringLiteral("maximumGain"), 100}})
             : QJsonValue(QJsonValue::Null)},
         {QStringLiteral("receivePanCenterControl"), receiveRange(capabilities.receivePanCenterControl)},
+        {QStringLiteral("receiveAudioPlayout"), capabilities.receiveAudioPlayout
+            ? QJsonValue(QJsonObject{{QStringLiteral("prefillMs"), capabilities.receiveAudioPlayout->prefillMs},
+                {QStringLiteral("bufferCapMs"), capabilities.receiveAudioPlayout->bufferCapMs}})
+            : QJsonValue(QJsonValue::Null)},
         {QStringLiteral("receivePanBandwidthControl"), receiveRange(capabilities.receivePanBandwidthControl)},
         {QStringLiteral("receiveCwPitchControl"), capabilities.receiveCwPitchControl
             ? QJsonValue(QJsonObject{{QStringLiteral("authority"), receiveAuthority(capabilities.receiveCwPitchControl)},

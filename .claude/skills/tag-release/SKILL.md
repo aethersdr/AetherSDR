@@ -1,6 +1,6 @@
 ---
 name: tag-release
-description: 'The AetherSDR cut pass — takes a CalVer version whose prep PR has merged on main and drives it from "the prep is on main" to "the release is published, every asset is signed and verified, the Store draft is staged, the website post is up and the report is written". Finds the squash-merge commit, checks the six release files at that SHA, tags it with a signed annotated tag, creates the release before CI attaches anything, watches the three build workflows and the signing runs, verifies the twenty-five-asset set on the files, reads the Store staging step, drafts the website post, and reports the first 48 hours. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/tag-release 26.9.5", "/tag-release v26.9.5", "tag the release", "cut the tag", "publish v26.9.5", "the prep merged, tag it", or otherwise wants a prepped version tagged and published. /release-prep ends where this begins.'
+description: 'The AetherSDR cut pass — takes a CalVer version whose prep PR has merged on main and drives it from "the prep is on main" to "the release is published, every asset is signed and verified, the Store submission is committed, the website post is up and the report is written". Finds the squash-merge commit, checks the six release files at that SHA, tags it with a signed annotated tag, creates the release before CI attaches anything, watches the three build workflows, the signing runs and Release Offload, verifies the assets on the files (the fourteen-file page and what Release Offload moved to updates.aethersdr.com), reads the Store publish step, drafts the website post, and reports the first 48 hours. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/tag-release 26.9.5", "/tag-release v26.9.5", "tag the release", "cut the tag", "publish v26.9.5", "the prep merged, tag it", or otherwise wants a prepped version tagged and published. /release-prep ends where this begins.'
 ---
 
 # Tag the release — tag, publish, watch, verify, announce
@@ -15,10 +15,16 @@ which). Nine deliverables, in this order:
    the title that equals the tag's first line and the derived notes.
 4. **The three build workflows and the signing runs watched to conclusion** —
    re-run or dispatched by hand where the record says they stall.
-5. **The asset set verified on the files** — twenty-five assets (twenty-four
-   for a hotfix), every `.asc` postdating what it signs, `SHA256SUMS.txt`, one
-   artifact signature and the manual's signature actually checked with `gpg`.
-6. **The Microsoft Store step read** — draft staged, or the reason it failed
+5. **The asset set verified on the files** — from v26.11.4, fourteen files on
+   the page and, once **Release Offload** has run, the per-file `.asc`
+   signatures, the five symbol archives and the `.msixupload` on
+   `updates.aethersdr.com/releases/vX.Y.Z/` (RFC #6964). Every `.asc` still on
+   the page postdates what it signs, `SHA256SUMS.txt` lists the PDF manual,
+   and one artifact signature is actually checked with `gpg`. v26.11.3 keeps
+   all twenty-four assets (twenty-three for a hotfix) on the page; releases
+   through v26.11.2 carry 25/24, the manual's `.pdf.asc` among them.
+6. **The Microsoft Store step read** — production submission committed (or a
+   draft staged when the switch is off), or the reason it failed
    and the recovery, stated.
 7. **The website post drafted** in a fresh worktree of `aethersdr/aetherweb`,
    opened as a PR there.
@@ -67,8 +73,8 @@ that claim goes wrong:
   sat unsigned for a week. A `.asc` that exists is not a signature that
   verifies; a DMG that exists is not a notarized DMG.
 - **The Store step colours the Windows run.** Four of the last eight Windows
-  runs went red at "Stage Microsoft Store submission (draft)" after all three
-  Windows assets had attached (v26.8.1, v26.8.4, v26.9.1, v26.9.4). Red
+  runs went red at the Store step after all three Windows assets had
+  attached (v26.8.1, v26.8.4, v26.9.1, v26.9.4). Red
   Windows with the assets present is a Store problem; read the step.
 - **The website post is part of the release.** Three of the last five posts
   were back-filled days or weeks late, and the front page's latest-release
@@ -153,7 +159,7 @@ ask" question, so the questions are batched once.
   component is a **hotfix**: `packaging/windows/get-store-build-plan.ps1`
   returns `storeEligible = false`, so the Windows job attaches the installer
   and the portable ZIP but builds **no `.msixupload`** and stages nothing —
-  twenty-four assets, not twenty-five, the Store skipped by design, the release body
+  twenty-three assets, not twenty-four, the Store skipped by design, the release body
   in the hotfix shape, and the notes covering one fix.
 - **Refuse a version that already exists.** Both must be empty:
 
@@ -221,14 +227,18 @@ ask" question, so the questions are batched once.
   not at push, so this is a convenience, not a gate.
 - **Partner Center state.** `gh api repos/aethersdr/AetherSDR/actions/variables
   --jq '.variables[].name'` lists `AETHERSDR_STORE_PRODUCT_ID`, so every
-  non-hotfix `v*` tag stages a Store draft. The staging step runs `msstore
-  publish … --noCommit`; it deletes an existing API-created submission and
+  non-hotfix `v*` tag submits to the Store. With the `release`-environment
+  secret `AETHERSDR_STORE_AUTO_PUBLISH=true` (armed since 2026-11-09) the
+  publish step runs `msstore publish` without `--noCommit`, committing the
+  production submission straight to certification; with it unset the step
+  stages a draft (`--noCommit`). Either way it deletes an existing
+  API-created submission and
   creates a new one, and **fails when Partner Center holds an in-progress
   submission that was created in the portal** — "Ingestion API can only
   update, delete, and commit submissions that are created through the API"
   (v26.8.1, v26.9.4). The skill cannot see Partner Center. Ask the maintainer
   to confirm there is no in-progress submission **before** the tag; a failed
-  staging cannot be re-run, because a manual dispatch never stages
+  submission cannot be re-run, because a manual dispatch never submits
   production (step 5).
 - **Hotfix mode** (nonzero fourth component): the branch strategy is an
   "Always ask" with "prep lands on `main` through `/release-prep`, tag the
@@ -363,7 +373,7 @@ tag push to the asset's `created_at`:
 | Apple Silicon DMG | 15–19 min |
 | Windows setup, ZIP and `.msixupload` | 27–40 min |
 | Intel DMG | 30–42 min (July's Intel legs took 1.7–2 h) |
-| PDF manual and its `.asc` | no record yet: started by the release, not the tag (below) |
+| PDF manual | no record yet: started by the release, not the tag (below) |
 
 Poll every few minutes; read `conclusion`, not `status`. The Intel leg is the
 one that fails: v26.7.4.1's succeeded on attempt 2 a day later; v26.7.2's
@@ -380,14 +390,39 @@ pending). Each run is skipped by its own `if` unless the triggering build
 waits up to 30 minutes for the eight GPG-signable assets (both AppImages,
 both Linux release tarballs, both macOS app tarballs, the setup.exe, the
 portable ZIP), checks out the **tag** for the source tarball, writes
-`SHA256SUMS.txt` over exactly nine files (the eight plus the source tarball —
-DMGs and the `.msixupload` are deliberately absent), signs
+`SHA256SUMS.txt` over exactly ten files (the eight, the source tarball and
+the PDF manual — DMGs and the `.msixupload` are deliberately absent; releases
+through v26.11.2 list nine, without the manual), signs
 everything and uploads with `--clobber`. Its runs execute on the default
 branch, so `gh run list --branch vX.Y.Z` never shows them:
 
 ```sh
 gh run list --workflow sign-release.yml --limit 6 --json event,status,conclusion,createdAt,updatedAt,url
 ```
+
+**Release Offload** (`release-offload.yml`, from v26.11.4) follows each
+signing run that succeeded. Its read-only `plan` job asks nothing until the
+release is settled: every build and Docs run for the tag finished, no
+signing run unfinished, `SHA256SUMS.txt` newer than every build artifact.
+Then its `offload` job parks at the **update-signing** gate, one approval
+per release, which the maintainer gives. It copies the per-file `.asc`
+signatures (not `SHA256SUMS.txt.asc`), the symbol archives and the
+`.msixupload` to `updates.aethersdr.com/releases/vX.Y.Z/` and checks each
+one. Only after every copy is checked does it delete them from the page,
+which ends at fourteen files. If a copy fails, the page is left whole. A
+re-sign or build re-run after it re-attaches signatures, and the next
+signing run asks again. To list what it would move, or to finish a run that
+stopped partway:
+
+```sh
+gh workflow run release-offload.yml -f tag=vX.Y.Z -f dry_run=true   # lists, writes nothing
+gh workflow run release-offload.yml -f tag=vX.Y.Z -f dry_run=false  # moves, after approval
+```
+
+Its patch bundles never reach the page once `UPDATE_PAYLOAD_BASE` is `r2`:
+Update Manifest puts them on `updates.aethersdr.com` itself. Bundles on a
+v26.11.4-or-later page mean the variable was unset, and the offload leaves
+them, because `manifest-v2.json` names them there.
 
 Match `createdAt` to the build completions: the first run starts seconds
 after AppImage concludes and spends its time in the wait step until the
@@ -417,30 +452,37 @@ as it is).
 **Docs** runs on `release: published`, so creating the release (step 2)
 starts it, not the tag push. "Render PDF manual for release" checks out the
 tag and typesets `AetherSDR-Manual-vX.Y.Z.pdf` from the tag's
-`docs/user/docs/`. "Attach PDF manual to release" runs in the `release`
-environment, so it waits for the same approval as the signing workflows; it
-signs the PDF with the release key (the same `GPG_PRIVATE_KEY`/`GPG_PASSPHRASE`
-secrets as `sign-release.yml`), verifies the signature and uploads the PDF and
-its `.asc` together. Then "Resolve what to deploy", "Build docs site for
+`docs/user/docs/`. "Attach PDF manual to release" uploads the PDF with
+no approval gate and no signature of its own: from releases after v26.11.2,
+`sign-release.yml` lists the PDF in `SHA256SUMS.txt`, so `SHA256SUMS.txt.asc`
+covers it (RFC #6964). Releases through v26.11.2 carry a `.pdf.asc`. Then "Resolve what to deploy", "Build docs site for
 deploy" and "Deploy docs site" publish docs.aethersdr.com from the tag, through
 the `cloudflare-pages` environment, with `/AetherSDR-Manual.pdf` redirected to
 the PDF just attached. A pre-release attaches the PDF but deploys nothing. Its
 runs execute on the tag; read its conclusion with the build workflows. A red run is re-run once
-without asking (`gh run rerun <id> --failed`): it builds nothing the other
-workflows depend on.
+without asking (`gh run rerun <id> --failed`). Signing depends on it now: when
+a Docs run attaches or replaces the PDF after signing, Sign Release Artifacts
+starts again by itself and parks at the `release` approval, like the build
+runs. Its `plan` job signs when the signed `SHA256SUMS.txt` misses the
+manual's current hash, or when a build artifact is unsigned or newer than the
+sums (a Docs-triggered run can displace a pending build-triggered one). It
+skips before any build has attached anything, and for a tag that signs the
+manual apart. A red `plan` means a read failed; re-run it. Approve it, and confirm the re-signed `SHA256SUMS.txt` lists the
+manual's current hash.
 
-**The Windows run's colour includes the Store step** ("Stage Microsoft Store
-submission (draft)" is not `continue-on-error`). Red Windows with all three
+**The Windows run's colour includes the Store step** ("Publish Microsoft Store
+package", in the "Publish Microsoft Store production" job, is not
+`continue-on-error`). Red Windows with all three
 Windows assets attached is a Store problem, not a build problem:
 
 ```sh
 gh run view <windows-run-id> --json jobs \
-  --jq '.jobs[] | {name, conclusion, steps: [.steps[] | select(.name | test("Plan Store|Create MSIX|Attach to release|Stage Microsoft")) | {name, conclusion}]}'
+  --jq '.jobs[] | {name, conclusion, steps: [.steps[] | select(.name | test("Plan Store|Create MSIX|Attach to release|Publish Microsoft")) | {name, conclusion}]}'
 ```
 
 Do not re-run a Windows job that is red only at the Store step: the assets
 are attached, the re-run rebuilds and re-attaches them under new timestamps
-after their signatures, and the staging still fails (step 5).
+after their signatures, and the submission still fails (step 5).
 
 ## 4. Verify the asset set — Principle VIII, on the files
 
@@ -463,11 +505,15 @@ report. What it checks, and what you check by hand where it cannot run:
   macOS jobs' "Code sign application", "Sign DMG" and "Notarize DMG" step
   conclusions per matrix leg — **that is the notarization proof**, not the
   DMG's presence, since `spctl` cannot run from Linux or Windows; the Windows
-  job's "Create MSIX package", "Attach to release" and "Stage Microsoft Store
-  submission (draft)" steps; the signing runs since the tag push and whether
+  jobs' "Create MSIX package", "Attach to release" and "Publish Microsoft
+  Store package" steps; the signing runs since the tag push and whether
   one succeeded.
 - **The set** (`references/asset-manifest.md`; v26.9.3 and v26.9.4 have
-  the first fifteen, before the manual was attached to releases):
+  the first fifteen, before the manual was attached to releases). From
+  v26.11.4 every `.asc` below except `SHA256SUMS.txt.asc`, and the
+  `.msixupload`, are on `updates.aethersdr.com/releases/vX.Y.Z/` once
+  Release Offload has run, with the symbol archives; the script checks them
+  there by size and downloads the signatures it verifies from there:
   - `AetherSDR-vX.Y.Z-x86_64.AppImage` and `-aarch64.AppImage`, each with `.asc`
   - `AetherSDR-vX.Y.Z-x86_64.tar.zst` and `-aarch64.tar.zst`, each with `.asc`
     (the Linux release tarballs: AppImage builds them from the image, Update
@@ -480,8 +526,9 @@ report. What it checks, and what you check by hand where it cannot run:
   - `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` and `-Windows-x64-portable.zip`, each with `.asc`
   - `AetherSDR-vX.Y.Z-source.tar.gz` with `.asc`
   - `SHA256SUMS.txt` with `.asc`
-  - `AetherSDR-Manual-vX.Y.Z.pdf` with `.asc` (made, signed and attached by
-    **Docs**, not Sign Release Artifacts; deliberately not in `SHA256SUMS.txt`)
+  - `AetherSDR-Manual-vX.Y.Z.pdf` (made and attached by **Docs**, listed in
+    `SHA256SUMS.txt` with no `.asc` of its own; through v26.11.2 Docs signed
+    it apart and the sums left it out)
   - `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` — absent for a hotfix
 
   Every `.asc` on the six CI-built binaries postdates its binary (a re-run
@@ -492,15 +539,19 @@ report. What it checks, and what you check by hand where it cannot run:
   `.msixupload` version is the release version plus `.0`: v26.9.2's read
   `26.9.205.0` (the workflow run counter, fixed in #5467) and v26.7.4.1's
   `26.7.4.1` (a hotfix number the Store cannot take; a hotfix now produces
-  none). Anything else on the release is a `WARN` to explain.
+  none). Patch bundles on the page are `INFO` through v26.11.3 and a `WARN`
+  from v26.11.4. Files Release Offload has not moved yet are a `WARN`: approve
+  its run. A signature or the `.msixupload` on neither the page nor
+  `updates.aethersdr.com` is a `FAIL`. Anything else on the release is a
+  `WARN` to explain.
 - **Actually verify, do not list.** The script downloads `SHA256SUMS.txt`,
   its `.asc`, the source tarball and the x86_64 AppImage (`--all` downloads
   every signable), imports `docs/RELEASE-SIGNING-KEY.pub.asc` (fingerprint
   `B765 6E6B CB2E 022B 79F0 F97B 5578 D10E 3D59 18F3`), runs `gpg --verify
   SHA256SUMS.txt.asc SHA256SUMS.txt`, recomputes SHA-256 over every
   downloaded file against `SHA256SUMS.txt`, runs `gpg --verify` on one
-  artifact's `.asc` and on the manual's, checks that `SHA256SUMS.txt` names exactly the seven
-  files, and opens the tarball to read `AetherSDR-vX.Y.Z/CMakeLists.txt`'s
+  artifact's `.asc` (and on the manual's through v26.11.2), checks that
+  `SHA256SUMS.txt` names exactly the ten files (nine through v26.11.2), and opens the tarball to read `AetherSDR-vX.Y.Z/CMakeLists.txt`'s
   `project(AetherSDR VERSION …)` — the pre-#5029 tarballs were archived from
   `main`, not the tag. Where `gpg` is absent the signature checks print
   `SKIP` with the reason, and the report says they did not run.
@@ -510,20 +561,26 @@ By hand, the same thing is:
 ```sh
 gh release download vX.Y.Z --dir "$SCRATCH/dl" --pattern 'SHA256SUMS.txt*' --pattern '*source.tar.gz*' --pattern '*x86_64.AppImage*' --pattern 'AetherSDR-Manual-*'
 gpg --import docs/RELEASE-SIGNING-KEY.pub.asc
-(cd "$SCRATCH/dl" && gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt && sha256sum -c --ignore-missing SHA256SUMS.txt && gpg --verify AetherSDR-vX.Y.Z-source.tar.gz.asc AetherSDR-vX.Y.Z-source.tar.gz && gpg --verify AetherSDR-Manual-vX.Y.Z.pdf.asc AetherSDR-Manual-vX.Y.Z.pdf)
+(cd "$SCRATCH/dl" && gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt && sha256sum -c --ignore-missing SHA256SUMS.txt && gpg --verify AetherSDR-vX.Y.Z-source.tar.gz.asc AetherSDR-vX.Y.Z-source.tar.gz)
 tar -xzOf "$SCRATCH/dl/AetherSDR-vX.Y.Z-source.tar.gz" AetherSDR-vX.Y.Z/CMakeLists.txt | grep 'project(AetherSDR VERSION'
 ```
 
 ## 5. The Microsoft Store — read the step, state the recovery, touch nothing
 
 On a non-hotfix `v*` tag the Windows workflow builds the `.msixupload`,
-attaches it, and stages a **draft** production submission (`msstore publish
-… --noCommit`); a maintainer clicks **Submit to Store** in Partner Center. CI
-never submits. The skill:
+attaches it, and submits it. With `AETHERSDR_STORE_AUTO_PUBLISH=true` in the
+`release` environment (armed since 2026-11-09, #7115) the production
+submission is **committed** straight to certification (`msstore publish`
+without `--noCommit`) and nobody clicks anything. With the secret unset it is
+staged as a **draft** (`--noCommit`) and a maintainer clicks **Submit to
+Store** in Partner Center. The secret is write-only; the step's `Mode :` line
+and closing line are the only readback. The skill:
 
 - **Reads the step result** from the Windows run's jobs (step 3's query).
-  Success: "Microsoft Store submission staged successfully." Say so, and that
-  the click is the maintainer's.
+  Success is "Microsoft Store submission committed successfully." (armed: say
+  the submission is in certification) or "Microsoft Store submission staged
+  successfully." (unarmed: say the click is the maintainer's). An armed run
+  with no `.msixupload` fails rather than finishing green.
 - **On failure, quotes the reason** — the lines after `Running: msstore
   publish …` in the job log (`gh run view --job <id> --log`, or
   `check_release_assets.py`, which prints them). Two shapes are in the record:
@@ -537,7 +594,7 @@ never submits. The skill:
     that is a workflow defect to file, not a Partner Center action.
 - **States the recovery**: a maintainer deletes or submits the in-progress
   submission in Partner Center, then uploads the attached `.msixupload` by
-  hand. **The workflow will not stage production on a re-run or a
+  hand. **The workflow will not submit production on a re-run or a
   dispatch** — `get-store-build-plan.ps1` grants `productionDraft` only to a
   `push` of a `refs/tags/v*` ref in `aethersdr/AetherSDR`, and a re-run
   rebuilds the assets over their signatures.
@@ -635,17 +692,18 @@ Each decision put through AskUserQuestion and the answer. "None." if so.
 | macOS DMG | <url> | 1 | success | Sign DMG / Notarize DMG success on both legs |
 | Sign Release Artifacts | <url> | — | success | workflow_run, after AppImage |
 | Sign Release Artifacts | <url> | — | skipped | workflow_run, Windows red |
-| Docs | <url> | 1 | success | release: published; manual PDF signed and attached |
+| Docs | <url> | 1 | success | release: published; manual PDF attached |
+| Release Offload | <url> | — | success | approved <time>; 15 files moved (14 for a hotfix) / n/a (before v26.11.4) |
 Re-run or dispatched by hand: <what, when> / none.
 
-### Assets (25 / 24 for a hotfix)
+### Assets (from v26.11.4: 14 on the page + 15 on updates.aethersdr.com, 14 for a hotfix; before: 24 / 23 for a hotfix)
 - [x] AetherSDR-vX.Y.Z-x86_64.AppImage — .asc +<min> after the binary (source tarball and SHA256SUMS: same upload as their .asc)
 - … one line per expected asset, ticked or **missing** …
 - [x] AetherSDR-X.Y.Z.0-Windows-x64.msixupload — version checked / n/a (hotfix)
-SHA256SUMS.txt covers: the nine expected files. Verified locally: `gpg --verify SHA256SUMS.txt.asc` OK, sha256 of <files> OK, `gpg --verify <artifact>.asc` OK, `gpg --verify AetherSDR-Manual-vX.Y.Z.pdf.asc` OK, tarball CMakeLists says X.Y.Z / not run: <why>.
+SHA256SUMS.txt covers: the ten expected files, the manual included. Verified locally: `gpg --verify SHA256SUMS.txt.asc` OK, sha256 of <files> (the manual among them) OK, `gpg --verify <artifact>.asc` OK, tarball CMakeLists says X.Y.Z / not run: <why>.
 
 ### Store
-Draft staged: yes — Submit to Store is the maintainer's click / **no** — step failed: "<quoted reason>". Recovery: <as step 5>. / n/a (hotfix).
+Committed: yes — in certification, nothing to click / draft staged (switch off) — Submit to Store is the maintainer's click / **no** — step failed: "<quoted reason>". Recovery: <as step 5>. / n/a (hotfix).
 
 ### Website
 aetherweb PR <url> (title "…", kicker "…", motif `…`) / pushed to main <sha>. `data-latest-tag` and roadmap row updated: yes / no.

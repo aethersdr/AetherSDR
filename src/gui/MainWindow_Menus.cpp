@@ -1755,7 +1755,7 @@ void MainWindow::buildMenuBar()
         const auto shortcutText = [this](const QString& id) {
             const ShortcutManager::Action* action = m_shortcutManager.action(id);
             return action
-                ? action->currentKey.toString(QKeySequence::NativeText)
+                ? shortcutKeyText(action->currentKey, QKeySequence::NativeText)
                 : QString();
         };
         populateWindowMenu(windowMenu, this,
@@ -2177,7 +2177,7 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     // be told there is nothing to hold until they bind one.
     QString keyText;
     if (auto* act = m_shortcutManager.action(QLatin1String(kSplitMonitorActionId)))
-        keyText = act->currentKey.toString(QKeySequence::NativeText);
+        keyText = shortcutKeyText(act->currentKey, QKeySequence::NativeText);
     QAction* keyRow = monitorMenu->addAction(
         keyText.isEmpty() ? tr("Not bound — set a key in Keyboard Shortcuts")
                           : tr("Hold %1").arg(keyText));
