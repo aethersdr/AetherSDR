@@ -2,6 +2,7 @@
 #include "HostCwTextEngine.h"
 #include "ModeVocabulary.h"
 #include "TxController.h"
+#include "core/CwxLocalKeyer.h"
 #include "core/LogManager.h"
 #include "core/SerialPortController.h"
 
@@ -959,6 +960,10 @@ bool RadioModel::admitHostCwx(const TxCoordinator::Request& request, const QStri
         return refuse(tr("CW text refused: a message holds at most %1 characters, and at most %2 may wait.")
                           .arg(HostCwTextEngine::kMaxMessageChars).arg(HostCwTextEngine::kMaxPendingChars),
                       "length");
+    }
+    // Text the host keyer cannot key whole would be keyed in part, or not at all.
+    if (!CwxLocalKeyer::canEncode(message)) {
+        return refuse(tr("CW text refused: it holds a character the CW keyer cannot send."), "encode");
     }
     // Another sender's run plays: this message waits behind it (one CW stream).
     if (m_hostCwText->playing() && !m_hostCwText->playingFor(request)) {

@@ -491,6 +491,28 @@ void testLengthBounds()
     check("bounds: after the stop a send keys", sentAfter && keyedAfter && f.edges.size() == 2);
 }
 
+// Review nit 1 on #7347: text the encoder cannot key whole is refused at admission.
+void testUnencodableTextRefused()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         notices += key == QLatin1String("cw-text-refused:encode") ? 1 : 0;
+                     });
+    f.radio.transmitModel().setCwSpeed(30);
+    check("encode: ### refused", !a.send(QStringLiteral("###")));
+    check("encode: E#E refused", !a.send(QStringLiteral("E#E")));
+    pumpFor(300);
+    // The two notices share a key, so the second, inside 5 s, is folded into the first.
+    check("encode: no edge, the refusal names its reason", f.edges.empty() && notices == 1);
+    check("encode: text it can key is accepted", a.send(QStringLiteral("e/e")));
+    pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 3000);
+    a.stop();
+    pumpFor(50);
+}
+
 // Review nit 2 on #7347: the 511/1024 bounds apply to a stored macro once
 // {CALL} is resolved, and a waiting macro counts its resolved length.
 void testMacroBoundsAfterPlaceholder()
@@ -872,6 +894,7 @@ int main(int argc, char** argv)
     testBreakInOffWithPttHeld();
     testLengthBounds();
     testMacroBoundsAfterPlaceholder();
+    testUnencodableTextRefused();
     testMidMessageRefusals();
     testInvalidatedSenderStops();
     testQueueBehindPlaying();
