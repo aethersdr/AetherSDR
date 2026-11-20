@@ -671,22 +671,36 @@ void testPaddleTakesOver()
 }
 
 // Ruling on #7347: a remote client's key edge (TCI keyer) is not the operator's
-// hand, so it does not take over from host text.
+// hand, so it does not take over from host text. Nor does it key beside it: its
+// key-down is refused with a notice, and its key-up unkeys nothing.
 void testRemoteKeyDoesNotTakeOver()
 {
     Fixture f(hl2Capabilities(true));
     Sender a(f.radio);
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         notices += key == QLatin1String("cw-text-remote-key") ? 1 : 0;
+                     });
     f.radio.transmitModel().setCwSpeed(20);
-    check("remote: A plays", a.send(QStringLiteral("MMMMMMMMMM")));
+    check("remote: A plays", a.send(QStringLiteral("MM")));
     check("remote: A's first key-down", pumpUntil([&] { return !f.edges.empty(); }, 2000));
     pumpFor(20);
-    const size_t before = f.edges.size();
     f.radio.sendRemoteCwKey(true, QStringLiteral("tci:keyer"));
     pumpFor(100);
     f.radio.sendRemoteCwKey(false, QStringLiteral("tci:keyer"));
-    pumpFor(400);
-    std::printf("       %zu edges after the remote key edge\n", f.edges.size() - before);
     check("remote: A's text is still playing", f.radio.producerRequestHasWork(a.request));
+    check("remote: A's text keys whole and alone",
+          pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 3000)
+              && f.edges.size() == 8 && alternates(f.edges));
+    std::printf("       %zu edges for MM with a remote key edge inside it\n", f.edges.size());
+    check("remote: one refusal notice", notices == 1);
+    pumpFor(100);
+    f.radio.sendRemoteCwKey(true, QStringLiteral("tci:keyer"));
+    pumpFor(60);
+    f.radio.sendRemoteCwKey(false, QStringLiteral("tci:keyer"));
+    pumpFor(50);
+    check("remote: with no host text playing the remote key keys", f.edges.size() == 10 && alternates(f.edges));
     a.stop();
     pumpFor(50);
 }

@@ -1118,6 +1118,8 @@ public:
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
     // A remote client's key edge (TCI keyer): sendCwKey, but it never takes
     // over from host CW text, which only a local operator input does (#7347 ruling).
+    // While host text plays its key-down is refused with a notice, and the
+    // matching key-up keys nothing.
     void sendRemoteCwKey(bool down, const QString& debugSource);
     void sendCwPaddle(bool dit, bool dah, const QString& debugSource = {},
                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // iambic paddle via netcw stream
@@ -2557,6 +2559,7 @@ private:
     std::unique_ptr<HostCwTextEngine> m_hostCwText;
     bool m_hostCwTextEdge{false};   // a host-text element is being dispatched, not a paddle
     bool m_remoteCwKeyEdge{false};  // a remote client's key edge is being dispatched
+    bool m_remoteCwKeyRefused{false};  // a remote key-down was refused; its key-up keys nothing
     DvkModel         m_dvkModel;
     NavtexModel         m_navtexModel;
     UsbCableModel       m_usbCableModel;

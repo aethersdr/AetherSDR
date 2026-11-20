@@ -6019,6 +6019,22 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
 
 void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
 {
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    // A remote key-down while host CW text plays is refused, never keyed beside
+    // it; the key-up of a refused key-down unkeys nothing.
+    if (down && m_hostCwText && m_hostCwText->playing()) {
+        m_remoteCwKeyRefused = true;
+        qCWarning(lcCw).noquote() << "CW key-down refused: host CW text is playing source=" << debugSource;
+        const SliceModel* tx = txSlice();
+        emitInterlockNotification(tr("Remote CW key refused: CW text is playing."),
+                                  QStringLiteral("cw-text-remote-key"), tx ? tx->panId() : QString());
+        return;
+    }
+    if (std::exchange(m_remoteCwKeyRefused, false) && !down) {
+        return;
+    }
     const bool was = std::exchange(m_remoteCwKeyEdge, true);
     sendCwKey(down, debugSource);
     m_remoteCwKeyEdge = was;
