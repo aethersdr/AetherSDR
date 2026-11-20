@@ -1067,13 +1067,13 @@ private:
         TxCoordinator::Completion completion;   // a key-up's; dropped once written
     };
     // Edges pending at once: those whose instant lies within the lead plus
-    // the shift before now, plus a key-down's own release. At the keyer's
-    // 60 WPM ceiling an edge falls every 20 ms (dit, space, dit ...).
+    // the shift before now, plus a key-down's own release. Host text runs to
+    // TransmitModel's 100 WPM ceiling: an edge every 12 ms (dit, space, dit ...).
     static constexpr std::size_t kCwScheduleCapacity = 32;
-    static constexpr int kCwFastestEdgeSpacingMs = 1200 / 60;
+    static constexpr int kCwFastestEdgeSpacingMs = 1200 / 100;
     static_assert((Hl2Settings::kCwEdgeLeadMaxMs + kCwMaxEdgeShiftMs) / kCwFastestEdgeSpacingMs + 2
                       <= static_cast<int>(kCwScheduleCapacity),
-                  "the largest lead plus the largest shift must fit in the edge schedule at 60 WPM");
+                  "the largest lead plus the largest shift must fit in the edge schedule at 100 WPM");
     // The cap's slack is the default lead, not the one in force: it only has
     // to sit past the release, which moves with the down.
     static constexpr std::int64_t kCwMaxScheduledElementSamples =
