@@ -196,6 +196,39 @@ private slots:
         QCOMPARE(atu->accessibleDescription(), QStringLiteral("(T)"));
     }
 
+    void sidedKeyIsNamed()
+    {
+        Rig rig(true);
+        QPushButton* mox = rig.button("mox_toggle", kMoxText);
+        rig.tips->refresh();
+        rig.shortcuts.setBinding("mox_toggle", QKeySequence(kShortcutKeyLeftCtrl));
+        QCOMPARE(mox->toolTip(), kMoxText + QStringLiteral(" (Left Ctrl)"));
+        QCOMPARE(mox->accessibleDescription(), kMoxText + QStringLiteral(" (Left Ctrl)"));
+    }
+
+    // PROC's capability update rewrites the description, which sends no event.
+    void annotateReReadsARewrittenDescription()
+    {
+        Rig rig(true);
+        QPushButton* proc = rig.button("mox_toggle", kMoxText);
+        rig.tips->refresh();
+        proc->setAccessibleDescription(kTuneText);
+        rig.tips->annotate(&rig.root);
+        QCOMPARE(proc->accessibleDescription(), kTuneText + QStringLiteral(" (T)"));
+    }
+
+    void annotateWatchesAControlBuiltAfterRefresh()
+    {
+        Rig rig(true);
+        rig.tips->refresh();
+        QPushButton* late = rig.button("mox_toggle", kMoxText);
+        rig.tips->annotate(&rig.root);
+        QCOMPARE(late->accessibleDescription(), kMoxText + QStringLiteral(" (T)"));
+        late->setToolTip(kTuneText);
+        QCoreApplication::processEvents();
+        QCOMPARE(late->toolTip(), kTuneText + QStringLiteral(" (T)"));
+    }
+
     // No owner disables a marked control without writing a reason today;
     // this pins the order for one that does.
     void disablingWithoutATextChangeMovesTheKeyFirst()

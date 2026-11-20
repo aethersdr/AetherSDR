@@ -1,6 +1,7 @@
 #include "ShortcutTooltips.h"
 
 #include "ControlActionRegistry.h"
+#include "core/ShortcutManager.h"
 
 #include <QApplication>
 #include <QEvent>
@@ -63,16 +64,44 @@ void ShortcutTooltips::setShortcutsEnabled(bool enabled)
         return;
     }
     m_shortcutsEnabled = enabled;
-    refresh();
+    annotateWatched();
 }
 
 void ShortcutTooltips::refresh()
 {
     collect();
+    annotateWatched();
+}
+
+void ShortcutTooltips::annotateWatched()
+{
     for (const QPointer<QWidget>& w : std::as_const(m_watched)) {
         if (w) {
-            annotate(w);
+            annotateOne(w);
         }
+    }
+}
+
+void ShortcutTooltips::annotate(QWidget* root)
+{
+    if (!root) {
+        return;
+    }
+    QList<QWidget*> widgets = root->findChildren<QWidget*>();
+    widgets.prepend(root);
+    for (QWidget* w : std::as_const(widgets)) {
+        if (w->property(kShortcutActionProperty).isValid()) {
+            watch(w);
+            annotateOne(w);
+        }
+    }
+}
+
+void ShortcutTooltips::watch(QWidget* w)
+{
+    if (!m_watched.contains(w)) {
+        m_watched.append(w);
+        w->installEventFilter(this);
     }
 }
 
@@ -83,18 +112,18 @@ void ShortcutTooltips::collect()
     m_watched.removeIf([](const QPointer<QWidget>& w) { return w.isNull(); });
     const QWidgetList widgets = QApplication::allWidgets();
     for (QWidget* w : widgets) {
-        if (!w->property(kShortcutActionProperty).isValid() || m_watched.contains(w)) {
-            continue;
+        if (w->property(kShortcutActionProperty).isValid()) {
+            watch(w);
         }
-        m_watched.append(w);
-        w->installEventFilter(this);
     }
 }
 
-void ShortcutTooltips::annotate(QWidget* w)
+void ShortcutTooltips::annotateOne(QWidget* w)
 {
     const QString id = w->property(kShortcutActionProperty).toString();
-    const QString keyText = m_registry.boundKey(id).toString(QKeySequence::NativeText);
+    // Not QKeySequence::toString: Qt cannot name a sided key (#7357).
+    const QString keyText =
+        shortcutKeyText(m_registry.boundKey(id), QKeySequence::NativeText);
 
     const QString tip = w->toolTip();
     const QString desc = w->accessibleDescription();
@@ -137,7 +166,7 @@ void ShortcutTooltips::flush()
     const QVector<QPointer<QWidget>> pending = std::exchange(m_pending, {});
     for (const QPointer<QWidget>& w : pending) {
         if (w) {
-            annotate(w);
+            annotateOne(w);
         }
     }
 }
@@ -158,7 +187,7 @@ bool ShortcutTooltips::eventFilter(QObject* watched, QEvent* event)
     case QEvent::ToolTip:
     case QEvent::FocusIn:
         // Right before the text is shown or announced, so it is never stale.
-        annotate(w);
+        annotateOne(w);
         break;
     default:
         break;

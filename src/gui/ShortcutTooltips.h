@@ -1,28 +1,17 @@
 #pragma once
 
+#include "ShortcutActionMarker.h"
+
 #include <QObject>
 #include <QPointer>
 #include <QString>
 #include <QVector>
-#include <QWidget>
 
 class QEvent;
 
 namespace AetherSDR {
 
 class ControlActionRegistry;
-
-// Names the shortcut id of the action a control performs. Set it where the
-// control is created, like markTxKeying:
-//     markShortcutAction(m_moxBtn, "mox_toggle");
-inline constexpr char kShortcutActionProperty[] = "aetherShortcutAction";
-
-inline void markShortcutAction(QWidget* w, const char* shortcutId)
-{
-    if (w) {
-        w->setProperty(kShortcutActionProperty, QString::fromLatin1(shortcutId));
-    }
-}
 
 // Appends a marked control's bound key, read from ControlActionRegistry, to its
 // tooltip and accessible description (RFC #5484). An unbound key changes
@@ -45,6 +34,11 @@ public:
     void setShortcutsEnabled(bool enabled);
     bool shortcutsEnabled() const { return m_shortcutsEnabled; }
 
+    // Re-read `root` and every marked control under it now, and watch any not
+    // yet watched. For an owner that rewrites a description, which sends no
+    // event, or builds a marked control after refresh().
+    void annotate(QWidget* root);
+
 public slots:
     // Watch every marked control in the application and re-read every
     // binding. Call once the controls exist; connect to bindingsChanged.
@@ -55,7 +49,9 @@ protected:
 
 private:
     void collect();
-    void annotate(QWidget* w);
+    void watch(QWidget* w);
+    void annotateOne(QWidget* w);
+    void annotateWatched();
     void schedule(QWidget* w);
     void flush();
 

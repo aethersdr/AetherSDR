@@ -8,7 +8,7 @@
 #include "TwoToneTuneGate.h"
 #include "TxOutputMetering.h"
 #include "core/TxKeyingMarker.h"
-#include "ShortcutTooltips.h"
+#include "ShortcutActionMarker.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"

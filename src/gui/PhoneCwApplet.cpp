@@ -7,7 +7,7 @@
 #include "models/TransmitModel.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
-#include "ShortcutTooltips.h"
+#include "ShortcutActionMarker.h"
 
 #include <algorithm>
 #include <cmath>

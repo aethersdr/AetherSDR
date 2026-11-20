@@ -157,6 +157,7 @@
 #include "SupportDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "ShortcutDialog.h"
+#include "ShortcutTooltips.h"
 #include "MultiFlexDialog.h"
 #include "Nr2WisdomDialog.h"
 #include "HelpDialog.h"
@@ -2698,6 +2699,10 @@ MainWindow::~MainWindow()
     // a focused child and re-emits focusChanged. QObject's context auto-disconnect
     // only fires in ~QObject, which is later still. Sever it here (#4857).
     QObject::disconnect(qApp, &QApplication::focusChanged, this, nullptr);
+    // It holds m_controlActions and its lookup reads m_shortcutManager, both
+    // value members gone before deleteChildren() could send it an event.
+    delete m_shortcutTooltips;
+    m_shortcutTooltips = nullptr;
 
     preparePanadapterUiForShutdown();
 
@@ -8113,6 +8118,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
             proc.label, proc.levelMaximum);
+        if (m_shortcutTooltips) {
+            // The rewritten description sends no event: name PROC's key again.
+            m_shortcutTooltips->annotate(m_appletPanel->phoneCwApplet());
+        }
         if (auto* band = m_appletPanel->bandApplet()) {
             band->setRadioCapabilities(m_radioModel.capabilities());
             applyTuningRangeToBandApplet();

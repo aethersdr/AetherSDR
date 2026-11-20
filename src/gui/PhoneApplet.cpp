@@ -13,7 +13,7 @@
 #include <QPainter>
 #include "core/ThemeManager.h"
 #include "core/TxKeyingMarker.h"
-#include "ShortcutTooltips.h"
+#include "ShortcutActionMarker.h"
 
 #include <QPointer>
 
