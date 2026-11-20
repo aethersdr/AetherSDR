@@ -93,7 +93,9 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   `MainWindow::nativeEvent` handles `WM_NCCALCSIZE` so the app can paint the
   full window. When maximized, it insets all four sides to fit the work area.
   On Windows 11, `applyNonClientBandInsets()` also keeps controls clear of the
-  resize band in a restored window.
+  resize band in a restored window. When maximized, Qt can give the widget
+  more logical pixels than fit in the native client. The layout reserves
+  that excess on the right and bottom using the actual client size and DPR.
   `MainWindow::nativeEvent` also answers `WM_NCHITTEST` itself on Windows 10
   and 11: the resize codes on a band at the window edges
   (`SM_CXSIZEFRAME` / `SM_CYSIZEFRAME` + `SM_CXPADDEDBORDER` for the

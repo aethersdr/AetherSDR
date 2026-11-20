@@ -251,6 +251,18 @@ inline QMargins nonClientBandInsets(int bandDevicePx, qreal dpr)
     return QMargins(band, 0, band, band);
 }
 
+// Qt's expanded-frame widget can be larger than the maximized HWND client.
+// Both paint from the client origin. Keep the layout's far edges inside
+// the native client, including when a logical pixel spans fractional pixels.
+inline QMargins maximizedClientInsets(QSize widget, QSize clientPixels, qreal dpr)
+{
+    if (clientPixels.isEmpty() || dpr <= 0) {
+        return {};
+    }
+    return QMargins(0, 0, qMax(0, widget.width() - qFloor(clientPixels.width() / dpr)),
+                    qMax(0, widget.height() - qFloor(clientPixels.height() / dpr)));
+}
+
 // The frameless size grip is pinned to the bottom-right corner, which under
 // the band inset (nonClientBandInsets()) is the corner of the contents rect,
 // not of the window. Pure in its inputs for the same reason: the Windows-only

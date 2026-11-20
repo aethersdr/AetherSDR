@@ -189,6 +189,17 @@ int main(int argc, char** argv)
               "a zero dpr is refused rather than dividing by zero");
     }
 
+    {
+        check(WindowChrome::maximizedClientInsets({3077, 1680}, {3840, 2100}, 1.25)
+                  == QMargins(0, 0, 5, 0), "125% maximized rail fits the native client");
+        check(WindowChrome::maximizedClientInsets({2567, 1392}, {3840, 2088}, 1.5)
+                  == QMargins(0, 0, 7, 0), "150% maximized rail fits the native client");
+        check(WindowChrome::maximizedClientInsets({1200, 800}, {1500, 999}, 1.25)
+                  == QMargins(0, 0, 0, 1), "fractional bottom edge stays inside the client");
+        check(WindowChrome::maximizedClientInsets({1000, 800}, {1600, 1200}, 1.5).isNull(),
+              "a layout inside the client needs no inset");
+    }
+
     // ── The frameless size grip, which sits inside that band ──
     {
         // The grip is pinned to the bottom-right corner. Under the inset the
@@ -203,8 +214,7 @@ int main(int argc, char** argv)
         check(inset.x() + 16 + 1 + band.right() == window.width(),
               "the grip's right edge lands on the contents rect, not the window");
 
-        // Maximized, and every non-Windows-11 path: the margins are zero and
-        // the grip has to land exactly where it did before this fix.
+        // With no inset the grip sits at the window corner.
         check(WindowChrome::sizeGripOrigin(window, 16, QMargins())
                   == QPoint(1200 - 16 - 1, 800 - 16 - 1),
               "with no band the grip is in the window corner, as on main");

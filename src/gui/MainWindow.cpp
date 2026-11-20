@@ -3912,21 +3912,20 @@ void MainWindow::restoreNativeClientRect(const QString& role)
 
 void MainWindow::applyNonClientBandInsets()
 {
-    // Keep controls inside the visible resize frame on restored Windows 11
-    // windows. Maximized and fullscreen clients already fit the screen.
     QMargins insets;
-#ifdef Q_OS_WIN
     if (windowFlags().testFlag(Qt::ExpandedClientAreaHint) && !isFullScreen()
-        && !isMaximized()
         && QOperatingSystemVersion::current() >= QOperatingSystemVersion::Windows11) {
-        if (const HWND hwnd = reinterpret_cast<HWND>(winId())) {
+        const HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (isMaximized() && IsZoomed(hwnd)) {
+            insets = WindowChrome::maximizedClientInsets(size(), nativeClientRect().size(),
+                                                         devicePixelRatioF());
+        } else if (!isMaximized() && hwnd) {
             const UINT dpi = GetDpiForWindow(hwnd);
             const int band = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
                            + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
             insets = WindowChrome::nonClientBandInsets(band, devicePixelRatioF());
         }
     }
-#endif
     if (contentsMargins() == insets) {
         // The margins are already right, but the grip may not be: showing it
         // from setFramelessWindow() changes no size and so sends no
@@ -4192,6 +4191,13 @@ void MainWindow::reapplyStartupGeometryAfterShow()
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
+#ifdef Q_OS_WIN
+    // A maximize can deliver the widget size after the window-state event.
+    if (isMaximized() && event->oldSize() != event->size()) {
+        applyNonClientBandInsets();
+        return;
+    }
+#endif
     positionSizeGrip();
 }
 
@@ -4221,8 +4227,7 @@ void MainWindow::changeEvent(QEvent* event)
     QMainWindow::changeEvent(event);
 
 #ifdef Q_OS_WIN
-    // The inset applies only while restored, so maximizing and restoring have
-    // to re-run it. A DPI change arrives at event(), not here.
+    // Restored and maximized windows reserve different margins.
     if (event && event->type() == QEvent::WindowStateChange) {
         applyNonClientBandInsets();
     }
