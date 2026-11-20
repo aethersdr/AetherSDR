@@ -183,6 +183,10 @@ void testReachable()
     check(ft8::reachableAddress(QHostAddress(QStringLiteral("100.125.126.37"))), "a tailnet address");
     check(!ft8::reachableAddress(QHostAddress(QStringLiteral("8.8.8.8"))), "a public address is not tried");
     check(!ft8::reachableAddress(QHostAddress()), "a null address is not tried");
+    check(ft8::reachableRadio(false, QHostAddress(QStringLiteral("192.168.0.31"))),
+          "the connected radio on the LAN is tried");
+    check(!ft8::reachableRadio(true, QHostAddress(QStringLiteral("192.168.0.31"))),
+          "over SmartLink a LAN address left from an earlier session is not tried");
 }
 
 void testBands()

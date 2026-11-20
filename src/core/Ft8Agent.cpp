@@ -203,6 +203,11 @@ QByteArray configJson(const Ft8Config& config)
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
+bool reachableRadio(bool overWan, const QHostAddress& address)
+{
+    return !overWan && reachableAddress(address);
+}
+
 bool reachableAddress(const QHostAddress& address)
 {
     if (address.isNull() || address.protocol() != QAbstractSocket::IPv4Protocol) {

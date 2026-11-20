@@ -1632,6 +1632,25 @@ void WaveformsDialog::updateInstallButtonState()
         m_installWsprAction->setToolTip(wsprTip);
         m_installWsprAction->setStatusTip(wsprTip);
     }
+    if (m_installFt8Action) {
+        // Only the legacy armv7 package is pinned (see Ft8Package), so the
+        // entry is offered on a radio known to take it and dimmed elsewhere.
+        const bool reachable = ft8::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
+        const bool hasWaveforms = m_radioModel->backendCapabilities().hasWaveforms;
+        const bool native = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Native;
+        m_installFt8Action->setEnabled(!busy && connected && hasWaveforms && reachable && native);
+        const QString ft8Tip = busy ? tr("A waveform install is already in progress.")
+            : !connected            ? tr("Connect to a radio before installing the FT8 receiver.")
+            : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
+            : !reachable            ? tr("Connect over the radio's local network or Remote Access to install "
+                                         "the FT8 receiver.")
+            : !native               ? tr("The FT8 receiver is available for FLEX-6000 series radios only.")
+                                    : tr("Install the FT8 receiver (version %1), a receive-only FT8 "
+                                         "decoder that runs on the radio.")
+                                          .arg(QString::fromLatin1(Ft8Package::kVersion));
+        m_installFt8Action->setToolTip(ft8Tip);
+        m_installFt8Action->setStatusTip(ft8Tip);
+    }
     if (busy) {
         m_installDockerAction->setToolTip(tr("A waveform install is already in progress."));
     } else if (dockerReady) {
@@ -1681,8 +1700,8 @@ void WaveformsDialog::onInstallFt8Clicked()
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    // Legacy only: see the note on Ft8Package for why there is no container
-    // pin yet, so a FLEX-8000 or Aurora is not served by this entry.
+    // Legacy only: Ft8Package has no container pin, and updateInstallButtonState
+    // dims this entry on a radio that would need one.
     QString error;
     const QString path = ft8::writeBundledPackage(
         Ft8Package::kLegacy,

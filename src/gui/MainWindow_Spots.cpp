@@ -790,7 +790,7 @@ void MainWindow::wireSpotSubsystem()
         // so once rather than retrying in a loop.
         m_ft8Feed->stop();
         if (connected && m_radioModel.backendCapabilities().hasWaveforms
-            && ft8::reachableAddress(m_radioModel.radioAddress())) {
+            && ft8::reachableRadio(m_radioModel.isWan(), m_radioModel.radioAddress())) {
             m_ft8Feed->start(m_radioModel.radioAddress());
         }
         m_wsprFeed->stop();

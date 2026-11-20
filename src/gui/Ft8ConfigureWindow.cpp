@@ -271,6 +271,14 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
     receive->addLayout(rgrid);
     receive->addWidget(roleLabel(tr("The receiver makes a slice of its own, which never transmits."),
                                  "hint", body));
+    // Ruling 3 on #7114: the remaining gap to WSJT-X is stated here. The
+    // figure is the default depth's score in tools/ft8-agent/osd/PROVENANCE.md.
+    auto* gapLabel = roleLabel(tr("It decodes 77.3% of the reference recordings and does not subtract "
+                                  "decoded signals, so on a crowded band it finds fewer stations than "
+                                  "WSJT-X."),
+                               "hint", body);
+    gapLabel->setWordWrap(true);
+    receive->addWidget(gapLabel);
 
     // ── Message and Apply ────────────────────────────────────────────────
     m_messageLabel = roleLabel(QString(), "message", body);
@@ -347,7 +355,8 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
 
 void Ft8ConfigureWindow::load()
 {
-    if (!m_model || !m_model->isConnected() || !ft8::reachableAddress(m_model->radioAddress())) {
+    if (!m_model || !m_model->isConnected()
+        || !ft8::reachableRadio(m_model->isWan(), m_model->radioAddress())) {
         setStatusLine(tr("Not reachable"), QStringLiteral("error"));
         setMessage(tr("The FT8 receiver can be reached only on the radio's local network, or through "
                       "a tailnet shim that publishes it."),

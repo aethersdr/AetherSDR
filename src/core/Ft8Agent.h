@@ -111,9 +111,8 @@ struct Ft8Status {
 // together. A package built on Windows installs and then silently never
 // runs -- only the zip container differs, and nothing reports the problem.
 //
-// There is no container pin yet: the ARM64 image needs the flex-tailnet-shim
-// mkimage helper, which this tree does not carry, so FLEX-8000 and Aurora
-// are not served by this installer.
+// There is no container pin yet, so FLEX-8000 and Aurora are not served by
+// this installer and its menu entry is dimmed on them.
 struct Ft8Package {
     struct Pin {
         const char* resource;
@@ -166,6 +165,9 @@ QByteArray configJson(const Ft8Config& config);
 // The receiver answers LAN callers only: a private, link-local or Tailscale
 // (100.64.0.0/10) IPv4 address.
 bool reachableAddress(const QHostAddress& address);
+// The same for the connected radio. Over SmartLink its address is left from
+// the last LAN session, and may be another radio's.
+bool reachableRadio(bool overWan, const QHostAddress& address);
 
 // Write the bundled package to `dir` and return its path, or empty with
 // `error` set when the shipped bytes do not match the pin. Mirrors
