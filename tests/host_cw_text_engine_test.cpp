@@ -381,6 +381,12 @@ void testRefusals()
 {
     const auto refused = [](const char* name, Fixture& f, RadioModel::HostCwTextRefusal expected) {
         Sender a(f.radio);
+        int notices = 0;
+        const QMetaObject::Connection counting = QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+            [&](const QString&, const QString& key, const QString&) {
+                notices += key.startsWith(QLatin1String("cw-text-refused:")) ? 1 : 0;
+            });
+        const bool host = f.radio.hasHostCwTextKeyer();
         const QString prefix = QString::fromLatin1(name);
         check((prefix + QStringLiteral(": preflight names the reason")).toUtf8().constData(),
               f.radio.hostCwTextRefusal() == expected);
@@ -388,6 +394,13 @@ void testRefusals()
               !a.send(QStringLiteral("TEST")));
         pumpFor(300);
         check((prefix + QStringLiteral(": no edge")).toUtf8().constData(), f.edges.empty());
+        // N3 (#7347 review): a refused host send names its reason and closes its request.
+        if (host) {
+            check((prefix + QStringLiteral(": one refusal notice")).toUtf8().constData(), notices == 1);
+            check((prefix + QStringLiteral(": the refused request is closed")).toUtf8().constData(),
+                  !a.request.valid());
+        }
+        QObject::disconnect(counting);
     };
     {
         Fixture f(hl2Capabilities(true), QStringLiteral("USB"));
@@ -447,16 +460,23 @@ void testLengthBounds()
     Sender a(f.radio);
     check("bounds: 511 per message, 1024 pending",
           maxMessage == 511 && HostCwTextEngine::kMaxPendingChars == 1024);
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         notices += key == QLatin1String("cw-text-refused:length") ? 1 : 0;
+                     });
     check("bounds: 512 characters refused", !a.send(longest + QLatin1Char('E')));
     pumpFor(200);
     check("bounds: no edge for the refused message", f.edges.empty());
     check("bounds: 511 accepted", a.send(longest));
     check("bounds: a second 511 from the same sender appended (1022)", a.send(longest));
     check("bounds: 3 more refused (1025 > 1024)", !a.send(QStringLiteral("EEE")));
+    check("bounds: the refusal names its reason", notices == 1);
     check("bounds: the refusal left the run playing", f.radio.producerRequestHasWork(a.request));
     check("bounds: 2 more still fit (1024)", a.send(QStringLiteral("EE")));
     Sender b(f.radio);
     check("bounds: a waiting sender counts against the same 1024", !b.send(QStringLiteral("E")));
+    check("bounds: B's refused send closes its request", !b.request.valid());
     a.stop();
     f.edges.clear();
     const bool sentAfter = a.send(QStringLiteral("E"));

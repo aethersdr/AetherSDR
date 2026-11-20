@@ -849,6 +849,10 @@ bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const
     if (host) {
         bool held = false;
         if (!admitHostCwx(request, text, onAdmitted, macroIndex, live, held)) {
+            // A refused append leaves the sender's playing host text alone.
+            if (!m_hostCwText || !m_hostCwText->playingFor(request)) {
+                abortProducerCwx(request);
+            }
             return false;
         }
         if (held) {
@@ -911,18 +915,45 @@ bool RadioModel::admitHostCwx(const TxCoordinator::Request& request, const QStri
                               const std::function<void()>& onAdmitted, int macroIndex, bool live,
                               bool& held)
 {
-    if (hostCwTextRefusal() != HostCwTextRefusal::None || !m_txCoordinator.acceptsRequest(request)) {
+    if (!m_txCoordinator.acceptsRequest(request)) {
         return false;
+    }
+    // Every refusal below names its reason, as the radio-side path's admission does.
+    const SliceModel* tx = txSlice();
+    const auto refuse = [this, tx](const QString& message, const char* reason) {
+        emitInterlockNotification(message, QStringLiteral("cw-text-refused:%1").arg(QLatin1String(reason)),
+                                  tx ? tx->panId() : QString());
+        return false;
+    };
+    switch (hostCwTextRefusal()) {
+    case HostCwTextRefusal::None:
+        break;
+    case HostCwTextRefusal::Unsupported:
+        return refuse(tr("CW text refused: this radio cannot key CW text."), "unsupported");
+    case HostCwTextRefusal::NoTxSlice:
+        return refuse(tr("CW text refused: no slice is set to transmit."), "no-tx-slice");
+    case HostCwTextRefusal::NotCwMode:
+        return refuse(tr("CW text refused: the transmit slice is not in a CW mode."), "not-cw");
+    case HostCwTextRefusal::ReceiveOnlyMode:
+        return refuse(tr("CW text refused: the transmit slice's mode is receive-only."), "receive-only");
+    case HostCwTextRefusal::Inhibited:
+        return refuse(tr("CW text refused: transmit is inhibited on the transmit slice."), "inhibited");
+    case HostCwTextRefusal::Tuning:
+        return refuse(tr("CW text refused: TUNE is active."), "tune");
+    case HostCwTextRefusal::BreakInOffUnkeyed:
+        return refuse(tr("CW text refused: break-in is off and transmit is not keyed."), "break-in-off");
     }
     // No radio holds a macro here: only the local copy can be keyed.
     const QString message = macroIndex != 0 ? m_cwxModel.macro(macroIndex - 1) : text;
     if (!m_hostCwText->admitsLength(static_cast<int>(message.size()))) {
-        return false;
+        return refuse(tr("CW text refused: a message holds at most %1 characters, and at most %2 may wait.")
+                          .arg(HostCwTextEngine::kMaxMessageChars).arg(HostCwTextEngine::kMaxPendingChars),
+                      "length");
     }
     // Another sender's run plays: this message waits behind it (one CW stream).
     if (m_hostCwText->playing() && !m_hostCwText->playingFor(request)) {
         if (!m_hostCwText->hold({request, message, macroIndex, live})) {
-            return false;
+            return refuse(tr("CW text refused: the CW text engine is closed."), "closed");
         }
         held = true;
         if (onAdmitted) {
