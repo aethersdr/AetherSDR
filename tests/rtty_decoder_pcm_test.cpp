@@ -393,8 +393,10 @@ int main(int argc, char** argv)
     QString decoded;
     bool haveStats = false;
     bool locked = false;
+    int resets = 0;
     QObject::connect(&decoder, &RttyDecoder::statsUpdated, &app,
                      [&](float, float, bool value) { haveStats = true; locked = value; });
+    QObject::connect(&decoder, &RttyDecoder::statsReset, &app, [&] { ++resets; });
     QObject::connect(&decoder, &RttyDecoder::textDecoded, &app,
                      [&](const QString& text, float) { decoded += text; });
     DecoderPcmAdapter adapter;
@@ -408,9 +410,10 @@ int main(int argc, char** argv)
     pumpUntil([&] { return haveStats && locked; });
     check(haveStats && locked, "real mark/space processing establishes visible signal statistics");
     decoded.clear();
+    const int resetsBefore = resets;
     decoder.resetInput();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-    check(!locked, "source reset clears visible detector lock statistics");
+    check(resets == resetsBefore + 1 && !locked, "source reset clears visible detector lock statistics");
     adapter.reset();
     feed(decoder, adapter, producer, signal(24000, PcmLayout::Mono, {1}, true), 1);
     pumpUntil([&] { return !decoded.isEmpty(); });
@@ -455,18 +458,13 @@ int main(int argc, char** argv)
 
     // The legacy stereo24 byte API keeps trim-oldest on overflow, as CwDecoder's
     // does. The observable difference is the neutral reset statistic: retiring
-    // detector state on overflow publishes one, trimming the backlog publishes
-    // none. Text alone does not separate them -- a decoder that resets on every
-    // overflow still emits characters between resets.
+    // detector state on overflow publishes one (statsReset), trimming the backlog
+    // publishes none. Text alone does not separate them -- a decoder that resets on
+    // every overflow still emits characters between resets.
     {
         RttyDecoder legacy;
         int neutralResets = 0;
-        QObject::connect(&legacy, &RttyDecoder::statsUpdated, &app,
-                         [&](float level, float snr, bool lockedNow) {
-                             if (level == 0.0f && snr == 0.0f && !lockedNow) {
-                                 ++neutralResets;
-                             }
-                         });
+        QObject::connect(&legacy, &RttyDecoder::statsReset, &app, [&] { ++neutralResets; });
         legacy.start();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         neutralResets = 0;   // start() publishes one reset of its own

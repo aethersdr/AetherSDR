@@ -60,6 +60,9 @@ signals:
     // of the read tone over the other, in dB. locked: characters are being framed with a
     // good average score. With no valid character for 1.5 s: 0, 0, false.
     void statsUpdated(float level, float snrDb, bool locked);
+    // The statistics were reset: start, a new source, or resetInput(). Emitted just before
+    // the neutral statsUpdated(0, 0, false), which an ordinary reading can also send.
+    void statsReset();
 
 private:
     void queueResetStats(quint64 generation);

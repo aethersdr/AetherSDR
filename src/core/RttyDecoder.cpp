@@ -182,6 +182,7 @@ void RttyDecoder::queueResetStats(quint64 generation)
     // reentrant destruction during start/stop or the source-reset operation.
     QMetaObject::invokeMethod(this, [this, generation] {
         if (m_inputGeneration.load() == generation) {
+            emit statsReset();
             emit statsUpdated(0.0f, 0.0f, false);
         }
     }, Qt::QueuedConnection);
