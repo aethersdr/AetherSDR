@@ -858,16 +858,20 @@ void Hl2Backend::updateTelemetryPollState()
     const Hl2LinkState state = telemetryLinkState();
     m_telemetryService->setLinkState(state);
 
-    // Publish RAD:PATEMP from the poller when in-band telemetry is not live,
-    // so the needle does not freeze. Raw, not fed into m_paTempC, whose filter
-    // belongs to the in-band session. With no reading at all the needle still
-    // holds (the meter seam has no "unknown"); the health row shows the gap.
+    // Publish RAD:PATEMP and RAD:PACURRENT from the poller when in-band
+    // telemetry is not live, so the needles do not freeze. Raw, not fed into
+    // m_paTempC, whose filter belongs to the in-band session. With no reading at
+    // all a needle still holds (the meter seam has no "unknown"); the health row
+    // shows the gap.
     if (state == Hl2LinkState::Streaming)
-        return;   // in-band owns the meter whenever it is live
+        return;   // in-band owns the meters whenever it is live
     const std::optional<DiscoveryReply> reply = m_telemetryService->lastReply();
     if (reply && reply->temperatureRaw)
         emit meterUpdate(QStringLiteral("RAD:PATEMP"),
                          hl2TemperatureCelsius(*reply->temperatureRaw));
+    if (reply && reply->biasCurrentRaw)
+        emit meterUpdate(QStringLiteral("RAD:PACURRENT"),
+                         hl2PaCurrentAmps(*reply->biasCurrentRaw));
 }
 
 void Hl2Backend::setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther)
