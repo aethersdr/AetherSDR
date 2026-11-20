@@ -306,6 +306,38 @@ void aNewPanTakesItsRememberedAgcOffLevel()
         [&] { return Access::lastReceiverDspChannel(backend) >= 0; });
 }
 
+// The linkUp handler announces every open receiver's blanker: RadioModel has
+// just wiped the slices, and the receive observation reads d.nb, so without it
+// slice.setNoiseBlanker is refused on receiver A until the blanker is toggled.
+void theLinkUpAnnouncesEveryBlanker()
+{
+    Hl2Backend backend;
+    if (!Access::rebuildReceivers(backend, 1)) {
+        check(false, "the injected receiver setup succeeds");
+        return;
+    }
+    QList<SliceDelta> echoes;
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                     [&echoes](int id, const SliceDelta& d) { if (id == 0) echoes.append(d); });
+    Access::linkUp(backend);
+    check(backend.isConnected(), "the injected link edge reaches the backend");
+    SliceModel announced(0);
+    for (const SliceDelta& d : echoes) {
+        announced.applyChanges(d);
+    }
+    check(announced.receiveObservation().noiseBlanker
+              && !*announced.receiveObservation().noiseBlanker,
+          "the linkUp announcement makes receiver A's blanker observed, off");
+    const int before = static_cast<int>(echoes.size());
+    backend.setSliceAudioGain(0, 40);
+    bool republished = false;
+    for (int i = before; i < echoes.size(); ++i) {
+        republished = republished || echoes.at(i).nb.has_value();
+    }
+    check(echoes.size() > before && !republished,
+          "negative control: a later echo does not republish the blanker");
+}
+
 // A receiver opened after connect announces its blanker, as the connect-time
 // announcement does for the receivers already open: the slice's receive
 // observation reads d.nb, and slice.setNoiseBlanker is admitted only on it.
@@ -889,6 +921,7 @@ int main(int argc, char** argv)
     theGuiThreadIsNotHeld();
     aPanSeededInADataModeCarriesTheHeldAgc();
     aNewPanTakesItsRememberedAgcOffLevel();
+    theLinkUpAnnouncesEveryBlanker();
     aNewPanAnnouncesItsBlanker();
     theBuildRunsOnTheBuildThread();
     aStaleFailureDoesNotCloseTheReuser();

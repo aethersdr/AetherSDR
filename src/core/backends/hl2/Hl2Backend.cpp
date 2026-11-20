@@ -475,7 +475,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // emitPanState() reads nothing pushInitialState() changes.
         emitAllPanState();
         pushInitialState();
-        emitAllSliceState();
+        emitAllSliceState(/*announceBlankers=*/true);
         defineMeters();
         // Once per connect, after receiver A is published: the remembered
         // notches and receivers B.. come back through the operator's own paths.
@@ -3465,12 +3465,17 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind k
     // bands can legitimately disagree. The slice model already holds it
     // per-slice, so honouring that is also what stops the second receiver's
     // toggle from moving the first one's.
+    const bool kindChanged = r->nbKind != kind;
     r->nbKind = kind;
     r->nbLevel = qBound(0, level, 100);
     r->nbFill = fill;
     pushNoiseBlanker(*r);
-    r->nbEchoPending = true;
-    emitSliceState(ddc);
+    // On/off and kind only: the receive observation reads d.nb, and a level or
+    // fill echo would make SliceModel re-emit all three NB signals per tick.
+    if (kindChanged) {
+        r->nbEchoPending = true;
+        emitSliceState(ddc);
+    }
     notifyOperatingStateChanged();
 }
 
@@ -9246,9 +9251,10 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     d.audioGain = qRound(r->audioGain * 100.0f);
     d.audioMute = r->audioMuted;
     d.audioPan = r->audioPanPercent;
-    // The blanker when it changed, was restored or every slice was re-announced,
-    // not on every echo: SliceModel re-emits all three NB signals for each one it
-    // receives. d.nb is what the slice's receive observation reads.
+    // The blanker when its kind changed, it was restored, its receiver just
+    // opened or the connect announcement re-sends it, not on every echo:
+    // SliceModel re-emits all three NB signals for each one it receives. d.nb is
+    // what the slice's receive observation reads.
     if (r->nbEchoPending) {
         d.nb = r->nbKind != AetherSDR::NoiseBlankerKind::Off;
         d.nbKind = r->nbKind;
@@ -9311,10 +9317,16 @@ void Hl2Backend::emitPanState(int ddc)
                                    static_cast<double>(m_sampleRateHz) / 1.0e6);
 }
 
-void Hl2Backend::emitAllSliceState()
+void Hl2Backend::emitAllSliceState(bool announceBlankers)
 {
-    for (Receiver& r : m_rx) {
-        r.nbEchoPending = true;
+    // Only the connect announcement re-sends every blanker: RadioModel has just
+    // wiped the slices. The other re-announces (TX slice or antenna moved, a
+    // receiver closed, a DSP build failed) keep every surviving slice, so a
+    // re-send would only make SliceModel re-emit all three NB signals.
+    if (announceBlankers) {
+        for (Receiver& r : m_rx) {
+            r.nbEchoPending = true;
+        }
     }
     for (const auto& ids : m_ids.all())
         emitSliceState(ids.ddcIndex, true);

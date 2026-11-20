@@ -28,7 +28,9 @@ namespace AetherSDR::hl2 {
 struct Hl2CwPitchReportTestAccess {
     static void setConnected(Hl2Backend& backend, bool connected) { backend.m_connected = connected; }
     // The announcement of every slice that the linkUp handler makes on connect.
-    static void announceAllSlices(Hl2Backend& backend) { backend.emitAllSliceState(); }
+    static void announceAllSlices(Hl2Backend& backend) { backend.emitAllSliceState(true); }
+    // Every other re-announce: the TX slice or antenna moved, or a receiver closed.
+    static void reannounceAllSlices(Hl2Backend& backend) { backend.emitAllSliceState(); }
 };
 } // namespace AetherSDR::hl2
 
@@ -1330,6 +1332,41 @@ void hl2ReceiveDspDrivesTheControlPlane()
               "an HL2 blanker change makes the blanker observed, on, at once");
         check(h.outcome(ReceiveOperation::NoiseBlanker) == QStringLiteral("result"),
               "so slice.setNoiseBlanker is admitted without a reconnect");
+        // Only a kind change and the connect announcement carry the blanker.
+        // SliceModel re-emits nbChanged, nbKindChanged and nbFillChanged for
+        // every echo that does, so a level drag or a TX-antenna re-announce
+        // must not.
+        int nbEchoes = 0;
+        int nbSignals = 0;
+        const QMetaObject::Connection echoes = QObject::connect(&h.hl2, &IRadioBackend::sliceChanged,
+            &h.hl2, [&](int, const SliceDelta& d) { nbEchoes += d.nb.has_value(); });
+        const QMetaObject::Connection nbWatch = QObject::connect(h.f.radio.slice(0), &SliceModel::nbChanged,
+            h.f.radio.slice(0), [&](bool) { ++nbSignals; });
+        for (int level = 51; level <= 60; ++level) {
+            h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Impulse, level, kDefaultNoiseBlankerFill);
+        }
+        h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Impulse, 60, NoiseBlankerFill::SampleHold);
+        check(nbEchoes == 0 && nbSignals == 0,
+              "a level or fill change on an enabled blanker publishes no blanker echo");
+        Access::reannounceAllSlices(h.hl2);
+        check(nbEchoes == 0 && nbSignals == 0,
+              "a re-announce other than connect publishes no blanker echo");
+        Access::announceAllSlices(h.hl2);
+        check(nbEchoes == 1 && nbSignals == 1,
+              "the connect announcement publishes the blanker once");
+        NoiseBlankerKind echoedKind = NoiseBlankerKind::Off;
+        const QMetaObject::Connection kinds = QObject::connect(&h.hl2, &IRadioBackend::sliceChanged,
+            &h.hl2, [&](int, const SliceDelta& d) { if (d.nbKind) { echoedKind = *d.nbKind; } });
+        h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Advanced, 60, NoiseBlankerFill::SampleHold);
+        QObject::disconnect(kinds);
+        check(nbEchoes == 2 && echoedKind == NoiseBlankerKind::Advanced,
+              "a switch between two blanker kinds, both on, is published");
+        h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Off, 60, NoiseBlankerFill::SampleHold);
+        check(nbEchoes == 3 && h.f.radio.slice(0)->receiveObservation().noiseBlanker
+                  && !*h.f.radio.slice(0)->receiveObservation().noiseBlanker,
+              "turning the blanker off is published at once, observed off");
+        QObject::disconnect(echoes);
+        QObject::disconnect(nbWatch);
     }
     {
         // The record covers every mode the HL2 accepts, so a slice a CAT client
