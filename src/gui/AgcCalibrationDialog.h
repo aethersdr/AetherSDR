@@ -9,7 +9,6 @@
 #include <QWidget>
 
 #include <functional>
-#include <limits>
 
 class QComboBox;
 class QLabel;

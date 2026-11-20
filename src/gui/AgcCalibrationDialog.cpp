@@ -23,7 +23,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace AetherSDR {
 
@@ -654,16 +653,11 @@ void AgcCalibrationDialog::updateModeUi()
     m_applyBtn->setAccessibleDescription(QString());
     m_applyBtn->setEnabled(!m_engine.isRunning() && m_engine.hasRecommendation());
     if (off) {
-        if (isTciMode()) {
-            m_modeLabel->setText(QStringLiteral(
-                "Calibrating radio AGC-T (agc_off_level) via TCI audio — "
-                "finding a comfortable fixed gain. AGC is off; no knee in this mode. "
-                "Target level uses PC Audio."));
-        } else {
-            m_modeLabel->setText(QStringLiteral(
-                "Calibrating radio AGC-T (agc_off_level) via PC Audio — "
-                "finding a comfortable fixed gain. AGC is off; no knee in this mode."));
-        }
+        // isTciMode() returns false when agcMode == "off" (TargetLevel always
+        // uses PC Audio per the 2026-11-20 ruling), so there is no TCI branch here.
+        m_modeLabel->setText(QStringLiteral(
+            "Calibrating radio AGC-T (agc_off_level) via PC Audio — "
+            "finding a comfortable fixed gain. AGC is off; no knee in this mode."));
     } else {
         if (isTciMode()) {
             m_modeLabel->setText(QStringLiteral(
