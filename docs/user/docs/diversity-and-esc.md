@@ -146,7 +146,6 @@ For developers and protocol researchers:
 
 ## Known issues
 
-- With diversity on for two slices on different panadapters, tuning one slice moves the other ([#4891](https://github.com/aethersdr/AetherSDR/issues/4891)).
 - Turning on DIV for a second slice silently breaks up the diversity pair that is already running, with no message ([#5352](https://github.com/aethersdr/AetherSDR/issues/5352)).
 
 ## Troubleshooting

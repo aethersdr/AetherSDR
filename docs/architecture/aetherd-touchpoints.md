@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 289 touchpoint headers (234 core, 55 models) — 289/289 tagged, 0/289 converted.
+**Totals:** 290 touchpoint headers (234 core, 56 models) — 290/290 tagged, 0/290 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -28,7 +28,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/BandStackSettings.h` | 4 | universal — Per-radio band-stack memories (freq/mode/filter/AGC/NB-NR) — canonical radio state; only the XML store is client-side | unconverted |
 | `core/CallsignInfo.h` | 1 | universal — Callsign lookup result struct (name/QTH/grid, JSON cache form); radio-agnostic spot/logging data. | unconverted |
 | `core/CallsignLookupService.h` | 3 | universal — Orchestrates QRZ/cty.dat callsign lookups + cache; radio-agnostic spot/logging integration. | unconverted |
-| `core/CallsignUtils.h` | 1 | universal — Stateless callsign parsing/validation helpers; radio-agnostic. | unconverted |
+| `core/CallsignUtils.h` | 2 | universal — Stateless callsign parsing/validation helpers; radio-agnostic. | unconverted |
 | `core/CatPort.h` | 2 | ui-support — CAT server (TCP+PTY, rigctld/TS-2000/FlexCAT dialects) for external apps; desktop integration, needs a home | unconverted |
 | `core/ClientComp.h` | 13 | universal — Client-side TX dynamics DSP (compressor/limiter/drive/phase rotator + GR meters); radio-agnostic engine DSP. | unconverted |
 | `core/ClientDisplaySettings.h` | 1 | ui-support — Radio-scoped client persistence for locally shaped display state (waterfall cadence, FFT FPS, the dBm range) under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state. | unconverted |
@@ -262,6 +262,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/DaxReceiveModel.h` | 1 | universal — Owner-thread adapter from typed native receive PCM and stable TCI receiver bindings to the existing 24 kHz virtual audio bridges; no radio wire protocol. | unconverted |
 | `models/DecoderAudioModel.h` | 3 | mixed(flex) — Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry. | unconverted |
 | `models/DigitalVoiceWaveformHistory.h` | 1 | mixed(flex) — Rolling health history for the DV waveform path (sample rate, turnaround, deficits). Generic rate/latency telemetry fused with Flex VITA sequence-gap counters. | unconverted |
+| `models/DiversityPairPolicy.h` | 1 | universal — Pure decision logic for which two diversity slices form one receive pair (radio diversity_index, pan fallback) — no QObject, no I/O, no model access. Canonical slice state only. | unconverted |
 | `models/EqualizerModel.h` | 3 | universal — 8-band TX/RX audio EQ state and typed enable/band-gain intent are universal; Flex encoding is backend-owned, legacy status parsing remains | unconverted |
 | `models/FirmwareInstallModel.h` | 1 | peripheral(ctr2) — CTR2-Max firmware installer model behind the CTR2 window: the signed release catalog, which controller is connected and in what mode, and actions on it (EspFirmwareJob in ROM download mode, or Ctr2ProxyModel's updater over the USB link), each checked against the device the operator confirmed. Controller firmware tooling, no radio state; a peripheral, NOT behind the radio seam. | unconverted |
 | `models/FlexWaveformModel.h` | 2 | vendor(flex) — Flex waveform/WFP status mirror with typed management intents; the backend encodes commands. | unconverted |

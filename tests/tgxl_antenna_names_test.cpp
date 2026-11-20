@@ -337,6 +337,10 @@ int main(int argc, char** argv)
     CHECK(inject(&direct, QStringLiteral("R1|1|info serial=TG123 3way=1")));
     CHECK(!direct.isThreeWay().has_value());
     CHECK(b1->isVisible());
+    // A rejected info reply retires its sequence before other replies arrive.
+    CHECK(inject(&direct, QStringLiteral("R1|0|antA=1")));
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(model.antennaA() == 1);
     CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
     CHECK(direct.isThreeWay().value_or(false));
     CHECK(b1->isVisible());

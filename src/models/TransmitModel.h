@@ -16,6 +16,7 @@
 #include <functional>
 #include <atomic>
 #include <memory>
+#include <utility>
 
 class QTimer;
 
@@ -367,6 +368,12 @@ public:
     // other direction. Unset = always admitted.
     using TuneAdmission = std::function<QString()>;
     void setTuneAdmission(TuneAdmission admission);
+    // Asked before VOX is switched on, since the radio then keys itself on
+    // audio. A non-empty answer leaves VOX as it is and raises
+    // voxEnableRefused(); requestVoxEnable(true) then returns 0. Never asked
+    // for VOX off, level or delay. Unset = always admitted.
+    using VoxAdmission = std::function<QString()>;
+    void setVoxAdmission(VoxAdmission admission) { m_voxAdmission = std::move(admission); }
 
     enum class KeyingIntent { Mox, Tune, Atu };
     // Installed by the engine. Admission precedes optimistic state and every
@@ -631,6 +638,8 @@ signals:
     void commandReady(const QString& cmd);
     void controlRequested(const AetherSDR::TransmitControlRequest& request);
     void pttBlocked(const QString& message);
+    // VOX on was refused by the VOX admission; nothing was sent.
+    void voxEnableRefused(const QString& message);
     void atuTuneFailed(AetherSDR::ATUStatus status, const QString& message);
     // Quindar active-phase signal (#2262).  Emitted on the GUI thread
     // immediately when intro/outro starts and again when each finishes,
@@ -680,6 +689,9 @@ private:
     TxModeGetter             m_txModeGetter;
     PttPreflight             m_pttPreflight;
     TuneAdmission            m_tuneAdmission;   // #5422
+    VoxAdmission             m_voxAdmission;
+    // The VOX admission's refusal, or empty; asked only for VOX on.
+    QString voxOnRefusal() const;
     KeyingAdmission          m_keyingAdmission;
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};

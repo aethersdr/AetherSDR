@@ -163,6 +163,7 @@
 #include "ThemeEditorDialog.h"
 #include "WhatsNewDialog.h"
 #include "models/SliceModel.h"
+#include "models/DiversityPairPolicy.h"
 #include "models/MeterModel.h"
 #include "models/BandDefs.h"
 #include "models/BandPlanManager.h"
@@ -568,19 +569,19 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 bool MainWindow::isSameDiversityReceivePair(const SliceModel* slice,
                                             const SliceModel* other)
 {
-    if (!slice || !other || slice == other
-        || !slice->diversity() || !other->diversity()) {
+    if (!slice || !other || slice == other)
         return false;
-    }
-
-    const bool parentChildPair =
-        (slice->isDiversityParent() && other->isDiversityChild())
-        || (slice->isDiversityChild() && other->isDiversityParent());
-    if (parentChildPair) {
-        return true;
-    }
-
-    return !slice->panId().isEmpty() && slice->panId() == other->panId();
+    auto view = [](const SliceModel* s) {
+        DiversityPairPolicy::SliceView v;
+        v.sliceId = s->sliceId();
+        v.diversity = s->diversity();
+        v.parent = s->isDiversityParent();
+        v.child = s->isDiversityChild();
+        v.diversityIndex = s->diversityIndex();
+        v.panId = s->panId();
+        return v;
+    };
+    return DiversityPairPolicy::isSamePair(view(slice), view(other));
 }
 
 // ─── Shortcut guard (file-scope for use as std::function<bool()>) ───────────
@@ -9642,6 +9643,9 @@ void MainWindow::routeCwDecoderOutput()
         // decoder target. Hide it before dropping ownership so a later refresh
         // cannot leave an orphaned CW dock on the old pan (#4409).
         m_cwDecoderApplet->setCwPanelVisible(false);
+        // Saved now, so the target below reads it rather than the value
+        // before the debounced save.
+        m_cwDecoderApplet->flushCwSens();
 #ifdef HAVE_CW_RX_BACKENDS
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwEngineChanged,
                    this, &MainWindow::selectCwRxBackend);
@@ -9689,9 +9693,11 @@ void MainWindow::routeCwDecoderOutput()
 
     // Connect to new applet
     if (m_cwDecoderApplet) {
-        // Each pan builds its own range sliders; the decoder's ranges are one
-        // shared setting, so the target shows the saved ones before they are pushed.
+        // Each pan builds its own range sliders and Sens slider; the decoder's
+        // ranges and Sens are saved settings, so the target shows the saved
+        // ones before they are pushed or used.
         m_cwDecoderApplet->restoreCwRanges();
+        m_cwDecoderApplet->restoreCwSens();
         connect(&m_cwDecoder, &CwRxModel::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         // TX-side decoded text routes to a separate slot so the panel
@@ -10866,8 +10872,12 @@ void MainWindow::updateKeyerAvailability()
     if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable, txIsSsb || !connected);
     // The local keyer is verified on FlexRadio; on a radio with no voice keyer
     // of its own (Hermes-Lite 2, Icom, ...) it is Beta until those radios have
-    // been tested on the air. hasVoiceKeyer() is permissive while disconnected,
-    // so the word appears only once such a radio is actually connected.
+    // been tested on the air. The family's capability decides it, not
+    // hasVoiceKeyer(): a FlexRadio whose firmware has no DVK API (#7156) still
+    // transmits the local keyer the verified way. Only once a radio is
+    // connected, since a disconnected capability set says nothing.
+    const bool familyHasVoiceKeyer = !connected
+        || m_radioModel.backendCapabilities().hasVoiceKeyer;
     if (m_dvkPanel) {
         // Offline the panel says so rather than blame the radio (the
         // capabilities are then a default-constructed set), and the local
@@ -10879,7 +10889,8 @@ void MainWindow::updateKeyerAvailability()
                 m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
                 m_radioModel.dvkLicenseRefused()),
             voiceKeyerPanelSlotsEditableOffline(voiceKeyerSource(), connected));
-        m_dvkPanel->setSourceQualifier(voiceKeyerSource() == VoiceKeyerSource::Local && !hasVoiceKeyer
+        m_dvkPanel->setSourceQualifier(voiceKeyerSource() == VoiceKeyerSource::Local
+                                               && !familyHasVoiceKeyer
                                            ? QStringLiteral("Beta") : QString());
     }
 
