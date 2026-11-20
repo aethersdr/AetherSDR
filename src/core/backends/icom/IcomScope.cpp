@@ -7,7 +7,7 @@ namespace {
 
 // Offsets inside a 0x27 0x00 frame's data (i.e. after cmd + subcommand).
 //
-//   data[0]      scope selector: 00, or 00 MAIN / 01 SUB on the IC-9700
+//   data[0]      scope selector: 00 MAIN / 01 SUB on receiver-addressed models
 //   data[1]      division index, BCD 01..11
 //   data[2]      division maximum, BCD — 01 over WLAN, 11 over USB
 // then, ONLY when the division index is 1:
@@ -37,6 +37,7 @@ constexpr std::size_t firstDivisionHeader(std::size_t freqBytes)
 
 std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
 {
+    m_rejection.reset();
     if (frame.cmd != cmd::kScope || !frame.hasSub || frame.sub != scope::kWaveData)
         return std::nullopt;
     if (frame.data.size() <= kOffDivisionMax)
@@ -47,8 +48,13 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
     // breaks at 10 — which over WLAN never happens, so it would ship.
     const int division    = decodeBcdByte(frame.data[kOffDivision]);
     const int divisionMax = decodeBcdByte(frame.data[kOffDivisionMax]);
-    if (division < 1 || divisionMax < 1 || division > divisionMax)
+    if (frame.data[0] > 1 || (frame.data[1] & 0x0f) > 9 || (frame.data[1] >> 4) > 9
+        || (frame.data[2] & 0x0f) > 9 || (frame.data[2] >> 4) > 9
+        || division < 1 || divisionMax < 1 || division > divisionMax
+        || divisionMax > m_geom.divisionsUsb || m_geom.points <= 0 || m_geom.points > 4096) {
+        reset();
         return std::nullopt;
+    }
 
     const std::size_t freqBytes = kFreqBytes;
 
@@ -56,18 +62,21 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
         // A first division restarts assembly unconditionally. If a previous
         // sweep was left half-assembled by packet loss, this is where it gets
         // discarded — keeping it would splice two sweeps into one trace.
-        m_partial = ScopeFrame{};
+        reset();
         m_partial.selector = frame.data[kOffSelector];
-        m_assembling = true;
         m_expectedDivision = 1;
+        m_totalDivisions = divisionMax;
 
         if (frame.data.size() <= kOffMode)
             return std::nullopt;
 
         const std::uint8_t modeByte = frame.data[kOffMode];
-        m_partial.mode = (modeByte <= static_cast<std::uint8_t>(ScopeMode::ScrollF))
-                             ? static_cast<ScopeMode>(modeByte)
-                             : ScopeMode::Fixed;
+        if (modeByte > static_cast<std::uint8_t>(ScopeMode::ScrollF)) {
+            m_rejection = Rejection{Rejection::Kind::Mode,
+                static_cast<std::size_t>(ScopeMode::ScrollF), modeByte};
+            return std::nullopt;
+        }
+        m_partial.mode = static_cast<ScopeMode>(modeByte);
 
         const std::size_t header = firstDivisionHeader(freqBytes);
         if (frame.data.size() < header)
@@ -97,8 +106,17 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
             m_partial.endHz   = *b;
         }
 
+        if (m_partial.endHz <= m_partial.startHz || frame.data[header - 1] > 1) {
+            return std::nullopt;
+        }
+        m_assembling = true;
         m_partial.outOfRange = frame.data[header - 1] != 0x00;
         if (m_partial.outOfRange) {
+            if (frame.data.size() != header) {
+                m_assembling = false;
+                m_rejection = Rejection{Rejection::Kind::Size, 0, frame.data.size() - header};
+                return std::nullopt;
+            }
             // The radio omits the waveform entirely when out of range, so there
             // is nothing to accumulate. Emit a floor-filled sweep immediately:
             // a waterfall that stops scrolling reads as a hung application,
@@ -118,7 +136,11 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
             // IC-705 backend runs, and it is why the multi-division machinery
             // below never executes over WiFi.
             m_assembling = false;
-            m_partial.raw.resize(static_cast<std::size_t>(m_geom.points), 0);
+            if (m_partial.raw.size() != static_cast<std::size_t>(m_geom.points)) {
+                m_rejection = Rejection{Rejection::Kind::Size,
+                    static_cast<std::size_t>(m_geom.points), m_partial.raw.size()};
+                return std::nullopt;
+            }
             return m_partial;
         }
         return std::nullopt;
@@ -127,7 +149,8 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
     // Continuation divisions (USB transport only).
     if (!m_assembling)
         return std::nullopt;   // mid-sweep frame with no first division — dropped
-    if (division != m_expectedDivision + 1) {
+    if (division != m_expectedDivision + 1 || divisionMax != m_totalDivisions
+        || frame.data[kOffSelector] != m_partial.selector) {
         // A gap means the sweep is unrecoverable: the waveform is positional and
         // there is no per-division index inside the payload to re-align against.
         // Abandon rather than concatenating a shifted trace.
@@ -136,13 +159,25 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
     }
     m_expectedDivision = division;
 
+    if (m_partial.raw.size() + frame.data.size() - kOffContinuation
+        > static_cast<std::size_t>(m_geom.points)) {
+        const std::size_t received = m_partial.raw.size() + frame.data.size() - kOffContinuation;
+        reset();
+        m_rejection = Rejection{Rejection::Kind::Size,
+            static_cast<std::size_t>(m_geom.points), received};
+        return std::nullopt;
+    }
     if (frame.data.size() > kOffContinuation)
         m_partial.raw.insert(m_partial.raw.end(), frame.data.begin() + kOffContinuation,
                              frame.data.end());
 
     if (division == divisionMax) {
         m_assembling = false;
-        m_partial.raw.resize(static_cast<std::size_t>(m_geom.points), 0);
+        if (m_partial.raw.size() != static_cast<std::size_t>(m_geom.points)) {
+            m_rejection = Rejection{Rejection::Kind::Size,
+                static_cast<std::size_t>(m_geom.points), m_partial.raw.size()};
+            return std::nullopt;
+        }
         return m_partial;
     }
     return std::nullopt;
@@ -150,9 +185,11 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
 
 void ScopeDecoder::reset() noexcept
 {
+    m_rejection.reset();
     m_partial = ScopeFrame{};
     m_assembling = false;
     m_expectedDivision = 0;
+    m_totalDivisions = 0;
 }
 
 std::vector<float> toDbm(const ScopeFrame& frame, const ScopeGeometry& geom,

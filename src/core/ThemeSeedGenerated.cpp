@@ -134,6 +134,7 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.meter.pivot.glow", QString("#ffb060"));
     m_tokens.insert("color.meter.pivot.rim", QString("#3a3e48"));
     m_tokens.insert("color.meter.rms", QString("#00b4d8"));
+    m_tokens.insert("color.meter.swr.yellow", QString("#e6d000"));
     m_tokens.insert("color.meter.thresh", QString("#ffb84d"));
     m_tokens.insert("color.networkQuality.excellent", QString("#00cc66"));
     m_tokens.insert("color.networkQuality.fair", QString("#cc9900"));

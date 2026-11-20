@@ -4,6 +4,9 @@
 #include <QMap>
 #include <QString>
 
+#include <functional>
+#include <utility>
+
 #include "core/backends/TunerDelta.h"
 
 namespace AetherSDR {
@@ -30,7 +33,8 @@ struct TunerPortInfo {
 // State model for a 4O3A Tuner Genius XL relayed via the FlexRadio. Status:
 // "atu <handle> key=val ..." after "sub atu all". Commands:
 //   tgxl set handle=<H> mode=<0|1> / bypass=<0|1>; tgxl autotune handle=<H>
-// A direct connection (port 9010) adds Pi-network relay stepping:
+// A direct connection (port 9010) carries device state and, for tuners with no
+// radio relay, operate/bypass commands. It also adds Pi-network relay stepping:
 //   tune relay=<0|1|2> move=<+1|-1>   (C1/L/C2)
 class TunerModel : public QObject {
     Q_OBJECT
@@ -64,7 +68,7 @@ public:
     int     antennaA()  const { return m_antennaA; }  // 0-indexed: 0=ANT1, 1=ANT2, 2=ANT3, -1=unknown
     float   fwdPower()  const { return m_fwdPower; }  // forward power in watts (from direct TGXL status)
     float   swr()       const { return m_swr; }       // SWR ratio (from direct TGXL status)
-    bool    hasAntennaSwitch() const { return m_oneByThree; }  // true for TGXL 3x1 model (one_by_three=1)
+    bool    hasAntennaSwitch() const;
     bool    isPresent() const { return !m_handle.isEmpty() || m_directPresence; }
     bool    hasDirectConnection() const;
 
@@ -83,11 +87,10 @@ public:
     void adjustRelay(int relay, int direction);
 
 private:
-    // `tuning` off the direct connection. Both direct frames carry it, and it
-    // gates abortTune() — which on this transport keys the transmitter — so
-    // it has to come from the device rather than only from the radio relaying
-    // for it.
-    void applyDirectTuning(const QMap<QString, QString>& kvs);
+    // Apply direct readback. Mode state is authoritative here only for
+    // direct-only tuners; the radio relay owns it when a handle is present.
+    void applyDirectState(const QMap<QString, QString>& kvs);
+    void applyDirectMeters(const QMap<QString, QString>& kvs);
     // Forgets a tune we can no longer see the end of. Clearing to false is
     // the safe direction: abortTune() goes inert rather than commanding a
     // tuner whose state we are guessing at.
@@ -95,18 +98,21 @@ private:
 
 public:
 
-    // Command methods — emit neutral intents (operate/bypass/autotune) that
-    // RadioModel translates to the Flex TGXL relay via invokeExtension. The
-    // direct port-9010 fast-path (autoTune when a direct conn is up, and the
-    // antenna/relay methods below) stays local and does not go through the seam.
+    // RadioModel translates neutral relay intents via invokeExtension.
+    // Mode commands keep the radio relay when a handle exists; direct mode
+    // commands serve IP-only tuners. Autotune prefers the direct link.
     void setOperate(bool on);
     void setBypass(bool on);
     // One operator action that needs BOTH verbs (STBY, BYP, the rail cycle),
-    // commanded in the order given. On a tuner no radio relays for, it is ONE
-    // refusal, not two: relayedCommandRefused fires once, naming the first
-    // verb, and nothing is sent.
+    // commanded in the order given. Without a ready direct link or radio
+    // handle, relayedCommandRefused fires once and nothing is sent.
     void setOperateAndBypass(bool operate, bool bypass, bool operateFirst);
     void autoTune();
+    // Asked before an autotune starts, on either route; a non-empty answer
+    // refuses it with autotuneRefused(). Never asked for an abort, which is
+    // the same verb while tuning.
+    using KeyOnAdmission = std::function<QString()>;
+    void setAutotuneAdmission(KeyOnAdmission admission) { m_autotuneAdmission = std::move(admission); }
     // Break a tune already in progress — the same `autotune` the start uses,
     // which the firmware treats as a toggle. No-op when not tuning.
     void abortTune();
@@ -118,7 +124,7 @@ signals:
     void stateChanged();               // any property changed
     void tuningChanged(bool tuning);   // tuning started/stopped
     void antennaAChanged(int antA);    // antenna port changed (0-indexed)
-    // fwd power / SWR / peak power from a direct TGXL connection.
+    // Forward power / SWR / peak power / reported MAX (watts).
     //
     // fwdPeak is the device's own peak, not ours. The TGXL is poll-response
     // only and `fwd` is an instantaneous sample, so on SSB most polls land
@@ -126,8 +132,10 @@ signals:
     // transmission, roughly three samples in four read 0.14 W while the
     // envelope was hitting 82 W. A peak taken from those samples is a peak of
     // the silences. `peak` is computed on the device's own timebase, where
-    // the envelope is actually visible.
-    void metersChanged(float fwdPower, float swr, float fwdPeak);
+    // the envelope is actually visible. The observed peak holds for about a
+    // second after the last peak, then re-arms. MAX's display interpretation
+    // as a tuning-solution limit still needs physical hardware verification.
+    void metersChanged(float fwdPower, float swr, float fwdPeak, float maxPower);
     // Alert text from the tuner; empty means cleared. See TgxlConnection.
     void alertChanged(const QString& text);
     // Either port's reported source/frequency/keying moved.
@@ -144,20 +152,18 @@ signals:
     void operateRequested(bool on);
     void bypassRequested(bool on);
     void autotuneRequested();
+    // An autotune start the admission refused; nothing was sent.
+    void autotuneRefused(const QString& message);
     // Emitted when an autotune goes out over the direct port-9010 channel, which
     // bypasses autotuneRequested. The TGXL then keys the radio over its interlock
     // line, so RadioModel arms its tune-carrier window from this edge.
     void directAutotuneStarted();
-    // OPERATE / STANDBY / BYPASS were asked of a tuner this client reaches
-    // ONLY over its direct port-9010 link. Those three are relayed by a Flex
-    // radio (the handle above), and the direct link carries no equivalent that
-    // this client speaks, so nothing was sent. Emitted instead of the silent
-    // debug-line return so the UI can say so; `command` is "operate" or
-    // "bypass". Not emitted with no tuner at all -- that is not a refusal of
-    // anything the operator can see.
+    // A present tuner has neither a ready direct link nor a radio handle.
+    // Nothing was sent; the UI can announce "operate" or "bypass" as refused.
     void relayedCommandRefused(const QString& command);
 
 private:
+    KeyOnAdmission m_autotuneAdmission;
     QString m_handle;
     QString m_model;
     QString m_serialNum;
@@ -179,6 +185,7 @@ private:
     int     m_antennaA{-1};   // 0-indexed antenna port (-1 = unknown)
     float   m_fwdPower{0.0f};  // forward power in watts (from direct TGXL status)
     float   m_fwdPeak{0.0f};   // device-side peak power in watts (TGXL `peak`)
+    float   m_maxPower{0.0f};  // reported MAX in watts; display semantics unverified
     float   m_swr{1.0f};      // SWR ratio (from direct TGXL status)
     bool    m_oneByThree{false}; // true for TGXL 3x1 model (from one_by_three=1)
 

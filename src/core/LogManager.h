@@ -64,8 +64,7 @@ Q_DECLARE_LOGGING_CATEGORY(lcHl2Tx)
 // The Support dialog (Help → Support) uses this to let users enable/disable
 // logging for individual modules without recompiling.
 //
-// loadSettings() enables the default support categories; other debug logging
-// is opt-in. Warnings/criticals always pass.
+// Default state: all debug logging DISABLED. Warnings/criticals always pass.
 // When a category is enabled, qCDebug messages for that module flow to the
 // log file and stderr.
 

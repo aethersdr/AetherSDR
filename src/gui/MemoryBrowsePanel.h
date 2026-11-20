@@ -5,6 +5,7 @@
 #include <QWidget>
 
 class QLabel;
+class QLineEdit;
 class QPushButton;
 class QTableWidget;
 
@@ -31,6 +32,7 @@ private:
 
     QMap<int, MemoryEntry> m_memories;
     QLabel* m_emptyLabel{nullptr};
+    QLineEdit* m_searchEdit{nullptr};
     QTableWidget* m_table{nullptr};
     QPushButton* m_addBtn{nullptr};
     int m_highlightedMemoryIndex{-1};

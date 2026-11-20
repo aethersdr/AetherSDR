@@ -714,23 +714,19 @@ void RadioConnection::processLine(const QString& line)
             m_lastPingSeq = 0;
         }
     }
-    ParsedMessage msg = CommandParser::parseLine(line);
-    if (!isGps && !isPingReply) {
-        // Recalibration is radio-side chatter. Keep WNB-only statuses opt-in,
-        // but preserve mixed pan updates in the normal connection log.
-        const bool isWnbOnly = msg.type == MessageType::Status
-            && msg.object.startsWith(QLatin1String("display pan 0x"))
-            && msg.object.count(u' ') == 2
-            && !msg.kvs.isEmpty()
-            && std::all_of(msg.kvs.keyBegin(), msg.kvs.keyEnd(), [](const QString& key) {
-                return key == QLatin1String("wnb") || key == QLatin1String("wnb_level")
-                    || key == QLatin1String("wnb_updating");
-            });
-        if (isWnbOnly) {
-            qCDebug(lcProtocol) << "RX:" << line;
-        } else {
-            qCDebug(lcConnection) << "RX:" << line;
-        }
+    const ParsedMessage msg = CommandParser::parseLine(line);
+    // Frequent WNB reports still reach the status ingress. Keep mixed pan
+    // updates in the connection log for diagnostics.
+    const bool isWnbOnly = msg.type == MessageType::Status
+        && msg.object.startsWith(QLatin1String("display pan 0x"))
+        && msg.object.count(u' ') == 2
+        && !msg.kvs.isEmpty()
+        && std::all_of(msg.kvs.keyBegin(), msg.kvs.keyEnd(), [](const QString& key) {
+            return key == QLatin1String("wnb") || key == QLatin1String("wnb_level")
+                || key == QLatin1String("wnb_updating");
+        });
+    if (!isGps && !isPingReply && !isWnbOnly) {
+        qCDebug(lcConnection) << "RX:" << line;
     }
 
     emit lineReceived(msg, m_lineEpoch.load());

@@ -24,6 +24,7 @@
 #include "arq/burst.hpp"
 #include "arq/frames.hpp"
 #include "arq/measured.hpp"
+#include "arq/nod.hpp"
 
 namespace data2g::arq {
 
@@ -39,6 +40,9 @@ int prime_tries();
 bool prime_default();
 // link.REPEAT: DATA2G_REPEAT=0 turns the combining of repeated controls off (read once).
 bool repeat_default();
+// link.NOD: DATA2G_NOD=0 turns nods off (docs/arq.md §3b; read once).
+bool nod_default();
+inline constexpr const char* NOD_MODE = "fsk16r25-r1/3";  // the mode a nod's control is packed and named in
 
 // Python's logging, by logger name ("data2g.link", "data2g.session") and
 // level (20 info, 30 warning). Unset: silent. Set once, before any use.
@@ -79,7 +83,8 @@ public:
     virtual bool want_dup() { return false; }
     virtual int rv_cycle(const std::string& submode) = 0;
     virtual bool has_outcome() { return false; }
-    virtual void outcome(const std::string&, int /*decoded*/, int /*sent*/, bool /*usable*/) {}
+    // usable: nullopt for a nod (neither a blind decode nor a loss of one)
+    virtual void outcome(const std::string&, int /*decoded*/, int /*sent*/, std::optional<bool> /*usable*/) {}
     // for the log
     virtual std::string mode_name(int rec) { return std::to_string(rec); }
     virtual bool has_airtime() { return false; }
@@ -266,6 +271,35 @@ public:
     std::vector<std::string> expected_modes() const;
     Bytes last_stream_;  // the control stream read_control read last
     bool primed_ctl_ = false;  // ... and only a primed retry read it
+    // nods (docs/arq.md §3b): on for this session (a session's station); the peer hears them (its T_NODS:
+    // mine may go to it); the peer acted on a burst of mine carrying T_NODS (no more of it), my bursts that did.
+    // Their anchors: per burst of mine what it said, per peer burst seq the same as decoded and which
+    // burst of mine it acted on.
+    bool nod = false;
+    bool nod_peer = false;
+    bool nods_told_ = false;
+    std::set<std::int64_t> nods_in_;
+    using Kept = std::tuple<int, std::optional<int>, bool>;  // size_hint, T_REPLY, T_CHAT
+    struct SentCtl {
+        std::int64_t cum;
+        int rec, acted;
+        std::optional<std::int64_t> new_end;
+        Kept kept;
+    };
+    std::map<std::int64_t, SentCtl> sent_ctl_;
+    struct PeerCtl {
+        int cum, rec;
+        std::int64_t acted;
+        std::optional<std::int64_t> new_end;
+    };
+    std::map<int, PeerCtl> peer_ctl_core_;
+    std::optional<std::int64_t> rx_new_end_;  // the last peer burst's new data end
+    // The family key of the peer's nod I may hear next (a reply to my latest burst), or nullopt.
+    std::optional<nod::FamilyKey> nod_family() const;
+    // A detected nod -> the control it stands for, as I know its anchors, or nullopt.
+    std::optional<Bytes> nod_payload(int meaning) const;
+    // A detected nod as the received burst it stands for.
+    nod::NodRx nod_rx(int meaning) const { return nod::NodRx(NOD_MODE, ctl_mask(peer(), 0, key), nod_payload(meaning)); }
 
     // What I know of the control of `rx`, a burst from my peer (link.Station.expect, §3a): hypotheses,
     // likeliest first, at most prime_tries().
@@ -280,7 +314,9 @@ public:
     void write(ByteView data) { tx.write(data); }
     Bytes read();
     // Virtual so a binding can see a test's override of the Python method.
-    virtual TxBurstPtr build(bool fresh = true);
+    // `nod`: the session sends it where the peer looks for a nod (a direct reply): a control-only CPM reply
+    // whose content is in the codebook then goes as one (docs/arq.md §3b).
+    virtual TxBurstPtr build(bool fresh = true, bool nod = false);
     TxBurstPtr on_timeout(bool allow_repeat = true);  // nullptr: link lost
     bool handle(RxBurst& rx);
     // After handle(): CLEANTXBUFFER's limbo settles against its ACK when that
@@ -308,6 +344,9 @@ private:
     };
     int escalation() const;
     bool data_allowed(bool fresh, const std::string& submode);
+    std::optional<std::pair<int, nod::FamilyKey>> nod_of(std::int64_t bn, const std::string& submode, const Core& core,
+                                                         const Ext& ext) const;
+    static Kept kept(const Core& core, const Ext& ext);
     void start_abandon(int reset);
     Ext control_tlvs(std::int64_t bn, std::optional<int> reply);
     Fit fit(Ext& ext, int cum, const std::vector<std::int64_t>& missing, bool has_new, int max_cw,

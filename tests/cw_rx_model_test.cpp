@@ -10,6 +10,7 @@
 #include <QThread>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 
 using namespace AetherSDR;
@@ -183,6 +184,88 @@ bool savedRangesStayInsideTheSliders()
     return kept;
 }
 
+// What the pane shows of neural text at a Sens threshold: a hidden DeepCW
+// chunk that held a space leaves one, so the words either side stay apart
+// (maintainer ruling on #7210, 2026-11-14).
+bool hiddenNeuralTextKeepsOneSpace()
+{
+    struct Chunk { const char* text; float cost; };
+    // CONSTRUCTED chunks shaped like DeepCwCommitter's cuts (#7240 review):
+    // a cut can land inside a word, and a chunk after one that ended in a
+    // space has no leading space. Threshold 0.5, so cost 0.9 is hidden.
+    auto pane = [](std::initializer_list<Chunk> chunks) {
+        QString shown;
+        for (const Chunk& c : chunks) {
+            const bool endsInSpace = shown.isEmpty() || shown.back().isSpace();
+            shown += CwDecodeSettings::shownNeuralText(QString::fromLatin1(c.text), c.cost, 0.5f,
+                                                       endsInSpace);
+        }
+        return shown;
+    };
+    if (!require(pane({{"DE K1", 0.1f}, {"ABC ", 0.9f}, {"K1ABC", 0.1f}}) == "DE K1 K1ABC",
+                 "A hidden chunk ending in a space fused the words either side")) { return false; }
+    if (!require(pane({{"DE K1A", 0.1f}, {"BC K1", 0.9f}, {"ABC K", 0.1f}}) == "DE K1A ABC K",
+                 "A hidden chunk with an inner space fused the words either side")) { return false; }
+    if (!require(pane({{"DE K1A", 0.1f}, {"BC", 0.9f}, {" K", 0.1f}}) == "DE K1A K",
+                 "A hidden chunk with no space left something in the pane")) { return false; }
+    if (!require(pane({{"DE ", 0.1f}, {"K1ABC ", 0.9f}, {"K1ABC", 0.1f}}) == "DE K1ABC",
+                 "A hidden chunk's space doubled the pane's own")) { return false; }
+    if (!require(pane({{"K1ABC ", 0.9f}, {"DE", 0.1f}}) == "DE",
+                 "A hidden chunk put a space at the start of the pane")) { return false; }
+    // DeepFist gives a space its own cost; it is always shown, as before.
+    if (!require(pane({{"K", 0.1f}, {" ", 0.9f}, {"1", 0.1f}}) == "K 1",
+                 "A low-confidence space was hidden")) { return false; }
+    return require(pane({{"DE", std::numeric_limits<float>::quiet_NaN()}, {" K1", 0.95f}})
+                       == "DE " && pane({{"DE K1", 0.95f}}).isEmpty()
+                       && CwDecodeSettings::shownNeuralText("DE", 0.9f, 1.0f, false) == "DE",
+                   "Shown text at or below the threshold changed");
+}
+
+// Each neural decoder keeps its own Sens beside the other CW decoder settings,
+// and a missing, malformed or out-of-span value never reaches the slider.
+bool neuralSensIsSavedPerDecoder()
+{
+    auto& s = AppSettings::instance();
+    auto store = [&](const char* json) { s.setValue("CwDecoder", QString::fromLatin1(json)); };
+    const QString ggmorseSens = s.value("CwDecoderSensitivity", "unset").toString();
+    // CONSTRUCTED blobs: they exercise the validation only.
+    store(R"({"rx":"True","tx":"False"})");
+    if (!require(CwDecodeSettings::sensitivity("deepfist") == 0
+                 && CwDecodeSettings::sensitivity("deepcw") == 0,
+                 "A neural decoder with no saved Sens did not read as 0")) { return false; }
+    store(R"({"sensitivity":{"deepfist":250,"deepcw":-4}})");
+    if (!require(CwDecodeSettings::sensitivity("deepfist") == 100
+                 && CwDecodeSettings::sensitivity("deepcw") == 0,
+                 "An out-of-span Sens was not clamped to the slider span")) { return false; }
+    store(R"({"sensitivity":{"deepfist":"high"}})");
+    if (!require(CwDecodeSettings::sensitivity("deepfist") == 0,
+                 "A non-numeric Sens did not read as 0")) { return false; }
+    store(R"({"sensitivity":7})");
+    if (!require(CwDecodeSettings::sensitivity("deepfist") == 0,
+                 "A Sens entry that is not per decoder did not read as 0")) { return false; }
+
+    store(R"({"rx":"False","tx":"True","liveContacts":"True","pitchLow":651,"pitchHigh":954})");
+    CwDecodeSettings::setSensitivity("deepfist", 40);
+    CwDecodeSettings::setSensitivity("deepcw", 70);
+    CwDecodeSettings::setSensitivity("deepfist", 45);
+    const bool kept = require(CwDecodeSettings::sensitivity("deepfist") == 45
+                              && CwDecodeSettings::sensitivity("deepcw") == 70,
+                              "Saving one decoder's Sens changed or lost the other's")
+        && require(!CwDecodeSettings::rxEnabled() && CwDecodeSettings::txEnabled()
+                   && CwDecodeSettings::liveContactsEnabled()
+                   && sameRange(CwDecodeSettings::pitchRange(), 651, 954),
+                   "Saving a Sens lost another CW decoder setting")
+        && require(s.value("CwDecoderSensitivity", "unset").toString() == ggmorseSens,
+                   "Saving a neural decoder's Sens changed ggmorse's");
+    CwDecodeSettings::setSensitivity("deepfist", 300);
+    const QJsonObject stored =
+        QJsonDocument::fromJson(s.value("CwDecoder").toString().toUtf8()).object();
+    const bool clamped = require(stored.value("sensitivity").toObject().value("deepfist").toInt(-1) == 100,
+                                 "A Sens above the slider span was saved unclamped");
+    store(R"({"rx":"True","tx":"False"})");
+    return kept && clamped;
+}
+
 bool unlockAfterStopClearsReadout()
 {
     // The CW panel shows the last statsUpdated. A stopped decoder keeps its
@@ -254,6 +337,8 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
     if (!savedRangesStayInsideTheSliders()) { return 1; }
+    if (!neuralSensIsSavedPerDecoder()) { return 1; }
+    if (!hiddenNeuralTextKeepsOneSpace()) { return 1; }
     if (!pitchRangeFollowsTheRadioPitch()) { return 1; }
     CwDecodeSettings::setBackend(QStringLiteral("unknown"));
     if (!require(!CwDecodeSettings::neuralSelected(),

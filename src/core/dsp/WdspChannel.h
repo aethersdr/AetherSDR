@@ -136,6 +136,10 @@ public:
         std::optional<AmReceive> amReceive;
         std::optional<AnalogReceiveDsp> analogReceiveDsp;
         std::optional<WbfmReceive> wbfmReceive;
+        // WDSP's FM detector limiter (fmd.c plim) without the FmReceive recipe's
+        // mode lock: it runs only inside the FM detector, so it bounds FM audio
+        // and leaves every other mode untouched across live mode changes (#7222).
+        bool fmLimiter = false;
         // RXA output panel gain, linear, applied after the AGC. Unset keeps
         // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942).
         std::optional<double> rxPanelGain;
@@ -465,6 +469,11 @@ public:
     // the operator tunes. 0 disables the stage. Receive channels only.
     bool setShift(double shiftHz) noexcept;
 
+    // WDSP's ANR (LMS noise reduction) on a running receive channel, level
+    // 0..100 in the slice model's units. Re-applied on reopen unless the
+    // Config's analogReceiveDsp recipe owns NR instead. Receive channels only.
+    bool setNoiseReduction(bool enabled, int level) noexcept;
+
     // Manual notches: the host-side Flex TNF equivalent, and the only notch on a
     // direct-sampling radio (HL2 has no radio-side DSP; oracle addendum 3 §B4).
     // Centres and the notch tune frequency are ABSOLUTE RF Hz; WDSP subtracts the
@@ -560,6 +569,35 @@ public:
     // After output-count readiness, wait for the last hook and DSP body before
     // arming another hold. Test/control only; NEVER call while a hold is armed.
     void synchronizeWorkerForTest() const noexcept;
+    // ---- PureSignal (TX channels; calcc.c) ---------------------------------
+    // Thin wrappers over WDSP's PS API for the Hermes-Lite 2 controller
+    // (Hl2PureSignal). None takes the control fence: calcc guards its own state
+    // with cs_update, and its API is meant to be called from a GUI thread against a
+    // running channel. The caller keeps every call on one thread with the
+    // channel's lifetime (the HL2 I/O thread) so none can outlive the channel.
+    // All return false on a receive channel.
+    struct PureSignalInfo {
+        int feedbackLevel = 0;    // info[4]: feedback peak, 256 = hardware peak
+        bool feedbackFresh = false; // info[0] bit 0 clear: info[4] measured last attempt
+        int calibrationCount = 0; // info[5]: successful calculations
+        int attempts = 0;         // info[7]: finished calculations, good or not
+        int fileError = 0;        // info[12]: save (bit 0) or restore (bit 1) failed
+        bool correcting = false;  // info[14]
+        int state = 0;            // info[15]: LRESET .. LTURNON
+        double maxTx = 0.0;       // GetPSMaxTX
+    };
+    // One block of time-aligned pairs: `tx` the TX DAC reference, `rx` the
+    // feedback, both interleaved I/Q doubles of `size` complex samples.
+    bool pureSignalFeed(int size, double* tx, double* rx) noexcept;
+    bool pureSignalControl(bool reset, bool mancal, bool automode, bool turnon) noexcept;
+    bool pureSignalMox(bool mox) noexcept;
+    bool pureSignalRunCal(bool run) noexcept;
+    bool pureSignalConfigure(double hwPeak, int feedbackRateHz, double moxDelaySec,
+                             double loopDelaySec, double txDelaySec) noexcept;
+    bool pureSignalInfo(PureSignalInfo* out) const noexcept;
+    bool pureSignalSave(const char* path) noexcept;
+    bool pureSignalRestore(const char* path) noexcept;
+
     // Test only (#6179, WDSP patch 22): queue PSRestoreCorr(path) on this TX
     // channel's PureSignal correction thread, on the WDSP the core drives.
     void restorePureSignalCorrectionForTest(const char* path) const noexcept;
@@ -622,6 +660,10 @@ private:
     // processIq() buffer-size check does not repeat a divide every block.
     std::size_t m_outputBlockSize = 0;
     double m_shiftHz = 0.0;
+    // setNoiseReduction()'s request; set = a live caller owns NR.
+    bool m_liveNrSet = false;
+    bool m_liveNrEnabled = false;
+    int m_liveNrLevel = 50;
     // These two coordinate the real-time processIq() against control-thread
     // operations. The handshake is Dekker-style — each side stores its own flag
     // then reads the other's — which is only correct under sequential

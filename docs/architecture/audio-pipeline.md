@@ -13,7 +13,7 @@ all run through the same DSP chain:
 
 - **RX speaker path**: radio audio from `PanadapterStream` is decoded to 24 kHz
   float32 stereo and handed to `AudioEngine::feedAudioData()`. RX noise
-  reduction, RX client EQ/Gate/Comp/DeEss/Tube/PUDU, output trim, optional
+  reduction, RX client EQ/Gate/Comp/Tube/PUDU, output trim, optional
   24 kHz to 48 kHz upsampling, metering, scopes, and speaker buffering happen
   in `AudioEngine`.
 - **Local sidetone / Quindar local output**: CW sidetone and local Quindar
@@ -125,7 +125,7 @@ When receiving, the current ordering is:
    each side's own content and an immediate pan is preferred over the shared
    mask and mono envelope that used to hold the balance.
 3. `writeAudio()` runs the client RX strip in this fixed order:
-   `ClientEqRx`, `ClientGateRx`, `ClientCompRx`, `ClientDeEssRx`,
+   `ClientEqRx`, `ClientGateRx`, `ClientCompRx`,
    `ClientTubeRx`, `ClientPuduRx`.
 4. The RX EQ analyzer tap is taken after RX EQ and before the remaining RX strip.
    It averages L/R to mono for the analyzer buffer.
@@ -204,11 +204,25 @@ RADE decoded speech is logically mono duplicated to stereo before that point.
   drain-side and enqueue-side bounds.
 - Trimming occurs on both drain and producer paths. `drainRxAudio()` trims
   normal, legacy KiwiSDR, and external Kiwi receive queues, plus RADE speech
-  separately. `processRxAudioData()` trims the NR2 packet queue or the raw
-  main/Kiwi buffer, depending on the path. `queueLegacyKiwiAudioData()` and
+  separately. For the main RX source, `trimMainRxBuffers()` advances overflow
+  input through the existing NR, client strip and output resamplers before
+  dropping oldest speaker-ready output. Byte input uses blocks of at most
+  20 ms, and only the oldest excess plus a 10 ms tail for the quiet-point
+  cut and fade is processed; input held for a presentation delay stays
+  queued. Received samples are never spliced
+  out ahead of those stateful processors. `processRxAudioData()` uses the same
+  combined raw/output bound on enqueue. Legacy and external Kiwi paths retain
+  their independent queue limits. `queueLegacyKiwiAudioData()` and
   `queueKiwiAudioData()` also enforce producer-side limits, and
   `setReceivePresentationDelays()` trims queued audio when delays decrease.
   Producer-side caps also bound backlog when the speaker drain is stopped.
+  Main-source trimming runs synchronously on the engine thread under the DSP
+  mutex. Lowering a presentation delay can process the entire held backlog;
+  20 ms bounds each input block, not the total time spent processing it.
+  Presentation feeds, ASR, Receive Sync, scopes and level/EQ taps observe the
+  processed excess before the speaker-output cut, including audio the speaker
+  will not play. The quiet-point search can retain up to 6 ms less than the
+  requested queue cap.
 - The speaker drain timer runs every 10 ms, writes only full float32 samples, and
   respects `QAudioSink::bytesFree()`.
 - If decoded RADE speech is pending, the speaker timer mixes `m_radeRxBuffer`
@@ -358,7 +372,7 @@ flowchart TD
     I --> J["Input SRC when needed<br/>device rate -> fixed 48 kHz DSP rate<br/>duplicate mono to L/R"]
     J --> K["Optional TX RN2 at native 48 kHz"]
     K --> L["Optional 48 kHz test tone"]
-    L --> M["User-ordered 48 kHz float strip<br/>Gate / EQ / DeEss / Comp / Tube / PUDU / Reverb"]
+    L --> M["User-ordered 48 kHz float strip<br/>Tube / EQ / Comp / PUDU / Reverb"]
     M --> N["PC mic gain -> Quindar -> final limiter<br/>48 kHz float32 stereo"]
     N --> O["Independent L/R egress SRC<br/>48 kHz -> 24 kHz float32"]
     O --> P["Linked TPDF dither + round-to-nearest<br/>quantize once to 24 kHz stereo Int16"]
@@ -511,8 +525,9 @@ After capture channel canonicalization, `onTxAudioReady()` uses this ordering:
 5. **Test tone**: `ClientTxTestTone` can replace the mic signal with a generated
    48 kHz float32 stereo tone before the user voice strip.
 6. **Voice DSP strip**: `TxVoiceProcessor::processChannelStrip()` runs float32
-   processors directly in the user-selected order. The default order is Gate,
-   EQ, DeEss, Comp, Tube, PUDU, Reverb.
+   processors directly in the user-selected order. The default order is Tube,
+   EQ, Comp, PUDU, Reverb (the TX gate and de-esser are retired; RN2 runs
+   ahead of the strip).
 7. **PC mic gain**: `setPcMicGain(0..100)` maps to `0.0..1.0` and attenuates the
    48 kHz float samples. It is not a boost stage.
 8. **Quindar tone**: `ClientQuindarTone::process()` inserts Quindar tones at
@@ -571,34 +586,51 @@ the gain is below approximately unity.
 The final limiter defaults are:
 
 - enabled: true
-- ceiling: `-1.0 dBFS`
+- ceiling: `-0.5 dBFS`
+- look-ahead: `1.5 ms` (operator range 0 to 5 ms)
 - output trim: `0.0 dB`
 - DC block: true
 
 The limiter is channel-linked and prepared at 48 kHz. It optionally DC-blocks
-each channel, applies output trim as a pre-limiter drive stage, and then limits
-peaks against the ceiling with attack/release smoothing.
+each channel and applies output trim as a pre-limiter drive stage. It is then
+a look-ahead brickwall: the signal is delayed by the look-ahead L, and the gain
+each sample needs (ceiling over its linked peak) is released toward unity
+(80 ms), passed through a sliding minimum over L+1 samples and then a moving
+average over L+1 samples. Every minimum averaged for an output sample covers
+the sample leaving the delay, so the gain never exceeds what that sample needs
+and no 48 kHz sample leaves above the ceiling. L = 0 is an instant hard limit.
+A hard clip after the gain is a safety net only; `safetyClipCount()` counts the
+samples it touched. Under steady parameters it never acts; a look-ahead,
+ceiling or on/off change while the limiter is working can need it for up to
+one window, so the output stays under the ceiling throughout. Changing L, or
+switching the limiter on or off, crossfades the delay tap over 240 frames; a
+change that arrives during a fade waits for it to end. The fade covers the
+delay tap only: switching off while limiting releases the gain at once.
 
-The limiter precedes the 48-to-24 kHz egress SRC. Although it bounds samples in
-the 48 kHz domain, the SRC's band-limited reconstruction can overshoot that
-sample ceiling. The final Int16 conversion saturates any resulting over-range
-samples, so the limiter ceiling is not currently a guaranteed post-SRC or true-
-peak ceiling.
+The look-ahead is the limiter's whole latency, and `TxVoiceProcessor::latencyFrames()`
+includes it while the limiter is enabled (72 frames at the 1.5 ms default).
+Adding it was a maintainer ruling (2026-11-15), which also turned the limiter
+on by default at the -0.5 dBFS ceiling, superseding #3004's default-off.
+The configuration is one object under the `ClientFinalLimiterTx` key
+(Principle V): `{enabled, ceilingDb, lookaheadMs, outputTrimDb, dcBlock}`. The
+legacy flat keys (`ClientFinalLimiterTxEnabled`, `…CeilingDb`, `…OutputTrimDb`,
+`…DcBlock`) are folded into it once and removed, so an existing installation
+keeps the LIM state it saved; a field that is absent takes the default.
 
-This ordering is deliberate rather than an oversight, so do not "fix" it
-without revisiting the trade. The measured worst case is about +1.5 dBFS, and
-only for a pathological input — a ceiling-limited full-scale square wave, the
-hardest signal a linear-phase decimator can be handed. Real limited speech
-overshoots far less. The obvious alternative, lowering the limiter ceiling by a
-matching true-peak margin, is rejected on purpose: absent radio-side
-compensation, even 1 dB of headroom costs roughly 21% of PEP. Occasional speech
-overshoots, clipped once at the Int16 rail, are preferable to a permanently
-reduced transmitter output — particularly for the tightly integrated Aurora.
-The pre-refactor chain made no stronger guarantee in practice either:
-`ClientFinalLimiter` is a smoothed peak limiter, not a brickwall.
+The limiter precedes the 48-to-24 kHz egress SRC. It bounds samples in the
+48 kHz domain only: the SRC's band-limited reconstruction can overshoot that
+ceiling, and the final Int16 conversion saturates any resulting over-range
+samples, so the ceiling is not a post-SRC or true-peak ceiling. It also bounds
+audio samples, not the SSB RF envelope, which can sit several dB above the
+highest audio sample.
 
-Changing that policy requires measured headroom or a separately
-specified post-SRC safeguard; it must not silently add lookahead latency.
+The ordering is deliberate. The worst measured SRC overshoot is about
++1.5 dBFS, and only for a pathological input (a ceiling-limited full-scale
+square wave); limited speech overshoots far less. Lowering the ceiling by a
+true-peak margin instead is rejected on purpose: absent radio-side
+compensation, even 1 dB of headroom costs roughly 21% of PEP. Occasional
+speech overshoots, clipped once at the Int16 rail, are preferable to a
+permanently reduced transmitter output.
 
 ### Passband authority, SRC filtering, and oversampling
 
@@ -784,7 +816,7 @@ flowchart TD
 ```
 
 DAX/TCI TX audio is intentionally separate from the PC mic voice strip. It is
-not run through client voice EQ, compression, gate, de-esser, tube, PUDU,
+not run through client voice RN2, tube, EQ, compression, PUDU,
 reverb, Quindar insertion, or the final voice limiter. Digital-mode tones and
 TCI audio must not be modified by those voice effects.
 
@@ -900,7 +932,7 @@ Radio-provided taps:
 | RX NR entry | `AudioEngine::feedAudioData()` | float32 stereo | float32 stereo | 24 kHz | 2 | Optional NR; bypassed while radio is transmitting |
 | RX NR2 | `AudioEngine::processNr2()` | float32 stereo | float32 stereo | producer rate | 2 | One `SpectralNR` estimate and mask per channel |
 | RX BNR | `NvidiaAfxFilter::process()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz -> 24 kHz, or native 48 kHz | 2 | One AFX denoiser effect per channel |
-| RX client strip | `AudioEngine::writeAudio()` | float32 stereo | float32 stereo | 24 kHz | 2 | EQ, Gate, Comp, DeEss, Tube, PUDU |
+| RX client strip | `AudioEngine::writeAudio()` | float32 stereo | float32 stereo | 24 kHz | 2 | EQ, Gate, Comp, Tube, PUDU |
 | RX output upsample | `AudioEngine::resampleStereo()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz | 2 | Uses separate L/R resamplers to preserve pan |
 | RX output gain stages | `AudioEngine::processMixedRxAudioData()` | float32 stereo | float32 stereo | 24 or 48 kHz | 2 | Optional RX boost, then output trim, whichever NR method ran; post-chain scope |
 | Speaker write | RX drain timer in `AudioEngine::startRxStream()` | float32 stereo buffers | `QAudioSink` writes | 24 or 48 kHz | 2 | Caps buffers and mixes RADE decoded speech |
@@ -910,10 +942,10 @@ Radio-provided taps:
 | PC mic channel canonicalization | `TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo()` | Int16 mono/stereo | duplicated-stereo Int16 | negotiated device rate | 1 or 2 -> 1 -> 2 | Auto selects stronger one-sided stereo channel or averages balanced stereo; no SRC here |
 | Voice float conversion / ingress SRC | `TxVoiceProcessor::processCapturedInt16()` | duplicated-stereo Int16 | float32 stereo | device rate -> 48 kHz when needed | 2 -> 1 -> 2 | Converts to float once; stateful mono r8brain SRC; native 48 kHz skips SRC |
 | TX RN2 | `RNNoiseFilter::process48kStereo(input, output)` | float32 stereo | float32 stereo | 48 kHz | 2 -> 1 -> 2 | Optional mic denoiser in `Native48k` rate domain; reuses caller-owned output storage |
-| PC mic voice strip | `TxVoiceProcessor::processChannelStrip()` | float32 stereo | float32 stereo | 48 kHz | 2 | Ordered Gate/EQ/DeEss/Comp/Tube/PUDU/Reverb |
+| PC mic voice strip | `TxVoiceProcessor::processChannelStrip()` | float32 stereo | float32 stereo | 48 kHz | 2 | Ordered Tube/EQ/Comp/PUDU/Reverb |
 | PC mic gain | `TxVoiceProcessor::processWorkBuffer()` | float32 stereo | float32 stereo | 48 kHz | 2 | 0..100 maps to 0.0..1.0 attenuation |
 | Quindar TX insertion | `ClientQuindarTone::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | Inserts tones before final limiter |
-| Final voice limiter | `ClientFinalLimiter::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | DC block, output trim, linked peak limiting |
+| Final voice limiter | `ClientFinalLimiter::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | DC block, output trim, linked look-ahead brickwall (0–5 ms delay) |
 | Voice egress SRC | `TxVoiceProcessor::processWorkBuffer()` | float32 stereo | float32 stereo | 48 kHz -> 24 kHz | 2 | Independent matched L/R r8brain instances preserve stereo; 12% transition profile; state persists across blocks; group delay is included by `latencyFrames()`. An impossible frame-count mismatch preserves the aligned common prefix and queues both SRC histories for reset on the audio event loop between callbacks. |
 | Voice transport quantization | `TxVoiceProcessor::processWorkBuffer()` | float32 stereo | Int16 stereo | 24 kHz | 2 | Linked unshaped TPDF (2 LSB peak-to-peak), round-to-nearest, and Int16 saturation; exact-zero frames remain digital zero while the PRNG advances |
 | Backend TX audio seam | `RadioModel::submitTxAudio()` / `IRadioBackend::submitTxAudio()` | Int16 stereo | backend-dependent | 24 kHz at seam | 2 | Used by host-modulating backends; HL2 and Icom currently convert the 24 kHz seam output to 48 kHz backend processing |
@@ -984,7 +1016,7 @@ warning before it is discarded and regenerated.
 | `AudioEngine::txPostChainScopeReady`, TX voice | `AudioEngine::emitTxPostChainScopeFromInt16Stereo()` | Final 24 kHz Int16 representation, post limiter/SRC/quantization and final monitor tap | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::txPostChainScopeReady`, TX DAX/TCI/RADE | `AudioEngine::emitTxPostChainScopeFromFloat32Stereo()` | Pre-packetization digital bypass audio | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::rxPostChainScopeReady` | `AudioEngine::emitRxPostChainScopeFromFloat32Stereo()` | Non-BNR: after RX strip, upsample, boost, and trim; BNR: after BNR resample/trim; before buffer append | Average L/R | float PCM scope samples, sample rate |
-| RX EQ analyzer | `AudioEngine::tapClientEqRxStereo()` | After RX EQ, before RX Gate/Comp/DeEss/Tube/PUDU | Average L/R | float mono analyzer samples |
+| RX EQ analyzer | `AudioEngine::tapClientEqRxStereo()` | After RX EQ, before RX Gate/Comp/Tube/PUDU | Average L/R | float mono analyzer samples |
 | TX EQ analyzer | `AudioEngine::tapClientEqTxFloat32()` | After TX EQ or EQ bypass inside the 48 kHz TX strip | Average L/R for stereo | float mono analyzer samples |
 | macOS DAX RX level | `VirtualAudioBridge::feedDaxAudio()` | After DAX RX gain, before shared-memory write | Left channel only | Linear RMS |
 | macOS DAX TX level | `VirtualAudioBridge::readTxAudio()` | After DAX TX gain, before `txAudioReady()` | Left channel only | Linear RMS |
