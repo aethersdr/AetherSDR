@@ -13,6 +13,8 @@ class QNetworkReply;
 
 namespace AetherSDR {
 
+class RadioModel;
+
 // Talks to the FT8 receiver on the radio (Ft8Agent.h): its status with the
 // spots since a time, and its settings. Plain HTTP to AetherSDR's own service
 // on the radio, not SmartSDR wire. The receiver is reached at the radio's
@@ -103,5 +105,13 @@ private:
     QList<Ft8Spot> m_recent;
     QString m_receiverCall;
 };
+
+namespace ft8 {
+// Every status the feed reads reserves the slice the receiver names (#7139),
+// so a missed read after a new slice heals on the next poll. Same shape as
+// wspr::reserveReceiverSlice.
+QMetaObject::Connection reserveReceiverSlice(Ft8SpotFeed* feed, RadioModel* radio,
+                                             const QString& label);
+}  // namespace ft8
 
 }  // namespace AetherSDR

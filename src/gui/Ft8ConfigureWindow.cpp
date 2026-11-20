@@ -261,7 +261,7 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
     m_daxCombo = new QComboBox(body);
     m_daxCombo->setAccessibleName(tr("DAX channel"));
     m_daxCombo->setAccessibleDescription(tr("The DAX audio channel the receiver uses for its own slice. "
-                                            "It must differ from any other receiver's."));
+                                            "It must differ from any other receiver's: the WSPR receiver starts on 4, this one on 3."));
     for (int ch = 1; ch <= 4; ++ch) {
         m_daxCombo->addItem(QString::number(ch), ch);
     }

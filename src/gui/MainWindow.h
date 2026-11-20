@@ -1495,6 +1495,7 @@ private:
     // at `radio` names one, then calls `done`. Waits at most
     // kWsprSliceReadMs: a radio without the receiver refuses at once.
     void readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done);
+    void readFt8ReceiverSlice(const QHostAddress& radio, std::function<void()> done);
     static constexpr int kWsprSliceReadMs = 1000;
     static constexpr int kWsprSliceRecheckMs = 500;
     PropForecastClient*  m_propForecast{nullptr};

@@ -106,6 +106,8 @@ std::optional<Ft8Status> parseStatus(const QByteArray& json)
     s.band = boundedString(root->value(QLatin1String("band")), kMaxStringChars);
     s.dialHz = static_cast<qint64>(root->value(QLatin1String("dial_hz")).toDouble());
     s.slice = root->value(QLatin1String("slice")).toBool();
+    s.sliceIndex = s.slice && inRange(root->value(QLatin1String("slice_index")), 0, 63)
+        ? root->value(QLatin1String("slice_index")).toInt(-1) : -1;
     s.audio = root->value(QLatin1String("audio")).toBool();
 
     const QJsonArray cycles = root->value(QLatin1String("cycles")).toArray();

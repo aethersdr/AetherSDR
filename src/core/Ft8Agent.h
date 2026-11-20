@@ -96,6 +96,11 @@ struct Ft8Status {
     QString band;
     qint64 dialHz{0};
     bool slice{false};
+    // The radio's index for the receiver's slice, -1 while it has none or
+    // the receiver is older than 0.1.3. The radio reports that slice as the
+    // connected GUI client's own, so this is how AetherSDR knows to leave it
+    // alone (#7139).
+    int sliceIndex{-1};
     bool audio{false};
     QList<Ft8Cycle> cycles;
     QList<Ft8Spot> spots;
@@ -120,9 +125,9 @@ struct Ft8Package {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.2";
+    static constexpr const char* kVersion = "0.1.3";
     static constexpr Pin kLegacy{":/waveforms/AetherFT8.ssdr_waveform", "AetherFT8.ssdr_waveform",
-                                 "a324f8bd595ed82bf876abf6fac8cf4c4e92a805d34b698ec3cc96349c5886ea", 106914};
+                                 "ba52cf8ce502517767d290a3836ffdcf45c8c72ff8178a72f68f413a85cb6e69", 113272};
 };
 
 // GET and POST /v1/config. A strict subset of WsprConfig: no hopping, no
@@ -134,7 +139,9 @@ struct Ft8Config {
     QString grid;           // empty: the radio's GPS grid
     QString band{QStringLiteral("20m")};
     QString rxant;          // empty: the radio's default
-    int daxChannel{4};
+    // Not AetherWSPR's 4: a DAX channel feeds one slice, so two receivers
+    // on one default would take each other's audio.
+    int daxChannel{3};
 
     bool operator==(const Ft8Config& o) const
     {

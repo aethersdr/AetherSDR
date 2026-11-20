@@ -58,6 +58,25 @@ void testStatus()
     check(st->band == QLatin1String("20m"), "band");
     check(st->dialHz == 14074000, "dial is the FT8 frequency, not WSPR's 14.0956");
     check(st->slice && st->audio, "slice and audio");
+    check(st->sliceIndex == -1, "a receiver before 0.1.3 names no slice index");
+    {
+        const auto with = [](const char* value) {
+            return ft8::parseStatus(QByteArray(kStatus).replace(
+                "\"slice\":true,", QByteArray("\"slice\":true,\"slice_index\":") + value + ","));
+        };
+        const auto five = with("5");
+        check(five && five->sliceIndex == 5, "the receiver's slice index comes through");
+        const auto zero = with("0");
+        check(zero && zero->sliceIndex == 0, "slice index 0 is an index");
+        for (const char* bad : {"-1", "64", "\"3\"", "null"}) {
+            const auto b = with(bad);
+            check(b && b->sliceIndex == -1, (QByteArray("an unusable slice index is none: ") + bad).constData());
+        }
+        const auto stale = ft8::parseStatus(QByteArray(kStatus).replace(
+            "\"slice\":true,", "\"slice\":false,\"slice_index\":5,"));
+        check(stale && stale->sliceIndex == -1, "an index without a slice is ignored");
+        check(Ft8Config().daxChannel != 4, "the default DAX channel is not the WSPR receiver's");
+    }
     // A FLEX-6000's kernel never clears STA_UNSYNC, so the agent falls back
     // to the radio's own NTP. That is normal there, not a degraded state.
     check(st->clockSource == QLatin1String("radio_ntp"), "clock source is reported");

@@ -803,21 +803,65 @@ void MainWindow::wireSpotSubsystem()
         }
     });
 
-    // The radio reports the WSPR receiver's slice as ours (#7139), so ask the
+    // The radio reports a receiver's slice as ours (#7139), so ask each
     // receiver which one it is: before registering, whose reply carries the
-    // slice statuses, and again whenever a slice appears, since the receiver
-    // may have just made one.
+    // slice statuses, and again whenever a slice appears, since a receiver
+    // may have just made one. Both are asked at once, and registering waits
+    // for both answers.
     m_radioModel.setRegistrationGate([this](const QHostAddress& radio, std::function<void()> proceed) {
-        readWsprReceiverSlice(radio, std::move(proceed));
+        auto waiting = std::make_shared<int>(2);
+        auto answered = [waiting, proceed = std::move(proceed)] {
+            if (--*waiting == 0 && proceed) {
+                proceed();
+            }
+        };
+        readWsprReceiverSlice(radio, answered);
+        readFt8ReceiverSlice(radio, answered);
     });
     wspr::reserveReceiverSlice(m_wsprFeed, &m_radioModel, tr("WSPR receiver"));
+    ft8::reserveReceiverSlice(m_ft8Feed, &m_radioModel, tr("FT8 receiver"));
     connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel*) {
         QTimer::singleShot(kWsprSliceRecheckMs, this, [this] {
             if (m_radioModel.isConnected()) {
                 readWsprReceiverSlice(m_radioModel.radioAddress(), {});
+                readFt8ReceiverSlice(m_radioModel.radioAddress(), {});
             }
         });
     });
+}
+
+void MainWindow::readFt8ReceiverSlice(const QHostAddress& radio, std::function<void()> done)
+{
+    if (!ft8::reachableRadio(m_radioModel.isWan(), radio)) {
+        if (done) done();
+        return;
+    }
+    // A client of its own: reads can overlap, and each ends on its own.
+    auto* client = new Ft8AgentClient(this);
+    client->setRadioAddress(radio);
+    auto finish = std::make_shared<std::function<void(int)>>();
+    *finish = [this, client, done = std::move(done)](int sliceIndex) {
+        client->disconnect(this);
+        client->cancel();
+        client->deleteLater();
+        if (sliceIndex >= 0) {
+            m_radioModel.reserveSlice(sliceIndex, tr("FT8 receiver"));
+        }
+        if (done) done();
+    };
+    // Once: taken out before it runs, so it never runs while being destroyed.
+    auto call = [finish](int sliceIndex) {
+        if (auto run = std::exchange(*finish, nullptr)) {
+            run(sliceIndex);
+        }
+    };
+    connect(client, &Ft8AgentClient::statusReceived, this,
+            [call](const Ft8Status& status) { call(status.sliceIndex); });
+    connect(client, &Ft8AgentClient::requestFailed, this,
+            [call](const QString&, const QString&, bool) { call(-1); });
+    QTimer::singleShot(kWsprSliceReadMs, client, [call] { call(-1); });
+    // Spots from now on: none, so the reply stays small.
+    client->fetchStatus(QDateTime::currentSecsSinceEpoch());
 }
 
 void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done)

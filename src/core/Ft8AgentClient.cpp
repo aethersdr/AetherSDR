@@ -1,6 +1,7 @@
 #include "Ft8AgentClient.h"
 
 #include "DxSpot.h"
+#include "models/RadioModel.h"
 
 #include <QDateTime>
 #include <QNetworkReply>
@@ -229,5 +230,21 @@ void Ft8SpotFeed::onStatus(const Ft8Status& status)
         emit spotsUpdated();
     }
 }
+
+namespace ft8 {
+
+QMetaObject::Connection reserveReceiverSlice(Ft8SpotFeed* feed, RadioModel* radio,
+                                             const QString& label)
+{
+    return QObject::connect(feed, &Ft8SpotFeed::statusReceived, radio,
+                            [radio, label](const Ft8Status& status) {
+        if (status.sliceIndex >= 0 && radio->isConnected()
+            && !radio->isSliceReserved(status.sliceIndex)) {
+            radio->reserveSlice(status.sliceIndex, label);
+        }
+    });
+}
+
+}  // namespace ft8
 
 }  // namespace AetherSDR
