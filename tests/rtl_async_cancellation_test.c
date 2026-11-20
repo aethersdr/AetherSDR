@@ -16,7 +16,8 @@ static void Sleep(unsigned int ms) { (void)ms; }
 
 enum scenario { DELAYED, PROMPT, LATE_COMPLETED, EVENT_ERROR, DEVICE_LOST,
                 SUBMIT_FAILURE, RESUBMIT_FAILURE, CALLBACK_STOP, ALLOC_FAILURE,
-                PERSISTENT_STALL, SECOND_SESSION, SCENARIO_COUNT };
+                PERSISTENT_STALL, SECOND_SESSION, LOST_AGAIN,
+                SCENARIO_COUNT };
 struct pending {
     struct libusb_transfer *transfer;
     int submitted, cancelling, attempts;
@@ -147,6 +148,12 @@ int LIBUSB_CALL libusb_handle_events_timeout_completed(libusb_context *ctx,
             rtlsdr_cancel_async(&device);
             return 0;
         }
+        if (scenario == LOST_AGAIN) {
+            /* A handle that lost the device before loses it again. */
+            complete(0, LIBUSB_TRANSFER_NO_DEVICE);
+            cancel_seen = 1;
+            return 0;
+        }
         if (scenario == RESUBMIT_FAILURE || scenario == CALLBACK_STOP) {
             complete(0, LIBUSB_TRANSFER_COMPLETED);
             cancel_seen = 1;
@@ -190,7 +197,7 @@ int main(void)
         memset(slots, 0, sizeof(slots));
         allocated = polls = callbacks = freed_pending = freed = 0;
         resubmitted_after_stop = cancel_seen = injected = 0;
-        if (scenario == SECOND_SESSION) {
+        if (scenario == SECOND_SESSION || scenario == LOST_AGAIN) {
             device.dev_lost = 1;
             device.xfer_errors = 14;
         }
@@ -207,19 +214,22 @@ int main(void)
             fail("lost transport error");
         }
         if (scenario == ALLOC_FAILURE && rc != LIBUSB_ERROR_NO_MEM) { fail("lost allocation error"); }
-        if ((scenario == DEVICE_LOST || scenario == PERSISTENT_STALL)
+        if ((scenario == DEVICE_LOST || scenario == PERSISTENT_STALL
+             || scenario == LOST_AGAIN)
             && rc != LIBUSB_ERROR_NO_DEVICE) {
             fail("device loss not reported");
         }
 #ifdef _WIN32
-        /* Any failure is device loss here and nothing is counted. */
-        if (scenario == SECOND_SESSION && (rc != 0 || device.xfer_errors != 0)) {
+        /* Any failure is device loss here, reported for this session, and
+         * nothing is counted. */
+        if (scenario == SECOND_SESSION
+            && (rc != LIBUSB_ERROR_NO_DEVICE || device.xfer_errors != 0)) {
 #else
         if (scenario == SECOND_SESSION && (rc != 0 || device.xfer_errors != 1)) {
 #endif
             fail("previous session's loss or error count leaked into this one");
         }
     }
-    puts("PASS: delayed/prompt cancellation, late completion, event/device/submit/resubmit errors, callback stop, partial allocation, persistent stall, second session");
+    puts("PASS: delayed/prompt cancellation, late completion, event/device/submit/resubmit errors, callback stop, partial allocation, persistent stall, second session, repeated loss");
     return 0;
 }

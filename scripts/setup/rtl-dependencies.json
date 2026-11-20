@@ -6,7 +6,7 @@
     "archive": "rtl-sdr-blog.tar.gz",
     "directory": "rtl-sdr-blog-aed0ea19f3a273370a13c9009b96313c75d54c7b",
     "patch": "rtl-async-cancellation.patch",
-    "patchSha256": "977c25a9aa20c61a708c27f6a841ad1f02e6d7d4f50d23e94ddcfaa4c25cdcd3"
+    "patchSha256": "6f8f6a03d3ac2dc0f053ff38a2ebb07ee94be63394ead6b5bba0a16813846227"
   },
   "libusb": {
     "version": "1.0.30",
