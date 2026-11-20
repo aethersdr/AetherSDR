@@ -2,7 +2,8 @@
 // `aethersdr_rx_span`, RFC #7181): offered only where the backend declares a
 // span control, set through RadioModel::requestPanBandwidth() like the
 // desktop's span controls, snapped to the sample rates where span is the rate,
-// refused while keyed there, answered with the span the radio reports, and
+// refused while keyed there (warned once per keyed period, idle again after an
+// over by the shared rule), answered with the span the radio reports, and
 // every move (span, receiver, pan, capability) notified to enabled clients
 // only. Two pans and two receivers, so trx 1 is exercised. Socket-free.
 
@@ -139,8 +140,18 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool, const TxCoordinator::Operation&,
-                   const TxCoordinator::Completion&) override {}
+    // Each key edge; with holdKeyUp, the key-up's delivery is kept unfinished.
+    QList<bool> keyEdges;
+    bool holdKeyUp{false};
+    TxCoordinator::Completion heldKeyUp;
+    void setKeying(bool on, const TxCoordinator::Operation&,
+                   const TxCoordinator::Completion& completion) override
+    {
+        keyEdges.append(on);
+        if (!on && holdKeyUp) {
+            heldKeyUp = completion;
+        }
+    }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
 
@@ -640,6 +651,69 @@ void ownershipBeforeMox()
           "while transmit ownership is held, a set is refused and answered with the span in force");
 }
 
+// An over keeps its TX ownership until qualified stop evidence, which a
+// backend with no interlock status (the HL2) never sends (NF0T on #7199): the
+// shared idle rule, RadioModel::transmitIdleForSelection(), lets a
+// rate-changing set through once the key-up is delivered and the backend's RX
+// edge is seen. A refusal warns the operator once per keyed period.
+void afterAnOver()
+{
+    Fixture f(true, true, 0.096, 0.096);
+    SliceDelta tx;
+    tx.txSlice = true;
+    f.model.emitBackendSliceChangedForTest(0, tx);
+    Wire a;
+    TciSpanExtensionTest::attach(*f.server, a.client, f.model);
+    int warnings = 0;
+    QObject::connect(&f.model, &RadioModel::configurationWarning,
+                     [&warnings](const QString&) { ++warnings; });
+    settle(600);
+    a.take();
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    SpanBackend* backend = f.backend;
+    const auto setTo = [&a](const char* hz) {
+        a.send(QStringLiteral("aethersdr_rx_span:0,%1;").arg(QLatin1String(hz)).toLatin1().constData());
+        settle();
+        return a.take();
+    };
+    const QStringList stays96{QStringLiteral("aethersdr_rx_span:0,96000;")};
+
+    f.model.setTransmit(true);
+    check(backend->keyEdges == QList<bool>({true}) && f.model.isRadioTransmitting(),
+          "over: desktop MOX keys the backend, which publishes its TX edge");
+    check(setTo("192000") == stays96 && backend->requests.isEmpty() && warnings == 1,
+          "over: a set while keyed is refused, and noticed");
+    check(setTo("48000") == stays96 && backend->requests.isEmpty() && warnings == 1,
+          "over: a second refusal in the same keyed period is answered, not noticed again");
+    f.model.setTransmit(false);
+    check(backend->keyEdges == QList<bool>({true, false}) && f.model.transmitOwnershipPending()
+              && !f.model.isRadioTransmitting() && !f.model.transmitModel().isTransmitting(),
+          "over: after the key-up the over's TX ownership is retained, unconfirmed");
+    const QStringList moved = setTo("192000");
+    check(backend->requests.size() == 1 && f.model.transmitOwnershipPending()
+              && moved == lines({"aethersdr_rx_span:0,192000;", "aethersdr_rx_span:1,192000;"}),
+          "over: after it, a rate-changing set reaches the radio and is answered; ownership retained");
+    if (backend->requests.size() != 1) {
+        dump("a", moved);
+    }
+
+    // The RX edge alone is not idle while the key-up is still being delivered.
+    backend->holdKeyUp = true;
+    f.model.setTransmit(true);
+    f.model.setTransmit(false);
+    check(!f.model.isRadioTransmitting()
+              && setTo("96000") == QStringList({QStringLiteral("aethersdr_rx_span:0,192000;")})
+              && backend->requests.size() == 1 && warnings == 2,
+          "over: a set while the key-up is still being delivered is refused, noticed again");
+    backend->holdKeyUp = false;
+    backend->heldKeyUp.finish();
+    backend->heldKeyUp = {};
+    settle();
+    setTo("96000");
+    check(backend->requests.size() == 2, "over: once it is delivered, the set reaches the radio");
+}
+
 // Each owed answer keeps its own two seconds: a later set on another trx does
 // not push back the one already waiting.
 void answerDeadlinePerTrx()
@@ -720,6 +794,7 @@ int main(int argc, char** argv)
     rateRadioWide();
     continuousPerPan();
     ownershipBeforeMox();
+    afterAnOver();
     answerDeadlinePerTrx();
     groupRegisteredAfterSpan();
 

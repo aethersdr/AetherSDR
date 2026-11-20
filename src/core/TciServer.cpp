@@ -4259,7 +4259,7 @@ void TciServer::registerAntennaGroups()
             announceExtensionSet();
         });
         // Unkey ends the keyed period: the next refused TX set warns again.
-        const auto unkeyed = [this] { rearmTxAntennaRefusal(); };
+        const auto unkeyed = [this] { rearmKeyedRefusals(); };
         TransmitModel* txModel = &m_model->transmitModel();
         connect(txModel, &TransmitModel::transmittingChanged, this, unkeyed);
         connect(txModel, &TransmitModel::moxChanged, this, unkeyed);
@@ -4270,10 +4270,11 @@ void TciServer::registerAntennaGroups()
     }
 }
 
-void TciServer::rearmTxAntennaRefusal()
+void TciServer::rearmKeyedRefusals()
 {
     if (m_model && !extensionKeyed()) {
         m_txAntennaRefusalWarned = false;
+        m_spanRefusalWarned = false;
     }
 }
 
@@ -4281,7 +4282,7 @@ void TciServer::clearTciPttClient()
 {
     m_tciPttClient.clear();
     // A TCI key can end after the last TransmitModel/radio edge has fired.
-    rearmTxAntennaRefusal();
+    rearmKeyedRefusals();
 }
 
 void TciServer::wireSliceAntennas(SliceModel* slice)
@@ -4628,8 +4629,15 @@ TciExtensionSet::Result TciServer::handleSpan(const QString& name, const QString
     }
     if (model.followsRate && extensionKeyed()) {
         // On a radio whose span is its sample rate, a change rebuilds the
-        // receive chains; not while keyed.
-        qCInfo(lcCat) << "TCI: aethersdr_rx_span refused while keyed, trx" << request->trx;
+        // receive chains; not while keyed. The operator gets the reason once
+        // per keyed period, the client the span in force every time.
+        if (!m_spanRefusalWarned) {
+            m_spanRefusalWarned = true;
+            const QString why = QStringLiteral("TCI: the span cannot change while "
+                                               "transmitting; it stays %1 Hz.").arg(*current);
+            qCWarning(lcCat).noquote() << why;
+            emit m_model->configurationWarning(why);
+        }
         result.reply = currentLine;
         return result;
     }
@@ -4703,9 +4711,7 @@ bool TciServer::broadcastSpan()
     m_spanRatesAnnounced = rates;
     m_spanAnnounced = spans;
     armSpanAnswerTimer();
-    const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
-        [](const ClientState& client) { return client.extensionsEnabled; });
-    if (lines.isEmpty() || !anyEnabled) {
+    if (lines.isEmpty() || !anyExtensionClient()) {
         return false;
     }
     for (const QString& line : std::as_const(lines)) {

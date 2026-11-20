@@ -513,9 +513,15 @@ aethersdr_rx_span:1,192000;       # set it
   moves to another panadapter. This is not the TCI `iq_samplerate`, which keeps
   its own meaning.
 - Where the span is the sample rate, a set is refused while transmitting or
-  tuning, and answered to the sender with the span in force. On a Hermes-Lite 2
-  a span change rebuilds every receiver's DSP at the new rate. The connection
-  and the stream stay up; the panadapter and the audio of every receiver may
+  tuning, and answered to the sender with the span in force; AetherSDR shows
+  the reason in its status bar once per transmission. After the over, a set is
+  accepted again once the radio is receiving, as for `tx_antenna`. On a
+  Hermes-Lite 2 that is as soon as the key-up has been delivered: a set in the
+  short tail after it is accepted, as the desktop's span buttons are, since the
+  rate only changes the receivers. A set made while a profile loads waits for the
+  load and is checked when it was made, not when it reaches the radio. On a
+  Hermes-Lite 2 a span change rebuilds every receiver's DSP at the new rate.
+  The connection and the stream stay up; the panadapter and the audio of every receiver may
   glitch briefly, and the answer comes when the rebuild is done. Elsewhere a
   set is allowed while transmitting, as the span buttons are.
 - On a Hermes-Lite 2 the TCI IQ stream is taken at the radio's rate, which is

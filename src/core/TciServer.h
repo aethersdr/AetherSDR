@@ -331,7 +331,8 @@ private:
     // refuses (requestTxRoute).
     bool extensionKeyed() const;
     // Clears the refusal latch once nothing is keyed any more.
-    void rearmTxAntennaRefusal();
+    // Unkeyed: the next keyed refusal (TX antenna, span) warns again.
+    void rearmKeyedRefusals();
     // Every end of a TCI key goes through here, so the latch is re-armed.
     void clearTciPttClient();
     // A slice's list moved: a resend to every enabled client carries it,
@@ -627,6 +628,8 @@ private:
     std::unique_ptr<TciExtensionNotice> m_antennaNotice;
     // A refused keyed TX-antenna set warns once per keyed period; cleared on unkey.
     bool              m_txAntennaRefusalWarned{false};
+    // The same for a refused keyed span set, where span is the sample rate.
+    bool              m_spanRefusalWarned{false};
     // Extension set, span notice. The last values sent to enabled clients, so
     // a notice carries what moved; a dispatched set owes its trx a line even
     // when the radio kept the span it had.
