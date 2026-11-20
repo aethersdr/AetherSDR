@@ -174,14 +174,23 @@ void AgcTCalibrator::onValueChanged(int value)
     if (m_auto) {
         return; // the sweep drives the value itself
     }
-    // Debounce: record once the value has settled.
+    // Debounce: record once the value has settled. Snapshot the level count
+    // so onManualSettle can detect a silent audio source (same guard as sweep).
     m_pendingManualValue = std::clamp(value, 0, 100);
+    m_levelCountAtManual = m_levelCount;
     m_manualTimer.start(std::max(120, m_settleMs));
 }
 
 void AgcTCalibrator::onManualSettle()
 {
     if (!canWrite() || m_auto || m_pendingManualValue < 0) {
+        return;
+    }
+    // No audio level since the slider settled: recording would use a stale RMS
+    // (silent TCI source or PC Audio off). Skip the point and signal the dialog.
+    if (m_levelCount == m_levelCountAtManual) {
+        m_pendingManualValue = -1;
+        emit noAudio();
         return;
     }
     recordPoint(m_pendingManualValue);

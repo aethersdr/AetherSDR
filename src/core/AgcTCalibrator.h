@@ -70,9 +70,10 @@ signals:
     void recommendation(int value, bool isKnee);
     void quietSpotStatus(bool quiet, float marginDb); // S-meter vs noise floor
     void finished(bool applied);
-    // The auto sweep stopped and restored the original value because no audio
-    // level arrived while a step settled (PC Audio off: nothing to measure).
-    // Emitted after finished(false).
+    // No audio level arrived while a step (auto sweep) or slider settle
+    // (manual path) waited. Auto sweep: emitted after finished(false), which
+    // has already restored the original value. Manual path: the point is
+    // silently dropped and the caller shows a source-specific message.
     void noAudio();
 
 private:
@@ -106,8 +107,10 @@ private:
     bool   m_haveRms{false};
     // Levels received, and the count when the sweep last applied a value: a
     // step that settles with no new level would record a stale reading.
+    // m_levelCountAtManual serves the same guard for the manual slider path.
     quint64 m_levelCount{0};
     quint64 m_levelCountAtApply{0};
+    quint64 m_levelCountAtManual{0};
     static constexpr float kRmsAlpha = 0.30f;
     static constexpr float kRmsFloor = 1.0e-6f; // avoid log10(0)
 
