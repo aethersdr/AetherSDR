@@ -9,7 +9,8 @@
 // only once its scheduled release is on EP2, under manual MOX and break-in;
 // a paddle's prequeued release leaves a separately held straight key keyed;
 // a straight key released during a paddle element ends with that element;
-// a revoked producer's element is not keyed, or stops, at the EP2 writer.
+// a revoked producer's element is not keyed, or stops, at the EP2 writer;
+// a host-text element's fall is whole when the next down is already queued.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -27,11 +28,13 @@
 #include <QString>
 #include <QVariantMap>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -328,6 +331,65 @@ static void testRevokedProducerAtTheWriter()
     }
 }
 
+// Review 3, blocker 1: host-text CW (no releaseAt; a separate scheduled
+// key-up per element) in break-in, with a space shorter than the lead. The
+// next element's key-down reaches the I/O thread before this element's
+// key-up is written. Writing that key-up must not hand the CW operation back
+// to this element, whose completion then ends its intent inside the 5 ms
+// fall: the frame after it would step the envelope to zero, a key click.
+static void testHostTextFallSurvivesTheNextDown()
+{
+    Rig rig(true);
+    const TxCoordinator::Producer text = rig.model.registerTxProducer();
+    const TxCoordinator::Request input = text.request();
+    // 40 WPM, 30 ms units, as HostCwTextKeyer queues them: a down, then its own
+    // up, no releaseAt. Its hostTextGates are admission only; this rig has no
+    // TX slice to pass them, so they are left off.
+    const auto edge = [&rig](const TxCoordinator::Request& element, bool down, std::int64_t ms) {
+        rig.model.queueProducerCwKeyEdge(element, down, QStringLiteral("test:text"), 0, 0, rig.at(ms),
+                                         /*hostTextGates=*/false,
+                                         down ? std::function<void()>{[&rig] { ++rig.refusedDowns; }}
+                                              : std::function<void()>{});
+    };
+    const TxCoordinator::Request first = input.derive();
+    edge(first, true, 100);
+    edge(first, false, 130);
+    const TxCoordinator::Request second = input.derive();
+    edge(second, true, 160);   // queued before the first up (due at 170 ms) is written
+    edge(second, false, 190);
+    Rig::settle();
+    check(rig.refusedDowns == 0 && Hl2TxGateTestAccess::pending(*rig.backend) == 4,
+          "host text: both elements are scheduled at EP2 (" + std::to_string(rig.refusedDowns) + " refused)");
+    const std::int64_t up = samplesOfMs(130) + samplesOfMs(Hl2Settings::kCwEdgeLeadDefaultMs);
+    // Through the frame that writes the first up, then let its completion
+    // reach the model inside the fall.
+    while (static_cast<std::int64_t>(rig.iTrace.size()) <= up) {
+        appendI(Hl2TxGateTestAccess::packet(*rig.backend), rig.iTrace);
+    }
+    Rig::settle();
+    rig.buildTo(400);
+    const std::int64_t fall = samplesOfMs(5);
+    bool monotonic = true;
+    int largestStep = 0;
+    for (std::int64_t n = up + 1; n <= up + fall; ++n) {
+        const int step = rig.iTrace[static_cast<std::size_t>(n - 1)] - rig.iTrace[static_cast<std::size_t>(n)];
+        monotonic = monotonic && step >= 0;
+        largestStep = std::max(largestStep, step);
+    }
+    // A raised-cosine fall over 240 samples drops at most ~215 per sample.
+    std::string trace;
+    for (std::int64_t n = up; n <= up + fall; n += 20) {
+        trace += " " + std::to_string(rig.iTrace[static_cast<std::size_t>(n)]);
+    }
+    check(monotonic && largestStep < 400 && rig.iTrace[static_cast<std::size_t>(up + fall - 20)] > 0
+              && rig.iTrace[static_cast<std::size_t>(up + fall)] == 0,
+          "host text, break-in, 40 ms lead: the first element's 5 ms fall decreases monotonically to 0 (I every 20 samples:"
+              + trace + "; largest step " + std::to_string(largestStep) + ")");
+    const auto runs = carriers(rig.iTrace);
+    check(runs.size() == 2 && within(runs[1].start - runs[0].start, samplesOfMs(60), 1),
+          "host text: both elements are on EP2, 60 ms apart (" + runsText(runs) + ")");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-cw-element-completion"));
@@ -341,6 +403,7 @@ int main(int argc, char** argv)
     testPaddleReleaseLeavesAStraightKeyHeld();
     testStraightKeyReleasedDuringAPaddleElement();
     testRevokedProducerAtTheWriter();
+    testHostTextFallSurvivesTheNextDown();
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
