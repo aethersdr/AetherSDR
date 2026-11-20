@@ -68,7 +68,7 @@
 #include "ft8_lib/common/monitor.h"
 #include "ft8_lib/common/wave.h"
 
-#define AGENT_VERSION "0.1.3"
+#define AGENT_VERSION "0.1.4"
 #define STATUS_PORT 48997   /* 48994 radio health, 48995 WSPR, 48997 here */
 #define AUDIO_RATE 24000
 /* ft8_lib works at 12 kHz, which is the WSJT-X convention and what its own
@@ -109,6 +109,18 @@ static volatile int g_api_fd = -1;
 /* Set by POST /v1/restart: the main loop stops talking to the radio, so it
  * cannot make a new slice while the old one is being handed back. */
 static volatile int g_stopping;
+
+/* The write end of the keeper's pipe, -1 without one: see keeper_start(). */
+static int g_keeper = -1;
+
+/* Tell the keeper which slice is ours now, -1 for none. One write of one
+ * int, so it is whole or absent, and safe from the signal handler. */
+static void keeper_tell(int slice)
+{
+    if (g_keeper < 0) return;
+    ssize_t w = write(g_keeper, &slice, sizeof slice);
+    (void)w;
+}
 
 static void on_term(int sig)
 {
@@ -1322,6 +1334,10 @@ static void serve(int fd)
         g_stopping = 1;
         usleep(250000);
         if (g_term_hook) g_term_hook();
+        /* The main loop may have read the radio's answer first; either way
+         * the slice was handed back here, and the new image's is not the
+         * old keeper's to remove. */
+        keeper_tell(-1);
         if (g_api_fd >= 0) close(g_api_fd);
         if (g_status_fd >= 0) close(g_status_fd);
         char *argv[] = { g_self, NULL };
@@ -1565,9 +1581,89 @@ static void release_on_term(void)
         if (k <= 0) break;
         for (ssize_t i = 0; i < k; i++) {
             matched = in[i] == want[matched] ? matched + 1 : (in[i] == want[0] ? 1 : 0);
+            if (matched == sizeof want - 1) { keeper_tell(-1); return; }
+        }
+    }
+}
+
+/* ------------------------------------------------------------- the keeper
+ *
+ * A FLEX-6000 stops a legacy waveform with SIGKILL: on `waveform uninstall`
+ * no catchable signal arrives (measured on a FLEX-6300, 4.3.16, 2026-11-19),
+ * so release_on_term() never runs, and the uninstall deletes the state
+ * directory that holds the saved slice index. The slice stayed on the radio.
+ *
+ * The keeper is a child in a session of its own, which that kill does not
+ * reach (measured the same day: alive 13 s later). It reads our slice index
+ * from a pipe. When the pipe closes we are gone, however that happened, and
+ * it removes the last slice it was told about. The pipe is close-on-exec, so
+ * POST /v1/restart ends this keeper and the new image starts its own. */
+
+/* Reads indexes until the pipe closes; returns the last one, -1 for none. */
+static int keeper_wait(int rd)
+{
+    int slice = -1, next;
+    for (;;) {
+        ssize_t k = read(rd, &next, sizeof next);
+        if (k == (ssize_t)sizeof next) slice = next;
+        else if (k == 0 || (k < 0 && errno != EINTR)) break;
+    }
+    return slice;
+}
+
+/* Removes `slice` on the radio API socket `fd`, and waits at most 1.5 s for
+ * the answer: closing at once can reset the connection and lose the command. */
+static void keeper_release(int fd, int slice)
+{
+    char out[48];
+    int l = snprintf(out, sizeof out, "C1|slice remove %d\n", slice);
+    if (write(fd, out, (size_t)l) != l) return;
+    static const char want[] = "R1|";
+    size_t matched = 0;
+    struct timespec t0, now;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long ms = (now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+        if (ms >= 1500) return;
+        struct pollfd pf = {.fd = fd, .events = POLLIN};
+        if (poll(&pf, 1, (int)(1500 - ms)) <= 0) return;
+        char in[4096];
+        ssize_t k = read(fd, in, sizeof in);
+        if (k <= 0) return;
+        for (ssize_t i = 0; i < k; i++) {
+            matched = in[i] == want[matched] ? matched + 1 : (in[i] == want[0] ? 1 : 0);
             if (matched == sizeof want - 1) return;
         }
     }
+}
+
+/* Called once, before any thread or socket exists, so the child inherits
+ * nothing but the pipe. */
+static void keeper_start(const char *radio_addr)
+{
+    int p[2];
+    if (pipe(p)) return;
+    pid_t child = fork();
+    if (child < 0) { close(p[0]); close(p[1]); return; }
+    if (child == 0) {
+        close(p[1]);
+        setsid();
+        signal(SIGTERM, SIG_IGN);
+        signal(SIGHUP, SIG_IGN);
+        signal(SIGINT, SIG_IGN);
+        int slice = keeper_wait(p[0]);
+        if (slice >= 0 && slice < MAX_SLICES) {
+            struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(4992)};
+            inet_pton(AF_INET, radio_addr, &sa.sin_addr);
+            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (fd >= 0 && !connect(fd, (struct sockaddr *)&sa, sizeof sa)) keeper_release(fd, slice);
+        }
+        _exit(0);
+    }
+    close(p[0]);
+    fcntl(p[1], F_SETFD, FD_CLOEXEC);
+    g_keeper = p[1];
 }
 
 static void slice_file(char *path, size_t cap)
@@ -1805,6 +1901,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
                 return;
             }
             save_slice_index(a->slice);
+            keeper_tell(a->slice);
             api_send(a, "slice set %d tx=0", a->slice);
             mute_slice(a);
             /* A new slice always starts from the CONFIGURED channel. It used
@@ -1933,6 +2030,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
         if (strstr(body, " in_use=0")) {
             if (a->stream) api_send(a, "stream remove 0x%08X", a->stream);
             a->slice = -1;
+            keeper_tell(-1);
             a->stream = 0;
             a->stream_retry = 0;
             a->want_dax = 0;       /* an answer about the old slice picks nothing */
@@ -2975,6 +3073,80 @@ static int selftest_orphan(void)
     return 0;
 }
 
+/* The keeper removes the last slice it was told about, and nothing when the
+ * last word was "none" or there was no word at all. */
+static int selftest_keeper(void)
+{
+    int p[2];
+    if (pipe(p)) return 1;
+    int saved = g_keeper;
+    g_keeper = p[1];
+    keeper_tell(3);
+    keeper_tell(-1);
+    keeper_tell(5);
+    close(p[1]);
+    int last = keeper_wait(p[0]);
+    close(p[0]);
+
+    if (pipe(p)) return 1;
+    g_keeper = p[1];
+    keeper_tell(4);
+    keeper_tell(-1);
+    close(p[1]);
+    int none = keeper_wait(p[0]);
+    close(p[0]);
+
+    if (pipe(p)) return 1;
+    close(p[1]);
+    int silent = keeper_wait(p[0]);
+    close(p[0]);
+    g_keeper = saved;
+    if (last != 5 || none != -1 || silent != -1) {
+        printf("selftest FAIL: the keeper's last slice: %d %d %d\n", last, none, silent);
+        return 1;
+    }
+
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
+    static const char answered[] = "S1|slice 5 in_use=0\nR1|0|\n";
+    if (write(sv[1], answered, sizeof answered - 1) != (ssize_t)(sizeof answered - 1)) return 1;
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    keeper_release(sv[0], 5);
+    long quick = elapsed_ms(&t0);
+    char wire[64];
+    drain_wire(sv[1], wire, sizeof wire);
+    close(sv[0]);
+    close(sv[1]);
+    if (strcmp(wire, "C1|slice remove 5\n") || quick > 500) {
+        printf("selftest FAIL: the keeper's remove (%ld ms): %s", quick, wire);
+        return 1;
+    }
+
+    /* SIGTERM's own remove, once answered, leaves the keeper nothing to do. */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) || pipe(p)) return 1;
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = sv[0];
+    a.slice = 3;
+    a.orphan = -1;
+    g_api = &a;
+    g_keeper = p[1];
+    keeper_tell(3);
+    static const char ok[] = "R9002|0|\n";
+    if (write(sv[1], ok, sizeof ok - 1) != (ssize_t)(sizeof ok - 1)) return 1;
+    release_on_term();
+    g_api = NULL;
+    close(p[1]);
+    g_keeper = saved;
+    int after_term = keeper_wait(p[0]);
+    close(p[0]);
+    close(sv[0]);
+    close(sv[1]);
+    if (after_term != -1) { printf("selftest FAIL: the keeper would remove a slice SIGTERM already removed (%d)\n", after_term); return 1; }
+    return 0;
+}
+
 /* The saved index survives a restart; a missing or bad file means none. */
 static int selftest_slice_file(void)
 {
@@ -3005,7 +3177,7 @@ static int selftest(void)
     if (selftest_persistence() || selftest_spots() || selftest_budget_flagged()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()) return 1;
     if (selftest_retune_mode() || selftest_dax_reclaim() || selftest_mute() || selftest_release_on_term()
-        || selftest_orphan() || selftest_slice_file() || selftest_slice_index() || selftest_settle()) return 1;
+        || selftest_orphan() || selftest_slice_file() || selftest_slice_index() || selftest_settle() || selftest_keeper()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
@@ -3475,6 +3647,7 @@ int main(int argc, char *argv[])
     config_default(&G.cfg);
     pick_state_dir(self_dir);
     load_config();
+    keeper_start(g_radio_addr);
     G.started = (long long)mono_s();
     logf_("AetherFT8 %s, state in %s", AGENT_VERSION, G.state_path[0] ? G.state_path : "(none)");
 
@@ -3535,6 +3708,7 @@ int main(int argc, char *argv[])
             api_send(&a, "slice remove %d", a.slice);
             if (a.stream) api_send(&a, "stream remove 0x%08X", a.stream);
             a.slice = -1;
+            keeper_tell(-1);
             a.stream = 0;
             a.stream_retry = 0;
             a.want_dax = 0;
