@@ -27,11 +27,13 @@ A test that touches `AppSettings` also needs its target name in the
 per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`) of tests
 kept on the macOS and Windows jobs because the claim each pins is about that
 platform's toolchain (Apple Metal, MSVC portability); the Linux job runs no
-tests, and the list does not grow. Pull-request CI does not compile tests either:
-Linux and macOS build `aether_non_test_targets` plus the macOS gate tests, so
-**build your test target locally before pushing**. A test that no longer
-compiles passes every PR check and fails `main` after the merge. Every test declared in `tests.cmake` that
-the default configure builds runs unfiltered on every push to `main`
+tests, and the list does not grow. The Linux PR job builds `aether_non_test_targets`.
+The macOS job builds those targets and its gate tests on both PRs and
+`main`, so **build your test target locally before pushing**. A
+test outside the PR target list can fail to compile after merge even if the
+PR checks pass. macOS-only tests outside its gate targets need a local build.
+Every test in `tests.cmake` that the default Linux configure builds runs
+unfiltered on every push to `main`
 (`full-suite.yml`) and twice weekly under the sanitizers (`sanitizers.yml`). (A test
 behind a default-OFF option runs in neither unless that lane passes the
 option; say so in the PR.) `tools/check_ci_test_gate.py` runs in
@@ -98,15 +100,15 @@ unfiltered test verdict and existing failure attribution. Keep every main
 commit's Full Suite run: do not add a concurrency group that cancels or
 replaces older commits. Windows/macOS main validation remains in `ci.yml`.
 
-Full Suite publishes `ccache-linux-build-<run_id>` and the Linux DeepFilterNet
+Full Suite publishes `ccache-linux-full-<run_id>` and the Linux DeepFilterNet
 cache only after a successful complete build on a main push. Saves happen at
 the end of the job, even when CTest failed, so test regressions do not freeze
 the compiler cache and cleanup can follow publication promptly. The final
 failure step still makes that test verdict red. Manual runs are restore-only.
 `cache-cleanup.yml` watches both CI and Full Suite completions; retain both.
-The Linux cache cap is 1500M in both jobs; its repository-wide budget is
-recorded beside Full Suite's cap. Configure flags must match between the two
-Linux jobs so PRs can reuse the main compiler cache.
+Both Linux jobs restore the Full Suite cache first and use the retired
+`ccache-linux-build-` prefix as a fallback. Both use a 2000M cache cap.
+Keep the configure flags aligned so PRs can reuse Full Suite's compiler objects.
 
 ## CI image
 

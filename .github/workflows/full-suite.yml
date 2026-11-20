@@ -1,6 +1,6 @@
 name: Full Suite
 
-# The sole Linux build and full-suite verdict for every push to main.
+# The sole Linux build shared by CI and the full test suite on each main push.
 # The PR Linux gate in ci.yml builds production targets; this job builds the
 # entire default graph, runs unfiltered CTest, and publishes the shared Linux
 # compiler/dependency caches. Keep its configuration aligned with that PR gate.
@@ -43,74 +43,13 @@ jobs:
     timeout-minutes: 90
     env:
       CCACHE_DIR: /ccache
-      # 1500M, revised twice. Read both steps before touching it again.
-      #
-      # 1000M -> 2000M (#5008, 2026-08-15). At 1000M this cache was FULL and
-      # evicting internally — the last green main run before that change:
-      #
-      #   Cache size (GB):  1.0 /  1.0 (95.41%)   Hits 2082/2210 (94.21%)
-      #
-      # A cold build settles at ~0.7 GB, but this entry does not hold one
-      # build: it accumulates objects across ~9.2 main merges a day. At 1.0 GB
-      # it only ever represented a narrow window of recent main, and a PR
-      # branched from a day-old main took misses on objects that had fallen
-      # out of ccache rather than out of the GitHub cache. 2000M fixed that:
-      # main runs 2026-09-01..05 report Hits 99.2–99.7%, PR runs 91–99%.
-      #
-      # 2000M -> 1500M (#5548 item 5, 2026-09-10). The #5008 budget assumed
-      # entries compress to ~55% of the ccache directory. They do not: ccache
-      # already compresses its objects, so the entry is ~95% of the directory
-      # — a full 2000M cache saved as a ~1.88 GiB entry (measured on every
-      # main save 2026-09-01..05). With the other caches also at their caps
-      # (sccache-windows 1.02 GiB, canary 0.94, macOS 0.44) and cache-cleanup
-      # keeping two of each, main alone held ~10.4 GiB against the 10 GiB
-      # allowance. GitHub evicted by LRU, this entry went first because it was
-      # the largest, and every main run until the next green save was a cold
-      # build: 27–37 min instead of 3–6, ten times between 2026-09-06 and
-      # 2026-09-10. cache-cleanup.yml now keeps one entry per prefix, which
-      # alone brings main to ~6.1 GiB; 1500M trims the largest entry further
-      # without giving back the whole 2000M window. Judge it by the "ccache
-      # stats" step: if main's hit rate settles below the ~99% seen at 2000M,
-      # the window is too narrow again and the budget below has room to go
-      # back up. If "Cache size" sits at 100% with a large `Cleanups` count
-      # AND the hit rate holds, leave it — a full cache that still hits is
-      # working as designed.
-      #
-      # Raised for THIS job only. The other two are not constrained and would
-      # pay transfer time for nothing — do not raise them on symmetry grounds:
-      #   check-macos     0.3 / 0.5 GB (57.63%)
-      #   check-windows   628 MiB / 1 GiB (61%)
-      #
-      # Budget at 1500M, against the repo's 10 GiB cache allowance, with
-      # cache-cleanup.yml's KEEP=1. Entry sizes are MEASURED on refs/heads/main
-      # from the "Save" steps, except Linux which is extrapolated from the
-      # ~95% ratio at the new cap:
-      #   Linux    ~1.4 GiB entry x 1 retained  = 1.4 GiB
-      #   Windows  ~1.02 GiB x 1                = 1.0 GiB
-      #   macOS    ~0.44 GiB x 1                = 0.4 GiB
-      #   canary   ~0.94 GiB x 1                = 0.9 GiB
-      #   deps (Qt 1.3, install-qt 0.4, DeepFilterNet, FFTW, qtkeychain)
-      #                                         ~ 1.8 GiB
-      #                                         --------
-      #                                         ~ 5.5 GiB
-      # That is the post-prune FLOOR, not what LRU evaluates. prune-main runs
-      # on workflow_run AFTER a main save, so between the save and the prune
-      # every prefix briefly holds two entries — a transient peak of about
-      # (1.4+1.02+0.44+0.94)x2 + 1.8 = ~9.4 GiB, and main runs are not
-      # serialised (cancel-in-progress is off for main), so those windows can
-      # overlap. Budget against the peak, not the floor.
-      # The canary line is system-libs-canary.yml's cache; it was missed by an
-      # earlier revision of this table and by cache-cleanup.yml's PREFIXES
-      # alike, so if you add a compiler cache in ANY workflow, add it to both.
-      # Dependency caches were also written on PR refs until #5548 item 1
-      # (~1.7 GiB per open PR that missed — ~12 GiB with the four open PRs
-      # measured on 2026-09-10, still over the line even after the prune
-      # change). Since item 1 they restore on PR and save on main only, so
-      # the figure above is the whole steady state; anything on refs/pull or
-      # refs/tags is transient and cache-cleanup.yml's sweep reclaims it.
-      # See "Compiler-cache strategy" at the bottom of ci.yml for why only
-      # main writes an entry, and cache-cleanup.yml for what prunes the rest.
-      CCACHE_MAXSIZE: 1500M
+      # Keep the cap sized for the full test graph (#7443). The active cache
+      # budget after pruning to one per prefix is about 6.1 GiB: Linux 1.86,
+      # Windows 1.02 per MSVC version, macOS 0.44, canary 0.94, and deps 1.8.
+      # The retired Linux build prefix still occupies space until it expires,
+      # and overlapping saves can exceed the 10 GiB limit before cleanup.
+      # Use the cache-cleanup usage report and ccache hit rates to judge the cap.
+      CCACHE_MAXSIZE: 2000M
 
     steps:
       - name: Free runner disk
@@ -127,15 +66,15 @@ jobs:
       - name: Ensure RTL-SDR build dependency is present
         run: dpkg -s librtlsdr-dev >/dev/null 2>&1 || (apt-get update && apt-get install -y librtlsdr-dev)
 
-      # Read the newest main cache. Only this workflow's successful main-push
-      # builds publish this prefix; ccache validates individual objects even
-      # when concurrently running commits restore an older entry.
+      # Use the existing Full Suite cache first. The legacy production-only
+      # cache still supplies matching objects if the Full Suite cache is absent.
       - name: Restore ccache objects
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: /ccache
-          key: ccache-linux-build-
+          key: ccache-linux-full-
           restore-keys: |
+            ccache-linux-full-
             ccache-linux-build-
 
       - name: Restore DeepFilterNet3
@@ -150,6 +89,7 @@ jobs:
         run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Zero ccache stats
+        continue-on-error: true
         run: ccache --zero-stats
 
       - name: Configure
@@ -207,6 +147,7 @@ jobs:
 
       - name: ccache stats
         if: always()
+        continue-on-error: true
         run: ccache --show-stats
 
       # Unfiltered, serial, and the exit code is the verdict. Serial because
@@ -215,7 +156,6 @@ jobs:
       # is a separate change with its own port audit.
       - name: Run the full test suite
         id: ctest
-        continue-on-error: true
         env:
           QT_QPA_PLATFORM: offscreen
         shell: bash
@@ -223,20 +163,19 @@ jobs:
           set -o pipefail
           ec=0
           ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
+          # Defer CTest's verdict until after reporting and cache publication.
+          # Failure to write the verdict itself must still fail this step.
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
         id: extract
-        if: steps.ctest.outputs.exit != '0'
+        if: ${{ !cancelled() && (steps.ctest.outcome == 'failure' || steps.ctest.outputs.exit != '0') }}
         shell: bash
         run: |
-          # NOTHING in this step may abort it. It runs under Actions' default
-          # `bash -eo pipefail`, and the artifact, sticky-issue and explicit-
-          # verdict steps below all carry an implicit success() on their `if:`
-          # — so a reporter that dies takes the whole report with it and the
-          # job goes red with no issue and no log: a crash wearing the costume
-          # of a report (#5412 second-opinion review). Two real triggers, both
-          # reproduced under that exact shell:
+          # Report both named failures and runs without a CTest summary.
+          # Disable errexit so an empty grep match or a deliberately truncated
+          # report cannot prevent the fingerprint from reaching the issue step.
+          # Two cases to preserve:
           #   - a zero-test run ("No tests were found!!!", which the
           #     --no-tests=error added earlier in this PR turns INTO a failure)
           #     has no "The following tests FAILED:" block, so grep exits 1 and
@@ -344,7 +283,7 @@ jobs:
       - name: Upload test log
         # !cancelled() rather than a bare condition: without it the implicit
         # success() means one bad step upstream silently drops the report.
-        if: ${{ !cancelled() && (steps.ctest.outputs.exit != '0' || steps.nobuild.outcome == 'success') }}
+        if: ${{ !cancelled() && (steps.ctest.outcome == 'failure' || steps.ctest.outputs.exit != '0' || steps.nobuild.outcome == 'success') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: full-suite-${{ github.run_id }}
@@ -358,7 +297,7 @@ jobs:
       # gating full-suite signal; the weekly append never touches labels, so a
       # maintainer's re-triage sticks.
       - name: Open or update tracking issue
-        if: ${{ !cancelled() && (steps.ctest.outputs.exit != '0' || steps.nobuild.outcome == 'success') }}
+        if: ${{ !cancelled() && (steps.ctest.outcome == 'failure' || steps.ctest.outputs.exit != '0' || steps.nobuild.outcome == 'success') }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           FAILED:  ${{ steps.extract.outputs.failed || steps.nobuild.outputs.failed }}
@@ -573,7 +512,7 @@ jobs:
         with:
           path: /ccache
           # Entries are immutable; the prefix restore selects the newest save.
-          key: ccache-linux-build-${{ github.run_id }}
+          key: ccache-linux-full-${{ github.run_id }}
 
       - name: Fail the job if any test failed
         if: ${{ !cancelled() && steps.ctest.outputs.exit != '0' }}

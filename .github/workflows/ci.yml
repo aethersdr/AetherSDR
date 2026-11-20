@@ -1,8 +1,8 @@
 name: CI
 
 # ── THE TEST GATE IN THIS FILE IS FROZEN ─────────────────────────────────────
-# This workflow does not run the test suite, and on pull requests it does
-# not build it either: Linux builds aether_non_test_targets (declared in
+# Full Suite builds and runs the entire Linux test suite on main.
+# This workflow's Linux PR job builds aether_non_test_targets (declared in
 # tests/tests.cmake), macOS builds that plus its gate tests, and Windows
 # lists its targets explicitly. The Linux `build` job runs NO tests; the only
 # `ctest -R` steps are the ones listed in .github/ci-test-gate.txt, kept on
@@ -25,17 +25,16 @@ on:
   # Post-merge guard. We dropped the "Require branches up to date before
   # merging" branch-protection bit because it forced a CI rerun on every
   # PR whenever main moved (~15–25 min × N stale PRs per batch day).
-  # The trade-off is: CI now runs on the merged commit itself, so any
-  # semantic conflict that slipped past three-way merge surfaces on main
-  # after validation and triggers normal failure notifications.
+  # Windows and macOS validate the merged commit in CI. Full Suite validates
+  # Linux on the same main push.
   push:
     branches: [main]
 
 # Auto-cancel superseded runs when a newer commit lands on the same PR, so a
 # rapid push stream doesn't stack full runs. PR runs share a stable per-PR
 # group (the older run is cancelled); main runs append the unique run_id so
-# each is its own group. Windows/macOS retain every main commit; the
-# separate Full Suite workflow owns Linux and likewise preserves each verdict.
+# each is its own group — main stays fully parallel and never queues or
+# cancels, leaving the post-merge push:main guard exactly as it was.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -84,7 +83,7 @@ env:
 
 jobs:
   build:
-    # Full Suite owns the Linux build and test verdict for each main commit.
+    # Full Suite builds the Linux default graph on main.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     # The full RelWithDebInfo tree plus ccache outgrows the hosted runner's
@@ -104,9 +103,8 @@ jobs:
     # the cache and the compiler side.
     env:
       CCACHE_DIR: /ccache
-      # Match Full Suite, the sole main writer of ccache-linux-build-.
-      # Its cache budget accounts for every platform and cache-cleanup.yml.
-      CCACHE_MAXSIZE: 1500M
+      # Restore the same cache Full Suite writes. See its repository-wide budget.
+      CCACHE_MAXSIZE: 2000M
 
     steps:
       - name: Free runner disk
@@ -130,8 +128,8 @@ jobs:
       - name: Ensure RTL-SDR build dependency is present
         run: dpkg -s librtlsdr-dev >/dev/null 2>&1 || (apt-get update && apt-get install -y librtlsdr-dev)
 
-      # Restore the main cache published by Full Suite — see "Compiler-cache strategy"
-      # at the bottom of this file for the measurements behind the split.
+      # Full Suite writes the shared Linux cache. Keep the legacy prefix as
+      # a fallback while existing entries expire.
       - name: Restore ccache objects
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -139,12 +137,13 @@ jobs:
           # There is deliberately no exact-match key here: the prefix fallback
           # IS the mechanism, and restore-keys picks the most recently created
           # matching entry, which under save-on-main is the newest main build.
-          key: ccache-linux-build-
+          key: ccache-linux-full-
           restore-keys: |
+            ccache-linux-full-
             ccache-linux-build-
 
-      # Full Suite publishes validated Linux dependencies on main. PRs only
-      # restore: private PR caches cannot be reused by other branches.
+      # Full Suite publishes the Linux dependency cache after a successful
+      # main build. PRs restore it or set up the dependency on a miss.
       - name: Restore DeepFilterNet3
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
@@ -174,7 +173,7 @@ jobs:
           # default so the assertion below has a request to check against.
           #
           # Match Full Suite's shared core and line-table debug configuration
-          # so PR builds can reuse its main-branch compiler cache.
+          # so the PR can reuse its main-branch compiler cache.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             -DAETHER_SHARED_CORE=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
@@ -212,8 +211,8 @@ jobs:
           }
           grep "GPU spectrum rendering enabled" configure.log
 
-      # The Linux PR gate builds production targets only. Full Suite builds
-      # the entire default graph and runs every registered test on main.
+      # The Linux PR gate builds production targets. Full Suite builds the
+      # default graph and runs every Linux-registered test on main.
       - name: Build
         run: cmake --build build -j$(nproc) --target aether_non_test_targets
 
@@ -222,10 +221,11 @@ jobs:
       # without anyone noticing, because nothing made the hit rate visible.
       # A "Hits 0" line here means the launcher was dropped — read it before
       # believing any wall-clock claim about this job. Runs last so it covers
-      # the main build.
+      # the PR build.
       - name: ccache stats
         if: always()
         run: ccache --show-stats
+
 
   # Cross-platform build check — runs on every PR (no path gating).
   #
@@ -471,31 +471,43 @@ jobs:
         shell: pwsh
         run: .\scripts\setup\setup-deepfilter.ps1
 
-      # Restored BEFORE sccache first runs, so the server sees a populated
-      # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
-      # since it survives the key drift that made the exact-key GHA backend
-      # miss 100%. Same save-on-main split as the Linux ccache step.
-      - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: D:\sccache
-          key: sccache-windows-
-          restore-keys: |
-            sccache-windows-
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-
       # CMAKE_CXX_COMPILER_LAUNCHER is honoured by Ninja and Make
       # generators, NOT by the Visual Studio / MSBuild generator that
       # CMake selects by default on windows-latest.  Switch to Ninja so
       # cl.exe invocations actually route through sccache.  msvc-dev-cmd
       # puts the MSVC toolchain on PATH (cl.exe, link.exe, etc.) so
-      # Ninja can find them.
+      # Ninja can find them. It runs before the sccache restore because it
+      # also exports VCToolsVersion, which the cache key needs.
       - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         with:
           arch: x64
+
+      # Restored BEFORE sccache first runs, so the server sees a populated
+      # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
+      # since it survives the key drift that made the exact-key GHA backend
+      # miss 100%. Same save-on-main split as the Linux ccache step.
+      #
+      # The key carries the MSVC toolset version because sccache hashes the
+      # compiler, so objects from another MSVC are a 100% miss. GitHub rolls a
+      # new runner image out over days and serves both meanwhile: with one
+      # shared entry, whichever MSVC saved last made every run on the other
+      # build cold, overrun the Build timeout and never save (2026-11-18/19,
+      # 14.51 vs 14.52). cache-cleanup.yml keeps one entry PER VERSION. The
+      # bare-prefix fallback only matters when this version has no entry yet;
+      # it may restore the wrong MSVC's objects, which miss, which costs only
+      # the ~10 s download, and sccache's LRU replaces them as it saves.
+      - name: Restore sccache objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: D:\sccache
+          key: sccache-windows-${{ env.VCToolsVersion }}-
+          restore-keys: |
+            sccache-windows-${{ env.VCToolsVersion }}-
+            sccache-windows-
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
 
       - name: Setup hidapi (HID encoder support)
         # Needed for the Ulanzi Dial Windows backend (#3239) and the
@@ -751,7 +763,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: D:\sccache
-          key: sccache-windows-${{ github.run_id }}
+          key: sccache-windows-${{ env.VCToolsVersion }}-${{ github.run_id }}
 
   # macOS build check — runs on every PR (no path gating), same rationale
   # as check-windows above.  Catches Q_OS_MACOS / CoreAudio / Cocoa-bridge
@@ -1045,13 +1057,12 @@ jobs:
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
 
-      # PRs build aether_non_test_targets plus the two gate tests run
-      # below; same reasoning as the Linux job's Build step. Main builds `all`
-      # so the ccache it saves stays warm for test sources. A gate test added
-      # to a ctest -R step here must also join this --target list: its PR
-      # otherwise fails at ctest with "Could not find executable".
+      # Builds aether_non_test_targets plus the two gate tests run below, on
+      # PRs and main alike; same reasoning as the Linux job's Build step. A
+      # gate test added to a ctest -R step here must also join this --target
+      # list: its PR otherwise fails at ctest with "Could not find executable".
       - name: Build
-        run: cmake --build build -j$(sysctl -n hw.ncpu) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test' || '' }}
+        run: cmake --build build -j$(sysctl -n hw.ncpu) --target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test
 
       - name: Run macOS MNR regression test
         run: ctest --test-dir build -R '^mac_nr_filter_test$' --no-tests=error --output-on-failure
@@ -1124,11 +1135,10 @@ jobs:
 # Compiler-cache strategy: restore everywhere, save only on main
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Platform builds restore their compiler cache on every run. Main cache writers
-# are Full Suite for Linux and CI for Windows/macOS; Linux PR builds only read.
-# Linux/Windows require a successful build before saving; the macOS action's
-# post-job save caveat is documented at its setup step. This section records why
-# PRs do not save: the previous arrangement failed silently for months.
+# Platform builds restore their compiler cache on every run. Full Suite
+# publishes the Linux cache after a successful main-push build. CI publishes
+# the Windows and macOS caches on main, with the macOS post-job save caveat
+# documented at its setup step.
 #
 # WHAT WENT WRONG BEFORE
 #
@@ -1201,8 +1211,7 @@ jobs:
 #   resolve to the most recent match, so run N's cache is unreachable the moment
 #   run N+1 saves, and an unreachable entry is never accessed again — so nothing
 #   refreshes its LRU position and nothing deletes it. Left alone, main writes
-#   ~4.3 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
-#   own. That job prunes each prefix to the newest 1 (was 2 until #5548; the
+#   several GiB per push and would pin the repo at its allowance on its own. That job prunes each prefix to the newest 1 (was 2 until #5548; the
 #   second copy alone put main over the allowance once every cache had filled
 #   to its cap). (Retention is itself a configurable policy as of 2025-11;
 #   see cache-cleanup.yml's header.)

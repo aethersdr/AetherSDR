@@ -9,6 +9,16 @@
 #include <QWidget>
 #include <QDebug>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace AetherSDR {
 
 namespace {
@@ -275,16 +285,16 @@ QList<ParsedShortcutRow> parseShortcutCsv(const QByteArray& bytes, QStringList& 
         // stays false, so a plain isEmpty() guard misses garbage. Round-trip
         // through toString(PortableText): Key_unknown stringifies as empty,
         // so a non-empty input that round-trips to "" is invalid.
-        const QKeySequence shortcut = QKeySequence::fromString(
+        const QKeySequence shortcut = shortcutKeyFromText(
             shortcutText, QKeySequence::PortableText);
         if (!shortcutText.isEmpty()
-            && shortcut.toString(QKeySequence::PortableText).isEmpty()) {
+            && shortcutKeyText(shortcut, QKeySequence::PortableText).isEmpty()) {
             errors << QStringLiteral("Line %1: invalid portable shortcut '%2'.")
                           .arg(row.lineNumber)
                           .arg(shortcutText);
         }
         if (customized && !shortcut.isEmpty()) {
-            const QString canonical = shortcut.toString(QKeySequence::PortableText);
+            const QString canonical = shortcutKeyText(shortcut, QKeySequence::PortableText);
             if (customizedKeyOwners.contains(canonical)) {
                 errors << QStringLiteral("Line %1: shortcut '%2' is customized for both %3 and %4.")
                               .arg(row.lineNumber)
@@ -362,6 +372,44 @@ void ShortcutManager::clearBinding(const QString& actionId)
     emit bindingsChanged();
 }
 
+void ShortcutManager::markHoldKeyAction(const QString& actionId)
+{
+    if (auto* a = action(actionId))
+        a->holdKey = true;
+}
+
+QString ShortcutManager::bindingRefusal(const Action& action, const QKeySequence& key)
+{
+    if (key.isEmpty() || !isShortcutSidedKey(key[0].key()))
+        return {};
+    if (key.count() != 1 || key[0].keyboardModifiers() != Qt::NoModifier)
+        return QStringLiteral("A left/right modifier key cannot be combined with "
+                              "other keys.");
+    if (!action.holdKey)
+        return QStringLiteral("Left/right modifier keys can only trigger hold actions "
+                              "(CW keys, PTT hold, Monitor hold).");
+    return {};
+}
+
+std::optional<quint8> shortcutPollSidedModifierState()
+{
+#ifdef Q_OS_WIN
+    static constexpr struct { Qt::Key key; int vk; } kVks[] = {
+        {kShortcutKeyLeftCtrl, VK_LCONTROL},   {kShortcutKeyRightCtrl, VK_RCONTROL},
+        {kShortcutKeyLeftShift, VK_LSHIFT},    {kShortcutKeyRightShift, VK_RSHIFT},
+        {kShortcutKeyLeftAlt, VK_LMENU},       {kShortcutKeyRightAlt, VK_RMENU},
+    };
+    quint8 down = 0;
+    for (const auto& k : kVks) {
+        if (::GetKeyState(k.vk) < 0)
+            down |= shortcutSidedKeyBit(k.key);
+    }
+    return down;
+#else
+    return std::nullopt;
+#endif
+}
+
 void ShortcutManager::resetToDefaults()
 {
     for (auto& a : m_actions) {
@@ -384,7 +432,14 @@ void ShortcutManager::loadBindings()
         // `persisted`, so this stays a contains() gate rather than a
         // value(key, default) fallback.
         if (s.contains(key)) {
-            a.currentKey = QKeySequence(s.value(key).toString());
+            const QKeySequence saved = shortcutKeyFromText(s.value(key).toString());
+            if (const QString refusal = bindingRefusal(a, saved); !refusal.isEmpty()) {
+                qWarning().noquote() << "ShortcutManager: ignoring saved binding"
+                                     << shortcutKeyText(saved) << "for" << a.id << "-"
+                                     << refusal;
+                continue;
+            }
+            a.currentKey = saved;
             a.persisted = true;
         }
     }
@@ -406,7 +461,7 @@ void ShortcutManager::normalizeDuplicateBindings()
         auto& action = m_actions[i];
         if (action.currentKey.isEmpty()) continue;
 
-        const QString keyText = action.currentKey.toString();
+        const QString keyText = shortcutKeyText(action.currentKey);
         auto it = ownerByKey.find(keyText);
         if (it == ownerByKey.end()) {
             ownerByKey.insert(keyText, i);
@@ -450,7 +505,7 @@ void ShortcutManager::saveBindings()
         // release's changed default reaches it instead of being pinned, and a
         // machine-initiated normalization clear never sticks.
         if (a.persisted) {
-            s.setValue(key, a.currentKey.toString());
+            s.setValue(key, shortcutKeyText(a.currentKey));
         } else {
             s.remove(key);
         }
@@ -469,7 +524,7 @@ QByteArray ShortcutManager::exportBindingsCsv() const
             action.id,
             action.displayName,
             action.category,
-            action.currentKey.toString(QKeySequence::PortableText),
+            shortcutKeyText(action.currentKey, QKeySequence::PortableText),
             action.persisted ? QStringLiteral("True") : QStringLiteral("False"),
         };
         QStringList escaped;
@@ -537,6 +592,17 @@ ShortcutImportResult ShortcutManager::importBindingsCsv(const QByteArray& bytes)
                                  .arg(importedActionLines.value(actionIndex))
                                  .arg(m_actions.at(actionIndex).displayName);
             continue;
+        }
+        if (record.customized) {
+            const QString refusal =
+                bindingRefusal(m_actions.at(actionIndex), record.shortcut);
+            if (!refusal.isEmpty()) {
+                result.errors << QStringLiteral("Line %1: %2 (%3, %4).")
+                                     .arg(record.lineNumber)
+                                     .arg(refusal, m_actions.at(actionIndex).displayName,
+                                          shortcutKeyText(record.shortcut));
+                continue;
+            }
         }
         importedActionLines.insert(actionIndex, record.lineNumber);
         pending << PendingBinding{
@@ -683,6 +749,9 @@ void ShortcutManager::rebuildShortcuts(QWidget* parent,
 
     for (const auto& a : m_actions) {
         if (a.currentKey.isEmpty() || !a.handler) continue;
+        // Qt's shortcut map cannot see a sided modifier key (#7354); only the
+        // momentary event-filter handlers resolve it.
+        if (isShortcutSidedKey(a.currentKey[0].key())) continue;
 
         auto* sc = new QShortcut(a.currentKey, parent);
         const bool windowManagement = isWindowManagement(a);
@@ -728,6 +797,15 @@ const ShortcutManager::Action* ShortcutManager::actionForKey(const QKeySequence&
     if (key.isEmpty()) return nullptr;
     for (const auto& a : m_actions) {
         if (a.currentKey == key) return &a;
+    }
+    // A sided modifier key with no binding of its own does what the generic
+    // key does, so a plain "Control" binding answers either Ctrl (#7354).
+    if (key.count() == 1 && isShortcutSidedKey(key[0].key())) {
+        const QKeySequence generic(key[0].keyboardModifiers()
+                                   | shortcutSidedKeyGeneric(key[0].key()));
+        for (const auto& a : m_actions) {
+            if (a.currentKey == generic) return &a;
+        }
     }
     return nullptr;
 }
