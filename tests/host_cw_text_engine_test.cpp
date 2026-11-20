@@ -889,6 +889,28 @@ void testKeyObjectionOncePerMessage()
     check("objection: no edge for it", f.edges.size() == 24);
 }
 
+// Review nit 6 on #7347: a send refused at its Cwx admission leaves CwxModel's
+// speed alone; an admitted one adopts the transmit speed.
+void testRefusedSendKeepsCwxSpeed()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    QObject owner;
+    QString objection = QStringLiteral("station objects");
+    f.radio.addKeyObjection(&owner, [&objection] { return objection; });
+    f.radio.transmitModel().setCwSpeed(30);
+    f.radio.cwxModel().adoptSpeed(25);
+    check("speed: CwxModel starts at 25 WPM", f.radio.cwxModel().speed() == 25);
+    check("speed: a send refused at admission", !a.send(QStringLiteral("E")));
+    check("speed: the refused send left CwxModel at 25 WPM", f.radio.cwxModel().speed() == 25);
+    objection.clear();
+    check("speed: an admitted send", a.send(QStringLiteral("E")));
+    check("speed: it adopted the transmit speed, 30 WPM", f.radio.cwxModel().speed() == 30);
+    pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 2000);
+    a.stop();
+    pumpFor(50);
+}
+
 // A route-less CwxModel::send() has no sender request to key under: refused, as today.
 void testRoutelessSendRefused()
 {
@@ -954,6 +976,7 @@ int main(int argc, char** argv)
     testWaitingRefusedAtItsTurn();
     testFailedStartDropsOnlyItsSender();
     testKeyObjectionOncePerMessage();
+    testRefusedSendKeepsCwxSpeed();
     testRoutelessSendRefused();
     testRadioSideKeyerUnchanged();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");

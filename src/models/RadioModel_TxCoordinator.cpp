@@ -859,15 +859,18 @@ bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const
         if (held) {
             return true;
         }
-        m_cwxModel.adoptSpeed(m_transmitModel.cwSpeed());   // one speed source for host keying
     }
     bool admitted = false;
     const CwxModel::TransmissionRoute route{
-        [self, request, &admitted, &onAdmitted]() -> CwxModel::TransmissionPermit {
+        [self, request, host, &admitted, &onAdmitted]() -> CwxModel::TransmissionPermit {
             if (!self || !self->beginTxActivity(TxActivity::Cwx, &request) || !self) {
                 return {};
             }
             admitted = true;
+            if (host) {
+                // One speed source for host keying, adopted once the send is admitted.
+                self->m_cwxModel.adoptSpeed(self->m_transmitModel.cwSpeed());
+            }
             const TxCoordinator::Operation operation = self->m_txCoordinator.requestOperation(request);
             if (onAdmitted) {
                 onAdmitted();
