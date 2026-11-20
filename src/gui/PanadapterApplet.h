@@ -96,6 +96,11 @@ public:
     int pitchRangeHigh()  const;
     // Sets both decoder range sliders to the saved shared ranges.
     void restoreCwRanges();
+    // Sets the Sens slider and its threshold to the selected decoder's saved
+    // value, unless the slider holds a change that is not saved yet.
+    void restoreCwSens();
+    // Saves a Sens change that is still waiting for its debounced save.
+    void flushCwSens();
 
     // RTTY decode panel
     void  setRttyPanelVisible(bool visible);
@@ -142,6 +147,9 @@ signals:
     // decoder's Sens filter) — the stream the CW callsign spotter watches
     // for "DE <call> <call>".
     void cwRxTextDisplayed(const QString& text);
+    // The operator picked a callsign in the CW text (double-click, or the
+    // context menu's entry): it becomes the DX call for CWX macros.
+    void cwCallsignPicked(const QString& call);
 
     // RTTY
     void rttyMarkHzChanged(int hz);
@@ -161,6 +169,8 @@ private:
     void applyCwFont();
     // Change the decoded-text font size by `delta` px, clamp, and persist (#3628).
     void adjustCwFont(int delta);
+    // The callsign at a point of the CW text's viewport, or empty.
+    QString cwCallsignAt(const QPoint& viewportPos) const;
     // Persist + clamp the CW panel height after a grip drag (#3628).
     void setCwPanelHeight(int h);
 

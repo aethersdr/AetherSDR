@@ -32,14 +32,14 @@ void check(bool value, const char* message)
     }
 }
 QVector<float> signal(int rate, PcmLayout layout, const QVector<int>& codes,
-                      bool startDuringSpace = false, double spaceHz = 1955)
+                      bool startDuringSpace = false, int markHz = 2125, int spaceHz = 1955)
 {
     QVector<float> samples;
     double phase = 0;
     const int channels = layout == PcmLayout::Mono ? 1 : 2;
     auto append = [&](bool mark, double seconds) {
         const int count = static_cast<int>(std::lround(rate * seconds));
-        const double step = 2.0 * std::numbers::pi * (mark ? 2125 : spaceHz) / rate;
+        const double step = 2.0 * std::numbers::pi * (mark ? markHz : spaceHz) / rate;
         for (int i = 0; i < count; ++i) {
             const float sample = static_cast<float>(0.5 * std::sin(phase));
             phase = std::fmod(phase + step, 2.0 * std::numbers::pi);
@@ -300,7 +300,7 @@ int main(int argc, char** argv)
         PcmProducer producer;
         producer.start(PcmPurpose::Slice, 9, {24000, PcmLayout::Mono});
         narrow.start();
-        feed(narrow, adapter, producer, signal(24000, PcmLayout::Mono, {31, 3, 3, 3, 3, 3, 3}, false, 2050), 1);
+        feed(narrow, adapter, producer, signal(24000, PcmLayout::Mono, {31, 3, 3, 3, 3, 3, 3}, false, 2125, 2050), 1);
         pumpUntil([&] { return text.size() >= 6; });
         check(text == QStringLiteral("AAAAAA") && minConf > 0.85f,
               "75 Hz shift: a clean signal's letters without a lone bit are green");
@@ -437,6 +437,59 @@ int main(int argc, char** argv)
             check(notifications == 0, "stopped RTTY decoder ignores non-finite typed input");
         }
     }
+    // Tones at or below 0 Hz hold the decoder idle; valid tones resume it with
+    // no restart. CONSTRUCTED signals: Mark 1000 / Shift 1170 puts space at
+    // -170 Hz, and the 1000/170 Hz RY below is what a filter built at the
+    // mirror image (+170 Hz) would decode.
+    {
+        RttyDecoder tones;
+        QString text;
+        bool finiteStats = true;
+        bool anyLock = false;
+        QObject::connect(&tones, &RttyDecoder::textDecoded, &app,
+                         [&](const QString& t, float) { text += t; });
+        QObject::connect(&tones, &RttyDecoder::statsUpdated, &app,
+                         [&](float level, float snr, bool lockedNow) {
+                             finiteStats = finiteStats && std::isfinite(level)
+                                 && std::isfinite(snr);
+                             anyLock = anyLock || lockedNow;
+                         });
+        DecoderPcmAdapter toneAdapter;
+        toneAdapter.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, 5);
+        PcmProducer toneProducer;
+        toneProducer.start(PcmPurpose::Slice, 5, {24000, PcmLayout::Mono});
+
+        tones.setMarkFreqHz(0);
+        tones.setShiftHz(170);
+        tones.start();
+        feed(tones, toneAdapter, toneProducer, signal(24000, PcmLayout::Mono, {31, 10, 21}), 1);
+        pumpUntil([&] { return !text.isEmpty(); });
+        check(text.isEmpty(), "Mark 0 holds the decoder idle");
+        check(finiteStats && !anyLock, "Mark 0 reports finite, unlocked statistics");
+
+        tones.setMarkFreqHz(1000);
+        tones.setShiftHz(1170);
+        feed(tones, toneAdapter, toneProducer,
+             signal(24000, PcmLayout::Mono, {31, 10, 21}, false, 1000, 170), 1);
+        pumpUntil([&] { return !text.isEmpty(); });
+        check(text.isEmpty(), "a space tone below 0 Hz holds the decoder idle, not at its mirror");
+
+        tones.setMarkFreqHz(2125);
+        tones.setShiftHz(170);
+        feed(tones, toneAdapter, toneProducer, signal(24000, PcmLayout::Mono, {31, 10, 21}), 1);
+        pumpUntil([&] { return text.size() >= 2; });
+        check(text == QStringLiteral("RY"), "valid tones resume decoding without a restart");
+
+        // Stepped down from valid tones, the running decoder must not keep
+        // decoding on the 2125/1955 Hz filters it built before.
+        text.clear();
+        tones.setMarkFreqHz(150);
+        feed(tones, toneAdapter, toneProducer, signal(24000, PcmLayout::Mono, {31, 10, 21}), 1);
+        pumpUntil([&] { return !text.isEmpty(); });
+        check(text.isEmpty(), "Mark 150 / Shift 170 holds a running decoder idle, not on its old filters");
+        tones.stop();
+    }
+
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

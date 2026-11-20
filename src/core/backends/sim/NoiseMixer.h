@@ -84,12 +84,14 @@ public:
     std::vector<Notch> autoNotchTones() const;
 
     // RF-anchored signals are drawn where they are in RF (#7420): the owner
-    // passes each one's offset from the panadapter centre. The birdie's pitch
+    // passes each one's offset from the panadapter center. The birdie's pitch
     // stays the "hz" knob; the RTTY station gets both tones' pitches (0 = not
     // audible) and RF offsets.
     void setBirdieRfOffsetHz(double hz) { m_birdieRfOffsetHz = hz; }   // unset: drawn at its pitch
     void setRttyTones(double upperAudioHz, double lowerAudioHz,
                       double upperRfOffsetHz, double lowerRfOffsetHz);
+    // The RTTY stations' shift: the lower tone sits this far below the upper in RF.
+    static constexpr double kRttyShiftHz = 170.0;
 
     // ---- generation ----
     // One 24 kHz mono float frame (kFrameLen samples) of the summed, notched,
@@ -99,7 +101,7 @@ public:
     // The active scene rendered as per-bin dBm for the panadapter, so the
     // waterfall shows what the audio carries. Noise BOTTOMS OUT on floorDbm and
     // rises up (real noise is a floor, not a floating band); notches carve to
-    // the floor. centerBin is pan 0's centre: RF-anchored signals are drawn at
+    // the floor. centerBin is pan 0's center: RF-anchored signals are drawn at
     // their RF offset from it, the others at their audio pitch; +Hz is right.
     QVector<float> spectrum(int nBins, double floorDbm, double spanHz,
                             int centerBin);
@@ -173,7 +175,7 @@ private:
     double m_birdieRfOffsetHz = std::numeric_limits<double>::quiet_NaN();   // NaN: no owner geometry
     RttyKeyer m_rtty, m_rttyReversed;
     double m_rttyUpperAudioHz = 0.0, m_rttyLowerAudioHz = 0.0;
-    double m_rttyUpperRfHz = 0.0, m_rttyLowerRfHz = -170.0;
+    double m_rttyUpperRfHz = 0.0, m_rttyLowerRfHz = -kRttyShiftHz;
     qint64 m_hashPhase = 0, m_woodPhase = 0;  // sample counters; long overflows in ~25 h on LLP64 (#4618)
 
     // RNG (own stream; Box-Muller spare)

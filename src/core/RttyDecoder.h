@@ -117,6 +117,7 @@ private:
     int    m_avgFrames{0};             // frames in that average, counted up to kMeanCharacters
     bool   m_lockState{false};
     qint64 m_samplesSinceFrame{0};
+    bool         m_filtersValid{false};
 };
 
 } // namespace AetherSDR

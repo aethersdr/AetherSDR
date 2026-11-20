@@ -3546,7 +3546,7 @@
         }
       ],
       "caption": "Diversity on a FLEX-8600: the DIV button adds a child slice on the second antenna, and ESC opens the beam-steering controls.",
-      "alt": "Two VFO flags. Slice A has its audio tab open, with DIV and ESC lit green, a phase slider at 0° with a +180 button, a gain slider at 1.00, a polar display of the ESC phase and gain, and an ESC level meter. To its right, the diversity child slice D on ANT2 shows the same frequency, 14.250.000."
+      "alt": "Two VFO flags on 144.200 MHz. On the left, the diversity child slice D on the Loops antenna. To its right, the parent slice A on the 18XXX antenna has its audio tab open, with DIV and ESC lit green, a phase slider at 160° with a +180 button, a gain slider at 1.95, a polar display of the ESC phase and gain, and an ESC level meter."
     },
     {
       "id": "rade-vfo-badge",

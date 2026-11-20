@@ -614,9 +614,9 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
                 notched |= std::abs(fHz - s.hz) <= w / 2;
             }
             if (notched) break;
-            // Where it is in RF, relative to the pan centre (#7420). Without an
+            // Where it is in RF, relative to the pan center (#7420). Without an
             // owner's geometry (the mixer on its own), USB with the dial at the
-            // centre: its pitch.
+            // center: its pitch.
             const int b = binOf(std::isnan(m_birdieRfOffsetHz) ? s.hz : m_birdieRfOffsetHz);
             bump(b, floorDbm + 90.0 + lvl + 10.0);
             bump(b - 1, floorDbm + 90.0 + lvl - 6.0);
@@ -664,8 +664,12 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
     }
 
     // Notch display: carve each notched offset to the floor (line disappears).
+    // The birdie's notch is carved where the birdie is drawn: its RF offset.
+    const ChannelState& birdie = m_ch.at(Channel::Birdie);
     for (double fHz : m_notchHz) {
-        const int nb = binOf(fHz);
+        const bool onBirdie = !std::isnan(m_birdieRfOffsetHz) && birdie.enabled
+                              && std::abs(fHz - birdie.hz) < 0.5;
+        const int nb = binOf(onBirdie ? m_birdieRfOffsetHz : fHz);
         const double w = m_notchWidthHz.count(std::lround(fHz))
                              ? m_notchWidthHz.at(std::lround(fHz)) : 100.0;
         const int half = std::max(1, static_cast<int>(w / (2 * hzPerBin)));

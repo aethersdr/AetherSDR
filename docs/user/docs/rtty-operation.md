@@ -179,9 +179,12 @@ The decoder is printing noise while it has no lock.
 
 The tones are not on the M and S lines, or the decoder settings don't match the signal.
 
+The built-in decoder stays idle while either tone is at or below 0 Hz. It resumes automatically when both tones are above 0 Hz.
+
 1. Tune your VFO until both tones sit on their respective dashed lines.
 2. Check that **Shift**, **Baud** and **REV** match the signal.
-3. If you use external software, verify the DAX channel is routing audio correctly.
+3. With **REV** off, keep **Mark** above **Shift**. With **REV** on, keep **Mark** above 0 Hz.
+4. If you use external software, verify the DAX channel is routing audio correctly.
 
 ## See also
 
