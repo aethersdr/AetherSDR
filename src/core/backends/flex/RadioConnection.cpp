@@ -715,8 +715,8 @@ void RadioConnection::processLine(const QString& line)
         }
     }
     const ParsedMessage msg = CommandParser::parseLine(line);
-    // Frequent WNB reports still reach the status ingress. Keep mixed pan
-    // updates in the connection log for diagnostics.
+    // A pan status carrying only WNB keys repeats every few seconds while
+    // WNB is on; keep it out of the RX log. It still reaches status ingress.
     const bool isWnbOnly = msg.type == MessageType::Status
         && msg.object.startsWith(QLatin1String("display pan 0x"))
         && msg.object.count(u' ') == 2

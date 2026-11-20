@@ -2,12 +2,14 @@
 // listener, network peer, discovery, or radio is used by this test.
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/FlexPttWireSession.h"
+#include "core/LogManager.h"
 
 #include <QSignalSpy>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QNetworkProxy>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QtTest>
 #include <algorithm>
 #include <cstring>
@@ -103,6 +105,62 @@ static int statusLines(const QSignalSpy& spy)
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    // A pan status carrying only WNB keys stays out of the RX log but still
+    // reaches status ingress; every other line keeps its RX log entry (#6069).
+    void wnbOnlyPanStatusSkipsRxLog()
+    {
+        // Force aether.connection debug on for this case only; reinstalling the
+        // previous filter re-applies whatever rules were in force before.
+        static QLoggingCategory::CategoryFilter previousFilter = nullptr;
+        previousFilter = QLoggingCategory::installFilter([](QLoggingCategory* category) {
+            if (previousFilter) { previousFilter(category); }
+            if (qstrcmp(category->categoryName(), "aether.connection") == 0) {
+                category->setEnabled(QtDebugMsg, true);
+            }
+        });
+        const auto restoreFilter = qScopeGuard([] { QLoggingCategory::installFilter(previousFilter); });
+        QVERIFY(lcConnection().isDebugEnabled());
+
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        QSignalSpy lines(&connection, &RadioConnection::lineReceived);
+        static QStringList captured;
+        const auto handler = [](QtMsgType type, const QMessageLogContext& context, const QString& text) {
+            if (type == QtDebugMsg && qstrcmp(context.category, "aether.connection") == 0
+                && text.startsWith(QStringLiteral("RX:"))) {
+                captured.append(text);
+            }
+        };
+        const auto capture = [&](const QByteArray& bytes) {
+            captured.clear();
+            const QtMessageHandler previous = qInstallMessageHandler(handler);
+            RadioConnectionSessionTestAccess::feed(connection, *socket, bytes);
+            qInstallMessageHandler(previous);
+            return captured;
+        };
+
+        QVERIFY(capture("S0|display pan 0x40000000 wnb=1 wnb_level=50 wnb_updating=1\n"
+                        "S0|display pan 0x40000000 wnb=1 wnb_level=50 wnb_updating=0\n"
+                        "S0|display pan 0x40000000 wnb_updating=1\n").isEmpty());
+        QCOMPARE(statusLines(lines), 3);
+        const ParsedMessage second = lines.at(1).at(0).value<ParsedMessage>();
+        QCOMPARE(second.object, QStringLiteral("display pan 0x40000000"));
+        QCOMPARE(second.kvs.value(QStringLiteral("wnb_level")), QStringLiteral("50"));
+        QCOMPARE(second.kvs.value(QStringLiteral("wnb_updating")), QStringLiteral("0"));
+
+        const QStringList logged = capture(
+            "S0|display pan 0x40000000 center=14.225 wnb_updating=1\n"
+            "S0|display pan 0x40000000 removed\n"
+            "S0|display pan 0x40000000 removed wnb=0\n"
+            "S0|display pan 0x40000000 wnb_future=1 wnb_updating=0\n"
+            "R17|0|wnb_updating=1\n"
+            "S0|slice 0 wnb_updating=1\n");
+        QCOMPARE(logged.size(), 6);
+        QVERIFY(logged.at(0).contains(QStringLiteral("center=14.225")));
+        QVERIFY(logged.at(1).contains(QStringLiteral("removed")));
+        QCOMPARE(lines.size(), 9);
+    }
+
     void wrongFamilyExplicitSourceFailsBeforeDial()
     {
         RadioConnection connection;
