@@ -401,6 +401,7 @@ func (s *Session) rewriteInfoReply(line []byte) []byte {
 	// Tailscale IPv6 address (fd7a:…) gets the reply as the radio sent it,
 	// rather than an address form clients may not expect.
 	if !ok || !local.Addr().Is4() {
+		log.Printf("session %d: client dialed %v, not an IPv4 address; info's ip= left as the radio sent it", s.id, s.client.LocalAddr())
 		return line
 	}
 	out := infoIPRe.ReplaceAll(body, []byte("${1}"+local.Addr().String()))

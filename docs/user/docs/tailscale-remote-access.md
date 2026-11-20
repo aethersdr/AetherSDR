@@ -321,7 +321,7 @@ The container relays the standard SmartSDR protocol, so other clients that
 can **connect by IP** from a computer running Tailscale also work through
 it. SmartSDR for Windows has been used this way. SmartSDR for Mac connects
 from container version 0.5.4: set it to **Fixed IP** with the radio's
-tailnet address. With an earlier version it lists the radio at its LAN
+tailnet IPv4 address (the `100.x.y.z` one, not the `fd7a:` IPv6 one). With an earlier version it lists the radio at its LAN
 address and can't connect. A device that can't run Tailscale itself can't
 reach the tailnet.
 
