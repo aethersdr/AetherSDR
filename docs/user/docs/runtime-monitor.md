@@ -53,6 +53,8 @@ Resident, peak resident, private memory and virtual address space, with a chart 
 
 A live tail of the current log file, filtered to the three performance-related categories: **Performance**, **Render** and **Audio**. The file path is shown above the viewer.
 
+Log highlighting follows the active theme, including lines already displayed when you switch between **Default Dark** and **Default Light**. Timestamps and debug levels are muted, categories use bold text, and information, warnings, errors, numbers and protocol terms use distinct theme colors. The **Application Logs** page in **Network Diagnostics** uses the same highlighting.
+
 - **Live** follows new lines as they arrive. Scrolling up pauses following so you can read around a stall; press **Live** again to resume.
 - A category that is switched off in **Help → Support & Diagnostics...** is shown dimmed. Only its warnings and errors reach the log until you turn it on there.
 
