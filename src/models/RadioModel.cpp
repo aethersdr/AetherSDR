@@ -6017,6 +6017,13 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     (void)sendCwInput(down, false, true, debugSource, debugTraceId, debugSourceMs, {});
 }
 
+void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
+{
+    const bool was = std::exchange(m_remoteCwKeyEdge, true);
+    sendCwKey(down, debugSource);
+    m_remoteCwKeyEdge = was;
+}
+
 void RadioModel::sendCwPaddle(bool dit, bool dah, const QString& debugSource,
                               quint64 debugTraceId, quint64 debugSourceMs)
 {
@@ -6099,8 +6106,8 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
     if (QThread::currentThread() != thread()) {
         return false;
     }
-    // The operator's key takes over from host text, queued senders included.
-    if (down && !ptt && !m_hostCwTextEdge && m_hostCwText && m_hostCwText->playing()) {
+    // A local operator's key takes over from host text, queued senders included.
+    if (down && !ptt && !m_hostCwTextEdge && !m_remoteCwKeyEdge && m_hostCwText && m_hostCwText->playing()) {
         m_cwxModel.clearBuffer();
     }
     const TxActivity activity = ptt ? TxActivity::CwPtt : TxActivity::CwKey;

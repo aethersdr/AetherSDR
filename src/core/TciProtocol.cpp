@@ -1778,7 +1778,7 @@ QString TciProtocol::cmdKeyer(const QStringList& args)
     // KEY UP, never "ignore and leave the key down" (Constitution VI).
     const bool down = (args[1].trimmed().toLower() == QLatin1String("true"));
     QMetaObject::invokeMethod(m_model, [model = m_model, down]() {
-        model->sendCwKey(down);
+        model->sendRemoteCwKey(down, QStringLiteral("tci:keyer"));
     }, Qt::QueuedConnection);
     return {};
 }

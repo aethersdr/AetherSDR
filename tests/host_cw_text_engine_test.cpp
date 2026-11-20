@@ -655,6 +655,27 @@ void testPaddleTakesOver()
     check("paddle: A's Cwx intent ended", !f.radio.producerRequestHasWork(a.request));
 }
 
+// Ruling on #7347: a remote client's key edge (TCI keyer) is not the operator's
+// hand, so it does not take over from host text.
+void testRemoteKeyDoesNotTakeOver()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    f.radio.transmitModel().setCwSpeed(20);
+    check("remote: A plays", a.send(QStringLiteral("MMMMMMMMMM")));
+    check("remote: A's first key-down", pumpUntil([&] { return !f.edges.empty(); }, 2000));
+    pumpFor(20);
+    const size_t before = f.edges.size();
+    f.radio.sendRemoteCwKey(true, QStringLiteral("tci:keyer"));
+    pumpFor(100);
+    f.radio.sendRemoteCwKey(false, QStringLiteral("tci:keyer"));
+    pumpFor(400);
+    std::printf("       %zu edges after the remote key edge\n", f.edges.size() - before);
+    check("remote: A's text is still playing", f.radio.producerRequestHasWork(a.request));
+    a.stop();
+    pumpFor(50);
+}
+
 // A waiting message that is refused when its turn comes is dropped with a notice.
 void testWaitingRefusedAtItsTurn()
 {
@@ -776,6 +797,7 @@ int main(int argc, char** argv)
     testScopedStop();
     testClearAll();
     testPaddleTakesOver();
+    testRemoteKeyDoesNotTakeOver();
     testWaitingRefusedAtItsTurn();
     testKeyObjectionOncePerMessage();
     testRoutelessSendRefused();
