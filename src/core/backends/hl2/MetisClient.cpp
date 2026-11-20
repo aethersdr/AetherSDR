@@ -228,9 +228,9 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
     std::vector<QHostAddress> localAddresses;
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
         const auto flags = iface.flags();
-        if (!flags.testFlag(QNetworkInterface::IsUp)
-            || !flags.testFlag(QNetworkInterface::IsRunning)
-            || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+        if (!discoveryWalksInterface(flags.testFlag(QNetworkInterface::IsUp)
+                                         && flags.testFlag(QNetworkInterface::IsRunning),
+                                     flags.testFlag(QNetworkInterface::IsLoopBack), broadcast)) {
             continue;
         }
         for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
@@ -282,6 +282,19 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
             break;
     }
     return found;
+}
+
+bool MetisClient::discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                          const QHostAddress& target)
+{
+    return upAndRunning && isLoopbackInterface == target.isLoopback();
+}
+
+QHostAddress MetisClient::sessionBindAddress(const QHostAddress& host, const QHostAddress& requested)
+{
+    if (host.protocol() == QAbstractSocket::IPv4Protocol && host.isLoopback())
+        return QHostAddress(QHostAddress::LocalHost);
+    return requested.isNull() ? QHostAddress(QHostAddress::AnyIPv4) : requested;
 }
 
 int MetisClient::effectiveNumRx(const Params& p)
@@ -370,6 +383,8 @@ bool MetisClient::start(const Params& params)
     // denominator that belongs to neither.
     m_adcWindowSamples = 0;
     m_adcWindowOverload = 0;
+    m_psGeneration = 0;
+    m_psAdcWindowGeneration = 0;
     m_telemetry.adcSamples = 0;
     m_telemetry.adcOverloadSamples = 0;
     m_telemetry.adcWindowMs = 0;
@@ -393,8 +408,7 @@ bool MetisClient::start(const Params& params)
         return m_startTransportForTest(params);
 
     m_socket = new QUdpSocket(this);
-    const QHostAddress bindAddress = params.localAddress.isNull()
-        ? QHostAddress::AnyIPv4 : params.localAddress;
+    const QHostAddress bindAddress = sessionBindAddress(m_host, params.localAddress);
     if (!m_socket->bind(bindAddress, 0)) {
         m_socket->deleteLater();
         m_socket = nullptr;
@@ -520,6 +534,7 @@ void MetisClient::onWatchdogTick()
         // retry returns early, and a PTT still shown (or a release still armed) from
         // before the gap would let the resumed stream key without a fresh press.
         // Idempotent on the later ticks of the same silence.
+        m_psAdcWindowGeneration = 0;
         clearRadioPtt();
         // Stage 1: re-send the run command before declaring link loss. If the gateware
         // halted because EP2 stopped (dsopenhpsdr1.v's watchdog drops `run`), resuming
@@ -843,8 +858,12 @@ void MetisClient::setReceiverCount(int count)
     relayoutReceivers(before);
 }
 
-void MetisClient::setPureSignal(bool enabled)
+void MetisClient::setPureSignal(bool enabled, quint64 generation)
 {
+    if (generation != m_psGeneration) {
+        m_psAdcWindowGeneration = 0;
+        m_psGeneration = generation;
+    }
     if (enabled == m_params.pureSignal)
         return;
     const int before = effectiveNumRx();
@@ -928,6 +947,7 @@ void MetisClient::relayoutReceivers(int before)
 
     // STOP first. Past this point the radio sends nothing, so there is no packet
     // that could be decoded against the wrong layout.
+    m_psAdcWindowGeneration = 0;
     countTx(sendCommandDatagram(metisStop(m_watchdogEnabled)));
 
     m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte,
@@ -1442,6 +1462,9 @@ bool MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         keyed = false;
     }
     m_mox = keyed;
+    if (m_mox != was || newOver) {
+        m_psAdcWindowGeneration = 0;
+    }
     m_overFlushOwed = m_overFlushOwed || m_mox;
     m_moxOperation = keyed
         ? (cwBreakIn ? operation.heldCwKeying() : operation.heldKeying()) : operation;
@@ -2241,7 +2264,7 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     // The loss accounting above lets rewinds and duplicates through, and their IQ
     // is still delivered. Their ptt_resp is not: a level from before the newest one
     // already believed cannot authorize another press.
-    const bool pttFresh = acceptPttSequence(*seq);
+    const bool ep6Fresh = acceptPttSequence(*seq);
 
     // Telemetry rides in the C&C bytes of each EP6 frame. The radio
     // free-runs through the classic response addresses, so this arrives
@@ -2263,7 +2286,7 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
             } else {
                 const bool wasRadioPtt = m_telemetry.ptt;
                 m_telemetry.apply(*resp);
-                if (!pttFresh) {
+                if (!ep6Fresh) {
                     // A stale frame's level is old news: it neither presses,
                     // releases, nor arms. The rest of its telemetry still applies.
                     m_telemetry.ptt = wasRadioPtt;
@@ -2282,6 +2305,10 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
                 // an ACK's raddr is a command address.
                 if (resp->raddr == 0x00 && m_telemetry.adcOverload) {
                     ++m_adcWindowSamples;
+                    if (!ep6Fresh) {
+                        // A reordered ADC response can belong to receive or an older over.
+                        m_psAdcWindowGeneration = 0;
+                    }
                     if (*m_telemetry.adcOverload)
                         ++m_adcWindowOverload;
                 }
@@ -2309,6 +2336,11 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
         m_telemetryEmitClock.restart();
         m_telemetry.adcSamples = m_adcWindowSamples;
         m_telemetry.adcOverloadSamples = m_adcWindowOverload;
+        // Attribute the completed window here, before it is queued to the GUI.
+        const bool psKeyed = m_mox && m_params.pureSignal;
+        m_telemetry.psAdcGeneration = psKeyed && m_adcWindowSamples > 0
+            ? m_psAdcWindowGeneration : 0;
+        m_psAdcWindowGeneration = psKeyed ? m_psGeneration : 0;
         m_adcWindowSamples = 0;
         m_adcWindowOverload = 0;
         m_telemetry.forwardPowerPeakRaw = m_fwdWindow.peak;
