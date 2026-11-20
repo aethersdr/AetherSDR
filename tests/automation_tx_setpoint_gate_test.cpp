@@ -465,6 +465,18 @@ int main(int argc, char** argv)
             }
             check(isTxSetpointControl(edit), n + " is marked a TX setpoint");
         }
+        // dumpTree reads the marker, not the name: neither edit is "RF power".
+        {
+            const QJsonObject bandTree = cmd(server, QStringLiteral("dumpTree"), {}, {}, {});
+            for (const QString& name : names) {
+                QJsonObject bandNode;
+                for (const auto& top : bandTree.value(QStringLiteral("roots")).toArray()) {
+                    findNode(top.toObject(), name, bandNode);
+                }
+                check(bandNode.value(QStringLiteral("txSetpoint")).toBool(),
+                      "dumpTree shows " + name.toUtf8() + " as txSetpoint");
+            }
+        }
         // Drive, not keying (#5851): the edits take bridge input without TX permission.
         backend->commands.clear();
         QLineEdit* rf = nullptr;
