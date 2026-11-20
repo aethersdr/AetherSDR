@@ -210,6 +210,19 @@ bool reachableRadio(bool overWan, const QHostAddress& address)
     return !overWan && reachableAddress(address);
 }
 
+DxSpot styled(DxSpot spot, const WsprSpotHubSettings& settings)
+{
+    spot.color = settings.color;
+    spot.lifetimeSec = settings.lifetimeMinutes * 60;
+    return spot;
+}
+
+bool feedStartsWithRadio(const WsprSpotHubSettings& settings, bool radioRunsWaveforms,
+                         bool overWan, const QHostAddress& address)
+{
+    return settings.autoStart && radioRunsWaveforms && reachableRadio(overWan, address);
+}
+
 bool reachableAddress(const QHostAddress& address)
 {
     if (address.isNull() || address.protocol() != QAbstractSocket::IPv4Protocol) {

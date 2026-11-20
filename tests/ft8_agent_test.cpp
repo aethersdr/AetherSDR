@@ -240,6 +240,40 @@ void testPanadapterSpot()
     check(d.utcTime == QTime(3, 24, 15), "the time is the cycle's start, in UTC");
 }
 
+void testSpotHubStyle()
+{
+    Ft8Spot s;
+    s.call = QStringLiteral("9Z4BM");
+    s.frequencyHz = 14075503;
+    WsprSpotHubSettings style;
+    const DxSpot plain = ft8::styled(ft8::toDxSpot(s, QStringLiteral("G0JKN")), style);
+    check(plain.lifetimeSec == 30 * 60, "an FT8 spot lives as long as SpotHub says, 30 minutes by default");
+    check(plain.color.isEmpty(), "with no color chosen it is left to the theme's FT8 color");
+    style.color = QStringLiteral("#12AB34");
+    style.lifetimeMinutes = 2;
+    const DxSpot chosen = ft8::styled(ft8::toDxSpot(s, QStringLiteral("G0JKN")), style);
+    check(chosen.lifetimeSec == 120, "a chosen lifetime is carried by the spot, in seconds");
+    check(chosen.color == QStringLiteral("#12AB34"), "a chosen color is carried by the spot");
+    check(chosen.dxCall == QStringLiteral("9Z4BM"), "styling changes nothing else");
+    check(QLatin1String(kFt8DefaultColorToken) != QLatin1String(kWsprDefaultColorToken),
+          "FT8 and WSPR spots do not share a default color");
+    check(QLatin1String(kFt8SpotHubKey) != QLatin1String("WsprSpots"),
+          "FT8 keeps its SpotHub settings apart from WSPR's");
+}
+
+void testFeedIsOptIn()
+{
+    const QHostAddress lan(QStringLiteral("192.168.0.47"));
+    WsprSpotHubSettings s;
+    check(!ft8::feedStartsWithRadio(s, true, false, lan), "the feed does not start by itself until it is turned on");
+    s.autoStart = true;
+    check(ft8::feedStartsWithRadio(s, true, false, lan), "with Auto-Start on it starts with a LAN radio");
+    check(!ft8::feedStartsWithRadio(s, false, false, lan), "but not on a radio that runs no waveforms");
+    check(!ft8::feedStartsWithRadio(s, true, true, lan), "and not over SmartLink");
+    check(!ft8::feedStartsWithRadio(s, true, false, QHostAddress(QStringLiteral("8.8.8.8"))),
+          "and not at a public address");
+}
+
 void testSpotsSince()
 {
     QList<Ft8Spot> all;
@@ -271,6 +305,8 @@ int main(int argc, char** argv)
     testReachable();
     testBands();
     testPanadapterSpot();
+    testSpotHubStyle();
+    testFeedIsOptIn();
     testSpotsSince();
     std::printf("\n%s (%d failure%s)\n", g_failed ? "FAILED" : "ALL PASSED", g_failed,
                 g_failed == 1 ? "" : "s");

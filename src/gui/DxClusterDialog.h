@@ -3,6 +3,7 @@
 #include "CanonWindow.h"
 
 #include <QAbstractTableModel>
+#include <functional>
 #include <QSortFilterProxyModel>
 #include <QHash>
 #include <QSet>
@@ -31,6 +32,8 @@ namespace AetherSDR {
 class DxClusterClient;
 class RadioModel;
 class WsprSpotFeed;
+class Ft8SpotFeed;
+struct WsprSpotHubSettings;
 
 // ── Spot list table model ───────────────────────────────────────────────────
 
@@ -93,6 +96,7 @@ public:
                              PotaClient* potaClient, EibiClient* eibiClient,
                              N1MMSpotClient* n1mmSpotClient,
                              WsprSpotFeed* wsprFeed,
+                             Ft8SpotFeed* ft8Feed,
 #ifdef HAVE_WEBSOCKETS
                              FreeDvClient* freedvClient,
 #endif
@@ -154,9 +158,30 @@ private:
     void buildWsjtxTab(QTabWidget* tabs);
     void buildSpotCollectorTab(QTabWidget* tabs);
     void buildPotaTab(QTabWidget* tabs);
-    // The WSPR receiver on the radio (tools/wspr-agent).
+    // A receiver that runs on the radio (tools/wspr-agent, tools/ft8-agent).
+    // Each gets the same tab, built once and told the receiver's name.
+    struct AgentTab {
+        QString         name;
+        QPushButton*    start{nullptr};
+        QPushButton*    autoStart{nullptr};
+        QPushButton*    configure{nullptr};
+        QLabel*         status{nullptr};
+        QPlainTextEdit* console{nullptr};
+    };
+    struct AgentTabSpec {
+        QString name;                    // "WSPR", "FT8": on every label
+        const char* colorToken{nullptr}; // the theme color until one is chosen
+        std::function<WsprSpotHubSettings()> load;
+        std::function<void(const WsprSpotHubSettings&)> save;
+        std::function<void()> configure; // open the receiver's settings window
+        std::function<void()> toggle;    // Start / Stop
+    };
+    QWidget* buildAgentTab(const AgentTabSpec& spec, AgentTab* tab);
+    void updateAgentControls(const AgentTab& tab, bool haveFeed, bool running, bool reachableOnLan);
     void buildWsprTab(QTabWidget* tabs);
     void updateWsprControls();
+    void buildFt8Tab(QTabWidget* tabs);
+    void updateFt8Controls();
     void buildEiBiTab(QTabWidget* tabs);
     void updateEibiTimestamps();
     void buildN1mmTab(QTabWidget* tabs);
@@ -249,11 +274,11 @@ private:
 
     // WSPR tab
     WsprSpotFeed*   m_wsprFeed{nullptr};
-    QPushButton*    m_wsprStartBtn{nullptr};
-    QPushButton*    m_wsprAutoStartBtn{nullptr};
-    QPushButton*    m_wsprConfigureBtn{nullptr};
-    QLabel*         m_wsprStatusLabel{nullptr};
-    QPlainTextEdit* m_wsprConsole{nullptr};
+    AgentTab        m_wsprTab;
+
+    // FT8 tab
+    Ft8SpotFeed*    m_ft8Feed{nullptr};
+    AgentTab        m_ft8Tab;
 
     // EiBi tab
     QPushButton*    m_eibiStartBtn{nullptr};

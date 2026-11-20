@@ -450,6 +450,8 @@ void MainWindow::wireSpotSubsystem()
                 spotColor = as.value("FreeDvSpotColor", "#FF8C00").toString();  // HAVE_WEBSOCKETS
             else if (source == "WSPR")
                 spotColor = ThemeManager::instance().value(QString::fromLatin1(kWsprDefaultColorToken));
+            else if (source == "FT8")
+                spotColor = ThemeManager::instance().value(QString::fromLatin1(kFt8DefaultColorToken));
         }
         if (spotColor.length() == 7)
             spotColor = "#FF" + spotColor.mid(1);
@@ -864,14 +866,14 @@ void MainWindow::wireSpotSubsystem()
     });
     // A new session or address: the feed belongs to the radio it started on.
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
-        // The FT8 feed follows the radio exactly as the WSPR one does. There
-        // is no autoStart setting for it yet (the WSPR SpotHub has one), so
-        // it starts whenever the radio can host waveforms: a radio without
-        // the receiver installed simply refuses the poll, and the feed says
-        // so once rather than retrying in a loop.
+        // The FT8 feed follows the radio exactly as the WSPR one does, and
+        // like it is opt-in: nothing is read until SpotHub → FT8 has
+        // Auto-Start on, or Start is pressed there.
         m_ft8Feed->stop();
-        if (connected && m_radioModel.backendCapabilities().hasWaveforms
-            && ft8::reachableRadio(m_radioModel.isWan(), m_radioModel.radioAddress())) {
+        if (connected
+            && ft8::feedStartsWithRadio(wspr::loadSpotHubSettings(QLatin1String(kFt8SpotHubKey)),
+                                        m_radioModel.backendCapabilities().hasWaveforms,
+                                        m_radioModel.isWan(), m_radioModel.radioAddress())) {
             m_ft8Feed->start(m_radioModel.radioAddress());
         }
         m_wsprFeed->stop();

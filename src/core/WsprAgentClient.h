@@ -106,8 +106,11 @@ private:
 };
 
 namespace wspr {
-WsprSpotHubSettings loadSpotHubSettings();
-void saveSpotHubSettings(const WsprSpotHubSettings& settings);
+// `key` is the receiver's own AppSettings key: WSPR's by default, and
+// kFt8SpotHubKey for the FT8 receiver, which keeps the same three settings.
+WsprSpotHubSettings loadSpotHubSettings(const QString& key = QStringLiteral("WsprSpots"));
+void saveSpotHubSettings(const WsprSpotHubSettings& settings,
+                         const QString& key = QStringLiteral("WsprSpots"));
 // Every status the feed reads reserves the slice the receiver names (#7139),
 // so a missed read after a new slice heals on the next poll.
 QMetaObject::Connection reserveReceiverSlice(WsprSpotFeed* feed, RadioModel* radio,

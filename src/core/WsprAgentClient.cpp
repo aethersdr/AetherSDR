@@ -231,15 +231,15 @@ void WsprSpotFeed::onStatus(const WsprStatus& status)
 
 namespace wspr {
 
-WsprSpotHubSettings loadSpotHubSettings()
+WsprSpotHubSettings loadSpotHubSettings(const QString& key)
 {
-    return parseSpotHubSettings(AppSettings::instance().value(QStringLiteral("WsprSpots")).toString());
+    return parseSpotHubSettings(AppSettings::instance().value(key).toString());
 }
 
-void saveSpotHubSettings(const WsprSpotHubSettings& settings)
+void saveSpotHubSettings(const WsprSpotHubSettings& settings, const QString& key)
 {
     auto& s = AppSettings::instance();
-    s.setValue(QStringLiteral("WsprSpots"), serializeSpotHubSettings(settings));
+    s.setValue(key, serializeSpotHubSettings(settings));
     s.save();
 }
 

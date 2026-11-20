@@ -1,5 +1,7 @@
 #pragma once
 
+#include "WsprAgent.h"
+
 #include <QByteArray>
 #include <QHostAddress>
 #include <QList>
@@ -40,6 +42,14 @@ inline constexpr bool kSupportsHopping = false;
 inline constexpr const char* kFt8WaveformName = "AetherFT8";
 // The port it answers on: 48994 is the radio health agent, 48995 AetherWSPR.
 inline constexpr quint16 kFt8Port = 48997;
+
+// The theme color FT8 spots take until one is chosen. Not WSPR's violet: the
+// two receivers can run side by side on one panadapter.
+inline constexpr const char* kFt8DefaultColorToken = "color.canon.category.teal";
+// SpotHub → FT8's own settings live under this AppSettings key. They are the
+// same three WSPR has (WsprSpotHubSettings, key "WsprSpots"), read and
+// written by the same code: start with the radio, color, lifetime.
+inline constexpr const char* kFt8SpotHubKey = "Ft8Spots";
 
 inline bool isFt8Waveform(const QString& name)
 {
@@ -125,9 +135,9 @@ struct Ft8Package {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.4";
+    static constexpr const char* kVersion = "0.1.5";
     static constexpr Pin kLegacy{":/waveforms/AetherFT8.ssdr_waveform", "AetherFT8.ssdr_waveform",
-                                 "fa051c520c2d2bfc5e70505ef73b80893648b741fd3d18655017639b8f1d7d08", 115348};
+                                 "9eb6f5a319f8646cabe8398052fe41abae69e9d14dc95a81b2877d67b2334b21", 115745};
 };
 
 // GET and POST /v1/config. A strict subset of WsprConfig: no hopping, no
@@ -189,6 +199,16 @@ QString writeBundledPackage(const Ft8Package::Pin& pin, const QString& dir, QStr
 // number on the panadapter that looks like an SNR and is not one, beside
 // WSPR spots whose dB figures are real. The score goes in the comment, named.
 DxSpot toDxSpot(const Ft8Spot& spot, const QString& receiver);
+
+// The same spot as SpotHub's FT8 settings say it should look: their color
+// (empty means the theme's kFt8DefaultColorToken) and their lifetime.
+DxSpot styled(DxSpot spot, const WsprSpotHubSettings& settings);
+
+// Whether the feed starts by itself when a radio connects. Reading the
+// receiver is opt-in: off until Auto-Start is turned on in SpotHub, and
+// never for a radio that cannot run waveforms or is reached over SmartLink.
+bool feedStartsWithRadio(const WsprSpotHubSettings& settings, bool radioRunsWaveforms,
+                         bool overWan, const QHostAddress& address);
 
 // The decodes with a cycle at or after `since`, newest cycle written back to
 // `next` so the caller advances. Same shape as wspr::spotsSince.

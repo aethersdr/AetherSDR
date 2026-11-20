@@ -1,6 +1,7 @@
 #include "Ft8AgentClient.h"
 
 #include "DxSpot.h"
+#include "WsprAgentClient.h"
 #include "models/RadioModel.h"
 
 #include <QDateTime>
@@ -210,13 +211,14 @@ void Ft8SpotFeed::onStatus(const Ft8Status& status)
     }
     emit statusReceived(status);
     m_receiverCall = status.callsign;
+    const WsprSpotHubSettings style = wspr::loadSpotHubSettings(QLatin1String(kFt8SpotHubKey));
     const QList<Ft8Spot> fresh = ft8::spotsSince(status.spots, m_since, &m_since);
     for (const Ft8Spot& s : fresh) {
         emit decoded(s);
         if (s.call.isEmpty()) {
             continue;   // nothing to label a spot with
         }
-        emit spotReceived(ft8::toDxSpot(s, status.callsign));
+        emit spotReceived(ft8::styled(ft8::toDxSpot(s, status.callsign), style));
     }
     if (!fresh.isEmpty()) {
         m_recent.append(fresh);

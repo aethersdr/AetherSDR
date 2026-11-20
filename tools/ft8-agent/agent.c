@@ -15,6 +15,8 @@
  *   POST /v1/config                 new settings (JSON). The first POST is
  *                                   open and returns an admin token; later
  *                                   ones need "Authorization: Bearer <token>"
+ *   POST /v1/restart                re-exec in place. Always needs the token:
+ *                                   an unclaimed receiver refuses it
  *
  * Only LAN callers are answered.
  *
@@ -68,7 +70,7 @@
 #include "ft8_lib/common/monitor.h"
 #include "ft8_lib/common/wave.h"
 
-#define AGENT_VERSION "0.1.4"
+#define AGENT_VERSION "0.1.5"
 #define STATUS_PORT 48997   /* 48994 radio health, 48995 WSPR, 48997 here */
 #define AUDIO_RATE 24000
 /* ft8_lib works at 12 kHz, which is the WSJT-X convention and what its own
@@ -820,6 +822,9 @@ extern long long aether_osd_rescued;
 extern long long aether_osd_skipped;
 #endif
 static char g_work[300];
+/* Set by the selftest only: an accepted POST /v1/restart answers and returns
+ * instead of re-executing the program that is running the test. */
+static int g_restart_dry;
 
 /* This process's own CPU seconds and peak RSS. AetherWSPR read these from its
  * child through wait4(); decoding in-process, we ask about ourselves. */
@@ -1304,9 +1309,15 @@ static void serve(int fd)
          * would make the new process fail to bind its own status port.
          *
          * Receive-only agent: nothing is keyed, so there is no transmit to
-         * leave hanging. */
+         * leave hanging.
+         *
+         * Unlike the first POST /v1/config, this is never open. Until the
+         * receiver is claimed there is no token to ask for, and anyone on
+         * the LAN could bounce it; so an unclaimed receiver refuses, and the
+         * way to restart one is to claim it first. */
         pthread_mutex_lock(&G.mu);
-        if (G.token[0]) {
+        if (!G.token[0]) { pthread_mutex_unlock(&G.mu); http_error(fd, 401, "claim the receiver first"); return; }
+        {
             char want[64];
             snprintf(want, sizeof want, "Bearer %s", G.token);
             char *auth = strcasestr(req, "\r\nAuthorization:");
@@ -1323,6 +1334,7 @@ static void serve(int fd)
 
         const char *msg = "{\"restarting\":true}";
         http_reply(fd, 200, msg, strlen(msg));
+        if (g_restart_dry) return;
         /* Let the reply reach the client before the process goes away. */
         shutdown(fd, SHUT_WR);
         close(fd);
@@ -2657,6 +2669,45 @@ static int selftest_save_failure(void)
     return 0;
 }
 
+/* POST /v1/restart is answered only for the admin token. An unclaimed
+ * receiver has none, and refuses rather than restarting for anyone who asks.
+ * Driven through the real request handler. */
+static int selftest_restart_auth(void)
+{
+    static const struct { const char *token, *header, *want, *what; } cases[] = {
+        {"", "", " 401 ", "an unclaimed receiver restarted with no token"},
+        {"", "Authorization: Bearer 0123456789abcdef0123456789abcdef\r\n", " 401 ",
+         "an unclaimed receiver restarted for a made-up token"},
+        {"0123456789abcdef0123456789abcdef", "", " 401 ", "a claimed receiver restarted with no token"},
+        {"0123456789abcdef0123456789abcdef", "Authorization: Bearer 0123456789abcdef0123456789abcdee\r\n", " 401 ",
+         "a claimed receiver restarted for the wrong token"},
+        {"0123456789abcdef0123456789abcdef", "Authorization: Bearer 0123456789abcdef0123456789abcdef\r\n", " 200 ",
+         "a claimed receiver refused its own token"},
+    };
+    int fail = 0;
+    g_restart_dry = 1;
+    G.state_path[0] = 0;
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        int sv[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) { fail = 1; break; }
+        strcpy(G.token, cases[i].token);
+        char req[256], reply[256] = "";
+        int l = snprintf(req, sizeof req, "POST /v1/restart HTTP/1.0\r\n%sContent-Length: 0\r\n\r\n", cases[i].header);
+        if (write(sv[0], req, (size_t)l) != l) fail = 1;
+        else serve(sv[1]);
+        ssize_t k = read(sv[0], reply, sizeof reply - 1);
+        close(sv[0]);
+        close(sv[1]);
+        if (k <= 0 || !strstr(reply, cases[i].want)) {
+            printf("selftest FAIL: %s\n", cases[i].what);
+            fail = 1;
+        }
+    }
+    g_restart_dry = 0;
+    G.token[0] = 0;
+    return fail;
+}
+
 /* What a socketpair's far end received, as one string. */
 static void drain_wire(int fd, char *wire, size_t cap)
 {
@@ -3175,7 +3226,8 @@ static int selftest(void)
 {
     if (selftest_dax_fallback() || selftest_rr73_both_encodings()) return 1;
     if (selftest_persistence() || selftest_spots() || selftest_budget_flagged()
-        || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()) return 1;
+        || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()
+        || selftest_restart_auth()) return 1;
     if (selftest_retune_mode() || selftest_dax_reclaim() || selftest_mute() || selftest_release_on_term()
         || selftest_orphan() || selftest_slice_file() || selftest_slice_index() || selftest_settle() || selftest_keeper()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
