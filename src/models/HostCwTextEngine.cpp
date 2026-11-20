@@ -130,8 +130,8 @@ void HostCwTextEngine::dropWaiting(const TxCoordinator::Request& sender)
 
 void HostCwTextEngine::endRun()
 {
-    // Fence first: an element the worker emits from here on derives from a
-    // dead input and is refused at admission.
+    // Belt and braces: invalidate() below fences the same elements; this
+    // fences them before the keyer joins.
     m_producer.discardInputs();
     m_run.reset();
     m_input = {};

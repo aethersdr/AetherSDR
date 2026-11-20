@@ -50,7 +50,6 @@
 #include "TnfModel.h"
 #include "SpotModel.h"
 #include "CwxModel.h"
-#include "HostCwTextEngine.h"
 #include "core/TxCoordinator.h"
 #include "DvkModel.h"
 #include "UsbCableModel.h"
@@ -100,6 +99,7 @@ class AprsDigipeaterModel;
 struct BandStackEntry;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
+class HostCwTextEngine;
 
 struct LicenseFeatureState {
     bool    seen{false};
