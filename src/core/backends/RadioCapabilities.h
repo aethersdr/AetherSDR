@@ -1042,6 +1042,7 @@ struct RadioCapabilities {
     // Engaged when a host text keyer may send client-timed elements through
     // requestCwControl(Kind::Carrier). A backend with a native text buffer may
     // accept carrier edges for a paddle and leave this fallback absent.
+    // Asked via RadioModel::hasHostCwTextKeyer() / hasCwTextKeyer() (#7146).
     struct HostCwKeyingControl {};
     std::optional<HostCwKeyingControl> hostCwKeyingControl;
 

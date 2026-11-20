@@ -5101,6 +5101,11 @@ bool RadioModel::hasHostCwTextKeyer() const
     return !caps.hasRadioSideCwKeyer && caps.hostCwKeyingControl.has_value() && caps.canTransmit;
 }
 
+bool RadioModel::hasCwTextKeyer() const
+{
+    return hasRadioSideCwKeyer() || hasHostCwTextKeyer();
+}
+
 RadioModel::HostCwTextRefusal RadioModel::hostCwTextRefusal() const
 {
     if (!hasHostCwTextKeyer()) {
