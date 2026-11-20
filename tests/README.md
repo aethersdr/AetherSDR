@@ -34,6 +34,15 @@ way, from `aether_test_log_manager` and `aether_test_async_log_writer`. Each is
 compiled once rather than once per test; configure fails if a test compiles
 them from source again.
 
+The widely shared widget and theme sources work the same way, from any test:
+`DragValuePopup`, `CanonWindow`, `CanonMessageBox`, `ModemChrome`,
+`FramelessResizer`, `FramelessWindowTitleBar`, `PersistentDialog`,
+`SliceColorManager`, `SliceLabel`, `ThemeManager` and `ThemeSeedGenerated` each
+have an `aether_test_*` object (the list is under "Shared GUI and theme
+objects" at the top of `tests.cmake`), and a test that needs the app's
+`resources.qrc` adds `$<TARGET_OBJECTS:aether_test_resources>` rather than
+running `qt_add_resources()` itself.
+
 Putting a test target in the root `CMakeLists.txt` instead fails two ways, on
 purpose: `tests.cmake` aborts the CMake configure step with a message pointing
 here, and `tools/check_test_registration.py --strict` fails the PR in CI.
