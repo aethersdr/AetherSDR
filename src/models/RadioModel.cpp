@@ -3181,6 +3181,10 @@ RadioModel::~RadioModel()
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
     m_independentTxGrants.reset(); // stop while every model member is still alive
+    // The local controls' TxController aborts its held inputs back into this
+    // model when it is destroyed, and the implicit member teardown would run
+    // that after m_slices is gone (it is declared later).
+    m_localTxController.reset();
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
