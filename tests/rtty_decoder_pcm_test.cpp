@@ -68,6 +68,42 @@ QVector<float> signal(int rate, PcmLayout layout, const QVector<int>& codes,
     return samples;
 }
 
+// Like signal(), with the other tone mixed into every bit at `other` times the read tone's
+// amplitude: each character then scores by how much of the other tone is heard.
+QVector<float> blendedSignal(const QVector<std::pair<int, double>>& codes)
+{
+    constexpr int rate = 24000;
+    QVector<float> samples;
+    double markPhase = 0;
+    double spacePhase = 0;
+    auto append = [&](bool mark, double other, double seconds) {
+        const int count = static_cast<int>(std::lround(rate * seconds));
+        const double markStep = 2.0 * std::numbers::pi * 2125 / rate;
+        const double spaceStep = 2.0 * std::numbers::pi * 1955 / rate;
+        for (int i = 0; i < count; ++i) {
+            const double m = std::sin(markPhase);
+            const double sp = std::sin(spacePhase);
+            samples.append(static_cast<float>(0.25 * (mark ? m + other * sp : sp + other * m)));
+            markPhase = std::fmod(markPhase + markStep, 2.0 * std::numbers::pi);
+            spacePhase = std::fmod(spacePhase + spaceStep, 2.0 * std::numbers::pi);
+        }
+    };
+    // Space, then idle mark, as signal(..., startDuringSpace): from a cold start on mark
+    // alone the filters can frame a LTRS, which would count toward the average.
+    append(false, 0.0, 0.25);
+    append(true, 0.0, 0.25);
+    constexpr double bitSeconds = 1.0 / 45.45;
+    for (const auto& [code, other] : codes) {
+        append(false, other, bitSeconds);
+        for (int bit = 0; bit < 5; ++bit) {
+            append((code & (1 << bit)) != 0, other, bitSeconds);
+        }
+        append(true, other, 1.5 * bitSeconds);
+    }
+    append(true, 0.0, 0.35);
+    return samples;
+}
+
 void feed(RttyDecoder& decoder, DecoderPcmAdapter& adapter, PcmProducer& producer,
           const QVector<float>& samples, int channels)
 {
@@ -102,6 +138,7 @@ bool pumpUntil(const std::function<bool()>& done)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
     for (int rate : {24000, 48000}) {
         for (PcmLayout layout : {PcmLayout::Mono, PcmLayout::Stereo}) {
             RttyDecoder decoder;
@@ -283,7 +320,7 @@ int main(int argc, char** argv)
         check(allProcessed, "every demo run was decoded to its last sample, with no input reset on the way");
     }
 
-    // #7422: the colour scale follows the filters. At a 75 Hz shift each filter passes more of
+    // #7422: the color scale follows the filters. At a 75 Hz shift each filter passes more of
     // the other tone, so a clean tone's share tops out lower than at 170 Hz; a clean A (no
     // lone bit between two opposite ones) still scores green.
     {
@@ -305,6 +342,51 @@ int main(int argc, char** argv)
         check(text == QStringLiteral("AAAAAA") && minConf > 0.85f,
               "75 Hz shift: a clean signal's letters without a lone bit are green");
         narrow.stop();
+    }
+
+    // #7422: how the average behind LOCKED and the level moves. Generated 'A's (no lone bit),
+    // each with the other tone mixed in: at 0.5 its amplitude a character scores about 0.78,
+    // between the unlock (0.70) and lock (0.83) scores; at 0.85 about 0.53.
+    {
+        auto lockSeries = [&](const QVector<float>& input) {
+            QVector<float> pcm = input;
+            pcm.resize((pcm.size() + 11999) / 12000 * 12000, 0.0f);
+            RttyDecoder decoder;
+            int readings = 0;
+            std::vector<bool> locked;
+            QObject::connect(&decoder, &RttyDecoder::statsUpdated, &app, [&](float, float, bool l) {
+                ++readings;
+                locked.push_back(l);
+            });
+            DecoderPcmAdapter adapter;
+            adapter.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, 10);
+            PcmProducer producer;
+            producer.start(PcmPurpose::Slice, 10, {24000, PcmLayout::Mono});
+            decoder.start();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+            // Paced as the demo runs above: at most 2.5 s ahead of the decoder's readings.
+            const int blocks = static_cast<int>(pcm.size() / 12000);
+            bool paced = true;
+            for (int block = 0; block < blocks && paced; ++block) {
+                paced = pumpUntil([&] { return block - (readings - 2) <= 4; });
+                feed(decoder, adapter, producer, pcm.mid(block * 12000, 12000), 1);
+            }
+            paced = paced && pumpUntil([&] { return readings >= 2 + blocks; });
+            decoder.stop();
+            check(paced && readings == 2 + blocks, "average checks: every sample decoded, no input reset");
+            return locked;
+        };
+        QVector<std::pair<int, double>> codes(6, {3, 0.0});
+        codes += QVector<std::pair<int, double>>(30, {3, 0.5});
+        const std::vector<bool> slipping = lockSeries(blendedSignal(codes));
+        check(std::find(slipping.begin(), slipping.end(), true) != slipping.end() && !slipping.empty()
+                  && slipping.back(),
+              "LOCKED holds while the average falls between the unlock and lock scores");
+        codes = {{3, 0.0}};
+        codes += QVector<std::pair<int, double>>(8, {3, 0.85});
+        const std::vector<bool> oneClean = lockSeries(blendedSignal(codes));
+        check(std::find(oneClean.begin(), oneClean.end(), true) == oneClean.end(),
+              "one clean character, then poor ones: the fresh average is a plain mean and never locks");
     }
 
     RttyDecoder decoder;

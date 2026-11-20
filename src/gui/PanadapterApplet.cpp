@@ -1353,8 +1353,10 @@ void PanadapterApplet::setRttyInputHint(const QString& hint, const QString& reas
 
 void PanadapterApplet::setRttyStats(float level, float snrDb, bool locked)
 {
-    // Level bar: the decoder's average character score on the letter colours' scale,
+    // Level bar: the decoder's average character score on the letter colors' scale,
     // empty with no characters, full on a clean copy. 15 segments, left to right.
+    // Not driven through MeterSmoother, by maintainer ruling (#7422): the level is a
+    // per-character average that also decides LOCKED, not display ballistics.
     const int markSegs = qBound(0, qRound(level * 15.0f), 15);
 
     QString markBar;
