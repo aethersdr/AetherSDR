@@ -9,6 +9,7 @@
 // only once its scheduled release is on EP2, under manual MOX and break-in;
 // a paddle's prequeued release leaves a separately held straight key keyed;
 // a straight key released during a paddle element ends with that element;
+// a straight key's suppressed up after the last release ends its hold;
 // a revoked producer's element is not keyed, or stops, at the EP2 writer;
 // a host-text element's fall is whole when the next down is already queued.
 
@@ -302,6 +303,34 @@ static void testStraightKeyReleasedDuringAPaddleElement()
           "overlap: one carrier, ending at the paddle's release sample (" + runsText(runs) + ")");
 }
 
+// The per-frame hold prune: a straight key's up that the model suppresses
+// (a paddle element is still down in the model) after that element's
+// scheduled release is already on EP2. Nothing is scheduled or keyed then,
+// so no release prunes the straight key's lapsed hold; the frame must, or
+// the carrier stays up on a hold whose intent has ended.
+static void testSuppressedStraightUpAfterTheLastRelease()
+{
+    Rig rig(true);
+    const TxCoordinator::Request straight = rig.model.registerTxProducer().request();
+    check(rig.model.requestProducerCw(straight, true), "prune: the straight key-down is admitted");
+    Rig::settle();
+    rig.buildTo(50);
+    const TxCoordinator::Producer paddle = rig.model.registerTxProducer();
+    const TxCoordinator::Request element = paddle.request().derive();
+    rig.model.queueProducerCwKeyEdge(element, true, QStringLiteral("test:paddle"), 0, 0, rig.at(100), false, {},
+                                     rig.at(140));
+    Rig::settle();
+    rig.buildTo(250);   // the paddle's release (180 ms) is written; nothing is pending
+    (void)rig.model.requestProducerCw(straight, false);
+    Rig::settle();
+    rig.buildTo(400);
+    const auto runs = carriers(rig.iTrace);
+    check(runs.size() == 1 && runs[0].start + runs[0].length <= samplesOfMs(250) + 2 * kFrame,
+          "prune: the straight key's lapsed hold ends the carrier with no release pending (" + runsText(runs) + ")");
+    rig.model.queueProducerCwKeyEdge(element, false, QStringLiteral("test:paddle"), 0, 0, rig.at(140));
+    Rig::settle();
+}
+
 // Producer revocation at the EP2 writer: before the element is due, nothing
 // is keyed; during it, the carrier stops within a frame.
 static void testRevokedProducerAtTheWriter()
@@ -402,6 +431,7 @@ int main(int argc, char** argv)
     testBreakInTwoDitsBothReachEp2();
     testPaddleReleaseLeavesAStraightKeyHeld();
     testStraightKeyReleasedDuringAPaddleElement();
+    testSuppressedStraightUpAfterTheLastRelease();
     testRevokedProducerAtTheWriter();
     testHostTextFallSurvivesTheNextDown();
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
