@@ -2,6 +2,7 @@
 // production dialog. Injected Flex transport and socket-free Demo; no RF.
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
+#include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/RadioSettingsScope.h"
 #include "core/TxKeyingMarker.h"
@@ -458,6 +459,7 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("radio-setup-tx-timing-fields"));
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    AppSettings::instance().load();   // as the app does at startup: the feature store opens
     RadioSetupTxTimingFieldsTest test;
     return QTest::qExec(&test, argc, argv);
 }

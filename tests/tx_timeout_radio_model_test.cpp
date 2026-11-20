@@ -646,6 +646,8 @@ int main(int argc, char** argv)
             radio.queueProducerCwKeyEdge(element, down, QStringLiteral("cw:iambic-keyer"),
                                          0, 0, std::chrono::steady_clock::now());
         };
+        int expiries = 0;
+        QObject::connect(&radio, &RadioModel::txTimeoutExpired, &radio, [&expiries] { ++expiries; });
         Access::radioKeyed(radio, true);
         radio.setProducerCwPaddleHeld(input, true);
         edge(true);
@@ -659,7 +661,7 @@ int main(int argc, char** argv)
         (void)pumpUntil([&] { return !keyDown; }, 3000);
         const int holdersAfter = Access::holders(radio);
         runOver(radio, now, 180'000);
-        const bool expired = radio.txTimeoutLatched();
+        const bool expired = expiries == 1;
         Access::radioKeyed(radio, false);
         Access::tick(radio);
         const std::string detail = "keyed=" + std::to_string(keyed) + " trailing=" + std::to_string(trailing)
