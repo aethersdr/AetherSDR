@@ -163,6 +163,7 @@
 #include "ThemeEditorDialog.h"
 #include "WhatsNewDialog.h"
 #include "models/SliceModel.h"
+#include "models/DiversityPairPolicy.h"
 #include "models/MeterModel.h"
 #include "models/BandDefs.h"
 #include "models/BandPlanManager.h"
@@ -568,19 +569,19 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 bool MainWindow::isSameDiversityReceivePair(const SliceModel* slice,
                                             const SliceModel* other)
 {
-    if (!slice || !other || slice == other
-        || !slice->diversity() || !other->diversity()) {
+    if (!slice || !other || slice == other)
         return false;
-    }
-
-    const bool parentChildPair =
-        (slice->isDiversityParent() && other->isDiversityChild())
-        || (slice->isDiversityChild() && other->isDiversityParent());
-    if (parentChildPair) {
-        return true;
-    }
-
-    return !slice->panId().isEmpty() && slice->panId() == other->panId();
+    auto view = [](const SliceModel* s) {
+        DiversityPairPolicy::SliceView v;
+        v.sliceId = s->sliceId();
+        v.diversity = s->diversity();
+        v.parent = s->isDiversityParent();
+        v.child = s->isDiversityChild();
+        v.diversityIndex = s->diversityIndex();
+        v.panId = s->panId();
+        return v;
+    };
+    return DiversityPairPolicy::isSamePair(view(slice), view(other));
 }
 
 // ─── Shortcut guard (file-scope for use as std::function<bool()>) ───────────
@@ -9642,6 +9643,9 @@ void MainWindow::routeCwDecoderOutput()
         // decoder target. Hide it before dropping ownership so a later refresh
         // cannot leave an orphaned CW dock on the old pan (#4409).
         m_cwDecoderApplet->setCwPanelVisible(false);
+        // Saved now, so the target below reads it rather than the value
+        // before the debounced save.
+        m_cwDecoderApplet->flushCwSens();
 #ifdef HAVE_CW_RX_BACKENDS
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwEngineChanged,
                    this, &MainWindow::selectCwRxBackend);
@@ -9689,9 +9693,11 @@ void MainWindow::routeCwDecoderOutput()
 
     // Connect to new applet
     if (m_cwDecoderApplet) {
-        // Each pan builds its own range sliders; the decoder's ranges are one
-        // shared setting, so the target shows the saved ones before they are pushed.
+        // Each pan builds its own range sliders and Sens slider; the decoder's
+        // ranges and Sens are saved settings, so the target shows the saved
+        // ones before they are pushed or used.
         m_cwDecoderApplet->restoreCwRanges();
+        m_cwDecoderApplet->restoreCwSens();
         connect(&m_cwDecoder, &CwRxModel::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         // TX-side decoded text routes to a separate slot so the panel

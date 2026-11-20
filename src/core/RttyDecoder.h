@@ -100,6 +100,7 @@ private:
     BiquadState  m_spaceState;
     double       m_markEnv{};
     double       m_spaceEnv{};
+    bool         m_filtersValid{false};
 };
 
 } // namespace AetherSDR
