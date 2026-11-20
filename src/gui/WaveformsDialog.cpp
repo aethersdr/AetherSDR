@@ -1387,11 +1387,17 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // The WSPR receiver ships inside AetherSDR, pinned like the health tools.
     m_installWsprAction = installMenu->addAction(
         tr("WSPR Receiver"), this, &WaveformsDialog::onInstallWsprClicked);
+    // AetherGPS ships inside AetherSDR too; the AetherGPS window's checkbox
+    // installs the same package.
+    m_installAetherGpsAction = installMenu->addAction(
+        tr("AetherGPS"), this, &WaveformsDialog::onInstallAetherGpsClicked);
     installMenu->addSeparator();
     installMenu->addAction(tr("Legacy Waveform (.ssdr_waveform)..."),
                            this, &WaveformsDialog::onInstallLegacyClicked);
     m_installDockerAction = installMenu->addAction(tr("Docker Waveform Image..."),
                                                    this, &WaveformsDialog::onInstallDockerClicked);
+    // AetherGPS's window can start an upload too; read the state as the menu opens.
+    connect(installMenu, &QMenu::aboutToShow, this, &WaveformsDialog::updateInstallButtonState);
     m_installBtn->setMenu(installMenu);
     installedHeader->addWidget(m_installBtn);
     installedRoot->addLayout(installedHeader);
@@ -1497,6 +1503,9 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::refreshWaveformList);
     connect(&wfModel, &FlexWaveformModel::waveformsChanged,
             this, &WaveformsDialog::updateHealthBar);
+    // The AetherGPS entry greys out once the radio lists it.
+    connect(&wfModel, &FlexWaveformModel::waveformsChanged,
+            this, &WaveformsDialog::updateInstallButtonState);
     connect(&wfModel, &FlexWaveformModel::commandFinished,
             this, &WaveformsDialog::onWaveformCommandFinished);
     connect(&wfModel, &FlexWaveformModel::restarted,
@@ -1624,6 +1633,28 @@ void WaveformsDialog::updateInstallButtonState()
         m_installWsprAction->setToolTip(wsprTip);
         m_installWsprAction->setStatusTip(wsprTip);
     }
+    if (m_installAetherGpsAction) {
+        // The same gate as AetherGPS's checkbox: the container on a radio with
+        // a Waveform Processor, under the Docker gate; any other, the legacy waveform.
+        const bool hasWaveforms = connected && m_radioModel->backendCapabilities().hasWaveforms;
+        const bool native = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Native;
+        bool installed = false;
+        for (const FlexWaveformEntry& w : wfModel.waveforms()) {
+            installed = installed || isAetherGpsWaveform(w.name);
+        }
+        const bool runtimeReady = native || dockerReady;
+        m_installAetherGpsAction->setEnabled(!busy && hasWaveforms && runtimeReady && !installed);
+        const QString gpsTip = busy ? tr("A waveform install is already in progress.")
+            : !connected            ? tr("Connect to a radio before installing AetherGPS.")
+            : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
+            : installed             ? tr("AetherGPS is already installed on this radio.")
+            : !runtimeReady         ? dockerBlocker
+                                    : tr("Install AetherGPS (version %1), which shares the radio's GPS "
+                                         "on your network.")
+                                          .arg(QString::fromLatin1(AetherGpsPackage::kVersion));
+        m_installAetherGpsAction->setToolTip(gpsTip);
+        m_installAetherGpsAction->setStatusTip(gpsTip);
+    }
     if (busy) {
         m_installDockerAction->setToolTip(tr("A waveform install is already in progress."));
     } else if (dockerReady) {
@@ -1674,6 +1705,40 @@ void WaveformsDialog::onInstallWsprClicked()
         return;
     }
     installWspr(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::onInstallAetherGpsClicked()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    installAetherGps(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+bool WaveformsDialog::installAetherGps(bool docker)
+{
+    if (docker) {
+        const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+        if (!blocker.isEmpty()) {
+            showDockerWfpNotReadyDialog(this, blocker);
+            return false;
+        }
+    }
+    // The package ships inside AetherSDR; the installer wants a file.
+    QString error;
+    const QString path = aethergps::writeBundledPackage(
+        docker ? AetherGpsPackage::kContainer : AetherGpsPackage::kLegacy,
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-gps-%1").arg(QString::fromLatin1(AetherGpsPackage::kVersion)),
+        &error);
+    if (path.isEmpty()) {
+        ScopedChildWidget<CanonMessageBox> box(tr("AetherGPS Not Installed"), error, this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
+        box.get()->exec();
+        return false;
+    }
+    installWaveformPath(docker, path, m_radioModel, m_radioModel->controlSession());
+    return true;
 }
 
 bool WaveformsDialog::installWspr(bool docker)
@@ -2524,11 +2589,10 @@ void WaveformsDialog::refreshWaveformList()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-    // The radio health agent is the health bar's, and AetherGPS is AetherGPS's
-    // checkbox: neither is a row of its own.
+    // The radio health agent is the health bar's, not a row of its own.
     QList<FlexWaveformEntry> waveforms;
     for (const FlexWaveformEntry& entry : wfModel.waveforms()) {
-        if (!isRadioHealthWaveform(entry.name, entry.isContainer) && !isAetherGpsWaveform(entry.name)) {
+        if (!isRadioHealthWaveform(entry.name, entry.isContainer)) {
             waveforms.append(entry);
         }
     }
