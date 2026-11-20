@@ -6,6 +6,12 @@
 
 namespace AetherSDR {
 
+namespace {
+// RTTY mode puts the dial at the 2125 Hz mark: audioHzForRf() and the birdie
+// knob's inverse both read it.
+constexpr double kRttyMarkHz = 2125.0;
+}  // namespace
+
 SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
 {
     // A member QObject has NO parent by default, and moveToThread() moves
@@ -135,8 +141,8 @@ void SimSignalSource::onTick()
         if (!m_scopeStalled && ++m_frames % kSpectrumRowEveryNFrames == 0) {
             constexpr int kBins = 1024;
             constexpr double kFloorDbm = -120.0;
-            // ±4 kHz around the VFO — the same span the synthetic connect
-            // publishes as the pan bandwidth, in Hz. One definition.
+            // ±4 kHz around pan 0's center — the same span the synthetic
+            // connect publishes as the pan bandwidth, in Hz. One definition.
             constexpr double kAudioSpanHz = DemoRadio::kAudioSpanHz;
             const QVector<float> row =
                 m_audio.spectrum(kBins, kFloorDbm, kAudioSpanHz, kBins / 2);
@@ -162,7 +168,14 @@ void SimSignalSource::setNoiseEnabled(const QString& channel, bool on)
 {
     bool ok = false;
     const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
-    if (ok) m_audio.setEnabled(c, on);
+    if (!ok) return;
+    // An RTTY station switched on lands with its upper tone on the dial (the
+    // M line in RTTY mode), then stays put in RF like the birdie (#7420).
+    if (on && (c == NoiseMixer::Channel::Rtty || c == NoiseMixer::Channel::RttyReversed)) {
+        m_rttyUpperMhz = m_sliceFreqMhz;
+        updateRttyFromVfo();
+    }
+    m_audio.setEnabled(c, on);
 }
 
 void SimSignalSource::setNoiseLevel(const QString& channel, double levelDb)
@@ -186,7 +199,9 @@ void SimSignalSource::setNoiseKnob(const QString& channel, const QString& knob,
     // straight through would leave the carrier stale and the next VFO nudge
     // would silently discard what the operator dialled.
     if (c == NoiseMixer::Channel::Birdie && knob == QLatin1String("hz")) {
-        m_birdieCarrierMhz = m_sliceFreqMhz + (m_lsb ? -value : value) / 1.0e6;
+        // Inverse of audioHzForRf(): RTTY puts the dial at the 2125 Hz mark.
+        const double offsetHz = m_rttyMode ? kRttyMarkHz - value : (m_lsb ? -value : value);
+        m_birdieCarrierMhz = m_sliceFreqMhz + offsetHz / 1.0e6;
         updateBirdieFromVfo();
         return;
     }
@@ -215,29 +230,59 @@ void SimSignalSource::setVfoMhz(double mhz)
 {
     m_sliceFreqMhz = mhz;
     updateBirdieFromVfo();
+    updateRttyFromVfo();
 }
 
 void SimSignalSource::setLowerSideband(bool lsb)
 {
     m_lsb = lsb;
     updateBirdieFromVfo();
+    updateRttyFromVfo();
+}
+
+void SimSignalSource::setRttyMode(bool rtty)
+{
+    m_rttyMode = rtty;
+    updateBirdieFromVfo();
+    updateRttyFromVfo();
+}
+
+void SimSignalSource::setPanCenterMhz(double mhz)
+{
+    m_panCenterMhz = mhz;
+    updateBirdieFromVfo();
+    updateRttyFromVfo();
+}
+
+double SimSignalSource::audioHzForRf(double rfMhz) const
+{
+    // USB: rf - VFO; LSB: VFO - rf; RTTY: lower sideband with the dial at the
+    // 2125 Hz mark (FlexLib's rtty_mark; the demo refuses `rtty mark`, #7121),
+    // so a tone 170 Hz below the dial sounds at 2295 Hz. 0 = not audible.
+    static constexpr double kMinAudibleHz = 50.0;    // below: zero-beat
+    static constexpr double kMaxAudibleHz = 6000.0;  // generous passband,
+                                                     // inside 12 kHz Nyquist
+    const double offsetHz = (rfMhz - m_sliceFreqMhz) * 1.0e6;
+    const double audioHz = m_rttyMode ? kRttyMarkHz - offsetHz
+                                      : (m_lsb ? -offsetHz : offsetHz);
+    return (audioHz >= kMinAudibleHz && audioHz <= kMaxAudibleHz) ? audioHz : 0.0;
+}
+
+void SimSignalSource::updateRttyFromVfo()
+{
+    const double lowerMhz = m_rttyUpperMhz - NoiseMixer::kRttyShiftHz / 1.0e6;
+    m_audio.setRttyTones(audioHzForRf(m_rttyUpperMhz), audioHzForRf(lowerMhz),
+                         (m_rttyUpperMhz - m_panCenterMhz) * 1.0e6,
+                         (lowerMhz - m_panCenterMhz) * 1.0e6);
 }
 
 void SimSignalSource::updateBirdieFromVfo()
 {
-    // Audio pitch from the RF offset, per sideband:
-    //   USB: pitch = carrier - VFO;  LSB: pitch = VFO - carrier.
-    // A carrier on the "wrong" side or outside the audio passband is silent —
-    // passing 0 tells NoiseMixer "not audible". Megahertz-scale offsets MUST
-    // go silent rather than alias back into the audio band as a screech.
-    static constexpr double kMinAudibleHz = 50.0;    // below: zero-beat
-    static constexpr double kMaxAudibleHz = 6000.0;  // generous passband,
-                                                     // inside 12 kHz Nyquist
-    const double offsetHz = (m_birdieCarrierMhz - m_sliceFreqMhz) * 1.0e6;
-    const double audioHz = m_lsb ? -offsetHz : offsetHz;
-    const bool audible = audioHz >= kMinAudibleHz && audioHz <= kMaxAudibleHz;
+    // The pitch follows the dial and the demodulation; the waterfall draws the
+    // carrier where it is in RF, relative to the pan center (#7420).
     m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"),
-                    audible ? audioHz : 0.0);
+                    audioHzForRf(m_birdieCarrierMhz));
+    m_audio.setBirdieRfOffsetHz((m_birdieCarrierMhz - m_panCenterMhz) * 1.0e6);
 }
 
 }  // namespace AetherSDR
