@@ -505,6 +505,18 @@ int main(int argc, char** argv)
             backend->replyLast({RadioSetupReply::Kind::Accepted, 0, {}});
             check(!ok(cmd(server, QStringLiteral("clickAt"), names[i], {}, QStringLiteral("5 5"))),
                   "TX not allowed, ceiling 10: clickAt on " + n + " is refused");
+            // The pointer verbs share one ceiling check (pointerSafetyError); only
+            // these targets tell the marker from the name "RF power"/"Tune power".
+            const auto pointerBlocked = [](const QJsonObject& r) {
+                const QString e = r.value(QStringLiteral("error")).toString();
+                return !ok(r) && e.contains(QStringLiteral("pointer input would bypass the power"));
+            };
+            check(pointerBlocked(cmd(server, QStringLiteral("wheel"), names[i], {},
+                                     QStringLiteral("5 5 3")))
+                      && pointerBlocked(cmd(server, QStringLiteral("drag"), names[i], {},
+                                            QStringLiteral("40 0"))),
+                  "TX not allowed, ceiling 10: wheel and drag on " + n
+                      + " are refused as bypassing the ceiling");
         }
         AutomationServerTestAccess::setTxMaxPower(server, -1);
         backend->commands.clear();
