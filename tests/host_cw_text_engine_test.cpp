@@ -284,11 +284,26 @@ void testSpeedModifierSegments()
         check("segments: the next word keys at the base 12 WPM", downs[1] > 225.0);
     }
     if (f.edges.size() >= 3) {
-        // WordGap at 24 WPM (4 x 50 ms), then the next letter's CharGap at 12 WPM (3 x 100 ms).
+        // The space leads the base segment (" T"): CharGap and WordGap at 12 WPM, 7 x 100 ms.
         const double gap = ms(f.edges[2].at - f.edges[1].at);
-        std::printf("       word gap %.1f ms, expected 500 ms\n", gap);
-        check("segments: a whole word gap between the segments (-20 % / +40 %)", gap > 400.0 && gap < 700.0);
+        std::printf("       word gap %.1f ms, expected 700 ms\n", gap);
+        check("segments: a whole word gap after the modified word (-20 % / +40 %)", gap > 560.0 && gap < 980.0);
     }
+    // "T ++++T": the space ends the base segment ("T "), so the modified word's
+    // first letter owes the CharGap: WordGap at 12 WPM (4 x 100 ms), then 3 x 50 ms.
+    Fixture g(hl2Capabilities(true));
+    Sender b(g.radio);
+    g.radio.transmitModel().setCwSpeed(12);
+    g.radio.cwxModel().setSpeedStep(3);
+    check("segments: T ++++T accepted", b.send(QStringLiteral("T ++++T")));
+    const bool done2 = pumpUntil([&] { return g.edges.size() >= 4; }, 5000);
+    check("segments: T ++++T keys two dahs", done2 && g.edges.size() == 4);
+    if (g.edges.size() >= 3) {
+        const double gap = ms(g.edges[2].at - g.edges[1].at);
+        std::printf("       word gap %.1f ms, expected 550 ms\n", gap);
+        check("segments: a whole word gap before the modified word (-20 % / +40 %)", gap > 440.0 && gap < 770.0);
+    }
+    pumpFor(100);
 }
 
 // Design point 2 of #7146: an element's key-up, a CwKey edge, is not swallowed
