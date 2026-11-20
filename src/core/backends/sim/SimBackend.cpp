@@ -293,7 +293,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     caps.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     caps.dspParameterReset = std::nullopt;
-    caps.receivePanCenterControl = std::nullopt; // no DDC: a centre request only moves the display
+    caps.receivePanCenterControl = std::nullopt; // no DDC: a center request only moves the display
     caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
     caps.canReboot = false;
     caps.hasRemoteOnControl = false;
@@ -554,7 +554,7 @@ void SimBackend::setSliceMode(int sliceId, const QString& mode)
     SliceDelta d;
     d.mode = m_sliceMode;
     // The RTTY passband a FLEX-8400 reports (filter_lo=-285 filter_hi=115):
-    // around M and S, as ModeFilterPresets centres it. The previous passband
+    // around M and S, as ModeFilterPresets centers it. The previous passband
     // comes back when RTTY is left.
     if (rtty && !wasRtty) {
         m_preRttyFilter = {m_filterLowHz, m_filterHighHz};
@@ -641,7 +641,7 @@ void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
 
 void SimBackend::pushPanCenterToSource(double mhz)
 {
-    // The spectrum rows are drawn around pan 0's centre, which does not
+    // The spectrum rows are drawn around pan 0's center, which does not
     // follow the dial; RF-anchored signals are placed relative to it (#7420).
     QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, mhz] {
         src->setPanCenterMhz(mhz);

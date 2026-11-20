@@ -135,7 +135,7 @@ void SimSignalSource::onTick()
         if (!m_scopeStalled && ++m_frames % kSpectrumRowEveryNFrames == 0) {
             constexpr int kBins = 1024;
             constexpr double kFloorDbm = -120.0;
-            // ±4 kHz around pan 0's centre — the same span the synthetic
+            // ±4 kHz around pan 0's center — the same span the synthetic
             // connect publishes as the pan bandwidth, in Hz. One definition.
             constexpr double kAudioSpanHz = DemoRadio::kAudioSpanHz;
             const QVector<float> row =
@@ -275,7 +275,7 @@ void SimSignalSource::updateRttyFromVfo()
 void SimSignalSource::updateBirdieFromVfo()
 {
     // The pitch follows the dial and the demodulation; the waterfall draws the
-    // carrier where it is in RF, relative to the pan centre (#7420).
+    // carrier where it is in RF, relative to the pan center (#7420).
     m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"),
                     audioHzForRf(m_birdieCarrierMhz));
     m_audio.setBirdieRfOffsetHz((m_birdieCarrierMhz - m_panCenterMhz) * 1.0e6);

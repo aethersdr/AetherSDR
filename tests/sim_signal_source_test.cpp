@@ -173,9 +173,9 @@ int main(int argc, char** argv)
            rx.spectrum == 0 && rx.audio > 5);
 
     // ── RF-anchored signals are drawn where they are in RF (#7420) ───────
-    // The birdie is a carrier at 14.1012 MHz. With the pan centred at 14.100 it
-    // is drawn 1200 Hz right of the centre whatever the dial and sideband: USB
-    // and LSB with the dial off the centre, RTTY with the dial on it.
+    // The birdie is a carrier at 14.1012 MHz. With the pan centered at 14.100 it
+    // is drawn 1200 Hz right of the center whatever the dial and sideband: USB
+    // and LSB with the dial off the center, RTTY with the dial on it.
     QMetaObject::invokeMethod(src, [src] {
         src->setScopeStalled(false);
         src->setNoiseEnabled(QStringLiteral("pink"), false);
@@ -197,13 +197,13 @@ int main(int argc, char** argv)
     const int lsb = peakBinAfter([src] { src->setLowerSideband(true); src->setVfoMhz(14.1018); });
     const int rtty = peakBinAfter([src] { src->setRttyMode(true); src->setVfoMhz(14.100); });
     std::printf("birdie peak bins: USB %d, LSB %d, RTTY %d (expected %d)\n", usb, lsb, rtty, birdieBin);
-    report("USB, dial off the pan centre: the birdie is drawn at its RF frequency", usb == birdieBin);
-    report("LSB, dial off the pan centre: the birdie is drawn at its RF frequency", lsb == birdieBin);
+    report("USB, dial off the pan center: the birdie is drawn at its RF frequency", usb == birdieBin);
+    report("LSB, dial off the pan center: the birdie is drawn at its RF frequency", lsb == birdieBin);
     report("RTTY mode: the birdie is drawn at its RF frequency", rtty == birdieBin);
-    const int offCentre = peakBinAfter([src] {
+    const int offCenter = peakBinAfter([src] {
         src->setRttyMode(false); src->setLowerSideband(false); src->setVfoMhz(14.100); src->setPanCenterMhz(14.0995); });
-    const int offCentreBin = static_cast<int>(kBins / 2 + 1700.0 / hzPerBin);
-    report("pan centre away from 14.100: the birdie is drawn at its RF frequency", offCentre == offCentreBin);
+    const int offCenterBin = static_cast<int>(kBins / 2 + 1700.0 / hzPerBin);
+    report("pan center away from 14.100: the birdie is drawn at its RF frequency", offCenter == offCenterBin);
 
     // ANF in RTTY mode carves the birdie where it is drawn, and nothing at its
     // audio pitch (2125 - 1200 = 925 Hz), where it is not. Pink noise keeps

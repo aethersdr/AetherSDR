@@ -84,7 +84,7 @@ public:
     std::vector<Notch> autoNotchTones() const;
 
     // RF-anchored signals are drawn where they are in RF (#7420): the owner
-    // passes each one's offset from the panadapter centre. The birdie's pitch
+    // passes each one's offset from the panadapter center. The birdie's pitch
     // stays the "hz" knob; the RTTY station gets both tones' pitches (0 = not
     // audible) and RF offsets.
     void setBirdieRfOffsetHz(double hz) { m_birdieRfOffsetHz = hz; }   // unset: drawn at its pitch
@@ -99,7 +99,7 @@ public:
     // The active scene rendered as per-bin dBm for the panadapter, so the
     // waterfall shows what the audio carries. Noise BOTTOMS OUT on floorDbm and
     // rises up (real noise is a floor, not a floating band); notches carve to
-    // the floor. centerBin is pan 0's centre: RF-anchored signals are drawn at
+    // the floor. centerBin is pan 0's center: RF-anchored signals are drawn at
     // their RF offset from it, the others at their audio pitch; +Hz is right.
     QVector<float> spectrum(int nBins, double floorDbm, double spanHz,
                             int centerBin);

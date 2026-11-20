@@ -614,9 +614,9 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
                 notched |= std::abs(fHz - s.hz) <= w / 2;
             }
             if (notched) break;
-            // Where it is in RF, relative to the pan centre (#7420). Without an
+            // Where it is in RF, relative to the pan center (#7420). Without an
             // owner's geometry (the mixer on its own), USB with the dial at the
-            // centre: its pitch.
+            // center: its pitch.
             const int b = binOf(std::isnan(m_birdieRfOffsetHz) ? s.hz : m_birdieRfOffsetHz);
             bump(b, floorDbm + 90.0 + lvl + 10.0);
             bump(b - 1, floorDbm + 90.0 + lvl - 6.0);

@@ -55,7 +55,7 @@ public slots:
     // RTTY mode demodulates as a FLEX-8400 does: lower sideband with the dial
     // heard at the 2125 Hz mark (#7420).
     void setRttyMode(bool rtty);
-    // The panadapter centre the spectrum rows are drawn around (#7420). The
+    // The panadapter center the spectrum rows are drawn around (#7420). The
     // demo pan does not follow the dial, so RF-anchored signals are drawn
     // relative to this, not to the VFO.
     void setPanCenterMhz(double mhz);
