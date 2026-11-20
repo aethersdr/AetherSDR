@@ -6643,10 +6643,8 @@ void MainWindow::buildUI()
         vbox->setSpacing(0);
         vbox->setAlignment(Qt::AlignVCenter);
         m_kpa500Indicator = new QLabel("KPA");
-        m_kpa500Indicator->setStyleSheet("QLabel { font-size:18px; font-weight:bold; }");
         m_kpa500Indicator->setAlignment(Qt::AlignCenter);
         m_kpa500StateLabel = new QLabel(QStringLiteral("–"));
-        m_kpa500StateLabel->setStyleSheet("QLabel { font-size:11px; }");
         m_kpa500StateLabel->setAlignment(Qt::AlignCenter);
         {
             QFont f = m_kpa500StateLabel->font();

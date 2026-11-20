@@ -7985,12 +7985,13 @@ void MainWindow::wireMeters()
             QStringLiteral("KPA500: %1").arg(
                 label == QStringLiteral("–") ? QStringLiteral("Unknown") : label));
     };
+    updateKpa500Style(true);
     connect(&m_kpa500Conn, &Kpa500Connection::detectedChanged, this, [this, updateKpa500Style](bool detected) {
         m_kpa500Container->setVisible(detected);
         m_kpa500Separator->setVisible(detected);
         updateStatusBarMinimumWidth();
         if (detected) {
-            updateKpa500Style(true);
+            updateKpa500Style(false);
         }
     });
     connect(&m_kpa500Conn, &Kpa500Connection::statusUpdated, this,
