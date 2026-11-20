@@ -7,9 +7,6 @@ PREFIX="${RTL_DEPS_PREFIX:-$(pwd)/third_party/rtl-deps}"
 WORK="$(pwd)/.rtl-deps-build"
 SOURCES="$PREFIX/share/aethersdr-rtl-sources"
 mkdir -p "$WORK" "$SOURCES"
-# Remove the retired local reproducer if this prefix was populated by an
-# earlier recipe; release source bundles should contain only the patch recipe.
-rm -f "$SOURCES/test-rtl-async-cancellation.py" "$SOURCES/rtl_async_cancellation_test.c"
 JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]][sys.argv[3]])' "$SCRIPT_DIR/rtl-dependencies.json" "$1" "$2"; }
 fetch() {
@@ -30,8 +27,6 @@ cmake_args=()
 if [ "$(uname -s)" = Darwin ]; then
     : "${MACOS_DEPLOYMENT_TARGET:?Set the deployment target explicitly}"
     export MACOSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET"
-    # Libtool's sysctl probe can return no value in restricted build runners.
-    export lt_cv_sys_max_cmd_len=262144
     # New Apple SDKs can link pipe2 as a weak import even when the target
     # macOS lacks it. Autoconf's link-only probe then selects a null call.
     # libusb's pipe + fcntl fallback works across our supported macOS floor.

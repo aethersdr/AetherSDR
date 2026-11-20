@@ -9,16 +9,19 @@
  	struct libusb_transfer **xfer;
  	unsigned char **xfer_buf;
  	rtlsdr_read_async_cb_t cb;
-@@ -1779,26 +1781,46 @@
+@@ -1779,26 +1781,52 @@
  static void LIBUSB_CALL _libusb_callback(struct libusb_transfer *xfer)
  {
  	rtlsdr_dev_t *dev = (rtlsdr_dev_t *)xfer->user_data;
--
 +	int r;
-+
+ 
 +	/* Only this event-handling context changes the submitted count. A cancel
 +	 * request (including NOT_FOUND for an already-cancelling transfer) does
-+	 * not release ownership; its terminal callback does. */
++	 * not release ownership; its terminal callback does. xfer_pending is a
++	 * plain counter: no other thread may handle libusb events on dev->ctx
++	 * while rtlsdr_read_async runs (a synchronous control transfer from
++	 * another thread would reap these callbacks there). Other threads may
++	 * only call rtlsdr_cancel_async. */
 +	dev->xfer_pending--;
  	if (LIBUSB_TRANSFER_COMPLETED == xfer->status) {
 +		if (RTLSDR_RUNNING != dev->async_status)
@@ -40,9 +43,13 @@
 +		}
  	} else if (LIBUSB_TRANSFER_CANCELLED != xfer->status) {
  #ifndef _WIN32
- 		if (LIBUSB_TRANSFER_ERROR == xfer->status)
- 			dev->xfer_errors++;
+-		if (LIBUSB_TRANSFER_ERROR == xfer->status)
+-			dev->xfer_errors++;
 -
++		/* Count every failure, not only TRANSFER_ERROR: a failure that
++		 * repeats (STALL, OVERFLOW) becomes device loss rather than an
++		 * endless resubmit loop. A completed transfer resets the count. */
++		dev->xfer_errors++;
  		if (dev->xfer_errors >= dev->xfer_buf_num ||
  		    LIBUSB_TRANSFER_NO_DEVICE == xfer->status) {
  #endif
@@ -63,18 +70,17 @@
  		}
  #endif
  	}
-@@ -1817,18 +1839,24 @@
+@@ -1817,18 +1845,24 @@
  		return -1;
  
  	if (!dev->xfer) {
 -		dev->xfer = malloc(dev->xfer_buf_num *
 +		dev->xfer = calloc(dev->xfer_buf_num,
  				   sizeof(struct libusb_transfer *));
--
--		for(i = 0; i < dev->xfer_buf_num; ++i)
 +		if (!dev->xfer)
 +			return -ENOMEM;
-+
+ 
+-		for(i = 0; i < dev->xfer_buf_num; ++i)
 +		for(i = 0; i < dev->xfer_buf_num; ++i) {
  			dev->xfer[i] = libusb_alloc_transfer(0);
 +			if (!dev->xfer[i])
@@ -93,7 +99,7 @@
  
  #if defined(ENABLE_ZEROCOPY) && defined (__linux__) && LIBUSB_API_VERSION >= 0x01000105
  	fprintf(stderr, "Allocating %d zero-copy buffers\n", dev->xfer_buf_num);
-@@ -1931,112 +1959,72 @@
+@@ -1931,112 +1965,88 @@
  			  uint32_t buf_num, uint32_t buf_len)
  {
  	unsigned int i;
@@ -102,13 +108,12 @@
  	struct timeval tv = { 1, 0 };
 -	struct timeval zerotv = { 0, 0 };
 -	enum rtlsdr_async_status next_status = RTLSDR_INACTIVE;
++	unsigned int backoff_ms = 1;
++	int lost_before;
+ 
+ 	if (!dev)
+ 		return -1;
 -
--	if (!dev)
--		return -1;
--
-+
-+	if (!dev)
-+		return -1;
  	if (RTLSDR_INACTIVE != dev->async_status)
  		return -2;
  
@@ -117,9 +122,14 @@
 -
 +	dev->async_error = 0;
 +	dev->xfer_pending = 0;
++	dev->xfer_errors = 0;
++	/* dev_lost stays set for rtlsdr_close; report only this session's loss. */
++	lost_before = dev->dev_lost;
  	dev->cb = cb;
  	dev->cb_ctx = ctx;
--
++	dev->xfer_buf_num = buf_num > 0 ? buf_num : DEFAULT_BUF_NUMBER;
++	dev->xfer_buf_len = buf_len > 0 && buf_len % 512 == 0 ? buf_len : DEFAULT_BUF_LENGTH;
+ 
 -	if (buf_num > 0)
 -		dev->xfer_buf_num = buf_num;
 -	else
@@ -152,9 +162,27 @@
 -					"/parameters/usbfs_memory_mb\n", i);
 -			dev->async_status = RTLSDR_CANCELING;
 -			break;
--		}
--	}
--
++	r = _rtlsdr_alloc_async_buffers(dev);
++	if (r < 0) {
++		dev->async_error = r == -ENOMEM ? LIBUSB_ERROR_NO_MEM : r;
++		rtlsdr_cancel_async(dev);
++	} else {
++		for (i = 0; i < dev->xfer_buf_num; ++i) {
++			if (RTLSDR_RUNNING != dev->async_status)
++				break;
++			libusb_fill_bulk_transfer(dev->xfer[i], dev->devh, 0x81,
++				dev->xfer_buf[i], dev->xfer_buf_len, _libusb_callback,
++				(void *)dev, BULK_TIMEOUT);
++			r = libusb_submit_transfer(dev->xfer[i]);
++			if (r < 0) {
++				dev->async_error = r;
++				rtlsdr_cancel_async(dev);
++				break;
++			}
++			dev->xfer_pending++;
+ 		}
+ 	}
+ 
 -	while (RTLSDR_INACTIVE != dev->async_status) {
 -		r = libusb_handle_events_timeout_completed(dev->ctx, &tv,
 -							   &dev->async_cancel);
@@ -163,23 +191,19 @@
 -			if (r == LIBUSB_ERROR_INTERRUPTED) /* stray signal */
 -				continue;
 -			break;
--		}
++	while (dev->xfer_pending > 0) {
++		if (RTLSDR_RUNNING != dev->async_status) {
++			for (i = 0; i < dev->xfer_buf_num; ++i) {
++				if (dev->xfer[i])
++					(void)libusb_cancel_transfer(dev->xfer[i]);
++			}
+ 		}
 -
 -		if (RTLSDR_CANCELING == dev->async_status) {
 -			next_status = RTLSDR_INACTIVE;
 -
 -			if (!dev->xfer)
-+	dev->xfer_buf_num = buf_num > 0 ? buf_num : DEFAULT_BUF_NUMBER;
-+	dev->xfer_buf_len = buf_len > 0 && buf_len % 512 == 0 ? buf_len : DEFAULT_BUF_LENGTH;
-+
-+	r = _rtlsdr_alloc_async_buffers(dev);
-+	if (r < 0) {
-+		dev->async_error = r;
-+		rtlsdr_cancel_async(dev);
-+	} else {
-+		for (i = 0; i < dev->xfer_buf_num; ++i) {
-+			if (RTLSDR_RUNNING != dev->async_status)
- 				break;
+-				break;
 -
 -			for(i = 0; i < dev->xfer_buf_num; ++i) {
 -				if (!dev->xfer[i])
@@ -191,9 +215,25 @@
 -					/* handle events after canceling
 -					 * to allow transfer status to
 -					 * propagate */
--#ifdef _WIN32
++		/* Cancellation and device loss must drain terminal callbacks too.
++		 * Passing async_cancel after it becomes 1 would skip event handling.
++		 * If the transport cannot finish, retain ownership rather than free
++		 * a transfer whose completion can still reach libusb. */
++		r = libusb_handle_events_timeout_completed(dev->ctx, &tv,
++			RTLSDR_RUNNING == dev->async_status ? &dev->async_cancel : NULL);
++		if (r < 0 && r != LIBUSB_ERROR_INTERRUPTED) {
++			if (dev->async_error == 0)
++				dev->async_error = r;
++			rtlsdr_cancel_async(dev);
++			/* A persistently failing event loop with transfers still owned
++			 * keeps them (and the device) rather than freeing them; back
++			 * off so that wait does not spin a core. */
+ #ifdef _WIN32
 -					Sleep(1);
--#endif
++			Sleep(backoff_ms);
++#else
++			usleep(backoff_ms * 1000);
+ #endif
 -					libusb_handle_events_timeout_completed(dev->ctx,
 -									       &zerotv, NULL);
 -					if (r < 0)
@@ -209,44 +249,19 @@
 -				 * just cancelled all transfers */
 -				libusb_handle_events_timeout_completed(dev->ctx,
 -								       &zerotv, NULL);
-+			libusb_fill_bulk_transfer(dev->xfer[i], dev->devh, 0x81,
-+				dev->xfer_buf[i], dev->xfer_buf_len, _libusb_callback,
-+				(void *)dev, BULK_TIMEOUT);
-+			r = libusb_submit_transfer(dev->xfer[i]);
-+			if (r < 0) {
-+				dev->async_error = r;
-+				rtlsdr_cancel_async(dev);
- 				break;
- 			}
-+			dev->xfer_pending++;
-+		}
-+	}
-+
-+	while (dev->xfer_pending > 0) {
-+		if (RTLSDR_RUNNING != dev->async_status) {
-+			for (i = 0; i < dev->xfer_buf_num; ++i) {
-+				if (dev->xfer[i])
-+					(void)libusb_cancel_transfer(dev->xfer[i]);
-+			}
-+		}
-+		/* Cancellation and device loss must drain terminal callbacks too.
-+		 * Passing async_cancel after it becomes 1 would skip event handling.
-+		 * If the transport cannot finish, retain ownership rather than free
-+		 * a transfer whose completion can still reach libusb. */
-+		r = libusb_handle_events_timeout_completed(dev->ctx, &tv,
-+			RTLSDR_RUNNING == dev->async_status ? &dev->async_cancel : NULL);
-+		if (r < 0 && r != LIBUSB_ERROR_INTERRUPTED) {
-+			if (dev->async_error == 0)
-+				dev->async_error = r;
-+			rtlsdr_cancel_async(dev);
-+#ifdef _WIN32
-+			Sleep(1);
-+#else
-+			usleep(1000);
-+#endif
+-				break;
+-			}
++			backoff_ms *= 2;
++			if (backoff_ms > 100)
++				backoff_ms = 100;
++		} else {
++			backoff_ms = 1;
  		}
  	}
  
++	/* Device loss sets no transport error of its own; report it. */
++	if (dev->dev_lost && !lost_before && dev->async_error == 0)
++		dev->async_error = LIBUSB_ERROR_NO_DEVICE;
  	_rtlsdr_free_async_buffers(dev);
 -
 -	dev->async_status = next_status;

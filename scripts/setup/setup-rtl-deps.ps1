@@ -7,7 +7,6 @@ $prefix = [IO.Path]::GetFullPath($OutDir)
 $work = Join-Path (Get-Location) '.rtl-deps-build'
 $sources = Join-Path $prefix 'share\aethersdr-rtl-sources'
 New-Item -ItemType Directory -Force $work,$sources,"$prefix\bin","$prefix\lib","$prefix\include" | Out-Null
-Remove-Item (Join-Path $sources 'test-rtl-async-cancellation.py'),(Join-Path $sources 'rtl_async_cancellation_test.c') -ErrorAction SilentlyContinue
 function Check-Native([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed: $LASTEXITCODE" } }
 foreach ($name in @('libusb','rtl','pthreads')) {
     $pin = $pins.$name
