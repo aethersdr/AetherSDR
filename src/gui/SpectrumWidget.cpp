@@ -255,6 +255,8 @@ bool overlaysAreAttachedDiversityPair(const SpectrumWidget::SliceOverlay* active
         v.parent = o.diversityParent;
         v.child = o.diversityChild;
         v.diversityIndex = o.diversityIndex;
+        // Non-empty on purpose, so the policy's same-pan fallback applies
+        // and an overlay pair with no role or index metadata stays attached.
         v.panId = QStringLiteral("this-pan");
         return v;
     };

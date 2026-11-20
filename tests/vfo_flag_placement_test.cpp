@@ -157,10 +157,9 @@ int main()
     report("lock-left geometry stays left at left edge",
            lockedAtLeftEdge.rect.x() == -190 && lockedAtLeftEdge.onLeft);
 
-    // FLEX-8600 capture (#7448): parent A is slice 0 with diversity_index=3,
-    // child D is slice 3 with diversity_index=0. The parent must still sort
-    // first, because the index is a partner pointer, not an order.
-    report("diversity parent orders before child (captured indexes)",
+    // The index can no longer be passed in, so the old bug (sorting by
+    // diversity_index, FLEX-8600 capture A=3/D=0 on #7448) can't come back.
+    report("diversity parent slice 0 orders before child slice 3",
            VfoWidget::diversityPairOrderKey(true, false, 0)
                < VfoWidget::diversityPairOrderKey(false, true, 3));
     report("diversity parent orders before lower-id child",

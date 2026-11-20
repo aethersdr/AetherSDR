@@ -50,7 +50,7 @@ The child slice appears in AetherSDR with its own VFO overlay (showing a differe
 
 When DIV is active on a slice, the **ESC panel** appears below the DIV button in the VFO audio tab. ESC is only shown on the **parent** slice — the child slice shows DIV but not ESC controls.
 
-<img src="/img/screens/diversity-esc.png" width="612" alt="Two VFO flags. Slice A has its audio tab open, with DIV and ESC lit green, a phase slider at 0° with a +180 button, a gain slider at 1.00, a polar display of the ESC phase and gain, and an ESC level meter. To its right, the diversity child slice D on ANT2 shows the same frequency, 14.250.000." />
+<img src="/img/screens/diversity-esc.png" width="612" alt="Two VFO flags. On the left, the diversity child slice D on the second antenna shows the same frequency as its parent. To its right, the parent slice A has its audio tab open, with DIV and ESC lit green, a phase slider with a +180 button, a gain slider, a polar display of the ESC phase and gain, and an ESC level meter." />
 
 *Diversity on a FLEX-8600: the DIV button adds a child slice on the second antenna, and ESC opens the beam-steering controls.*
 
