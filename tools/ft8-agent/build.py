@@ -11,7 +11,7 @@ for both kinds of radio, as static binaries with the licenses:
 
     python3 -I build.py --output OUT_DIR [--host]
 
-Needs zig 0.17 (it bundles the linker and musl for both targets). The packages
+Needs zig 0.17.0 (it bundles the linker and musl for both targets). The packages
 are reproducible byte for byte with the same zig. --host also builds a native
 binary for the tests.
 
@@ -93,8 +93,8 @@ def check_version():
 
 def check_version_zig():
     out = subprocess.run(['zig', 'version'], capture_output=True, text=True, check=True).stdout.strip()
-    if not out.startswith('0.17'):
-        raise SystemExit(f'needs zig 0.17, found {out}')
+    if out != '0.17.0':
+        raise SystemExit(f'needs zig 0.17.0 (0.17.1 builds different bytes), found {out}')
 
 
 def licenses():
@@ -102,15 +102,32 @@ def licenses():
     lib_dir = re.search(r'"?lib_dir"?\s*[:=]\s*"([^"]+)"', zig_lib).group(1)
     musl = pathlib.Path(lib_dir, 'libc', 'musl', 'COPYRIGHT').read_text(encoding='utf-8')
     ft8 = (HERE / 'ft8_lib' / 'LICENSE').read_text(encoding='utf-8')
+    kissfft = (HERE / 'ft8_lib' / 'fft' / 'COPYING').read_text(encoding='utf-8')
+    rule = '=' * 64 + '\n'
+    osd = ('tools/ft8-agent/osd/osd174_91.c is a C port of lib/ft8/osd174_91.f90\n'
+           'from WSJT-X (https://sourceforge.net/projects/wsjt/).\n\n'
+           'osd174_91 is by Steve Franke, K9AN, and Joe Taylor, K1JT. WSJT-X is\n'
+           'Copyright (C) 2001-2026 by Joe Taylor, K1JT, Bill Somerville, G4WJS,\n'
+           'Steve Franke, K9AN, and the other WSJT-X authors.\n\n'
+           'WSJT-X is free software: you can redistribute it and/or modify it\n'
+           'under the terms of the GNU General Public License as published by\n'
+           'the Free Software Foundation, either version 3 of the License, or\n'
+           '(at your option) any later version. It is distributed WITHOUT ANY\n'
+           'WARRANTY; see the GNU General Public License\n'
+           '(https://www.gnu.org/licenses/gpl-3.0.html) for details. The source\n'
+           'of this port is in tools/ft8-agent/osd of the AetherSDR repository.\n')
     return ('AetherFT8 is part of AetherSDR, licensed under the GNU GPL v3\n'
             '(https://github.com/aethersdr/AetherSDR). It includes the ft8_lib\n'
             'decoder (Karlis Goba YL3JG, MIT; https://github.com/kgoba/ft8_lib),\n'
             'whose source is in tools/ft8-agent/ft8_lib of the AetherSDR\n'
             'repository, with its transmit-side encoder removed. ft8_lib bundles\n'
-            'kissfft (Mark Borgerding, BSD-3-Clause). The binaries are linked\n'
-            'statically with musl libc, whose license follows.\n\n'
-            + '=' * 64 + '\nft8_lib\n' + '=' * 64 + '\n' + ft8 + '\n'
-            + '=' * 64 + '\nmusl libc\n' + '=' * 64 + '\n' + musl)
+            'kissfft (Mark Borgerding, BSD-3-Clause). The binaries also include\n'
+            'a C port of the osd174_91 ordered-statistics decoder from WSJT-X,\n'
+            'and are linked statically with musl libc. Each notice follows.\n\n'
+            + rule + 'osd174_91 (from WSJT-X)\n' + rule + osd + '\n'
+            + rule + 'ft8_lib\n' + rule + ft8 + '\n'
+            + rule + 'kissfft\n' + rule + kissfft + '\n'
+            + rule + 'musl libc\n' + rule + musl)
 
 
 def mkimage():

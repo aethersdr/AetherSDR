@@ -833,7 +833,9 @@ Statically linked into the AetherHealth agent binaries
 by zig 0.17, which bundles musl). AetherSDR installs that package on a radio
 when "Install radio health tools" is ticked. The same applies to the AetherWSPR
 binaries (resources/waveforms/AetherWSPR.ssdr_waveform, built from
-tools/wspr-agent), installed from Waveforms → Install → WSPR Receiver. The full
+tools/wspr-agent), installed from Waveforms → Install → WSPR Receiver, and to
+the AetherFT8 binary (resources/waveforms/AetherFT8.ssdr_waveform, built from
+tools/ft8-agent), installed from Waveforms → Install → FT8 Receiver. The full
 license text ships in each package as LICENSES.
 
   Copyright: Copyright (c) 2005-2020 Rich Felker, et al.
@@ -897,3 +899,41 @@ Bundled at third_party/data2g/third_party/pocketfft/ as Data2G ships it.
              Copyright (C) 2024 Tan Ping Liang, Peter Bell
   License:   BSD-3-Clause
   Source:    https://github.com/mreineck/pocketfft
+
+
+39. ft8_lib — the FT8 decoder in the FT8 receiver
+-------------------------------------------------------------------------------
+tools/ft8-agent/ft8_lib holds ft8_lib at commit 9fec6ca, pruned (its transmit
+encoder, demos and all but one test recording are removed; see PROVENANCE.md
+there). It is built into the AetherFT8 binary
+(resources/waveforms/AetherFT8.ssdr_waveform). The license text is at
+tools/ft8-agent/ft8_lib/LICENSE and ships in the package as LICENSES.
+
+  Copyright: Copyright (c) 2018 Kārlis Goba
+  License:   MIT
+  Source:    https://github.com/kgoba/ft8_lib
+
+
+40. kissfft — FFT (vendored by ft8_lib)
+-------------------------------------------------------------------------------
+tools/ft8-agent/ft8_lib/fft holds kissfft as ft8_lib ships it, built into the
+AetherFT8 binary. The license text is at tools/ft8-agent/ft8_lib/fft/COPYING
+and ships in the package as LICENSES.
+
+  Copyright: Copyright (c) 2003-2010 Mark Borgerding
+  License:   BSD-3-Clause
+  Source:    https://github.com/mborgerding/kissfft
+
+
+41. osd174_91 — the ordered-statistics decoder from WSJT-X
+-------------------------------------------------------------------------------
+tools/ft8-agent/osd/osd174_91.c is a C port of WSJT-X's lib/ft8/osd174_91.f90
+(by Steve Franke, K9AN, and Joe Taylor, K1JT), built into the AetherFT8 binary.
+The upstream revision and the changes made in the port are in
+tools/ft8-agent/osd/PROVENANCE.md. The GPL text is at
+tools/wspr-agent/wsprd/COPYING.
+
+  Copyright: Copyright (C) 2001-2026 by Joe Taylor, K1JT, Bill Somerville,
+             G4WJS, Steve Franke, K9AN, and the other WSJT-X authors
+  License:   GPL-3.0-or-later
+  Source:    https://sourceforge.net/projects/wsjt/

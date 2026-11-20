@@ -68,7 +68,7 @@
 #include "ft8_lib/common/monitor.h"
 #include "ft8_lib/common/wave.h"
 
-#define AGENT_VERSION "0.1.1"
+#define AGENT_VERSION "0.1.2"
 #define STATUS_PORT 48997   /* 48994 radio health, 48995 WSPR, 48997 here */
 #define AUDIO_RATE 24000
 /* ft8_lib works at 12 kHz, which is the WSJT-X convention and what its own

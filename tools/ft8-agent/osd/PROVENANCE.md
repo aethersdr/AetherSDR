@@ -9,6 +9,15 @@ Fetched from the WSJT-X SourceForge repository at `master`, 2026-11-14
 (`https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/lib/ft8/osd174_91.f90`),
 409 lines of Fortran.
 
+Upstream revision, identified on the GitHub mirror (`WSJTX/wsjtx`):
+
+- `master` on the fetch date: `967c85a6119110788b0df3782cf796485b2cee14` (2026-09-24).
+- Last change to this file: `cd6971b2a3d78a043c8ef7c5b08c71cd611dc09c`
+  (2020-05-17, "Silence some compiler warning messages.").
+
+The file at that `master` commit is 409 lines, and the line references below
+match it.
+
 Added for **[#7114](https://github.com/aethersdr/AetherSDR/issues/7114) ruling 3**:
 *"Port WSJT-X's `osd174_91` into the agent before it ships, and measure the decode
 rate against the same reference corpus with and without it."*

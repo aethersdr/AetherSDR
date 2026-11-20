@@ -8,6 +8,11 @@ AetherSDR is GPL-3.0-or-later. MIT is permissive and GPL-compatible, so this
 vendors cleanly. `fft/` is kissfft (BSD-3-Clause, Copyright (c) 2003-2010 Mark
 Borgerding), already vendored inside ft8_lib upstream.
 
+ft8_lib does not carry the `COPYING` that every kissfft header points at.
+`fft/COPYING` here is kissfft's own `COPYING` followed by the licence text of
+its `LICENSES/BSD-3-Clause`, with the copyright line filled in from `COPYING`.
+Both are from <https://github.com/mborgerding/kissfft> at `de93ec3`.
+
 ## What was removed, and why
 
 The upstream tree is 45 MB; this copy is ~600 KB. Removed:
