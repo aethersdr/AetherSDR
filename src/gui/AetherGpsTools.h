@@ -9,8 +9,42 @@
 
 namespace AetherSDR {
 
+class FlexWaveformModel;
 class RadioModel;
 class WaveformInstaller;
+
+// The radio accepted an AetherGPS install or removal, but its waveform list
+// doesn't show the change yet; that takes a few seconds. One per radio,
+// shared by the AetherGPS window's checkbox and the Waveforms window's
+// Install menu, so neither offers a second upload meanwhile. Ends when the
+// list agrees, when the session ends, or after 30 s. GUI thread only.
+class AetherGpsSettle : public QObject {
+    Q_OBJECT
+
+public:
+    enum class State { None, Install, Removal };
+
+    // The radio's one instance, created on first use as a child of `waveforms`.
+    static AetherGpsSettle* of(FlexWaveformModel& waveforms);
+
+    State state() const { return m_state; }
+    bool active() const { return m_state != State::None; }
+    // Waits for the list to show the install or the removal (restarting the
+    // 30 s); nothing to wait for when it already does.
+    void start(bool installing);
+
+signals:
+    void changed();
+
+private:
+    explicit AetherGpsSettle(FlexWaveformModel& waveforms);
+    bool listed() const;
+    void end();
+
+    FlexWaveformModel& m_waveforms;
+    State m_state{State::None};
+    QTimer m_timer;
+};
 
 // The AetherGPS relay on the radio (tools/aether-gps): whether the radio
 // lists it, and installing or removing it. FlexRadio only: the relay is a
@@ -26,7 +60,9 @@ public:
     // Whether this radio installs waveforms at all; the bar hides otherwise.
     bool radioTakesWaveforms() const;
     bool installed() const;
-    // An install, or a removal the radio has not finished, is in progress.
+    // An install, or a removal the radio has not finished, is in progress:
+    // any upload in this process, or an AetherGPS change from either window
+    // that the radio's list doesn't show yet.
     bool busy() const;
     AetherGpsBlocker blocker() const;
     // Why the checkbox is unavailable, or empty.
@@ -36,6 +72,17 @@ public:
     void install();
     void remove();
 
+    // The Waveforms window installed (`installed`) or removed AetherGPS and
+    // the radio accepted it: wait for its list to agree, as after install()
+    // and remove().
+    void awaitListing(bool installed);
+
+    // Writes the bundled package for a radio that takes the container
+    // (`docker`) or the legacy waveform to the cache, for an installer.
+    // Empty, with `error` set, on failure. The Waveforms window's Install
+    // menu uses it too.
+    static QString writePackage(bool docker, QString* error);
+
 signals:
     // Installed, busy or the blocker may have changed.
     void changed();
@@ -43,17 +90,10 @@ signals:
     void failed(const QString& message);
 
 private:
-    void startSettling(bool installing);
-
     QPointer<RadioModel> m_model;
     WaveformInstaller* m_installer{nullptr};
     bool m_removing{false};    // the remove command is in flight
-    // The radio accepted an install or a removal but its list doesn't show
-    // it yet: it takes a few seconds. Ends when the list agrees, on a
-    // disconnect, or when m_settleTimer (30 s, one per change) fires.
-    enum class Settling { None, Install, Removal };
-    Settling m_settling{Settling::None};
-    QTimer m_settleTimer;
+    QPointer<AetherGpsSettle> m_settle;   // the radio's, shared with the Waveforms window
 };
 
 }  // namespace AetherSDR

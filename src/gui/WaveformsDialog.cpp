@@ -1,4 +1,5 @@
 #include "WaveformsDialog.h"
+#include "AetherGpsTools.h"
 #include "CanonIndicators.h"
 #include "core/DigitalVoiceWaveformProcess.h"
 #include "core/DigitalVoiceWaveformSettings.h"
@@ -1396,8 +1397,6 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
                            this, &WaveformsDialog::onInstallLegacyClicked);
     m_installDockerAction = installMenu->addAction(tr("Docker Waveform Image..."),
                                                    this, &WaveformsDialog::onInstallDockerClicked);
-    // AetherGPS's window can start an upload too; read the state as the menu opens.
-    connect(installMenu, &QMenu::aboutToShow, this, &WaveformsDialog::updateInstallButtonState);
     m_installBtn->setMenu(installMenu);
     installedHeader->addWidget(m_installBtn);
     installedRoot->addLayout(installedHeader);
@@ -1503,8 +1502,12 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::refreshWaveformList);
     connect(&wfModel, &FlexWaveformModel::waveformsChanged,
             this, &WaveformsDialog::updateHealthBar);
-    // The AetherGPS entry greys out once the radio lists it.
-    connect(&wfModel, &FlexWaveformModel::waveformsChanged,
+    // The AetherGPS entry follows the radio's list and the AetherGPS window's
+    // installs; the Install button follows every window's uploads.
+    m_gpsTools = new AetherGpsTools(m_radioModel, this);
+    connect(m_gpsTools, &AetherGpsTools::changed,
+            this, &WaveformsDialog::updateInstallButtonState);
+    connect(WaveformInstallActivity::instance(), &WaveformInstallActivity::changed,
             this, &WaveformsDialog::updateInstallButtonState);
     connect(&wfModel, &FlexWaveformModel::commandFinished,
             this, &WaveformsDialog::onWaveformCommandFinished);
@@ -1643,8 +1646,12 @@ void WaveformsDialog::updateInstallButtonState()
             installed = installed || isAetherGpsWaveform(w.name);
         }
         const bool runtimeReady = native || dockerReady;
-        m_installAetherGpsAction->setEnabled(!busy && hasWaveforms && runtimeReady && !installed);
+        // Also busy while the radio has yet to list an AetherGPS change from
+        // either window.
+        const bool gpsBusy = busy || (m_gpsTools && m_gpsTools->busy());
+        m_installAetherGpsAction->setEnabled(!gpsBusy && hasWaveforms && runtimeReady && !installed);
         const QString gpsTip = busy ? tr("A waveform install is already in progress.")
+            : gpsBusy               ? tr("Waiting for the radio to finish the last AetherGPS change.")
             : !connected            ? tr("Connect to a radio before installing AetherGPS.")
             : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
             : installed             ? tr("AetherGPS is already installed on this radio.")
@@ -1724,20 +1731,21 @@ bool WaveformsDialog::installAetherGps(bool docker)
             return false;
         }
     }
-    // The package ships inside AetherSDR; the installer wants a file.
     QString error;
-    const QString path = aethergps::writeBundledPackage(
-        docker ? AetherGpsPackage::kContainer : AetherGpsPackage::kLegacy,
-        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
-            + QStringLiteral("/waveforms/aether-gps-%1").arg(QString::fromLatin1(AetherGpsPackage::kVersion)),
-        &error);
+    const QString path = AetherGpsTools::writePackage(docker, &error);
     if (path.isEmpty()) {
         ScopedChildWidget<CanonMessageBox> box(tr("AetherGPS Not Installed"), error, this);
         box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
         return false;
     }
-    installWaveformPath(docker, path, m_radioModel, m_radioModel->controlSession());
+    const QPointer<AetherGpsTools> tools(m_gpsTools);
+    installWaveformPath(docker, path, m_radioModel, m_radioModel->controlSession(), false,
+                        [tools](bool ok) {
+                            if (ok && tools) {
+                                tools->awaitListing(true);   // until the radio lists it
+                            }
+                        });
     return true;
 }
 
@@ -2167,7 +2175,8 @@ void WaveformsDialog::installWaveformFile(const QString& title,
 }
 
 void WaveformsDialog::installWaveformPath(bool docker, const QString& path, RadioModel* model,
-                                          const RadioControlSession& session, bool quiet)
+                                          const RadioControlSession& session, bool quiet,
+                                          const std::function<void(bool ok)>& finished)
 {
     const QPointer<RadioModel> modelGuard(model);
     if (!modelGuard || m_radioModel != modelGuard.data() || !modelGuard->controlSessionCurrent(session)) {
@@ -2244,7 +2253,10 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
     });
 
     connect(m_installer, &WaveformInstaller::finished,
-            this, [this, progress](bool ok, const QString& msg) {
+            this, [this, progress, finished](bool ok, const QString& msg) {
+                if (finished) {
+                    finished(ok);
+                }
                 progress->close();
                 progress->deleteLater();
                 updateInstallButtonState();
@@ -2888,6 +2900,9 @@ void WaveformsDialog::onWaveformCommandFinished(const QString& action, const QSt
     } else {
         m_rowNotices.remove(name);
         refreshWaveformList();
+        if (isAetherGpsWaveform(name) && m_gpsTools) {
+            m_gpsTools->awaitListing(false);   // until the radio drops it
+        }
     }
 }
 
