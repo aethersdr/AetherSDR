@@ -237,6 +237,7 @@ int main(int argc, char** argv)
     {
         Hl2RxDsp::Config fm = cfg;
         fm.mode = WdspChannel::Mode::Fm;
+        fm.blockForOutput = true;   // every block yields output: the checks below count blocks
         Hl2RxDsp gateDsp;
         std::vector<AetherSDR::SquelchGateState> seen;
         QObject::connect(&gateDsp, &Hl2RxDsp::squelchGateChanged, &gateDsp,
