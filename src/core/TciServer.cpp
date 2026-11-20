@@ -971,8 +971,9 @@ void TciServer::onClientOpened(std::shared_ptr<TciClientLifetime> lifetime,
             ? data.size() : -1;
     };
     ws->streamSink = [io, id](const QByteArray& data) -> qint64 {
-        return io->post([io, id, data] { io->sendStreamFrame(id, data); }, data.size())
-            ? data.size() : -1;
+        // A refused frame is dropped (0), as when the socket is behind.
+        return io->postStream([io, id, data] { io->sendStreamFrame(id, data); }, data.size())
+            ? data.size() : 0;
     };
     ws->closeSink = [io, id](QWebSocketProtocol::CloseCode code, const QString& reason) {
         io->post([io, id, code, reason] { io->closeClient(id, code, reason); });

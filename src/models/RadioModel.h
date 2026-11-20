@@ -524,6 +524,10 @@ public:
     enum class HostCwTextRefusal { None, Unsupported, NoTxSlice, NotCwMode, ReceiveOnlyMode, Inhibited,
                                    Tuning, BreakInOffUnkeyed };
     HostCwTextRefusal hostCwTextRefusal() const;
+    // "Can this radio send CW text?": hasRadioSideCwKeyer() || hasHostCwTextKeyer(),
+    // so it keeps the permissive disconnected rule. The one check every text-CW
+    // surface asks once it can reach the host engine (#7146).
+    bool hasCwTextKeyer() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
     int cwTextMinWpm() const;
