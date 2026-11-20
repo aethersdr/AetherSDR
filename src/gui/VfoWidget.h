@@ -270,6 +270,7 @@ public:
     // on top of the slice markers. No-op unless the SmartMTR meter + value labels
     // are active and the flag is expanded. Coordinates are SpectrumWidget-local.
     void drawSmartMtrLabels(QPainter& p) const;
+    QRect smartMtrLabelsCoverageRect() const;
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) were
     // removed from the VFO DSP grid; that family lives in the spectrum
