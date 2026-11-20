@@ -105,8 +105,9 @@ type Session struct {
 
 	rxPackets, txPackets atomic.Uint64
 
-	pendingMu sync.Mutex
-	pending   map[string]pendingReply // sequence numbers of commands whose replies the relay acts on
+	pendingMu         sync.Mutex
+	pending           map[string]pendingReply // sequence numbers of commands whose replies the relay acts on
+	pendingFullLogged bool                    // the cap on pending has been hit and logged
 
 	// UDP diagnostics, reported in /v1/status and the caller's /v1/session.
 	fromRadio, toClientErrs, maxDatagram atomic.Uint64
@@ -338,6 +339,11 @@ func (s *Session) expectReply(seq string, what pendingReply) {
 	// Bounded: a client that never reads its replies can't grow it.
 	if len(s.pending) < maxPendingReplies {
 		s.pending[seq] = what
+		return
+	}
+	if !s.pendingFullLogged {
+		s.pendingFullLogged = true
+		log.Printf("session %d: %d replies already pending; not acting on the reply to C%s", s.id, maxPendingReplies, seq)
 	}
 }
 
@@ -517,8 +523,7 @@ func (s *Session) injectedReply(line []byte) (ours, accepted bool) {
 	if seq == "" || !bytes.HasPrefix(line, []byte("R"+seq+"|")) {
 		return false, false
 	}
-	m := regexp.MustCompile(`^R\d+\|0+\|`).Match(line)
-	return true, m
+	return true, okReplyRe.Match(line)
 }
 
 // bindClientUDP points the session's UDP at ap. A repeated `client udpport`

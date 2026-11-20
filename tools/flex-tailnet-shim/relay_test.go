@@ -593,11 +593,6 @@ func TestFailedTransferReplyClearsItsWait(t *testing.T) {
 	}
 }
 
-// The reply to a client's `info` names the address the client dialed, not
-// the radio's LAN address, so a client that reconnects to what `info` says
-// stays on the tailnet. Nothing else that mentions ip= changes: not the
-// radio's static network settings, not a reply to some other command, not a
-// failed `info`.
 // infoRelay starts a fake radio and a relay listening on listen, connects a
 // client, reads the greeting, and sends three commands: `info` (answered
 // with the 6500's real reply and an unsolicited status), a lookalike reply
@@ -668,6 +663,11 @@ func expectLines(t *testing.T, rd *bufio.Reader, want ...string) {
 	}
 }
 
+// The reply to a client's `info` names the address the client dialed, not
+// the radio's LAN address, so a client that reconnects to what `info` says
+// stays on the tailnet. Nothing else that mentions ip= changes: not the
+// radio's static network settings, not a reply to some other command, not a
+// failed `info`.
 func TestInfoReplyNamesTheDialedAddress(t *testing.T) {
 	dialed, rd := infoRelay(t, "127.0.0.1:0")
 	expectLines(t, rd,
@@ -690,6 +690,33 @@ func TestInfoReplyUnchangedOverIPv6(t *testing.T) {
 		"R6|0|ip=192.168.0.20\n",
 		"R7|50000015|ip=192.168.0.20\n",
 	)
+}
+
+// tailnetConn is a client connection that reports a fixed local address.
+type tailnetConn struct {
+	net.Conn
+	local net.Addr
+}
+
+func (c tailnetConn) LocalAddr() net.Addr { return c.local }
+
+// A failed `info` reply ends its wait, so a later reply that reuses the
+// sequence number passes through as the radio sent it. The client dialed a
+// 100.x address that differs from the radio's, so the rewrite is seen to take
+// the address the client dialed.
+func TestFailedInfoReplyEndsItsWait(t *testing.T) {
+	s := &Session{relay: &Relay{}, client: tailnetConn{local: &net.TCPAddr{IP: net.IPv4(100, 64, 1, 2), Port: 4992}}}
+	s.noteCommand([]byte("C7|info\n"))
+	if got := string(s.rewriteInfoReply([]byte("R7|50000015|ip=192.168.0.20\n"))); got != "R7|50000015|ip=192.168.0.20\n" {
+		t.Fatalf("a failed reply was rewritten: %q", got)
+	}
+	if got := string(s.rewriteInfoReply([]byte("R7|0|ip=192.168.0.20\n"))); got != "R7|0|ip=192.168.0.20\n" {
+		t.Fatalf("a stale wait rewrote a later reply: %q", got)
+	}
+	s.noteCommand([]byte("C8|info\n"))
+	if got := string(s.rewriteInfoReply([]byte("R8|0|model=\"FLEX-6500\",ip=192.168.0.20,netmask=255.255.255.0\r\n"))); got != "R8|0|model=\"FLEX-6500\",ip=100.64.1.2,netmask=255.255.255.0\r\n" {
+		t.Fatalf("got %q", got)
+	}
 }
 
 // A grant whose caller WhoIs then refuses isn't used up: the computer that
