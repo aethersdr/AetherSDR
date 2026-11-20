@@ -9,6 +9,7 @@
 #include "models/SliceModel.h"
 
 #include <QComboBox>
+#include <QDateTime>
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -22,6 +23,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace AetherSDR {
 
@@ -354,8 +356,14 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_startStopBtn = new QPushButton(QStringLiteral("Auto Sweep"), this);
     m_applyBtn = new QPushButton(QStringLiteral("Apply"), this);
     m_applyBtn->setEnabled(false);
+    m_adaptBtn = new QPushButton(QStringLiteral("Auto-Adapt"), this);
+    m_adaptBtn->setCheckable(true);
+    m_adaptBtn->setEnabled(false);
+    m_adaptBtn->setToolTip(tr("Continuously nudge AGC-T at each FT8 quiet slot "
+                              "to track noise floor drift. Run Auto Sweep first."));
     buttons->addWidget(m_startStopBtn);
     buttons->addStretch(1);
+    buttons->addWidget(m_adaptBtn);
     buttons->addWidget(m_applyBtn);
     body->addLayout(buttons);
 
@@ -368,6 +376,13 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
 
     connect(m_startStopBtn, &QPushButton::clicked, this, &AgcCalibrationDialog::onStartStop);
     connect(m_applyBtn, &QPushButton::clicked, this, &AgcCalibrationDialog::onApply);
+    connect(m_adaptBtn, &QPushButton::clicked, this, &AgcCalibrationDialog::onAdaptToggle);
+
+    // 500 ms tick used to detect FT8 quiet slots at the half-second mark
+    // (second 14.5, 29.5, 44.5, 59.5 UTC) — deeper into the quiet window.
+    m_adaptTimer = new QTimer(this);
+    m_adaptTimer->setInterval(500);
+    connect(m_adaptTimer, &QTimer::timeout, this, &AgcCalibrationDialog::onAdaptTick);
 
     // Engine wiring.
     connect(&m_engine, &AgcTCalibrator::started, this, &AgcCalibrationDialog::onStarted);
@@ -405,6 +420,12 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
 
 AgcCalibrationDialog::~AgcCalibrationDialog()
 {
+    // Sever the audio source connection before m_engine is destroyed as a
+    // member. Without this, the AudioEngine audio thread can emit levelChanged
+    // concurrently with m_engine's destructor, causing a race on m_engine's
+    // QObject state (manifests as a crash in QTimer::~QTimer).
+    disconnect(m_audioConn);
+    m_audioConn = {};
     // Destroyed without a close (the app quitting): put the AGC-T back too.
     if (m_engine.isRunning()) {
         m_engine.stop();
@@ -416,6 +437,10 @@ void AgcCalibrationDialog::done(int result)
     if (m_engine.isRunning()) {
         m_engine.stop(); // restores the original value
     }
+    // Auto-Adapt intentionally keeps running when the dialog is hidden —
+    // the user doesn't need to keep the panel open for background drift
+    // correction to work. The timer is only stopped by onAdaptToggle() or
+    // when the dialog is destroyed on app exit.
     CanonWindow::done(result);
 }
 
@@ -476,8 +501,10 @@ void AgcCalibrationDialog::connectSlice(SliceModel* slice)
     connect(slice, &SliceModel::agcModeChanged, this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::externalReceiveAgcModeChanged,
             this, &AgcCalibrationDialog::updateModeUi);
-    // Source label (TCI vs PC Audio) depends on the slice mode.
+    // Source label (TCI vs PC Audio) depends on the slice mode and DAX channel.
     connect(slice, &SliceModel::modeChanged,
+            this, &AgcCalibrationDialog::updateModeUi);
+    connect(slice, &SliceModel::daxChannelChanged,
             this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::agcThresholdChanged, &m_engine, &AgcTCalibrator::onValueChanged);
     connect(slice, &SliceModel::agcOffLevelChanged, &m_engine, &AgcTCalibrator::onValueChanged);
@@ -529,14 +556,23 @@ void AgcCalibrationDialog::rewireAudioSource()
     if (isTciMode()) {
         const int daxCh = m_slice->daxChannel(); // >= 1 guaranteed by isTciMode()
         m_audioConn = connect(m_tci, &TciServer::rxLevel,
-                              &m_engine, [this, daxCh](int ch, float rms) {
+                              this, [this, daxCh](int ch, float rms) {
             if (ch == daxCh) {
+                // Convert linear 0..1 RMS to dBFS and track for Auto-Adapt.
+                m_lastRmsDb = (rms > 0.0f)
+                    ? 20.0f * std::log10(rms)
+                    : -120.0f;
                 m_engine.onAudioLevel(rms);
             }
         });
     } else if (m_audio) {
         m_audioConn = connect(m_audio, &AudioEngine::levelChanged,
-                              &m_engine, &AgcTCalibrator::onAudioLevel);
+                              this, [this](float rms) {
+            m_lastRmsDb = (rms > 0.0f)
+                ? 20.0f * std::log10(rms)
+                : -120.0f;
+            m_engine.onAudioLevel(rms);
+        });
     }
 }
 
@@ -578,10 +614,15 @@ void AgcCalibrationDialog::updateModeUi()
     // audio and the AGC knee is masked. Warn in the hint label; the auto-sweep
     // start path also refuses to begin until NR is off.
     if (nrSuppressesCalibration() && m_hintLabel) {
-        m_hintLabel->setText(QStringLiteral(
-            "⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR/NNR) for accurate "
-            "calibration — NR crushes the noise floor the knee detector is "
-            "looking for."));
+        m_hintLabel->setText(isTciMode()
+            ? QStringLiteral(
+                "⚠ Disable radio-side Noise Reduction (NR) for accurate "
+                "calibration — NR crushes the noise floor the knee detector is "
+                "looking for.")
+            : QStringLiteral(
+                "⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR/NNR) for accurate "
+                "calibration — NR crushes the noise floor the knee detector is "
+                "looking for."));
     } else if (m_hintLabel) {
         m_hintLabel->setText(QStringLiteral(
             "Tune to a clear spot, then Auto Sweep — or move the AGC-T "
@@ -591,11 +632,16 @@ void AgcCalibrationDialog::updateModeUi()
     // Update the audio source label regardless of slice state.
     if (m_sourceLabel) {
         if (isTciMode()) {
-            m_sourceLabel->setText(QStringLiteral("Audio source: TCI (DIGU/DIGL)"));
+            m_sourceLabel->setText(tr("Audio source: TCI (DIGU/DIGL)"));
+        } else if (m_tci && m_slice && m_slice->daxChannel() < 1
+                   && (m_slice->mode() == QStringLiteral("DIGU")
+                       || m_slice->mode() == QStringLiteral("DIGL"))) {
+            // Already in DIGU/DIGL but no DAX channel assigned — TCI can't fire.
+            m_sourceLabel->setText(tr("Audio source: PC Audio (TCI needs a DAX channel in DIGU/DIGL)"));
         } else if (m_tci) {
-            m_sourceLabel->setText(QStringLiteral("Audio source: PC Audio (switch to DIGU/DIGL for TCI)"));
+            m_sourceLabel->setText(tr("Audio source: PC Audio (switch to DIGU/DIGL with a DAX channel for TCI)"));
         } else {
-            m_sourceLabel->setText(QStringLiteral("Audio source: PC Audio"));
+            m_sourceLabel->setText(tr("Audio source: PC Audio"));
         }
     }
 
@@ -628,13 +674,28 @@ void AgcCalibrationDialog::updateModeUi()
     m_applyBtn->setAccessibleDescription(QString());
     m_applyBtn->setEnabled(!m_engine.isRunning() && m_engine.hasRecommendation());
     if (off) {
-        m_modeLabel->setText(QStringLiteral(
-            "AGC: OFF — calibrating fixed gain (agc_off_level) to a comfortable "
-            "noise level. No knee in this mode."));
+        if (isTciMode()) {
+            m_modeLabel->setText(QStringLiteral(
+                "Calibrating radio AGC-T (agc_off_level) via TCI audio — "
+                "finding a comfortable fixed gain. AGC is off; no knee in this mode. "
+                "Target level uses PC Audio."));
+        } else {
+            m_modeLabel->setText(QStringLiteral(
+                "Calibrating radio AGC-T (agc_off_level) via PC Audio — "
+                "finding a comfortable fixed gain. AGC is off; no knee in this mode."));
+        }
     } else {
-        m_modeLabel->setText(QStringLiteral(
-            "AGC: %1 — finding the knee (agc_threshold) just above the noise floor.")
-            .arg(m_slice->agcMode().toUpper()));
+        if (isTciMode()) {
+            m_modeLabel->setText(QStringLiteral(
+                "Calibrating radio AGC-T (agc_threshold) via TCI audio (%1) — "
+                "finding the knee just above the noise floor.")
+                .arg(m_slice->mode()));
+        } else {
+            m_modeLabel->setText(QStringLiteral(
+                "Calibrating radio AGC-T (agc_threshold) via PC Audio (%1) — "
+                "finding the knee just above the noise floor.")
+                .arg(m_slice->agcMode().toUpper()));
+        }
     }
 
     // Re-evaluate the audio source when the mode changes while the dialog is
@@ -675,13 +736,17 @@ void AgcCalibrationDialog::onStartStop()
     // The user can disable NR and try again. Mirrors the quiet-spot guard
     // pattern in the engine and matches the in-hint warning text.
     if (nrSuppressesCalibration()) {
+        const QString nrMsg = isTciMode()
+            ? tr("Radio-side Noise Reduction (NR) is active and is crushing the "
+                 "audio noise floor that the AGC knee detector measures. "
+                 "Turn off NR on this slice, then try Auto Sweep again.")
+            : tr("Noise Reduction is active and is crushing the audio noise "
+                 "floor that the AGC knee detector measures. Turn off any of "
+                 "NR / NR2 / RN2 / NR4 / DFNR / MNR / BNR / NNR, then try Auto Sweep "
+                 "again.");
         ScopedChildWidget<QMessageBox> boxOwner(
             QMessageBox::Warning, QStringLiteral("Disable NR for AGC-T calibration"),
-            QStringLiteral(
-                "Noise Reduction is active and is crushing the audio noise "
-                "floor that the AGC knee detector measures. Turn off any of "
-                "NR / NR2 / RN2 / NR4 / DFNR / MNR / BNR / NNR, then try Auto Sweep "
-                "again."), QMessageBox::Ok, this);
+            nrMsg, QMessageBox::Ok, this);
         boxOwner.get()->exec();
         return;
     }
@@ -733,10 +798,25 @@ void AgcCalibrationDialog::onRecommendation(int value, bool isKnee)
     if (!m_engine.isRunning()) {
         m_applyBtn->setEnabled(true);
     }
+    // Save the reference for Auto-Adapt: the audio RMS at the recommended
+    // AGC-T from the curve. Using the curve point is more reliable than
+    // currentRmsDb() since the engine may have stepped past this value.
+    m_savedKneeAgct = value;
+    m_targetRmsDb = std::numeric_limits<float>::quiet_NaN();
+    for (const auto& pt : m_engine.curve()) {
+        if (pt.value == value) {
+            m_targetRmsDb = pt.rmsDb;
+            break;
+        }
+    }
+    if (m_adaptBtn) {
+        m_adaptBtn->setEnabled(std::isfinite(m_targetRmsDb));
+    }
 }
 
 void AgcCalibrationDialog::onQuietSpot(bool quiet, float marginDb)
 {
+    m_quietNow = quiet;
     if (quiet) {
         m_quietLabel->setText(QStringLiteral("✓ Quiet spot (signal %1 dB over floor).")
                                   .arg(marginDb, 0, 'f', 1));
@@ -768,6 +848,127 @@ void AgcCalibrationDialog::onFinished(bool applied)
     }
     updateModeUi();
     refreshFromSlice();
+}
+
+void AgcCalibrationDialog::onAdaptToggle()
+{
+    m_adaptRunning = !m_adaptRunning;
+    if (m_adaptRunning) {
+        // Reset target, slot guard, and history so first quiet-slot sets baseline.
+        m_targetRmsDb = std::numeric_limits<float>::quiet_NaN();
+        m_lastAdaptSlot = -1;
+        m_floorHistory.clear();
+        m_adaptBtn->setText(QStringLiteral("Stop Adapting"));
+        m_adaptTimer->start();
+    } else {
+        m_adaptBtn->setText(QStringLiteral("Auto-Adapt"));
+        m_adaptTimer->stop();
+    }
+}
+
+void AgcCalibrationDialog::onAdaptTick()
+{
+    // Fire once per FT8 cycle at the half-second mark of second 14 (i.e.,
+    // 14.5s, 29.5s, 44.5s, 59.5s UTC) — deeper into the quiet window after
+    // the previous burst has had time to fully decay.
+    const QTime utc = QDateTime::currentDateTimeUtc().time();
+    const int sec  = utc.second();
+    const int msec = utc.msec();
+    if (sec % 15 != 14 || msec < 400) {
+        return;
+    }
+    // Slot index (0..3 per minute) prevents double-firing within the same slot.
+    const int slot = sec / 15;
+    if (slot == m_lastAdaptSlot) {
+        return;
+    }
+    m_lastAdaptSlot = slot;
+
+    if (!m_slice || !m_slice->agcCalibrationAllowed()) {
+        return;
+    }
+    if (m_engine.isRunning()) {
+        return; // don't interfere with an auto sweep
+    }
+    if (!std::isfinite(m_lastRmsDb)) {
+        return;
+    }
+
+    // Push this quiet-slot reading into the ring buffer (capacity 4 slots,
+    // ~1 minute of history). Once we have at least 2 samples the mean is used
+    // as the smoothed floor; before that we just accumulate without nudging.
+    constexpr int kHistoryCapacity = 2;
+    if (m_floorHistory.size() >= kHistoryCapacity) {
+        m_floorHistory.removeFirst();
+    }
+    m_floorHistory.append(m_lastRmsDb);
+
+    // On the very first quiet-slot sample, capture the current floor as the
+    // baseline rather than using the sweep's knee-point RMS. The sweep measures
+    // the floor while FT8 signals are present; the quiet slot is 10–15 dB
+    // lower. Using the sweep value as the target would cause permanent upward
+    // drift. Instead we lock in the quiet-slot floor at the calibrated AGC-T
+    // and track deviations from that.
+    if (!std::isfinite(m_targetRmsDb)) {
+        m_targetRmsDb = m_lastRmsDb;
+        m_recLabel->setText(tr("Auto-Adapt: baseline captured — floor %1 dB at AGC-T %2")
+            .arg(m_targetRmsDb, 0, 'f', 1)
+            .arg(liveValue()));
+        return;
+    }
+
+    // Need at least 2 samples in the buffer before making a correction.
+    if (m_floorHistory.size() < 2) {
+        return;
+    }
+
+    // Smoothed floor: mean of the ring buffer.
+    float sum = 0.0f;
+    for (float v : m_floorHistory) sum += v;
+    const float smoothedDb = sum / static_cast<float>(m_floorHistory.size());
+
+    const float delta = smoothedDb - m_targetRmsDb;
+    // Dead-band: ignore small fluctuations (measurement scatter, band noise
+    // variance). Only nudge when the smoothed floor has drifted by more than 3 dB.
+    constexpr float kDeadBandDb = 2.0f;
+    if (std::abs(delta) < kDeadBandDb) {
+        m_recLabel->setText(tr("Auto-Adapt: floor on target (%1%2 dB, n=%3)")
+            .arg(delta >= 0 ? QStringLiteral("+") : QStringLiteral(""))
+            .arg(delta, 0, 'f', 1)
+            .arg(m_floorHistory.size()));
+        return;
+    }
+    // Higher RMS than target → band noise went up → knee shifted down →
+    // lower AGC-T. Lower RMS → knee shifted up → raise AGC-T.
+    // ±3 units per slot for now; magnitude will be tuned once we see behaviour.
+    constexpr int kNudge = 2;
+    const int nudge = delta > 0.0f ? -kNudge : (delta < 0.0f ? +kNudge : 0);
+
+    const int current = liveValue();
+    const int next = qBound(0, current + nudge, 100);
+    if (next == current) {
+        return;
+    }
+
+    const bool off = m_slice->agcMode() == QStringLiteral("off");
+    if (off) {
+        m_slice->setAgcOffLevel(next);
+    } else {
+        m_slice->setAgcThresholdFromCalibration(next);
+    }
+
+    // Update saved knee so successive corrections are relative to the new value.
+    m_savedKneeAgct = next;
+
+    // Clear the history so the next decision is based on fresh measurements at
+    // the new AGC-T position, not stale samples from before the nudge.
+    m_floorHistory.clear();
+
+    m_recLabel->setText(tr("Auto-Adapt: floor %1%2 dB (n=%3) → AGC-T %4")
+        .arg(delta >= 0 ? QStringLiteral("+") : QStringLiteral(""))
+        .arg(delta, 0, 'f', 1)
+        .arg(m_floorHistory.size())
+        .arg(next));
 }
 
 } // namespace AetherSDR

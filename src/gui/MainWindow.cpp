@@ -4833,8 +4833,13 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
     // A canon dialog, so not showOrRaisePersistent(): that applies View →
     // Frameless Window, which a CanonWindow does not follow.
     if (!m_agcCalibrationDialog) {
+#ifdef HAVE_WEBSOCKETS
         auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, tciServer(), floorFn, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
+#else
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, nullptr, floorFn, this);
+#endif
+        // No WA_DeleteOnClose — the dialog persists so Auto-Adapt keeps
+        // running in the background after the panel is closed.
         m_agcCalibrationDialog = dlg;
     }
     m_agcCalibrationDialog->setSlice(slice);
