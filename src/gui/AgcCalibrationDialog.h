@@ -78,8 +78,6 @@ public:
 private slots:
     void onStartStop();
     void onApply();
-    void onAdaptToggle();
-    void onAdaptTick();
     void onStarted(AgcTCalibrator::Strategy strategy, int originalValue);
     void onProgress(int currentValue, int percent);
     void onPointAdded(int value, float rmsDb);
@@ -137,23 +135,8 @@ private:
     QComboBox*      m_sliceCombo{nullptr};
     QPushButton*    m_startStopBtn{nullptr};
     QPushButton*    m_applyBtn{nullptr};
-    QPushButton*    m_adaptBtn{nullptr};
     QDoubleSpinBox* m_targetSpin{nullptr};
     QWidget*        m_targetRow{nullptr};
-    // Saved state from the last completed sweep — used by Auto-Adapt to
-    // compute corrections from live audio RMS drift without re-sweeping.
-    int   m_savedKneeAgct{-1};
-    float m_targetRmsDb{std::numeric_limits<float>::quiet_NaN()};
-    // Auto-Adapt state.
-    QTimer* m_adaptTimer{nullptr};   // fires every 500 ms to check FT8 slot
-    bool    m_adaptRunning{false};
-    bool    m_quietNow{false};       // last known quiet-spot status
-    int     m_lastAdaptSlot{-1};     // FT8 slot index of last adapt action (prevents double-fire)
-    float   m_lastRmsDb{std::numeric_limits<float>::quiet_NaN()}; // last audio level (dBFS)
-    // Ring buffer of quiet-slot floor readings for smoothing. Capacity 4 slots
-    // (~1 minute of history). Delta is computed from the buffer mean once at
-    // least 2 samples are present.
-    QVector<float> m_floorHistory;
 };
 
 } // namespace AetherSDR

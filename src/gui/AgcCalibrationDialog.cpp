@@ -356,14 +356,8 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_startStopBtn = new QPushButton(QStringLiteral("Auto Sweep"), this);
     m_applyBtn = new QPushButton(QStringLiteral("Apply"), this);
     m_applyBtn->setEnabled(false);
-    m_adaptBtn = new QPushButton(QStringLiteral("Auto-Adapt"), this);
-    m_adaptBtn->setCheckable(true);
-    m_adaptBtn->setEnabled(false);
-    m_adaptBtn->setToolTip(tr("Continuously nudge AGC-T at each FT8 quiet slot "
-                              "to track noise floor drift. Run Auto Sweep first."));
     buttons->addWidget(m_startStopBtn);
     buttons->addStretch(1);
-    buttons->addWidget(m_adaptBtn);
     buttons->addWidget(m_applyBtn);
     body->addLayout(buttons);
 
@@ -376,13 +370,6 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
 
     connect(m_startStopBtn, &QPushButton::clicked, this, &AgcCalibrationDialog::onStartStop);
     connect(m_applyBtn, &QPushButton::clicked, this, &AgcCalibrationDialog::onApply);
-    connect(m_adaptBtn, &QPushButton::clicked, this, &AgcCalibrationDialog::onAdaptToggle);
-
-    // 500 ms tick used to detect FT8 quiet slots at the half-second mark
-    // (second 14.5, 29.5, 44.5, 59.5 UTC) — deeper into the quiet window.
-    m_adaptTimer = new QTimer(this);
-    m_adaptTimer->setInterval(500);
-    connect(m_adaptTimer, &QTimer::timeout, this, &AgcCalibrationDialog::onAdaptTick);
 
     // Engine wiring.
     connect(&m_engine, &AgcTCalibrator::started, this, &AgcCalibrationDialog::onStarted);
@@ -437,10 +424,6 @@ void AgcCalibrationDialog::done(int result)
     if (m_engine.isRunning()) {
         m_engine.stop(); // restores the original value
     }
-    // Auto-Adapt intentionally keeps running when the dialog is hidden —
-    // the user doesn't need to keep the panel open for background drift
-    // correction to work. The timer is only stopped by onAdaptToggle() or
-    // when the dialog is destroyed on app exit.
     CanonWindow::done(result);
 }
 
@@ -538,7 +521,11 @@ bool AgcCalibrationDialog::isTciMode() const
     // daxChannel() >= 1 required: host-demodulating backends (HL2, etc.) and
     // Flex slices with no DAX channel assigned leave m_daxChannel at 0, so the
     // rxLevel channel-match can never fire. Fall back to PC Audio for them.
-    if (!m_tci || !m_slice || m_slice->daxChannel() < 1) {
+    // AGC Off (TargetLevel strategy) always uses PC Audio regardless of mode,
+    // per the 2026-11-20 ruling: the target-level solve runs against a fixed
+    // −28 dB reference that was calibrated on the PC Audio path.
+    if (!m_tci || !m_slice || m_slice->daxChannel() < 1
+            || m_slice->agcMode() == QStringLiteral("off")) {
         return false;
     }
     const QString& m = m_slice->mode();
@@ -558,19 +545,12 @@ void AgcCalibrationDialog::rewireAudioSource()
         m_audioConn = connect(m_tci, &TciServer::rxLevel,
                               this, [this, daxCh](int ch, float rms) {
             if (ch == daxCh) {
-                // Convert linear 0..1 RMS to dBFS and track for Auto-Adapt.
-                m_lastRmsDb = (rms > 0.0f)
-                    ? 20.0f * std::log10(rms)
-                    : -120.0f;
                 m_engine.onAudioLevel(rms);
             }
         });
     } else if (m_audio) {
         m_audioConn = connect(m_audio, &AudioEngine::levelChanged,
                               this, [this](float rms) {
-            m_lastRmsDb = (rms > 0.0f)
-                ? 20.0f * std::log10(rms)
-                : -120.0f;
             m_engine.onAudioLevel(rms);
         });
     }
@@ -798,25 +778,10 @@ void AgcCalibrationDialog::onRecommendation(int value, bool isKnee)
     if (!m_engine.isRunning()) {
         m_applyBtn->setEnabled(true);
     }
-    // Save the reference for Auto-Adapt: the audio RMS at the recommended
-    // AGC-T from the curve. Using the curve point is more reliable than
-    // currentRmsDb() since the engine may have stepped past this value.
-    m_savedKneeAgct = value;
-    m_targetRmsDb = std::numeric_limits<float>::quiet_NaN();
-    for (const auto& pt : m_engine.curve()) {
-        if (pt.value == value) {
-            m_targetRmsDb = pt.rmsDb;
-            break;
-        }
-    }
-    if (m_adaptBtn) {
-        m_adaptBtn->setEnabled(std::isfinite(m_targetRmsDb));
-    }
 }
 
 void AgcCalibrationDialog::onQuietSpot(bool quiet, float marginDb)
 {
-    m_quietNow = quiet;
     if (quiet) {
         m_quietLabel->setText(QStringLiteral("✓ Quiet spot (signal %1 dB over floor).")
                                   .arg(marginDb, 0, 'f', 1));
@@ -848,127 +813,6 @@ void AgcCalibrationDialog::onFinished(bool applied)
     }
     updateModeUi();
     refreshFromSlice();
-}
-
-void AgcCalibrationDialog::onAdaptToggle()
-{
-    m_adaptRunning = !m_adaptRunning;
-    if (m_adaptRunning) {
-        // Reset target, slot guard, and history so first quiet-slot sets baseline.
-        m_targetRmsDb = std::numeric_limits<float>::quiet_NaN();
-        m_lastAdaptSlot = -1;
-        m_floorHistory.clear();
-        m_adaptBtn->setText(QStringLiteral("Stop Adapting"));
-        m_adaptTimer->start();
-    } else {
-        m_adaptBtn->setText(QStringLiteral("Auto-Adapt"));
-        m_adaptTimer->stop();
-    }
-}
-
-void AgcCalibrationDialog::onAdaptTick()
-{
-    // Fire once per FT8 cycle at the half-second mark of second 14 (i.e.,
-    // 14.5s, 29.5s, 44.5s, 59.5s UTC) — deeper into the quiet window after
-    // the previous burst has had time to fully decay.
-    const QTime utc = QDateTime::currentDateTimeUtc().time();
-    const int sec  = utc.second();
-    const int msec = utc.msec();
-    if (sec % 15 != 14 || msec < 400) {
-        return;
-    }
-    // Slot index (0..3 per minute) prevents double-firing within the same slot.
-    const int slot = sec / 15;
-    if (slot == m_lastAdaptSlot) {
-        return;
-    }
-    m_lastAdaptSlot = slot;
-
-    if (!m_slice || !m_slice->agcCalibrationAllowed()) {
-        return;
-    }
-    if (m_engine.isRunning()) {
-        return; // don't interfere with an auto sweep
-    }
-    if (!std::isfinite(m_lastRmsDb)) {
-        return;
-    }
-
-    // Push this quiet-slot reading into the ring buffer (capacity 4 slots,
-    // ~1 minute of history). Once we have at least 2 samples the mean is used
-    // as the smoothed floor; before that we just accumulate without nudging.
-    constexpr int kHistoryCapacity = 2;
-    if (m_floorHistory.size() >= kHistoryCapacity) {
-        m_floorHistory.removeFirst();
-    }
-    m_floorHistory.append(m_lastRmsDb);
-
-    // On the very first quiet-slot sample, capture the current floor as the
-    // baseline rather than using the sweep's knee-point RMS. The sweep measures
-    // the floor while FT8 signals are present; the quiet slot is 10–15 dB
-    // lower. Using the sweep value as the target would cause permanent upward
-    // drift. Instead we lock in the quiet-slot floor at the calibrated AGC-T
-    // and track deviations from that.
-    if (!std::isfinite(m_targetRmsDb)) {
-        m_targetRmsDb = m_lastRmsDb;
-        m_recLabel->setText(tr("Auto-Adapt: baseline captured — floor %1 dB at AGC-T %2")
-            .arg(m_targetRmsDb, 0, 'f', 1)
-            .arg(liveValue()));
-        return;
-    }
-
-    // Need at least 2 samples in the buffer before making a correction.
-    if (m_floorHistory.size() < 2) {
-        return;
-    }
-
-    // Smoothed floor: mean of the ring buffer.
-    float sum = 0.0f;
-    for (float v : m_floorHistory) sum += v;
-    const float smoothedDb = sum / static_cast<float>(m_floorHistory.size());
-
-    const float delta = smoothedDb - m_targetRmsDb;
-    // Dead-band: ignore small fluctuations (measurement scatter, band noise
-    // variance). Only nudge when the smoothed floor has drifted by more than 3 dB.
-    constexpr float kDeadBandDb = 2.0f;
-    if (std::abs(delta) < kDeadBandDb) {
-        m_recLabel->setText(tr("Auto-Adapt: floor on target (%1%2 dB, n=%3)")
-            .arg(delta >= 0 ? QStringLiteral("+") : QStringLiteral(""))
-            .arg(delta, 0, 'f', 1)
-            .arg(m_floorHistory.size()));
-        return;
-    }
-    // Higher RMS than target → band noise went up → knee shifted down →
-    // lower AGC-T. Lower RMS → knee shifted up → raise AGC-T.
-    // ±3 units per slot for now; magnitude will be tuned once we see behaviour.
-    constexpr int kNudge = 2;
-    const int nudge = delta > 0.0f ? -kNudge : (delta < 0.0f ? +kNudge : 0);
-
-    const int current = liveValue();
-    const int next = qBound(0, current + nudge, 100);
-    if (next == current) {
-        return;
-    }
-
-    const bool off = m_slice->agcMode() == QStringLiteral("off");
-    if (off) {
-        m_slice->setAgcOffLevel(next);
-    } else {
-        m_slice->setAgcThresholdFromCalibration(next);
-    }
-
-    // Update saved knee so successive corrections are relative to the new value.
-    m_savedKneeAgct = next;
-
-    // Clear the history so the next decision is based on fresh measurements at
-    // the new AGC-T position, not stale samples from before the nudge.
-    m_floorHistory.clear();
-
-    m_recLabel->setText(tr("Auto-Adapt: floor %1%2 dB (n=%3) → AGC-T %4")
-        .arg(delta >= 0 ? QStringLiteral("+") : QStringLiteral(""))
-        .arg(delta, 0, 'f', 1)
-        .arg(m_floorHistory.size())
-        .arg(next));
 }
 
 } // namespace AetherSDR
