@@ -594,6 +594,7 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         m_tuneBtn->setEnabled(available);
         m_tuneBtn->setToolTip(available ? tr("Start or stop tune carrier")
             : tr("Tune carrier is unavailable in this mode through the current radio backend"));
+        m_tuneBtn->setAccessibleDescription(m_tuneBtn->toolTip());
     };
     connect(m_model, &TransmitModel::tuneAvailabilityChanged, this, updateTuneAvailability);
     connect(m_model, &TransmitModel::tuneChanged, this, updateTuneAvailability);
@@ -709,20 +710,21 @@ void TxApplet::updateAtuAvailability()
     // fundamental one: with no ATU fitted, what the TGXL is doing is beside the
     // point, and "Disabled — TGXL is in OPERATE mode" would send the operator
     // looking at the wrong box.
-    QString tip;
+    QString reason;
     if (!m_radioHasTuner) {
-        tip = tr("Antenna tuner controls are unavailable for this radio");
+        reason = tr("Antenna tuner controls are unavailable for this radio");
     } else if (m_tgxlOperate) {
-        tip = tr("Disabled — TGXL is in OPERATE mode");
+        reason = tr("Disabled — TGXL is in OPERATE mode");
     } else if (!pathAvailable) {
-        tip = tr("Disabled — the internal ATU is not in the transverter TX path");
+        reason = tr("Disabled — the internal ATU is not in the transverter TX path");
     }
-    m_atuBtn->setToolTip(tip);
-    m_atuBtn->setAccessibleDescription(tip);
+    const QString atuTip = reason.isEmpty() ? tr("Start automatic antenna tuner") : reason;
+    m_atuBtn->setToolTip(atuTip);
+    m_atuBtn->setAccessibleDescription(atuTip);
     if (!m_radioHasTunerMemories) {
         m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
     } else {
-        m_memBtn->setToolTip(tip);
+        m_memBtn->setToolTip(reason);
     }
     m_memBtn->setAccessibleDescription(m_memBtn->toolTip());
 }

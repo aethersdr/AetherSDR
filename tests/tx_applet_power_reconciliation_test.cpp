@@ -1030,8 +1030,52 @@ void testTransverterAtuAvailability()
            atu->isEnabled() && mem->isEnabled() && success->isEnabled()
                && bypass->isEnabled() && memory->isEnabled()
                && success->styleSheet() == successStyle && memory->styleSheet() == memoryStyle
-               && atu->toolTip().isEmpty() && atu->accessibleDescription().isEmpty()
+               && atu->toolTip() == QStringLiteral("Start automatic antenna tuner")
+               && atu->accessibleDescription() == atu->toolTip()
                && mem->accessibleDescription().isEmpty());
+}
+
+// A screen reader reads the accessible description, not the tooltip. TUNE and
+// ATU must announce what they do while available, and why while unavailable.
+void testTuneAndAtuBaseTexts()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    auto* tune = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("Tune")));
+    auto* atu = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("ATU tune")));
+    report("TUNE and ATU buttons exist", tune && atu);
+    if (!tune || !atu) {
+        return;
+    }
+    const QString tuneBase = QStringLiteral("Start or stop tune carrier");
+    const QString atuBase = QStringLiteral("Start automatic antenna tuner");
+
+    report("available TUNE describes itself",
+           tune->toolTip() == tuneBase && tune->accessibleDescription() == tuneBase,
+           tune->accessibleDescription());
+    model.setTuneAvailable(false);
+    report("unavailable TUNE announces its reason",
+           tune->toolTip().contains(QStringLiteral("unavailable"))
+               && tune->accessibleDescription() == tune->toolTip(),
+           tune->accessibleDescription());
+    model.setTuneAvailable(true);
+    report("TUNE returns to its base text",
+           tune->toolTip() == tuneBase && tune->accessibleDescription() == tuneBase,
+           tune->accessibleDescription());
+
+    report("available ATU describes itself",
+           atu->toolTip() == atuBase && atu->accessibleDescription() == atuBase,
+           atu->accessibleDescription());
+    model.setHasTuner(false);
+    report("ATU on a radio with no tuner announces its reason",
+           atu->toolTip() == QStringLiteral("Antenna tuner controls are unavailable for this radio")
+               && atu->accessibleDescription() == atu->toolTip(),
+           atu->accessibleDescription());
+    model.setHasTuner(true);
+    report("ATU returns to its base text",
+           atu->toolTip() == atuBase && atu->accessibleDescription() == atuBase,
+           atu->accessibleDescription());
 }
 
 void testTuneAvailability()
@@ -1288,6 +1332,7 @@ int main(int argc, char** argv)
     testAtuCapabilityUsesThreeVisibleStates();
     testTransverterAtuAvailability();
     testTuneAvailability();
+    testTuneAndAtuBaseTexts();
     testAtuContextMenuExplainsWhyPreTuneIsDisabled();
     testMemButtonFollowsReadbackOnly();
     testMemButtonResyncsOnResetState();
