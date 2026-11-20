@@ -744,6 +744,82 @@ void txSetAfterAnOver()
           "over: once it is delivered, the TX set is accepted");
 }
 
+// A backend with no interlock status (the HL2): the over's TX ownership is
+// still never confirmed, and the backend's own RX edge, once the key-up is
+// delivered, is the settled RX that lets a TX set through again.
+void txSetAfterAnOverWithoutInterlock()
+{
+    RadioModel model;
+    auto owner = std::make_unique<AntennaBackend>();
+    AntennaBackend* backend = owner.get();
+    backend->connected = false;
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    QString error;
+    const bool fixture = model.automationApplySliceFixture(0, QStringLiteral("A"), &error);
+    backend->connected = true;
+    SliceModel* s0 = model.slice(0);
+    check(fixture && s0, "no interlock: one fixture slice");
+    if (!fixture || !s0) {
+        std::printf("      fixture: %s\n", qPrintable(error));
+        return;
+    }
+    SliceDelta tx = antennas({QStringLiteral("ANT1"), QStringLiteral("ANT2")}, QStringLiteral("ANT1"),
+                             {QStringLiteral("ANT1"), QStringLiteral("ANT2")}, QStringLiteral("ANT1"));
+    tx.txSlice = true;
+    tx.mode = QStringLiteral("USB");
+    s0->applyChanges(tx);
+    TciServer server(&model);
+    server.wireSlice(s0->sliceId(), s0);
+    Wire a;
+    TciAntennaExtensionTest::attach(server, a.client, model);
+    int warnings = 0;
+    QObject::connect(&model, &RadioModel::configurationWarning,
+                     [&warnings](const QString&) { ++warnings; });
+    settle(600);
+    a.take();
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    const auto setTo = [&a](const char* antenna) {
+        a.send(QStringLiteral("aethersdr_tx_antenna:0,%1;").arg(QLatin1String(antenna)).toLatin1().constData());
+        settle();
+        return a.takeExtension();
+    };
+    const QStringList stays1{QStringLiteral("aethersdr_tx_antenna:0,ANT1;")};
+
+    model.setTransmit(true);
+    check(backend->keyEdges == QList<bool>({true}) && model.isRadioTransmitting(),
+          "no interlock: desktop MOX keys the backend, which publishes its TX edge");
+    check(setTo("ANT2") == stays1 && backend->txRequests.isEmpty() && warnings == 1,
+          "no interlock: a TX set while keyed is refused, and noticed");
+    model.setTransmit(false);
+    check(backend->keyEdges == QList<bool>({true, false}) && model.transmitOwnershipPending()
+              && !model.isRadioTransmitting() && !model.transmitModel().isTransmitting(),
+          "no interlock: after the key-up the over's TX ownership is retained, unconfirmed");
+    const QStringList moved = setTo("ANT2");
+    check(backend->txRequests.size() == 1 && s0->txAntenna() == QStringLiteral("ANT2")
+              && moved == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT2;")})
+              && model.transmitOwnershipPending(),
+          "no interlock: after the backend's RX edge, a TX set is accepted; ownership retained");
+    if (backend->txRequests.size() != 1) {
+        dump("a", moved);
+    }
+
+    // The RX edge alone is not idle while the key-up is still being delivered.
+    backend->holdKeyUp = true;
+    model.setTransmit(true);
+    model.setTransmit(false);
+    check(!model.isRadioTransmitting() && setTo("ANT1").size() == 1
+              && backend->txRequests.size() == 1 && warnings == 2,
+          "no interlock: a TX set while the key-up is still being delivered is refused");
+    backend->holdKeyUp = false;
+    backend->heldKeyUp.finish();
+    backend->heldKeyUp = {};
+    settle();
+    setTo("ANT1");
+    check(backend->txRequests.size() == 2 && s0->txAntenna() == QStringLiteral("ANT1"),
+          "no interlock: once it is delivered, the TX set is accepted");
+}
+
 // One enabled client is behind on the item list, the other already holds it:
 // the resend reaches only the first, so a list change is still noticed to both.
 void mixedResend()
@@ -820,6 +896,7 @@ int main(int argc, char** argv)
     serverBehaviour();
     mixedResend();
     txSetAfterAnOver();
+    txSetAfterAnOverWithoutInterlock();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
