@@ -5773,6 +5773,12 @@ void RadioModel::publishBackendTransmitEdge(bool tx)
     if (!m_backend || m_flexBackend || m_radioTransmitting == tx)
         return;
     m_radioTransmitting = tx;
+    // With no interlock status this edge is the only settled-RX evidence, as
+    // interlock READY is on a Flex; transmitIdleForSelection() still waits
+    // for the key-up's delivery. Set before the emit, as the interlock path.
+    if (m_interlockState.isEmpty()) {
+        m_daxTxSelectionRxObserved = radioReceivingForTransmitDax();
+    }
     emit radioTransmittingChanged(tx);
 }
 
