@@ -1034,11 +1034,12 @@ void testTransverterAtuAvailability()
                && success->styleSheet() == successStyle && memory->styleSheet() == memoryStyle
                && atu->toolTip() == QStringLiteral("Start automatic antenna tuner")
                && atu->accessibleDescription() == atu->toolTip()
-               && mem->accessibleDescription().isEmpty());
+               && mem->toolTip() == QStringLiteral("Toggle ATU memory recall")
+               && mem->accessibleDescription() == mem->toolTip());
 }
 
-// A screen reader reads the accessible description, not the tooltip. TUNE and
-// ATU must announce what they do while available, and why while unavailable.
+// A screen reader reads the accessible description, not the tooltip. TUNE, ATU
+// and MEM must announce what they do while available, and why while unavailable.
 void testTuneAndAtuBaseTexts()
 {
     TransmitModel model;
@@ -1046,8 +1047,9 @@ void testTuneAndAtuBaseTexts()
     applet.setTransmitModel(&model);
     auto* tune = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("Tune")));
     auto* atu = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("ATU tune")));
-    report("TUNE and ATU buttons exist", tune && atu);
-    if (!tune || !atu) {
+    auto* mem = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("ATU memories")));
+    report("TUNE, ATU and MEM buttons exist", tune && atu && mem);
+    if (!tune || !atu || !mem) {
         return;
     }
     const QString tuneBase = QStringLiteral("Start or stop tune carrier");
@@ -1101,6 +1103,35 @@ void testTuneAndAtuBaseTexts()
     report("ATU returns to its base text after the TGXL leaves OPERATE",
            atu->toolTip() == atuBase && atu->accessibleDescription() == atuBase,
            atu->accessibleDescription());
+
+    const QString memBase = QStringLiteral("Toggle ATU memory recall");
+    report("available MEM describes itself",
+           mem->toolTip() == memBase && mem->accessibleDescription() == memBase,
+           mem->accessibleDescription());
+    model.setHasTunerMemories(false);
+    report("MEM on a radio with no tuner memories announces its reason",
+           mem->toolTip() == QStringLiteral("ATU memory controls are unavailable for this radio")
+               && mem->accessibleDescription() == mem->toolTip(),
+           mem->accessibleDescription());
+    model.setHasTunerMemories(true);
+    {
+        TunerDelta d;
+        d.operate = true;
+        d.bypass = false;
+        tuner.applyChanges(d);
+    }
+    report("MEM with the TGXL in OPERATE announces its reason",
+           mem->toolTip() == QStringLiteral("Disabled — TGXL is in OPERATE mode")
+               && mem->accessibleDescription() == mem->toolTip(),
+           mem->accessibleDescription());
+    {
+        TunerDelta d;
+        d.operate = false;
+        tuner.applyChanges(d);
+    }
+    report("MEM returns to its base text",
+           mem->toolTip() == memBase && mem->accessibleDescription() == memBase,
+           mem->accessibleDescription());
 }
 
 void testTuneAvailability()

@@ -327,7 +327,7 @@ void TxApplet::buildUI()
         m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_memBtn->setFixedHeight(22);
         m_memBtn->setAccessibleName("ATU memories");
-        m_memBtn->setAccessibleDescription("Toggle ATU memory recall");
+        m_memBtn->setAccessibleDescription(tr("Toggle ATU memory recall"));
         row->addWidget(m_memBtn);
 
         vbox->addLayout(row);
@@ -721,12 +721,11 @@ void TxApplet::updateAtuAvailability()
     const QString atuTip = reason.isEmpty() ? tr("Start automatic antenna tuner") : reason;
     m_atuBtn->setToolTip(atuTip);
     m_atuBtn->setAccessibleDescription(atuTip);
-    if (!m_radioHasTunerMemories) {
-        m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
-    } else {
-        m_memBtn->setToolTip(reason);
-    }
-    m_memBtn->setAccessibleDescription(m_memBtn->toolTip());
+    const QString memTip = !m_radioHasTunerMemories
+        ? tr("ATU memory controls are unavailable for this radio")
+        : reason.isEmpty() ? tr("Toggle ATU memory recall") : reason;
+    m_memBtn->setToolTip(memTip);
+    m_memBtn->setAccessibleDescription(memTip);
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)
