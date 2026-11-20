@@ -4,10 +4,9 @@
 // panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
-#include "core/Kpa500IndicatorState.h"
-#include "core/ThemeManager.h"
 #include "ControlAvailabilityRegistry.h"
 #include "HGauge.h"
+#include "Kpa500IndicatorState.h"
 #include "StatusIndicator.h"
 #include "StatusBarMessageOverlay.h"
 #include "models/CwDecodeSettings.h"
@@ -7895,10 +7894,11 @@ void MainWindow::wireMeters()
         // with the state, which the color alone otherwise carries.
         if (QWidget* container = stateLbl->parentWidget()) {
             const QString cycle = container->property("aetherStateCycle").toString();
-            const QString described = cycle.isEmpty() ? state
-                                                      : QStringLiteral("%1. %2").arg(state, cycle);
-            if (container->accessibleDescription() != described) {
-                container->setAccessibleDescription(described);
+            if (!cycle.isEmpty()) {
+                const QString described = QStringLiteral("%1. %2").arg(state, cycle);
+                if (container->accessibleDescription() != described) {
+                    container->setAccessibleDescription(described);
+                }
             }
         }
     };
@@ -7945,10 +7945,13 @@ void MainWindow::wireMeters()
     // KPA500 main-window indicator — RFC #7092.
     // Six states in priority order: FAULT > TX > OPERATE > STANDBY > OFF > "–".
     // Passive widget; show/hide on detectedChanged only (not on radio-disconnect teardown).
-    auto updateKpa500Style = [this, setIndicatorStyle]() {
+    auto updateKpa500Style = [this, setIndicatorStyle](bool force) {
         const bool live = m_kpa500Conn.isConnected() && m_kpa500Conn.isResponding();
         const auto [label, token] = kpa500IndicatorState(
             m_kpa500Conn.lastStatus(), live, m_kpa500Conn.hasLiveTxMeters());
+        if (!force && m_kpa500StateLabel->text() == label) {
+            return;
+        }
         setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, label, token);
         // Accessibility: state word in the name, not just color (docs/a11y.md).
         m_kpa500Container->setAccessibleName(
@@ -7960,13 +7963,13 @@ void MainWindow::wireMeters()
         m_kpa500Separator->setVisible(detected);
         updateStatusBarMinimumWidth();
         if (detected) {
-            updateKpa500Style();
+            updateKpa500Style(true);
         }
     });
     connect(&m_kpa500Conn, &Kpa500Connection::statusUpdated, this,
-            [updateKpa500Style](const AetherSDR::Kpa500::Status&) { updateKpa500Style(); });
+            [updateKpa500Style](const AetherSDR::Kpa500::Status&) { updateKpa500Style(false); });
     connect(&m_kpa500Conn, &Kpa500Connection::respondingChanged, this,
-            [updateKpa500Style]() { updateKpa500Style(); });
+            [updateKpa500Style]() { updateKpa500Style(false); });
 
     // Drain current and PA heatsink temperature, relayed by the radio as the
     // PGXL's ID and TEMP meters. The applet prefers these while they are

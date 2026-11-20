@@ -6629,6 +6629,7 @@ void MainWindow::buildUI()
     m_kpa500Separator->setVisible(false);
 
     m_kpa500Container = new QWidget;
+    m_kpa500Container->setObjectName(QStringLiteral("kpa500Indicator"));
     m_kpa500Container->setToolTip("Elecraft KPA500");
     m_kpa500Container->setAccessibleName("KPA500: Unknown");
     m_kpa500Container->setVisible(false);
