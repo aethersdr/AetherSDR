@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include "DaxTxAudioPermit.h"
+#include "TciExtensionNotice.h"
 #include "TciExtensionSet.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
@@ -86,6 +87,7 @@ class TciServer : public QObject {
     friend class TxOperationIntegrationTestAccess;
     friend class TciAntennaExtensionTest;
     friend class TciExtensionSetTest;
+    friend class TciRxGainExtensionTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -270,6 +272,26 @@ private:
     bool announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
+    // Extension groups `rx_rf_gain`, `rx_auto_rf_gain`, `rx_overload`
+    // (TciRxGainExtension.h).
+    void registerRxGainGroups();
+    void wireRxGainPan(PanadapterModel* pan);
+    void wireRxGainSlice(SliceModel* slice);
+    bool rxGainOffered() const;
+    bool rxAutoGainOffered() const;
+    bool rxOverloadOffered() const;
+    // The trx's pan, while it has a published dB range.
+    PanadapterModel* rxGainPanForTrx(int trx) const;
+    QList<int> rxGainTrxs() const;
+    QStringList rxGainStateLines() const;
+    TciExtensionSet::Result handleRxGain(const QString& name, const QStringList& args);
+    TciExtensionSet::Result handleRxAutoGain(const QStringList& args);
+    void queueRxGainNotice(const QString& panId, bool range);
+    void queueRxGainTrxNotice(int trx);
+    bool broadcastRxGain();
+    bool broadcastRxAutoGain();
+    bool broadcastRxOverload();
+    bool anyExtensionClient() const;
     void broadcastBinary(const QByteArray& data);
     // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
     enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
@@ -511,6 +533,12 @@ private:
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
     TciExtensionSet m_extensions;
+    // Receive gain group notices: the trxs whose range or gain line is due.
+    QSet<int> m_rxGainRangeDue;
+    QSet<int> m_rxGainDue;
+    std::unique_ptr<TciExtensionNotice> m_rxGainNotice;
+    std::unique_ptr<TciExtensionNotice> m_rxAutoGainNotice;
+    std::unique_ptr<TciExtensionNotice> m_rxOverloadNotice;
     std::function<void(int, bool)> m_centerLockSet;
     std::function<bool(int)> m_centerLockQuery;
     // #6352: the newest removal per slice id. A close timer that finds a newer

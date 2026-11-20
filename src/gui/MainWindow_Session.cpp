@@ -3831,15 +3831,16 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
 // call this so a refusal reads like a drop. The latch is shared with the
 // commandDropped path: a gate refusal consumes the notice for a later real
 // drop in the same session too.
-void MainWindow::showUnsupportedControlNotice()
+void MainWindow::showUnsupportedControlNotice(const QString& message)
 {
     if (m_commandDroppedNoticeShown)
         return;
     m_commandDroppedNoticeShown = true;
-    statusBar()->showMessage(
-        tr("This radio doesn't support that control — nothing was sent to "
-           "the radio. Further unsupported controls are logged."),
-        8000);
+    const QString notice = message.isEmpty()
+        ? tr("This radio doesn't support that control — nothing was sent to "
+             "the radio. Further unsupported controls are logged.")
+        : message;
+    statusBar()->showMessage(notice, 8000);
 }
 
 
