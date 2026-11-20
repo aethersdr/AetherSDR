@@ -1777,7 +1777,9 @@ void MetisClient::applyDueCwEdges(std::int64_t sample, qint64 nowMs)
             pruneCwHolds(nowMs);
             // A release keeps the held CW operation its key-down entered with;
             // the element's own intent may end before the shifted up is due.
-            if (m_cwMode && !edge.release) {
+            // A pending down set the held operation the next element needs;
+            // an earlier element's key-up must not replace it.
+            if (m_cwMode && !edge.release && m_cwScheduleCount == 0) {
                 m_cwOperation = edge.operation;
             }
         } else if (m_txAllowed && edge.operation.permitsDispatch(nowMs)) {
