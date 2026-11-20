@@ -106,6 +106,10 @@ AnanRxDsp::RebuildResult AnanRxDsp::buildChannel(const Config& config)
     wc.noiseBlanker = config.noiseBlanker;
     wc.noiseBlankerLevel = config.noiseBlankerLevel;
     wc.noiseBlankerFill = config.noiseBlankerFill;
+    // FM bypasses the AGC; set in every build because setMode() enters FM
+    // live, and WdspChannel moves the panel gain with the mode (#7252).
+    wc.fmLimiter = true;
+    wc.fmRxPanelGain = kFmRxPanelGain;
     // filterTaps left at WdspChannel::Config's own default (2048): this
     // phase has no manual notch filter, so there is no narrow-notch floor to
     // widen it for (contrast Hl2RxDsp::kRxFilterTaps, which exists solely

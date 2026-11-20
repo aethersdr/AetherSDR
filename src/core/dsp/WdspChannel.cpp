@@ -710,7 +710,16 @@ bool WdspChannel::setMode(Mode mode) noexcept
     {
         const std::scoped_lock setupLock(g_setupMutex);
         if (m_config.direction == Direction::Receive) {
+            // Lower the panel before FM starts and raise it after FM stops, so
+            // WDSP's thread never runs an FM block at the non-FM gain.
+            const bool movePanel = m_config.fmRxPanelGain.has_value();
+            if (movePanel && mode == Mode::Fm) {
+                SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, mode));
+            }
             SetRXAMode(m_channelId, wdspMode(mode));
+            if (movePanel && mode != Mode::Fm) {
+                SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, mode));
+            }
             // The squelch belongs to a mode family, so a mode change moves it
             // to the new family's stage and stops the old one — see
             // setSquelch() in the header.
@@ -1568,12 +1577,26 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
             return false;
         }
     }
-    if (config.rxPanelGain && (config.direction != Direction::Receive
-        || !std::isfinite(*config.rxPanelGain) || *config.rxPanelGain < 0.0)) {
-        setError(error, "WDSP RX panel gain must be finite, non-negative and receive-only");
-        return false;
+    const std::pair<const std::optional<double>&, const char*> panelGains[] = {
+        {config.rxPanelGain, "WDSP rxPanelGain must be finite, non-negative and receive-only"},
+        {config.fmRxPanelGain, "WDSP fmRxPanelGain must be finite, non-negative and receive-only"},
+    };
+    for (const auto& [gain, message] : panelGains) {
+        if (gain && (config.direction != Direction::Receive
+            || !std::isfinite(*gain) || *gain < 0.0)) {
+            setError(error, message);
+            return false;
+        }
     }
     return true;
+}
+
+double WdspChannel::rxPanelGainFor(const Config& config, Mode mode) noexcept
+{
+    if (mode == Mode::Fm && config.fmRxPanelGain) {
+        return *config.fmRxPanelGain;
+    }
+    return config.rxPanelGain.value_or(kWdspDefaultRxPanelGain);
 }
 
 int WdspChannel::wdspMode(Mode mode) noexcept
@@ -1725,8 +1748,13 @@ bool WdspChannel::open() noexcept
             SetRXAFMLimGain(m_channelId, 0.0);
             SetRXAFMLimRun(m_channelId, 1);
         }
-        if (m_config.rxPanelGain) {  // a set field wins over the FM value above
+        // A set rxPanelGain wins over the FmReceive value above; in FM, a set
+        // fmRxPanelGain wins over both.
+        if (m_config.rxPanelGain) {
             SetRXAPanelGain1(m_channelId, *m_config.rxPanelGain);
+        }
+        if (m_config.fmRxPanelGain) {
+            SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, m_config.mode));
         }
         if (m_config.wbfmReceive) {
             m_wbfm = std::make_unique<WbfmState>(m_config);

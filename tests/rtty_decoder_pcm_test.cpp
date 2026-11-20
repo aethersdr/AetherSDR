@@ -2,6 +2,7 @@
 // mark/space PCM is fed directly; no peer, sound device, radio or TX path.
 #include "core/DecoderPcmAdapter.h"
 #include "core/RttyDecoder.h"
+#include "core/backends/sim/NoiseMixer.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -28,14 +29,14 @@ void check(bool value, const char* message)
     }
 }
 QVector<float> signal(int rate, PcmLayout layout, const QVector<int>& codes,
-                      bool startDuringSpace = false)
+                      bool startDuringSpace = false, int markHz = 2125, int spaceHz = 1955)
 {
     QVector<float> samples;
     double phase = 0;
     const int channels = layout == PcmLayout::Mono ? 1 : 2;
     auto append = [&](bool mark, double seconds) {
         const int count = static_cast<int>(std::lround(rate * seconds));
-        const double step = 2.0 * std::numbers::pi * (mark ? 2125 : 1955) / rate;
+        const double step = 2.0 * std::numbers::pi * (mark ? markHz : spaceHz) / rate;
         for (int i = 0; i < count; ++i) {
             const float sample = static_cast<float>(0.5 * std::sin(phase));
             phase = std::fmod(phase + step, 2.0 * std::numbers::pi);
@@ -115,6 +116,57 @@ int main(int argc, char** argv)
                   "actual RTTY worker decodes RY at fixed24 for every producer rate/layout");
             decoder.stop();
         }
+    }
+
+    // The demo radio's RTTY stations (#7420) through the real decoder. NoiseMixer
+    // keys them; the tone pitches are what SimSignalSource sets in RTTY mode with
+    // the dial on the upper tone (2125 Hz; the tone 170 Hz below it at 2295 Hz),
+    // or on the lower tone (2125 Hz; the upper one then at 1955 Hz).
+    {
+        auto copies = [&](NoiseMixer::Channel channel, double upperHz, double lowerHz, bool rev) {
+            NoiseMixer mixer;
+            mixer.setEnabled(channel, true);
+            mixer.setRttyTones(upperHz, lowerHz, 0.0, -170.0);
+            QVector<float> pcm;
+            for (int i = 0; i < 14 * 24000 / NoiseMixer::kFrameLen; ++i) {
+                pcm += mixer.mixFrame();   // ~14 s: two passes of the station's text
+            }
+            RttyDecoder demo;
+            QString text;
+            QObject::connect(&demo, &RttyDecoder::textDecoded, &app,
+                             [&](const QString& t, float) { text += t; });
+            DecoderPcmAdapter demoAdapter;
+            demoAdapter.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, 8);
+            PcmProducer demoProducer;
+            demoProducer.start(PcmPurpose::Slice, 8, {24000, PcmLayout::Mono});
+            demo.setReversePolarity(rev);
+            demo.start();
+            // Half a second at a time: the typed input ring holds 4 s and a
+            // source that outruns it is treated as a discontinuity (reset).
+            for (qsizetype offset = 0; offset < pcm.size(); offset += 12000) {
+                feed(demo, demoAdapter, demoProducer, pcm.mid(offset, 12000), 1);
+                QThread::msleep(25);
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+            }
+            QElapsedTimer settle;
+            settle.start();
+            while (!text.contains(QStringLiteral("DE DEMO DEMO K")) && settle.elapsed() < 1500) {
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+                QThread::msleep(2);
+            }
+            demo.stop();
+            return text.contains(QStringLiteral("DE DEMO DEMO K"));
+        };
+        // Today's decoder: REV on listens for space 170 Hz above the mark in audio.
+        check(copies(NoiseMixer::Channel::Rtty, 2125, 2295, true),
+              "demo RTTY normal, dial on its upper tone: copies with REV on");
+        check(!copies(NoiseMixer::Channel::Rtty, 2125, 2295, false),
+              "demo RTTY normal, dial on its upper tone: no copy with REV off");
+        check(!copies(NoiseMixer::Channel::RttyReversed, 2125, 2295, true)
+                  && !copies(NoiseMixer::Channel::RttyReversed, 2125, 2295, false),
+              "demo RTTY reversed, dial on its upper tone: no copy in either REV state (#7408)");
+        check(copies(NoiseMixer::Channel::RttyReversed, 1955, 2125, false),
+              "demo RTTY reversed, dial retuned onto its mark (the lower tone): copies with REV off");
     }
 
     RttyDecoder decoder;
@@ -247,6 +299,59 @@ int main(int argc, char** argv)
             check(notifications == 0, "stopped RTTY decoder ignores non-finite typed input");
         }
     }
+    // Tones at or below 0 Hz hold the decoder idle; valid tones resume it with
+    // no restart. CONSTRUCTED signals: Mark 1000 / Shift 1170 puts space at
+    // -170 Hz, and the 1000/170 Hz RY below is what a filter built at the
+    // mirror image (+170 Hz) would decode.
+    {
+        RttyDecoder tones;
+        QString text;
+        bool finiteStats = true;
+        bool anyLock = false;
+        QObject::connect(&tones, &RttyDecoder::textDecoded, &app,
+                         [&](const QString& t, float) { text += t; });
+        QObject::connect(&tones, &RttyDecoder::statsUpdated, &app,
+                         [&](float mark, float space, float snr, bool lockedNow) {
+                             finiteStats = finiteStats && std::isfinite(mark)
+                                 && std::isfinite(space) && std::isfinite(snr);
+                             anyLock = anyLock || lockedNow;
+                         });
+        DecoderPcmAdapter toneAdapter;
+        toneAdapter.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, 5);
+        PcmProducer toneProducer;
+        toneProducer.start(PcmPurpose::Slice, 5, {24000, PcmLayout::Mono});
+
+        tones.setMarkFreqHz(0);
+        tones.setShiftHz(170);
+        tones.start();
+        feed(tones, toneAdapter, toneProducer, signal(24000, PcmLayout::Mono, {31, 10, 21}), 1);
+        pumpUntil([&] { return !text.isEmpty(); });
+        check(text.isEmpty(), "Mark 0 holds the decoder idle");
+        check(finiteStats && !anyLock, "Mark 0 reports finite, unlocked statistics");
+
+        tones.setMarkFreqHz(1000);
+        tones.setShiftHz(1170);
+        feed(tones, toneAdapter, toneProducer,
+             signal(24000, PcmLayout::Mono, {31, 10, 21}, false, 1000, 170), 1);
+        pumpUntil([&] { return !text.isEmpty(); });
+        check(text.isEmpty(), "a space tone below 0 Hz holds the decoder idle, not at its mirror");
+
+        tones.setMarkFreqHz(2125);
+        tones.setShiftHz(170);
+        feed(tones, toneAdapter, toneProducer, signal(24000, PcmLayout::Mono, {31, 10, 21}), 1);
+        pumpUntil([&] { return text.size() >= 2; });
+        check(text == QStringLiteral("RY"), "valid tones resume decoding without a restart");
+
+        // Stepped down from valid tones, the running decoder must not keep
+        // decoding on the 2125/1955 Hz filters it built before.
+        text.clear();
+        tones.setMarkFreqHz(150);
+        feed(tones, toneAdapter, toneProducer, signal(24000, PcmLayout::Mono, {31, 10, 21}), 1);
+        pumpUntil([&] { return !text.isEmpty(); });
+        check(text.isEmpty(), "Mark 150 / Shift 170 holds a running decoder idle, not on its old filters");
+        tones.stop();
+    }
+
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

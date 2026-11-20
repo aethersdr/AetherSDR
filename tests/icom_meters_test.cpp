@@ -702,11 +702,59 @@ static void testModeList()
 
     // The same provenance rule powerCurveFor states: a row nobody has read that
     // model's own guide for gets NOTHING, not the IC-705's list.
-    const IcomModel* ic9700 = modelForId(0xA2);
     const IcomModel* mk2 = modelForId(0xB6);
-    check(ic9700 && modeListFor(*ic9700).empty(), "another model gets no borrowed list");
     check(mk2 && modeListFor(*mk2).empty(), "including the verified IC-7300MK2");
     check(modeListFor(unknownModel()).empty(), "and nor does an unknown radio");
+
+    // The IC-9700's list comes from its own guide, so it differs from the
+    // IC-705's where the radios differ.
+    const IcomModel* ic9700 = modelForId(0xA2);
+    check(ic9700 != nullptr, "the IC-9700 is in the table");
+    if (!ic9700)
+        return;
+    const auto n9700 = modeListFor(*ic9700);
+    check(!n9700.empty(), "the IC-9700 publishes a mode list");
+
+    // The exact list, in combo order. The checks below reject a wrong entry
+    // but cannot see a missing one.
+    static constexpr std::string_view kExpected9700[] = {
+        "USB", "LSB", "CW", "CWL", "AM", "FM", "DFM", "DIGU", "DIGL"};
+    check(std::equal(n9700.begin(), n9700.end(),
+                     std::begin(kExpected9700), std::end(kExpected9700)),
+          "the IC-9700 publishes exactly its nine round-trip modes, in order");
+
+    // THE load-bearing assertion. The IC-9700 starts at 144 MHz and its 0x06
+    // table has no WFM entry; the IC-705's does. If this ever passes, somebody
+    // has pointed the IC-9700 at kIc705Modes and the radio will answer NG.
+    check(std::find(n9700.begin(), n9700.end(), std::string_view{"WFM"}) == n9700.end(),
+          "and it has NO WFM - the IC-9700 is not a broadcast receiver");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"WFM"}) != modes.end(),
+          "while the IC-705 still does - so these are two different lists");
+
+    // D-STAR and DD are deliberately absent: modeToNeutral(Dv) returns "" and
+    // 0x22 has no CivMode at all, so neither can round-trip.
+    check(std::find(n9700.begin(), n9700.end(), std::string_view{"DV"}) == n9700.end(),
+          "DV is not offered as a demodulator mode");
+    check(std::find(n9700.begin(), n9700.end(), std::string_view{"DD"}) == n9700.end(),
+          "nor is DD");
+
+    // Same round-trip contract the IC-705 list is held to above. A name the
+    // radio reports back differently makes the combo jump on confirmation.
+    for (const std::string_view m : n9700) {
+        bool data = false;
+        const auto civ = modeFromNeutral(std::string(m), data);
+        check(civ.has_value(), "every published IC-9700 mode is one the radio accepts");
+        if (!civ)
+            continue;
+        check(modeToNeutral(*civ, data) == std::string(m),
+              "and one it reports back under the same name");
+        check(std::count(n9700.begin(), n9700.end(), m) == 1, "listed exactly once");
+    }
+
+    // Every IC-9700 band is an amateur allocation, so nothing is receive-only.
+    for (const std::string_view m : n9700)
+        check(!modeIsReceiveOnly(*ic9700, m),
+              "no IC-9700 mode is receive-only, unlike the IC-705's WFM");
 }
 
 // WFM receives 76-108 MHz broadcast; the transmitter does not follow.

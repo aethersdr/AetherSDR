@@ -203,8 +203,14 @@ void RttyDecoder::recalcFilterCoeffs()
     const double spaceHz = m_reverse.load() ? markHz + shift : markHz - shift;
     const double bw      = baud * 3.0;  // 3× baud: selectivity vs. fast tracking
 
-    m_markCoeffs  = designBandpass(markHz,  bw, kSampleRate);
-    m_spaceCoeffs = designBandpass(spaceHz, bw, kSampleRate);
+    // A tone at 0 Hz divides by zero in designBandpass(), and a negative one
+    // builds the filter at its mirror image; neither gives a usable filter.
+    // The decoder stays idle until both tones are above 0 Hz again.
+    m_filtersValid = markHz > 0.0 && spaceHz > 0.0;
+    if (m_filtersValid) {
+        m_markCoeffs  = designBandpass(markHz,  bw, kSampleRate);
+        m_spaceCoeffs = designBandpass(spaceHz, bw, kSampleRate);
+    }
     m_markState   = {};
     m_spaceState  = {};
     m_markEnv     = 0;
@@ -212,6 +218,9 @@ void RttyDecoder::recalcFilterCoeffs()
 
     qCDebug(lcDsp) << "RttyDecoder: mark=" << markHz << "space=" << spaceHz
                    << "bw=" << bw << "baud=" << baud << "rev=" << m_reverse.load();
+    if (!m_filtersValid) {
+        qCDebug(lcDsp) << "RttyDecoder: idle, mark and space must both be above 0 Hz";
+    }
 }
 
 // ── Baudot ───────────────────────────────────────────────────────────────────
@@ -309,7 +318,9 @@ void RttyDecoder::decodeLoop()
 
         const auto* samples = reinterpret_cast<const float*>(chunk.constData());
 
-        for (int i = 0; i < kChunkSamples; ++i) {
+        // Idle: the chunk is drained, the envelopes stay at 0, and the stats
+        // below report no lock.
+        for (int i = 0; m_filtersValid && i < kChunkSamples; ++i) {
             if (!current()) {
                 break;
             }

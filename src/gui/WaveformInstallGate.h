@@ -16,6 +16,21 @@ inline bool remoteAccessUsesNativePackage(RadioPlatform platform)
     return isKnownNonWfpPlatform(platform);
 }
 
+// Why a waveform row's Restart is unavailable on this radio; empty where it
+// works. FLEX-6000 firmware refuses the command outright (#6990):
+//   waveform restart <name>  ->  R|50000016|usage: ... Not supported by Flex6K series
+// so the button is dimmed there with the reason, not offered and then refused.
+// An Unknown platform keeps Restart: a radio that has not identified itself
+// yet must not lose an action it may well support.
+inline QString waveformRestartUnavailableReason(RadioPlatform platform)
+{
+    if (!isKnownNonWfpPlatform(platform)) {
+        return {};
+    }
+    return QCoreApplication::translate("WaveformInstallGate",
+        "The firmware of a FLEX-6000 series radio does not support restarting a waveform.");
+}
+
 // The radio a package may be installed to once its download or file picker
 // finishes: the one it was chosen for, in the same control session, or null.
 // The RadioModel object outlives a reconnect, so the pointer alone can't stop

@@ -794,6 +794,9 @@ private:
                                                   const QString& profileId,
                                                   bool selectSlice);
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
+    // The clear above, only while the slice holds anything it undoes; for a
+    // caller that may repeat it often (a TCI RX-antenna set).
+    void clearKiwiSdrVirtualAntennaIfHeld(int sliceId);
     void prepareKiwiSdrBandRecallForPan(const QString& panId);
     bool finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
     void finishPreparedKiwiSdrBandRecallForPan(const QString& panId);
