@@ -17,6 +17,8 @@ other aarch64 Linux systems.
 
 ![AetherSDR Screenshot](docs/assets/screenshot-3dstackedtrace.JPG)
 
+<p><i>Native. Open. Yours.</i></p>
+
 ---
 
 ## Highlights
