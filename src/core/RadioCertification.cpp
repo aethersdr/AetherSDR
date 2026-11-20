@@ -1777,6 +1777,7 @@ RadioCertification::MeterScaleReading RadioCertification::judgeMeterScale(
     // the last key's leftover, and a refused key measured nothing.
     MeterScaleReading r;
     if (!keyedOk) {
+        r.swrNote = QStringLiteral("SWR not measurable: the key was refused");
         r.problems << QStringLiteral(
             "INCONCLUSIVE — the key was refused, so neither meter was read while "
             "transmitting");
@@ -2641,6 +2642,19 @@ void RadioCertification::stageSideband(const Options& o)
                QStringLiteral("docs/HERMES.md 14.6"));
         return;
     }
+    if (keyRefused) {
+        record(QStringLiteral("sideband"),
+               QStringLiteral("Transmit/receive sideband AGREEMENT — not absolute correctness"),
+               QJsonObject{{QStringLiteral("transmitMode"), o.mode},
+                           {QStringLiteral("keyConfirmed"), false}},
+               QStringLiteral("A key was refused, so no leg was measured while "
+                              "transmitting."),
+               QStringLiteral("INCONCLUSIVE — the key was refused, so the captures are "
+                              "unkeyed receive audio; they say nothing about sideband "
+                              "agreement"),
+               QStringLiteral("docs/HERMES.md 14.6"));
+        return;
+    }
 
     // Take the rate from the capture (docs/HERMES.md 1.9): the "output" tap runs at
     // the audio device rate, not AudioEngine::DEFAULT_SAMPLE_RATE, and a wrong
@@ -2694,19 +2708,13 @@ void RadioCertification::stageSideband(const Options& o)
             {QStringLiteral("frames"), static_cast<int>(oppSb.size())}}},
         {QStringLiteral("matchedMinusOppositeDb"), db(sameTone) - db(oppTone)},
         {QStringLiteral("receiverSaturated"), saturated},
-        {QStringLiteral("keyConfirmed"), !keyRefused},
     };
 
     // Saturation check first: our own TX over a few inches of coax overloads the
     // receiver (measured +7.3 dBFS) and makes the sidebands read alike. An
     // overloaded measurement must decline to answer, not report inversion.
     QString concern;
-    if (keyRefused) {
-        concern = QStringLiteral(
-            "INCONCLUSIVE — the key was refused, so no leg was transmitted and "
-            "the captures are unkeyed receive audio; they say nothing about "
-            "sideband agreement");
-    } else if (sameSb.empty() || oppSb.empty()) {
+    if (sameSb.empty() || oppSb.empty()) {
         concern = QStringLiteral(
             "no receive audio captured while transmitting. The TX audio monitor "
             "may not be implemented for this backend, in which case this stage "
@@ -2865,6 +2873,18 @@ void RadioCertification::stageLifecycle(const Options&)
     }
 
     const bool keyed = keyViaOperatorPath(true);
+    if (!keyed) {
+        // m_keyInput may have started before the radio declined.
+        keyViaOperatorPath(false);
+        record(QStringLiteral("lifecycle"), title,
+               QJsonObject{{QStringLiteral("rxBytesBeforeKey"), bytes(before)},
+                           {QStringLiteral("keyConfirmed"), false}},
+               observation,
+               QStringLiteral("INCONCLUSIVE — the key was refused, so no window was "
+                              "taken during transmit and this says nothing about muting"),
+               reference);
+        return;
+    }
     spin(600);
     const bool duringArmed = armCapture(1200, output, &captureError);
     spin(duringArmed ? 1400 : 0);
@@ -2880,17 +2900,13 @@ void RadioCertification::stageLifecycle(const Options&)
         {QStringLiteral("rxBytesDuringTx"), duringArmed ? QJsonValue(bytes(during)) : QJsonValue()},
         {QStringLiteral("rxBytesAfterUnkey"),
          afterArmed ? QJsonValue(bytes(afterUnkey)) : QJsonValue()},
-        {QStringLiteral("keyConfirmed"), keyed},
+        {QStringLiteral("keyConfirmed"), true},
     };
 
     QString concern;
     if (!duringArmed || !afterArmed) {
         m[QStringLiteral("captureError")] = captureError;
         concern = captureUnavailableConcern(captureError);
-    } else if (!keyed) {
-        concern = QStringLiteral(
-            "INCONCLUSIVE — the key was refused, so the window labelled "
-            "\"during transmit\" was taken unkeyed and says nothing about muting");
     } else if (bytes(during) > 0) {
         concern = QStringLiteral(
             "receive audio was still flowing during transmit. The operator will "

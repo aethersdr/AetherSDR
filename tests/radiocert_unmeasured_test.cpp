@@ -1,12 +1,4 @@
-// radiocert must not report a reading it never took.
-//
-// #7083: every audio stage discarded startAutomationAudioCapture()'s refusal,
-// so without AETHER_AUTOMATION=1 rx-sidebands read -240 dB and blamed the
-// antenna, and lifecycle certified receive muting on three empty windows.
-//
-// #7084: meter-scale judged SWR without its stale flag, so a 255.99 left over
-// from an earlier key raised a fixed-point saturation concern on a radio whose
-// SWR meter was not fed at all.
+// radiocert must not report a reading it never took (#7083, #7084).
 //
 // Socket-free: the stages run against a RadioModel with a backend installed for
 // test and an AudioEngine that is constructed and never started. No
@@ -16,6 +8,7 @@
 #include "core/AudioEngine.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/PcmFrame.h"
 #include "models/MeterModel.h"
 #include "models/RadioModel.h"
 #include "TestSettingsProfile.h"
@@ -26,9 +19,12 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QString>
+#include <QTimer>
+#include <QVector>
 
 #include <cstdio>
 #include <memory>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -181,6 +177,9 @@ void testMeterScaleJudgement()
               "meter-scale: a refused key is INCONCLUSIVE and judges neither meter");
         check(r.swr.isNull() && r.micPeakDbfs.isNull(),
               "meter-scale: and publishes neither value");
+        check(r.swrNote.contains(QLatin1String("not measurable"))
+                  && r.swrNote.contains(QLatin1String("refused")),
+              "meter-scale: a refused key says the SWR was not measurable, as documented");
     }
 }
 
@@ -227,7 +226,9 @@ struct AudioStages {
     int keyRefusals = -1;
 };
 
-AudioStages runAudioStages()
+// `feedAudio`: receive audio flows through the device-free Line Out path, so
+// a capture fills; only lifecycle is run.
+AudioStages runAudioStages(bool feedAudio = false)
 {
     RadioModel radio;
     auto* backend = new IdleBackend();
@@ -241,12 +242,28 @@ AudioStages runAudioStages()
         std::exit(2);
     }
     AudioEngine audio;
+    PcmProducer producer;
+    QTimer feeder;
+    if (feedAudio) {
+        audio.setLineOutCaptureEnabled(true);
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        QObject::connect(&feeder, &QTimer::timeout, &audio, [&]() {
+            const std::optional<PcmFrame> frame =
+                producer.produce(QVector<float>(2 * 480, 0.1f));
+            if (frame)
+                audio.feedPcmFrame(*frame);
+        });
+        feeder.start(10);
+    }
     RadioCertification cert(&radio, &audio);
     RadioCertification::Options o;
     o.settleMs = 0;
-    RadioCertificationTestAccess::rxSidebands(cert, o);
-    RadioCertificationTestAccess::sideband(cert, o);
+    if (!feedAudio) {
+        RadioCertificationTestAccess::rxSidebands(cert, o);
+        RadioCertificationTestAccess::sideband(cert, o);
+    }
     RadioCertificationTestAccess::lifecycle(cert, o);
+    feeder.stop();
     AudioStages out;
     out.rxSidebands = stageNamed(cert, QStringLiteral("rx-sidebands"));
     out.sideband = stageNamed(cert, QStringLiteral("sideband"));
@@ -333,11 +350,39 @@ void testCaptureArmedButSilent()
           "silent: sideband reports keyConfirmed false");
     check(s.keyRefusals == 1,
           "silent: sideband stops keying after the first refused key");
+    const QJsonObject sbMeasured = s.sideband.value(QStringLiteral("measured")).toObject();
+    check(!sbMeasured.contains(QStringLiteral("demodMatched"))
+              && !sbMeasured.contains(QStringLiteral("demodOpposite"))
+              && !sbMeasured.contains(QStringLiteral("matchedMinusOppositeDb")),
+          "silent: a refused key publishes no leg levels, so no -240 dB figures");
 
     const QString life = concernOf(s.lifecycle);
     check(life.contains(QLatin1String("INCONCLUSIVE"))
               && life.contains(QLatin1String("no audio before")),
           "silent: lifecycle is INCONCLUSIVE when no audio flowed before the key");
+}
+
+void testLifecycleKeyRefusedWithAudio()
+{
+    // Audio flows before the key, so the stage reaches the key; with no
+    // TxController it is refused, and no window may be reported as "during TX".
+    qputenv("AETHER_AUTOMATION", "1");
+    const AudioStages s = runAudioStages(true);
+    qunsetenv("AETHER_AUTOMATION");
+
+    const QJsonObject m = s.lifecycle.value(QStringLiteral("measured")).toObject();
+    check(m.value(QStringLiteral("rxBytesBeforeKey")).toInt() > 0,
+          "fixture: receive audio flowed before the key");
+    check(s.keyRefusals == 1, "refused key: lifecycle tried to key once and was refused");
+    const QString life = concernOf(s.lifecycle);
+    check(life.contains(QLatin1String("INCONCLUSIVE"))
+              && life.contains(QLatin1String("no window was taken during transmit")),
+          "refused key: lifecycle is INCONCLUSIVE and takes no transmit window");
+    check(!m.contains(QStringLiteral("rxBytesDuringTx"))
+              && !m.contains(QStringLiteral("rxBytesAfterUnkey")),
+          "refused key: lifecycle publishes no unkeyed window as during or after transmit");
+    check(m.value(QStringLiteral("keyConfirmed")).toBool(true) == false,
+          "refused key: lifecycle reports keyConfirmed false");
 }
 
 }  // namespace
@@ -350,6 +395,7 @@ int main(int argc, char** argv)
 
     testCaptureRefused();
     testCaptureArmedButSilent();
+    testLifecycleKeyRefusedWithAudio();
     testMeterScaleJudgement();
     testMeterScaleStage();
 
