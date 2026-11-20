@@ -23,6 +23,8 @@ constexpr int kQuickTimeoutMs = 8'000;
 // radio's LAN address could send more; QNAM would buffer all of it before
 // it reaches the parser.
 constexpr qint64 kMaxReplyBytes = 256 * 1024;
+// Set on each reply by send(): whether its request carried the admin token.
+constexpr const char* kWithTokenProperty = "aetherWithToken";
 }  // namespace
 
 namespace tailnetshim {
@@ -233,6 +235,16 @@ bool shouldRereadWithToken(const TailnetShimStatus& st, bool haveToken, bool alr
     return st.announceDevicesHidden && haveToken && !alreadyReread;
 }
 
+AnnounceDevicesBlock announceDevicesBlock(const TailnetShimStatus& st, bool haveToken)
+{
+    if (!st.announceDevicesHidden || !haveToken) {
+        return AnnounceDevicesBlock::None;
+    }
+    // Read without the token (before the keychain answered): the read with
+    // it is on its way. Read with it: the shim refused it.
+    return st.readWithToken ? AnnounceDevicesBlock::TokenRefused : AnnounceDevicesBlock::Reading;
+}
+
 bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,
                          bool busy, bool lanReachable, bool alreadyTried)
 {
@@ -355,13 +367,11 @@ QNetworkReply* TailnetShimClient::send(const QString& method, const QString& pat
     if (!adminToken.isEmpty()) {
         req.setRawHeader("Authorization", "Bearer " + adminToken.toUtf8());
     }
-    if (method == QLatin1String("GET")) {
-        return m_nam.get(req);
-    }
-    if (method == QLatin1String("PUT")) {
-        return m_nam.put(req, body);
-    }
-    return m_nam.post(req, body);
+    QNetworkReply* reply = method == QLatin1String("GET") ? m_nam.get(req)
+        : method == QLatin1String("PUT")                  ? m_nam.put(req, body)
+                                                          : m_nam.post(req, body);
+    reply->setProperty(kWithTokenProperty, !adminToken.isEmpty());
+    return reply;
 }
 
 void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
@@ -415,11 +425,12 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
             emit loginReceived(*login);
             return;
         }
-        const auto st = tailnetshim::parseStatus(body);
+        auto st = tailnetshim::parseStatus(body);
         if (!st) {
             emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false);
             return;
         }
+        st->readWithToken = reply->property(kWithTokenProperty).toBool();
         emit statusReceived(*st);
     });
 }

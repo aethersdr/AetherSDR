@@ -176,6 +176,22 @@ int main(int argc, char** argv)
                      "only once, so a refused token can't loop");
         ok &= expect(!tailnetshim::shouldRereadWithToken(listed, true, false),
                      "not when the devices are listed");
+
+        // Until a status lists the devices, the card can't be saved from a
+        // computer with the token: it shows no ticks, so Save would erase
+        // them (review of #7346). Why depends on whether the hidden status
+        // answered a read that carried the token.
+        using Block = tailnetshim::AnnounceDevicesBlock;
+        ok &= expect(tailnetshim::announceDevicesBlock(hidden, true) == Block::Reading,
+                     "a status read before the token blocks the card while the token's read runs");
+        TailnetShimStatus refused = hidden;
+        refused.readWithToken = true;
+        ok &= expect(tailnetshim::announceDevicesBlock(refused, true) == Block::TokenRefused,
+                     "a status read with the token and still hidden says the token was refused");
+        ok &= expect(tailnetshim::announceDevicesBlock(listed, true) == Block::None,
+                     "listed devices leave the card editable");
+        ok &= expect(tailnetshim::announceDevicesBlock(hidden, false) == Block::None,
+                     "without a token the card's own reason applies");
     }
 
     // The window starts the sign-in unasked only once the keychain has

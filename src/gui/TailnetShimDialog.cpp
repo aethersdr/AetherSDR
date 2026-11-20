@@ -897,7 +897,12 @@ void TailnetShimDialog::updateControls()
     // The same inputs as sharing, and a shim that has the feature. Each
     // disabled control says why: a tooltip alone isn't announced.
     const bool announceSupported = known && m_status->announceSupported;
-    const bool announceOk = provisioned && haveToken && !waiting && announceSupported;
+    // A status that leaves the devices out shows no ticks, so Save would
+    // erase the saved ones: wait for the read with the token.
+    const auto devicesBlock = known ? tailnetshim::announceDevicesBlock(*m_status, haveToken)
+                                    : tailnetshim::AnnounceDevicesBlock::None;
+    const bool announceOk = provisioned && haveToken && !waiting && announceSupported
+        && devicesBlock == tailnetshim::AnnounceDevicesBlock::None;
     QString announceReason = tr("Remote access on the radio hasn't answered yet.");
     if (known && !announceSupported) {
         announceReason = tr("This radio's remote access (version %1) doesn't announce the radio "
@@ -907,6 +912,11 @@ void TailnetShimDialog::updateControls()
                             "change this.");
     } else if (waiting) {
         announceReason = tr("Not while the radio's sign-in is being completed.");
+    } else if (devicesBlock == tailnetshim::AnnounceDevicesBlock::Reading) {
+        announceReason = tr("Reading this radio's tailnet devices…");
+    } else if (devicesBlock == tailnetshim::AnnounceDevicesBlock::TokenRefused) {
+        announceReason = tr("The radio didn't accept this computer's access token, so its "
+                            "tailnet devices can't be shown or changed here.");
     }
     const QString tickReason = announceOk
         ? tr("Choose Only the devices ticked below to pick devices.") : announceReason;

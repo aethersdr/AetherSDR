@@ -82,6 +82,10 @@ struct TailnetShimStatus {
     // The status was read without the admin token, so the shim left out the
     // devices and the ticked IDs (#6984, condition 3).
     bool announceDevicesHidden{false};
+    // The request this status answers carried an admin token. Set by
+    // TailnetShimClient, not parsed: with announceDevicesHidden, the shim
+    // didn't accept that token.
+    bool readWithToken{false};
 };
 
 // A provisioning reply. authUrl is set for a sign-in by QR code (no auth
@@ -135,6 +139,12 @@ bool shouldSignInUnasked(const TailnetShimStatus& status, bool tokenLoaded, bool
 // the keychain answered, and the window holds the token now. Once until a
 // status lists them, so a token the shim refuses can't keep it reading.
 bool shouldRereadWithToken(const TailnetShimStatus& status, bool haveToken, bool alreadyReread);
+// Why a status that leaves the devices out blocks the announcement card on
+// a computer that holds the token. Saving from it would send an empty ticked
+// list and erase the saved one (review of #7346). None when the devices are
+// listed, or without a token, where the card's own reason covers it.
+enum class AnnounceDevicesBlock { None, Reading, TokenRefused };
+AnnounceDevicesBlock announceDevicesBlock(const TailnetShimStatus& status, bool haveToken);
 // The token the window keeps when the keychain answers: one it already
 // holds (issued by a sign-in meanwhile) wins over the read.
 QString tokenAfterKeychainRead(const QString& held, const QString& read);
