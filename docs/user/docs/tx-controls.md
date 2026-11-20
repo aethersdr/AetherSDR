@@ -359,6 +359,9 @@ transmission stopped after N s**. Nothing transmits again until every PTT input
 has been released, including a CAT or TCI program that keeps asking to
 transmit, and you key again. If the radio's own PTT input is still held, the
 notification says so. A CAT or TCI program sees the radio go back to receive.
+On a FlexRadio the time-out counts only while the radio reports TRANSMITTING:
+once it reports UNKEY_REQUESTED, the time-out treats it as idle, even if the
+radio still has RF up.
 
 With full break-in, where the radio returns to receive between elements, each
 element is its own key-down, so the time-out bounds a key held down, not a whole

@@ -4109,6 +4109,9 @@ void RadioModel::applyInterlockStatus(const InterlockStatusDelta& d)
 
             // Emit raw radio TX state regardless of ownership — used by DAX
             // passthrough when an external app triggers PTT (#752).
+            // Only TRANSMITTING counts: UNKEY_REQUESTED is idle, also for the
+            // host transmit time-out, which disarms there and can clear its
+            // latch there, even if the radio still has RF up.
             const bool radioTx = (state == "TRANSMITTING");
             m_radioTransmitting = radioTx;
             m_interlockState = state;
