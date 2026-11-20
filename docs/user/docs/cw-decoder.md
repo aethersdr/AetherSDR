@@ -44,6 +44,8 @@ When the selected slice is in **CW**, **CWU**, **CWL** or **CWR**, the decode pa
 
 Drag the grip on the panel's edge to resize it; the height is remembered. Right-click the text for font size and Clear.
 
+Double-click a callsign in the decoded text, or right-click it and choose **Use … as DX call**, to make it the DX call that fills `{CALL}` in CWX macros. This works on received text from any decoder and on your own sending. A word that does not have the shape of a callsign is not taken. See [The DX call placeholder](./cwx-panel.md#the-dx-call-placeholder).
+
 <img src="/img/screens/cw-decoder-panel.png" width="1340" alt="The bottom of the panadapter in CW mode. The lower part of the waterfall shows CW signals as dotted vertical lines. Below it, the decoder pane's control row reads CW, (selected slice), the detected tone and speed, a Sens slider with two lock buttons, Pitch 500 to 700 Hz and WPM 15 to 40 range sliders, and CPY ALL, CPY VIS, A-, A+, CLR and close buttons, above the decoded-text line." />
 
 *The CW decoder pane under the waterfall, with its sensitivity, pitch and speed controls.*
