@@ -51,6 +51,7 @@
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
 #include "TransmitInhibitPolicy.h"
+#include "HostCwTextEngine.h"
 #include "ModeVocabulary.h"
 #include <QCoreApplication>
 #include <QDebug>
@@ -2957,6 +2958,13 @@ RadioModel::RadioModel(QObject* parent)
     // No CWX text while TUNE is active (#5422): the radio keys it at TUNE power.
     m_cwxModel.setSendAvailability([this] { return m_transmitModel.admitsCwxSend(); });
     m_cwxModel.setTransmissionAdmission([this]() -> CwxModel::TransmissionPermit {
+        // Host-keyed text needs its sender's request (requestProducerCwx).
+        if (m_backend && !backendCapabilities().hasRadioSideCwKeyer
+            && backendCapabilities().hostCwKeyingControl) {
+            emitInterlockNotification(tr("This radio does not support the requested transmit operation."),
+                                      QStringLiteral("tx-operation-unsupported"));
+            return {};
+        }
         const std::shared_ptr<TxController> controller = localTxController();
         if (!controller) {
             return {};
@@ -2991,6 +2999,9 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
         const TxCoordinator::Intent intent = m_cwxCommandIntent;
         const TxCoordinator::Operation operation = m_cwxCommandOperation;
+        if (m_hostCwText) {
+            m_hostCwText->stopAll();   // operator clear: queued senders included
+        }
         (void)m_txCoordinator.requestIntentEnd(intent);
         m_cwxActive = false;
         m_cwxDrainArmed = false;
@@ -3181,6 +3192,7 @@ RadioModel::~RadioModel()
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
     m_independentTxGrants.reset(); // stop while every model member is still alive
+    m_hostCwText.reset();          // key up while every model member is still alive
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
@@ -5101,6 +5113,11 @@ bool RadioModel::hasHostCwTextKeyer() const
     return !caps.hasRadioSideCwKeyer && caps.hostCwKeyingControl.has_value() && caps.canTransmit;
 }
 
+bool RadioModel::hasCwTextKeyer() const
+{
+    return hasRadioSideCwKeyer() || hasHostCwTextKeyer();
+}
+
 RadioModel::HostCwTextRefusal RadioModel::hostCwTextRefusal() const
 {
     if (!hasHostCwTextKeyer()) {
@@ -6000,6 +6017,13 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     (void)sendCwInput(down, false, true, debugSource, debugTraceId, debugSourceMs, {});
 }
 
+void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
+{
+    const bool was = std::exchange(m_remoteCwKeyEdge, true);
+    sendCwKey(down, debugSource);
+    m_remoteCwKeyEdge = was;
+}
+
 void RadioModel::sendCwPaddle(bool dit, bool dah, const QString& debugSource,
                               quint64 debugTraceId, quint64 debugSourceMs)
 {
@@ -6081,6 +6105,10 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
 {
     if (QThread::currentThread() != thread()) {
         return false;
+    }
+    // A local operator's key takes over from host text, queued senders included.
+    if (down && !ptt && !m_hostCwTextEdge && !m_remoteCwKeyEdge && m_hostCwText && m_hostCwText->playing()) {
+        m_cwxModel.clearBuffer();
     }
     const TxActivity activity = ptt ? TxActivity::CwPtt : TxActivity::CwKey;
     // TUNE refuses a key-down, never the key-up that releases an old element.
@@ -7431,6 +7459,7 @@ void RadioModel::onConnected()
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();
     m_txSessionClosing = false;
+    createHostCwTextEngine();
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_connectAttemptActive = false;  // the attempt landed (#4912)
     m_reconnectTimer.stop();
@@ -11430,6 +11459,7 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     // Injected backends bypass onConnected(), but replacement must still drain
     // the old session before test callers can exercise the new one.
     m_txSessionClosing = false;
+    createHostCwTextEngine();
 }
 
 void RadioModel::rebuildBackendForFamily(const QString& family)

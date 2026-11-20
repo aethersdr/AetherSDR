@@ -2637,6 +2637,13 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.cwTextControl = std::nullopt;
     // requestCwControl(Kind::Carrier) shapes host-timed elements into IQ.
     c.hostCwKeyingControl = RadioCapabilities::HostCwKeyingControl{};
+    // The host engine's shape (HostCwTextEngine): per-segment WPM, a 511-character
+    // message, and no progress index, stored macros or live typing of its own.
+    c.cwTextMaxMessageChars = 511;
+    c.cwTextHasProgress = false;
+    c.cwTextHasStoredMacros = false;
+    c.cwTextSupportsLive = false;
+    c.cwTextSupportsSpeedModifiers = true;
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
