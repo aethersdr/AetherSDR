@@ -198,7 +198,7 @@ transmit-frequency check.
 AetherSDR's own noise-reduction methods run on your computer, one at a time:
 **NR2**, **RN2**, **NR4**, **MNR** (macOS only), **BNR** (NVIDIA RTX/GeForce
 GPU, Linux and Windows), **DFNR** and **NNR**. Choose a method and adjust it on
-the **AetherNR** tab of **Settings → AetherRX...**, which also opens from the
+the **AetherNR** tab of **Tools → AetherRX...**, which also opens from the
 **AetherRX** launcher on the VFO flag's DSP tab. The launcher lights while a
 method is running. Right-clicking a DSP button gives a quick parameter popup.
 

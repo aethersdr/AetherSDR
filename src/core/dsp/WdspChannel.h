@@ -123,6 +123,9 @@ public:
         bool operator==(const AnalogReceiveDsp&) const = default;
     };
 
+    // create_rxa()'s panel gain1 (RXA.c), used when rxPanelGain is unset.
+    static constexpr double kWdspDefaultRxPanelGain = 4.0;
+
     struct Config
     {
         Direction direction = Direction::Receive;
@@ -141,8 +144,14 @@ public:
         // and leaves every other mode untouched across live mode changes (#7222).
         bool fmLimiter = false;
         // RXA output panel gain, linear, applied after the AGC. Unset keeps
-        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942).
+        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942). In FM,
+        // fmRxPanelGain overrides this when set.
         std::optional<double> rxPanelGain;
+        // RXA panel gain while the mode is FM, applied at open() and on every
+        // live mode change; other modes then get rxPanelGain or WDSP's 4.0. The
+        // panel runs after the FM limiter, so 4.0 would lift its ~0.9 bound
+        // past full scale (#7252).
+        std::optional<double> fmRxPanelGain;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
@@ -621,6 +630,8 @@ private:
 
     static bool validateConfig(const Config& config, std::string* error) noexcept;
     static int wdspMode(Mode mode) noexcept;
+    // The panel gain fmRxPanelGain asks for in `mode`.
+    static double rxPanelGainFor(const Config& config, Mode mode) noexcept;
     // Pushes the NBP stage's copy of the shift. WDSP keeps the shift stage and
     // the notch database's idea of the shift as two unrelated values, so a
     // caller that sets one without the other gets notches that sit exactly one
