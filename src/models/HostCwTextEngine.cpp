@@ -64,10 +64,11 @@ bool HostCwTextEngine::play(const TxCoordinator::Request& sender, const QString&
         RadioModel* model = m_model.data();
         // Worker thread: derive() and the queued hops take no model state.
         m_keyer->setOnKeyDownChange(
-            [model, input = m_input, onRefused, element = TxCoordinator::Request{}](
+            [model, input = m_input, sender, onRefused, element = TxCoordinator::Request{}](
                 bool down, std::chrono::steady_clock::time_point when) mutable {
                 if (down) {
-                    element = input.derive();
+                    // A sender whose producer was invalidated keys nothing more.
+                    element = sender.valid() ? input.derive() : TxCoordinator::Request{};
                 }
                 model->queueProducerCwKeyEdge(element, down, QStringLiteral("host-cw-text"), 0, 0, when,
                                               /*hostTextGates=*/true,

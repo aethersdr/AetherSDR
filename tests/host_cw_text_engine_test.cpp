@@ -514,6 +514,24 @@ void testMidMessageRefusals()
         QStringLiteral("cw-text-tuning"));
 }
 
+// A sender whose producer dies mid-message, with no abortProducerCwx, keys nothing more.
+void testInvalidatedSenderStops()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    Sender b(f.radio);
+    f.radio.transmitModel().setCwSpeed(20);
+    check("invalidated: A plays, B waits", a.send(QStringLiteral("MMMMMMMMMM")) && b.send(QStringLiteral("E")));
+    check("invalidated: first down", pumpUntil([&] { return !f.edges.empty(); }, 2000));
+    pumpFor(20);
+    const size_t before = f.edges.size();
+    a.producer.invalidate();
+    pumpFor(2000);
+    check("invalidated: A's element keys up, then B's E, nothing more of A",
+          f.edges.size() == before + 3 && alternates(f.edges));
+    check("invalidated: A's Cwx intent ended", !f.radio.producerRequestHasWork(a.request));
+}
+
 // Q2: another sender's text waits behind the playing message, never interleaved.
 void testQueueBehindPlaying()
 {
@@ -741,6 +759,7 @@ int main(int argc, char** argv)
     testBreakInOffWithPttHeld();
     testLengthBounds();
     testMidMessageRefusals();
+    testInvalidatedSenderStops();
     testQueueBehindPlaying();
     testSameSenderStaysTogether();
     testScopedStop();
