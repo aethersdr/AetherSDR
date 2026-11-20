@@ -288,7 +288,7 @@ void TxApplet::buildUI()
         m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_tuneBtn->setFixedHeight(22);
         m_tuneBtn->setAccessibleName("Tune");
-        m_tuneBtn->setAccessibleDescription("Start or stop tune carrier");
+        m_tuneBtn->setAccessibleDescription(tr("Start or stop tune carrier"));
         // Right-click picks the carrier shape (Mono Tone / Two Tone) for
         // the next tune cycle.  Transient one-shot — no AppSettings write.
         m_tuneBtn->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -312,7 +312,7 @@ void TxApplet::buildUI()
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_atuBtn->setFixedHeight(22);
         m_atuBtn->setAccessibleName("ATU tune");
-        m_atuBtn->setAccessibleDescription("Start automatic antenna tuner");
+        m_atuBtn->setAccessibleDescription(tr("Start automatic antenna tuner"));
         // Right-click on the ATU button exposes the pre-tune sweep and
         // Clear ATU Memories actions. Matches SmartSDR Windows's hidden
         // right-click menu on this button. (#2624)

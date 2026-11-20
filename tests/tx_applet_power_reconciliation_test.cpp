@@ -1,6 +1,7 @@
 #include "ModelControlWireSpy.h"
 #include "TestSettingsProfile.h"
 #include "core/backends/TransmitDelta.h"
+#include "core/backends/TunerDelta.h"
 #include "core/TxKeyingMarker.h"
 #include "core/aprs/AprsMessenger.h"
 #include "gui/AtuPreTuneDialog.h"
@@ -11,6 +12,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "models/TunerModel.h"
 
 #include <QAction>
 #include <QApplication>
@@ -1056,7 +1058,8 @@ void testTuneAndAtuBaseTexts()
            tune->accessibleDescription());
     model.setTuneAvailable(false);
     report("unavailable TUNE announces its reason",
-           tune->toolTip().contains(QStringLiteral("unavailable"))
+           tune->toolTip()
+                   == QStringLiteral("Tune carrier is unavailable in this mode through the current radio backend")
                && tune->accessibleDescription() == tune->toolTip(),
            tune->accessibleDescription());
     model.setTuneAvailable(true);
@@ -1074,6 +1077,28 @@ void testTuneAndAtuBaseTexts()
            atu->accessibleDescription());
     model.setHasTuner(true);
     report("ATU returns to its base text",
+           atu->toolTip() == atuBase && atu->accessibleDescription() == atuBase,
+           atu->accessibleDescription());
+
+    TunerModel tuner;
+    tuner.setHandle(QStringLiteral("0x2000"));
+    applet.setTunerModel(&tuner);
+    {
+        TunerDelta d;
+        d.operate = true;
+        d.bypass = false;
+        tuner.applyChanges(d);
+    }
+    report("ATU with the TGXL in OPERATE announces its reason",
+           atu->toolTip() == QStringLiteral("Disabled — TGXL is in OPERATE mode")
+               && atu->accessibleDescription() == atu->toolTip(),
+           atu->accessibleDescription());
+    {
+        TunerDelta d;
+        d.operate = false;
+        tuner.applyChanges(d);
+    }
+    report("ATU returns to its base text after the TGXL leaves OPERATE",
            atu->toolTip() == atuBase && atu->accessibleDescription() == atuBase,
            atu->accessibleDescription());
 }
