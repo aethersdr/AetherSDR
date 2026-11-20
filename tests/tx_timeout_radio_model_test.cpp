@@ -46,6 +46,8 @@ public:
     static bool hostRequestedNow(const RadioModel& radio) { return radio.m_txRequested; }
     static void radioPttKeyed(RadioModel& radio, bool on) { radio.m_radioPttKeyed = on; }
     static void radioPttDown(RadioModel& radio, bool down) { radio.m_radioPttObservedDown = down; }
+    static void txOwnedByUs(RadioModel& radio, bool ours) { radio.m_txOwnedByUs = ours; }
+    static bool flex(const RadioModel& radio) { return radio.m_flexBackend != nullptr; }
     static bool admit(RadioModel& radio, const TxCoordinator::Request& request)
     {
         return radio.beginTxActivity(TxCoordinator::Activity::Mox, &request);
@@ -213,6 +215,39 @@ int main(int argc, char** argv)
                               "Transmit time-out: transmission stopped after 180 s.")),
                    rec.sources.join(QLatin1Char(',')).toStdString());
         }
+    }
+
+    // multiFLEX (ruling, ten9876): on a Flex, another station's over is not
+    // this client's to time. It never arms, never stops and never latches.
+    // Control: the same unowned over on a non-Flex backend still expires.
+    {
+        RadioModel radio;
+        qint64 now = 5'000'000;
+        Access::setClock(radio, &now);
+        Recorder rec(radio);
+        Access::txOwnedByUs(radio, false);
+        runOver(radio, now, 181'000);
+        Access::radioKeyed(radio, false);
+        report("flex_other_stations_over_is_not_timed",
+               Access::flex(radio) && !rec.keys.contains(QStringLiteral("tx-timeout-expired"))
+                   && !rec.keys.contains(QStringLiteral("tx-timeout-warning")) && rec.sources.isEmpty()
+                   && !radio.txTimeoutLatched(),
+               "flex=" + std::to_string(Access::flex(radio)) + " keys=" + rec.keys.join(QLatin1Char(',')).toStdString());
+
+        RadioModel hl2;
+        auto owned = std::make_unique<CwKeyingStub>();
+        int downs = 0;
+        bool keyDown = false;
+        owned->downs = &downs;
+        owned->keyDown = &keyDown;
+        hl2.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        qint64 hl2Now = 5'000'000;
+        Access::setClock(hl2, &hl2Now);
+        Recorder hl2Rec(hl2);
+        Access::txOwnedByUs(hl2, false);
+        runOver(hl2, hl2Now, 180'000);
+        report("non_flex_unowned_over_still_expires",
+               !Access::flex(hl2) && hl2Rec.keys.contains(QStringLiteral("tx-timeout-expired")));
     }
 
     // Repeated keyed status (Flex re-sends state=TRANSMITTING within an over)

@@ -126,6 +126,11 @@ void RadioModel::publishTxTimeoutLatch(bool before)
 
 void RadioModel::onTxTimeoutTransmitting(bool transmitting)
 {
+    // multiFLEX: the host time-out covers only this client's own transmit
+    // (ruling, ten9876); another station's over is not ours to time or stop.
+    if (transmitting && m_flexBackend && !m_txOwnedByUs) {
+        return;
+    }
     const bool before = m_txTimeout.latched();
     if (transmitting) {
         if (!m_txTimeout.transmitting()) {

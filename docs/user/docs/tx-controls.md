@@ -350,7 +350,9 @@ time-out follows the radio's and is never shorter than it. Once it has stored
 a value (any edit here, or leaving one of its boxes), the stored values apply,
 even if the radio's Timeout is raised later. On a radio without a timeout of
 its own, **Timeout (sec):** stays dimmed and this group is the time-out that
-applies.
+applies. On a FlexRadio shared by several stations (multiFLEX), only this
+station's own transmissions are timed; another station's over is left to the
+radio.
 
 When it stops a transmission, a notification says **Transmit time-out:
 transmission stopped after N s**. Nothing transmits again until every PTT input
