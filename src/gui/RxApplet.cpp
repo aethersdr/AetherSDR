@@ -1057,7 +1057,7 @@ void RxApplet::buildUI()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_sqlSlider,
             primarySliderStyleTemplate() + QStringLiteral(
                 "QSlider[squelchGate=\"closed\"]::sub-page:horizontal"
-                " { background: {{color.slider.foreground.disabled}}; }"));
+                " { background: {{color.slider.foreground.gateClosed}}; }"));
         row->addWidget(m_sqlSlider, 1);
 
         applySqlModeVisuals();

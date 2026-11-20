@@ -164,6 +164,7 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.slider.background.disabled", QString("#1a2330"));
     m_tokens.insert("color.slider.foreground", QString("#00b4d8"));
     m_tokens.insert("color.slider.foreground.disabled", QString("#3a4a5a"));
+    m_tokens.insert("color.slider.foreground.gateClosed", QString("#3a4a5a"));
     m_tokens.insert("color.slider.handle", QString("#c8d8e8"));
     m_tokens.insert("color.slider.handle.disabled", QString("#506070"));
     m_tokens.insert("color.spe.lcd.background", QString("#102010"));
