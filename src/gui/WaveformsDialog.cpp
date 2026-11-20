@@ -1507,6 +1507,14 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     m_gpsTools = new AetherGpsTools(m_radioModel, this);
     connect(m_gpsTools, &AetherGpsTools::changed,
             this, &WaveformsDialog::updateInstallButtonState);
+    // The AetherGPS row's Remove follows the shared wait.
+    connect(m_gpsTools, &AetherGpsTools::changed, this, [this] {
+        const bool awaiting = m_gpsTools->awaitingRadio();
+        if (awaiting != m_gpsAwaitingShown) {
+            m_gpsAwaitingShown = awaiting;
+            refreshWaveformList();
+        }
+    });
     connect(WaveformInstallActivity::instance(), &WaveformInstallActivity::changed,
             this, &WaveformsDialog::updateInstallButtonState);
     connect(&wfModel, &FlexWaveformModel::commandFinished,
@@ -1642,12 +1650,12 @@ void WaveformsDialog::updateInstallButtonState()
         // waveform. Busy also covers an AetherGPS change from either window
         // that the radio has yet to list.
         const bool gpsBusy = busy || (m_gpsTools && m_gpsTools->busy());
+        // m_gpsTools exists whenever there is a model.
         const bool blocked = !m_gpsTools || m_gpsTools->blocker() != AetherGpsBlocker::None;
         const bool installed = m_gpsTools && m_gpsTools->installed();
         m_installAetherGpsAction->setEnabled(!gpsBusy && !blocked && !installed);
         const QString gpsTip = busy ? tr("A waveform install is already in progress.")
             : gpsBusy               ? tr("Waiting for the radio to finish the last AetherGPS change.")
-            : !m_gpsTools           ? tr("Connect to a radio before installing AetherGPS.")
             : blocked               ? m_gpsTools->blockerReason()
             : installed             ? tr("AetherGPS is already installed on this radio.")
                                     : tr("Install AetherGPS (version %1), which shares the radio's GPS "
@@ -2761,7 +2769,9 @@ void WaveformsDialog::refreshWaveformList()
         });
 
         restartBtn->setEnabled(!rowPending);
-        removeBtn->setEnabled(!rowPending);
+        // An AetherGPS change from the AetherGPS window holds its row too.
+        const bool gpsChanging = isAetherGpsWaveform(name) && m_gpsTools && m_gpsTools->awaitingRadio();
+        removeBtn->setEnabled(!rowPending && !gpsChanging);
         const int actionButtonWidth = std::max({
             installedWaveformActionButtonWidth(restartBtn, removeBtn),
             styledWaveformActionButtonWidth(restartBtn),

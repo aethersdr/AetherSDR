@@ -115,6 +115,7 @@ private:
     QAction*           m_installAetherGpsAction{nullptr};
     // AetherGPS's install state, shared with the AetherGPS window.
     AetherGpsTools*    m_gpsTools{nullptr};
+    bool               m_gpsAwaitingShown{false};   // as the AetherGPS row last drew it
     struct RowNotice {
         QString text;
         QString tone;      // "pending", "ok" or "error"

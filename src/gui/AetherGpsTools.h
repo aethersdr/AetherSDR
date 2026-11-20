@@ -78,6 +78,9 @@ public:
     // stopWaiting() when the radio refuses the change.
     void awaitListing(bool installed);
     void stopWaiting();
+    // An AetherGPS install or removal from either window that the radio
+    // hasn't finished: busy() without other windows' uploads.
+    bool awaitingRadio() const;
 
     // Writes the bundled package for a radio that takes the container
     // (`docker`) or the legacy waveform to the cache, for an installer.

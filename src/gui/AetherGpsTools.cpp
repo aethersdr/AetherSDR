@@ -227,8 +227,12 @@ void AetherGpsTools::remove()
         }
         disconnect(*conn);
         m_removing = false;
-        if (ok && m_settle) {
-            m_settle->start(false);   // until the radio drops it
+        if (m_settle) {
+            if (ok) {
+                m_settle->start(false);   // until the radio drops it
+            } else {
+                m_settle->cancel();
+            }
         }
         emit changed();
         if (!ok) {
@@ -236,6 +240,10 @@ void AetherGpsTools::remove()
                             .arg(message.isEmpty() ? tr("it refused") : message));
         }
     });
+    // Held from the send, so the Waveforms window's row can't send another.
+    if (m_settle) {
+        m_settle->start(false);
+    }
     if (container) {
         waveforms.requestRemoveContainer(name);
     } else {
@@ -249,6 +257,11 @@ void AetherGpsTools::awaitListing(bool installed)
     if (m_settle) {
         m_settle->start(installed);
     }
+}
+
+bool AetherGpsTools::awaitingRadio() const
+{
+    return m_settle && m_settle->active();
 }
 
 void AetherGpsTools::stopWaiting()
