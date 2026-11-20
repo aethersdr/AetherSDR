@@ -51,6 +51,7 @@
 #include <QAction>
 #include <QMouseEvent>
 #include <QMenuBar>
+#include <QOperatingSystemVersion>
 #include <QPoint>
 #include <QPointer>
 #include <QRect>
@@ -142,6 +143,13 @@ int main(int argc, char** argv)
               "Windows frameless paints through the resize band");
         check(!WindowChrome::claimsWholeWindowAsClient(winOff),
               "turning frameless off leaves native client sizing to Windows");
+        using OSV = QOperatingSystemVersion;
+        check(!WindowChrome::reservesClientInsets(winOn, OSV(OSV::Windows, 10, 0, 19045)),
+              "Windows 10 frameless reserves no client insets");
+        check(WindowChrome::reservesClientInsets(winOn, OSV(OSV::Windows, 10, 0, 22000)),
+              "Windows 11's first build reserves the client insets");
+        check(!WindowChrome::reservesClientInsets(winOff, OSV(OSV::Windows, 10, 0, 22000)),
+              "turning frameless off reserves no client insets on Windows 11");
         const Qt::WindowFlags macOn = WindowChrome::chromeFlags(base, true, QStringLiteral("cocoa"));
         check(WindowChrome::usesNativeCaption(macOn, QStringLiteral("cocoa")),
               "macOS frameless keeps the native traffic lights");

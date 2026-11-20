@@ -3838,7 +3838,7 @@ void MainWindow::applyWindowsCaptionStyles()
     }
     const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
     const LONG_PTR desired = style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
-    // On Windows 10 this frame change is also what routes WM_NCCALCSIZE
+    // On Windows this frame change is also what routes WM_NCCALCSIZE
     // through nativeEvent() before setFramelessWindow() and the startup
     // re-apply measure the client rect; Qt answered it at creation.
     if (style != desired) {
@@ -3914,8 +3914,8 @@ void MainWindow::restoreNativeClientRect(const QString& role)
 void MainWindow::applyNonClientBandInsets()
 {
     QMargins insets;
-    if (windowFlags().testFlag(Qt::ExpandedClientAreaHint) && !isFullScreen()
-        && QOperatingSystemVersion::current() >= QOperatingSystemVersion::Windows11) {
+    if (!isFullScreen()
+        && WindowChrome::reservesClientInsets(windowFlags(), QOperatingSystemVersion::current())) {
         const HWND hwnd = reinterpret_cast<HWND>(winId());
         if (isMaximized() && IsZoomed(hwnd)) {
             insets = WindowChrome::maximizedClientInsets(size(), nativeClientRect().size(),
@@ -3936,9 +3936,9 @@ void MainWindow::applyNonClientBandInsets()
     }
     // QMainWindow's layout honours the window's own margins, so this insets
     // the central widget — the title bar included, since it sits in the
-    // central widget's vbox — and the status bar. Only the top is left alone,
-    // for the caption's own row. The title bar's side bands are lost the same
-    // way, and nothing doubles: TitleBar::updateChromeLayout() adds
+    // central widget's vbox — and the status bar. The top is always left
+    // alone, for the caption's own row; maximized, only the right and bottom
+    // are inset. Nothing doubles: TitleBar::updateChromeLayout() adds
     // contentInsets(), which is safeAreaMargins() and 0 on those edges here.
     setContentsMargins(insets);
     // The window's size has not changed, so no resizeEvent re-places the grip,
@@ -4017,9 +4017,9 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
         const QRect rect(window.left, window.top,
                          window.right - window.left, window.bottom - window.top);
-        // The client area's top-left in screen pixels. GetWindowRect includes
-        // the invisible DWM resize border and Qt's geometry does not, so the
-        // caption gate anchors here instead — see logicalScreenPoint().
+        // The client area's top-left in screen pixels. Maximized, the client
+        // is inset from GetWindowRect and Qt's geometry follows the client, so
+        // the caption gate anchors here instead — see logicalScreenPoint().
         POINT clientOrigin{0, 0};
         ClientToScreen(msg->hwnd, &clientOrigin);
         // The bar's height is in logical pixels and WM_NCHITTEST is physical.
@@ -4208,7 +4208,8 @@ void MainWindow::positionSizeGrip()
     // overlaying the status bar.  Direct child of MainWindow so the
     // grip's native dotted-texture paint isn't suppressed by the
     // status-bar stylesheet.  Inside the contents margins, which hold the
-    // Windows 11 resize band (applyNonClientBandInsets()) and are 0
+    // Windows 11 resize band while restored and Qt's excess over the native
+    // client while maximized (applyNonClientBandInsets()), and are 0
     // everywhere else.
     if (m_sizeGrip) {
         m_sizeGrip->move(WindowChrome::sizeGripOrigin(size(), m_sizeGrip->width(),

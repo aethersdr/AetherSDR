@@ -101,7 +101,7 @@ See [Profile Management](./profile-management.md).
 | **UI Scale ▸** | 75 % to 200 %, plus Zoom In (Ctrl+=), Zoom Out (Ctrl+-) and Reset (100 %) (Ctrl+0). Takes effect after a restart. |
 | **Reset Applet Order** | Restores the default applet order. |
 | **Minimal Mode** | Ctrl+Shift+M. Collapses the window to a narrow applet strip. See [Keyboard Shortcuts](./keyboard-shortcuts.md). |
-| **Frameless Window** | Ctrl+Shift+F. On by default. On Windows, the frameless main window uses the app theme up to its border. When maximized, the right-hand applet rail stays inside the Windows work area. Turn it off to return the main window to the operating system's own title bar and borders. |
+| **Frameless Window** | Ctrl+Shift+F. On by default. On Windows, the frameless main window uses the app theme up to its border. On Windows 11, when maximized, the right-hand applet rail stays inside the Windows work area. Turn it off to return the main window to the operating system's own title bar and borders. |
 | **Propagation Conditions** | Shows the propagation forecast on the panadapters. Off by default. |
 | **Smart Spot Filtering** | Dims SSB spots with no detected voice signal nearby. Off by default; needs SpotHub Signal History. |
 | **Show live CW contacts** | Shows station information for callsigns the CW decoder hears in a separate **Live CW contacts** window, so it never covers decoded text. Off by default; closing the window turns it off. See [Callsign Lookup](./callsign-lookup.md). |

@@ -3,6 +3,7 @@
 #include <QGuiApplication>
 #include <QJsonObject>
 #include <QMargins>
+#include <QOperatingSystemVersion>
 #include <QPoint>
 #include <QRect>
 #include <QSize>
@@ -82,6 +83,14 @@ inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags)
     return flags.testFlag(Qt::ExpandedClientAreaHint);
 }
 
+// Windows 11 insets the frameless contents, by the resize band while restored
+// and by Qt's excess over the native client while maximized, so edge controls
+// stay clear of the WM_NCHITTEST resize zone and the screen edge (#7077).
+inline bool reservesClientInsets(Qt::WindowFlags flags, const QOperatingSystemVersion& os)
+{
+    return flags.testFlag(Qt::ExpandedClientAreaHint) && os >= QOperatingSystemVersion::Windows11;
+}
+
 // Windows expanded client area: the part of the window a point is on, for the
 // main window's own WM_NCHITTEST. Qt 6.12's answer for these flags turns the
 // live mouse-button state into synthetic presses, doubling real clicks (#6272).
@@ -102,9 +111,10 @@ enum class FrameHit { Client, Caption, Left, Right, Top, Bottom, TopLeft, TopRig
 // while Qt's widget geometry — and so TitleBar::isSystemMoveAreaAt() — is in
 // logical ones.
 //
-// Anchor on the client origin: GetWindowRect includes Windows 11's
-// invisible DWM resize border, while Qt's widget geometry describes the
-// client area. Pairing the two client origins preserves control alignment.
+// Anchor on the client origin, not GetWindowRect: the maximized
+// WM_NCCALCSIZE answer insets the client from the window rect, while Qt's
+// widget geometry describes the client area. Pairing the two client
+// origins preserves control alignment.
 //
 // `physical` is the WM_NCHITTEST point; `clientOriginPhysical` is the client
 // area's top-left in screen pixels (GetClientRect + ClientToScreen);
@@ -242,6 +252,8 @@ inline QRect savedNativeClientRect(const QJsonObject& doc, const QString& role, 
 // Windows 11's native resize band is in device pixels. Round up when
 // reserving logical space for controls so a fractional scale cannot clip
 // the last pixel (#7077). The caption occupies the top edge.
+// `bandDevicePx` is SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI;
+// `dpr` is the window's devicePixelRatioF().
 inline QMargins nonClientBandInsets(int bandDevicePx, qreal dpr)
 {
     if (bandDevicePx <= 0 || dpr <= 0.0) {
