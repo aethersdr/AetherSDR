@@ -6094,6 +6094,14 @@ target_include_directories(kpa500_protocol_test PRIVATE src)
 target_link_libraries(kpa500_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kpa500_protocol_test COMMAND kpa500_protocol_test)
 
+# Socket-free priority mapping for the KPA500 status indicator (RFC #7092).
+add_executable(kpa500_state_test
+    tests/kpa500_state_test.cpp
+)
+target_include_directories(kpa500_state_test PRIVATE src)
+target_link_libraries(kpa500_state_test PRIVATE Qt6::Core)
+add_test(NAME kpa500_state_test COMMAND kpa500_state_test)
+
 # Socket-free injected KPA500 transport: liveness and stale-snapshot recovery.
 add_executable(kpa500_connection_test
     tests/kpa500_connection_test.cpp
