@@ -89,6 +89,9 @@ DeepCwEngine::DeepCwEngine()
 #endif
 {
 #ifdef HAVE_ONNX
+    // Microsoft's Windows build hands usage events to Windows telemetry; opt out
+    // (a process-wide flag) before any session loads a model.
+    m_env.DisableTelemetryEvents();
     // CW audio is slow and windows are short; one intra-op thread keeps it off
     // the hot path and deterministic (mirrors SignalClassifier).
     m_sessionOpts.SetIntraOpNumThreads(1);

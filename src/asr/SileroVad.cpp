@@ -32,6 +32,9 @@ bool SileroVad::load(const std::string& modelPath)
 #ifdef HAVE_ONNX
     try {
         m_env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "AetherSDR-VAD");
+        // Microsoft's Windows build hands usage events to Windows telemetry; opt out
+        // (a process-wide flag) before any session loads a model.
+        m_env->DisableTelemetryEvents();
         m_session = std::make_unique<Ort::Session>(
             *m_env, asr_detail::toOrtPath(modelPath).c_str(), m_opts);
         reset();

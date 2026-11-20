@@ -12,6 +12,9 @@ SignalClassifier::SignalClassifier()
 #endif
 {
 #ifdef HAVE_ONNX
+    // Microsoft's Windows build hands usage events to Windows telemetry; opt out
+    // (a process-wide flag) before any session loads a model.
+    m_env.DisableTelemetryEvents();
     m_sessionOpts.SetIntraOpNumThreads(1);
     m_sessionOpts.SetGraphOptimizationLevel(ORT_ENABLE_BASIC);
 #endif
