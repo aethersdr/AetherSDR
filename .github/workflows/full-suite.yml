@@ -1,22 +1,10 @@
 name: Full Suite
 
-# The ONLY gating run of the whole test suite (#5032).
-#
-# ci.yml runs no Linux tests on a pull request — its gate is frozen to a
-# handful of platform-only tests (.github/ci-test-gate.txt). Before this
-# workflow the full suite ran in exactly one place, sanitizers.yml, weekly and
-# non-gating, and a test that shipped red in v26.8.3 (#5031) went through both
-# holes at once: no PR job selected it, and the weekly run it would have failed
-# was four days away. This closes the window from "up to a week" to "minutes
-# after the merge": every push to main builds RelWithDebInfo — the same
-# configuration ci.yml's build job uses, ccache-warm — and runs `ctest` with
-# no -R filter. A red run here means main is red, full stop.
-#
-# Two things it is NOT. Not a PR gate — it runs post-merge, so it catches
-# rather than prevents (a PR-time full run is #5032's option 2 and wants
-# measuring on a runner first). And not the sanitizer lane: same tests, no
-# instrumentation, so it fails on what a test asserts rather than on what a
-# sanitizer sees; sanitizers.yml keeps that job, weekly.
+# The sole Linux build shared by CI and the full test suite on each main push.
+# The PR Linux gate in ci.yml builds production targets; this job builds the
+# entire default graph, runs unfiltered CTest, and publishes the shared Linux
+# compiler/dependency caches. Keep its configuration aligned with that PR gate.
+# Sanitizers remain a separate scheduled lane.
 
 on:
   push:
@@ -55,6 +43,12 @@ jobs:
     timeout-minutes: 90
     env:
       CCACHE_DIR: /ccache
+      # Keep the cap sized for the full test graph (#7443). The active cache
+      # budget after pruning to one per prefix is about 6.1 GiB: Linux 1.86,
+      # Windows 1.02 per MSVC version, macOS 0.44, canary 0.94, and deps 1.8.
+      # The retired Linux build prefix still occupies space until it expires,
+      # and overlapping saves can exceed the 10 GiB limit before cleanup.
+      # Use the cache-cleanup usage report and ccache hit rates to judge the cap.
       CCACHE_MAXSIZE: 2000M
 
     steps:
@@ -72,12 +66,8 @@ jobs:
       - name: Ensure RTL-SDR build dependency is present
         run: dpkg -s librtlsdr-dev >/dev/null 2>&1 || (apt-get update && apt-get install -y librtlsdr-dev)
 
-      # This job is the only one that compiles the test tree on main (ci.yml's
-      # build job stops at aether_non_test_targets), so it keeps its own cache
-      # of those objects and saves it below. The ccache-linux-build- fallback
-      # covers a first run or an evicted entry: same flags, so its non-test
-      # objects hit. ccache is content-addressed, so a stale entry is a miss
-      # rather than a wrong object.
+      # Use the existing Full Suite cache first. The legacy production-only
+      # cache still supplies matching objects if the Full Suite cache is absent.
       - name: Restore ccache objects
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -87,8 +77,8 @@ jobs:
             ccache-linux-full-
             ccache-linux-build-
 
-      - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore DeepFilterNet3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -98,11 +88,16 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
+      - name: Zero ccache stats
+        continue-on-error: true
+        run: ccache --zero-stats
+
       - name: Configure
         id: configure
         run: |
-          # -g1 to match ci.yml's build job, whose ccache this falls back to;
-          # the reason is there.
+          # Shared core avoids copying it into each test executable. Line-table
+          # debug info preserves file:line backtraces without full debug size.
+          # ci.yml's Linux PR configuration matches this cache-producing build.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             -DAETHER_SHARED_CORE=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
@@ -111,6 +106,14 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {
             cat configure.log
+            exit 1
+          }
+          cat configure.log
+          # An ON request can silently fall back when Qt private headers are
+          # missing. Keep the former main CI guard in the sole Linux builder.
+          grep -q "GPU spectrum rendering enabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
             exit 1
           }
 
@@ -143,17 +146,9 @@ jobs:
           echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
 
       - name: ccache stats
+        if: always()
+        continue-on-error: true
         run: ccache --show-stats
-
-      # Saved once the build is green, before the tests run, so a red test
-      # still leaves a warm cache. Key on run_id (entries are immutable);
-      # cache-cleanup.yml prunes superseded ccache-linux-full- entries.
-      - name: Save ccache objects
-        if: github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: /ccache
-          key: ccache-linux-full-${{ github.run_id }}
 
       # Unfiltered, serial, and the exit code is the verdict. Serial because
       # several tests bind fixed ports or Unix sockets (the reason ci.yml's
@@ -161,7 +156,6 @@ jobs:
       # is a separate change with its own port audit.
       - name: Run the full test suite
         id: ctest
-        continue-on-error: true
         env:
           QT_QPA_PLATFORM: offscreen
         shell: bash
@@ -169,20 +163,19 @@ jobs:
           set -o pipefail
           ec=0
           ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
+          # Defer CTest's verdict until after reporting and cache publication.
+          # Failure to write the verdict itself must still fail this step.
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
         id: extract
-        if: steps.ctest.outputs.exit != '0'
+        if: ${{ !cancelled() && (steps.ctest.outcome == 'failure' || steps.ctest.outputs.exit != '0') }}
         shell: bash
         run: |
-          # NOTHING in this step may abort it. It runs under Actions' default
-          # `bash -eo pipefail`, and the artifact, sticky-issue and explicit-
-          # verdict steps below all carry an implicit success() on their `if:`
-          # — so a reporter that dies takes the whole report with it and the
-          # job goes red with no issue and no log: a crash wearing the costume
-          # of a report (#5412 second-opinion review). Two real triggers, both
-          # reproduced under that exact shell:
+          # Report both named failures and runs without a CTest summary.
+          # Disable errexit so an empty grep match or a deliberately truncated
+          # report cannot prevent the fingerprint from reaching the issue step.
+          # Two cases to preserve:
           #   - a zero-test run ("No tests were found!!!", which the
           #     --no-tests=error added earlier in this PR turns INTO a failure)
           #     has no "The following tests FAILED:" block, so grep exits 1 and
@@ -290,7 +283,7 @@ jobs:
       - name: Upload test log
         # !cancelled() rather than a bare condition: without it the implicit
         # success() means one bad step upstream silently drops the report.
-        if: ${{ !cancelled() && (steps.ctest.outputs.exit != '0' || steps.nobuild.outcome == 'success') }}
+        if: ${{ !cancelled() && (steps.ctest.outcome == 'failure' || steps.ctest.outputs.exit != '0' || steps.nobuild.outcome == 'success') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: full-suite-${{ github.run_id }}
@@ -304,7 +297,7 @@ jobs:
       # gating full-suite signal; the weekly append never touches labels, so a
       # maintainer's re-triage sticks.
       - name: Open or update tracking issue
-        if: ${{ !cancelled() && (steps.ctest.outputs.exit != '0' || steps.nobuild.outcome == 'success') }}
+        if: ${{ !cancelled() && (steps.ctest.outcome == 'failure' || steps.ctest.outputs.exit != '0' || steps.nobuild.outcome == 'success') }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           FAILED:  ${{ steps.extract.outputs.failed || steps.nobuild.outputs.failed }}
@@ -496,6 +489,30 @@ jobs:
               });
               core.notice(`Opened #${created.data.number}`);
             }
+
+      # Publish at the end so workflow_run cleanup follows the save promptly.
+      # A test failure must not freeze a fully built compiler cache. Preserve
+      # the former CI policy: only a successful complete main-push build writes;
+      # PRs, manual runs, failed builds, and cancellations remain read-only.
+      - name: Save DeepFilterNet3
+        if: >-
+          !cancelled() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' && steps.build.outcome == 'success' &&
+          steps.cache-deepfilter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/deepfilter
+          key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
+
+      - name: Save ccache objects
+        if: >-
+          !cancelled() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          # Entries are immutable; the prefix restore selects the newest save.
+          key: ccache-linux-full-${{ github.run_id }}
 
       - name: Fail the job if any test failed
         if: ${{ !cancelled() && steps.ctest.outputs.exit != '0' }}
