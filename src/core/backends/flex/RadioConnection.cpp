@@ -714,11 +714,21 @@ void RadioConnection::processLine(const QString& line)
             m_lastPingSeq = 0;
         }
     }
-    if (!isGps && !isPingReply) {
+    const ParsedMessage msg = CommandParser::parseLine(line);
+    // A pan status carrying only WNB keys repeats every few seconds while
+    // WNB is on; keep it out of the RX log. It still reaches status ingress.
+    const bool isWnbOnly = msg.type == MessageType::Status
+        && msg.object.startsWith(QLatin1String("display pan 0x"))
+        && msg.object.count(u' ') == 2
+        && !msg.kvs.isEmpty()
+        && std::all_of(msg.kvs.keyBegin(), msg.kvs.keyEnd(), [](const QString& key) {
+            return key == QLatin1String("wnb") || key == QLatin1String("wnb_level")
+                || key == QLatin1String("wnb_updating");
+        });
+    if (!isGps && !isPingReply && !isWnbOnly) {
         qCDebug(lcConnection) << "RX:" << line;
     }
 
-    ParsedMessage msg = CommandParser::parseLine(line);
     emit lineReceived(msg, m_lineEpoch.load());
 
     switch (msg.type) {

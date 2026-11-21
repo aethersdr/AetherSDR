@@ -12,7 +12,7 @@ computer, independent of the radio's own DSP, and comes as two windows:
   Open it from **Tools → AetherTX...**
 - **AetherRX** — the receive chain: noise reduction, gate, EQ, compressor,
   tube, AetherVoice and an output meter. Open it from
-  **Settings → AetherRX...**
+  **Tools → AetherRX...**
 
 The two chains keep completely separate settings, so you can shape your
 microphone for transmit and the band for listening without one disturbing the

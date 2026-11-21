@@ -228,9 +228,9 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
     std::vector<QHostAddress> localAddresses;
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
         const auto flags = iface.flags();
-        if (!flags.testFlag(QNetworkInterface::IsUp)
-            || !flags.testFlag(QNetworkInterface::IsRunning)
-            || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+        if (!discoveryWalksInterface(flags.testFlag(QNetworkInterface::IsUp)
+                                         && flags.testFlag(QNetworkInterface::IsRunning),
+                                     flags.testFlag(QNetworkInterface::IsLoopBack), broadcast)) {
             continue;
         }
         for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
@@ -282,6 +282,19 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
             break;
     }
     return found;
+}
+
+bool MetisClient::discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                          const QHostAddress& target)
+{
+    return upAndRunning && isLoopbackInterface == target.isLoopback();
+}
+
+QHostAddress MetisClient::sessionBindAddress(const QHostAddress& host, const QHostAddress& requested)
+{
+    if (host.protocol() == QAbstractSocket::IPv4Protocol && host.isLoopback())
+        return QHostAddress(QHostAddress::LocalHost);
+    return requested.isNull() ? QHostAddress(QHostAddress::AnyIPv4) : requested;
 }
 
 int MetisClient::effectiveNumRx(const Params& p)
@@ -395,8 +408,7 @@ bool MetisClient::start(const Params& params)
         return m_startTransportForTest(params);
 
     m_socket = new QUdpSocket(this);
-    const QHostAddress bindAddress = params.localAddress.isNull()
-        ? QHostAddress::AnyIPv4 : params.localAddress;
+    const QHostAddress bindAddress = sessionBindAddress(m_host, params.localAddress);
     if (!m_socket->bind(bindAddress, 0)) {
         m_socket->deleteLater();
         m_socket = nullptr;

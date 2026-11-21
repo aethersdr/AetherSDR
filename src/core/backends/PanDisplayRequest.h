@@ -40,7 +40,12 @@ enum class PanZoomPlacement {
 struct PanDisplayControl {
     QSet<PanDisplayField> fields;
     QSet<PanGeometryComponent> geometry;
+    // Fields where writing the value already in force changes nothing on the
+    // radio, so a caller may skip it. Empty by default: on an HL2 a same-value
+    // RF gain write still ends a session pin and records band memory (#5402).
+    QSet<PanDisplayField> noopRepeats;
     bool supports(PanDisplayField field) const { return fields.contains(field); }
+    bool repeatIsNoop(PanDisplayField field) const { return noopRepeats.contains(field); }
     bool declaresSpan() const { return geometry.contains(PanGeometryComponent::Bandwidth); }
 };
 

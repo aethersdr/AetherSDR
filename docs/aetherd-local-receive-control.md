@@ -175,14 +175,17 @@ HL2 RIT retunes the receiver's DDC by the offset, clamped to ±9999 Hz
 (`Hl2Backend::clampRitXit`), so the panadapter stays put while the receive
 point moves. Its DSP record lists every mode `setSliceMode` accepts, WBFM and
 DRM included (a CAT or TCI client can select them), so a slice in either keeps
-these verbs. The blanker is published when it changes and when each slice is
-announced on connect. RF gain is the LNA, radio-wide: setting it on one
-panadapter reports the applied gain, less any automatic RF gain offset, to
-every panadapter. HL2 noise reduction is WDSP's ANR in the receiver's own
-channel, as on ANAN, published when it changes (that stage alone), on a
-restore and when each slice is announced on connect. The record also
-declares the APF in CW and CWL and the auto notch (WDSP ANF) in AM, SAM, DSB,
-USB and LSB, for the desktop only; no headless verb steers them.
+these verbs. The HL2 has no DRM decoder, so in DRM they act on a receiver with
+no demodulator behind it. The blanker (kind, level and fill) is published when
+it is turned on or off or changes kind, when a slice opens or is restored, and
+when each slice is announced on connect. A live level or fill change is not
+echoed: the slice that asked for it already holds it. RF gain is the LNA,
+radio-wide: setting it on one panadapter reports the applied gain, less any
+automatic RF gain offset, to every panadapter. HL2 noise reduction is WDSP's
+ANR in the receiver's own channel, as on ANAN, published when it changes (that
+stage alone), on a restore and when each slice is announced on connect. The
+record also declares the APF in CW and CWL and the auto notch (WDSP ANF) in AM,
+SAM, DSB, USB and LSB, for the desktop only; no headless verb steers them.
 
 ANAN mode and filter follow the HL2's contract because both demodulate in the
 same host WDSP: Protocol 2 carries no mode, so the radio adds none. ANAN

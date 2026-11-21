@@ -124,6 +124,21 @@ int main()
     report("gps: a radio family without waveforms -> NoWaveforms",
            aetherGpsBlocker(true, false, true, D::None) == G::NoWaveforms);
 
+    // ── Restart: FLEX-6000 firmware refuses `waveform restart` (#6990) ──────
+    report("restart: a FLEX-6300/6500/6700 (Microburst) gives a reason",
+           !waveformRestartUnavailableReason(RadioPlatform::Microburst).isEmpty());
+    report("restart: a FLEX-6400/6600 (DeepEddy) gives a reason",
+           !waveformRestartUnavailableReason(RadioPlatform::DeepEddy).isEmpty());
+    report("restart: the reason names the radio family",
+           waveformRestartUnavailableReason(RadioPlatform::Microburst)
+               .contains(QStringLiteral("FLEX-6000")));
+    report("restart: a FLEX-8000 / Aurora (BigBend) keeps Restart",
+           waveformRestartUnavailableReason(RadioPlatform::BigBend).isEmpty());
+    report("restart: DragonFire keeps Restart",
+           waveformRestartUnavailableReason(RadioPlatform::DragonFire).isEmpty());
+    report("restart: a radio that has not identified itself keeps Restart",
+           waveformRestartUnavailableReason(RadioPlatform::Unknown).isEmpty());
+
     if (g_failed == 0) {
         std::printf("\nAll %d waveform-install-gate tests passed.\n", g_total);
         return 0;
