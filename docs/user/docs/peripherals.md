@@ -212,7 +212,7 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 | VK3AMP Amplifier | TCP control, UDP telemetry | 5005 (UDP 5010) |
 | Elecraft KPA1500 | TCP | 1500 |
 | RF-KIT Amplifier | HTTP (REST/JSON) | 8080 |
-| LP-100A Meter | Serial (115200 8N1) or a ser2net host in raw mode | 2000 |
+| LP-100A Meter | Serial (115200 8N1), a ser2net host in raw mode, or the radio's USB port (Radio USB) | 2000 |
 
 ### LP-100A diagnostics
 

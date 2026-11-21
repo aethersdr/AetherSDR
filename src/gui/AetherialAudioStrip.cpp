@@ -9,9 +9,7 @@
 #include "StageTabBar.h"
 #include "ClientEqApplet.h"
 #include "StripCompPanel.h"
-#include "StripDeEssPanel.h"
 #include "StripEqPanel.h"
-#include "StripGatePanel.h"
 #include "StripPuduPanel.h"
 #include "StripReverbPanel.h"
 #include "StripTubePanel.h"
@@ -20,9 +18,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientComp.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientEq.h"
-#include "core/ClientGate.h"
 #include "core/ClientPudu.h"
 #include "core/ClientReverb.h"
 #include "core/ClientTube.h"
@@ -63,9 +59,7 @@ namespace {
 AudioEngine::TxChainStage toChainStage(AetherialAudioStrip::Stage s)
 {
     switch (s) {
-        case AetherialAudioStrip::Gate:   return AudioEngine::TxChainStage::Gate;
         case AetherialAudioStrip::Eq:     return AudioEngine::TxChainStage::Eq;
-        case AetherialAudioStrip::DeEss:  return AudioEngine::TxChainStage::DeEss;
         case AetherialAudioStrip::Comp:   return AudioEngine::TxChainStage::Comp;
         case AetherialAudioStrip::Tube:   return AudioEngine::TxChainStage::Tube;
         case AetherialAudioStrip::Enh:    return AudioEngine::TxChainStage::Enh;
@@ -77,15 +71,17 @@ AudioEngine::TxChainStage toChainStage(AetherialAudioStrip::Stage s)
 AetherialAudioStrip::Stage fromChainStage(AudioEngine::TxChainStage s)
 {
     switch (s) {
-        case AudioEngine::TxChainStage::Gate:   return AetherialAudioStrip::Gate;
+        case AudioEngine::TxChainStage::Gate:   return AetherialAudioStrip::StageCount;  // retired
         case AudioEngine::TxChainStage::Eq:     return AetherialAudioStrip::Eq;
-        case AudioEngine::TxChainStage::DeEss:  return AetherialAudioStrip::DeEss;
+        case AudioEngine::TxChainStage::DeEss:  return AetherialAudioStrip::StageCount;  // retired
         case AudioEngine::TxChainStage::Comp:   return AetherialAudioStrip::Comp;
         case AudioEngine::TxChainStage::Tube:   return AetherialAudioStrip::Tube;
         case AudioEngine::TxChainStage::Enh:    return AetherialAudioStrip::Enh;
         case AudioEngine::TxChainStage::Reverb: return AetherialAudioStrip::Reverb;
-        default:                                return AetherialAudioStrip::StageCount;
+        case AudioEngine::TxChainStage::None:   return AetherialAudioStrip::StageCount;
     }
+    // No default: a new stage must be mapped above, or -Wswitch says so.
+    return AetherialAudioStrip::StageCount;
 }
 
 } // namespace
@@ -179,21 +175,17 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
             this, &AetherialAudioStrip::showSettings);
 
     m_tube        = new StripTubePanel        (m_audio, this);
-    m_gate        = new StripGatePanel        (m_audio, this);
     m_eq          = new StripEqPanel          (m_audio, this);
     m_comp        = new StripCompPanel        (m_audio, this);
-    m_dess        = new StripDeEssPanel       (m_audio, this);
     m_pudu        = new StripPuduPanel        (m_audio, this);
     m_reverb      = new StripReverbPanel      (m_audio, this);
     m_waveform    = new StripWaveformPanel    (m_audio, this);
     m_finalOutput = new StripFinalOutputPanel (m_audio, this);
 
     // In chain order, which is also the order the signal meets them.
-    addStage(Gate,    QStringLiteral("Gate"),       makeStagePage(m_gate));
-    addStage(Eq,      QStringLiteral("EQ"),         makeStagePage(m_eq));
-    addStage(DeEss,   QStringLiteral("De-esser"),   makeStagePage(m_dess));
-    addStage(Comp,    QStringLiteral("Compressor"), makeStagePage(m_comp));
     addStage(Tube,    QStringLiteral("Tube"),       makeStagePage(m_tube));
+    addStage(Eq,      QStringLiteral("EQ"),         makeStagePage(m_eq));
+    addStage(Comp,    QStringLiteral("Compressor"), makeStagePage(m_comp));
     addStage(Enh,     QStringLiteral("Exciter"),    makeStagePage(m_pudu));
     addStage(Reverb,  QStringLiteral("Reverb"),     makeStagePage(m_reverb));
 
@@ -319,9 +311,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         tr("Settings: save, load, import and export transmit chain profiles."));
 
     // Pin every panel to its TX engine instance, then show the first stage.
-    if (m_gate)        m_gate->showForTx();
     if (m_eq)          m_eq->showForPath(ClientEqApplet::Path::Tx);
-    if (m_dess)        m_dess->showForTx();
     if (m_comp)        m_comp->showForTx();
     if (m_tube)        m_tube->showForTx();
     if (m_pudu)        m_pudu->showForTx();
@@ -330,9 +320,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     if (m_waveform)    m_waveform->showForTx();
 
     // One panel to a page: the tab already names it, so the plate comes off.
-    for (QWidget* panel : {static_cast<QWidget*>(m_gate),
-                           static_cast<QWidget*>(m_eq),
-                           static_cast<QWidget*>(m_dess),
+    for (QWidget* panel : {static_cast<QWidget*>(m_eq),
                            static_cast<QWidget*>(m_comp),
                            static_cast<QWidget*>(m_tube),
                            static_cast<QWidget*>(m_pudu),
@@ -343,8 +331,8 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     tidyEmbeddedPanel(m_finalOutput, /*keepTitle=*/true);
     tidyEmbeddedPanel(m_waveform, /*keepTitle=*/true);
 
-    m_tabs->setCurrentStage(Gate);
-    m_stack->setCurrentIndex(Gate);
+    m_tabs->setCurrentStage(Tube);
+    m_stack->setCurrentIndex(Tube);
 
     // The Client* stages are plain classes with no change signal, and the
     // docked chain applet writes the same flags, so the boxes are polled
@@ -364,10 +352,8 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // they have no engine to enumerate bands for, and the canvas displays
     // the "(no EQ connected)" placeholder.
     m_tube->showForTx();
-    m_gate->showForTx();
     m_eq->showForPath(ClientEqApplet::Path::Tx);
     m_comp->showForTx();
-    m_dess->showForTx();
     m_pudu->showForTx();
     m_reverb->showForTx();
     m_waveform->showForTx();
@@ -396,9 +382,7 @@ bool AetherialAudioStrip::stageEnabled(Stage stage) const
 {
     if (!m_audio) return false;
     switch (stage) {
-        case Gate:   return m_audio->clientGateTx()  && m_audio->clientGateTx()->isEnabled();
         case Eq:     return m_audio->clientEqTx()    && m_audio->clientEqTx()->isEnabled();
-        case DeEss:  return m_audio->clientDeEssTx() && m_audio->clientDeEssTx()->isEnabled();
         case Comp:   return m_audio->clientCompTx()  && m_audio->clientCompTx()->isEnabled();
         case Tube:   return m_audio->clientTubeTx()  && m_audio->clientTubeTx()->isEnabled();
         case Enh:    return m_audio->clientPuduTx()  && m_audio->clientPuduTx()->isEnabled();
@@ -411,19 +395,9 @@ void AetherialAudioStrip::setStageEnabled(Stage stage, bool on)
 {
     if (!m_audio) return;
     switch (stage) {
-        case Gate:
-            if (auto* g = m_audio->clientGateTx()) {
-                g->setEnabled(on); m_audio->saveClientGateSettings();
-            }
-            break;
         case Eq:
             if (auto* e = m_audio->clientEqTx()) {
                 e->setEnabled(on); m_audio->saveClientEqSettings();
-            }
-            break;
-        case DeEss:
-            if (auto* d = m_audio->clientDeEssTx()) {
-                d->setEnabled(on); m_audio->saveClientDeEssSettings();
             }
             break;
         case Comp:
@@ -606,9 +580,7 @@ void AetherialAudioStrip::refreshAllPanelsFromEngine()
     // labels stay stale.
     if (m_eq)     m_eq->refreshFromEngine();
     if (m_tube)   m_tube->syncControlsFromEngine();
-    if (m_gate)   m_gate->syncControlsFromEngine();
     if (m_comp)   m_comp->syncControlsFromEngine();
-    if (m_dess)   m_dess->syncControlsFromEngine();
     if (m_pudu)   m_pudu->syncControlsFromEngine();
     if (m_reverb) m_reverb->syncControlsFromEngine();
     if (m_waveform)    m_waveform->syncControlsFromEngine();

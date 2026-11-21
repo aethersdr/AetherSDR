@@ -42,6 +42,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
+#if defined(Q_OS_LINUX)
+#include <cstring>
+#include <dirent.h>
+#endif
 
 namespace AetherSDR::hl2 {
 
@@ -55,6 +59,12 @@ struct MetisClientTestAccess {
     }
     static bool holdsSocket(const MetisClient& c) { return c.m_socket != nullptr; }
     static Cc txFreqCc(const MetisClient& c) { return c.m_ccTxFreq; }
+    static Cc rxFreqCc(const MetisClient& c, int ddc)
+    {
+        return ddc >= 0 && ddc < static_cast<int>(c.m_ccRxFreq.size())
+                   ? c.m_ccRxFreq[static_cast<std::size_t>(ddc)]
+                   : Cc{};
+    }
 };
 
 struct Hl2PersistTestAccess {
@@ -116,6 +126,31 @@ struct Hl2PersistTestAccess {
         return out;
     }
     static Cc expectedTxCc(const Hl2Backend& b, double hz) { return ccTxFreq(b.ncoCommandHz(hz)); }
+    // Receiver `ddc`'s NCO register as MetisClient holds it, and the word a
+    // true-RF frequency should produce there.
+    static Cc rxNcoCc(Hl2Backend& b, int ddc)
+    {
+        Cc out{};
+        QMetaObject::invokeMethod(b.m_metis, [metis = b.m_metis, ddc, &out] {
+            out = MetisClientTestAccess::rxFreqCc(*metis, ddc);
+        }, Qt::BlockingQueuedConnection);
+        return out;
+    }
+    static Cc expectedRxCc(const Hl2Backend& b, int ddc, double hz)
+    {
+        return ccRxFreq(ddc, b.ncoCommandHz(hz));
+    }
+    static double ncoHz(const Hl2Backend& b, int ddc)
+    {
+        const Hl2Backend::Receiver* r = b.rx(ddc);
+        return r ? r->ncoHz : 0.0;
+    }
+    static double sliceHz(const Hl2Backend& b, int ddc)
+    {
+        const Hl2Backend::Receiver* r = b.rx(ddc);
+        return r ? r->sliceFreqHz : 0.0;
+    }
+    static int sampleRateHz(const Hl2Backend& b) { return b.m_sampleRateHz; }
     static QString panIdOf(const Hl2Backend& b, int ddc)
     {
         const Hl2ReceiverIds* ids = b.m_ids.byDdc(ddc);
@@ -144,6 +179,25 @@ inline void check(bool ok, const QString& what)
 // Socket descriptors this process holds; -1 where it cannot be counted.
 inline int openSocketCount()
 {
+#if defined(Q_OS_LINUX)
+    // By name, never by descriptor: fstat() on a descriptor another thread
+    // created is a race under TSan (#7232); readlink() on its /proc path is not.
+    if (DIR* dir = opendir("/proc/self/fd")) {
+        int count = 0;
+        while (const dirent* entry = readdir(dir)) {
+            if (entry->d_name[0] == '.')
+                continue;
+            char path[64];
+            char target[64];
+            std::snprintf(path, sizeof path, "/proc/self/fd/%s", entry->d_name);
+            const ssize_t n = readlink(path, target, sizeof target - 1);
+            if (n >= 7 && std::memcmp(target, "socket:", 7) == 0)
+                ++count;
+        }
+        closedir(dir);
+        return count;
+    }
+#endif
 #if defined(Q_OS_UNIX)
     long limit = sysconf(_SC_OPEN_MAX);
     if (limit <= 0 || limit > 65536)

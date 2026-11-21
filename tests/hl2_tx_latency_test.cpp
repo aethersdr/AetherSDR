@@ -65,6 +65,13 @@ void check(bool ok, const char* what)
 
 constexpr double kPi = 3.14159265358979323846;
 
+// Feed lengths are fixed in input samples at 24 kHz, whole blocks of any block
+// up to 512, so a block-size change moves no capture window.
+std::size_t wholeBlocks(std::size_t samples, std::size_t block)
+{
+    return samples / block * block;
+}
+
 // Run `audio` (mono, at the channel's input rate) through a freshly created and
 // started TX channel, in whole input blocks, and return the wire-order IQ.
 // Empty on any refusal or non-Ok block, which the caller reports.
@@ -125,8 +132,7 @@ Onset measureOnset(const WdspChannel::Config& config)
 {
     constexpr double kToneHz = 1000.0;
     constexpr float kAmplitude = 0.5f;          // -6 dBFS, the #6052 hardware tone
-    constexpr std::size_t kBlocks = 40;         // 0.85 s at 24 kHz / 512
-    std::vector<float> audio(config.inputBlockSize * kBlocks);
+    std::vector<float> audio(wholeBlocks(20480, config.inputBlockSize));   // 0.85 s
     for (std::size_t n = 0; n < audio.size(); ++n) {
         audio[n] = kAmplitude * static_cast<float>(
             std::sin(2.0 * kPi * kToneHz * static_cast<double>(n)
@@ -268,16 +274,14 @@ Impulse measureImpulse(const WdspChannel::Config& config,
     const std::size_t in = config.inputBlockSize;
     const std::size_t upsample =
         static_cast<std::size_t>(config.outputSampleRate / config.inputSampleRate);
-    constexpr std::size_t kBlocks = 60;
-    constexpr std::size_t kImpulseBlock = 30;
-    std::vector<float> audio(in * kBlocks, 0.0f);
+    std::vector<float> audio(wholeBlocks(30720, in), 0.0f);   // 1.28 s
     const std::size_t primer = static_cast<std::size_t>(config.inputSampleRate / 10);
     for (std::size_t n = 0; n < primer; ++n) {
         audio[n] = 1.0e-4f * static_cast<float>(
             std::sin(2.0 * kPi * 1000.0 * static_cast<double>(n)
                      / static_cast<double>(config.inputSampleRate)));
     }
-    const std::size_t at = in * kImpulseBlock;
+    const std::size_t at = wholeBlocks(15360, in);
     audio[at] = 0.01f;
     const std::vector<std::complex<double>> iq = runChannel(config, audio, beforeFeed);
     Impulse r;
@@ -371,8 +375,7 @@ struct Tone {
 // spelled out above wholeCycles() in hl2_txdsp_test.cpp).
 Tone measureTone(const WdspChannel::Config& config, double toneHz)
 {
-    constexpr std::size_t kBlocks = 120;
-    std::vector<float> audio(config.inputBlockSize * kBlocks);
+    std::vector<float> audio(wholeBlocks(61440, config.inputBlockSize));   // 2.56 s
     for (std::size_t n = 0; n < audio.size(); ++n) {
         audio[n] = 0.1f * static_cast<float>(
             std::sin(2.0 * kPi * toneHz * static_cast<double>(n)
@@ -538,12 +541,102 @@ void runBandpassCase()
     }
 }
 
+// ── (c) the block: half the block, one output block less at key-down ──────
+//
+// Two delays are one DSP block each: the output ring's pre-load (create_iobuffs,
+// (DSP_MULT - 1) x r2_size) and bp0's fircore, which right-justifies each
+// partition in its 2 x size mask (firmin.c). Hl2TxDsp also waits for one input
+// block. The bandpass length does not change. The reference is the product's
+// channel at twice its block, derived, not retyped.
+void runBlockCase()
+{
+    const WdspChannel::Config now = productChannel(WdspChannel::Mode::Usb, 300.0, 2700.0);
+    WdspChannel::Config ref = now;
+    ref.inputBlockSize *= 2;
+    ref.dspBlockSize *= 2;
+    const int rate = now.outputSampleRate;
+    const int inRate = now.inputSampleRate;
+
+    check(now.inputBlockSize == 256 && now.dspBlockSize == 512,
+          "(c) the HL2 TX block is 256 input samples, 512 at the DSP rate (10.67 ms)");
+    check(now.filterTaps == ref.filterTaps && now.filterTaps == Hl2TxDsp::kTxFilterTaps,
+          "(c) the bandpass keeps its length when the block changes");
+
+    const Onset a = measureOnset(now);
+    const Onset b = measureOnset(ref);
+    check(a.ok && b.ok, "(c) both onset legs measured");
+    if (!a.ok || !b.ok) {
+        return;
+    }
+    printOnset("USB, this block", a, rate);
+    printOnset("USB, twice this block", b, rate);
+    // Pre-load plus fircore: two DSP blocks, so the difference is twice the change.
+    const long expected = 2 * static_cast<long>(ref.dspBlockSize - now.dspBlockSize);
+    const long delta = b.firstLsb - a.firstLsb;
+    std::fprintf(stderr,
+        "PROBE  (c) first sample >= one EP2 LSB: %ld -> %ld output samples, %ld earlier"
+        " (%.2f ms); two blocks of the change is %ld\n",
+        b.firstLsb, a.firstLsb, delta, ms(delta, rate), expected);
+    check(std::abs(delta - expected) <= 2,
+          "(c) the first non-zero sample is two blocks of the change earlier in the "
+          "stream: the ring pre-load and the fircore partition");
+    check(std::abs((b.rise50 - a.rise50) - expected) <= 2
+              && std::abs((b.rise90 - a.rise90) - expected) <= 2,
+          "(c) and the whole envelope moves with it");
+
+    // Wall clock at the queue: output sample n leaves the channel with exchange
+    // n / outBlock, which runs once (that + 1) input blocks have arrived.
+    const auto availableMs = [inRate](long n, const WdspChannel::Config& c) {
+        const long call = n / static_cast<long>(c.dspBlockSize);
+        return 1000.0 * static_cast<double>((call + 1) * static_cast<long>(c.inputBlockSize))
+            / static_cast<double>(inRate);
+    };
+    const double tNow = availableMs(a.firstLsb, now);
+    const double tRef = availableMs(b.firstLsb, ref);
+    const double blockMs = 1000.0 * static_cast<double>(now.inputBlockSize) / inRate;
+    std::fprintf(stderr,
+        "PROBE  (c) first non-zero IQ handed to the queue %.2f ms after the first input"
+        " sample (twice this block: %.2f ms), %.2f ms sooner\n", tNow, tRef, tRef - tNow);
+    check(tRef - tNow >= blockMs - 1e-9,
+          "(c) the first non-zero IQ reaches the queue at least one block period sooner");
+
+    // The impulse moves by the same two blocks, so nothing else in the channel
+    // depends on the block.
+    const Impulse ia = measureImpulse(now);
+    const Impulse ib = measureImpulse(ref);
+    check(ia.ok && ib.ok, "(c) both impulse legs measured");
+    if (ia.ok && ib.ok) {
+        std::fprintf(stderr, "PROBE  (c) impulse peak (stream position past the impulse):"
+                     " %ld at this block, %ld at twice it\n", ia.peak, ib.peak);
+        check(std::abs((ib.peak - ia.peak) - expected) <= 1,
+              "(c) the impulse moves by the same two blocks: no other block term");
+    }
+    // SELECTIVITY: the DIGU low edge, the tightest case, at both blocks.
+    const WdspChannel::Config digu = productChannel(WdspChannel::Mode::Digu, 150.0, 3000.0);
+    WdspChannel::Config diguRef = digu;
+    diguRef.inputBlockSize *= 2;
+    diguRef.dspBlockSize *= 2;
+    const Tone ta = measureTone(digu, 250.0);
+    const Tone tb = measureTone(diguRef, 250.0);
+    check(ta.ok && tb.ok, "(c) both DIGU tone legs measured");
+    if (ta.ok && tb.ok) {
+        std::fprintf(stderr, "PROBE  (c) DIGU 250 Hz: suppression %.1f dB at this block,"
+                     " %.1f dB at twice it; level difference %+.4f dB\n",
+                     ta.suppressionDb, tb.suppressionDb, ta.wantedDb - tb.wantedDb);
+        check(ta.suppressionDb >= kSuppressionFloorDb,
+              "(c) DIGU opposite-sideband suppression stays 30 dB beyond the 16-bit wire");
+        check(std::abs(ta.wantedDb - tb.wantedDb) <= 0.01,
+              "(c) the passband level does not depend on the block");
+    }
+}
+
 }  // namespace
 
 int main()
 {
     runMuteDelayCase();
     runBandpassCase();
+    runBlockCase();
     if (g_failures != 0) {
         std::fprintf(stderr, "hl2_tx_latency_test: %d FAILURE(S)\n", g_failures);
         return 1;

@@ -439,8 +439,8 @@ void ShortcutDialog::populateTable(const QString& filter, const QString& categor
         nameItem->setData(Qt::UserRole, a.id);
         m_table->setItem(row, 0, nameItem);
         m_table->setItem(row, 1, new QTableWidgetItem(a.category));
-        m_table->setItem(row, 2, new QTableWidgetItem(a.currentKey.toString()));
-        m_table->setItem(row, 3, new QTableWidgetItem(a.defaultKey.toString()));
+        m_table->setItem(row, 2, new QTableWidgetItem(shortcutKeyText(a.currentKey)));
+        m_table->setItem(row, 3, new QTableWidgetItem(shortcutKeyText(a.defaultKey)));
     }
 }
 
@@ -477,12 +477,23 @@ void ShortcutDialog::assignAction(const QString& actionId)
         if (act)
             m_mgr->clearBinding(act->id);
     } else {
+        if (const auto* target = m_mgr->action(actionId)) {
+            const QString refusal = ShortcutManager::bindingRefusal(*target, seq);
+            if (!refusal.isEmpty()) {
+                showNotice(this, QStringLiteral("Cannot Assign Key"),
+                           QStringLiteral("%1 cannot trigger '%2'.")
+                               .arg(shortcutKeyText(seq), target->displayName),
+                           refusal);
+                updateSelectedKeyInfo();   // the combo goes back to the key's own action
+                return;
+            }
+        }
         // Check for conflict
         QString conflict = m_mgr->conflictCheck(seq, actionId);
         if (!conflict.isEmpty()) {
             if (!confirm(this, QStringLiteral("Key Conflict"),
                          QString("Key [%1] is currently bound to '%2'.\nReassign it?")
-                             .arg(seq.toString(), conflict),
+                             .arg(shortcutKeyText(seq), conflict),
                          QStringLiteral("Reassign"), CanonMessageBox::Role::Accept)) {
                 updateSelectedKeyInfo();   // the combo goes back to the key's own action
                 return;
@@ -530,9 +541,17 @@ void ShortcutDialog::updateSelectedKeyInfo()
     }
 
     QKeySequence seq(key);
-    m_selectedKeyLabel->setText(seq.toString());
+    m_selectedKeyLabel->setText(shortcutKeyText(seq));
 
     const auto* act = m_mgr->actionForKey(seq);
+    // A sided cap with no binding of its own shows the plain-key binding
+    // that answers both sides; Clear and Reset act on that one (#7354).
+    if (act && isShortcutSidedKey(key) && act->currentKey != seq) {
+        m_selectedKeyLabel->setText(
+            QStringLiteral("%1 (plain %2, both sides)")
+                .arg(shortcutKeyText(seq),
+                     QKeySequence(shortcutSidedKeyGeneric(key)).toString(QKeySequence::NativeText)));
+    }
     if (act) {
         // Find the combo index for this action
         int idx = m_actionCombo->findData(act->id);

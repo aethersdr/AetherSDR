@@ -24,11 +24,44 @@ QString installerText(const char* source)
     return QCoreApplication::translate("WaveformInstaller", source);
 }
 
+QList<const WaveformInstaller*>& liveInstallers()
+{
+    static QList<const WaveformInstaller*> list;
+    return list;
+}
+
 } // namespace
+
+WaveformInstallActivity* WaveformInstallActivity::instance()
+{
+    // Never destroyed: an installer may announce its end during shutdown.
+    static auto* activity = new WaveformInstallActivity;
+    return activity;
+}
+
+bool WaveformInstaller::anyInstalling()
+{
+    for (const WaveformInstaller* installer : liveInstallers()) {
+        if (installer->isInstalling()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+WaveformInstaller::~WaveformInstaller()
+{
+    const bool wasInstalling = isInstalling();
+    liveInstallers().removeAll(this);
+    if (wasInstalling) {
+        emit WaveformInstallActivity::instance()->changed();
+    }
+}
 
 WaveformInstaller::WaveformInstaller(RadioModel* model, QObject* parent)
     : QObject(parent), m_model(model)
 {
+    liveInstallers().append(this);
     m_idleTimeout.setSingleShot(true);
     connect(&m_idleTimeout, &QTimer::timeout, this, [this] {
         finishOperation(m_activeGeneration, false, tr("Waveform upload timed out while waiting for data."));
@@ -168,6 +201,7 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, 
     m_uploadConnected = false;
     m_activeGeneration = m_uploadState.begin(fileSize);
     const Generation generation = m_activeGeneration;
+    emit WaveformInstallActivity::instance()->changed();
 
     m_fileSize = fileSize;
     QTimer::singleShot(operationBudgetMs(fileSize), this, [this, generation] {
@@ -447,6 +481,9 @@ void WaveformInstaller::finishOperation(Generation generation,
     m_fileData.clear();
     m_uploadPort = 0;
     m_finishing = false;
+    // Before finished(): a handler there may open a modal result box, and the
+    // other windows shouldn't wait for it to close.
+    emit WaveformInstallActivity::instance()->changed();
     emit finished(success, message);
 }
 

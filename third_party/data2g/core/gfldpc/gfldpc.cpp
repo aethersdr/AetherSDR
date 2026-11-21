@@ -192,13 +192,14 @@ void mul_norm(float* v, const float* w, int q) {
 // The same belief propagation as gfldpc.Decoder (flooding, the check in the
 // Walsh-Hadamard domain), on probabilities in place of log-probabilities: no
 // exp or log in the loop, decisions alike.
-Decoded Decoder::decode(const Mat<float>& ll, int iters) const {
+Decoded Decoder::decode(const Mat<float>& ll, int iters, bool posterior) const {
     const Code& c = code_;
     const int q = c.q, n = c.n, D = c.dmax;
     if (ll.cols != static_cast<std::size_t>(n * q)) throw std::invalid_argument("gfldpc::Decoder: expected (B, n * q)");
     const auto* mul = c.gf().mul.data();
     const auto* inv = c.gf().inv.data();
-    Decoded out{Mat<std::uint8_t>(ll.rows, static_cast<std::size_t>(n)), std::vector<std::uint8_t>(ll.rows, 0)};
+    Decoded out{Mat<std::uint8_t>(ll.rows, static_cast<std::size_t>(n)), std::vector<std::uint8_t>(ll.rows, 0),
+                posterior ? Mat<float>(ll.rows, static_cast<std::size_t>(n * q)) : Mat<float>()};
     const std::size_t E = static_cast<std::size_t>(c.m * D);
     int dv = 0;
     for (int v = 0; v < n; ++v) dv = std::max(dv, col_ptr_[v + 1] - col_ptr_[v]);
@@ -225,6 +226,10 @@ Decoded Decoder::decode(const Mat<float>& ll, int iters) const {
                 }
                 const float* post = &fwd[d * q];
                 hard[v] = static_cast<std::uint8_t>(std::max_element(post, post + q) - post);
+                if (posterior) {
+                    const float mx = post[hard[v]];
+                    for (int a = 0; a < q; ++a) out.post[b][v * q + a] = std::log(post[a] / mx);
+                }
                 std::fill(tmp.begin(), tmp.end(), 1.0f);  // the product of the edges past j
                 for (int j = d - 1; j >= 0; --j) {
                     float* m = &v2c[es[j] * q];

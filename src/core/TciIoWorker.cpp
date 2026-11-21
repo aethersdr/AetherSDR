@@ -24,11 +24,22 @@ constexpr int kTxChronoPollMs = 5;
 constexpr qint64 kTxSummaryEveryBlocks = 48;
 constexpr qsizetype kMailboxBytes = 4 * 1024 * 1024;
 constexpr qsizetype kMailboxItems = 256;
+constexpr qsizetype kStreamMailboxBytes = 1024 * 1024;   // beside the control budget
+constexpr qsizetype kStreamMailboxItems = 64;
 constexpr qsizetype kTextBytes = 64 * 1024;
 }
 
 TciIoWorker::TciIoWorker(QObject* parent) : QObject(parent), m_txChronoTimer(this)
 {
+    m_textSend = [this](quint64 id, const QString& message) {
+        const auto it = m_clients.constFind(id);
+        if (it == m_clients.cend() || !it->socket || !it->lifetime->live.load()) { return; }
+        if (it->socket->bytesToWrite() > kMaxRxBacklogBytes - message.size() * 4) {
+            closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI output backlog"));
+            return;
+        }
+        it->socket->sendTextMessage(message);
+    };
     m_rxSend = [this](quint64 id, const QByteArray& data) { return sendBinary(id, data); };
     m_rxBacklog = [this](quint64 id) {
         const auto client = m_clients.constFind(id);
@@ -122,6 +133,8 @@ void TciIoWorker::stop()
         m_accepting = false;
         m_mailbox.clear();
         m_mailboxBytes = 0;
+        m_streamItems = 0;
+        m_streamBytes = 0;
         m_overloaded = false;
     }
     stopChrono();
@@ -152,16 +165,40 @@ void TciIoWorker::stop()
 
 bool TciIoWorker::post(std::function<void()> work, qsizetype bytes)
 {
+    return enqueue(std::move(work), bytes, false);
+}
+
+bool TciIoWorker::postStream(std::function<void()> work, qsizetype bytes)
+{
+    return enqueue(std::move(work), bytes, true);
+}
+
+bool TciIoWorker::enqueue(std::function<void()> work, qsizetype bytes, bool stream)
+{
     // Before start(), socket-free tests use the same engine in its owner
     // context. Production ingress always enters the bounded mailbox.
     if (QThread::currentThread() == thread()) { work(); return true; }
     QMutexLocker lock(&m_mailboxMutex);
     if (!m_accepting) { return false; }
-    const bool fits = bytes >= 0 && bytes <= kMailboxBytes - m_mailboxBytes
-        && m_mailbox.size() < kMailboxItems;
+    // Control and stream work are bounded separately, so stream frames can
+    // never take the room a control item needs.
+    const qsizetype usedBytes = stream ? m_streamBytes : m_mailboxBytes - m_streamBytes;
+    const qsizetype usedItems = stream ? m_streamItems : qsizetype(m_mailbox.size()) - m_streamItems;
+    const bool fits = bytes >= 0
+        && bytes <= (stream ? kStreamMailboxBytes : kMailboxBytes) - usedBytes
+        && usedItems < (stream ? kStreamMailboxItems : kMailboxItems);
     if (fits) {
-        m_mailbox.push_back({std::move(work), bytes});
+        m_mailbox.push_back({std::move(work), bytes, stream});
         m_mailboxBytes += bytes;
+        if (stream) { ++m_streamItems; m_streamBytes += bytes; }
+    } else if (stream) {
+        const quint64 dropped = ++m_droppedStreamPosts;
+        if (!m_streamPostDropLog.isValid() || m_streamPostDropLog.elapsed() >= kStreamDropLogMs) {
+            m_streamPostDropLog.start();
+            lock.unlock();
+            qCWarning(lcCat) << "TCI: IQ frame dropped, worker mailbox behind: dropped=" << dropped;
+        }
+        return false;
     } else {
         m_overloaded = true;
     }
@@ -180,13 +217,14 @@ void TciIoWorker::drain()
         {
             QMutexLocker lock(&m_mailboxMutex);
             overloaded = std::exchange(m_overloaded, false);
-            if (overloaded) { m_mailbox.clear(); m_mailboxBytes = 0; }
+            if (overloaded) { m_mailbox.clear(); m_mailboxBytes = 0; m_streamItems = 0; m_streamBytes = 0; }
             if (m_mailbox.empty()) {
                 m_drainScheduled = false;
             } else {
                 next = std::move(m_mailbox.front());
                 m_mailbox.pop_front();
                 m_mailboxBytes -= next.bytes;
+                if (next.stream) { --m_streamItems; m_streamBytes -= next.bytes; }
             }
         }
         if (overloaded) {
@@ -333,13 +371,7 @@ void TciIoWorker::acknowledgeText(quint64 id)
 
 void TciIoWorker::sendText(quint64 id, const QString& message)
 {
-    const auto it = m_clients.constFind(id);
-    if (it == m_clients.cend() || !it->socket || !it->lifetime->live.load()) { return; }
-    if (it->socket->bytesToWrite() > kMaxRxBacklogBytes - message.size() * 4) {
-        closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI output backlog"));
-        return;
-    }
-    it->socket->sendTextMessage(message);
+    m_textSend(id, message);
 }
 
 qint64 TciIoWorker::sendBinary(quint64 id, const QByteArray& message)
@@ -353,10 +385,36 @@ qint64 TciIoWorker::sendBinary(quint64 id, const QByteArray& message)
     return it->socket->sendBinaryMessage(message);
 }
 
+// Host IQ uses at most a quarter of the socket backlog. Drop a frame that
+// cannot fit, preserving room for text and RX audio under their existing
+// close-on-overrun policy.
+qint64 TciIoWorker::sendStreamFrame(quint64 id, const QByteArray& message)
+{
+    const auto it = m_clients.find(id);
+    if (it == m_clients.end() || !it->socket || !it->lifetime->live.load()) { return -1; }
+    const qint64 pending = it->socket->bytesToWrite();
+    if (pending > 0 && pending + message.size() > kMaxStreamBacklogBytes) {
+        ++it->droppedStreamFrames;
+        // Logged by time, not by count: the frame cadence depends on the rate.
+        if (!it->streamDropLog.isValid() || it->streamDropLog.elapsed() >= kStreamDropLogMs) {
+            it->streamDropLog.start();
+            qCWarning(lcCat) << "TCI: IQ frame dropped, socket behind: client=" << id
+                             << "pending_bytes=" << pending << "dropped=" << it->droppedStreamFrames;
+        }
+        return 0;
+    }
+    return it->socket->sendBinaryMessage(message);
+}
+
 void TciIoWorker::closeClient(quint64 id, QWebSocketProtocol::CloseCode code, const QString& reason)
 {
     const auto it = m_clients.find(id);
     if (it == m_clients.end()) { return; }
+    // The server's disconnect line cannot tell this from a network drop.
+    if (code != QWebSocketProtocol::CloseCodeNormal) {
+        qCWarning(lcCat) << "TCI: closing client=" << id << "code=" << int(code) << "reason=" << reason
+                         << "pending_bytes=" << (it->socket ? it->socket->bytesToWrite() : -1);
+    }
     it->lifetime->live.store(false, std::memory_order_release);
     it->producer.invalidate();
     if (m_txClient == id) { stopChrono(); }

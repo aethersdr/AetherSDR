@@ -137,6 +137,23 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // Identity only: a TGXL named in replayed captured status.
     connect(&m_statusIngress, &FlexStatusIngress::tunerChanged, this, &IRadioBackend::tunerChanged);
     connect(&m_statusIngress, &FlexStatusIngress::amplifierChanged, this, &IRadioBackend::amplifierChanged);
+    // The native producer has no setup inventory; replayed setup status is the Demo's.
+    connect(&m_statusIngress, &FlexStatusIngress::setupStatusObserved, this, &IRadioBackend::setupStatusObserved);
+    // Radio-global values are the native producer's; the synthetic wire's
+    // client, oscillator and static-network reports are relayed.
+    connect(&m_statusIngress, &FlexStatusIngress::radioStatusObserved, this,
+            [this](const RadioStatusObservation& observation) {
+        if (observation.kind != RadioStatusObservation::Kind::Radio) { emit radioStatusObserved(observation); }
+    });
+    // Slice identity, ownership, presence and mode list: Demo publishes its
+    // values through its native sliceChanged producer.
+    connect(&m_statusIngress, &FlexStatusIngress::sliceObserved, this,
+            [this](const SliceObservation& observation) {
+        SliceObservation lifecycle = observation;
+        lifecycle.values = {};
+        lifecycle.values.inUse = observation.values.inUse;
+        emit sliceObserved(lifecycle);
+    });
     connect(&m_statusIngress, &FlexStatusIngress::displayObserved, this,
             [this](DisplayObservation observation) {
         if (!m_connected) { return; }
@@ -274,8 +291,9 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
     caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    caps.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     caps.dspParameterReset = std::nullopt;
-    caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
+    caps.receivePanCenterControl = std::nullopt; // no DDC: a center request only moves the display
     caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
     caps.canReboot = false;
     caps.hasRemoteOnControl = false;
@@ -302,6 +320,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.radioGraphicEqControl = std::nullopt;
     // The demo cannot key at all (Principle VI), let alone synthesise tones.
     caps.twoToneGenerator = std::nullopt;
+    caps.boardIdentity = std::nullopt;  // no hardware board
     caps.firmwareUpdateSource = std::nullopt;  // synthetic radio; nothing to compare.
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
@@ -379,6 +398,7 @@ RadioCapabilities SimBackend::capabilities() const
     // a simulator that cannot key has nothing to be full duplex about.
     caps.hasRadioSideCwKeyer = false;
     caps.cwTextControl = std::nullopt;
+    caps.hostCwKeyingControl = std::nullopt;
     caps.hasVoiceKeyer = false;
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;
@@ -477,15 +497,13 @@ void SimBackend::emitInitialState()
     // display observations carry only identity and dimensions.
     emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
                                    m_sliceFreqMhz, kDemoPanBandwidthMhz);
+    pushPanCenterToSource(m_sliceFreqMhz);
 
     emit panWaterfallLineDurationChanged(QStringLiteral("0x40000000"),
                                          kWaterfallRate);
 
-    // One active slice on a sensible default, so the UI has something live to
-    // show the moment demo mode connects. Same rationale as the pan above: the
-    // wire "slice 0 RF_frequency=14.100" is delivered but decodeSliceStatus is
-    // Flex-only, so without this typed emit the slice model never gets a
-    // frequency and the VFO reads 0.
+    // SimBackend owns the canonical receiver values. Its synthetic transport
+    // contributes lifecycle/ownership only, so native state is published once.
     SliceDelta slice;
     slice.letter = QStringLiteral("A");
     slice.panId = QStringLiteral("0x40000000");
@@ -519,17 +537,37 @@ void SimBackend::setSliceMode(int sliceId, const QString& mode)
     if (!m_connected || sliceId != kSliceId) {
         return;
     }
+    const bool wasRtty = m_sliceMode.toUpper() == QLatin1String("RTTY");
     m_sliceMode = mode;
-    // Lower-sideband family: LSB, DIGL, CWL. Everything else demodulates
-    // USB-style. Drives which side of the VFO the birdie is audible on.
+    // Lower-sideband family: LSB, DIGL, CWL, and RTTY, which a FLEX-8400
+    // demodulates lower sideband with the dial at the 2125 Hz mark (#7420).
+    // Everything else demodulates USB-style. Drives which side of the VFO the
+    // birdie and the RTTY station are audible on.
     const QString up = mode.toUpper();
+    const bool rtty = up == QLatin1String("RTTY");
     const bool lsb = (up == QLatin1String("LSB") || up == QLatin1String("DIGL")
-                      || up == QLatin1String("CWL"));
-    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, lsb] {
+                      || up == QLatin1String("CWL") || rtty);
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, lsb, rtty] {
         src->setLowerSideband(lsb);
+        src->setRttyMode(rtty);
     }, Qt::QueuedConnection);
     SliceDelta d;
     d.mode = m_sliceMode;
+    // The RTTY passband a FLEX-8400 reports (filter_lo=-285 filter_hi=115):
+    // around M and S, as ModeFilterPresets centers it. The previous passband
+    // comes back when RTTY is left.
+    if (rtty && !wasRtty) {
+        m_preRttyFilter = {m_filterLowHz, m_filterHighHz};
+        m_filterLowHz = -285;
+        m_filterHighHz = 115;
+    } else if (!rtty && wasRtty) {
+        m_filterLowHz = m_preRttyFilter.first;
+        m_filterHighHz = m_preRttyFilter.second;
+    }
+    if (rtty != wasRtty) {
+        d.filterLow = m_filterLowHz;
+        d.filterHigh = m_filterHighHz;
+    }
     emit sliceChanged(kSliceId, d);
 }
 
@@ -598,6 +636,16 @@ void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     }
     emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
                                    hz / 1.0e6, kDemoPanBandwidthMhz);
+    pushPanCenterToSource(hz / 1.0e6);
+}
+
+void SimBackend::pushPanCenterToSource(double mhz)
+{
+    // The spectrum rows are drawn around pan 0's center, which does not
+    // follow the dial; RF-anchored signals are placed relative to it (#7420).
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, mhz] {
+        src->setPanCenterMhz(mhz);
+    }, Qt::QueuedConnection);
 }
 
 void SimBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
@@ -842,14 +890,8 @@ void SimBackend::injectHighSwr(double ratio)
 
 void SimBackend::injectDropSlice()
 {
-    // Yank the active slice out from under AE — exercises slice-gone teardown
-    // (VFO removal, TX-slice re-evaluation). Push it as the wire status AE decodes
-    // ("slice 0 … removed"), NOT the interface sliceRemoved signal: RadioModel
-    // consumes slice removal only through handleSliceStatus (the Flex backend
-    // never emits IRadioBackend::sliceRemoved), so the wire path is the one that
-    // actually reaches the teardown. A reconnect restores it via emitInitialState.
-    // AE detects slice removal via in_use=0 (RadioModel.cpp onStatusReceived),
-    // not a "removed" token — send the wire form AE actually acts on.
+    // Exercise the same typed retirement path as a radio's in_use=0 report.
+    // Reconnect restores the canonical receiver via emitInitialState().
     pushFaultStatus(QStringLiteral(
         "SDE300001|slice 0 client_handle=0xDE300001 in_use=0"));
 }
@@ -857,7 +899,7 @@ void SimBackend::injectDropSlice()
 void SimBackend::injectMalformedStatus()
 {
     // Push a deliberately garbled slice status so AE's decoder must fail closed
-    // (present-only + ok-guarded carry — decodeSliceStatus drops malformed present
+    // (present-only + ok-guarded carry — the slice decoder drops malformed present
     // fields rather than applying them). A real radio never sends this; AE must
     // NOT retune/reset the VFO to 0 or crash. Assertion: VFO/slice unaffected.
     // RF_frequency is non-numeric garbage; the ok-guarded toDouble drops it.

@@ -1,9 +1,12 @@
 #include "RadioModel.h"
+#include "ModeVocabulary.h"
 #include "TxController.h"
 #include "core/LogManager.h"
+#include "core/SerialPortController.h"
 
 #include <QPointer>
 #include <QScopeGuard>
+#include <QThread>
 #include <vector>
 
 namespace AetherSDR {
@@ -132,6 +135,7 @@ void RadioModel::abortTxProducerInputs(const TxCoordinator::Producer& producer,
             case TxActivity::Atu: (void)requestProducerAtu(request, false); break;
             case TxActivity::Tune: (void)requestProducerTune(request, false); break;
             case TxActivity::Mox: abortProducerPtt(request, source); break;
+            case TxActivity::VoiceKeyer: case TxActivity::Navtex: break;
             }
         }
     }
@@ -199,6 +203,20 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
         }});
 }
 
+void RadioModel::connectSerialPttInput(SerialPortController* source)
+{
+    // Both edges go through the normal PTT paths so the footswitch gets the
+    // same tails as MOX: Quindar intro/outro, RADE end-of-over, TX off delay.
+    connect(source, &SerialPortController::externalPttChanged,
+            this, [this](bool active, const TxCoordinator::Request& input) {
+        if (active) {
+            (void)requestProducerPttOn(input, TransmitModel::PttSource::Mox);
+        } else {
+            requestProducerPttOff(input, TransmitModel::PttSource::Mox);
+        }
+    });
+}
+
 void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
                                  TransmitModel::PttSource source)
 {
@@ -226,12 +244,32 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     }
 }
 
-bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request)
+bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request,
+                                 bool askKeyObjection)
 {
     if (m_txInputsStopping) {
         return false;
     }
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
+        return false;
+    }
+    const unsigned services = static_cast<unsigned>(TxActivity::VoiceKeyer)
+        | static_cast<unsigned>(TxActivity::Navtex);
+    const bool serviceActivity = static_cast<unsigned>(activity) & services;
+    if (m_txCoordinator.hasOtherIntents(m_txOperation, {}, serviceActivity ? 0 : services)) {
+        emitInterlockNotification(serviceActivity
+                ? tr("The voice keyer or NAVTEX waits for the current transmission to end.")
+                : tr("Transmit is held by the voice keyer or a NAVTEX message."),
+            QStringLiteral("tx-service"));
+        return false;
+    }
+    // The radio's own report decides too: a Stop releases this client's hold
+    // at once, but a playback or NAVTEX transmission the radio still reports
+    // keeps every other transmit out (maintainer ruling).
+    if (!serviceActivity && (m_dvkModel.status() == VoiceKeyer::Playback
+            || m_navtexModel.status() == NavtexStatus::Transmitting)) {
+        emitInterlockNotification(tr("Transmit is held: the radio reports the voice keyer or NAVTEX transmitting."),
+                                  QStringLiteral("tx-service"));
         return false;
     }
     if (m_daxTxOwnershipIntent) {
@@ -285,8 +323,14 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     }
     const QString gate = activity == TxActivity::Tune || activity == TxActivity::Atu
         ? QStringLiteral("tune-start")
-        : activity == TxActivity::Mox ? QStringLiteral("xmit") : QStringLiteral("cw-key");
+        : activity == TxActivity::Mox ? QStringLiteral("xmit")
+        : activity == TxActivity::VoiceKeyer ? QStringLiteral("dvk")
+        : activity == TxActivity::Navtex ? QStringLiteral("navtex") : QStringLiteral("cw-key");
     if (transmitStartBlockedByInhibit(gate)) {
+        return false;
+    }
+    // After the radio's own refusals, so a pan inhibit is reported ahead of it.
+    if (askKeyObjection && transmitStartBlockedByKeyObjection(gate)) {
         return false;
     }
     const bool independent = request && m_txCoordinator.isIndependentRequest(*request);
@@ -1045,6 +1089,27 @@ void RadioModel::cancelLocalTransmit()
     if (QThread::currentThread() != thread()) {
         return;
     }
+    // This is explicit operator Stop, unlike automatic operation retirement.
+    // DVK stop is global; automatic cleanup cannot prove another client's
+    // replacement has not acquired that radio operation.
+    const QPointer<RadioModel> alive(this);
+    if (m_dvkModel.status() == VoiceKeyer::Playback
+        || m_dvkModel.pendingOperation() == VoiceKeyer::Playback) {
+        m_dvkModel.playbackStop(m_dvkModel.activeId());
+    }
+    if (!alive) { return; }
+    // Stop also ends the services' hold on the transmitter, so a NAVTEX
+    // submission or voice playback whose answer never came cannot lock out
+    // MOX, TUNE or the next submission until reconnect.
+    if (m_dvkTxRequest) {
+        m_dvkTxRequest = 0;
+        endLocalTxActivity(std::exchange(m_dvkTxIntent, {}));
+    }
+    if (m_navtexTxRequest) {
+        m_navtexTxRequest = 0;
+        endLocalTxActivity(std::exchange(m_navtexTxIntent, {}));
+    }
+    if (!alive) { return; }
     m_txCoordinator.discardCapturedRequests();
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();
@@ -1083,12 +1148,75 @@ void RadioModel::emergencyTransmitStop()
     cancelLocalTransmit();
 }
 
+void RadioModel::addKeyObjection(QObject* owner, KeyObjection objection)
+{
+    if (QThread::currentThread() != thread() || owner == nullptr || !objection) {
+        return;
+    }
+    m_keyObjections.push_back({QPointer<QObject>(owner), std::move(objection)});
+}
+
+QString RadioModel::keyObjectionMessage() const
+{
+    // A request while this client already transmits is not a key-on: refusing
+    // it would roll back the state of a transmission on the air.
+    if (activeTxActivities() != 0) {
+        return QString();
+    }
+    return firstKeyObjection();
+}
+
+QString RadioModel::firstKeyObjection() const
+{
+    for (const KeyObjectionEntry& entry : m_keyObjections) {
+        if (entry.owner.isNull()) {
+            continue;
+        }
+        const QString message = entry.objection().trimmed();
+        if (!message.isEmpty()) {
+            return message;
+        }
+    }
+    return QString();
+}
+
+void RadioModel::emitKeyObjectionNotice(const QString& message, const QString& gate)
+{
+    // Keyed by gate, never by the sentence, so a changing sentence does not
+    // re-fire the notice inside its de-duplication window.
+    const QString panId = txSlice() ? txSlice()->panId() : QString();
+    emitInterlockNotification(message, QStringLiteral("key-objection:%1:%2").arg(panId, gate), panId);
+}
+
+bool RadioModel::transmitStartBlockedByKeyObjection(const QString& gate)
+{
+    const QString message = keyObjectionMessage();
+    if (message.isEmpty()) {
+        return false;
+    }
+    emitKeyObjectionNotice(message, gate);
+    m_transmitModel.setTransmitting(false);
+    if (m_txAudioGate) {
+        m_txAudioGate = false;
+        emit txAudioGateChanged(false);
+    }
+    return true;
+}
+
 void RadioModel::resetTxOperations()
 {
     // Even an idle coordinator must refuse new intent while the session dies.
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    m_transmitServiceSession->store(false, std::memory_order_release);
+    m_transmitServiceSession = std::make_shared<std::atomic_bool>(true);
+    m_dvkTxRequest = 0;
+    m_navtexTxRequest = 0;
+    m_dvkTxIntent = {};
+    m_navtexTxIntent = {};
+    m_dvkModel.reset();
+    m_navtexModel.reset();
     m_cwxSessionValid->store(false, std::memory_order_release);
     m_cwxSessionValid = std::make_shared<std::atomic<bool>>(true);
     if (m_independentTxGrants) {
@@ -1125,13 +1253,49 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
 
 void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                        const QString& source, quint64 traceId, quint64 sourceMs,
-                                       std::chrono::steady_clock::time_point scheduledAt)
+                                       std::chrono::steady_clock::time_point scheduledAt,
+                                       bool hostTextGates, std::function<void()> onDownRefused)
 {
-    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt] {
+    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt,
+                                     hostTextGates, onDownRefused = std::move(onDownRefused)] {
+        const auto refused = [down, &onDownRefused] {
+            if (down && onDownRefused) {
+                onDownRefused();
+            }
+        };
         if (m_txSessionClosing || scheduledAt < m_cwInputNotBefore) {
+            refused();
             return;
         }
-        (void)sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request);
+        if (down && hostTextGates) {
+            SliceModel* tx = txSlice();
+            if (!tx || !isCwMode(tx->mode())) {
+                emitInterlockNotification(
+                    tr("CW text stopped: the transmit slice is not in a CW mode."),
+                    QStringLiteral("cw-text-mode:%1").arg(tx ? tx->mode() : QString()),
+                    tx ? tx->panId() : QString());
+                refused();
+                return;
+            }
+            if (!m_transmitModel.admitsCwKeyEdge(true)) {
+                emitInterlockNotification(tr("CW text stopped: TUNE is active."),
+                                          QStringLiteral("cw-text-tuning"), tx->panId());
+                refused();
+                return;
+            }
+            // Break-in turned off, or MOX/PTT released, mid-message: the
+            // backend would not raise MOX, so the element would not go out.
+            if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
+                emitInterlockNotification(
+                    tr("CW text stopped: break-in is off and transmit is not keyed."),
+                    QStringLiteral("cw-text-unkeyed"), tx->panId());
+                refused();
+                return;
+            }
+        }
+        if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
+            refused();
+        }
     }, Qt::QueuedConnection);
 }
 

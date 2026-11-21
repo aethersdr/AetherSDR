@@ -114,6 +114,7 @@ enum class SpectrumRenderMode : int {
 class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_OBJECT
     friend struct SpectrumOffscreenTestAccess;
+    friend struct TxMaskTestAccess;   // #5204 TX waterfall mask vs filter drag
     // Expose the measured FFT noise floor (and the pan index that identifies
     // which spectrum this is) to the automation bridge so a driver can read
     // them generically via QObject::property() in dumpTree — without coupling
@@ -179,16 +180,11 @@ public:
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
     void setRenderScheduler(PanadapterRenderScheduler* scheduler);
-    // macOS: whether the pan gets its own native NSView (historical default —
-    // #714). AETHER_PAN_NO_NATIVE_WINDOW=1 opts out to validate the cheaper
-    // composited path (no per-present raster flushSubWindow blend). Keep the
-    // native path as the production default because current Qt/macOS versions
-    // can otherwise leave a QRhiWidget inside a raster top-level window with no
-    // Metal surface, producing a transparent panadapter.
+    // The required Qt 6.12 stack supports shared top-level Metal composition.
+    // Native child surfaces are an explicit diagnostic override (#714).
+    // Source references and live evidence: docs/performance/backing-store-redraws.md.
     static bool nativeWindowPreferred() {
-        static const bool noNative =
-            qEnvironmentVariableIntValue("AETHER_PAN_NO_NATIVE_WINDOW") == 1;
-        return !noNative;
+        return qEnvironmentVariableIntValue("AETHER_PAN_NATIVE_WINDOW") == 1;
     }
     // macOS: apply the native-window isolation policy as one unit — request the
     // native Metal leaf (WA_NativeWindow) *and* block ancestor promotion
@@ -863,7 +859,14 @@ public:
     };
 
     // Add or update a slice overlay (called per-slice on any state change).
-    bool isDraggingFilter() const { return m_draggingFilter != FilterEdge::None; }
+    // True while a filter-edge drag is moving this slice's overlay. The drag
+    // writes activeOverlay(), so other slices on the pan are not held back.
+    bool isDraggingFilterOf(int sliceId) const
+    {
+        if (m_draggingFilter == FilterEdge::None) { return false; }
+        const SliceOverlay* dragged = activeOverlay();
+        return dragged && dragged->sliceId == sliceId;
+    }
     void setSliceOverlay(int sliceId, double freq, int fLow, int fHigh,
                          bool tx, bool active, const QString& mode = {},
                          int rttyMark = 2125, int rttyShift = 170,
@@ -950,6 +953,34 @@ public:
         QString backgroundColor;
     };
     void setSpotMarkers(const QVector<SpotMarker>& markers);
+
+    // Live WSJT-X Rx/Tx frequency overlay (#4526). One entry per WSJT-X
+    // instance currently reporting Status — MainWindow expires an instance's
+    // entry after it goes quiet, so this list is never fed a stale marker
+    // that just sits there after WSJT-X exits or loses network. Deliberately
+    // separate from SpotMarker/drawSpotMarkers(): this is the digital-mode
+    // program's live Rx/Tx position, not a DX spot, and the issue calls out
+    // that the two must stay visually distinct.
+    struct WsjtxMarker {
+        QString id;               // WSJT-X instance id, for tooltip/debugging only
+        double  dialFreqHz{0.0};  // raw radio dial frequency, no audio offset
+        double  rxFreqHz{0.0};    // dial + Rx audio offset (full RF)
+        double  txFreqHz{0.0};    // dial + Tx audio offset (full RF)
+        bool    transmitting{false};
+        QString mode;             // WSJT-X mode name ("FT8"/"FT4"/"FT2"/...), drives
+                                  // the double-line occupied-bandwidth width below.
+    };
+    void setWsjtxMarkers(const QVector<WsjtxMarker>& markers);
+    // Per-pan, unlike setShowTuneGuides/setExtendedFrequencyLine (which
+    // propagate globally to every sibling SpectrumWidget). Deliberately NOT
+    // global here: the whole point of the overlay is one WSJT-X instance per
+    // band/slice, so an operator showing it on the 20 m pan and hiding it on
+    // the 40 m pan is the normal case, not an edge case. Persisted as part of
+    // the WsjtxOverlay config object — see WsjtxOverlayConfig.h. Lives in this pan's own
+    // right-click menu next to Show Tune Guides (#4526 follow-up: moved here
+    // from a Spots-dialog checkbox).
+    void setShowWsjtxFreq(bool on);
+    bool showWsjtxFreq() const { return m_showWsjtxFreq; }
 
     struct SpotCluster {
         QRect rect;
@@ -1045,6 +1076,11 @@ signals:
     void sliceDragActiveChanged(bool active);
     void sliceDragCancelled();
     void spotTriggered(int spotIndex);
+    // Emitted when the per-pan WSJT-X Rx/Tx overlay is switched on so
+    // MainWindow can start the UDP listener if the radio is already connected
+    // (the auto-start path in onConnectionStateChanged only runs at connect
+    // time and would miss a mid-session toggle). (#4526)
+    void wsjtxListenerNeeded();
     // Emitted when the user changes both center and bandwidth as one explicit
     // pan/zoom operation and the radio should apply them coherently. Splitting
     // those into separate commands was a known source of waterfall edge loss
@@ -1174,6 +1210,7 @@ private:
     void drawTnfMarkers(QPainter& p, const QRect& specRect,
                         const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
+    void drawWsjtxMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
     void drawSquelchLine(QPainter& p, const QRect& specRect);
@@ -2263,6 +2300,8 @@ private:
     int  m_notchMaxWidthHz{12000};
     bool m_tnfGlobalEnabled{true};
     QVector<SpotMarker> m_spotMarkers;
+    QVector<WsjtxMarker> m_wsjtxMarkers;
+    bool m_showWsjtxFreq{false};
     QVector<SwrSweepPoint> m_swrSweepPoints;
     bool   m_swrSweepRunning{false};
     double m_swrSweepCurrentFreqMhz{-1.0};
@@ -2378,6 +2417,12 @@ private:
     QImage m_overlayStatic;     // screen-space chrome — drawn ABOVE FFT
     QImage m_overlayFrequency;  // frequency-anchored markers — drawn ABOVE FFT
     QImage m_frequencyScalePreviewImage;  // narrow partial-upload staging strip
+    // Preserve only the pre-label pixels in the SmartMTR text band. Meter
+    // animation can then restore/repaint/upload this band without touching the
+    // frequency overlay, background or other screen-space chrome.
+    QImage m_smartMtrLabelBaseStrip;
+    QRect m_smartMtrLabelStripPx;
+    bool m_smartMtrLabelsDirty{false};
     bool m_overlayStaticDirty{true};
     bool m_overlayNeedsUpload{true};
     bool m_overlayFrequencyNeedsUpload{true};
@@ -2489,6 +2534,9 @@ private:
     // ── panstats: per-widget frame-cost counters (automation bridge) ─────────
     // Always-on: a handful of integer adds per frame plus one QElapsedTimer
     // read per instrumented section. Snapshot/reset via panstatsSnapshot().
+    QElapsedTimer m_submissionClock;
+    QVector<qint64> m_submissionIntervalsNs;
+    static constexpr qsizetype kMaxSubmissionIntervals = 65536; // ~18 min at 60 fps
     struct PanStats {
         QElapsedTimer clock;              // wall interval since last reset
         quint64 updateSpectrumCalls{0};   // FFT frames ingested
@@ -2537,6 +2585,12 @@ private:
             clock.start();
         }
     } m_panStats;
+
+    // SmartMTR value change: GPU builds restore and re-upload only the label
+    // band; otherwise identical to markOverlayDirty("smartMtr").
+    void invalidateSmartMtrLabels();
+    // Union of every flag's label band, in widget coordinates.
+    QRect smartMtrLabelsCoverageRect() const;
 
     // Mark the static overlay for repaint and schedule a frame update.
     // In non-GPU mode this is just update(). `cause` feeds the panstats

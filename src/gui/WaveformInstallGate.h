@@ -2,7 +2,9 @@
 
 #include "models/ModelCapabilities.h"   // RadioPlatform, isKnownNonWfpPlatform
 
+#include <QCoreApplication>
 #include <QPointer>
+#include <QString>
 
 namespace AetherSDR {
 
@@ -12,6 +14,21 @@ namespace AetherSDR {
 inline bool remoteAccessUsesNativePackage(RadioPlatform platform)
 {
     return isKnownNonWfpPlatform(platform);
+}
+
+// Why a waveform row's Restart is unavailable on this radio; empty where it
+// works. FLEX-6000 firmware refuses the command outright (#6990):
+//   waveform restart <name>  ->  R|50000016|usage: ... Not supported by Flex6K series
+// so the button is dimmed there with the reason, not offered and then refused.
+// An Unknown platform keeps Restart: a radio that has not identified itself
+// yet must not lose an action it may well support.
+inline QString waveformRestartUnavailableReason(RadioPlatform platform)
+{
+    if (!isKnownNonWfpPlatform(platform)) {
+        return {};
+    }
+    return QCoreApplication::translate("WaveformInstallGate",
+        "The firmware of a FLEX-6000 series radio does not support restarting a waveform.");
 }
 
 // The radio a package may be installed to once its download or file picker
@@ -82,6 +99,60 @@ inline DockerWaveformInstallBlocker dockerWaveformInstallBlocker(
         return DockerWaveformInstallBlocker::WfpNotReady;
     }
     return DockerWaveformInstallBlocker::None;
+}
+
+// What to tell the operator for a Docker install blocker; empty for None.
+// One wording for every install path (the Waveforms window, AetherGPS).
+inline QString dockerInstallBlockerMessage(DockerWaveformInstallBlocker blocker, bool wfpPowered,
+                                           bool wfpReady)
+{
+    switch (blocker) {
+    case DockerWaveformInstallBlocker::None:
+        return {};
+    case DockerWaveformInstallBlocker::NotConnected:
+        return QCoreApplication::translate("WaveformInstallGate",
+            "Connect to a radio before installing Docker waveform images.");
+    case DockerWaveformInstallBlocker::UnsupportedPlatform:
+        return QCoreApplication::translate("WaveformInstallGate",
+            "This radio platform does not support on-radio Docker waveform deployment.");
+    case DockerWaveformInstallBlocker::RuntimeStatusUnknown:
+        return QCoreApplication::translate("WaveformInstallGate",
+            "WFP runtime status has not been reported by this radio.");
+    case DockerWaveformInstallBlocker::WfpNotReady:
+        break;
+    }
+    return QCoreApplication::translate("WaveformInstallGate", "%1, %2")
+        .arg(wfpPowered ? QCoreApplication::translate("WaveformInstallGate", "WFP ON")
+                        : QCoreApplication::translate("WaveformInstallGate", "WFP OFF"),
+             wfpReady ? QCoreApplication::translate("WaveformInstallGate", "READY")
+                      : QCoreApplication::translate("WaveformInstallGate", "NOT READY"));
+}
+
+// Why AetherGPS's "Install AetherGPS on the radio" checkbox is unavailable,
+// or None. The relay ships as a legacy waveform for a radio without a
+// Waveform Processor (the FLEX-6000) and as a container for the rest, which
+// the Docker gate governs. Unlike the health tools it needs no LAN address
+// to install: AetherGPS reaches it on the LAN or through the tailnet shim.
+enum class AetherGpsBlocker {
+    None,
+    NotConnected,
+    NoWaveforms,   // this radio family installs no waveforms
+    Container,     // the container path, held by the Docker gate
+};
+
+inline AetherGpsBlocker aetherGpsBlocker(bool connected, bool hasWaveforms, bool nativePackage,
+                                         DockerWaveformInstallBlocker docker)
+{
+    if (!connected) {
+        return AetherGpsBlocker::NotConnected;
+    }
+    if (!hasWaveforms) {
+        return AetherGpsBlocker::NoWaveforms;
+    }
+    if (!nativePackage && docker != DockerWaveformInstallBlocker::None) {
+        return AetherGpsBlocker::Container;
+    }
+    return AetherGpsBlocker::None;
 }
 
 }  // namespace AetherSDR
