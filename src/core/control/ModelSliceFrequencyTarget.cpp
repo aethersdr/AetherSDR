@@ -77,7 +77,7 @@ public:
         }
         // Do not call the optimistic desktop/CAT setters. No event-loop
         // yielding or saved pointer crosses validation and this typed dispatch.
-        m_radio->backend()->requestSliceTune(sliceId,
+        m_radio->requestBackendSliceTune(sliceId,
             {static_cast<double>(hz), SliceTuneRequest::PanIntent::PreservePan});
         return std::nullopt;
     }

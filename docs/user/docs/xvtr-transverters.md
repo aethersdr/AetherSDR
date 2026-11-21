@@ -1,19 +1,22 @@
 ---
 title: "XVTR (Transverters)"
 slug: "/xvtr-transverters"
-description: "AetherSDR supports transverters for VHF, UHF and microwave operation through the FlexRadio's XVTR configuration and its XVTA / XVTB antenna ports."
+description: "AetherSDR supports transverters for VHF, UHF and microwave operation through the FlexRadio's XVTR configuration and its XVTA / XVTB antenna ports, and receive-only transverters on a networked Icom."
 status: "Supported"
-applies_to: ["FlexRadio"]
+applies_to: ["FlexRadio", "Networked Icom (early, receive-only)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio
+**Status:** Supported · **Applies to:** FlexRadio, Networked Icom (early, receive-only)
 
 :::
 
 AetherSDR supports transverters for VHF, UHF and microwave operation through
-the FlexRadio's XVTR configuration and its XVTA / XVTB antenna ports.
+the FlexRadio's XVTR configuration and its XVTA / XVTB antenna ports. A
+networked Icom keeps no transverter list, so AetherSDR holds one for it and
+does the frequency conversion itself; see
+[Transverters on a networked Icom](#transverters-on-a-networked-icom).
 
 ## Setup
 
@@ -55,13 +58,73 @@ status indicators in [TX Controls](./tx-controls.md). **TUNE** remains available
 to check transverter drive with a carrier; set the transverter's **Max Power
 (dBm)** for its rated input.
 
+### Transverters on a networked Icom
+
+On a single-receiver networked Icom, **Settings → Radio Setup... →
+Transverters** shows a table that AetherSDR stores for that radio. (The
+dual-receiver IC-7610, IC-7760, IC-7851 and IC-9700 are not served.) The radio only ever tunes the IF;
+AetherSDR adds the LO, so the VFO, the panadapter, spots, TCI and CAT show the
+operating (RF) frequency.
+
+1. Click **Add** and fill in the row:
+   - **Name** — the band button's label, e.g., "QO-100". Each row needs its own name;
+     **Apply** refuses two rows with the same name
+   - **IF low (MHz)** / **IF high (MHz)** — the part of the radio's range the
+     transverter uses, e.g., 28.500 to 29.000
+   - **RX LO (MHz)** — receive LO; RF = IF + LO, e.g., 10461.000
+   - **TX LO (MHz)** — transmit LO of a split up/down converter, e.g.,
+     2371.500; leave it empty when transmit uses the receive LO
+   - **Enabled** — untick to keep a row without using it
+2. **RF range** shows the resulting band, and the transmit range when the TX LO
+   differs.
+3. Click **Apply**. Incomplete rows are saved but ignored.
+
+A transverter becomes active when you tune into its RF range: by its band
+button, a typed frequency or a spot. It stays active while the radio's IF stays
+inside the IF range. Tuning up to 1 MHz past either end of the RF range holds
+the radio at that edge. A frequency that is outside the radio's own range and
+outside every transverter's RF range is refused with a notice, and the radio
+does not move. Tuning to one of the radio's own frequencies, or turning the radio's
+dial out of the IF range, returns to the radio's own frequencies.
+
+Transverter bands on a networked Icom are **receive-only**. While one is
+active, **MOX**, **TUNE** and the antenna tuner are refused with the notice
+"The *name* transverter is receive-only in AetherSDR", because AetherSDR does
+not yet limit the radio's RF power to what a transverter input takes. The
+radio's own PTT, VOX and front-panel key are outside AetherSDR's control: set
+the radio's power for your transverter before keying it from the radio.
+
+Receive-only follows the **active** transverter: the one whose band you tuned
+to, and only while the radio's dial stays in its IF range. On the radio's own
+bands it transmits as usual, and on an IF frequency with no transverter active
+AetherSDR has nothing to protect. This interlock is a stopgap. The real
+protection is a **Max Power** limit per transverter, which is planned as a
+follow-up and will allow transmitting on a transverter band at a safe power.
+
+TCI clients see `tx_enable:<trx>,false;` while a transverter is active, and
+`true` again when it is cleared, so a client can disable its own TX controls.
+
+While the radio is transmitting or sending a TUNE carrier, a tune onto a
+transverter band is refused with the notice "Unkey before tuning to the *name*
+transverter band", and the radio stays where it is. Unkey first, then tune.
+
+TCI reports the transmit frequency through the TX LO (`tx_frequency` is
+2400.040 MHz for a 10489.540 MHz QO-100 downlink).
+
+While client transverters are configured, TCI's `vfo_limits` upper limit is
+raised to the top of the highest transverter band (10490 MHz for the QO-100
+example), so a client that keeps to the advertised range can still tune it.
+A client that is already connected gets the new `vfo_limits` when the list
+changes. Without client transverters the limits are unchanged.
+
 ## Using transverter bands
 
 ### Selecting a band
 
 1. Click **Band** in the panadapter's overlay menu.
 2. Your configured transverter bands appear as their own buttons in the band
-   grid, between the HF bands and the utility row.
+   grid, between the HF bands and the utility row. On a networked Icom they
+   appear beside the radio's own bands.
 3. Click one to tune to it.
 
 The [Band applet](./panadapter-controls.md#band-applet) (button **BAND**) shows the same transverter buttons in the applet panel.

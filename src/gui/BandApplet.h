@@ -29,6 +29,9 @@ public:
         QString name;
         double  rfFreqMhz{0.0};
         QString stackKey;
+        // A client-side transverter (networked Icom): the operator's own
+        // band, shown beside a radio-declared band set.
+        bool    clientOwned{false};
     };
 
     explicit BandApplet(QWidget* parent = nullptr);

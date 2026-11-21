@@ -39,6 +39,7 @@
 #include <array>
 #include <optional>
 #include "SliceModel.h"
+#include "ClientTransverter.h"
 #include "MeterModel.h"
 #include "PanadapterModel.h"
 #include "PanBandTransitions.h"
@@ -2915,8 +2916,61 @@ public:
     };
     const QMap<int, XvtrInfo>& xvtrList() const { return m_xvtrList; }
 
+    // Client-side transverters for a backend that declares
+    // RadioCapabilities::clientTransverters. RadioModel translates RF<->IF at
+    // the backend seam, so every model and consumer above it (VFO, pan, spots,
+    // TCI, rigctl, logging) sees RF. Receive-only: see refuseKeyInReceiveOnlyMode().
+    bool usesClientTransverters() const { return m_backend && m_clientXvtrsAvailable; }
+    const ClientTransverterSet& clientTransverters() const { return m_clientXvtrs; }
+    // The transverter that makes this session receive-only, or none. Every
+    // change to it republishes capabilities, so a reader bound to
+    // capabilitiesChanged (TCI tx_enable) follows it.
+    const ClientTransverter* activeClientTransverter() const
+    {
+        return usesClientTransverters() ? m_clientXvtrs.active() : nullptr;
+    }
+    // False, with nothing stored or applied, when the connected backend does
+    // not qualify (no capability record, or more than one receiver).
+    bool setClientTransverters(const QVector<ClientTransverter>& list);
+    // The frequency a slice transmits on. Equal to its frequency, except under a
+    // client transverter with its own TX LO (QO-100: RX 10489.540 transmits on
+    // 2400.040), which TCI tx_frequency and logging must report.
+    double transmitFrequencyMhz(const SliceModel* slice) const;
+    // Seam entry points for the headless control plane, which tunes a slice or
+    // pan without a SliceModel intent. They carry the same RF->IF translation
+    // as the desktop path; calling the backend directly would send RF raw.
+    void requestBackendSliceTune(int sliceId, const SliceTuneRequest& request);
+    void requestBackendPanCenter(const QString& backendPanId, double hz,
+                                 IRadioBackend::PanCenterIntent intent);
+
 private:
     QMap<int, XvtrInfo> m_xvtrList;
+    ClientTransverterSet m_clientXvtrs;
+    bool m_clientXvtrsAvailable{false};
+    void loadClientTransverters();
+    // Qualification is the backend's, not the session's: recomputed when its
+    // capabilities change and dropped with it in teardownBackend().
+    void refreshClientTransverterQualification();
+    void clearClientTransverterState();
+    void saveClientTransverters();
+    void noteClientTransverterActivation(int previousIndex);
+    // Empty when the radio cannot reach the request; the operator is told and
+    // nothing is sent.
+    std::optional<double> clientTransverterRadioMhz(double requestedMhz);
+    // The same judgement on a copy, for a caller with admission checks of its
+    // own to run before anything changes; commit applies an admitted probe.
+    std::optional<double> probeClientTransverterRadioMhz(double requestedMhz,
+                                                         ClientTransverterSet& probe);
+    void commitClientTransverterProbe(const ClientTransverterSet& probe);
+    void cacheClientTransverterNativeRange();
+    QString clientTransverterReceiveOnlyMessage(const ClientTransverter& t) const;
+    // The record, on a backend with one receiver: the active transverter is a
+    // single model-wide state.
+    bool backendQualifiesForClientTransverters() const;
+    // Puts back what the radio last reported after a refused tune, so the
+    // slice does not go on showing a frequency the radio is not on.
+    void showLastReportedSliceFrequency(SliceModel* slice);
+    QHash<int, double> m_xvtrReportedRadioMhz;
 
     // Backward-compat helpers for active panadapter (Phase 1)
     QString activeWfId() const {

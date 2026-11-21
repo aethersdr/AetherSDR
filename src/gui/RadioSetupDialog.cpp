@@ -6173,8 +6173,161 @@ QWidget* RadioSetupDialog::buildFiltersTab()
     vbox->addStretch(1);
     return page;
 }
+QWidget* RadioSetupDialog::buildClientXvtrTab()
+{
+    // A radio that keeps no transverter list: the list belongs to AetherSDR,
+    // saved per radio, and RadioModel translates RF<->IF at the backend seam.
+    // A separate TX LO covers split up/down converters such as QO-100 (one IF,
+    // 10461 MHz LO down, 2371.5 MHz LO up).
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto* intro = new QLabel(tr(
+        "This radio keeps no transverter list, so AetherSDR does the conversion. "
+        "Tune into a transverter's RF range (or press its band button) and the radio "
+        "goes to the IF; the display, spots, TCI and logging show RF. Leave TX LO "
+        "empty when transmit uses the same LO as receive. Transverter bands are "
+        "receive-only: MOX and TUNE are refused while one is active."));
+    intro->setWordWrap(true);
+    setTone(intro, Tone::Hint);
+    vbox->addWidget(intro);
+
+    enum Col { Name, IfLow, IfHigh, RxLo, TxLo, RfRange, Enabled, ColCount };
+    auto* table = new QTableWidget(0, ColCount);
+    table->setHorizontalHeaderLabels({tr("Name"), tr("IF low (MHz)"), tr("IF high (MHz)"),
+                                      tr("RX LO (MHz)"), tr("TX LO (MHz)"), tr("RF range"),
+                                      tr("Enabled")});
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    table->verticalHeader()->setVisible(false);
+    vbox->addWidget(table, 1);
+
+    auto mhz = [](double v) { return v > 0.0 ? QString::number(v, 'f', 6) : QString(); };
+    auto checkItem = [](bool on) {
+        auto* item = new QTableWidgetItem;
+        item->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        item->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+        return item;
+    };
+    auto readRow = [table](int r) {
+        auto text = [&](int c) { return table->item(r, c) ? table->item(r, c)->text().trimmed() : QString(); };
+        auto checked = [&](int c) { return table->item(r, c) && table->item(r, c)->checkState() == Qt::Checked; };
+        ClientTransverter t;
+        t.name = text(Name);
+        t.ifLowMhz = text(IfLow).toDouble();
+        t.ifHighMhz = text(IfHigh).toDouble();
+        t.rxLoMhz = text(RxLo).toDouble();
+        t.txLoMhz = text(TxLo).toDouble();
+        t.enabled = checked(Enabled);
+        return t;
+    };
+    auto refreshRange = [table, readRow](int r) {
+        const ClientTransverter t = readRow(r);
+        QString range = tr("invalid");
+        if (t.isUsable() || (!t.enabled && t.ifHighMhz > t.ifLowMhz && t.rxLoMhz > 0.0)) {
+            range = QStringLiteral("%1-%2").arg(t.rfLowMhz(), 0, 'f', 3).arg(t.rfHighMhz(), 0, 'f', 3);
+            if (t.txLoMhz > 0.0 && t.txLoMhz != t.rxLoMhz) {
+                range += tr(" (TX %1-%2)").arg(t.ifLowMhz + t.txLoMhz, 0, 'f', 3)
+                                          .arg(t.ifHighMhz + t.txLoMhz, 0, 'f', 3);
+            }
+        }
+        auto* item = new QTableWidgetItem(range);
+        item->setFlags(Qt::ItemIsEnabled);
+        QSignalBlocker block(table);
+        table->setItem(r, RfRange, item);
+    };
+    auto addRow = [=](const ClientTransverter& t) {
+        QSignalBlocker block(table);
+        const int r = table->rowCount();
+        table->insertRow(r);
+        table->setItem(r, Name, new QTableWidgetItem(t.name));
+        table->setItem(r, IfLow, new QTableWidgetItem(mhz(t.ifLowMhz)));
+        table->setItem(r, IfHigh, new QTableWidgetItem(mhz(t.ifHighMhz)));
+        table->setItem(r, RxLo, new QTableWidgetItem(mhz(t.rxLoMhz)));
+        table->setItem(r, TxLo, new QTableWidgetItem(mhz(t.txLoMhz)));
+        table->setItem(r, Enabled, checkItem(t.enabled));
+        refreshRange(r);
+    };
+    for (const ClientTransverter& t : m_model->clientTransverters().transverters()) {
+        addRow(t);
+    }
+    connect(table, &QTableWidget::itemChanged, page, [table, refreshRange](QTableWidgetItem* item) {
+        if (item && item->column() != RfRange) {
+            refreshRange(item->row());
+        }
+    });
+
+    auto* status = new QLabel;
+    auto* buttons = new QHBoxLayout;
+    auto* addBtn = new QPushButton(tr("Add"));
+    auto* removeBtn = new QPushButton(tr("Remove"));
+    auto* applyBtn = new QPushButton(tr("Apply"));
+    buttons->addWidget(addBtn);
+    buttons->addWidget(removeBtn);
+    buttons->addStretch(1);
+    buttons->addWidget(status);
+    buttons->addWidget(applyBtn);
+    vbox->addLayout(buttons);
+
+    connect(addBtn, &QPushButton::clicked, page, [addRow, readRow, table] {
+        // The first unused "XVTR n": the name identifies the row, and Add,
+        // Remove, Add would otherwise hand out the same one twice.
+        QSet<QString> names;
+        for (int r = 0; r < table->rowCount(); ++r) {
+            names.insert(readRow(r).name);
+        }
+        ClientTransverter t;
+        for (int n = table->rowCount() + 1; ; ++n) {
+            t.name = QStringLiteral("XVTR %1").arg(n);
+            if (!names.contains(t.name)) {
+                break;
+            }
+        }
+        addRow(t);
+    });
+    connect(removeBtn, &QPushButton::clicked, page, [table] {
+        if (table->currentRow() >= 0) {
+            table->removeRow(table->currentRow());
+        }
+    });
+    connect(applyBtn, &QPushButton::clicked, page, [this, table, readRow, status] {
+        QVector<ClientTransverter> list;
+        int unusable = 0;
+        for (int r = 0; r < table->rowCount(); ++r) {
+            const ClientTransverter t = readRow(r);
+            if (t.enabled && !t.isUsable()) {
+                ++unusable;
+            }
+            list.append(t);
+        }
+        // The active transverter, its band button and its notices are all
+        // followed by name.
+        QSet<QString> names;
+        for (const ClientTransverter& t : std::as_const(list)) {
+            if (names.contains(t.name)) {
+                status->setText(tr("Two rows are named \"%1\"; nothing was saved").arg(t.name));
+                setTone(status, Tone::Error);
+                return;
+            }
+            names.insert(t.name);
+        }
+        if (!m_model->setClientTransverters(list)) {
+            status->setText(tr("Not available on this radio; nothing was saved"));
+            setTone(status, Tone::Error);
+            return;
+        }
+        status->setText(unusable ? tr("Saved; %1 row(s) incomplete and ignored").arg(unusable)
+                                 : tr("Saved"));
+        setTone(status, unusable ? Tone::Error : Tone::Ok);
+    });
+    return page;
+}
+
 QWidget* RadioSetupDialog::buildXvtrTab()
 {
+    if (m_model->usesClientTransverters()) {
+        return buildClientXvtrTab();
+    }
     auto* page = new QWidget;
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(8);

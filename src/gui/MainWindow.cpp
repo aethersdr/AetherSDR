@@ -7053,6 +7053,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (x.isValid)
                     xvtrBands.append({x.name, x.rfFreq, QString("X%1").arg(x.index)});
             }
+            if (m_radioModel.usesClientTransverters()) {
+                // Client-side transverters (non-Flex): the button tunes the
+                // bottom of the RF window, which activates the transverter.
+                for (const ClientTransverter& t
+                     : m_radioModel.clientTransverters().transverters()) {
+                    if (t.isUsable()) {
+                        xvtrBands.append({t.name, t.rfLowMhz(), QString(), true});
+                    }
+                }
+            }
             const ModelCapabilities caps = m_radioModel.capabilities();
             const QVector<DeclaredBandRange> declaredBandRanges =
                 m_radioModel.backendCapabilities().declaredBandRanges;
@@ -7072,7 +7082,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 bandApplet->setDeclaredBands(declaredBands, declaredBandRanges);
                 QVector<BandApplet::XvtrBand> appletXvtrBands;
                 for (const auto& x : xvtrBands) {
-                    appletXvtrBands.append({x.name, x.rfFreqMhz, x.stackKey});
+                    appletXvtrBands.append({x.name, x.rfFreqMhz, x.stackKey, x.clientOwned});
                 }
                 bandApplet->setXvtrBands(appletXvtrBands);
                 applyTuningRangeToBandApplet();

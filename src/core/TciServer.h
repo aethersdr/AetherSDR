@@ -649,6 +649,10 @@ private:
     QHash<int, SpanAnswer> m_spanAnswerOwed;
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
+    // Last vfo_limits sent after the init burst; a change is re-announced so a
+    // client connected before the transverter list loaded can still reach it.
+    QString           m_announcedVfoLimits;
+    void publishVfoLimits();
     TciClient*       m_txChronoClient{nullptr};
     QPointer<TciClient> m_tciPttClient;
     TxCoordinator::Request m_tciPttRequest;

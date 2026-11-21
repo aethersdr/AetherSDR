@@ -3637,7 +3637,8 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     m_xvtrBandBtns.clear();
     const bool radioDeclaredBandSet = !m_declaredBands.isEmpty();
     const int xvtrBandCount = configuredXvtrBandCount(
-        radioDeclaredBandSet, bands.size());
+        radioDeclaredBandSet, bands.size(),
+        !bands.isEmpty() && bands.first().clientOwned);
     for (int i = 0; i < xvtrBandCount; ++i) {
         auto* btn = new QPushButton(bands[i].name, m_bandPanel);
         btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);

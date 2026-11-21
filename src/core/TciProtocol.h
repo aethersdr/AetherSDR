@@ -217,6 +217,13 @@ public:
     // not identify the slice which currently owns TX; PTT routing resolves
     // that separately when a client deliberately keys the radio.
     static bool transmitPermitted(const RadioModel* model, const SliceModel* slice);
+    // vfo_limits for this model, in Hz. The defaults are the fixed values every
+    // setup has always been given; only a configured client transverter (#6472)
+    // raises the upper limit, to the top of its RF window, so a client that
+    // honours the advertised range can tune a 10 GHz band.
+    static QString vfoLimits(const RadioModel* model, qint64 defaultMinHz, qint64 defaultMaxHz);
+    static constexpr qint64 kInitVfoMinHz = 1'000;
+    static constexpr qint64 kInitVfoMaxHz = 75'000'000;
 
     // The single scan for "which trx is the TX slice", returning -1 when none
     // is marked. Both TX-trx resolvers build on this so the scan lives in one

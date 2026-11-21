@@ -233,6 +233,11 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
     };
     PanDisplayRequest guarded = request;
     if (request.field == PanDisplayField::DaxIqChannel) { guarded.guard = pan->beginIqBinding(); }
+    if (PanGeometryRequest* geometry = std::get_if<PanGeometryRequest>(&guarded.value);
+        geometry && geometry->centerMhz && usesClientTransverters()) {
+        // The pan is held in RF; the backend's scope is on the IF.
+        geometry->centerMhz = m_clientXvtrs.shiftToRadioMhz(*geometry->centerMhz);
+    }
     const ReceiveDispatch result = control && control->supports(request.field) && current()
         ? m_backend->requestPanDisplay(backendPanIdFor(pan->panId()), waterfallId, guarded, completion, current)
         : ReceiveDispatch::Unsupported;

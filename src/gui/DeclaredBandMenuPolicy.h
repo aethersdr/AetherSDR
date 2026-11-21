@@ -37,9 +37,13 @@ inline bool declaredBandUtilityTargetAvailable(double targetMhz,
         || (targetMhz >= tuningMinMhz && targetMhz <= tuningMaxMhz);
 }
 
-inline int configuredXvtrBandCount(bool radioDeclaredBandSet, int configuredCount)
+// A radio that declares its own band set never shows radio-held (Flex) XVTR
+// bands, but a client-side transverter configured in AetherSDR for that radio
+// (networked Icom) is the operator's own band and always gets its button.
+inline int configuredXvtrBandCount(bool radioDeclaredBandSet, int configuredCount,
+                                   bool clientOwned = false)
 {
-    return radioDeclaredBandSet ? 0 : configuredCount;
+    return radioDeclaredBandSet && !clientOwned ? 0 : configuredCount;
 }
 
 inline bool declaredBandMenuIncludesUtility(bool radioDeclaredBandSet,
