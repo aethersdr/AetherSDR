@@ -1211,6 +1211,7 @@ set(CORE_SOURCES
     src/core/SpectrogramBuffer.cpp
     src/core/SignalClassifier.cpp
     src/core/Resampler.cpp
+    src/core/ReceiverAudioMixer.cpp
     src/core/NvidiaAfxFilter.cpp
     src/core/NvidiaAfxPack.cpp
     src/core/DeepFilterFilter.cpp

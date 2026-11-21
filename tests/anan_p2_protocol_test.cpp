@@ -459,6 +459,92 @@ int main()
               "...and writes no row past the last DDC");
         check(x[29] == 0 && (static_cast<int>(x[30]) << 8 | x[31]) == 96,
               "a repeated DDC keeps its first entry's row");
+
+        // The session's list, mask and link DDC drop exactly what the packet does.
+        const ActiveDdcSet set = resolveActiveDdcs(rejected);
+        check(set.mask == 0x04 && set.ddcs.size() == 1 && set.ddcs.front().ddc == 2
+                  && set.ddcs.front().rateKsps == 96,
+              "resolveActiveDdcs keeps the first DDC2 entry and drops the rest");
+        const ActiveDdcSet both = resolveActiveDdcs(reversed);
+        check(both.mask == 0x0C && both.ddcs.size() == 2 && both.ddcs.front().ddc == 3,
+              "and keeps the caller's order, so the first entry stays the link DDC");
+        check(resolveActiveDdcs({}).ddcs.empty() && resolveActiveDdcs({}).mask == 0,
+              "an empty request resolves to no DDC");
+    }
+
+    // ---- A live list change keeps a running DDC's rate ----
+    // AnanBackend records a zoom's new rate before the zoom's DSP channel is
+    // built; a list sent in that window (RX2 opening or closing) must not
+    // move the running DDC to it. Only setDdcRateLive() does.
+    {
+        const std::vector<DdcConfig> running{DdcConfig{.ddc = 2, .rateKsps = 48, .adcIndex = 0}};
+        const std::vector<DdcConfig> requested{
+            DdcConfig{.ddc = 2, .rateKsps = 96, .adcIndex = 0},
+            DdcConfig{.ddc = 3, .rateKsps = 192, .adcIndex = 1}};
+        const ActiveDdcSet live = resolveLiveDdcs(requested, running);
+        check(live.ddcs.size() == 2 && live.ddcs[0].ddc == 2 && live.ddcs[0].rateKsps == 48,
+              "RX1's DDC2, running at 48 ksps, stays at 48 while its 96 ksps zoom builds");
+        check(live.ddcs[1].ddc == 3 && live.ddcs[1].rateKsps == 192 && live.ddcs[1].adcIndex == 1
+                  && live.mask == 0x0C,
+              "RX2's DDC3, not running yet, takes the rate it asks for");
+        const std::array<std::uint8_t, 1444> x = buildDdcSpecific(live.ddcs);
+        check((static_cast<int>(x[17 + 6 * 2 + 1]) << 8 | x[17 + 6 * 2 + 2]) == 48,
+              "and the packet carries DDC2's running rate");
+
+        const std::vector<DdcConfig> reversed{requested[1], requested[0]};
+        const ActiveDdcSet order = resolveLiveDdcs(reversed, running);
+        check(order.ddcs.size() == 2 && order.ddcs[0].ddc == 3 && order.ddcs[1].rateKsps == 48,
+              "the caller's order is kept, and the running rate is matched by DDC, not by place");
+        check(resolveLiveDdcs(requested, {}).ddcs[0].rateKsps == 96,
+              "with nothing running, every DDC takes its requested rate");
+    }
+
+    // ---- High Priority waits for a newly enabled DDC's frequency ----
+    {
+        std::array<double, kMaxDdcs> hz{};
+        hz[2] = 7'100'000.0;
+        check(!highPriorityWithDdcChange(0x04, 0x0C, hz),
+              "enabling DDC3 before its frequency: no High Priority, or ADC1's bank "
+              "would follow 0 Hz to bypass for one packet");
+        hz[3] = 3'700'000.0;
+        check(highPriorityWithDdcChange(0x04, 0x0C, hz),
+              "with DDC3's frequency already there, High Priority goes with the enable");
+        hz[3] = 0.0;
+        check(highPriorityWithDdcChange(0x0C, 0x04, hz),
+              "disabling DDC3 sends High Priority, which drops its word and moves its bank");
+        check(highPriorityWithDdcChange(0x0C, 0x0C, hz),
+              "an unchanged list (a resend) sends High Priority");
+    }
+
+    // ---- Each band-pass bank follows the receiver on its ADC ----
+    {
+        std::array<double, kMaxDdcs> hz{};
+        hz[2] = 7'100'000.0;    // RX1 on DDC2
+        hz[3] = 3'700'000.0;    // RX2 on DDC3
+        const std::array<DdcConfig, 2> split{
+            DdcConfig{.ddc = 2, .rateKsps = 48, .adcIndex = 0},
+            DdcConfig{.ddc = 3, .rateKsps = 48, .adcIndex = 1}};
+        const std::array<double, 2> banks = bandFilterFrequenciesHz(split, hz);
+        check(banks[0] == 7'100'000.0 && banks[1] == 3'700'000.0,
+              "RX1 on ADC0 and RX2 on ADC1: each bank follows its own receiver");
+
+        const std::array<DdcConfig, 1> alone{split[0]};
+        check(bandFilterFrequenciesHz(alone, hz)[1] == 7'100'000.0,
+              "with no receiver on ADC1, its bank follows RX1, the link DDC");
+
+        const std::array<DdcConfig, 2> shared{
+            DdcConfig{.ddc = 2, .rateKsps = 48, .adcIndex = 1},
+            DdcConfig{.ddc = 3, .rateKsps = 48, .adcIndex = 1}};
+        const std::array<double, 2> sharedBanks = bandFilterFrequenciesHz(shared, hz);
+        check(sharedBanks[1] == 7'100'000.0 && sharedBanks[0] == 7'100'000.0,
+              "two receivers on ADC1: the first has its bank, and ADC0's follows RX1");
+        check(bandFilterFrequenciesHz({}, hz) == std::array<double, 2>{},
+              "no DDC: both banks get zero, which alexRxFilterFor() bypasses");
+
+        const std::array<AlexRxFilter, 2> filters{alexRxFilterFor(banks[0]),
+                                                  alexRxFilterFor(banks[1])};
+        check(filters[0] == AlexRxFilter::Bpf9_5MHz && filters[1] == AlexRxFilter::Bpf6_5MHz,
+              "so 40 m on RX1 and 80 m on RX2 select different filters on the two banks");
     }
 
     // ---- Sender-port demux (the ONLY thing separating DDC streams) ----
