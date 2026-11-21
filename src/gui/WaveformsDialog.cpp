@@ -12,8 +12,10 @@
 #include "core/RadioHealthClient.h"
 #include "core/RadioHealthPackage.h"
 #include "core/AetherGpsPackage.h"
+#include "core/Ft8Agent.h"
 #include "core/WsprAgent.h"
 #include "TailnetShimDialog.h"
+#include "Ft8ConfigureWindow.h"
 #include "WsprConfigureWindow.h"
 #include "WaveformEnvironmentDialog.h"
 #include "FramelessResizer.h"
@@ -1388,6 +1390,12 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // The WSPR receiver ships inside AetherSDR, pinned like the health tools.
     m_installWsprAction = installMenu->addAction(
         tr("WSPR Receiver"), this, &WaveformsDialog::onInstallWsprClicked);
+    // The FT8 receiver ships the same way. Without this entry the only route
+    // was "Legacy Waveform..." pointed at a file the operator had to find --
+    // and the package is not on their disk, so in practice there was no route
+    // at all from the UI.
+    m_installFt8Action = installMenu->addAction(
+        tr("FT8 Receiver"), this, &WaveformsDialog::onInstallFt8Clicked);
     // AetherGPS ships inside AetherSDR too; the AetherGPS window's checkbox
     // installs the same package.
     m_installAetherGpsAction = installMenu->addAction(
@@ -1644,6 +1652,25 @@ void WaveformsDialog::updateInstallButtonState()
         m_installWsprAction->setToolTip(wsprTip);
         m_installWsprAction->setStatusTip(wsprTip);
     }
+    if (m_installFt8Action) {
+        // Only the legacy armv7 package is pinned (see Ft8Package), so the
+        // entry is offered on a radio known to take it and dimmed elsewhere.
+        const bool reachable = ft8::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
+        const bool hasWaveforms = m_radioModel->backendCapabilities().hasWaveforms;
+        const bool native = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Native;
+        m_installFt8Action->setEnabled(!busy && connected && hasWaveforms && reachable && native);
+        const QString ft8Tip = busy ? tr("A waveform install is already in progress.")
+            : !connected            ? tr("Connect to a radio before installing the FT8 receiver.")
+            : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
+            : !reachable            ? tr("Connect over the radio's local network or Remote Access to install "
+                                         "the FT8 receiver.")
+            : !native               ? tr("The FT8 receiver is available for FLEX-6000 series radios only.")
+                                    : tr("Install the FT8 receiver (version %1), a receive-only FT8 "
+                                         "decoder that runs on the radio.")
+                                          .arg(QString::fromLatin1(Ft8Package::kVersion));
+        m_installFt8Action->setToolTip(ft8Tip);
+        m_installFt8Action->setStatusTip(ft8Tip);
+    }
     if (m_installAetherGpsAction) {
         // AetherGPS's checkbox's own gate: the container on a radio with a
         // Waveform Processor, under the Docker gate; any other, the legacy
@@ -1706,6 +1733,28 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
         return;
     }
     installRemoteAccess(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::onInstallFt8Clicked()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    // Legacy only: Ft8Package has no container pin, and updateInstallButtonState
+    // dims this entry on a radio that would need one.
+    QString error;
+    const QString path = ft8::writeBundledPackage(
+        Ft8Package::kLegacy,
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-ft8-%1").arg(QString::fromLatin1(Ft8Package::kVersion)),
+        &error);
+    if (path.isEmpty()) {
+        ScopedChildWidget<CanonMessageBox> box(tr("FT8 Receiver Not Installed"), error, this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
+        box.get()->exec();
+        return;
+    }
+    installWaveformPath(false, path, m_radioModel, m_radioModel->controlSession());
 }
 
 void WaveformsDialog::onInstallWsprClicked()
@@ -2718,6 +2767,26 @@ void WaveformsDialog::refreshWaveformList()
                         }
                     });
                 });
+                open = window;
+                window->show();
+            });
+        }
+
+        // The FT8 receiver: Configure… opens its settings. Narrower than the
+        // WSPR window because the agent takes fewer settings; RFC #7114
+        // proposes one capability-driven window for every shim instead.
+        if (isFt8Waveform(name)) {
+            configureBtn = new QPushButton(tr("Configure…"), actionWidget);
+            configureBtn->setAccessibleName(tr("Configure the FT8 receiver"));
+            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+                static QPointer<Ft8ConfigureWindow> open;
+                if (open) {
+                    open->raise();
+                    open->activateWindow();
+                    return;
+                }
+                auto* window = new Ft8ConfigureWindow(m_radioModel, this);
+                window->setAttribute(Qt::WA_DeleteOnClose);
                 open = window;
                 window->show();
             });

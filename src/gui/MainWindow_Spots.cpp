@@ -11,6 +11,7 @@
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
 #include "core/N1MMSpotClient.h"
+#include "core/Ft8AgentClient.h"
 #include "core/WsprAgentClient.h"
 #include "models/TransmitModel.h"
 #include "core/N1MMSpotParser.h"
@@ -76,6 +77,7 @@ void MainWindow::wireSpotSubsystem()
     m_eibiClient = new EibiClient;
     m_n1mmSpotClient = new N1MMSpotClient;
     m_wsprFeed = new WsprSpotFeed(this);
+    m_ft8Feed = new Ft8SpotFeed(this);
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
 #endif
@@ -448,6 +450,8 @@ void MainWindow::wireSpotSubsystem()
                 spotColor = as.value("FreeDvSpotColor", "#FF8C00").toString();  // HAVE_WEBSOCKETS
             else if (source == "WSPR")
                 spotColor = ThemeManager::instance().value(QString::fromLatin1(kWsprDefaultColorToken));
+            else if (source == "FT8")
+                spotColor = ThemeManager::instance().value(QString::fromLatin1(kFt8DefaultColorToken));
         }
         if (spotColor.length() == 7)
             spotColor = "#FF" + spotColor.mid(1);
@@ -851,8 +855,27 @@ void MainWindow::wireSpotSubsystem()
             this, [queueSpotCmd](const DxSpot& spot) {
         queueSpotCmd(spot, "WSPR");
     });
+
+    // The FT8 receiver's decodes reach the panadapter the same way. Without
+    // this the receiver decodes and the operator sees nothing: before it, FT8
+    // appeared in no GUI surface except its own Configure window, while the
+    // agent held hundreds of spots with nowhere to go.
+    connect(m_ft8Feed, &Ft8SpotFeed::spotReceived,
+            this, [queueSpotCmd](const DxSpot& spot) {
+        queueSpotCmd(spot, "FT8");
+    });
     // A new session or address: the feed belongs to the radio it started on.
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        // The FT8 feed follows the radio exactly as the WSPR one does, and
+        // like it is opt-in: nothing is read until SpotHub → FT8 has
+        // Auto-Start on, or Start is pressed there.
+        m_ft8Feed->stop();
+        if (connected
+            && ft8::feedStartsWithRadio(wspr::loadSpotHubSettings(QLatin1String(kFt8SpotHubKey)),
+                                        m_radioModel.backendCapabilities().hasWaveforms,
+                                        m_radioModel.isWan(), m_radioModel.radioAddress())) {
+            m_ft8Feed->start(m_radioModel.radioAddress());
+        }
         m_wsprFeed->stop();
         // A radio without the receiver just refuses the poll, and one that
         // gets it later is picked up by the next one.
@@ -863,39 +886,51 @@ void MainWindow::wireSpotSubsystem()
         }
     });
 
-    // The radio reports the WSPR receiver's slice as ours (#7139), so ask the
+    // The radio reports a receiver's slice as ours (#7139), so ask each
     // receiver which one it is: before registering, whose reply carries the
-    // slice statuses, and again whenever a slice appears, since the receiver
-    // may have just made one.
+    // slice statuses, and again whenever a slice appears, since a receiver
+    // may have just made one. Both are asked at once, and registering waits
+    // for both answers.
     m_radioModel.setRegistrationGate([this](const QHostAddress& radio, std::function<void()> proceed) {
-        readWsprReceiverSlice(radio, std::move(proceed));
+        auto waiting = std::make_shared<int>(2);
+        auto answered = [waiting, proceed = std::move(proceed)] {
+            if (--*waiting == 0 && proceed) {
+                proceed();
+            }
+        };
+        readReceiverSlice(new WsprAgentClient, tr("WSPR receiver"), radio, answered);
+        readReceiverSlice(new Ft8AgentClient, tr("FT8 receiver"), radio, answered);
     });
     wspr::reserveReceiverSlice(m_wsprFeed, &m_radioModel, tr("WSPR receiver"));
+    ft8::reserveReceiverSlice(m_ft8Feed, &m_radioModel, tr("FT8 receiver"));
     connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel*) {
         QTimer::singleShot(kWsprSliceRecheckMs, this, [this] {
             if (m_radioModel.isConnected()) {
-                readWsprReceiverSlice(m_radioModel.radioAddress(), {});
+                readReceiverSlice(new WsprAgentClient, tr("WSPR receiver"), m_radioModel.radioAddress(), {});
+                readReceiverSlice(new Ft8AgentClient, tr("FT8 receiver"), m_radioModel.radioAddress(), {});
             }
         });
     });
 }
 
-void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done)
+void MainWindow::readReceiverSlice(RadioAgentClient* client, const QString& label,
+                                   const QHostAddress& radio, std::function<void()> done)
 {
-    if (m_radioModel.isWan() || !wspr::reachableAddress(radio)) {
+    if (m_radioModel.isWan() || !radioAgentReachable(radio)) {
+        delete client;
         if (done) done();
         return;
     }
     // A client of its own: reads can overlap, and each ends on its own.
-    auto* client = new WsprAgentClient(this);
+    client->setParent(this);
     client->setRadioAddress(radio);
     auto finish = std::make_shared<std::function<void(int)>>();
-    *finish = [this, client, done = std::move(done)](int sliceIndex) {
+    *finish = [this, client, label, done = std::move(done)](int sliceIndex) {
         client->disconnect(this);
         client->cancel();
         client->deleteLater();
         if (sliceIndex >= 0) {
-            m_radioModel.reserveSlice(sliceIndex, tr("WSPR receiver"));
+            m_radioModel.reserveSlice(sliceIndex, label);
         }
         if (done) done();
     };
@@ -905,9 +940,8 @@ void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<
             run(sliceIndex);
         }
     };
-    connect(client, &WsprAgentClient::statusReceived, this,
-            [call](const WsprStatus& status) { call(status.sliceIndex); });
-    connect(client, &WsprAgentClient::requestFailed, this,
+    connect(client, &RadioAgentClient::receiverSlice, this, [call](int sliceIndex) { call(sliceIndex); });
+    connect(client, &RadioAgentClient::requestFailed, this,
             [call](const QString&, const QString&, bool) { call(-1); });
     QTimer::singleShot(kWsprSliceReadMs, client, [call] { call(-1); });
     // Spots from now on: none, so the reply stays small.

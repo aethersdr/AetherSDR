@@ -44,6 +44,7 @@ private slots:
     void onInstallRemoteAccessClicked();
     // The WSPR receiver (tools/wspr-agent), bundled in AetherSDR.
     void onInstallWsprClicked();
+    void onInstallFt8Clicked();
     void onInstallAetherGpsClicked();
     // Removes an older WSPR receiver and installs the bundled one, for
     // WsprConfigureWindow's Update, which then puts its settings back.
@@ -112,6 +113,7 @@ private:
     QAction*           m_installDockerAction{nullptr};
     QAction*           m_installRemoteAccessAction{nullptr};
     QAction*           m_installWsprAction{nullptr};
+    QAction*           m_installFt8Action{nullptr};
     QAction*           m_installAetherGpsAction{nullptr};
     // AetherGPS's install state, shared with the AetherGPS window.
     AetherGpsTools*    m_gpsTools{nullptr};

@@ -1852,5 +1852,17 @@
   "note": "Bounded Flex VITA count/timestamp receive ordering and loss resolution; private to the Flex stream path.",
   "split": "",
   "confidence": "high"
+ },
+ "core/Ft8Agent.h": {
+  "tag": "peripheral(ft8-agent)",
+  "note": "The FT8 receiver's status, cycles, spots and settings (types, bounded JSON parsing, the settings body, the SpotHub DxSpot) and its pinned package. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48997 (the FT8 receiver, tools/ft8-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/WsprAgent.h and core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/Ft8AgentClient.h": {
+  "tag": "peripheral(ft8-agent)",
+  "note": "Polls the FT8 receiver's /v1/status and reads and saves its /v1/config at the radio's LAN or tailnet-shim address. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48997 (the FT8 receiver, tools/ft8-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/WsprAgentClient.h and core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
  }
 }

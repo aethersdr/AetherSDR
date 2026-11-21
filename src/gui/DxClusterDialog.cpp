@@ -19,9 +19,11 @@
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
+#include "core/Ft8AgentClient.h"
 #include "core/WsprAgentClient.h"
 #include "models/RadioModel.h"
 #include "WsprConfigureWindow.h"
+#include "Ft8ConfigureWindow.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -511,6 +513,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
                                    PotaClient* potaClient, EibiClient* eibiClient,
                                    N1MMSpotClient* n1mmSpotClient,
                                    WsprSpotFeed* wsprFeed,
+                                   Ft8SpotFeed* ft8Feed,
 #ifdef HAVE_WEBSOCKETS
                                    FreeDvClient* freedvClient,
 #endif
@@ -566,6 +569,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     auto* tabs = new QTabWidget(bodyWidget());
 
     m_wsprFeed = wsprFeed;
+    m_ft8Feed = ft8Feed;
     buildClusterTab(tabs);
     buildRbnTab(tabs);
     buildWsjtxTab(tabs);
@@ -574,6 +578,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildEiBiTab(tabs);
     buildN1mmTab(tabs);
     buildWsprTab(tabs);
+    buildFt8Tab(tabs);
 #ifdef HAVE_WEBSOCKETS
     buildFreeDvTab(tabs);
 #endif
@@ -1813,20 +1818,25 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     tabs->addTab(page, "POTA");
 }
 
-void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
+// The settings group, the Start row and the decode console every receiver on
+// the radio gets in SpotHub. WSPR and FT8 differ only in the name on the
+// labels, where the three settings are stored, and what a decode looks like;
+// the caller wires its own feed to the widgets handed back.
+QWidget* DxClusterDialog::buildAgentTab(const AgentTabSpec& spec, AgentTab* tab)
 {
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
     layout->setSpacing(8);
-    const WsprSpotHubSettings settings = wspr::loadSpotHubSettings();
+    const WsprSpotHubSettings settings = spec.load();
+    const QString name = spec.name;
 
-    auto* group = new QGroupBox(tr("WSPR Receiver"));
+    auto* group = new QGroupBox(tr("%1 Receiver").arg(name));
     auto* groupLayout = new QVBoxLayout(group);
     groupLayout->setSpacing(4);
     auto* grid = new QGridLayout;
     grid->setColumnStretch(1, 1);
     grid->addWidget(new QLabel(tr("Source:")), 0, 0);
-    auto* source = new QLabel(tr("The WSPR receiver on the radio (Waveforms → Install → WSPR Receiver)"));
+    auto* source = new QLabel(tr("The %1 receiver on the radio (Waveforms → Install → %1 Receiver)").arg(name));
     ThemeManager::instance().applyStyleSheet(source, "QLabel { color: {{color.canon.muted}}; }");
     grid->addWidget(source, 0, 1);
     grid->addWidget(new QLabel(tr("Lifetime:")), 1, 0);
@@ -1834,31 +1844,133 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
     lifetime->setRange(1, 1440);
     lifetime->setValue(settings.lifetimeMinutes);
     lifetime->setSuffix(tr(" min"));
-    lifetime->setAccessibleName(tr("How long WSPR spots stay on the panadapter"));
-    connect(lifetime, &QSpinBox::valueChanged, this, [](int v) {
-        WsprSpotHubSettings s = wspr::loadSpotHubSettings();
+    lifetime->setAccessibleName(tr("How long %1 spots stay on the panadapter").arg(name));
+    connect(lifetime, &QSpinBox::valueChanged, this, [spec](int v) {
+        WsprSpotHubSettings s = spec.load();
         s.lifetimeMinutes = v;
-        wspr::saveSpotHubSettings(s);
+        spec.save(s);
     });
     grid->addWidget(lifetime, 1, 1, Qt::AlignLeft);
     groupLayout->addLayout(grid);
 
     auto* btnRow = new QHBoxLayout;
-    m_wsprAutoStartBtn = new QPushButton(settings.autoStart ? tr("Auto-Start: ON") : tr("Auto-Start: OFF"));
-    m_wsprAutoStartBtn->setCheckable(true);
-    m_wsprAutoStartBtn->setChecked(settings.autoStart);
-    m_wsprAutoStartBtn->setAccessibleDescription(
-        tr("Start reading the WSPR receiver when a radio that has it connects."));
-    connect(m_wsprAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
-        m_wsprAutoStartBtn->setText(on ? tr("Auto-Start: ON") : tr("Auto-Start: OFF"));
-        WsprSpotHubSettings s = wspr::loadSpotHubSettings();
+    auto* autoStart = new QPushButton(settings.autoStart ? tr("Auto-Start: ON") : tr("Auto-Start: OFF"));
+    autoStart->setObjectName(name.toLower() + QStringLiteral("AutoStartBtn"));
+    autoStart->setCheckable(true);
+    autoStart->setChecked(settings.autoStart);
+    autoStart->setAccessibleDescription(
+        tr("Start reading the %1 receiver when a radio that has it connects.").arg(name));
+    connect(autoStart, &QPushButton::toggled, this, [spec, autoStart](bool on) {
+        autoStart->setText(on ? tr("Auto-Start: ON") : tr("Auto-Start: OFF"));
+        WsprSpotHubSettings s = spec.load();
         s.autoStart = on;
-        wspr::saveSpotHubSettings(s);
+        spec.save(s);
     });
-    btnRow->addWidget(m_wsprAutoStartBtn);
-    m_wsprConfigureBtn = new QPushButton(tr("Configure…"));
-    m_wsprConfigureBtn->setAccessibleName(tr("Configure the WSPR receiver"));
-    connect(m_wsprConfigureBtn, &QPushButton::clicked, this, [this] {
+    btnRow->addWidget(autoStart);
+    auto* configure = new QPushButton(tr("Configure…"));
+    configure->setAccessibleName(tr("Configure the %1 receiver").arg(name));
+    connect(configure, &QPushButton::clicked, this, spec.configure);
+    btnRow->addWidget(configure);
+    btnRow->addStretch();
+    auto* status = new QLabel(tr("Stopped"));
+    status->setAccessibleName(tr("%1 receiver status").arg(name));
+    ThemeManager::instance().applyStyleSheet(status,
+                                             "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+    btnRow->addWidget(status);
+    btnRow->addStretch();
+    auto* start = new QPushButton(tr("Start"));
+    start->setObjectName(name.toLower() + QStringLiteral("StartBtn"));
+    start->setFixedWidth(100);
+    start->setProperty("spotHubPrimary", true);
+    connect(start, &QPushButton::clicked, this, spec.toggle);
+    btnRow->addWidget(start);
+    groupLayout->addLayout(btnRow);
+    layout->addWidget(group);
+
+    // ── Console ──────────────────────────────────────────────────────────
+    auto* consoleRow = new QHBoxLayout;
+    auto* consoleLabel = new QLabel(tr("%1 Decodes").arg(name));
+    ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
+    consoleRow->addWidget(consoleLabel);
+    consoleRow->addStretch();
+    auto* colorLabel = new QLabel(tr("Spot Color:"));
+    ThemeManager::instance().applyStyleSheet(colorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+    consoleRow->addWidget(colorLabel);
+    auto* colorBtn = new QPushButton;
+    colorBtn->setFixedSize(18, 18);
+    colorBtn->setAccessibleName(tr("%1 spot color").arg(name));
+    auto paintSwatch = [colorBtn](const QString& c) {
+        ThemeManager::instance().applyStyleSheet(colorBtn, QString(
+            "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+            "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c));
+    };
+    const QString colorToken = QString::fromLatin1(spec.colorToken);
+    const auto swatchColor = [colorToken](const WsprSpotHubSettings& s) {
+        return s.color.isEmpty() ? ThemeManager::instance().value(colorToken) : s.color;
+    };
+    paintSwatch(swatchColor(settings));
+    connect(colorBtn, &QPushButton::clicked, this, [this, spec, name, paintSwatch, swatchColor] {
+        WsprSpotHubSettings s = spec.load();
+        const QColor c = getColorForLiveParent(QColor(swatchColor(s)), this, tr("%1 Spot Color").arg(name));
+        if (c.isValid()) {
+            s.color = c.name();
+            spec.save(s);
+            paintSwatch(s.color);
+        }
+    });
+    consoleRow->addWidget(colorBtn);
+    layout->addLayout(consoleRow);
+
+    auto* console = new QPlainTextEdit;
+    console->setReadOnly(true);
+    console->setMaximumBlockCount(2000);
+    console->setAccessibleName(tr("%1 decodes").arg(name));
+    layout->addWidget(console, 1);
+    auto* clearRow = new QHBoxLayout;
+    clearRow->addStretch();
+    clearRow->addWidget(makeConsoleClearButton(console, nullptr, name.toLower() + QStringLiteral("ClearBtn")));
+    layout->addLayout(clearRow);
+
+    tab->name = name;
+    tab->start = start;
+    tab->autoStart = autoStart;
+    tab->configure = configure;
+    tab->status = status;
+    tab->console = console;
+    return page;
+}
+
+// Start is offered only where the receiver can be reached, and says why not.
+void DxClusterDialog::updateAgentControls(const AgentTab& tab, bool haveFeed, bool running, bool reachableOnLan)
+{
+    if (!tab.start) {
+        return;
+    }
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    tab.start->setText(running ? tr("Stop") : tr("Start"));
+    const bool runsWaveforms = connected && m_radioModel->backendCapabilities().hasWaveforms;
+    const bool reachable = runsWaveforms && reachableOnLan;
+    tab.start->setEnabled(haveFeed && (running || reachable));
+    const QString why = !connected        ? tr("Connect to a radio first.")
+                        : !runsWaveforms  ? tr("This radio doesn't run waveforms.")
+                        : !reachable      ? tr("The %1 receiver can be reached only on the radio's local "
+                                               "network or through Remote Access.").arg(tab.name)
+                                          : QString();
+    tab.start->setToolTip(why);
+    tab.start->setAccessibleDescription(why);
+    tab.configure->setEnabled(reachable);
+    tab.configure->setToolTip(why);
+    tab.configure->setAccessibleDescription(why);
+}
+
+void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
+{
+    AgentTabSpec spec;
+    spec.name = QStringLiteral("WSPR");
+    spec.colorToken = kWsprDefaultColorToken;
+    spec.load = [] { return wspr::loadSpotHubSettings(); };
+    spec.save = [](const WsprSpotHubSettings& s) { wspr::saveSpotHubSettings(s); };
+    spec.configure = [this] {
         static QPointer<WsprConfigureWindow> open;
         if (open) {
             open->raise();
@@ -1869,19 +1981,8 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
         window->setAttribute(Qt::WA_DeleteOnClose);
         open = window;
         window->show();
-    });
-    btnRow->addWidget(m_wsprConfigureBtn);
-    btnRow->addStretch();
-    m_wsprStatusLabel = new QLabel(tr("Stopped"));
-    m_wsprStatusLabel->setAccessibleName(tr("WSPR receiver status"));
-    ThemeManager::instance().applyStyleSheet(m_wsprStatusLabel,
-                                             "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-    btnRow->addWidget(m_wsprStatusLabel);
-    btnRow->addStretch();
-    m_wsprStartBtn = new QPushButton(tr("Start"));
-    m_wsprStartBtn->setFixedWidth(100);
-    m_wsprStartBtn->setProperty("spotHubPrimary", true);
-    connect(m_wsprStartBtn, &QPushButton::clicked, this, [this] {
+    };
+    spec.toggle = [this] {
         if (!m_wsprFeed) {
             return;
         }
@@ -1890,66 +1991,20 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
         } else if (m_radioModel) {
             m_wsprFeed->start(m_radioModel->radioAddress());
         }
-    });
-    btnRow->addWidget(m_wsprStartBtn);
-    groupLayout->addLayout(btnRow);
-    layout->addWidget(group);
-
-    // ── Console ──────────────────────────────────────────────────────────
-    auto* consoleRow = new QHBoxLayout;
-    auto* consoleLabel = new QLabel(tr("WSPR Decodes"));
-    ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
-    consoleRow->addWidget(consoleLabel);
-    consoleRow->addStretch();
-    auto* colorLabel = new QLabel(tr("Spot Color:"));
-    ThemeManager::instance().applyStyleSheet(colorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
-    consoleRow->addWidget(colorLabel);
-    auto* colorBtn = new QPushButton;
-    colorBtn->setFixedSize(18, 18);
-    colorBtn->setAccessibleName(tr("WSPR spot color"));
-    auto paintSwatch = [colorBtn](const QString& c) {
-        ThemeManager::instance().applyStyleSheet(colorBtn, QString(
-            "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
-            "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c));
     };
-    const auto swatchColor = [](const WsprSpotHubSettings& s) {
-        return s.color.isEmpty() ? ThemeManager::instance().value(QString::fromLatin1(kWsprDefaultColorToken))
-                                 : s.color;
-    };
-    paintSwatch(swatchColor(settings));
-    connect(colorBtn, &QPushButton::clicked, this, [this, paintSwatch, swatchColor] {
-        WsprSpotHubSettings s = wspr::loadSpotHubSettings();
-        const QColor c = getColorForLiveParent(QColor(swatchColor(s)), this, tr("WSPR Spot Color"));
-        if (c.isValid()) {
-            s.color = c.name();
-            wspr::saveSpotHubSettings(s);
-            paintSwatch(s.color);
-        }
-    });
-    consoleRow->addWidget(colorBtn);
-    layout->addLayout(consoleRow);
-
-    m_wsprConsole = new QPlainTextEdit;
-    m_wsprConsole->setReadOnly(true);
-    m_wsprConsole->setMaximumBlockCount(2000);
-    m_wsprConsole->setAccessibleName(tr("WSPR decodes"));
-    layout->addWidget(m_wsprConsole, 1);
-    auto* clearRow = new QHBoxLayout;
-    clearRow->addStretch();
-    clearRow->addWidget(makeConsoleClearButton(m_wsprConsole, nullptr, "wsprClearBtn"));
-    layout->addLayout(clearRow);
+    QWidget* page = buildAgentTab(spec, &m_wsprTab);
 
     if (m_wsprFeed) {
         connect(m_wsprFeed, &WsprSpotFeed::started, this, [this] {
-            m_wsprStatusLabel->setText(tr("Reading the receiver…"));
+            m_wsprTab.status->setText(tr("Reading the receiver…"));
             updateWsprControls();
         });
         connect(m_wsprFeed, &WsprSpotFeed::stopped, this, [this] {
-            m_wsprStatusLabel->setText(tr("Stopped"));
+            m_wsprTab.status->setText(tr("Stopped"));
             updateWsprControls();
         });
         connect(m_wsprFeed, &WsprSpotFeed::failed, this, [this](const QString& message) {
-            m_wsprStatusLabel->setText(message);
+            m_wsprTab.status->setText(message);
         });
         connect(m_wsprFeed, &WsprSpotFeed::statusReceived, this, [this](const WsprStatus& st) {
             QString line = st.band.isEmpty() ? tr("Starting") : tr("On %1").arg(st.band);
@@ -1962,7 +2017,7 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
             if (!st.clockSynced) {
                 line = tr("Waiting for the radio's clock");
             }
-            m_wsprStatusLabel->setText(line);
+            m_wsprTab.status->setText(line);
         });
         connect(m_wsprFeed, &WsprSpotFeed::spotReceived, this, [this](const DxSpot& spot) {
             m_spotBatch.append(spot);   // the Spot List tab
@@ -1970,7 +2025,7 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
         connect(m_wsprFeed, &WsprSpotFeed::decoded, this, [this](const WsprSpot& s, const QString& here) {
             const int km = wspr::distanceKm(here, s.grid);
             const QString when = QDateTime::fromSecsSinceEpoch(s.cycleStart, QTimeZone::UTC).toString("HH:mm");
-            m_wsprConsole->appendPlainText(
+            m_wsprTab.console->appendPlainText(
                 QStringLiteral("%1  %2  %3  %4  %5 dB  %6 dBm  %7")
                     .arg(when, s.band.leftJustified(5), (s.call.isEmpty() ? tr("<hashed>") : s.call).leftJustified(10),
                          s.grid.leftJustified(6))
@@ -1988,26 +2043,89 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
 
 void DxClusterDialog::updateWsprControls()
 {
-    if (!m_wsprStartBtn) {
-        return;
+    updateAgentControls(m_wsprTab, m_wsprFeed != nullptr, m_wsprFeed && m_wsprFeed->isRunning(),
+                        m_radioModel && wspr::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress()));
+}
+
+void DxClusterDialog::buildFt8Tab(QTabWidget* tabs)
+{
+    AgentTabSpec spec;
+    spec.name = QStringLiteral("FT8");
+    spec.colorToken = kFt8DefaultColorToken;
+    spec.load = [] { return wspr::loadSpotHubSettings(QLatin1String(kFt8SpotHubKey)); };
+    spec.save = [](const WsprSpotHubSettings& s) { wspr::saveSpotHubSettings(s, QLatin1String(kFt8SpotHubKey)); };
+    spec.configure = [this] {
+        static QPointer<Ft8ConfigureWindow> open;
+        if (open) {
+            open->raise();
+            open->activateWindow();
+            return;
+        }
+        auto* window = new Ft8ConfigureWindow(m_radioModel, this);
+        window->setAttribute(Qt::WA_DeleteOnClose);
+        open = window;
+        window->show();
+    };
+    spec.toggle = [this] {
+        if (!m_ft8Feed) {
+            return;
+        }
+        if (m_ft8Feed->isRunning()) {
+            m_ft8Feed->stop();
+        } else if (m_radioModel) {
+            m_ft8Feed->start(m_radioModel->radioAddress());
+        }
+    };
+    QWidget* page = buildAgentTab(spec, &m_ft8Tab);
+
+    if (m_ft8Feed) {
+        connect(m_ft8Feed, &Ft8SpotFeed::started, this, [this] {
+            m_ft8Tab.status->setText(tr("Reading the receiver…"));
+            updateFt8Controls();
+        });
+        connect(m_ft8Feed, &Ft8SpotFeed::stopped, this, [this] {
+            m_ft8Tab.status->setText(tr("Stopped"));
+            updateFt8Controls();
+        });
+        connect(m_ft8Feed, &Ft8SpotFeed::failed, this, [this](const QString& message) {
+            m_ft8Tab.status->setText(message);
+        });
+        connect(m_ft8Feed, &Ft8SpotFeed::statusReceived, this, [this](const Ft8Status& st) {
+            QString line = st.band.isEmpty() ? tr("Starting") : tr("On %1").arg(st.band);
+            if (!st.cycles.isEmpty()) {
+                line += tr(" · %n spot(s) last cycle", nullptr, st.cycles.last().spots);
+            }
+            if (!st.clockSynced) {
+                line = tr("Waiting for the radio's clock");
+            }
+            m_ft8Tab.status->setText(line);
+        });
+        connect(m_ft8Feed, &Ft8SpotFeed::spotReceived, this, [this](const DxSpot& spot) {
+            m_spotBatch.append(spot);   // the Spot List tab
+        });
+        connect(m_ft8Feed, &Ft8SpotFeed::decoded, this, [this](const Ft8Spot& s) {
+            // The score is ft8_lib's correlation strength, not dB, so it is
+            // not labelled as one.
+            const QString when = QDateTime::fromSecsSinceEpoch(s.cycleStart, QTimeZone::UTC).toString("HH:mm:ss");
+            m_ft8Tab.console->appendPlainText(
+                QStringLiteral("%1  %2  %3  %4  %5")
+                    .arg(when, s.band.leftJustified(5))
+                    .arg(s.frequencyHz / 1e6, 0, 'f', 6)
+                    .arg(s.score, 3)
+                    .arg(s.message));
+        });
     }
-    const bool running = m_wsprFeed && m_wsprFeed->isRunning();
-    const bool connected = m_radioModel && m_radioModel->isConnected();
-    m_wsprStartBtn->setText(running ? tr("Stop") : tr("Start"));
-    const bool runsWaveforms = connected && m_radioModel->backendCapabilities().hasWaveforms;
-    const bool reachable = runsWaveforms
-        && wspr::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
-    m_wsprStartBtn->setEnabled(m_wsprFeed && (running || reachable));
-    const QString why = !connected        ? tr("Connect to a radio first.")
-                        : !runsWaveforms  ? tr("This radio doesn't run waveforms.")
-                        : !reachable      ? tr("The WSPR receiver can be reached only on the radio's local "
-                                               "network or through Remote Access.")
-                                          : QString();
-    m_wsprStartBtn->setToolTip(why);
-    m_wsprStartBtn->setAccessibleDescription(why);
-    m_wsprConfigureBtn->setEnabled(reachable);
-    m_wsprConfigureBtn->setToolTip(why);
-    m_wsprConfigureBtn->setAccessibleDescription(why);
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool) { updateFt8Controls(); });
+    }
+    updateFt8Controls();
+    tabs->addTab(page, tr("FT8"));
+}
+
+void DxClusterDialog::updateFt8Controls()
+{
+    updateAgentControls(m_ft8Tab, m_ft8Feed != nullptr, m_ft8Feed && m_ft8Feed->isRunning(),
+                        m_radioModel && ft8::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress()));
 }
 
 void DxClusterDialog::updateEibiTimestamps()

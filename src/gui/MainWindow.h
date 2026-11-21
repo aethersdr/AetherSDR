@@ -142,6 +142,8 @@ namespace AetherSDR {
 enum class RadioSliceSelectionSource;
 
 class AetherClockApplet;
+class Ft8SpotFeed;
+class RadioAgentClient;
 class WsprSpotFeed;
 class AetherClockEngine;
 class AetherClockModel;
@@ -1499,10 +1501,14 @@ private:
     // The WSPR receiver on the radio (tools/wspr-agent): its spots for
     // SpotHub and the panadapter. Main thread; it only polls HTTP.
     WsprSpotFeed*        m_wsprFeed{nullptr};
+    Ft8SpotFeed*         m_ft8Feed{nullptr};
     // Reserves the WSPR receiver's slice in RadioModel when the receiver
     // at `radio` names one, then calls `done`. Waits at most
     // kWsprSliceReadMs: a radio without the receiver refuses at once.
-    void readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done);
+    // Asks one receiver on the radio which slice is its own and reserves it
+    // under `label`. Takes ownership of `client`.
+    void readReceiverSlice(RadioAgentClient* client, const QString& label,
+                           const QHostAddress& radio, std::function<void()> done);
     static constexpr int kWsprSliceReadMs = 1000;
     static constexpr int kWsprSliceRecheckMs = 500;
     PropForecastClient*  m_propForecast{nullptr};
