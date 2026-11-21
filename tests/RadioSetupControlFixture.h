@@ -71,6 +71,9 @@ class RadioSetupTestBackend final : public FlexBackend {
 public:
     bool live{true};
     bool accept{true};
+    // Setup-sink commands starting with this are refused (as the profile-load
+    // hold refuses slice writes); empty refuses nothing.
+    QString refusePrefix;
     QStringList commands;
     std::vector<RadioSetupCompletion> replies;
     std::shared_ptr<bool> retired;
@@ -112,6 +115,7 @@ public:
         });
         setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& completion) {
             if (!live || !accept) { return false; }
+            if (!refusePrefix.isEmpty() && command.startsWith(refusePrefix)) { return false; }
             commands.append(command);
             if (completion) { replies.push_back(completion); }
             return true;

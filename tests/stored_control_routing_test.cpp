@@ -133,6 +133,14 @@ void encoders()
     check(backend.commands == QStringList{"slice set 3 active=1", "memory apply 7", "slice tune 3 146.520000 autopan=0", "slice set 3 step=100",
         "slice set 3 repeater_offset_dir=down fm_repeater_offset_freq=0.600000 tx_offset_freq=-0.600000 fm_tone_mode=ctcss_tx fm_tone_value=88.5"},
         "recall makes the target active, then preserves ordered retune/step/repeater correction");
+    // If the active write is refused (e.g. the profile-load hold drops slice
+    // writes), the recall is refused whole: memory apply would land on
+    // whatever slice the radio has active.
+    backend.commands.clear();
+    backend.refusePrefix = QStringLiteral("slice set ");
+    check(backend.requestMemory(recall) == ReceiveDispatch::Unsupported && backend.commands.isEmpty(),
+          "recall refused before memory apply when the active write cannot be sent");
+    backend.refusePrefix.clear();
     backend.commands.clear();
     update.patch.freq = std::numeric_limits<double>::infinity();
     check(backend.requestMemory(update) == ReceiveDispatch::Unsupported && backend.commands.isEmpty(), "nonfinite memory refuses before dispatch");
