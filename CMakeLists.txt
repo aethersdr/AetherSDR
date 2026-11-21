@@ -890,6 +890,7 @@ set(CORE_SOURCES
     src/core/control/ControlCredentials.cpp   # explicit credential identity, not TX grants
     src/core/control/ControlPairing.cpp  # aetherd remote clients: pairing (aetherd-remote-clients.md)
     src/core/control/VaultPairingIssuer.cpp  # aetherd remote clients: paired credentials into the vault
+    src/core/control/DiscoveryResponder.cpp  # aetherd remote clients: LAN advertisement (aetherd-remote-backend.md §1)
     src/core/control/ControlCredentialVault.cpp # OS-vault-only, explicit provisioning composition
     src/core/control/ControlCredentialProvisioner.cpp
     src/core/control/ControlInputPump.cpp     # bounded input turns and terminal authority lifetime
