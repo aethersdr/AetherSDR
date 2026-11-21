@@ -152,7 +152,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SettingsHelpers.h` | 2 | ui-support — QSlider live/persist debounce wiring for AppSettings saves; pure Qt client plumbing, no radio state. | unconverted |
 | `core/SettingsPaths.h` | 2 | ui-support — Single source of truth for every path in the client settings store (RFC #4603), replacing three drifted hand-copies of the config-dir logic. Client persistence plumbing. | unconverted |
 | `core/SettingsSanitizer.h` | 2 | ui-support — Recursive secret-safe rendering of the settings store for the support bundle and `--config export` (RFC #4603). Diagnostics plumbing. | unconverted |
-| `core/ShortcutManager.h` | 5 | ui-support — Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks — client input plumbing, no radio state. | unconverted |
+| `core/ShortcutManager.h` | 6 | ui-support — Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks — client input plumbing, no radio state. | unconverted |
 | `core/ShutdownTrace.h` | 2 | ui-support — Process-local shutdown diagnostics and support-log breadcrumbs; lifecycle plumbing, not radio state. | unconverted |
 | `core/ShuttleRateIntegrator.h` | 1 | ui-support — pure shuttle-ring rate arithmetic for the desktop HID surface, no radio state | unconverted |
 | `core/SignalClassifier.h` | 1 | universal — ONNX CNN voice/carrier classifier over spectrogram patches; radio-agnostic engine DSP/analysis feature | unconverted |
@@ -178,7 +178,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/ThemeManager.h` | 193 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
-| `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
+| `core/TxKeyingMarker.h` | 18 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
 | `core/TxOffDelaySettings.h` | 2 | ui-support — Client-side persistence for the phone-mode TX off delay (one nested AppSettings object, Principle V). The radio interlock stores key-on delays only, so there is no radio-owned value to defer to; no wire commands or vendor coupling. | unconverted |
 | `core/UlanziDialBackend.h` | 4 | ui-support — Platform alias for Ulanzi Dial HID knob backend (evdev/hidapi); physical input device for client, not radio state | unconverted |
 | `core/UlanziDialMacOSManager.h` | 1 | ui-support — macOS IOKit implementation of the Ulanzi Dial client input surface. Desktop hardware plumbing, not radio state. | unconverted |
