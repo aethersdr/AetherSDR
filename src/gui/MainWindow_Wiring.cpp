@@ -782,7 +782,9 @@ void MainWindow::setViewLockForPan(const QString& panId, bool locked, bool persi
     }
 
     if (locked && viewLockHoldFraction(panId) <= 0.0) {
-        locked = false;
+        // Refused, not unlocked: the saved intent is for a radio that can hold.
+        sw->setViewLocked(false);
+        return;
     }
 
     // Disconnected, the last radio's key still resolves, but its saved state
@@ -803,20 +805,15 @@ void MainWindow::setViewLockForPan(const QString& panId, bool locked, bool persi
         return;
     }
     if (!saves) {
-        // Only a lock waits for the next radio: unlocking a pan that showed
-        // nothing saved says nothing about that radio.
-        if (locked) {
-            m_pendingViewLockPanIndices.insert(sw->panIndex());
-        } else {
-            m_pendingViewLockPanIndices.remove(sw->panIndex());
-        }
+        // Either way the choice waits for the next radio, which saves it.
+        m_pendingViewLockByPanIndex.insert(sw->panIndex(), locked);
         return;
     }
     const QString radioKey = centerLockRadioKey();
     if (radioKey.isEmpty()) {
         return;
     }
-    m_pendingViewLockPanIndices.remove(sw->panIndex());
+    m_pendingViewLockByPanIndex.remove(sw->panIndex());
     QSet<int>& pans = m_viewLockedPanIndicesByRadio[radioKey];
     const bool wasLocked = pans.contains(sw->panIndex());
     if (locked) {
@@ -884,7 +881,7 @@ void MainWindow::onViewLockCapabilitiesChanged(bool connected)
         m_viewLockPendingSawConnection = true;
     } else if (m_viewLockPendingSawConnection) {
         m_viewLockPendingSawConnection = false;
-        m_pendingViewLockPanIndices.clear();
+        m_pendingViewLockByPanIndex.clear();
     }
     if (!m_panStack) {
         return;
@@ -906,11 +903,13 @@ void MainWindow::restoreViewLockForPan(const QString& panId)
     if (!m_radioModel.isConnected() || radioKey.isEmpty() || !sw) {
         return;
     }
-    // A lock made before connecting wins over the saved state and is saved
-    // under this radio, once the radio can hold (an Icom, after its first sweep).
-    if (m_pendingViewLockPanIndices.contains(sw->panIndex())
-        && viewLockHoldFraction(panId) > 0.0) {
-        setViewLockForPan(panId, true, /*persist=*/true);
+    // A choice made before connecting wins over the saved state and is saved
+    // under this radio: an unlock at once, a lock once the radio can hold (an
+    // Icom, after its first sweep).
+    const auto pending = m_pendingViewLockByPanIndex.constFind(sw->panIndex());
+    if (pending != m_pendingViewLockByPanIndex.cend()
+        && (!pending.value() || viewLockHoldFraction(panId) > 0.0)) {
+        setViewLockForPan(panId, pending.value(), /*persist=*/true);
         return;
     }
     setViewLockForPan(
@@ -3982,7 +3981,7 @@ void MainWindow::selectBand(const QString& panId, const QString& bandName, doubl
         // Centre the window on the new band. Without this the panadapter
         // keeps the old band's NCO until the tune happens to fall outside
         // the usable passband, so a band change could leave the trace
-        // centred a whole band away from the slice that just moved. A locked
+        // centered a whole band away from the slice that just moved. A locked
         // view already showing the target tunes in place instead.
         if (!lockedViewShows(panId, freqMhz)) {
             m_radioModel.requestPanCenter(panId, freqMhz);

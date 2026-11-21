@@ -48,6 +48,13 @@ enum class ScopeMode : std::uint8_t {
     ScrollF = 0x03,
 };
 
+// SCROLL-F and Fixed keep the window still under a tuned VFO; Center and
+// SCROLL-C move it with every tune.
+constexpr bool scopeModeHoldsView(ScopeMode mode)
+{
+    return mode == ScopeMode::ScrollF || mode == ScopeMode::Fixed;
+}
+
 // One fully-assembled sweep.
 struct ScopeFrame {
     ScopeMode mode = ScopeMode::Centre;

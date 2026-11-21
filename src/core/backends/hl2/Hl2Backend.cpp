@@ -2574,7 +2574,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
     // Declaring absence is what makes the control refuse rather than lie.
     c.panZoomModes = std::nullopt;
-    // setSliceFrequency() re-centres the NCO (the pan centre) once the slice is
+    // setSliceFrequency() recenters the NCO (the pan center) once the slice is
     // more than kUsablePassbandFraction of the half-span away from it, so only
     // that central part of the span holds still under a tuned slice.
     c.panViewHold = RadioCapabilities::PanViewHold{kUsablePassbandFraction};

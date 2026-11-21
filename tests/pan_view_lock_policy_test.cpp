@@ -80,7 +80,7 @@ int testHoldBandwidth()
     if (!nearlyEqual(holdBandwidthMhz(0.2, 0.2, 1.0), 0.2)) {
         return fail("a whole-span hold is the drawn span");
     }
-    // HL2: the NCO re-centres past 80% of the half-span, so a 192 kHz span
+    // HL2: the NCO recenters past 80% of the half-span, so a 192 kHz span
     // holds the central 153.6 kHz, less the 2 Hz guard at each edge.
     if (!nearlyEqual(holdBandwidthMhz(0.192, 0.192, 0.8), 0.1536 - 4.0e-6)) {
         return fail("HL2 holds only the usable fraction of its span, guarded");
@@ -103,7 +103,7 @@ int testHoldBandwidth()
     return 0;
 }
 
-// Hl2Backend::setSliceFrequency() re-centres the NCO when
+// Hl2Backend::setSliceFrequency() recenters the NCO when
 // |tunedHz - ncoHz| > rate/2 * 0.8, computed on the MHz value times 1e6 with no
 // rounding. A locked drag or click parked at the hold edge, plus the in-view
 // slack, must stay strictly inside that, or the "held" view jumps.
@@ -124,7 +124,7 @@ int testHl2HoldEdgeStaysInsideNcoWindow()
                     if (std::abs(parked * 1.0e6 - centerMhz * 1.0e6) > usableHz) {
                         std::fprintf(stderr, "nco=%dkHz rate=%d step=%d parked=%.12f\n",
                                      ncoKhz, rateHz, stepHz, parked);
-                        return fail("a parked HL2 edge crosses the NCO re-centre test");
+                        return fail("a parked HL2 edge crosses the NCO recenter test");
                     }
                 }
                 // The widest frequency the in-view test still accepts.

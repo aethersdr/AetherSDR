@@ -8620,14 +8620,17 @@ void SpectrumWidget::setViewLocked(bool locked)
     if (m_viewLocked == locked) {
         return;
     }
+    if (locked) {
+        // A zoom still settling lands now: nothing queued may move the view
+        // once it is locked.
+        finishFrequencyRangeSettleUpdate();
+    }
     m_viewLocked = locked;
     if (m_viewLockBtn) {
         const QSignalBlocker blocker(m_viewLockBtn);
         m_viewLockBtn->setChecked(locked);
         m_viewLockBtn->setText(locked ? QString::fromUtf8("\xF0\x9F\x94\x92")    // 🔒
                                       : QString::fromUtf8("\xF0\x9F\x94\x93"));  // 🔓
-        QAccessibleValueChangeEvent event(m_viewLockBtn, locked);
-        QAccessible::updateAccessibility(&event);
     }
     // Engaging mid-drag must stop an edge pan already in flight.
     if (locked && m_vfoDragEdgePanTimer && m_vfoDragEdgePanTimer->isActive()) {

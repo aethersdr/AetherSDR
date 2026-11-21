@@ -16,11 +16,11 @@ enum class TuneKind {
 };
 
 // Slack on the inclusive edge test. A slice parked exactly on an on-step edge
-// must read as on screen, but the edge itself comes from a radio-echoed centre
+// must read as on screen, but the edge itself comes from a radio-echoed center
 // and floating-point halving, so it can land a hair inside the slice.
 inline constexpr double kEdgeToleranceMhz = 1.0e-6;  // 1 Hz
 
-// A partial hold window ends where the radio's own re-centre test starts (HL2:
+// A partial hold window ends where the radio's own recenter test starts (HL2:
 // strictly greater than the window). Pulling each edge in by more than the
 // tolerance keeps a parked or clicked slice, rounding and slack included,
 // strictly inside the radio's window.

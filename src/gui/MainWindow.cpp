@@ -7912,7 +7912,7 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
         const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
         if (memoryBand != currentBand && lockedViewShows(slicePanId, memoryFreqMhz)) {
             // A locked view already showing the memory tunes in place: a band
-            // stack recall would move the view to that band's saved centre.
+            // stack recall would move the view to that band's saved center.
             clearSwrSweepForBandChange(-1, slicePanId, memoryBand);
             m_bandSettings.setCurrentBand(memoryBand);
         } else if (memoryBand != currentBand) {
@@ -8874,9 +8874,13 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
     if (m_radioModel.confirmsReceiveControls()) {
         if (m_radioModel.slice(slice->sliceId()) != slice) { return; }
         IRadioBackend::ReceiveTuneView view = IRadioBackend::ReceiveTuneView::Preserve;
-        if (intent == TuneIntent::CommandedTargetCenter || centerLockActiveForSlice(slice)) {
+        // A locked view that may not move stays on Preserve.
+        const bool viewMayMove = viewLockAllowsRecenter(slice, mhz, intent);
+        if (viewMayMove
+            && (intent == TuneIntent::CommandedTargetCenter || centerLockActiveForSlice(slice))) {
             view = IRadioBackend::ReceiveTuneView::Center;
-        } else if (intent != TuneIntent::IncrementalTune || panFollowEnabled()) {
+        } else if (viewMayMove
+                   && (intent != TuneIntent::IncrementalTune || panFollowEnabled())) {
             view = IRadioBackend::ReceiveTuneView::Reveal;
         }
         // Receiver and display intent are admitted together. A refusal leaves

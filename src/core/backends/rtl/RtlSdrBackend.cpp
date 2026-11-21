@@ -270,7 +270,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.firmwareUpdateSource = std::nullopt;  // no published firmware list is read.
     c.panZoomModes = std::nullopt;      // no command plane, no per-pan zoom flags.
     // No static fraction describes what holds: the default full-width view has
-    // one legal centre, so a slice tuned past it drags the capture, and in
+    // one legal center, so a slice tuned past it drags the capture, and in
     // AM/CW the capture jumps off DC even for an on-screen tune.
     c.panViewHold = std::nullopt;
     c.hasAmCarrierLevel = false;

@@ -68,16 +68,23 @@ int main()
               && !shortcuts.isEmpty() && !actions.isEmpty(),
           "read the MainWindow sources");
 
-    // ---- tune-driven recentres ----
+    // ---- tune-driven recenters ----
 
     const QByteArray reveal = body(
         wiring, "MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(",
         "MainWindow::TuneCenteringResult MainWindow::panFollowVfo(");
     check(ordered(reveal, "if (!viewLockAllowsRecenter(slice, mhz, intent)) { return result; }",
                   "if (intent == TuneIntent::CommandedTargetCenter)"),
-          "reveal/follow consults the lock before any hard-centre");
+          "reveal/follow consults the lock before any hard-center");
+    check(mainWindow.contains(
+              "const bool viewMayMove = viewLockAllowsRecenter(slice, mhz, intent); "
+              "if (viewMayMove && (intent == TuneIntent::CommandedTargetCenter "
+              "|| centerLockActiveForSlice(slice))) {")
+              && mainWindow.contains("} else if (viewMayMove && (intent != TuneIntent::IncrementalTune "
+                                     "|| panFollowEnabled())) {"),
+          "a confirmed-receive tune asks the radio to preserve a view the lock holds");
     check(wiring.contains("&& !panViewLocked(pan->panId())) {"),
-          "the edge-pan drag handler never writes a new centre for a locked pan");
+          "the edge-pan drag handler never writes a new center for a locked pan");
     check(wiring.contains("return sw && sw->viewLocked() && sw->frequencyInView(mhz);"),
           "lockedViewShows is true only for a locked pan that shows the target");
     check(wiring.contains("if (!lockedViewShows(panId, freqMhz)) { "
@@ -116,16 +123,21 @@ int main()
 
     // ---- persistence and availability ----
 
+    check(setForPan.contains("if (locked && viewLockHoldFraction(panId) <= 0.0) { "
+                             "sw->setViewLocked(false); return; }"),
+          "a lock the radio cannot hold is refused without touching the saved intent");
     check(setForPan.contains("const bool saves = persist && m_radioModel.isConnected();")
-              && setForPan.contains("if (!saves) { if (locked) { m_pendingViewLockPanIndices.insert("),
-          "a lock made while disconnected waits for the next radio, saving nothing");
+              && setForPan.contains("if (!saves) { "
+                                    "m_pendingViewLockByPanIndex.insert(sw->panIndex(), locked); "
+                                    "return; }"),
+          "a lock or an unlock made while disconnected waits for the next radio, saving nothing");
     const QByteArray restore = body(
         wiring, "void MainWindow::restoreViewLockForPan(const QString& panId)",
         "bool MainWindow::snapCenterLockForSlice(");
-    check(restore.contains("if (m_pendingViewLockPanIndices.contains(sw->panIndex()) "
-                           "&& viewLockHoldFraction(panId) > 0.0) { "
-                           "setViewLockForPan(panId, true, /*persist=*/true);"),
-          "connecting applies and saves that lock once the radio can hold");
+    check(restore.contains("if (pending != m_pendingViewLockByPanIndex.cend() "
+                           "&& (!pending.value() || viewLockHoldFraction(panId) > 0.0)) { "
+                           "setViewLockForPan(panId, pending.value(), /*persist=*/true); return; }"),
+          "connecting saves that choice: an unlock at once, a lock once the radio can hold");
     const QByteArray holdFraction = body(
         wiring, "double MainWindow::viewLockHoldFraction(const QString& panId) const",
         "void MainWindow::syncViewLockAvailability(");
@@ -144,9 +156,9 @@ int main()
         "void MainWindow::restoreViewLockForPan(");
     check(capsChanged.contains("} else if (m_viewLockPendingSawConnection) { "
                                "m_viewLockPendingSawConnection = false; "
-                               "m_pendingViewLockPanIndices.clear(); }")
+                               "m_pendingViewLockByPanIndex.clear(); }")
               && capsChanged.contains("syncViewLockAvailability(applet->panId());"),
-          "each capability publication re-syncs every pan and ends an unapplied pending lock");
+          "each capability publication re-syncs every pan and ends an unapplied pending choice");
     check(session.contains("&RadioModel::capabilitiesChanged, this, "
                            "&MainWindow::onViewLockCapabilitiesChanged);")
               && session.contains("connect(pan, &PanadapterModel::viewHoldsChanged, this, "

@@ -15,15 +15,6 @@
 
 namespace AetherSDR::icom {
 
-namespace {
-// SCROLL-F and Fixed keep the window still under a tuned VFO; Center and
-// SCROLL-C move it with every tune.
-bool scopeModeHoldsView(ScopeMode mode)
-{
-    return mode == ScopeMode::ScrollF || mode == ScopeMode::Fixed;
-}
-} // namespace
-
 bool IcomCivBackend::hasDualReceivers() const
 {
     return m_model && profileFor(*m_model).dualReceiver.has_value();

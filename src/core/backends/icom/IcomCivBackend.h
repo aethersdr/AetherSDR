@@ -760,6 +760,7 @@ private:
     [[nodiscard]] PanZoomPlacement zoomPlacement() const;
     void publishZoomPlacement(bool force = false);
     std::optional<PanZoomPlacement> m_zoomPlacementPublished;
+    std::optional<bool> m_viewHoldPublished;
     // The mode the radio last reported (sweep or 27 14 read).
     std::optional<ScopeMode> m_scopeReportedMode;
     int m_scopePublishedModeIndex = -2;   // -2 = nothing published yet

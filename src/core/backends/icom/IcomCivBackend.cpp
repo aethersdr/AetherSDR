@@ -2282,16 +2282,21 @@ PanZoomPlacement IcomCivBackend::zoomPlacement() const
 
 void IcomCivBackend::publishZoomPlacement(bool force)
 {
+    // The hold follows the mode the radio last reported, so a commanded change
+    // still in flight (placement Unknown) keeps it; before any report nothing
+    // is promised.
+    const bool holds = scopeModesOffered() && m_scopeReportedMode
+        && scopeModeHoldsView(*m_scopeReportedMode);
+    if (force || m_viewHoldPublished != holds) {
+        m_viewHoldPublished = holds;
+        emit panViewHoldChanged(panId(), holds);
+    }
     const PanZoomPlacement placement = zoomPlacement();
     if (!force && m_zoomPlacementPublished == placement) {
         return;
     }
     m_zoomPlacementPublished = placement;
     emit panZoomPlacementChanged(panId(), placement);
-    // The window is the VFO's only in Center and SCROLL-C; until the mode is
-    // known nothing is promised.
-    emit panViewHoldChanged(panId(), placement == PanZoomPlacement::CenterAllocation
-                                         || placement == PanZoomPlacement::Unavailable);
 }
 
 void IcomCivBackend::setPanScopeMode(const QString& id, int index)
@@ -2450,6 +2455,7 @@ void IcomCivBackend::resetScopeEdgeState()
         m_scopeReportedMode.reset();
         m_scopePublishedModeIndex = -2;
         m_zoomPlacementPublished.reset();
+        m_viewHoldPublished.reset();
         m_scopeModeRequestedAtMs = 0;
         m_scopeEdgeNumber = 0;
         m_scopeLowerHz = 0;

@@ -2464,14 +2464,15 @@ private:
     // live flag; this is the persisted intent by radio/station + pan index
     // (ViewLockSettings.h). The locked range itself is radio-owned, never saved.
     QHash<QString, QSet<int>> m_viewLockedPanIndicesByRadio;
-    // Pan indices locked while disconnected. restoreViewLockForPan() applies
-    // and saves each once the next radio can hold; a connection that ends
-    // without holding (ANAN, an Icom left in Center) drops them.
-    QSet<int> m_pendingViewLockPanIndices;
+    // Lock (true) or unlock (false) chosen per pan index while disconnected.
+    // restoreViewLockForPan() applies and saves each on the next radio: an
+    // unlock at once, a lock once that radio can hold. A connection that ends
+    // first (ANAN, an Icom left in Center) drops what is left.
+    QHash<int, bool> m_pendingViewLockByPanIndex;
     bool m_viewLockPendingSawConnection{false};
     bool panViewLocked(const QString& panId) const;
     // True when panId's view is locked and already shows mhz: a jump there
-    // tunes in place, so nothing may recentre or recall a band stack for it.
+    // tunes in place, so nothing may recenter or recall a band stack for it.
     bool lockedViewShows(const QString& panId, double mhz) const;
     // A locked view's range is frozen: refuse an operator pan/zoom command for
     // panId and say why on the status bar. Returns true when refused.

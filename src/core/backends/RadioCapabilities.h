@@ -500,8 +500,8 @@ struct RadioCapabilities {
     // refuses, so the lock button is dimmed with the reason instead of
     // pretending. Per-family rationale: docs/architecture/radio-capabilities-map.md.
     struct PanViewHold {
-        // Fraction (0, 1] of the published pan bandwidth, centred on the pan
-        // centre, inside which a tuned slice never moves the view. 1.0 = the
+        // Fraction (0, 1] of the published pan bandwidth, centered on the pan
+        // center, inside which a tuned slice never moves the view. 1.0 = the
         // whole span. No default: an engaging backend must state its own.
         double holdableSpanFraction;
     };

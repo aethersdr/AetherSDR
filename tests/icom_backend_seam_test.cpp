@@ -139,6 +139,12 @@ struct IcomCivBackendTestAccess {
     static void refuse(IcomCivBackend& b, const char* key) { b.handleScopeRefusal(key); }
     static bool scopeModesOffered(const IcomCivBackend& b) { return b.scopeModesOffered(); }
     static void scopeStartup(IcomCivBackend& b) { b.applyScopeStartup(); }
+    // A mode pick's grace window, open whatever the test clock reads.
+    static void holdScopeModeGraceOpen(IcomCivBackend& b)
+    {
+        b.m_scopeModeRequestedAtMs = b.nowMs() + 1;
+        b.publishZoomPlacement();
+    }
     static void fixedView(IcomCivBackend& b) { b.m_scopeView = IcomCivBackend::ScopeView::Fixed; }
     static bool tuning(const IcomCivBackend& b) { return b.m_tuning; }
     static bool tuneTimerActive(const IcomCivBackend& b)
@@ -1456,6 +1462,11 @@ void testViewHoldFollowsScopeMode()
     check(last() == QVariant(false), "SCROLL-C follows the tuned frequency: no hold");
     Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
     check(last() == QVariant(true), "Fixed never pages, so it holds");
+    QSignalSpy placements(&backend, &IRadioBackend::panZoomPlacementChanged);
+    backend.setPanScopeMode(QStringLiteral("0"), 0);
+    Access::holdScopeModeGraceOpen(backend);
+    check(!placements.isEmpty() && last() == QVariant(true),
+          "a pick still in flight moves the placement but keeps the reported mode's hold");
     Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x00));
     check(last() == QVariant(false), "Center follows every tune: no hold");
     Access::settleScope(backend);

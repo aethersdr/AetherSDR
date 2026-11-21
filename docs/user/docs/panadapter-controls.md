@@ -147,8 +147,9 @@ Lock view freezes a panadapter's frequency range, so the slice moves across a st
 - The range itself is frozen too: dragging the display or the frequency scale, Ctrl+scroll, pinch-to-zoom and the zoom shortcuts do nothing, the − + S B zoom buttons are dimmed, and **Center Slice** is unavailable. Unlock to change the range.
 - Lock view and Center Lock do opposite things, so turning one on turns the other off for that panadapter.
 - Closing a panadapter with its **✕**, or choosing a layout with fewer panadapters, forgets its Lock view setting.
+- A padlock turned on or off while no radio is connected applies to the next radio you connect and is remembered for it.
 - While WFM is running on a slice, the display still follows it once it leaves the WFM capture window.
-- On a Hermes-Lite 2 the radio recenters itself once the slice is near the edge, so Lock view holds only the middle 80% of the display: a dragged slice stops there, and tuning past it moves the display. With RIT on, the radio judges the edge on the RIT frequency, so the held range is smaller by the RIT offset.
+- On a Hermes-Lite 2 the radio recenters itself once the slice is near the edge, so Lock view holds only the middle 80% of the display: a dragged slice stops there, and tuning past it moves the display. With RIT on, the radio judges the edge on the RIT frequency, so the held range is smaller by the RIT offset. If RIT alone carried the slice past the edge, turning RIT off leaves the display centered on the dial frequency, not on the range you locked; the radio does this with Lock view off too.
 - On a networked Icom, Lock view works while the scope is in **Scroll-F** or **Fixed** and the button is dimmed in **Center**, where the window follows every tune. Switching back to Scroll-F or Fixed brings a saved lock back. In Scroll-F, tuning off the edge still pages the window, because the radio does that itself. Turning the radio's own dial into the outer tenth of the window also moves it.
 - On ANAN and RTL-SDR radios the button is dimmed, because the panadapter can move with the slice.
 - Another MultiFlex station tuning your slice can still move the display.

@@ -513,7 +513,7 @@ window** — the drawn range narrowed to `RadioCapabilities::panViewHold`
   cross-band memory recall or typed tune.
 - Slice drag: `SpectrumWidget::updateVfoDragEdgePan()` reports no edge zone and
   `driveVfoDragTune()` clamps the target on-step to the hold window; the
-  `edgePanTuneRequested` handler also refuses to write a new centre. Clicks
+  `edgePanTuneRequested` handler also refuses to write a new center. Clicks
   snap through `snapClickTarget()`, which never rounds across the edge.
 - The hard-center paths below are explicit jumps and stay as they are when the
   target is off-screen (band change, CAT/TCI out of span).
@@ -524,12 +524,18 @@ window** — the drawn range narrowed to `RadioCapabilities::panViewHold`
   `IRadioBackend::panViewHoldChanged`: an Icom scope in Center).
   `syncViewLockAvailability()` releases the live lock when the hold goes and
   restores the saved one when it returns.
+- A lock or an unlock made while disconnected is queued per pan index
+  (`m_pendingViewLockByPanIndex`) and saved under the next radio by
+  `restoreViewLockForPan()`: an unlock at once, a lock once that radio holds.
+- A confirmed-receive tune (`applyTuneRequest()` on a
+  `confirmsReceiveControls()` backend) asks for `ReceiveTuneView::Preserve`
+  whenever `viewLockAllowsRecenter()` says the view may not move.
 - The on-screen cross-band skip of the Flex band-stack preselect also skips
   what the recall restores (antenna, mode, filter): the target is tuned in
   place.
 - Operator range changes also include the span-preset actions
   (`setActivePanSpan`), refused like the zoom shortcuts.
-- Known limits, left as they are: the WFM DAX-IQ recentre
+- Known limits, left as they are: the WFM DAX-IQ recenter
   (`MainWindow_DigitalModes.cpp`, `centerPanAtSlice`) still moves a locked pan
   once the slice leaves the IQ window; CAT/TCI decide "in span" on the radio's
   geometry (`PanadapterModel::spanContainsMhz`), so on a KiwiSDR-display pan a

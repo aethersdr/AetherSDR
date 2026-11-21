@@ -704,7 +704,7 @@ RadioCapabilities AnanBackend::capabilities() const
         PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
-    // emitPanState() publishes the pan centre as the slice frequency, so the
+    // emitPanState() publishes the pan center as the slice frequency, so the
     // view moves with every tune: nothing for Lock view to hold.
     c.panViewHold = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly

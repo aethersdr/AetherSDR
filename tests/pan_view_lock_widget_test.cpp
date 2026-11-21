@@ -150,11 +150,26 @@ void testRangeGestures()
         } else {
             check(afterWheel > 0, "unlocked baseline: Ctrl+wheel requests a zoom");
             check(afterPinch > afterWheel, "unlocked baseline: a pinch requests a zoom");
-            check(afterPanDrag > afterPinch, "unlocked baseline: a pan drag requests a centre");
+            check(afterPanDrag > afterPinch, "unlocked baseline: a pan drag requests a center");
             check(afterScaleDrag > afterPanDrag,
                   "unlocked baseline: a frequency-scale drag requests a span");
         }
     }
+}
+
+// A zoom's final range command trails the gesture on a settle timer. Locking
+// inside that window sends it at once, so nothing moves the view afterward.
+void testLockLandsSettlingZoom()
+{
+    SpectrumWidget widget;
+    prepare(widget);
+    Requests requests(widget);
+    ctrlWheel(widget);
+    widget.setViewLocked(true);
+    const int atLock = requests.rangeChanges();
+    wait(450);
+    check(atLock > 0 && requests.rangeChanges() == atLock,
+          "locking mid-zoom lands the zoom at once; nothing is requested after the lock");
 }
 
 void testSliceDrag()
@@ -176,7 +191,7 @@ void testSliceDrag()
         check(near(requests.tuned, kCenter + kSpan / 2.0),
               "locked: the dragged slice stops on the on-step right edge");
         check(near(requests.edgePanCenter, kCenter) && near(widget.centerMhz(), kCenter),
-              "locked: the drag never asks for a new centre");
+              "locked: the drag never asks for a new center");
     }
     {
         // A radio that holds only the middle 80% (HL2): the slice stops inside it.
@@ -275,6 +290,7 @@ int main(int argc, char** argv)
     TestSettingsProfile profile("pan-view-lock-widget");
     QApplication app(argc, argv);
     testRangeGestures();
+    testLockLandsSettlingZoom();
     testSliceDrag();
     testClickNearEdge();
     testButtons();
