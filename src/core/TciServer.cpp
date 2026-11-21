@@ -99,6 +99,26 @@ void writeRecordingSetting(const QString& key, const QJsonValue& value)
     settings.save();
 }
 
+// TCI feature options, one nested document under the root key "Tci"
+// (Principle V): TxVoiceDsp (bool, off by default) and RxAudioSource
+// ("raw" by default, or "processed"). Absent or unreadable reads as all
+// defaults.
+QJsonObject readTciFeatureSettings()
+{
+    return QJsonDocument::fromJson(
+        AppSettings::instance().value("Tci", "{}").toString().toUtf8()).object();
+}
+
+void writeTciFeatureSetting(const QString& key, const QJsonValue& value)
+{
+    auto& settings = AppSettings::instance();
+    QJsonObject tci = readTciFeatureSettings();
+    tci.insert(key, value);
+    settings.setValue("Tci", QString::fromUtf8(
+        QJsonDocument(tci).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+
 QString tciCommandName(const QString& message)
 {
     const QString trimmed = message.trimmed().toLower();
@@ -185,6 +205,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         .object();
     m_lineOutIncludeTx = recording.value("lineOutIncludeTx").toBool(false);
     m_lineOutPcAudioOffConsent = recording.value("lineOutPcAudioOffConsent").toBool(false);
+    m_txVoiceDsp = readTciFeatureSettings().value("TxVoiceDsp").toBool(false);
+    m_rxAudioProcessed = readTciFeatureSettings().value("RxAudioSource").toString()
+        == QLatin1String("processed");
+    m_rxSource.setProcessed(m_rxAudioProcessed);
     if (m_model) { m_model->setLineOutPcAudioOffConsent(m_lineOutPcAudioOffConsent); }
     m_io = std::make_unique<TciIoWorker>();
     m_io->setLineOutIncludeTx(m_lineOutIncludeTx);
@@ -3044,12 +3068,16 @@ void TciServer::setAudioEngine(AudioEngine* audio)
         disconnect(m_io.get(), nullptr, m_audio, nullptr);
         disconnect(m_audio, nullptr, this, nullptr);
         QMetaObject::invokeMethod(m_audio, [previous = m_audio] { previous->setLineOutCaptureEnabled(false); }, Qt::AutoConnection);
+        releaseProcessedRx(-1, true);
     }
     m_audio = audio;
     m_lineOutCaptureWanted = false;
     if (audio) {
         connect(m_io.get(), &TciIoWorker::txPcmReady, audio,
-                &AudioEngine::feedDaxTxAudio, Qt::QueuedConnection);
+                &AudioEngine::feedTciTxAudio, Qt::QueuedConnection);
+        audio->setTciTxVoiceDsp(m_txVoiceDsp);
+        connect(audio, &AudioEngine::tciSliceProcessedAudioReady, this,
+                &TciServer::onProcessedSliceAudio, Qt::QueuedConnection);
         connect(audio, &QObject::destroyed, this, [this] {
             m_audio = nullptr;
             m_lineOutCaptureWanted = false;
@@ -3065,6 +3093,84 @@ void TciServer::setAudioEngine(AudioEngine* audio)
             }, Qt::DirectConnection);
     }
     updateLineOutCapture();
+}
+
+void TciServer::setTxVoiceDsp(bool on)
+{
+    if (m_txVoiceDsp == on) { return; }
+    m_txVoiceDsp = on;
+    writeTciFeatureSetting(QStringLiteral("TxVoiceDsp"), on);
+    if (m_audio) { m_audio->setTciTxVoiceDsp(on); }
+    emit txVoiceDspChanged(on);
+}
+
+void TciServer::setRxAudioProcessed(bool on)
+{
+    if (m_rxAudioProcessed == on) { return; }
+    m_rxAudioProcessed = on;
+    writeTciFeatureSetting(QStringLiteral("RxAudioSource"),
+                           on ? QStringLiteral("processed") : QStringLiteral("raw"));
+    // Off: the processed streams are revoked and their routes released now,
+    // so the next raw frame takes each slice route without waiting.
+    if (!on) { releaseProcessedRx(-1, true); }
+    m_rxSource.setProcessed(on);
+    emit rxAudioProcessedChanged(on);
+}
+
+bool TciServer::sliceAudioWanted(int sliceId) const
+{
+    const auto binding = m_rxBindings.constFind(TciIoWorker::rxRouteKey(false, sliceId));
+    if (binding == m_rxBindings.cend()) { return false; }
+    for (const ClientState& client : m_clients) {
+        if (client.audioEnabled
+            && (client.audioReceiver < 0 || client.audioReceiver == binding->trx)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void TciServer::releaseProcessedRx(int sliceId, bool releaseRoutes)
+{
+    for (auto it = m_processedRx.begin(); it != m_processedRx.end();) {
+        if (sliceId >= 0 && it->first != sliceId) { ++it; continue; }
+        it->second->producer.invalidate();
+        if (releaseRoutes && m_rxSource.processedOwns(it->first)) {
+            const quint64 key = TciIoWorker::rxRouteKey(false, it->first);
+            m_io->post([io = m_io.get(), key] { io->releaseRxRoute(key); });
+        }
+        it = m_processedRx.erase(it);
+    }
+    if (sliceId < 0) { m_rxSource.clear(); } else { m_rxSource.forget(sliceId); }
+    if (m_audio) {
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, sliceId] {
+            audio->releaseTciSliceDsp(sliceId);
+        }, Qt::AutoConnection);
+    }
+}
+
+void TciServer::onProcessedSliceAudio(int sliceId, const QByteArray& pcm)
+{
+    constexpr qsizetype kFrameBytes = 2 * sizeof(float);
+    if (sliceId < 0 || pcm.isEmpty() || pcm.size() % kFrameBytes != 0) { return; }
+    const auto action = m_rxSource.onProcessed(sliceId, m_rxSourceClock());
+    if (action == TciRxSourceSelector::Action::Drop) { return; }
+    const quint64 key = TciIoWorker::rxRouteKey(false, sliceId);
+    auto& slot = m_processedRx[sliceId];
+    if (!slot) { slot = std::make_unique<ProcessedSliceRx>(); }
+    if (action == TciRxSourceSelector::Action::Handover) {
+        // A fresh epoch per takeover; the raw stream's pin is released so
+        // this one may take the route.
+        if (!slot->producer.start(PcmPurpose::Slice, sliceId, PcmFormat{})) {
+            m_rxSource.forget(sliceId);
+            return;
+        }
+        m_io->post([io = m_io.get(), key] { io->releaseRxRoute(key); });
+    }
+    const std::optional<PcmFrame> frame = slot->producer.legacyStereo24(pcm);
+    if (!frame) { return; }
+    m_io->post([io = m_io.get(), key, frame = *frame] { io->receivePcm(key, frame); },
+               frame->samples().size() * sizeof(float));
 }
 
 void TciServer::setLineOutIncludeTx(bool enabled)
@@ -3190,6 +3296,7 @@ void TciServer::retireAllRxRoutes()
     m_rxBindingOwners.clear();
     m_channelSlice.clear();
     m_channelTrx.clear();
+    releaseProcessedRx(-1, false);
     refreshRxBindings();
 }
 
@@ -3200,6 +3307,7 @@ void TciServer::retireSliceRx(int sliceId)
             binding.alive->store(false, std::memory_order_release);
         }
     }
+    releaseProcessedRx(sliceId, false);
     for (auto it = m_channelSlice.begin(); it != m_channelSlice.end();) {
         if (!it.value() || it.value()->sliceId() == sliceId) {
             m_channelTrx.remove(it.key());
@@ -3210,7 +3318,31 @@ void TciServer::retireSliceRx(int sliceId)
 
 void TciServer::onSlicePcmReady(int sliceId, const PcmFrame& frame)
 {
+    if (m_rxAudioProcessed && m_audio && sliceAudioWanted(sliceId)) {
+        // The slice's own raw audio feeds its processed tap; the result
+        // returns on onProcessedSliceAudio(). Non-24 kHz frames have no
+        // legacy view, so they stay raw (the unsupported-rate fallback).
+        const QByteArray pcm = frame.legacyStereo24();
+        if (!pcm.isEmpty()) {
+            QMetaObject::invokeMethod(m_audio, [audio = m_audio, sliceId, pcm] {
+                audio->processTciSliceAudio(sliceId, pcm);
+            }, Qt::AutoConnection);
+        }
+    }
     const quint64 key = TciIoWorker::rxRouteKey(false, sliceId);
+    switch (m_rxSource.onRaw(sliceId, m_rxSourceClock())) {
+    case TciRxSourceSelector::Action::Drop:
+        return; // the processed stream owns the route and is flowing
+    case TciRxSourceSelector::Action::Handover:
+        // Processed went stale: revoke it and let raw take the route back.
+        if (auto it = m_processedRx.find(sliceId); it != m_processedRx.end()) {
+            it->second->producer.invalidate();
+        }
+        m_io->post([io = m_io.get(), key] { io->releaseRxRoute(key); });
+        break;
+    case TciRxSourceSelector::Action::Forward:
+        break;
+    }
     m_io->post([io = m_io.get(), key, frame] { io->receivePcm(key, frame); },
                frame.samples().size() * sizeof(float));
 }

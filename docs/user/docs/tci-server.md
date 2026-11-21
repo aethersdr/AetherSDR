@@ -38,6 +38,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
+| **TX audio through TX DSP (voice clients)** | Runs audio a TCI client transmits through the same client TX chain as the microphone (see [TX voice DSP](#tx-voice-dsp)). Off by default; leave it off for digital modes. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -231,6 +232,27 @@ not keep the stream open.
 Server-side `line_out_recorder_*` file recording is not implemented.
 Live TX, MON and multi-client recording qualification remain outstanding
 ([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
+
+### TX voice DSP
+
+TCI transmit audio normally goes to the radio as the client sent it, which is what digital-mode clients (WSJT-X, JTDX, fldigi) need: their tones must not pass a voice compressor or EQ. A voice client, such as a remote-operation app, can instead be given the same client TX chain as the microphone (EQ, compressor, tube, enhancer, reverb, final limiter) with **TX audio through TX DSP (voice clients)** in the TCI Server applet ([#7066](https://github.com/aethersdr/AetherSDR/issues/7066)).
+
+- Off by default. Off, the transmit path is unchanged.
+- The stages, their order and their settings are the microphone's; there is no second chain to configure.
+- The PC mic gain and RNNoise are not applied, because the client sets its own level.
+- Left and right are folded to mono before the chain.
+- DAX transmit audio never passes through it.
+- It changes only the audio. When and how the radio keys does not change.
+
+### Processed RX audio
+
+TCI clients normally receive each slice's audio raw, as the radio delivers it. Decoders such as WSJT-X, JTDX and fldigi need exactly that. With **RX audio through RX DSP (processed)** in the TCI Server applet, a slice's audio first passes AetherSDR's own RX DSP: the noise reduction that is switched on (NR2, RNNoise, NR4, ...) and the client RX chain (EQ, gate, compressor, tube, enhancer), with the same settings you hear locally. A remote-operation client then hears the cleaned-up audio ([#6864](https://github.com/aethersdr/AetherSDR/issues/6864)).
+
+- Off by default. Off, nothing changes. The setting is stored as `Tci.RxAudioSource` (`raw` or `processed`).
+- Each slice is processed on its own, from that slice's audio. TCI clients never receive the speaker mix, and other slices are never mixed in.
+- PC audio does not have to be on.
+- Raw audio takes over again within half a second whenever processed audio is not available: during TX, while a noise reduction is still starting, or when the slice delivers another sample rate than 24 kHz. It switches back when processed audio returns.
+- Receivers fed by DAX (FlexRadio) always stay raw. Line Out is not affected.
 
 ### TX overflow handling
 
