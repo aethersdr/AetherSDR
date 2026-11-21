@@ -4680,6 +4680,22 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             return;
         }
 
+        // A change from elsewhere (a TCI client, the bridge) is announced on
+        // extensionStatus("hl2", "hw"); re-read it so the page does not go
+        // stale. Bound once per backend: the reseed runs from that handler.
+        if (m_hl2HwStatusBackend != static_cast<QObject*>(backend)) {
+            QObject::disconnect(m_hl2HwStatusConnection);
+            m_hl2HwStatusBackend = backend;
+            m_hl2HwStatusConnection = connect(backend, &IRadioBackend::extensionStatus, this,
+                [this](const QString& ns, const QString& kind, const QVariantMap&) {
+                    if (ns == QLatin1String("hl2") && kind == QLatin1String("hw")
+                        && static_cast<QObject*>(m_model->backend()) == m_hl2HwStatusBackend
+                        && m_hl2HardwareReseed) {
+                        m_hl2HardwareReseed();
+                    }
+                });
+        }
+
         // REQUEST IDS ARE NOT ALLOCATED CENTRALLY — see BandscopeDialog's note.
         // This one lives in its own decade so it cannot collide with
         // AutomationServer's counter or RadioModel's reserved UINT64_MAX.
@@ -4734,8 +4750,12 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             // QVariant off a generic seam, and a slider given a value outside
             // its range silently takes the nearest end — which would then be
             // persisted by the next drag as if the operator had chosen it.
-            spkSlider->setValue(std::clamp(
-                m.value(QStringLiteral("speakerLevelPercent"), 100).toInt(), 0, 100));
+            // Not under the operator's drag: a reseed for a change made
+            // elsewhere would snap the handle back. The release writes it.
+            if (!spkSlider->isSliderDown()) {
+                spkSlider->setValue(std::clamp(
+                    m.value(QStringLiteral("speakerLevelPercent"), 100).toInt(), 0, 100));
+            }
             // Inside the blockers with everything else, though these three
             // only relabel and dim now — nothing here writes a control's value.
             refreshDither();

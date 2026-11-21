@@ -30,6 +30,8 @@
 #include <QPair>
 #include <QSet>
 #include <QString>
+#include <QVariant>
+#include <QVariantMap>
 #include <QVector>
 #include <array>
 #include <atomic>
@@ -44,6 +46,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
+class IRadioBackend;
 class AudioEngine;
 class SliceModel;
 class PanadapterModel;
@@ -88,6 +91,7 @@ class TciServer : public QObject {
     friend class TxOperationIntegrationTestAccess;
     friend class TciAntennaExtensionTest;
     friend class TciExtensionSetTest;
+    friend class TciHl2ExtensionTest;
     friend class TciRxGainExtensionTest;
     friend class TciSpanExtensionTest;
 
@@ -125,6 +129,11 @@ public:
     bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
     void setLineOutPcAudioOffConsent(bool enabled);
     bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
+    // "Allow TCI clients to change HL2 hardware", off by default: whether an
+    // aethersdr_hl2_* set is accepted. Reads answer either way. Persisted in
+    // the TciExtensions settings object.
+    void setHl2HardwareChangesAllowed(bool allowed);
+    bool hl2HardwareChangesAllowed() const { return m_hl2HardwareChangesAllowed; }
     // The application owns PC Audio preferences; refresh after its toggle.
     void updateLineOutCapture();
     // Thread-safe owning ingress, safe even if a source callback overlaps
@@ -198,6 +207,7 @@ public slots:
 signals:
     void lineOutIncludeTxChanged(bool enabled);
     void lineOutPcAudioOffConsentChanged(bool enabled);
+    void hl2HardwareChangesAllowedChanged(bool allowed);
     void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
@@ -274,6 +284,25 @@ private:
     bool announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
+    // Extension group `hl2` (TciHl2Extension.h).
+    void registerHl2Group();
+    TciExtensionSet::Result handleHl2(const QString& name, const QStringList& args);
+    bool hl2Offered() const;
+    QStringList hl2StateLines();
+    // hw.get, answered synchronously by the backend; nullopt if it did not.
+    std::optional<QVariantMap> hl2Hardware();
+    QString hl2FilterBoardLine();
+    void bindHl2Backend();
+    void onHl2ExtensionResult(quint64 requestId, const QVariant& result);
+    void onHl2ExtensionError(quint64 requestId, const QString& reason);
+    void onHl2ExtensionStatus(const QString& ns, const QString& kind, const QVariantMap& fields);
+    void queueHl2FilterNotice();
+    bool broadcastHl2FilterBoard();
+    QString hl2SetRefusal() const;
+    void warnHl2SetRefused(const QString& refusal);
+    void onHl2TransmitStateChanged();
+    // Applies the newest filter board set held in the rate window.
+    void flushHl2Set();
     // Extension groups `rx_rf_gain`, `rx_auto_rf_gain`, `rx_overload`
     // (TciRxGainExtension.h).
     void registerRxGainGroups();
@@ -490,6 +519,7 @@ private:
     void syncLineOutClient(const ClientState& client);
     bool m_lineOutIncludeTx{false};
     bool m_lineOutPcAudioOffConsent{false};
+    bool m_hl2HardwareChangesAllowed{false};
     bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);
@@ -552,6 +582,28 @@ private:
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
     TciExtensionSet m_extensions;
+    // The client whose extension command is being handled, for a group whose
+    // answer arrives later (aethersdr_hl2_ioboard_status).
+    QPointer<TciClient> m_extensionRequester;
+    // Extension set, HL2 group. Request ids in their own decade (0x07..), so
+    // they cannot answer or be answered by the setup page's or the bridge's.
+    quint64           m_hl2NextRequestId{0x0700000000000000ull};
+    QPointer<IRadioBackend> m_hl2Backend;
+    QList<QMetaObject::Connection> m_hl2Connections;
+    QHash<quint64, QPointer<TciClient>> m_hl2IoBoardPending;
+    std::unique_ptr<TciExtensionNotice> m_hl2FilterNotice;
+    // Filter board and HPF the enabled clients were last sent (state lines or
+    // a hw status); a notice is queued when a status moves them.
+    std::optional<QPair<int, bool>> m_hl2LastFilter;
+    // A filter board set waiting for the rate window, newest wins, and who
+    // asked; refusal warnings already shown in this transmit state.
+    QTimer*           m_hl2SetRateTimer{nullptr};
+    std::optional<QVariantMap> m_hl2SetPending;
+    QPointer<TciClient> m_hl2SetRequester;
+    QSet<QString>     m_hl2RefusalWarned;
+    // True only inside flushHl2Set()'s own hw.set, whose status is not a
+    // change from elsewhere.
+    bool              m_hl2OwnSetInFlight{false};
     // Receive gain group notices: the trxs whose range or gain line is due.
     QSet<int> m_rxGainRangeDue;
     QSet<int> m_rxGainDue;
