@@ -6628,6 +6628,37 @@ void MainWindow::buildUI()
     }
     hbox->addWidget(m_pgxlContainer);
 
+    // KPA500 main-window indicator — RFC #7092.
+    // Passive widget (no click / no aetherStateCycle): show/hide on detectedChanged only.
+    m_kpa500Separator = addSep();
+    m_kpa500Separator->setVisible(false);
+
+    m_kpa500Container = new QWidget;
+    m_kpa500Container->setObjectName(QStringLiteral("kpa500Indicator"));
+    m_kpa500Container->setToolTip("Elecraft KPA500");
+    m_kpa500Container->setAccessibleName("KPA500: Unknown");
+    m_kpa500Container->setVisible(false);
+    {
+        auto* vbox = new QVBoxLayout(m_kpa500Container);
+        vbox->setContentsMargins(0, 0, 0, 4);
+        vbox->setSpacing(0);
+        vbox->setAlignment(Qt::AlignVCenter);
+        m_kpa500Indicator = new QLabel("KPA");
+        m_kpa500Indicator->setAlignment(Qt::AlignCenter);
+        m_kpa500StateLabel = new QLabel(QStringLiteral("–"));
+        m_kpa500StateLabel->setAlignment(Qt::AlignCenter);
+        {
+            QFont f = m_kpa500StateLabel->font();
+            f.setPixelSize(11);
+            const int minW = QFontMetrics(f).horizontalAdvance("STANDBY") + 16;
+            m_kpa500StateLabel->setMinimumWidth(minW);
+            m_kpa500Container->setMinimumWidth(minW);
+        }
+        vbox->addWidget(m_kpa500Indicator);
+        vbox->addWidget(m_kpa500StateLabel);
+    }
+    hbox->addWidget(m_kpa500Container);
+
     addSep();
 
     m_txIndicator = new QLabel("TX");
