@@ -7372,6 +7372,71 @@ target_include_directories(green_heron_protocol_test PRIVATE src)
 target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
 add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
 
+# microHAM TRIO antenna switch, which AetherSDR never switches. Pure: recorded state documents in,
+# snapshots and session decisions out, no socket and no clock.
+add_executable(microham_trio_protocol_test
+    tests/microham_trio_protocol_test.cpp
+    src/core/MicrohamTrioProtocol.cpp
+)
+target_include_directories(microham_trio_protocol_test PRIVATE src)
+target_link_libraries(microham_trio_protocol_test PRIVATE Qt6::Core)
+add_test(NAME microham_trio_protocol_test COMMAND microham_trio_protocol_test)
+
+# The held session over an injected transport and clock: handshake bytes,
+# framing, keep-alive, an eviction that is never retaken, release, close.
+add_executable(microham_trio_session_test
+    tests/microham_trio_session_test.cpp
+    src/core/MicrohamTrioSession.cpp
+    src/core/MicrohamTrioWebSocket.cpp
+    src/core/MicrohamTrioProtocol.cpp
+)
+target_include_directories(microham_trio_session_test PRIVATE src)
+target_link_libraries(microham_trio_session_test PRIVATE Qt6::Core)
+set_target_properties(microham_trio_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME microham_trio_session_test COMMAND microham_trio_session_test)
+
+# The TRIO model on a scripted transport and a hand-moved clock: settings,
+# session words, eviction, release, failures, a cancelled Test; nothing but
+# the handshake, keep-alives and a close leaves. Binds no socket; the
+# settings store is a private temporary profile.
+add_executable(microham_trio_model_test tests/microham_trio_model_test.cpp)
+target_include_directories(microham_trio_model_test PRIVATE src tests)
+target_link_libraries(microham_trio_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME microham_trio_model_test COMMAND microham_trio_model_test)
+
+# The Trio row on the Peripherals page with a scripted Trio: Add, Connect,
+# DIRECT / OFFLINE / Needs attention, the state field, Web UI, Remove.
+add_executable(microham_trio_peripherals_test
+    tests/microham_trio_peripherals_test.cpp
+    tests/fakes/PeripheralAuthStoreFake.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    src/gui/RadioSetupDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp
+    src/gui/Kpa500AdvancedWidget.cpp
+    src/gui/AntennaGeniusApplet.cpp
+    src/gui/ShackSwitchApplet.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h)
+target_include_directories(microham_trio_peripherals_test PRIVATE tests/fakes src tests)
+target_link_libraries(microham_trio_peripherals_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+set_target_properties(microham_trio_peripherals_test PROPERTIES AUTOMOC ON)
+add_test(NAME microham_trio_peripherals_test COMMAND microham_trio_peripherals_test)
+set_tests_properties(microham_trio_peripherals_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 # aethersdr/radio/state payload shape + the drive-publish timing contract
 # (#5518). Links the real TransmitModel because the have-status latch and the
 # coalesce debounce are half the contract; MqttRadioState.cpp itself is pure.
