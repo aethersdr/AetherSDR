@@ -11,8 +11,8 @@ name: Update Manifest
 #          is shown to hold exactly the payload's files. macOS's payload and
 #          `full` is the app tarball the macOS DMG build attached (Phase 4),
 #          with the DAX driver's source hash (hal-plugin/ at the tag).
-# publish  runs in the update-signing environment (main and v* tags only,
-#          maintainer approval): signs both manifests with the Ed25519 update
+# publish  runs in the update-signing environment (main and v* refs only, no
+#          approval): signs both manifests with the Ed25519 update
 #          key, verifies each signature against packaging/update-signing.pub,
 #          puts the bundles where manifest-v2.json names them (the release, or
 #          updates.aethersdr.com with UPDATE_PAYLOAD_BASE=r2) and puts both
@@ -44,9 +44,12 @@ permissions:
   contents: read
 
 # AppImage, Windows Installer and macOS DMG trigger this, so one tag produces
-# up to three runs. They queue rather than race; GitHub keeps one pending run
-# per group, so a third trigger cancels the one still pending, and a run that
-# finds the manifest already published stops.
+# up to three runs. A run whose missing files belong to a build still running
+# stops as deferred, and that build's completion starts the run that builds the
+# manifest (macOS DMG takes hours longer than the others). They queue rather
+# than race; GitHub keeps one pending run per group, so a third trigger cancels
+# the one still pending, and a run that finds the manifest already published
+# stops.
 concurrency:
   group: update-manifest-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
   cancel-in-progress: false
@@ -55,7 +58,7 @@ jobs:
   build:
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (contains(fromJSON('["success", "failure"]'), github.event.workflow_run.conclusion) &&
        contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
@@ -63,7 +66,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
-      publish: ${{ steps.plan.outputs.publish }}
+      publish: ${{ steps.assets.outputs.deferred == 'true' && 'deferred' || steps.plan.outputs.publish }}
     steps:
       # The tag reaches scripts only through the environment, and only once it
       # has the shape of a stable release tag: vYY.M.patch with an optional
@@ -184,6 +187,7 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
           TARBALLS: ${{ steps.tarballs.outputs.expected }}
           APP_TARBALLS: ${{ steps.apptarballs.outputs.expected }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           want="x86_64.AppImage aarch64.AppImage Windows-x64-portable.zip"
           if [ "$TARBALLS" = true ]; then
@@ -194,6 +198,16 @@ jobs:
             app="macOS-apple-silicon.app.tar.zst macOS-intel.app.tar.zst"
           fi
           base="$want"
+          # Which build attaches each file, so a missing one can be traced to it.
+          builder() {
+            case "$1" in
+              *.AppImage|*.tar.zst) case "$1" in macOS-*) echo "macOS DMG" ;; *) echo "AppImage" ;; esac ;;
+              *.zip) echo "Windows Installer" ;;
+            esac
+          }
+          status_of() {
+            gh run list --workflow "$1" --branch "$TAG" --limit 1 --json status --jq '.[0].status // ""'
+          }
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
             # The macOS app tarballs are waited for only while the tag's macOS
@@ -226,6 +240,19 @@ jobs:
               echo "macos=$macos" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+            # A build-triggered run does not wait out a build still running:
+            # that build's own completion triggers the run that publishes.
+            # A dispatch keeps waiting, since nothing follows it.
+            if [ "$EVENT_NAME" = workflow_run ]; then
+              for w in $missing; do
+                b=$(builder "$w")
+                if [ -n "$b" ] && [ "$(status_of "$b")" != completed ]; then
+                  echo "::notice::Deferred: $b is still running and will start the run that builds this manifest."
+                  echo "deferred=true" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+              done
+            fi
             echo "Waiting for:$missing  ($i/90)"
             sleep 20
           done
@@ -233,7 +260,7 @@ jobs:
           exit 1
 
       - name: Install unsquashfs and zstd
-        if: ${{ steps.plan.outputs.publish != 'already' }}
+        if: ${{ steps.plan.outputs.publish != 'already' && steps.assets.outputs.deferred != 'true' }}
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q squashfs-tools zstd
@@ -245,7 +272,7 @@ jobs:
       # manifest-v2.json puts the patch bundles: unset or "github" keeps them
       # on the release page; "r2" puts them on updates.aethersdr.com.
       - name: Build the manifests and patch bundles
-        if: ${{ steps.plan.outputs.publish != 'already' }}
+        if: ${{ steps.plan.outputs.publish != 'already' && steps.assets.outputs.deferred != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
@@ -277,7 +304,7 @@ jobs:
           ls -l update-out
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: ${{ steps.plan.outputs.publish != 'already' }}
+        if: ${{ steps.plan.outputs.publish != 'already' && steps.assets.outputs.deferred != 'true' }}
         with:
           name: update-manifest-${{ steps.tag.outputs.tag }}
           path: update-out/
