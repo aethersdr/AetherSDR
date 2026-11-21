@@ -527,6 +527,11 @@ private:
     // Field::TxAntenna: "ANT" or "RF1". Every outcome republishes the actual
     // route on every slice; a refusal also raises configurationWarning.
     ReceiveDispatch requestTxRoute(const QString& token);
+    // The same condition requestTxRoute() refuses on: the tail counts.
+    bool transmitPathBusy() const override
+    {
+        return m_keyed || m_radioPtt || m_tuning || m_txTailPending;
+    }
     void applyTxRoute(hl2::TxRoute next);
     void refuseTxRoute(const QString& why);
     void onMetisTxRouteRefused(int actual);

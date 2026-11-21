@@ -52,6 +52,7 @@
 #include "CwxModel.h"
 #include "core/TxCoordinator.h"
 #include "DvkModel.h"
+#include "StationAntenna.h"
 #include "UsbCableModel.h"
 #include "DaxIqModel.h"
 #include "NavtexModel.h"
@@ -933,6 +934,31 @@ public:
     bool panTransmitInhibited(const QString& panId) const;
     QString panTransmitInhibitReason(const QString& panId) const;
 
+    // The registry of station devices (RFC #7238): antenna switches outside
+    // the radio, each offered as a submenu of the RX ANT and TX ANT menus
+    // (models/StationAntenna.h). RadioModel names no device; a peripheral
+    // registers under its own `id`, which replaces an earlier entry with that
+    // id. An entry goes when `owner` is destroyed. The owner calls
+    // notifyStationAntennasChanged() whenever its view may have changed.
+    using StationAntennaViewFn = std::function<StationAntennaView()>;
+    using StationAntennaSelectFn = std::function<QString(const QString& token, bool tx)>;
+    void addStationAntennaSource(QObject* owner, const QString& id, StationAntennaViewFn view,
+                                 StationAntennaSelectFn select);
+    // The active views, in registration order; each carries its id.
+    QVector<StationAntennaView> stationAntennaViews() const;
+    // Whether any device is active for the connected radio: its submenu is
+    // shown, with its ports or with the reason it has none to offer now.
+    bool hasStationAntennas() const;
+    // Empty when the pick went out; otherwise the sentence for the operator.
+    // A device or token not on offer is refused, and so is every pick while
+    // the radio may still radiate (keyed, tuning, or in its transmit tail):
+    // the switch would move under RF. Nothing here gates keying.
+    QString selectStationAntenna(const QString& id, const QString& token, bool tx);
+    // Keyed, tuning, MOX, CW key down, the radio's interlock, or the backend's
+    // own tail (transmitPathBusy()).
+    bool stationAntennaSwitchBlocked() const;
+    void notifyStationAntennasChanged() { emit stationAntennasChanged(); }
+
     // Multi-Flex slot occupancy.  These let UI distinguish three slot
     // states for any global slice index: ours (we have a SliceModel for
     // it), foreign (another client owns it — we have no SliceModel but
@@ -1543,6 +1569,7 @@ signals:
     void antListChanged(QStringList ants);
     // Local AetherSDR display aliases changed. The radio still uses canonical tokens.
     void antennaAliasesChanged();
+    void stationAntennasChanged();
     // (Amplifier presence/state/telemetry signals moved to AmpModel — bind
     //  m_radioModel.amplifier() directly. #4094.)
     void memoryChanged(int index);
@@ -2776,6 +2803,13 @@ private:
     };
     QMap<int, TxBandInfo> m_txBandSettings;
     QHash<QString, QString> m_panTransmitInhibitReasons;
+    struct StationAntennaSource {
+        QPointer<QObject>      owner;
+        QString                id;
+        StationAntennaViewFn   view;
+        StationAntennaSelectFn select;
+    };
+    std::vector<StationAntennaSource> m_stationAntennaSources;
     struct InhibitedTxSelection {
         int id{-1};
         QPointer<SliceModel> identity;

@@ -437,6 +437,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/MicrohamTrioSettings.h": {
+  "tag": "peripheral(microhamtrio)",
+  "note": "Where the microHAM TRIO antenna switch's configuration is kept: its address and port under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect, and the radio-scoped TrioBinding feature document naming the Trio radio port a radio is cabled to. Peripheral accessory configuration, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/HidEncoderManager.h": {
   "tag": "ui-support",
   "note": "USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state",
@@ -1091,6 +1097,18 @@
   "split": "",
   "confidence": "high"
  },
+ "models/MicrohamTrioModel.h": {
+  "tag": "peripheral(microhamtrio)",
+  "note": "microHAM TRIO client: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, the state it reports (radio focus, antenna, labels), the radio's port on it (stored per radio), and this radio's antenna picked from the antenna menus (split implied by RX differing from TX), refused while the radio may radiate. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/MicrohamTrioRadioLink.h": {
+  "tag": "peripheral(microhamtrio)",
+  "note": "Joins the TRIO model to the connected radio: hands it the radio's settings scope and its transmitting state, and registers the Trio with RadioModel's registry of station devices as a family-neutral station-antenna source (models/StationAntenna.h). RadioModel names no peripheral. Peripheral glue, NOT behind the IRadioBackend radio seam.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/MemoryEntry.h": {
   "tag": "universal",
   "note": "POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) \u2014 canonical memories surface",
@@ -1160,6 +1178,12 @@
  "models/SpotModel.h": {
   "tag": "universal",
   "note": "Panadapter spot store (callsign/freq/mode/lifetime/priority) on canonical state; kv ingest is trivially generic",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/StationAntenna.h": {
+  "tag": "universal",
+  "note": "Plain data for a station device outside the radio, an antenna switch, as the RX ANT and TX ANT menus offer it in a submenu per device beside the radio's own ports: tokens, labels and the shared refusal sentences, never the device. Family-neutral; a device registers in RadioModel's registry of station devices (addStationAntennaSource), not behind IRadioBackend.",
   "split": "",
   "confidence": "high"
  },

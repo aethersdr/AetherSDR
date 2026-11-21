@@ -66,6 +66,7 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "models/MicrohamTrioRadioLink.h"
 #include "core/SpeConnection.h"
 #include "core/SpeLegacyProtocol.h"
 #include "core/SpeProtocol.h"
@@ -6706,6 +6707,7 @@ void MainWindow::wireMeters()
         m_vkampConn.setAutoReconnect(ar);
         m_kpa1500Conn.setAutoReconnect(ar);
         m_rfkitConn.setAutoReconnect(ar);
+        m_trioModel.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
         m_kpa500Conn.setAutoReconnect(
             ar && PeripheralSettings::autoConnect(QStringLiteral("kpa500")));
@@ -7518,6 +7520,20 @@ void MainWindow::wireMeters()
         if (!ip.isEmpty())
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
+
+    // ── microHAM Trio antenna switch ──────────────────────────────────────
+    // The Peripherals page shows its state and labels; the link below sends
+    // the antenna picks made in RX ANT / TX ANT to it. Its session is taken at
+    // startup only with "Connect automatically" on, like the KPA500/KAT500 rows.
+    m_trioModel.loadSettings(PeripheralSettings::autoConnect(
+        QLatin1String(MicrohamTrioSettings::kPeripheralId)));
+    // The Trio is told which radio is connected (the Peripherals page reads and
+    // stores that radio's port on it), and its antenna ports are offered in
+    // the RX ANT / TX ANT menus beside the radio's own.
+    m_trioLink = new MicrohamTrioRadioLink(&m_radioModel, &m_trioModel, this);
+    connect(&m_trioModel, &MicrohamTrioModel::notice, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 8000);
+    });
 
     // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and

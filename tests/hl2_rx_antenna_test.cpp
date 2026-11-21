@@ -106,7 +106,7 @@ int main(int argc, char** argv)
     s.applyChanges(*h.last);
     check(s.rxAntennaList() == kAntOnly && s.rxAntenna() == QLatin1String("ANT"),
           "the slice model holds {ANT} and ANT");
-    check(!rxAntennaChoiceRefused(true, !s.rxAntennaList().isEmpty(), false),
+    check(!rxAntennaChoiceRefused(true, !s.rxAntennaList().isEmpty(), false, false),
           "the RX antenna button opens on a real port instead of refusing");
 
     // The RX menus merge RadioModel::knownAntennaTokens(), which adds every
