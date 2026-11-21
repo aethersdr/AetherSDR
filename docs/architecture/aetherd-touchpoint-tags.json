@@ -425,6 +425,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/FatalSignalRelease.h": {
+  "tag": "universal",
+  "note": "Family-neutral termination-signal release (#7163): the app shells install the SIGTERM/SIGINT/SIGHUP/SIGQUIT handlers, and each backend that holds a radio registers an async-signal-safe release (the HL2 its pre-armed stop datagram). Holds function pointers only; no wire code, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/QtAudioBackendGuard.h": {
   "tag": "ui-support",
   "note": "Pre-QApplication probe that keeps Qt 6.12's QtMultimedia off a PipeWire backend that would crash; client startup plumbing, not radio state.",
@@ -1381,7 +1387,7 @@
  },
  "core/backends/hl2/Hl2EmergencyStop.h": {
   "tag": "vendor(hl2)",
-  "note": "Async-signal-safe release path for the Hermes-Lite 2 (an HL2 left streaming at a dead host keeps sending EP6, stops answering discovery, and needs a physical power cycle \u2014 reproduced three times). Family wire behavior invoked from main.cpp's signal handler; pre-existing coupling, frozen into the EB3 baseline. Generalizes to an engine-level 'release every backend on fatal signal' hook.",
+  "note": "Async-signal-safe release path for the Hermes-Lite 2 (an HL2 left streaming at a dead host keeps sending EP6, stops answering discovery, and needs a physical power cycle \u2014 reproduced three times). Family wire behavior below the seam: armEmergencyStop() registers fireEmergencyStop() with core/FatalSignalRelease.h, whose handlers the app shells install (#7163), so no file above the seam includes it.",
   "split": "",
   "confidence": "high"
  },

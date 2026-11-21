@@ -1764,7 +1764,7 @@ bool runLifecycleTest()
 // The wisdom cache must be on disk when open() RETURNS — not at process exit.
 //
 // What this pins: export used to be a std::atexit handler alone, and the app's
-// own signal path (Hl2EmergencyStop restores SIG_DFL and re-raises) turns every
+// own signal path (FatalSignalRelease restores SIG_DFL and re-raises) turns every
 // SIGTERM, crash and Force Quit into an exit that never runs one. The plans were
 // measured and then thrown away, so the next launch paid full first-run cost
 // again — for anyone who had ever force-quit, on every run.
