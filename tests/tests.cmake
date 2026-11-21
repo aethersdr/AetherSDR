@@ -7334,6 +7334,20 @@ target_include_directories(control_action_registry_test PRIVATE src)
 target_link_libraries(control_action_registry_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Test)
 add_test(NAME control_action_registry_test COMMAND control_action_registry_test)
 
+# A control names its bound key in its tooltip, read from the registry (#5484).
+# Socket-free: no radio, no transmitter; settings in a temporary profile.
+add_executable(shortcut_tooltip_test
+    tests/shortcut_tooltip_test.cpp
+    src/gui/ShortcutTooltips.cpp
+    src/gui/ControlActionRegistry.cpp
+    src/core/ShortcutManager.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(shortcut_tooltip_test PRIVATE src tests)
+target_link_libraries(shortcut_tooltip_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME shortcut_tooltip_test COMMAND shortcut_tooltip_test)
+set_tests_properties(shortcut_tooltip_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Actual Qt key delivery, socket-free; no radio or transmitter is constructed.
 add_executable(window_shortcut_test
     tests/window_shortcut_test.cpp
@@ -12025,6 +12039,7 @@ set(AETHER_SETTINGS_CONSUMERS
     qrz_callsign_test
     shortcut_manager_test
     control_action_registry_test
+    shortcut_tooltip_test
     window_shortcut_test
     antenna_alias_test
     mqtt_settings_test

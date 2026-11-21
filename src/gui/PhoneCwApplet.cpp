@@ -7,6 +7,7 @@
 #include "models/TransmitModel.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
+#include "ShortcutActionMarker.h"
 
 #include <algorithm>
 #include <cmath>
@@ -435,6 +436,7 @@ void PhoneCwApplet::buildPhonePanel()
         row->setSpacing(4);
 
         m_procBtn = new QPushButton("PROC");
+        markShortcutAction(m_procBtn, "speech_proc_toggle");
         m_procBtn->setCheckable(true);
         m_procBtn->setFixedHeight(22);
         m_procBtn->setFixedWidth(48);
@@ -494,6 +496,7 @@ void PhoneCwApplet::buildPhonePanel()
         row->addWidget(m_procValueLabel, 0, Qt::AlignBottom);
 
         m_daxBtn = new QPushButton("DAX");
+        markShortcutAction(m_daxBtn, "dax_toggle");
         m_daxBtn->setCheckable(true);
         m_daxBtn->setFixedHeight(22);
         m_daxBtn->setFixedWidth(48);
@@ -528,6 +531,7 @@ void PhoneCwApplet::buildPhonePanel()
         row->setSpacing(4);
 
         m_monBtn = new QPushButton("MON");
+        markShortcutAction(m_monBtn, "tx_monitor_toggle");
         m_monBtn->setCheckable(true);
         m_monBtn->setFixedHeight(22);
         m_monBtn->setFixedWidth(48);

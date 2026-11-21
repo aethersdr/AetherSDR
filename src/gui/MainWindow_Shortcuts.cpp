@@ -9,6 +9,7 @@
 #include "TxKeyActivationGuard.h"
 #include "PttHoldKeyStep.h"
 #include "ShortcutRefusalNotice.h"
+#include "ShortcutTooltips.h"
 #include "TwoToneTuneGate.h"
 #include "core/IambicKeyer.h"
 
@@ -1962,6 +1963,18 @@ void MainWindow::registerShortcutActions()
     s_keyboardShortcutsEnabled = m_keyboardShortcutsEnabled;
     syncOperatingShortcutsEnabled();
     m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
+
+    // Buttons name their bound key; the registry reads it live from here, so a
+    // remap shows on the next hover and bindingsChanged rewrites the rest.
+    m_controlActions.setBindingLookup([this](const QString& id) {
+        const ShortcutManager::Action* a = m_shortcutManager.action(id);
+        return a ? a->currentKey : QKeySequence();
+    });
+    m_shortcutTooltips = new ShortcutTooltips(m_controlActions, this);
+    m_shortcutTooltips->setShortcutsEnabled(m_keyboardShortcutsEnabled);
+    m_shortcutTooltips->refresh();
+    connect(&m_shortcutManager, &ShortcutManager::bindingsChanged,
+            m_shortcutTooltips, &ShortcutTooltips::refresh);
 
     m_sliderShortcutLeaseTimer.setSingleShot(true);
     connect(&m_sliderShortcutLeaseTimer, &QTimer::timeout, this,
