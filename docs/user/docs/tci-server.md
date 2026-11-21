@@ -266,7 +266,7 @@ AetherSDR implements the TCI 2.0 command set, including:
 | Audio streaming | `audio_start/stop`, `audio_samplerate`, `audio_stream_sample_type`, `audio_stream_channels`, `audio_stream_samples` |
 | IQ | `iq_start/stop`, `iq_samplerate` |
 | Spots | `spot`, `spot_delete`, `spot_clear`, `clicked_on_spot` |
-| Sensors | `rx_sensors_enable`, `tx_sensors_enable`, `rx_channel_sensors`, `tx_sensors` |
+| Sensors | `rx_sensors_enable`, `tx_sensors_enable`, `hw_sensors_enable`, `rx_channel_sensors`, `tx_sensors`, `hw_sensors` |
 | Digital | `digl_offset`, `digu_offset` |
 
 Notes:
@@ -299,6 +299,7 @@ Notes:
 ```
 rx_sensors_enable:true;    # S-meter updates
 tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting or tuning
+hw_sensors_enable:true,500;  # supply voltage, current and temperature
 ```
 
 RX sensors broadcast each receiver's S-meter in dBm:
@@ -310,6 +311,23 @@ rx_channel_sensors:0,0,-97.3;
 TX sensors broadcast during transmit and tune, including ALC. They follow this
 station's own transmission only: on a multiFLEX radio, another station's
 transmission sends none.
+
+Hardware sensors go only to the client that enabled them, as
+`hw_sensors:<volts>,<amps>,<°C>;`, every 30–1000 ms (200 ms when the interval
+is left out). `hw_sensors_enable` gets no reply. A value the radio does not
+measure is sent as `NaN`, because the three fields are positional and the
+specification forbids empty arguments. No radio reports its current
+consumption, so the second field is always `NaN`. A Hermes-Lite 2 reports
+temperature only:
+
+```
+hw_sensors:NaN,NaN,42.0;
+```
+
+A FLEX reports supply voltage and temperature. An ANAN reports its supply rail
+only, `hw_sensors:<volts>,NaN,NaN;`. An Icom sends `NaN` in the first field:
+its Vd meter is the PA drain voltage, not the supply voltage the field names.
+A radio that measures none of the three sends nothing.
 
 The SWR field is the same trusted SWR the S-meter shows. A reading taken
 without measurable forward power, for example in a speech pause, does not
