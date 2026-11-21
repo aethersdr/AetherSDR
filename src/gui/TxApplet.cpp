@@ -288,7 +288,7 @@ void TxApplet::buildUI()
         m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_tuneBtn->setFixedHeight(22);
         m_tuneBtn->setAccessibleName("Tune");
-        m_tuneBtn->setAccessibleDescription("Start or stop tune carrier");
+        m_tuneBtn->setAccessibleDescription(tr("Start or stop tune carrier"));
         // Right-click picks the carrier shape (Mono Tone / Two Tone) for
         // the next tune cycle.  Transient one-shot — no AppSettings write.
         m_tuneBtn->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -312,7 +312,7 @@ void TxApplet::buildUI()
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_atuBtn->setFixedHeight(22);
         m_atuBtn->setAccessibleName("ATU tune");
-        m_atuBtn->setAccessibleDescription("Start automatic antenna tuner");
+        m_atuBtn->setAccessibleDescription(tr("Start automatic antenna tuner"));
         // Right-click on the ATU button exposes the pre-tune sweep and
         // Clear ATU Memories actions. Matches SmartSDR Windows's hidden
         // right-click menu on this button. (#2624)
@@ -327,7 +327,7 @@ void TxApplet::buildUI()
         m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_memBtn->setFixedHeight(22);
         m_memBtn->setAccessibleName("ATU memories");
-        m_memBtn->setAccessibleDescription("Toggle ATU memory recall");
+        m_memBtn->setAccessibleDescription(tr("Toggle ATU memory recall"));
         row->addWidget(m_memBtn);
 
         vbox->addLayout(row);
@@ -594,6 +594,7 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         m_tuneBtn->setEnabled(available);
         m_tuneBtn->setToolTip(available ? tr("Start or stop tune carrier")
             : tr("Tune carrier is unavailable in this mode through the current radio backend"));
+        m_tuneBtn->setAccessibleDescription(m_tuneBtn->toolTip());
     };
     connect(m_model, &TransmitModel::tuneAvailabilityChanged, this, updateTuneAvailability);
     connect(m_model, &TransmitModel::tuneChanged, this, updateTuneAvailability);
@@ -709,22 +710,22 @@ void TxApplet::updateAtuAvailability()
     // fundamental one: with no ATU fitted, what the TGXL is doing is beside the
     // point, and "Disabled — TGXL is in OPERATE mode" would send the operator
     // looking at the wrong box.
-    QString tip;
+    QString reason;
     if (!m_radioHasTuner) {
-        tip = tr("Antenna tuner controls are unavailable for this radio");
+        reason = tr("Antenna tuner controls are unavailable for this radio");
     } else if (m_tgxlOperate) {
-        tip = tr("Disabled — TGXL is in OPERATE mode");
+        reason = tr("Disabled — TGXL is in OPERATE mode");
     } else if (!pathAvailable) {
-        tip = tr("Disabled — the internal ATU is not in the transverter TX path");
+        reason = tr("Disabled — the internal ATU is not in the transverter TX path");
     }
-    m_atuBtn->setToolTip(tip);
-    m_atuBtn->setAccessibleDescription(tip);
-    if (!m_radioHasTunerMemories) {
-        m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
-    } else {
-        m_memBtn->setToolTip(tip);
-    }
-    m_memBtn->setAccessibleDescription(m_memBtn->toolTip());
+    const QString atuTip = reason.isEmpty() ? tr("Start automatic antenna tuner") : reason;
+    m_atuBtn->setToolTip(atuTip);
+    m_atuBtn->setAccessibleDescription(atuTip);
+    const QString memTip = !m_radioHasTunerMemories
+        ? tr("ATU memory controls are unavailable for this radio")
+        : reason.isEmpty() ? tr("Toggle ATU memory recall") : reason;
+    m_memBtn->setToolTip(memTip);
+    m_memBtn->setAccessibleDescription(memTip);
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)

@@ -208,7 +208,9 @@
             "key.meffa.active.border":     "#0e8a4b",
             "key.meffa.active.hover":      "#0e7a44",
             "key.meffa.active.foreground": "#ffffff",
-            "key.meffa.standby.foreground": "#0b6b3a"
+            "key.meffa.standby.foreground": "#0b6b3a",
+            "indicator.operate.foreground": "#007030",
+            "indicator.bypass.foreground":  "#6a3f00"
           },
           "waterfall.colormap": {
             "default": {

@@ -289,7 +289,7 @@ jobs:
         run: bash scripts/setup/setup-sherpa-onnx.sh
 
       - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@dbeefd73e8e2ffc1bbc412570072735eb4db3607
+        uses: hendrikmuhs/ccache-action@e91f31892a1d1b8c44424b1a94c0b7f52d337168
         with:
           key: ccache-macos-${{ matrix.label }}
           max-size: 500M

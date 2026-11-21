@@ -1091,7 +1091,7 @@ cost a few integer adds per frame.
 | `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
-| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`). One key is not a rebuild: `smartMtrStrip` counts GPU frames that repainted and uploaded only the SmartMTR value-label strip, so leave it out when summing causes against `overlayRebuilds*` |
 | `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
 | `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
 | `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
@@ -1257,6 +1257,9 @@ operator setting it lowered. Where a backend withholds SWR below its own forward
 gate (the health keys `forwardPowerSwrGateCounts` and `forwardPowerSwrGateClears`), `rf`
 reports `swrResult: gate-not-reached` with the gate, the key's forward peak, the
 tone and the drive, instead of "no SWR reading".
+`meter-scale` publishes `swr` and `micPeakDbfs` only from a confirmed key and a
+fresh meter. Otherwise the value is `null` and is not judged, and `swrNote`
+says the SWR was not measurable.
 Full drive does not establish adequate stimulus: a quiet tone can still leave
 the forward reading below the gate. Check the selected tone level and
 independently measured forward power before drawing conclusions about the
@@ -1265,6 +1268,15 @@ detector or its scaling.
 The receive-only `rx-sidebands` stage judges each mode's reference tone relative
 to its own background. Silent captures and non-finite measurements do not count
 as recovered carriers, so muted audio cannot produce an `expected` pattern.
+
+The `rx-sidebands`, `sideband` and `lifecycle` stages measure through the
+automation audio capture, which needs `AETHER_AUTOMATION=1` at launch. Without
+it each of those stages reports `INCONCLUSIVE — audio capture unavailable` with
+the engine's reason, publishes no levels, and does not key. A capture that arms
+but returns no audio is reported as a missing receive-audio path, not as a
+quiet band, and `rx-sidebands` then reports `summary.pattern: no-audio`.
+`sideband` reports a refused key as INCONCLUSIVE with `keyConfirmed: false`,
+and does not key its second leg.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 
