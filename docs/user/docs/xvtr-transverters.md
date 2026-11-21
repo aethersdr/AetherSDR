@@ -111,6 +111,12 @@ transverter band", and the radio stays where it is. Unkey first, then tune.
 TCI reports the transmit frequency through the TX LO (`tx_frequency` is
 2400.040 MHz for a 10489.540 MHz QO-100 downlink).
 
+While client transverters are configured, TCI's `vfo_limits` upper limit is
+raised to the top of the highest transverter band (10490 MHz for the QO-100
+example), so a client that keeps to the advertised range can still tune it.
+A client that is already connected gets the new `vfo_limits` when the list
+changes. Without client transverters the limits are unchanged.
+
 ## Using transverter bands
 
 ### Selecting a band

@@ -541,6 +541,54 @@ static void tciTxEnableFollowsTheActiveTransverter()
           "the radio's dial leaving the IF makes it true again and re-broadcasts it");
 }
 
+// jensenpat's review of #7373, item 2: a client that honours vfo_limits must
+// be able to reach a configured RF window; every other setup keeps the fixed
+// values it has always been sent.
+static void tciVfoLimitsReachTheRfWindowOnlyWithClientTransverters()
+{
+    const QString initDefault = QStringLiteral("vfo_limits:1000,75000000;");
+    const QString queryDefault = QStringLiteral("vfo_limits:30000,54000000;");
+    check(TciProtocol::vfoLimits(nullptr, TciProtocol::kInitVfoMinHz, TciProtocol::kInitVfoMaxHz)
+              == initDefault,
+          "with no model the init burst limits are the fixed default");
+    {
+        Fixture f(/*qualified=*/false);
+        check(TciProtocol::vfoLimits(&f.radio, TciProtocol::kInitVfoMinHz,
+                                     TciProtocol::kInitVfoMaxHz) == initDefault
+                  && TciProtocol::vfoLimits(&f.radio, 30'000, 54'000'000) == queryDefault,
+              "a backend without client transverters keeps both fixed strings");
+    }
+    Fixture f;
+    // QO-100's window tops out at 10461 + 29.0 = 10490 MHz; 2m's at 146 MHz.
+    check(TciProtocol::vfoLimits(&f.radio, TciProtocol::kInitVfoMinHz, TciProtocol::kInitVfoMaxHz)
+              == QStringLiteral("vfo_limits:1000,10490000000;"),
+          "configured transverters raise the init upper limit to the top RF window");
+    check(TciProtocol::vfoLimits(&f.radio, 30'000, 54'000'000)
+              == QStringLiteral("vfo_limits:30000,10490000000;"),
+          "and the query answer the same way, keeping its own lower limit");
+    check(TciProtocol::vfoLimits(&f.radio, TciProtocol::kInitVfoMinHz, TciProtocol::kInitVfoMaxHz)
+              == TciProtocol::vfoLimits(&f.radio, TciProtocol::kInitVfoMinHz,
+                                        TciProtocol::kInitVfoMaxHz),
+          "the limits do not depend on which transverter is active");
+    ClientTransverter incomplete = qo100();
+    incomplete.rxLoMhz = 0.0;
+    f.radio.setClientTransverters({twoMetres(), incomplete});
+    check(TciProtocol::vfoLimits(&f.radio, TciProtocol::kInitVfoMinHz, TciProtocol::kInitVfoMaxHz)
+              == QStringLiteral("vfo_limits:1000,146000000;"),
+          "an unusable row is ignored; the 2m window still raises the limit to 146 MHz");
+    ClientTransverter lowIf = twoMetres();
+    lowIf.name = QStringLiteral("6m");
+    lowIf.rxLoMhz = 22.0;   // RF 50-52 MHz, inside the default range
+    f.radio.setClientTransverters({lowIf});
+    check(TciProtocol::vfoLimits(&f.radio, TciProtocol::kInitVfoMinHz, TciProtocol::kInitVfoMaxHz)
+              == initDefault,
+          "a window below the default upper limit leaves the default");
+    f.radio.setClientTransverters({});
+    check(TciProtocol::vfoLimits(&f.radio, TciProtocol::kInitVfoMinHz, TciProtocol::kInitVfoMaxHz)
+              == initDefault,
+          "an empty list gives the default back");
+}
+
 static void internalTunerIsLockedOut()
 {
     Fixture f;
@@ -721,6 +769,7 @@ int main(int argc, char** argv)
     anUnknownPanCentreIsNotShifted();
     theNativeRangeFollowsTheBackend();
     tciTxEnableFollowsTheActiveTransverter();
+    tciVfoLimitsReachTheRfWindowOnlyWithClientTransverters();
     internalTunerIsLockedOut();
     headlessTargetsUseTheSameSeam();
     editingTheListKeepsTheRadioOnItsIf();

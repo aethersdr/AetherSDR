@@ -9,6 +9,7 @@
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
 #include "models/TransmitModel.h"
+#include "models/ClientTransverter.h"
 #include "models/EqualizerModel.h"
 #include "models/SpotModel.h"
 #include "models/DaxIqModel.h"
@@ -52,6 +53,19 @@ bool TciProtocol::transmitPermitted(const RadioModel* model, const SliceModel* s
         // state on a single-receiver radio, so it covers every receiver.
         && !model->activeClientTransverter()
         && model->panTransmitInhibitReason(slice->panId()).isEmpty();
+}
+
+QString TciProtocol::vfoLimits(const RadioModel* model, qint64 defaultMinHz, qint64 defaultMaxHz)
+{
+    qint64 maxHz = defaultMaxHz;
+    if (model && model->usesClientTransverters()) {
+        for (const ClientTransverter& t : model->clientTransverters().transverters()) {
+            if (t.isUsable()) {
+                maxHz = std::max(maxHz, static_cast<qint64>(std::llround(t.rfHighMhz() * 1.0e6)));
+            }
+        }
+    }
+    return QStringLiteral("vfo_limits:%1,%2;").arg(defaultMinHz).arg(maxHz);
 }
 
 QString TciProtocol::sanitizeSliceLetter(const QString& letter)
@@ -351,7 +365,7 @@ QString TciProtocol::generateInitBurst()
     // state including stream parameters, as ExpertSDR3 does: SDC / CW Skimmer
     // latch settings on READY, so an early READY gives them defaults (notably a
     // wrong iq_samplerate). eesdr-tci imposes no pre-READY grammar.
-    burst += QStringLiteral("vfo_limits:1000,75000000;");
+    burst += vfoLimits(m_model, kInitVfoMinHz, kInitVfoMaxHz);
     burst += QStringLiteral("if_limits:-48000,48000;");
 
     const auto slices = m_model ? m_model->slices() : QList<SliceModel*>{};
@@ -612,7 +626,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "digu_offset")      return cmdDiguOffset(args, isSet);
     if (name == "set_in_focus")     return cmdSetInFocus();
     if (name == "tx_frequency")     return cmdTxFrequency();
-    if (name == "vfo_limits")       return QStringLiteral("vfo_limits:30000,54000000;");
+    if (name == "vfo_limits")       return vfoLimits(m_model, 30'000, 54'000'000);
     if (name == "if_limits")        return QStringLiteral("if_limits:-10000,10000;");
     if (name == "vfo_lock")         return cmdLock(args, isSet);  // alias
 
