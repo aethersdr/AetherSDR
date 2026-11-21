@@ -1244,7 +1244,7 @@ void TunerApplet::syncFromModel()
     // accessible name is that word too.
     // operate=1, bypass=0 → OPERATE  (green)
     // operate=1, bypass=1 → BYPASS   (orange)
-    // operate=0           → STANDBY  (default)
+    // operate=0           → STANDBY  (amber, kStandbyActiveStyle)
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool operate = m_model->isOperate();
     const bool bypass = m_model->isBypass();
@@ -1268,10 +1268,7 @@ void TunerApplet::syncFromModel()
             "QPushButton:hover { background: #9a7000; }"));
     } else {
         m_operateBtn->setText(tr("STANDBY"));
-        applyRailStyle(m_operateBtn, QStringLiteral(
-            "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+        applyRailStyle(m_operateBtn, kStandbyActiveStyle);
     }
 
     // Expanded presentation: the same three states, but shown as the lit key

@@ -27,6 +27,10 @@
 namespace AetherSDR::hl2 {
 struct Hl2CwPitchReportTestAccess {
     static void setConnected(Hl2Backend& backend, bool connected) { backend.m_connected = connected; }
+    // The announcement of every slice that the linkUp handler makes on connect.
+    static void announceAllSlices(Hl2Backend& backend) { backend.emitAllSliceState(true); }
+    // Every other re-announce: the TX slice or antenna moved, or a receiver closed.
+    static void reannounceAllSlices(Hl2Backend& backend) { backend.emitAllSliceState(); }
 };
 } // namespace AetherSDR::hl2
 
@@ -142,7 +146,10 @@ struct Fixture {
     const ResourceAddress panAddress{QStringLiteral("panadapter"), QStringLiteral("radio-1"), pan};
     const ResourceAddress sessionAddress{QStringLiteral("radioSession"), {}, QStringLiteral("radio-1")};
 
-    explicit Fixture(ReceiveControlPolicy policy = ReceiveControlPolicy::Optimistic)
+    // reportDsp=false leaves the DSP and RF gain observations unknown, for a
+    // test that feeds them from a production backend's own publications.
+    explicit Fixture(ReceiveControlPolicy policy = ReceiveControlPolicy::Optimistic,
+                     bool reportDsp = true)
     {
         auto owned = std::make_unique<Backend>();
         backend = owned.get();
@@ -177,13 +184,17 @@ struct Fixture {
         report("USB", 100, 2800);
         SliceDelta audio; audio.audioGain = 50; audio.audioMute = false;
         radio.slice(0)->applyChanges(audio);
-        SliceDelta dspReport; dspReport.agcThreshold = 50; dspReport.nb = false; dspReport.nr = false;
-        dspReport.ritOn = false; dspReport.ritFreq = 0;
-        radio.slice(0)->applyChanges(dspReport);
+        if (reportDsp) {
+            SliceDelta dspReport; dspReport.agcThreshold = 50; dspReport.nb = false; dspReport.nr = false;
+            dspReport.ritOn = false; dspReport.ritFreq = 0;
+            radio.slice(0)->applyChanges(dspReport);
+        }
         backend->panCenterBandwidthChanged(kBackendPan, 14.225, .192);
         // setBackendForTest() skips setupBackend(), which wires panRfGainChanged
         // to the observation, so the report is recorded the way that wiring does.
-        radio.panadapter(pan)->recordRfGainObservation(0);
+        if (reportDsp) {
+            radio.panadapter(pan)->recordRfGainObservation(0);
+        }
         backend->radioSpeakerAudioReported(false);
         reportPitch(600);
         adapter.publishAll();
@@ -1196,6 +1207,179 @@ void hl2CwPitchIsDeclaredAndReported()
 }
 } // namespace
 
+// The HL2's receiveDspControl and receivePanRfGainControl, admitted by the
+// production target, with every observation fed from the real Hl2Backend's own
+// publications rather than from a synthetic report.
+void hl2ReceiveDspDrivesTheControlPlane()
+{
+    using Access = hl2::Hl2CwPitchReportTestAccess;
+    const auto with = [](QJsonObject values, const char* key, const QJsonValue& value) {
+        values.insert(QLatin1String(key), value);
+        return values;
+    };
+    const RadioCapabilities hl2Caps = hl2::Hl2Backend{}.capabilities();
+    check(hl2Caps.receiveDspControl && hl2Caps.receivePanRfGainControl,
+          "the HL2 declares receive DSP and pan RF gain records");
+    if (!hl2Caps.receiveDspControl || !hl2Caps.receivePanRfGainControl) {
+        return;
+    }
+    // A fixture carrying the HL2's records and no DSP observation, and a real
+    // backend whose slice publications reach the fixture slice as RadioModel
+    // would deliver them. Only the DSP fields are carried, so the fixture's
+    // observed mode and passband stay its own.
+    struct Hl2Fed {
+        Fixture f{ReceiveControlPolicy::Optimistic, false};
+        hl2::Hl2Backend hl2;
+        Hl2Fed(const RadioCapabilities& caps)
+        {
+            f.backend->caps.receiveDspControl = caps.receiveDspControl;
+            f.backend->caps.receivePanRfGainControl = caps.receivePanRfGainControl;
+            QObject::connect(&hl2, &IRadioBackend::sliceChanged, &hl2, [this](int id, const SliceDelta& d) {
+                if (id != 0) { return; }
+                SliceDelta dsp;
+                dsp.agcThreshold = d.agcThreshold;
+                dsp.nb = d.nb;
+                dsp.nr = d.nr;
+                dsp.ritOn = d.ritOn;
+                dsp.ritFreq = d.ritFreq;
+                f.radio.slice(0)->applyChanges(dsp);
+                f.adapter.publishAll();
+            });
+            QObject::connect(&hl2, &IRadioBackend::panRfGainChanged, &hl2, [this](const QString&, int gainDb) {
+                f.radio.panadapter(f.pan)->recordRfGainObservation(gainDb);
+                f.adapter.publishAll();
+            });
+        }
+        QString outcome(ReceiveOperation op, const QJsonObject& values)
+        {
+            const QJsonObject response = f.send(op, values);
+            return response.contains(QStringLiteral("result")) ? QStringLiteral("result") : error(response);
+        }
+        QString outcome(ReceiveOperation op) { return outcome(op, f.params(op)); }
+    };
+    {
+        Hl2Fed h(hl2Caps);
+        check(h.outcome(ReceiveOperation::AgcThreshold) == QStringLiteral("capability.unavailable")
+                  && h.outcome(ReceiveOperation::NoiseBlanker) == QStringLiteral("capability.unavailable")
+                  && h.outcome(ReceiveOperation::Rit) == QStringLiteral("capability.unavailable")
+                  && h.outcome(ReceiveOperation::PanRfGain) == QStringLiteral("capability.unavailable"),
+              "negative control: before the HL2 publishes, no DSP or RF gain verb is admitted");
+        // Any slice publication carries the AGC threshold and RIT pair.
+        h.hl2.setSliceAudioGain(0, 40);
+        check(h.f.radio.slice(0)->receiveObservation().agcThreshold
+                  && h.f.radio.slice(0)->receiveObservation().ritEnabled
+                  && h.f.radio.slice(0)->receiveObservation().ritOffsetHz,
+              "an HL2 slice publication makes the AGC threshold and RIT observed");
+        check(!h.f.radio.slice(0)->receiveObservation().noiseBlanker,
+              "the blanker is not republished on every slice echo");
+        // The connect-time announcement publishes the blanker as well.
+        Access::announceAllSlices(h.hl2);
+        check(h.f.radio.slice(0)->receiveObservation().noiseBlanker
+                  && !*h.f.radio.slice(0)->receiveObservation().noiseBlanker,
+              "the HL2's connect announcement makes the blanker observed, off");
+        check(h.outcome(ReceiveOperation::AgcThreshold) == QStringLiteral("result")
+                  && h.f.backend->method == QStringLiteral("agc")
+                  && h.f.backend->args.value("threshold").toInt() == 65,
+              "slice.setAgcThreshold is admitted on the HL2's own AGC readback");
+        check(h.outcome(ReceiveOperation::NoiseBlanker) == QStringLiteral("result")
+                  && h.f.backend->args.value("feature").toInt() == static_cast<int>(SliceDspRequest::Feature::Nb),
+              "slice.setNoiseBlanker is admitted on the HL2's own blanker readback");
+        check(h.outcome(ReceiveOperation::NoiseReduction) == QStringLiteral("capability.unavailable"),
+              "slice.setNoiseReduction is refused: the HL2 runs no NR");
+        const int maximum = hl2Caps.receiveDspControl->maximumRitOffsetHz;
+        check(h.outcome(ReceiveOperation::Rit, with(h.f.params(ReceiveOperation::Rit), "offsetHz", maximum))
+                      == QStringLiteral("result")
+                  && h.outcome(ReceiveOperation::Rit, with(h.f.params(ReceiveOperation::Rit), "offsetHz", -maximum))
+                      == QStringLiteral("result"),
+              "slice.setRit is admitted up to the HL2's declared limit, both ways");
+        check(h.outcome(ReceiveOperation::Rit, with(h.f.params(ReceiveOperation::Rit), "offsetHz", maximum + 1))
+                  == QStringLiteral("request.out_of_range"),
+              "and refused one hertz past it");
+        // The RF gain observation is what the HL2 reports applying.
+        SliceDelta announced;
+        const QMetaObject::Connection watch = QObject::connect(&h.hl2, &IRadioBackend::sliceChanged,
+            &h.hl2, [&](int, const SliceDelta& d) { if (d.panId) { announced = d; } });
+        h.hl2.setSliceAudioGain(0, 41);
+        QObject::disconnect(watch);
+        check(announced.panId.has_value(), "the HL2 names receiver A's pan");
+        const ReceivePanRfGainControl gain = *hl2Caps.receivePanRfGainControl;
+        h.hl2.setPanRfGain(announced.panId.value_or(QString()), gain.maximumDb + 50);
+        check(h.f.radio.panadapter(h.f.pan)->reportedRfGain() == gain.maximumDb,
+              "the HL2 reports the declared maximum when asked past it");
+        h.hl2.setPanRfGain(announced.panId.value_or(QString()), gain.minimumDb - 50);
+        check(h.f.radio.panadapter(h.f.pan)->reportedRfGain() == gain.minimumDb,
+              "and the declared minimum when asked below it");
+        for (const int db : {gain.minimumDb, gain.maximumDb}) {
+            check(h.outcome(ReceiveOperation::PanRfGain, with(h.f.params(ReceiveOperation::PanRfGain), "gainDb", db))
+                      == QStringLiteral("result")
+                      && h.f.backend->method == QStringLiteral("rfGain")
+                      && h.f.backend->args.value("gainDb").toInt() == db,
+                  "panadapter.setRfGain is admitted at each end of the HL2's LNA range");
+        }
+        for (const int db : {gain.minimumDb - 1, gain.maximumDb + 1}) {
+            check(h.outcome(ReceiveOperation::PanRfGain, with(h.f.params(ReceiveOperation::PanRfGain), "gainDb", db))
+                      == QStringLiteral("request.out_of_range"),
+                  "and refused one dB outside it");
+        }
+    }
+    {
+        // A blanker change is published at once, without waiting for a restore
+        // or an unrelated echo.
+        Hl2Fed h(hl2Caps);
+        h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Impulse, 50, kDefaultNoiseBlankerFill);
+        check(h.f.radio.slice(0)->receiveObservation().noiseBlanker
+                  && *h.f.radio.slice(0)->receiveObservation().noiseBlanker,
+              "an HL2 blanker change makes the blanker observed, on, at once");
+        check(h.outcome(ReceiveOperation::NoiseBlanker) == QStringLiteral("result"),
+              "so slice.setNoiseBlanker is admitted without a reconnect");
+        // Only a kind change and the connect announcement carry the blanker.
+        // SliceModel re-emits nbChanged, nbKindChanged and nbFillChanged for
+        // every echo that does, so a level drag or a TX-antenna re-announce
+        // must not.
+        int nbEchoes = 0;
+        int nbSignals = 0;
+        const QMetaObject::Connection echoes = QObject::connect(&h.hl2, &IRadioBackend::sliceChanged,
+            &h.hl2, [&](int, const SliceDelta& d) { nbEchoes += d.nb.has_value(); });
+        const QMetaObject::Connection nbWatch = QObject::connect(h.f.radio.slice(0), &SliceModel::nbChanged,
+            h.f.radio.slice(0), [&](bool) { ++nbSignals; });
+        for (int level = 51; level <= 60; ++level) {
+            h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Impulse, level, kDefaultNoiseBlankerFill);
+        }
+        h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Impulse, 60, NoiseBlankerFill::SampleHold);
+        check(nbEchoes == 0 && nbSignals == 0,
+              "a level or fill change on an enabled blanker publishes no blanker echo");
+        Access::reannounceAllSlices(h.hl2);
+        check(nbEchoes == 0 && nbSignals == 0,
+              "a re-announce other than connect publishes no blanker echo");
+        Access::announceAllSlices(h.hl2);
+        check(nbEchoes == 1 && nbSignals == 1,
+              "the connect announcement publishes the blanker once");
+        NoiseBlankerKind echoedKind = NoiseBlankerKind::Off;
+        const QMetaObject::Connection kinds = QObject::connect(&h.hl2, &IRadioBackend::sliceChanged,
+            &h.hl2, [&](int, const SliceDelta& d) { if (d.nbKind) { echoedKind = *d.nbKind; } });
+        h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Advanced, 60, NoiseBlankerFill::SampleHold);
+        QObject::disconnect(kinds);
+        check(nbEchoes == 2 && echoedKind == NoiseBlankerKind::Advanced,
+              "a switch between two blanker kinds, both on, is published");
+        h.hl2.setSliceNoiseBlanker(0, NoiseBlankerKind::Off, 60, NoiseBlankerFill::SampleHold);
+        check(nbEchoes == 3 && h.f.radio.slice(0)->receiveObservation().noiseBlanker
+                  && !*h.f.radio.slice(0)->receiveObservation().noiseBlanker,
+              "turning the blanker off is published at once, observed off");
+        QObject::disconnect(echoes);
+        QObject::disconnect(nbWatch);
+    }
+    {
+        // The record covers every mode the HL2 accepts, so a slice a CAT client
+        // put in WBFM keeps its AGC threshold.
+        Hl2Fed h(hl2Caps);
+        h.hl2.setSliceAudioGain(0, 40);
+        h.f.report(QStringLiteral("WBFM"), -40000, 40000);
+        h.f.adapter.publishAll();
+        check(h.outcome(ReceiveOperation::AgcThreshold) == QStringLiteral("result"),
+              "slice.setAgcThreshold is admitted on a slice observed in WBFM");
+    }
+}
+
 // The G2 front-panel verbs: each one's own range, mode gating and the exact
 // typed intent it reaches the backend with.
 void panelVerbs()
@@ -1327,6 +1511,7 @@ int main(int argc, char** argv)
     cwPitchControl();
     hl2CwPitchIsDeclaredAndReported();
     panelVerbs();
+    hl2ReceiveDspDrivesTheControlPlane();
     radioSpeakerVerb();
     return failures == 0 ? 0 : 1;
 }

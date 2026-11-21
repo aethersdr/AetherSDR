@@ -10,7 +10,9 @@
 
 #include "asr/AsrSegmenter.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <vector>
 
@@ -294,6 +296,77 @@ int main()
         appendSilence(audio, 5000); // long silence, but detection is off
         seg.feed(audio.data(), static_cast<int>(audio.size()));
         expect(!seg.consumeLongGap(), "longGapMs = 0 never reports a gap");
+    }
+
+    // Segment ids and positions (the live-preview timeline). Fed in odd-sized
+    // chunks so the count must survive chunk and partial-frame boundaries; the
+    // proof a position is right is that it slices exactly the segment's audio.
+    {
+        AsrSegmenter seg;
+        std::vector<float> audio;
+        appendSilence(audio, 200);
+        appendTone(audio, 500);
+        appendSilence(audio, 400);
+        appendTone(audio, 500, 0.3f, 660.0f);
+        appendSilence(audio, 400);
+        std::vector<AsrSegmenter::ClosedSegment> out;
+        for (size_t off = 0; off < audio.size(); off += 97) {
+            const int n = static_cast<int>(std::min<size_t>(97, audio.size() - off));
+            for (auto& cs : seg.feed(audio.data() + off, n)) {
+                out.push_back(std::move(cs));
+            }
+        }
+        expect(seg.samplesFed() == static_cast<std::int64_t>(audio.size()),
+               "samplesFed counts every sample across chunk boundaries");
+        expect(out.size() == 2 && out[0].id == 0 && out[1].id == 1,
+               "segments are numbered 0, 1 in order");
+        bool exact = out.size() == 2;
+        for (const auto& cs : out) {
+            exact = exact && cs.startSample >= 0
+                && cs.endSample - cs.startSample == static_cast<std::int64_t>(cs.samples.size())
+                && std::equal(cs.samples.begin(), cs.samples.end(),
+                              audio.begin() + cs.startSample);
+        }
+        expect(exact, "each segment's [startSample, endSample) slices exactly its own audio");
+        seg.reset();
+        expect(seg.samplesFed() == 0, "reset() restarts the timeline at 0");
+        std::vector<float> again;
+        appendTone(again, 500);
+        appendSilence(again, 400);
+        const auto afterReset = seg.feed(again.data(), static_cast<int>(again.size()));
+        expect(afterReset.size() == 1 && afterReset[0].id == 0,
+               "reset() restarts segment ids at 0");
+    }
+
+    // A burst too short to count as speech is thrown away without a segment;
+    // consumeDiscardedThrough() is the only record of where it ended (the live
+    // preview drops text for it there).
+    {
+        AsrSegmenter seg;
+        std::vector<float> audio;
+        appendSilence(audio, 200);
+        appendTone(audio, 100); // under minSpeechMs (200)
+        appendSilence(audio, 400);
+        const auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
+        const std::int64_t through = seg.consumeDiscardedThrough();
+        // Closed by the 300 ms hangover after the burst: 200 + 100 + 300 ms.
+        const std::int64_t closeAt = (200 + 100 + 300) * 16;
+        expect(out.empty() && through >= closeAt - 160 && through <= closeAt + 160,
+               "a too-short burst reports where it was discarded (at its hangover close)");
+        expect(seg.consumeDiscardedThrough() == -1, "the report is one-shot");
+
+        std::vector<float> speech;
+        appendTone(speech, 500);
+        appendSilence(speech, 400);
+        const auto closed = seg.feed(speech.data(), static_cast<int>(speech.size()));
+        expect(closed.size() == 1 && seg.consumeDiscardedThrough() == -1,
+               "a segment that is emitted is not reported as discarded");
+
+        appendTone(audio, 100);
+        appendSilence(audio, 400);
+        seg.feed(audio.data(), static_cast<int>(audio.size()));
+        seg.reset();
+        expect(seg.consumeDiscardedThrough() == -1, "reset() clears a pending report");
     }
 
     std::printf(g_failures == 0 ? "\nASR segmenter: ALL PASS\n"

@@ -34,6 +34,13 @@ bool declaresPanRfGain(const RadioCapabilities& caps)
     return caps.panDisplayControl && caps.panDisplayControl->supports(PanDisplayField::RfGain);
 }
 
+bool rfGainRepeatIsNoop(const RadioCapabilities& caps, const PanadapterModel& pan, int gainDb)
+{
+    const std::optional<int> requested = pan.requestedRfGain();
+    return caps.panDisplayControl && caps.panDisplayControl->repeatIsNoop(PanDisplayField::RfGain)
+        && pan.rfGain() == gainDb && (!requested || *requested == gainDb);
+}
+
 bool gainOffered(bool connected, const RadioCapabilities& caps, bool anyPanRange)
 {
     return connected && declaresPanRfGain(caps) && anyPanRange;

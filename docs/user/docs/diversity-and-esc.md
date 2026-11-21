@@ -50,7 +50,7 @@ The child slice appears in AetherSDR with its own VFO overlay (showing a differe
 
 When DIV is active on a slice, the **ESC panel** appears below the DIV button in the VFO audio tab. ESC is only shown on the **parent** slice — the child slice shows DIV but not ESC controls.
 
-<img src="/img/screens/diversity-esc.png" width="612" alt="Two VFO flags. Slice A has its audio tab open, with DIV and ESC lit green, a phase slider at 0° with a +180 button, a gain slider at 1.00, a polar display of the ESC phase and gain, and an ESC level meter. To its right, the diversity child slice D on ANT2 shows the same frequency, 14.250.000." />
+<img src="/img/screens/diversity-esc.png" width="612" alt="Two VFO flags on 144.200 MHz. On the left, the diversity child slice D on the Loops antenna. To its right, the parent slice A on the 18XXX antenna has its audio tab open, with DIV and ESC lit green, a phase slider at 160° with a +180 button, a gain slider at 1.95, a polar display of the ESC phase and gain, and an ESC level meter." />
 
 *Diversity on a FLEX-8600: the DIV button adds a child slice on the second antenna, and ESC opens the beam-steering controls.*
 
@@ -143,11 +143,6 @@ For developers and protocol researchers:
 - The radio echoes ESC state in slice status: `esc=0 esc_gain=1.000000 esc_phase_shift=0.000000`
 - When ESC is enabled, the radio sets the child slice to `audio_mute=1 audio_level=0` — the child's audio is absorbed into the parent's ESC processing
 - Feature gated by `DIV_ESC` license (status: `license feature name=DIV_ESC enabled=1 reason=PLUS`)
-
-## Known issues
-
-- With diversity on for two slices on different panadapters, tuning one slice moves the other ([#4891](https://github.com/aethersdr/AetherSDR/issues/4891)).
-- Turning on DIV for a second slice silently breaks up the diversity pair that is already running, with no message ([#5352](https://github.com/aethersdr/AetherSDR/issues/5352)).
 
 ## Troubleshooting
 
