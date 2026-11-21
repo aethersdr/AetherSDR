@@ -41,13 +41,20 @@ name: Static Checks
 # held: at the flip every open PR had already run this workflow, so none was
 # stranded on a check it could not trigger.
 
+# Also on every push to main (#5914). Each PR is checked against main as of
+# its own run, and branches need not be up to date to merge, so two green PRs
+# can merge into a main that fails a whole-tree check. The push run reports
+# that on the merge that caused it, not on the next unrelated PR. Steps that
+# read the PR (its base, its diff, its number) run on pull_request only.
 on:
   pull_request:
     branches: ["**"]
+  push:
+    branches: [main]
 
-# Auto-cancel superseded runs when a newer commit lands on the same PR. PR-only
-# workflow: the run_id suffix and the main guard never trigger here (ref is
-# always refs/pull/N/merge), kept identical to ci.yml/codeql.yml for uniformity.
+# Auto-cancel superseded runs when a newer commit lands on the same PR. A push
+# to main gets the run_id suffix, so each merge keeps its own verdict and none
+# is cancelled; kept identical to ci.yml/codeql.yml.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -505,7 +512,7 @@ jobs:
       # failed command substitution used as an argument, so an inline form would
       # silently pass an empty base to `git worktree add`.
       - name: Hardcoded-colour ratchet
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
@@ -518,9 +525,10 @@ jobs:
             --strict
 
       # ── Accessibility: warnings only, never fails the job (see docs/a11y.md).
-      # Scoped to src/gui/ files changed by this PR rather than the whole tree.
+      # Scoped to src/gui/ files changed by this PR rather than the whole tree,
+      # so these three steps, like the ratchet above, run on pull_request only.
       - name: Get changed src/gui/ files
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
@@ -532,7 +540,7 @@ jobs:
 
       - name: Qt accessibility static analysis
         id: a11y
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
           FILES=()
           while IFS= read -r f; do FILES+=("$f"); done < /tmp/changed_gui_files.txt
@@ -560,7 +568,7 @@ jobs:
       # their consent. Accessibility remediation should be picked up via a
       # follow-up issue (e.g. #3288), not by side-effect of opening a PR.
       - name: Comment with accessibility summary
-        if: ${{ !cancelled() && steps.a11y.outputs.findings != '0' && steps.a11y.outputs.findings != '' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.a11y.outputs.findings != '0' && steps.a11y.outputs.findings != '' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
