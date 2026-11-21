@@ -754,6 +754,7 @@ void PhoneCwApplet::buildCwPanel()
         m_delayEdit->setFixedWidth(kValueW);
         m_delayEdit->setAlignment(Qt::AlignCenter);
         m_delayEdit->setValidator(new QIntValidator(0, 2000, m_delayEdit));
+        m_delayEdit->installEventFilter(this);   // focus-out restore, #7325
         m_delayEdit->setAccessibleName("CW delay value");
         m_delayEdit->setAccessibleDescription("CW break-in delay in milliseconds, 0 to 2000");
         row->addWidget(m_delayEdit);
@@ -787,7 +788,7 @@ void PhoneCwApplet::buildCwPanel()
 
         m_speedSlider = new GuardedSlider(Qt::Horizontal);
         m_speedSlider->setRange(5, 100);
-        m_speedSlider->setAccessibleName("CW speed");
+        m_speedSlider->setAccessibleName(tr("CW speed"));
         m_speedSlider->setAccessibleDescription(tr("CW keying speed in words per minute"));
         applyPrimarySliderStyle(m_speedSlider);
         row->addWidget(m_speedSlider, 1);
@@ -834,7 +835,7 @@ void PhoneCwApplet::buildCwPanel()
         m_pitchSlider->setSingleStep(m_pitchStepHz);
         m_pitchSlider->setPageStep(m_pitchStepHz * 10);
         m_pitchSlider->setValue(600);
-        m_pitchSlider->setAccessibleName("CW pitch");
+        m_pitchSlider->setAccessibleName(tr("CW pitch"));
         m_pitchSlider->setAccessibleDescription(tr("CW sidetone pitch in Hz, 100 to 6000"));
         applyPrimarySliderStyle(m_pitchSlider);
         row->addWidget(m_pitchSlider, 1);
@@ -883,6 +884,7 @@ void PhoneCwApplet::buildCwPanel()
         m_sidetoneEdit->setFixedWidth(kValueW);
         m_sidetoneEdit->setAlignment(Qt::AlignCenter);
         m_sidetoneEdit->setValidator(new QIntValidator(0, 100, m_sidetoneEdit));
+        m_sidetoneEdit->installEventFilter(this);   // focus-out restore, #7325
         m_sidetoneEdit->setAccessibleName("Sidetone volume value");
         m_sidetoneEdit->setAccessibleDescription("CW sidetone monitor volume, 0 to 100");
         row->addWidget(m_sidetoneEdit);
@@ -922,11 +924,10 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(lLbl);
 
         // The same centre-out pan as the RX applet and the VFO audio tab:
-        // centre mark, double-click recentres, and the drag readout says
-        // C, L30 or R30 rather than the raw 0-100 sent as mon_pan_cw (#7260).
-        auto* cwPan = new CenterMarkSlider(50, Qt::Horizontal);
-        cwPan->setDragValueFormatter(panText);
-        m_cwPanSlider = cwPan;
+        // centre mark, double-click recentres, and the drag readout and the
+        // accessible value say C, L30 or R30 rather than the raw 0-100 sent
+        // as mon_pan_cw (#7260).
+        m_cwPanSlider = new CenterMarkSlider(50, Qt::Horizontal);
         m_cwPanSlider->setRange(0, 100);
         m_cwPanSlider->setValue(50);
         m_cwPanSlider->setAccessibleName(tr("CW audio pan"));
@@ -1068,6 +1069,7 @@ void PhoneCwApplet::buildCwPanel()
         m_apfEdit->setFixedWidth(kValueW);
         m_apfEdit->setAlignment(Qt::AlignCenter);
         m_apfEdit->setValidator(new QIntValidator(0, 100, m_apfEdit));
+        m_apfEdit->installEventFilter(this);   // focus-out restore, #7325
         m_apfEdit->setAccessibleName("APF bandwidth value");
         m_apfEdit->setAccessibleDescription("CW audio peaking filter bandwidth, 0 to 100");
         row->addWidget(m_apfEdit);
@@ -1618,10 +1620,13 @@ void PhoneCwApplet::updateAlc(float alc)
 bool PhoneCwApplet::eventFilter(QObject* obj, QEvent* ev)
 {
     if (ev->type() == QEvent::FocusOut
-        && (obj == m_speedEdit || obj == m_pitchEdit)) {
+        && (obj == m_speedEdit || obj == m_pitchEdit || obj == m_delayEdit
+            || obj == m_sidetoneEdit || obj == m_apfEdit)) {
         // QLineEdit emits no editingFinished for Intermediate text ("2" under
-        // a 5 WPM floor, "6" under 100 Hz, empty), so nothing commits and the
-        // field would keep showing what was typed (#7325). Put the current
+        // a 5 WPM floor, "6" under 100 Hz, or an empty field, which is the
+        // only Intermediate text the 0-based delay, sidetone and APF edits
+        // can hold), so nothing commits and the field would keep showing what
+        // was typed (#7325). Put the current
         // value back once the edit has finished its own focus-out: restoring
         // here would make the text acceptable in time for editingFinished,
         // and the pitch path would send a cw pitch command for no change.
@@ -1634,12 +1639,21 @@ bool PhoneCwApplet::eventFilter(QObject* obj, QEvent* ev)
                 if (edit->hasFocus() || edit->hasAcceptableInput()) {
                     return;
                 }
-                if (edit == m_speedEdit) {
-                    edit->setText(QString::number(m_speedSlider->value()));
+                // Each edit's slider follows the radio even while the edit
+                // has focus; pitch reads the model, as setCwControlLimits does.
+                int value = 0;
+                if (edit == m_pitchEdit) {
+                    value = m_model ? m_model->cwPitch() : m_pitchSlider->value();
+                } else if (edit == m_speedEdit) {
+                    value = m_speedSlider->value();
+                } else if (edit == m_delayEdit) {
+                    value = m_delaySlider->value();
+                } else if (edit == m_sidetoneEdit) {
+                    value = m_sidetoneSlider->value();
                 } else {
-                    edit->setText(QString::number(
-                        m_model ? m_model->cwPitch() : m_pitchSlider->value()));
+                    value = m_apfSlider->value();
                 }
+                edit->setText(QString::number(value));
             });
         }
     }

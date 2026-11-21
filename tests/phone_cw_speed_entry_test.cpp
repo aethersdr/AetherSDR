@@ -5,6 +5,7 @@
 #include "gui/PhoneCwApplet.h"
 #include "models/TransmitModel.h"
 
+#include <QAccessible>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QLineEdit>
@@ -205,6 +206,63 @@ int main(int argc, char** argv)
     check(panText(50) == QStringLiteral("C") && panText(20) == QStringLiteral("L30")
               && panText(80) == QStringLiteral("R30"),
           "the pan readout is C, L30 or R30");
+    // The 0-based Delay and Sidetone edits can only hold an empty field as
+    // Intermediate text; leaving one empty puts the current value back too.
+    // (APF shares the same filter but is disabled with no slice bound.)
+    const auto findEdit = [&applet](const char* name) -> QLineEdit* {
+        for (QLineEdit* candidate : applet.findChildren<QLineEdit*>()) {
+            if (candidate->accessibleName() == QLatin1String(name)) {
+                return candidate;
+            }
+        }
+        return nullptr;
+    };
+    const auto emptyThenLeave = [&slider](QLineEdit* field) {
+        field->setFocus();
+        field->selectAll();
+        QTest::keyClick(field, Qt::Key_Backspace);
+        slider->setFocus();
+        QCoreApplication::processEvents();
+    };
+    QLineEdit* delayEdit = findEdit("CW delay value");
+    QLineEdit* sidetoneEdit = findEdit("Sidetone volume value");
+    check(delayEdit && sidetoneEdit, "the delay and sidetone value fields exist");
+    if (delayEdit && sidetoneEdit) {
+        const int delayBefore = model.cwDelay();
+        emptyThenLeave(delayEdit);
+        check(delayEdit->text() == QString::number(delayBefore)
+                  && model.cwDelay() == delayBefore,
+              "focus-out restores an empty delay field without changing the delay");
+        const int sidetoneBefore = model.monGainCw();
+        emptyThenLeave(sidetoneEdit);
+        check(sidetoneEdit->text() == QString::number(sidetoneBefore)
+                  && model.monGainCw() == sidetoneBefore,
+              "focus-out restores an empty sidetone field without changing the level");
+    }
+
+    // A screen reader reads the pan the way the operator sees it.
+    if (pan) {
+        pan->setValue(20);
+        QAccessibleInterface* a11y = QAccessible::queryAccessibleInterface(pan);
+        check(a11y && a11y->role() == QAccessible::Slider,
+              "the CW pan is announced as a slider");
+        check(a11y && a11y->text(QAccessible::Value) == QStringLiteral("L30"),
+              "the CW pan's accessible value is L30, not 20");
+        check(a11y && a11y->valueInterface()
+                  && a11y->valueInterface()->currentValue().toInt() == 20,
+              "the numeric value is still there for assistive tech that wants it");
+        pan->setValue(50);
+        check(a11y && a11y->text(QAccessible::Value) == QStringLiteral("C"),
+              "the centred pan reads C");
+    }
+    // Every CenterMarkSlider gets this, including the VFO pan, which never
+    // set a readout of its own.
+    CenterMarkSlider bare(50, Qt::Horizontal);
+    bare.setRange(0, 100);
+    bare.setValue(80);
+    QAccessibleInterface* bareA11y = QAccessible::queryAccessibleInterface(&bare);
+    check(bareA11y && bareA11y->text(QAccessible::Value) == QStringLiteral("R30"),
+          "a CenterMarkSlider with no formatter set still reads R30");
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;
 }

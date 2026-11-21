@@ -3,6 +3,9 @@
 #include "GuardedSlider.h"
 #include "core/ThemeManager.h"
 
+#include <QAccessible>
+#include <QAccessibleWidget>
+
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -12,6 +15,19 @@
 #include <QStyleOptionSlider>
 
 #include <cstdlib>
+
+// Drag readout for a 0-100 pan whose centre is 50: "C", "L30", "R30".
+inline QString panText(int value)
+{
+    if (value == 50)
+        return QStringLiteral("C");
+    return QStringLiteral("%1%2").arg(value < 50 ? QStringLiteral("L") : QStringLiteral("R"))
+                                .arg(std::abs(value - 50));
+}
+
+class CenterMarkSlider;
+inline QAccessibleInterface* centerMarkSliderAccessibleFactory(const QString& key,
+                                                               QObject* object);
 
 // Slider that resets to a default value on double-click.
 // Extends GuardedSlider for controls-lock support (#745).
@@ -33,7 +49,31 @@ private:
 class CenterMarkSlider : public ResetSlider {
 public:
     explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : ResetSlider(resetVal, o, parent) {}
+        : ResetSlider(resetVal, o, parent)
+    {
+        // Every CenterMarkSlider is a 0-100 pan centred on 50, so the drag
+        // readout and the accessible value both say C, L30 or R30. Before,
+        // only the RX applet and the CW pan set this; the VFO pan read 0-100.
+        setDragValueFormatter(panText);
+
+        // A screen reader reads the accessible Value. Qt's own slider
+        // interface reports the raw number, so a pan the operator sees as
+        // L21 was announced as "29". Install a factory that hands this
+        // class its own interface, and evict one Qt may already have cached
+        // for this object (the ScrollableLabel lesson in GuardedSlider.h).
+        static bool s_factoryInstalled = false;
+        if (!s_factoryInstalled) {
+            s_factoryInstalled = true;
+            QAccessible::installFactory(centerMarkSliderAccessibleFactory);
+        }
+        if (QAccessibleInterface* cached = QAccessible::queryAccessibleInterface(this)) {
+            if (cached->text(QAccessible::Value) != accessibleValueText())
+                QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(cached));
+        }
+    }
+
+    // What the slider shows while dragged, and what assistive tech reads.
+    QString accessibleValueText() const { return dragValueText(); }
 protected:
     void paintEvent(QPaintEvent* ev) override {
         ResetSlider::paintEvent(ev);
@@ -80,11 +120,49 @@ protected:
     }
 };
 
-// Drag readout for a 0-100 pan whose centre is 50: "C", "L30", "R30".
-inline QString panText(int value)
+// Accessible interface for CenterMarkSlider: role Slider, the numeric range
+// through QAccessibleValueInterface (assistive tech that wants a number still
+// gets 0-100), and the Value text from the slider's own readout, so a screen
+// reader says "L21" where the operator sees L21. Setting a value honours the
+// sidebar controls lock (#745), as wheel and mouse input do.
+class CenterMarkSliderAccessible : public QAccessibleWidget, public QAccessibleValueInterface {
+public:
+    explicit CenterMarkSliderAccessible(QWidget* widget)
+        : QAccessibleWidget(widget, QAccessible::Slider) {}
+
+    void* interface_cast(QAccessible::InterfaceType type) override
+    {
+        if (type == QAccessible::ValueInterface)
+            return static_cast<QAccessibleValueInterface*>(this);
+        return QAccessibleWidget::interface_cast(type);
+    }
+
+    QString text(QAccessible::Text t) const override
+    {
+        if (t == QAccessible::Value)
+            return slider()->accessibleValueText();
+        return QAccessibleWidget::text(t);
+    }
+
+    QVariant currentValue() const override { return slider()->value(); }
+    void setCurrentValue(const QVariant& value) override
+    {
+        if (!ControlsLock::isLocked())
+            slider()->setValue(value.toInt());
+    }
+    QVariant maximumValue() const override { return slider()->maximum(); }
+    QVariant minimumValue() const override { return slider()->minimum(); }
+    QVariant minimumStepSize() const override { return slider()->singleStep(); }
+
+private:
+    CenterMarkSlider* slider() const { return static_cast<CenterMarkSlider*>(widget()); }
+};
+
+// CenterMarkSlider has no Q_OBJECT, so Qt asks for it under "QSlider":
+// match the object itself rather than the key.
+inline QAccessibleInterface* centerMarkSliderAccessibleFactory(const QString&, QObject* object)
 {
-    if (value == 50)
-        return QStringLiteral("C");
-    return QStringLiteral("%1%2").arg(value < 50 ? QStringLiteral("L") : QStringLiteral("R"))
-                                .arg(std::abs(value - 50));
+    if (auto* slider = dynamic_cast<CenterMarkSlider*>(object))
+        return new CenterMarkSliderAccessible(slider);
+    return nullptr;
 }
