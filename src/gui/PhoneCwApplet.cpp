@@ -788,7 +788,7 @@ void PhoneCwApplet::buildCwPanel()
         m_speedSlider = new GuardedSlider(Qt::Horizontal);
         m_speedSlider->setRange(5, 100);
         m_speedSlider->setAccessibleName("CW speed");
-        m_speedSlider->setAccessibleDescription("CW keying speed in words per minute");
+        m_speedSlider->setAccessibleDescription(tr("CW keying speed in words per minute"));
         applyPrimarySliderStyle(m_speedSlider);
         row->addWidget(m_speedSlider, 1);
 
@@ -797,8 +797,8 @@ void PhoneCwApplet::buildCwPanel()
         m_speedEdit->setAlignment(Qt::AlignCenter);
         m_speedEdit->setValidator(new QIntValidator(5, 100, m_speedEdit));
         m_speedEdit->installEventFilter(this);   // focus-out restore, #7325
-        m_speedEdit->setAccessibleName("CW speed value");
-        m_speedEdit->setAccessibleDescription("CW keying speed in words per minute, 5 to 100");
+        m_speedEdit->setAccessibleName(tr("CW speed value"));
+        m_speedEdit->setAccessibleDescription(tr("CW keying speed in words per minute, 5 to 100"));
         row->addWidget(m_speedEdit);
 
         connect(m_speedSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -835,15 +835,15 @@ void PhoneCwApplet::buildCwPanel()
         m_pitchSlider->setPageStep(m_pitchStepHz * 10);
         m_pitchSlider->setValue(600);
         m_pitchSlider->setAccessibleName("CW pitch");
-        m_pitchSlider->setAccessibleDescription("CW sidetone pitch in Hz, 100 to 6000");
+        m_pitchSlider->setAccessibleDescription(tr("CW sidetone pitch in Hz, 100 to 6000"));
         applyPrimarySliderStyle(m_pitchSlider);
         row->addWidget(m_pitchSlider, 1);
 
         m_pitchEdit = new QLineEdit("600");
         m_pitchEdit->setAlignment(Qt::AlignCenter);
         m_pitchEdit->setFixedWidth(kValueW);
-        m_pitchEdit->setAccessibleName("CW pitch frequency");
-        m_pitchEdit->setAccessibleDescription("CW sidetone pitch in Hz, 100 to 6000");
+        m_pitchEdit->setAccessibleName(tr("CW pitch frequency"));
+        m_pitchEdit->setAccessibleDescription(tr("CW sidetone pitch in Hz, 100 to 6000"));
         m_pitchEdit->setValidator(new QIntValidator(m_pitchMinHz, m_pitchMaxHz, m_pitchEdit));
         m_pitchEdit->installEventFilter(this);   // focus-out restore, #7325
         row->addWidget(m_pitchEdit);
