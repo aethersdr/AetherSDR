@@ -493,7 +493,7 @@ private:
 
     void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
-    void emitAllSliceState();
+    void emitAllSliceState(bool announceBlankers = false);
     void emitAllPanState();
     void pushInitialState();
     // Put every receiver's AGC pair where this session should come up: remembered
@@ -709,7 +709,9 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
-        // A restored blanker still to be published once (emitSliceState).
+        // A blanker whose kind changed, that was restored, whose receiver just
+        // opened, or that the connect announcement re-sends, still to be
+        // published once (emitSliceState).
         bool nbEchoPending = false;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes

@@ -6134,6 +6134,14 @@ target_include_directories(kpa500_protocol_test PRIVATE src)
 target_link_libraries(kpa500_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kpa500_protocol_test COMMAND kpa500_protocol_test)
 
+# Socket-free priority mapping for the KPA500 status indicator (RFC #7092).
+add_executable(kpa500_state_test
+    tests/kpa500_state_test.cpp
+)
+target_include_directories(kpa500_state_test PRIVATE src)
+target_link_libraries(kpa500_state_test PRIVATE Qt6::Core)
+add_test(NAME kpa500_state_test COMMAND kpa500_state_test)
+
 # Socket-free injected KPA500 transport: liveness and stale-snapshot recovery.
 add_executable(kpa500_connection_test
     tests/kpa500_connection_test.cpp
@@ -6369,11 +6377,48 @@ if (ENABLE_ASR)
     target_include_directories(asr_segmenter_test PRIVATE src)
     add_test(NAME asr_segmenter_test COMMAND asr_segmenter_test)
 
+    add_executable(asr_live_preview_assembler_test
+        tests/asr_live_preview_assembler_test.cpp
+        src/asr/LivePreviewAssembler.cpp
+    )
+    target_include_directories(asr_live_preview_assembler_test PRIVATE src)
+    target_link_libraries(asr_live_preview_assembler_test PRIVATE Qt6::Core)
+    add_test(NAME asr_live_preview_assembler_test COMMAND asr_live_preview_assembler_test)
+
+    # Engine live-preview plumbing with a fake recogniser and fake backend.
+    add_executable(asr_live_preview_engine_test
+        tests/asr_live_preview_engine_test.cpp
+        src/asr/AsrEngine.cpp
+        src/asr/AsrSegmenter.cpp
+        src/asr/LivePreviewAssembler.cpp
+        src/asr/SileroVad.cpp    # AsrEngine references it (stub without HAVE_ONNX)
+        src/asr/Fbank.cpp
+        src/asr/SpeakerEmbedder.cpp
+        src/asr/SpeakerClusterer.cpp
+        src/core/Resampler.cpp
+    )
+    target_include_directories(asr_live_preview_engine_test PRIVATE src ${CMAKE_SOURCE_DIR}/third_party/r8brain)
+    target_link_libraries(asr_live_preview_engine_test PRIVATE Qt6::Core Qt6::Test)
+    set_target_properties(asr_live_preview_engine_test PROPERTIES AUTOMOC ON)
+    add_test(NAME asr_live_preview_engine_test COMMAND asr_live_preview_engine_test)
+
+    # Apple live-preview bridge on a real recording; needs macOS 26 and the
+    # on-device model, so it is run by hand.
+    if (APPLE)
+        add_executable(apple_live_preview_smoke tests/apple_live_preview_smoke.cpp) # not registered: manual, needs a recording and macOS 26
+        target_link_libraries(apple_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+    endif()
+
+    # sherpa-onnx live preview on a real recording and model; run by hand.
+    add_executable(sherpa_live_preview_smoke tests/sherpa_live_preview_smoke.cpp) # not registered: manual, needs a recording and a streaming model
+    target_link_libraries(sherpa_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+
     # Engine orchestration: fake backend, worker thread, no whisper/model.
     add_executable(asr_engine_test
         tests/asr_engine_test.cpp
         src/asr/AsrEngine.cpp
         src/asr/AsrSegmenter.cpp
+        src/asr/LivePreviewAssembler.cpp
         src/asr/SileroVad.cpp    # AsrEngine references it (stub without HAVE_ONNX)
         src/asr/Fbank.cpp
         src/asr/SpeakerEmbedder.cpp
@@ -6993,6 +7038,23 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME rtl_package_closure_test
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_rtl_package.py)
+    # not registered: opt-in reproducer for the RTL async cancellation
+    # lifetime fix (#7397). It compiles the pinned, patched librtlsdr.c
+    # against an injected libusb (no device, no socket), and only the release
+    # recipes fetch that source into .rtl-deps-build. Build this target by
+    # name after scripts/setup/setup-rtl-deps.* has run; it exits 77 without
+    # the sources. See docs/rtl-release-packaging.md.
+    set(rtl_async_sanitizer)
+    if(NOT WIN32)
+        set(rtl_async_sanitizer --sanitize)
+    endif()
+    add_custom_target(rtl_async_cancellation_test
+        COMMAND ${PYTHON3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup/test-rtl-async-cancellation.py
+                ${rtl_async_sanitizer}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        USES_TERMINAL
+        VERBATIM)
     add_test(NAME capability_record_parser
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_capability_records.py)
@@ -8252,6 +8314,12 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tci_ext_antennas_test PRIVATE
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_ext_antennas_test COMMAND tci_ext_antennas_test)
+    # The extension set's span group (aethersdr_rx_span_rates, aethersdr_rx_span).
+    add_executable(tci_ext_span_test tests/tci_ext_span_test.cpp)
+    target_include_directories(tci_ext_span_test PRIVATE src tests)
+    target_link_libraries(tci_ext_span_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_span_test COMMAND tci_ext_span_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -11783,6 +11851,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_extension_zero_traffic_test
     tci_ext_rx_gain_test
     tci_ext_antennas_test
+    tci_ext_span_test
     tci_applet_test
     tci_rx_applet_test
     tci_host_iq_test

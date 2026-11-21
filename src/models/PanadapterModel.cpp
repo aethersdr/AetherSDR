@@ -72,6 +72,7 @@ void PanadapterModel::setOwnerHandle(quint32 handle)
         m_reportedCenterHz.reset();
         m_reportedBandwidthHz.reset();
         m_reportedRfGain.reset();
+        m_requestedRfGain.reset();
     }
     m_ownerHandle = handle;
     m_clientHandle = QString::number(handle, 16);
@@ -228,6 +229,7 @@ void PanadapterModel::resetCenterKnownForReconnect()
         m_reportedBandwidthHz.reset();
         emit geometryObservationChanged();
     }
+    m_requestedRfGain.reset();
     if (m_reportedRfGain) {
         m_reportedRfGain.reset();
         emit rfGainObservationChanged();

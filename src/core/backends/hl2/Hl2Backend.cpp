@@ -500,7 +500,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // emitPanState() reads nothing pushInitialState() changes.
         emitAllPanState();
         pushInitialState();
-        emitAllSliceState();
+        emitAllSliceState(/*announceBlankers=*/true);
         defineMeters();
         // Once per connect, after receiver A is published: the remembered
         // notches and receivers B.. come back through the operator's own paths.
@@ -1172,6 +1172,8 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     Receiver seed = requested;
     seed.publishedTxAntenna.clear();
     seed.antennasPublished = false;
+    // A new slice's blanker is announced once, like its antennas.
+    seed.nbEchoPending = true;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -2461,6 +2463,29 @@ RadioCapabilities Hl2Backend::capabilities() const
         {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
         {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    // The host DSP this backend runs and echoes in emitSliceState(): AGC, the
+    // impulse blankers and RIT (a DDC retune, clamped by clampRitXit()) in every
+    // mode setSliceMode() accepts, and the APF only where Hl2RxDsp puts it in
+    // circuit. No NR, ANF or manual notch runs here, so none is declared.
+    {
+        using Feature = ReceiveDspControl::Feature;
+        ReceiveDspControl dsp;
+        for (const QString& mode : hl2::knownModeStrings()) {
+            const QString canonical = canonicalOfferedMode(mode);
+            if (!dsp.modes.contains(canonical)) {
+                dsp.modes.append(canonical);
+            }
+        }
+        dsp.features = {Feature::Agc, Feature::Nb, Feature::Apf, Feature::Rit};
+        dsp.featureModes.insert(Feature::Apf, {QStringLiteral("CW"), QStringLiteral("CWL")});
+        dsp.authority = SliceFrequencyControl::Authority::Engine;
+        dsp.maximumRitOffsetHz = kRitXitMaxHz;
+        c.receiveDspControl = dsp;
+    }
+    // setPanRfGain() drives the AD9866 LNA, and panRfGainChanged reports the
+    // gain it applied (the operator's, less any automatic offset).
+    c.receivePanRfGainControl = ReceivePanRfGainControl{SliceFrequencyControl::Authority::Engine,
+                                                        kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb};
     // The BFO pitch is host DSP: setCwPitch adopts it and reports it back as
     // TransmitDelta::cwPitch. Same range and step as cwPitchMinHz..cwPitchMaxHz.
     c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
@@ -3884,10 +3909,17 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind k
     // bands can legitimately disagree. The slice model already holds it
     // per-slice, so honouring that is also what stops the second receiver's
     // toggle from moving the first one's.
+    const bool kindChanged = r->nbKind != kind;
     r->nbKind = kind;
     r->nbLevel = qBound(0, level, 100);
     r->nbFill = fill;
     pushNoiseBlanker(*r);
+    // On/off and kind only: the receive observation reads d.nb, and a level or
+    // fill echo would make SliceModel re-emit all three NB signals per tick.
+    if (kindChanged) {
+        r->nbEchoPending = true;
+        emitSliceState(ddc);
+    }
     notifyOperatingStateChanged();
 }
 
@@ -9733,9 +9765,12 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     d.audioGain = qRound(r->audioGain * 100.0f);
     d.audioMute = r->audioMuted;
     d.audioPan = r->audioPanPercent;
-    // A restored blanker, once, so the NB control shows it. Not on every echo:
-    // SliceModel re-emits all three NB signals for each one it receives.
+    // The blanker when its kind changed, it was restored, its receiver just
+    // opened or the connect announcement re-sends it, not on every echo:
+    // SliceModel re-emits all three NB signals for each one it receives. d.nb is
+    // what the slice's receive observation reads.
     if (r->nbEchoPending) {
+        d.nb = r->nbKind != AetherSDR::NoiseBlankerKind::Off;
         d.nbKind = r->nbKind;
         d.nbLevel = r->nbLevel;
         d.nbFill = r->nbFill;
@@ -9796,8 +9831,17 @@ void Hl2Backend::emitPanState(int ddc)
                                    static_cast<double>(m_sampleRateHz) / 1.0e6);
 }
 
-void Hl2Backend::emitAllSliceState()
+void Hl2Backend::emitAllSliceState(bool announceBlankers)
 {
+    // Only the connect announcement re-sends every blanker: RadioModel has just
+    // wiped the slices. The other re-announces (TX slice or antenna moved, a
+    // receiver closed, a DSP build failed) keep every surviving slice, so a
+    // re-send would only make SliceModel re-emit all three NB signals.
+    if (announceBlankers) {
+        for (Receiver& r : m_rx) {
+            r.nbEchoPending = true;
+        }
+    }
     for (const auto& ids : m_ids.all())
         emitSliceState(ids.ddcIndex, true);
 }
