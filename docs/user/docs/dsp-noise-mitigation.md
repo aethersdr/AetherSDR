@@ -58,6 +58,8 @@ advanced parameters.
 ### NR — Noise Reduction
 General-purpose noise reduction. Adjustable level (0-100). Good starting point for noisy bands.
 
+On the [Hermes-Lite 2](./hermes-lite-2.md) and the [ANAN-G2](./anan-g2.md), NR is WDSP's noise reduction, run on the computer inside the receiver's own channel, so TCI programs and decoders get the processed audio too. On the Hermes-Lite 2, **ANF** runs there as well.
+
 ### ANF — Auto Notch Filter
 Removes a single persistent tone from the passband. Adjustable level (0-100). Best for a dominant interfering carrier.
 

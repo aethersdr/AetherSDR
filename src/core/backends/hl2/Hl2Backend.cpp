@@ -1174,6 +1174,7 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     seed.antennasPublished = false;
     // A new slice's blanker is announced once, like its antennas.
     seed.nbEchoPending = true;
+    seed.dspEchoPending = true;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -1426,6 +1427,7 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
     pushPanAveraging(*r);
     pushSquelch(*r);
     pushApf(*r);
+    pushChannelNoiseFilters(*r);
     pushAgcOffLevel(*r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
@@ -2465,8 +2467,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     // The host DSP this backend runs and echoes in emitSliceState(): AGC, the
     // impulse blankers and RIT (a DDC retune, clamped by clampRitXit()) in every
-    // mode setSliceMode() accepts, and the APF only where Hl2RxDsp puts it in
-    // circuit. No NR, ANF or manual notch runs here, so none is declared.
+    // mode setSliceMode() accepts, and the APF, the channel's NR (WDSP ANR) and
+    // its automatic notch (ANF) only where Hl2RxDsp puts each in circuit. No
+    // manual notch runs here, so none is declared.
     {
         using Feature = ReceiveDspControl::Feature;
         ReceiveDspControl dsp;
@@ -2476,8 +2479,18 @@ RadioCapabilities Hl2Backend::capabilities() const
                 dsp.modes.append(canonical);
             }
         }
-        dsp.features = {Feature::Agc, Feature::Nb, Feature::Apf, Feature::Rit};
+        dsp.features = {Feature::Agc, Feature::Nb, Feature::Apf, Feature::Rit,
+                        Feature::Nr, Feature::Anf};
         dsp.featureModes.insert(Feature::Apf, {QStringLiteral("CW"), QStringLiteral("CWL")});
+        QStringList nrModes;
+        QStringList anfModes;
+        for (const QString& mode : dsp.modes) {
+            const WdspChannel::Mode wdsp = modeFromString(mode);
+            if (Hl2RxDsp::noiseReductionRunsIn(wdsp)) { nrModes.append(mode); }
+            if (Hl2RxDsp::autoNotchRunsIn(wdsp)) { anfModes.append(mode); }
+        }
+        dsp.featureModes.insert(Feature::Nr, nrModes);
+        dsp.featureModes.insert(Feature::Anf, anfModes);
         dsp.authority = SliceFrequencyControl::Authority::Engine;
         dsp.maximumRitOffsetHz = kRitXitMaxHz;
         c.receiveDspControl = dsp;
@@ -2550,7 +2563,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasExtendedDsp = false;
     // Both moot while hasRadioSideDsp is false — the host runs every filter
     // this radio has — but stated rather than defaulted, per the struct's
-    // "a backend that omits one silently declares it absent" rule.
+    // "a backend that omits one silently declares it absent" rule. The
+    // channel's own NR and ANF are the NR/ANF pair in receiveDspControl above,
+    // not these Flex NRL/ANFL/ANFT buttons.
     c.hasLmsNoiseFilters = false;
     // THE EXCEPTION, like the blanker below: WDSP's CW peaking filter runs on
     // this host (setSliceApf), so the APF row is a working control here even
@@ -2577,8 +2592,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // The one member of the noise family that is NOT moot here. WDSP's ANB runs
     // on this host, on the raw IQ, ahead of the demodulator — the same
     // arrangement as the manual notch and for the same reason (oracle addendum
-    // 3 §B4: the HL2 carries no DSP). NR and ANF are left off because they are
-    // not implemented, not because they could not be.
+    // 3 §B4: the HL2 carries no DSP). NR and ANF run here too, inside the
+    // receive channel; they are declared per mode in receiveDspControl.
     c.hasHostNoiseBlanker = true;
     // Squelch is host-side too, per mode family: FM on WDSP's fmsq, AM/SAM/DSB/
     // LSB/USB on the level squelch amsq (WdspChannel::setSquelch()). CW and the
@@ -4044,10 +4059,43 @@ ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& 
     case SliceDspRequest::Feature::Apf:
         setSliceApf(sliceId, request.enabled, request.level);
         break;
+    case SliceDspRequest::Feature::Nr:
+    case SliceDspRequest::Feature::Anf:
+        setSliceChannelNoiseFilter(sliceId, request);
+        break;
     default:
         return ReceiveDispatch::Unsupported;
     }
     return ReceiveDispatch::Dispatched;
+}
+
+void Hl2Backend::setSliceChannelNoiseFilter(int sliceId, const SliceDspRequest& request)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r) {
+        return;
+    }
+    // Per receiver, like the APF. Only the named stage moves, and only it is
+    // re-sent and echoed: SetRXAANRVals and SetRXAANFVals flush the LMS taps,
+    // so re-sending the other one would make it re-converge, and an echo of the
+    // other one moves the VFO's level slider onto it.
+    const bool nr = request.feature == SliceDspRequest::Feature::Nr;
+    bool& on = nr ? r->nrOn : r->anfOn;
+    int& level = nr ? r->nrLevel : r->anfLevel;
+    if (request.field == SliceDspRequest::Field::Enabled) {
+        on = request.enabled;
+    } else {
+        level = qBound(0, request.level, 100);
+    }
+    if (r->dsp) {
+        QMetaObject::invokeMethod(r->dsp, nr ? "setNoiseReduction" : "setAutoNotch",
+            Qt::QueuedConnection, Q_ARG(bool, on), Q_ARG(int, level));
+        requestDspChainsPublish();
+    }
+    (nr ? r->nrEchoPending : r->anfEchoPending) = true;
+    emitSliceState(ddc);
+    notifyOperatingStateChanged();
 }
 
 ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
@@ -4362,6 +4410,20 @@ void Hl2Backend::pushApf(const Receiver& r)
     QMetaObject::invokeMethod(r.dsp, "setApf", Qt::QueuedConnection,
         Q_ARG(bool, r.apfOn), Q_ARG(int, r.apfLevel),
         Q_ARG(double, static_cast<double>(m_cwPitchHz)));
+    requestDspChainsPublish();
+}
+
+void Hl2Backend::pushChannelNoiseFilters(const Receiver& r)
+{
+    if (!r.dsp) {
+        return;
+    }
+    // Unconditional, like the blanker and the APF: Hl2RxDsp decides from its
+    // own mode whether each stage is in circuit.
+    QMetaObject::invokeMethod(r.dsp, "setNoiseReduction", Qt::QueuedConnection,
+        Q_ARG(bool, r.nrOn), Q_ARG(int, r.nrLevel));
+    QMetaObject::invokeMethod(r.dsp, "setAutoNotch", Qt::QueuedConnection,
+        Q_ARG(bool, r.anfOn), Q_ARG(int, r.anfLevel));
     requestDspChainsPublish();
 }
 
@@ -6608,6 +6670,15 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         e[QStringLiteral("apfCenterHz")] = c->apfCenterHz;
         e[QStringLiteral("apfBandwidthHz")] = c->apfBandwidthHz;
         e[QStringLiteral("apfGain")] = c->apfGain;
+        // The channel NR (ANR) and ANF: the request, what the channel last
+        // ACCEPTED (like apfRun, so a refused push reads differently from an
+        // applied one), and the level.
+        e[QStringLiteral("nrRequested")] = dsp->noiseReductionRequested();
+        e[QStringLiteral("nrRun")] = dsp->noiseReductionApplied();
+        e[QStringLiteral("nrLevel")] = dsp->noiseReductionLevel();
+        e[QStringLiteral("anfRequested")] = dsp->autoNotchRequested();
+        e[QStringLiteral("anfRun")] = dsp->autoNotchApplied();
+        e[QStringLiteral("anfLevel")] = dsp->autoNotchLevel();
         // Level 4 where it exists: these two ask WDSP itself rather than
         // reading the config, and are marked so a reader can tell.
         e[QStringLiteral("wdspNotchCount")] = dsp->wdspNotchCount();
@@ -8220,6 +8291,10 @@ QJsonObject Hl2Backend::receiverMemoryJson(const Receiver& r)
         {QStringLiteral("nbFill"), static_cast<int>(r.nbFill)},
         {QStringLiteral("apfOn"), r.apfOn},
         {QStringLiteral("apfLevel"), r.apfLevel},
+        {QStringLiteral("nrOn"), r.nrOn},
+        {QStringLiteral("nrLevel"), r.nrLevel},
+        {QStringLiteral("anfOn"), r.anfOn},
+        {QStringLiteral("anfLevel"), r.anfLevel},
         {QStringLiteral("squelchOn"), r.squelchOn},
         {QStringLiteral("squelchLevel"), r.squelchLevel},
         {QStringLiteral("ritOn"), r.ritOn},
@@ -8280,6 +8355,10 @@ std::optional<Hl2Backend::Receiver> Hl2Backend::receiverFromMemory(const QJsonOb
     r.nbLevel = percent("nbLevel", r.nbLevel);
     r.apfOn = flag("apfOn", r.apfOn);
     r.apfLevel = percent("apfLevel", r.apfLevel);
+    r.nrOn = flag("nrOn", r.nrOn);
+    r.nrLevel = percent("nrLevel", r.nrLevel);
+    r.anfOn = flag("anfOn", r.anfOn);
+    r.anfLevel = percent("anfLevel", r.anfLevel);
     r.squelchOn = flag("squelchOn", r.squelchOn);
     r.squelchLevel = percent("squelchLevel", r.squelchLevel);
     r.ritOn = flag("ritOn", false);
@@ -8289,6 +8368,7 @@ std::optional<Hl2Backend::Receiver> Hl2Backend::receiverFromMemory(const QJsonOb
     r.audioGain = static_cast<float>(percent("audioGain", 100)) / 100.0f;
     r.audioPanPercent = percent("audioPan", r.audioPanPercent);
     r.nbEchoPending = true;
+    r.dspEchoPending = true;
     return r;
 }
 
@@ -8319,6 +8399,10 @@ void Hl2Backend::seedReceiverExtras(Receiver& r, const Receiver& memory) const
     r.nbFill = memory.nbFill;
     r.apfOn = memory.apfOn;
     r.apfLevel = memory.apfLevel;
+    r.nrOn = memory.nrOn;
+    r.nrLevel = memory.nrLevel;
+    r.anfOn = memory.anfOn;
+    r.anfLevel = memory.anfLevel;
     r.squelchOn = memory.squelchOn;
     r.squelchLevel = memory.squelchLevel;
     r.ritOn = memory.ritOn;
@@ -8328,6 +8412,7 @@ void Hl2Backend::seedReceiverExtras(Receiver& r, const Receiver& memory) const
     r.audioGain = memory.audioGain;
     r.audioPanPercent = memory.audioPanPercent;
     r.nbEchoPending = true;
+    r.dspEchoPending = true;
     r.ncoHz = panCentreKeptOrRecentred(r, memory.ncoHz);
 }
 
@@ -9150,6 +9235,7 @@ void Hl2Backend::pushInitialState()
         pushPanAveraging(r);
         pushSquelch(r);
         pushApf(r);
+        pushChannelNoiseFilters(r);
         pushAgcOffLevel(r);
     }
     if (m_txDsp) {
@@ -9786,6 +9872,18 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     d.agcOffLevel = r->agcOffLevel;
     d.apf = r->apfOn;
     d.apfLevel = r->apfLevel;
+    // The channel NR/ANF only when changed, restored or re-announced, like the
+    // blanker: applyChanges() emits nrChanged/anfChanged unguarded, and the
+    // VFO's level slider follows each one. A request echoes its own stage only.
+    if (r->dspEchoPending || r->nrEchoPending) {
+        d.nr = r->nrOn;
+        d.nrLevel = r->nrLevel;
+    }
+    if (r->dspEchoPending || r->anfEchoPending) {
+        d.anf = r->anfOn;
+        d.anfLevel = r->anfLevel;
+    }
+    r->dspEchoPending = r->nrEchoPending = r->anfEchoPending = false;
     // The squelch pair the receiver holds and has pushed to its chain, so the
     // SQL control shows the receiver's state. Safe to echo:
     // SliceModel::applyChanges() does not emit squelchCommandIssued.
@@ -9836,10 +9934,12 @@ void Hl2Backend::emitAllSliceState(bool announceBlankers)
     // Only the connect announcement re-sends every blanker: RadioModel has just
     // wiped the slices. The other re-announces (TX slice or antenna moved, a
     // receiver closed, a DSP build failed) keep every surviving slice, so a
-    // re-send would only make SliceModel re-emit all three NB signals.
+    // re-send would only make SliceModel re-emit all three NB signals. The
+    // channel NR/ANF follow the same rule: their echo emits unguarded.
     if (announceBlankers) {
         for (Receiver& r : m_rx) {
             r.nbEchoPending = true;
+            r.dspEchoPending = true;
         }
     }
     for (const auto& ids : m_ids.all())

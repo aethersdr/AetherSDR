@@ -2252,10 +2252,17 @@ void VfoWidget::buildTabContent()
         }
 
         // DSP button tooltips
-        m_nrBtn->setToolTip("Radio-side noise reduction \u2014 attenuates uncorrelated background noise.");
+        // Not "radio-side": on a radio that sends IQ (HL2, ANAN, RTL) this is the
+        // NR inside this computer's receive channel, and the AetherRX modules are
+        // a different stage with similar names, so the tooltip says which is which.
+        m_nrBtn->setToolTip("Receiver noise reduction \u2014 attenuates uncorrelated background noise. "
+                            "Runs in the radio, or, for a radio that sends IQ, in this computer's receive "
+                            "channel, so TCI clients and decoders get the processed audio too. "
+                            "Not the AetherRX modules (NR2, RN2, ...), which run later, on the audio this computer plays.");
         m_nbBtn->setToolTip("Noise blanker \u2014 detects and removes fast impulse noise from sparks and switching sources. "
                             "Where this host runs the blanker, clicking again selects NB2, which reconstructs the blanked window instead of silencing it.");
-        m_anfBtn->setToolTip("Auto notch filter \u2014 detects and cancels persistent unwanted tones.");
+        m_anfBtn->setToolTip("Auto notch filter \u2014 detects and cancels persistent unwanted tones. "
+                             "Runs in the radio, or, for a radio that sends IQ, in this computer's receive channel.");
         m_apfBtn->setToolTip("CW audio peaking filter \u2014 narrows the audio passband around the CW pitch frequency to improve S/N.");
         m_nrlBtn->setToolTip("Leaky LMS adaptive filter \u2014 preserves correlated signals while removing uncorrelated noise. Best for daily SSB/CW.");
         m_nrsBtn->setToolTip("Spectral subtraction with voice activity detection \u2014 cuts noise most aggressively between words.");
