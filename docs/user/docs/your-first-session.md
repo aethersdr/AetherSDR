@@ -126,7 +126,7 @@ Make some noise, add a voice to listen to, then let AetherSDR's noise reduction 
 
    **You should hear** a voice in the noise. Hover over any source for a tooltip that explains the real-world cause.
 
-3. Choose **Settings → AetherRX...**. On the **AetherNR** tab, click **NNR**.
+3. Choose **Tools → AetherRX...**. On the **AetherNR** tab, click **NNR**.
 
    **You should see** the **NNR** button light and the **AetherNR** stage's tick box become ticked. **You should hear** the noise drop behind the voice.
 

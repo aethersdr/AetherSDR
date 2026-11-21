@@ -856,6 +856,16 @@ int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
     return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
 }
 
+// PA drain current in amps from `biasCurrentRaw`, shared like the above. HL2
+// schematic: 0.04 ohm shunt R123, INA199A1 (gain 50) U14, then R108 270 ohm /
+// R109 1 kohm into AIN2 of the slow ADC; the same 3.26 V reference as above.
+// Quisk's Code2Current and hl2setup's hl2.cxx agree. Not checked against a meter.
+[[nodiscard]] constexpr double hl2PaCurrentAmps(int raw) noexcept
+{
+    return (3.26 * (static_cast<double>(raw) / 4096.0)) / 50.0 / 0.04
+           * (1270.0 / 1000.0);
+}
+
 // EP4 wideband bandscope: a second radio->host stream on the EP6 socket,
 // enabled by kRunWideSpectrum, framed `EF FE 01 04`, 1032 bytes (usopenhpsdr1.v
 // WIDE1..WIDE4, fifos.v usbs_fifo; confirmed on a v74.2 board). It carries raw
