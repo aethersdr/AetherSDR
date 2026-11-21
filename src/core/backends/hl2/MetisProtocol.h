@@ -252,6 +252,15 @@ Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept;
 Cc ccRx1Freq(std::uint32_t hz) noexcept;
 // AD9866 LNA gain in dB, clamped to [-12, +48]; C4 = 0x40 | (dB + 12).
 Cc ccRxGain(int db) noexcept;
+// The same 0x0a bank with the PureSignal enable, DATA[22] = C2 bit 6. It is set
+// for the whole PureSignal session and, while keyed, C4 carries the feedback
+// attenuation instead of the receive gain (HL2 fact, consulted from MI0BOT's
+// Thetis fork, networkproto1.c; see THIRD_PARTY_LICENSES):
+// ((31 - att) & 0x3F) | 0x40, att -28..31, which is ccRxGain(19 - att). With
+// the bit set the HL2 gateware streams the TX DAC samples and the ADC on the
+// third and fourth receivers during transmit (DDC3 = reference, DDC2 = feedback).
+inline constexpr std::uint8_t kGainPureSignal = 0x40;   // C2 bit 6 = DATA[22]
+Cc ccGain(int db, bool pureSignal) noexcept;
 // Per-receiver ADC assignment (see kC0AdcAssignOrTxGain). Phase 1 runs one receiver on
 // ADC0, so every field is zero; the bank still has to be SENT for a conforming
 // device to route ADC samples to RX1 at all.
@@ -514,6 +523,9 @@ struct Hl2Telemetry {
     int adcSamples = 0;
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
+    // Enable cycle that covered this whole keyed ADC window, or zero when the
+    // window cannot be attributed to PureSignal feedback.
+    std::uint64_t psAdcGeneration = 0;
 
     // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] over responses
     // that carry a measurement (ForwardPowerWindow::observe skips the rest; the
@@ -842,6 +854,16 @@ int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
 [[nodiscard]] constexpr double hl2TemperatureCelsius(int raw) noexcept
 {
     return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
+}
+
+// PA drain current in amps from `biasCurrentRaw`, shared like the above. HL2
+// schematic: 0.04 ohm shunt R123, INA199A1 (gain 50) U14, then R108 270 ohm /
+// R109 1 kohm into AIN2 of the slow ADC; the same 3.26 V reference as above.
+// Quisk's Code2Current and hl2setup's hl2.cxx agree. Not checked against a meter.
+[[nodiscard]] constexpr double hl2PaCurrentAmps(int raw) noexcept
+{
+    return (3.26 * (static_cast<double>(raw) / 4096.0)) / 50.0 / 0.04
+           * (1270.0 / 1000.0);
 }
 
 // EP4 wideband bandscope: a second radio->host stream on the EP6 socket,

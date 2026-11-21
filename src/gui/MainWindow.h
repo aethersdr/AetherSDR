@@ -390,9 +390,10 @@ protected:
     void restoreNativeClientRect(const QString& role);
     // Windows 11: colour the DWM window border to color.background.app.
     void applyWindowsFrameColor();
-    // Inset the central widget and status bar by the non-client resize band,
-    // which Qt reports as zero on Windows 11 (#7077). The band is a
-    // per-monitor device-pixel figure, so this re-runs whenever it can move.
+    // Windows 11: inset the central widget and status bar by the resize band
+    // so controls stay clear of the WM_NCHITTEST resize zone, and while
+    // maximized by Qt's excess over the native client (#7077). Both are
+    // per-monitor device-pixel figures, so this re-runs whenever they can move.
     void applyNonClientBandInsets();
     // Qt delivers DevicePixelRatioChange to event(), never to changeEvent().
     bool event(QEvent* event) override;
@@ -675,7 +676,7 @@ private:
     // One status-bar notice per connect session for a control this radio
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
-    void showUnsupportedControlNotice();
+    void showUnsupportedControlNotice(const QString& message = {});
     // An antenna button or combo refused a pick because the radio published no
     // port to choose (AntennaChoiceGate.h). Log it and say so, once a session.
     void announceAntennaChoiceRefused(bool tx);
@@ -794,6 +795,9 @@ private:
                                                   const QString& profileId,
                                                   bool selectSlice);
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
+    // The clear above, only while the slice holds anything it undoes; for a
+    // caller that may repeat it often (a TCI RX-antenna set).
+    void clearKiwiSdrVirtualAntennaIfHeld(int sliceId);
     void prepareKiwiSdrBandRecallForPan(const QString& panId);
     bool finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
     void finishPreparedKiwiSdrBandRecallForPan(const QString& panId);
@@ -919,6 +923,7 @@ private:
     // connection when either endpoint dies, and the old backend is destroyed before
     // the new one is built, so no duplicates. Guarded anyway - see the body.
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
+    void wirePureSignalApplet(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
     // Display panel → "Clone to all Pans". Copies every Display setting from
@@ -1313,6 +1318,11 @@ private:
     void pushCwPaddleState(const QString& source = {},
                            quint64 traceId = 0, quint64 sourceMs = 0);
     bool handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // The CW, PTT-hold and Monitor-hold handlers, in that order.
+    bool dispatchMomentaryKey(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // A sided Ctrl/Shift/Alt event as per-side edges through
+    // dispatchMomentaryKey(); nullopt when the side is unknown (#7354).
+    std::optional<bool> handleSidedModifierEvent(QKeyEvent* keyEvent, QEvent::Type eventType);
     bool handleScopedCwMomentaryShortcut(const QString& action, bool press,
                                          const std::shared_ptr<TxController>& controller,
                                          bool keyboard = true);
@@ -1570,6 +1580,17 @@ private:
     // spot id, so an "add" for a callsign already on this band updates the
     // existing spot instead of minting a duplicate (#2906).
     QHash<QString, int> m_n1mmSpotIdByKey;
+
+    // WSJT-X Rx/Tx frequency overlay (#4526). One live entry per WSJT-X
+    // instance id — a second instance on another slice/band gets its own
+    // marker, same per-instance keying #3595 established for spot placement.
+    // Swept by the existing passiveSpotExpiryTimer (MainWindow_Spots.cpp):
+    // an instance that stops reporting Status (exited without a clean Close,
+    // network dropped) has its marker cleared rather than sitting on a stale
+    // frequency forever.
+    QHash<QString, WsjtxStatus> m_wsjtxInstances;
+    QHash<QString, qint64> m_wsjtxInstanceLastSeenMs;
+    void rebuildWsjtxMarkers();
     // External controllers run on a dedicated worker thread (#502)
     QThread*             m_extCtrlThread{nullptr};
 #ifdef HAVE_SERIALPORT
@@ -2014,6 +2035,10 @@ private:
     QWidget* m_pgxlContainer{nullptr};
     QLabel*  m_pgxlIndicator{nullptr};   // top row: "AMP"
     QLabel*  m_pgxlStateLabel{nullptr};  // bottom row: OPERATE / STANDBY
+    QLabel*  m_kpa500Separator{nullptr};
+    QWidget* m_kpa500Container{nullptr};
+    QLabel*  m_kpa500Indicator{nullptr};   // top row: "KPA"
+    QLabel*  m_kpa500StateLabel{nullptr};  // bottom row: FAULT / TX / OPERATE / STANDBY / OFF / –
     QLabel* m_txIndicator{nullptr};
     QLabel* m_gpsDateLabel{nullptr};
     QLabel* m_gpsTimeLabel{nullptr};
@@ -2233,6 +2258,7 @@ private:
     bool m_serialCwPaddleHeld{false};
     void captureLocalCwPaddleInput(bool held);
     bool m_cwRightPaddleActive{false};
+    ShortcutSidedModifierTracker m_sidedModifiers;
     QPointer<QWidget> m_sliderShortcutLease;
     QTimer m_sliderShortcutLeaseTimer;
     struct SwrSweepSample {

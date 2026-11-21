@@ -197,14 +197,13 @@ public:
         return (gapLeft >= gapRight) ? ForceLeft : ForceRight;
     }
 
+    // Sort key for an attached diversity pair: the parent first, then the
+    // child, else the lower slice ID. diversity_index is the partner's slice
+    // index (FlexLib Slice.cs), not an order, so it is not used here (#7448).
     static int diversityPairOrderKey(bool diversityParent,
                                      bool diversityChild,
-                                     int diversityIndex,
                                      int sliceId)
     {
-        if (diversityIndex >= 0) {
-            return diversityIndex;
-        }
         if (diversityParent) {
             return 0;
         }
@@ -215,10 +214,10 @@ public:
     }
 
     // Locked flag side for an attached diversity pair member, by
-    // diversityPairOrderKey index. Index 0 is the DIV parent when the radio reports
-    // diversity_parent / diversity_index (else the lower slice ID) and locks RIGHT
-    // to match SmartSDR; index 1 locks LEFT. Lock*, not Force*, so the pair keeps
-    // opposite sides at a pan edge (#2663, #3880).
+    // diversityPairOrderKey position: position 0 (the DIV parent, else the
+    // lower slice ID) locks RIGHT to match SmartSDR; position 1 locks LEFT.
+    // Lock*, not Force*, so the pair keeps opposite sides at a pan edge
+    // (#2663, #3880).
     static FlagDir diversityPairFlagDir(int orderIndex)
     {
         return orderIndex == 0 ? LockRight : LockLeft;
@@ -271,6 +270,7 @@ public:
     // on top of the slice markers. No-op unless the SmartMTR meter + value labels
     // are active and the flag is expanded. Coordinates are SpectrumWidget-local.
     void drawSmartMtrLabels(QPainter& p) const;
+    QRect smartMtrLabelsCoverageRect() const;
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) were
     // removed from the VFO DSP grid; that family lives in the spectrum

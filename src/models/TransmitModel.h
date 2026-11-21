@@ -16,6 +16,7 @@
 #include <functional>
 #include <atomic>
 #include <memory>
+#include <utility>
 
 class QTimer;
 
@@ -347,6 +348,17 @@ public:
     void setTxModeGetter(TxModeGetter getter);
     using PttPreflight = std::function<QString(PttSource)>;
     void setPttPreflight(PttPreflight preflight);
+    // Phone-mode PTT release holds the unkey this long so the speech tail
+    // still airs. 0 = off. Clamped to TxOffDelaySettings' range. Applies only
+    // to releases routed through requestPttOff() (not CAT/DAX producers, which
+    // release directly); hardware PTT wired to the radio unkeys at the radio.
+    void setTxOffDelayMs(int ms);
+    [[nodiscard]] int txOffDelayMs() const { return m_txOffDelayMs; }
+    [[nodiscard]] bool txOffDelayPending() const { return m_txOffDelayTimer != nullptr; }
+    // PC mic only: true once the audio window has passed in a longer hold.
+    [[nodiscard]] bool txOffDelayMicMuted() const { return m_txOffDelayMicMuted; }
+    // The radio reported it is no longer transmitting: end a pending hold now.
+    void expireTxOffDelayNow();
     // TUNE admission (#5422). RadioModel returns a non-empty message while a
     // client CW source is keying (key edge down, paddle held, CWX in flight);
     // startTune()/startTwoToneTune() are then refused and pttBlocked() carries
@@ -356,6 +368,12 @@ public:
     // other direction. Unset = always admitted.
     using TuneAdmission = std::function<QString()>;
     void setTuneAdmission(TuneAdmission admission);
+    // Asked before VOX is switched on, since the radio then keys itself on
+    // audio. A non-empty answer leaves VOX as it is and raises
+    // voxEnableRefused(); requestVoxEnable(true) then returns 0. Never asked
+    // for VOX off, level or delay. Unset = always admitted.
+    using VoxAdmission = std::function<QString()>;
+    void setVoxAdmission(VoxAdmission admission) { m_voxAdmission = std::move(admission); }
 
     enum class KeyingIntent { Mox, Tune, Atu };
     // Installed by the engine. Admission precedes optimistic state and every
@@ -504,6 +522,7 @@ public:
     void setHoldBreakInDelay(bool on);
 
 signals:
+    void txOffDelayMicMuteChanged(bool muted);
     void stateChanged();
     // The answer to requestVoxEnable(): which request, what it asked for, and
     // whether the radio applied it. current is false when a VOX change was
@@ -619,6 +638,8 @@ signals:
     void commandReady(const QString& cmd);
     void controlRequested(const AetherSDR::TransmitControlRequest& request);
     void pttBlocked(const QString& message);
+    // VOX on was refused by the VOX admission; nothing was sent.
+    void voxEnableRefused(const QString& message);
     void atuTuneFailed(AetherSDR::ATUStatus status, const QString& message);
     // Quindar active-phase signal (#2262).  Emitted on the GUI thread
     // immediately when intro/outro starts and again when each finishes,
@@ -655,6 +676,11 @@ private:
     bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
     bool tuneAdmitted();   // #5422: false (pttBlocked emitted, toggle resynced) while CW is keyed
     void cancelPendingQuindarOff();
+    void cancelPendingTxOffDelay();
+    bool txOffDelayApplies() const;
+    void cancelTxOffDelayMicTimer();
+    void setTxOffDelayMicMuted(bool muted);
+    void continuePttOff(const PttRelease& release);
     void dispatchMoxOff(const PttRelease& release);
     PttRelease capturePttRelease(PttRelease release);
 
@@ -663,9 +689,18 @@ private:
     TxModeGetter             m_txModeGetter;
     PttPreflight             m_pttPreflight;
     TuneAdmission            m_tuneAdmission;   // #5422
+    VoxAdmission             m_voxAdmission;
+    // The VOX admission's refusal, or empty; asked only for VOX on.
+    QString voxOnRefusal() const;
     KeyingAdmission          m_keyingAdmission;
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};
+    int                      m_txOffDelayMs{0};
+    // Non-null exactly while a held release is waiting; invalidatePttRelease()
+    // clears it, so a re-key, reset or stop always drops the pending unkey.
+    QTimer*                  m_txOffDelayTimer{nullptr};
+    QTimer*                  m_txOffDelayMicTimer{nullptr};
+    bool                     m_txOffDelayMicMuted{false};
     PttOffHook               m_pttOffHook;
     std::shared_ptr<std::atomic<bool>> m_pttReleaseFence;
     std::function<void()> m_pttReleaseAbandoned;

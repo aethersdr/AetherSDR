@@ -2153,6 +2153,13 @@ void MainWindow::wireRadioModel()
 #endif
     });
 
+    connect(&m_radioModel.transmitModel(), &TransmitModel::txOffDelayMicMuteChanged,
+            this, [this](bool muted) {
+        if (m_audio) {
+            m_audio->setTxMicHeld(muted);
+        }
+    });
+
     // Interlock fallback gate:
     // we only consume TX-off here, as a safety net if local edge updates
     // are missed while interlock transitions.
@@ -3160,6 +3167,13 @@ void MainWindow::wireCatPorts()
         applyMasterVolume(pct);
     });
 
+    // A TCI RX-antenna set releases a KiwiSDR virtual antenna first, as the
+    // RX applet, VFO and overlay menus do (flexRxAntennaSelected). Direct:
+    // the clear must run before the set. Only when something is held: a peer
+    // may send many sets, and the clear logs and resyncs the UI every time.
+    connect(tciServer(), &TciServer::rxAntennaSetByTci,
+            this, &MainWindow::clearKiwiSdrVirtualAntennaIfHeld, Qt::DirectConnection);
+
     // Wire slice state changes -> TCI broadcasts. TCI receivers are contiguous
     // indexes within our owned slice list; Flex slice ids can be non-zero when
     // another client owns lower-numbered slices.
@@ -3829,15 +3843,16 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
 // call this so a refusal reads like a drop. The latch is shared with the
 // commandDropped path: a gate refusal consumes the notice for a later real
 // drop in the same session too.
-void MainWindow::showUnsupportedControlNotice()
+void MainWindow::showUnsupportedControlNotice(const QString& message)
 {
     if (m_commandDroppedNoticeShown)
         return;
     m_commandDroppedNoticeShown = true;
-    statusBar()->showMessage(
-        tr("This radio doesn't support that control — nothing was sent to "
-           "the radio. Further unsupported controls are logged."),
-        8000);
+    const QString notice = message.isEmpty()
+        ? tr("This radio doesn't support that control — nothing was sent to "
+             "the radio. Further unsupported controls are logged.")
+        : message;
+    statusBar()->showMessage(notice, 8000);
 }
 
 

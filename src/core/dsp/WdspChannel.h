@@ -123,6 +123,9 @@ public:
         bool operator==(const AnalogReceiveDsp&) const = default;
     };
 
+    // create_rxa()'s panel gain1 (RXA.c), used when rxPanelGain is unset.
+    static constexpr double kWdspDefaultRxPanelGain = 4.0;
+
     struct Config
     {
         Direction direction = Direction::Receive;
@@ -141,8 +144,14 @@ public:
         // and leaves every other mode untouched across live mode changes (#7222).
         bool fmLimiter = false;
         // RXA output panel gain, linear, applied after the AGC. Unset keeps
-        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942).
+        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942). In FM,
+        // fmRxPanelGain overrides this when set.
         std::optional<double> rxPanelGain;
+        // RXA panel gain while the mode is FM, applied at open() and on every
+        // live mode change; other modes then get rxPanelGain or WDSP's 4.0. The
+        // panel runs after the FM limiter, so 4.0 would lift its ~0.9 bound
+        // past full scale (#7252).
+        std::optional<double> fmRxPanelGain;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
@@ -569,6 +578,35 @@ public:
     // After output-count readiness, wait for the last hook and DSP body before
     // arming another hold. Test/control only; NEVER call while a hold is armed.
     void synchronizeWorkerForTest() const noexcept;
+    // ---- PureSignal (TX channels; calcc.c) ---------------------------------
+    // Thin wrappers over WDSP's PS API for the Hermes-Lite 2 controller
+    // (Hl2PureSignal). None takes the control fence: calcc guards its own state
+    // with cs_update, and its API is meant to be called from a GUI thread against a
+    // running channel. The caller keeps every call on one thread with the
+    // channel's lifetime (the HL2 I/O thread) so none can outlive the channel.
+    // All return false on a receive channel.
+    struct PureSignalInfo {
+        int feedbackLevel = 0;    // info[4]: feedback peak, 256 = hardware peak
+        bool feedbackFresh = false; // info[0] bit 0 clear: info[4] measured last attempt
+        int calibrationCount = 0; // info[5]: successful calculations
+        int attempts = 0;         // info[7]: finished calculations, good or not
+        int fileError = 0;        // info[12]: save (bit 0) or restore (bit 1) failed
+        bool correcting = false;  // info[14]
+        int state = 0;            // info[15]: LRESET .. LTURNON
+        double maxTx = 0.0;       // GetPSMaxTX
+    };
+    // One block of time-aligned pairs: `tx` the TX DAC reference, `rx` the
+    // feedback, both interleaved I/Q doubles of `size` complex samples.
+    bool pureSignalFeed(int size, double* tx, double* rx) noexcept;
+    bool pureSignalControl(bool reset, bool mancal, bool automode, bool turnon) noexcept;
+    bool pureSignalMox(bool mox) noexcept;
+    bool pureSignalRunCal(bool run) noexcept;
+    bool pureSignalConfigure(double hwPeak, int feedbackRateHz, double moxDelaySec,
+                             double loopDelaySec, double txDelaySec) noexcept;
+    bool pureSignalInfo(PureSignalInfo* out) const noexcept;
+    bool pureSignalSave(const char* path) noexcept;
+    bool pureSignalRestore(const char* path) noexcept;
+
     // Test only (#6179, WDSP patch 22): queue PSRestoreCorr(path) on this TX
     // channel's PureSignal correction thread, on the WDSP the core drives.
     void restorePureSignalCorrectionForTest(const char* path) const noexcept;
@@ -592,6 +630,8 @@ private:
 
     static bool validateConfig(const Config& config, std::string* error) noexcept;
     static int wdspMode(Mode mode) noexcept;
+    // The panel gain fmRxPanelGain asks for in `mode`.
+    static double rxPanelGainFor(const Config& config, Mode mode) noexcept;
     // Pushes the NBP stage's copy of the shift. WDSP keeps the shift stage and
     // the notch database's idea of the shift as two unrelated values, so a
     // caller that sets one without the other gets notches that sit exactly one

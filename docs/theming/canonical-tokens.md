@@ -144,6 +144,18 @@ The traffic-light / caption-chip fills retain the platform semantic values in
 both bundled themes, but still resolve through tokens so custom and future light
 themes can preserve contrast without bypassing the theme system.
 
+### Accessory status indicators
+
+The TGXL, PGXL and KPA500 status-bar labels use these foregrounds on
+`color.background.0`. STANDBY uses `color.accessory.key.standby.foreground`;
+fault and TX use `color.accent.danger`, and off or unknown uses
+`color.text.secondary`.
+
+| Token | Dark | Light |
+|---|---|---|
+| `color.accessory.indicator.operate.foreground` | `#00e060` | `#007030` |
+| `color.accessory.indicator.bypass.foreground` | `#e0a000` | `#6a3f00` |
+
 ### Meter colours (specialised — paint code only)
 
 | Token | Canonical | Refs |
