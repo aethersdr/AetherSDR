@@ -328,6 +328,8 @@ keyer:0,true;                     # key down
 keyer:0,false;                    # key up
 ```
 
+A `keyer:` key-up releases only the key that same client pressed. It never releases the operator's own key or another client's. A client that disconnects with its key down releases it. The operator's own key-up still takes the key up.
+
 ### AetherSDR extension set
 
 AetherSDR offers its own TCI commands as one opt-in set. A client that does not
