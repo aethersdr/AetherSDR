@@ -232,7 +232,7 @@ AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedbac
 - FM repeater duplex and CTCSS encode.
 - PureSignal.
 - Line out and headphone controls: the **Line Out:** and **Headphone:** rows under **Settings → Radio Setup... → Audio → Radio Audio Outputs** are dimmed. A codec board's speaker level is under **HL2 Hardware**.
-- Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied."
+- Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied." The transmit time-out that applies is **Transmit time-out (this computer)** on the same page; see [Transmit time-out](./tx-controls.md#transmit-time-out).
 - Controls the HL2 cannot honor are dimmed with their reason, or refuse with a notice.
 
 ## Known issues

@@ -9440,6 +9440,22 @@ target_include_directories(flex_cw_controls_test PRIVATE src tests)
 target_link_libraries(flex_cw_controls_test PRIVATE aethercore Qt6::Core)
 add_test(NAME flex_cw_controls_test COMMAND flex_cw_controls_test)
 
+# Host transmit time-out (RFC #7021): the timer, warning and release latch on
+# an injected clock. Pure policy, no Qt event loop, no socket.
+add_executable(tx_timeout_guard_test
+    tests/tx_timeout_guard_test.cpp
+    src/models/TxTimeoutGuard.cpp)
+target_include_directories(tx_timeout_guard_test PRIVATE src)
+target_link_libraries(tx_timeout_guard_test PRIVATE Qt6::Core)
+add_test(NAME tx_timeout_guard_test COMMAND tx_timeout_guard_test)
+
+# The same time-out on RadioModel's arming, stop and admission paths. Socket-
+# free: a bare RadioModel, the keyed edge emitted by hand, the clock injected.
+add_executable(tx_timeout_radio_model_test tests/tx_timeout_radio_model_test.cpp)
+target_include_directories(tx_timeout_radio_model_test PRIVATE src tests)
+target_link_libraries(tx_timeout_radio_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_timeout_radio_model_test COMMAND tx_timeout_radio_model_test)
+
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
