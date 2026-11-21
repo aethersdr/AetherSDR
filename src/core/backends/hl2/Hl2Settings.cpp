@@ -4,18 +4,23 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QString>
+
+#include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 
 namespace {
 // Single nested-JSON key holding this backend's config (Principle V).
-// Shape: {"spanMhz":double}. There are no legacy flat keys to migrate — this
+// Shape: {"spanMhz":double, "cwEdgeLeadMs":int}. There are no legacy flat keys to migrate — this
 // object is new, so it starts in the correct shape rather than being
 // grandfathered into it.
 const QString kRootKey = QStringLiteral("Hl2");
 
 constexpr const char* kFieldSpanMhz = "spanMhz";
+constexpr const char* kFieldCwEdgeLeadMs = "cwEdgeLeadMs";
 
 // Owned by the connection panel, not by us. Read only; see the header.
 const QString kLowBandwidthKey = QStringLiteral("LowBandwidthConnect");
@@ -53,6 +58,29 @@ void Hl2Settings::setSpanMhz(double mhz)
     s.setValue(kRootKey,
                QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
     s.save();
+}
+
+int Hl2Settings::cwEdgeLeadMs()
+{
+    const QJsonValue v = readObj().value(QLatin1String(kFieldCwEdgeLeadMs));
+    if (!v.isDouble())
+        return kCwEdgeLeadDefaultMs;
+    const double ms = v.toDouble();
+    if (!std::isfinite(ms))
+        return kCwEdgeLeadDefaultMs;
+    return clampCwEdgeLeadMs(static_cast<int>(std::clamp(std::round(ms), -1.0, 1.0e6)));
+}
+
+int Hl2Settings::setCwEdgeLeadMs(int ms)
+{
+    const int clamped = clampCwEdgeLeadMs(ms);
+    QJsonObject o = readObj();
+    o[QLatin1String(kFieldCwEdgeLeadMs)] = clamped;
+    auto& s = AppSettings::instance();
+    s.setValue(kRootKey,
+               QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+    s.save();
+    return clamped;
 }
 
 bool Hl2Settings::lowBandwidth()

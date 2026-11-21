@@ -8425,6 +8425,31 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
+# #5065: scheduled CW edges land at their EP2 sample plus a fixed lead; a late
+# down shifts the over, past the bound it is refused; cap and flushes. Socket-free.
+add_executable(hl2_cw_edge_timing_test tests/hl2_cw_edge_timing_test.cpp)
+target_include_directories(hl2_cw_edge_timing_test PRIVATE src tests)
+target_link_libraries(hl2_cw_edge_timing_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_cw_edge_timing_test COMMAND hl2_cw_edge_timing_test)
+
+# #5065, the issue's case: a real IambicKeyer, its edges hopping through a
+# blocked main thread to Hl2Backend, frames built at the wall-clock EP2 rate.
+# Socket-free, nothing keyed. Skipped (77) when the host cannot meet the
+# measured wall-clock precondition; never passed in that case.
+add_executable(hl2_cw_gui_stall_test tests/hl2_cw_gui_stall_test.cpp)
+target_include_directories(hl2_cw_gui_stall_test PRIVATE src tests)
+target_link_libraries(hl2_cw_gui_stall_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_cw_gui_stall_test COMMAND hl2_cw_gui_stall_test)
+set_tests_properties(hl2_cw_gui_stall_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
+# #7245: scheduled CW elements through RadioModel with real per-element
+# completions: an element outlives its key-up until its release is on EP2,
+# a paddle release leaves a straight-key hold keyed, revocation at the writer.
+add_executable(hl2_cw_element_completion_test tests/hl2_cw_element_completion_test.cpp)
+target_include_directories(hl2_cw_element_completion_test PRIVATE src tests)
+target_link_libraries(hl2_cw_element_completion_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_cw_element_completion_test COMMAND hl2_cw_element_completion_test)
+
 # #5386, #6105: RIT shifts its own receiver's receive path, XIT the TX NCO
 # register while its receiver transmits, each without touching the other.
 # Constructed backend only — no socket, no DSP, nothing keyed.
@@ -11954,6 +11979,9 @@ set(AETHER_SETTINGS_CONSUMERS
     slice_rit_xit_seam_test
     hl2_rx_antenna_test
     hl2_tx_gate_test
+    hl2_cw_edge_timing_test
+    hl2_cw_gui_stall_test
+    hl2_cw_element_completion_test
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test
     hl2_rx_dsp_declaration_test

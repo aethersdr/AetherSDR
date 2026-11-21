@@ -145,13 +145,14 @@ IambicKeyer::Element IambicKeyer::nextElementChoice(bool ditWanted,
     return justSent == Element::Dit ? Element::Dah : Element::Dit;
 }
 
-void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when)
+void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when,
+                              std::chrono::steady_clock::time_point releaseAt)
 {
     if (down == m_lastEmittedKeyDown) return;
     m_lastEmittedKeyDown = down;
     if (m_onKeyDownChange) m_onKeyDownChange(down, when);
     if (m_onRoutedKeyDownChange) {
-        m_onRoutedKeyDownChange(down, when, m_elementInput);
+        m_onRoutedKeyDownChange(down, when, releaseAt, m_elementInput);
     }
 }
 
@@ -271,7 +272,8 @@ void IambicKeyer::workerLoop()
             // Cancellation/reconnect cannot mint fresh authority here. Local
             // monitor/recorder timing remains independent of RF admission.
             m_elementInput = input.derive();
-            emitKeyDown(true, grid);
+            // onDeadline is this element's key-up instant, known now (#5065).
+            emitKeyDown(true, grid, onDeadline);
             {
                 std::unique_lock<std::mutex> lk(m_mu);
                 while (std::chrono::steady_clock::now() < onDeadline
@@ -284,6 +286,17 @@ void IambicKeyer::workerLoop()
                 }
             }
             grid = onDeadline;
+            // A stop mid-element: the key-up keeps the deadline as its instant
+            // (local sidetone and other backends unchanged) and carries the
+            // stop instant as well, for a backend that places edges at their
+            // instant and would otherwise key up at the deadline (HL2, #5065).
+            std::chrono::steady_clock::time_point stoppedAt{};
+            if (m_stopRequested.load(std::memory_order_acquire)) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now < onDeadline) {
+                    stoppedAt = now;
+                }
+            }
 
             // ── Inter-element gap ──────────────────────────────────────
             // Same limiter for the gap: without it the element that absorbed
@@ -291,7 +304,7 @@ void IambicKeyer::workerLoop()
             const auto gapNow = std::chrono::steady_clock::now();
             if (grid + offDuration < gapNow) grid = gapNow;
             const auto offDeadline = grid + offDuration;
-            emitKeyDown(false, grid);
+            emitKeyDown(false, grid, stoppedAt);
             if (m_stopRequested.load(std::memory_order_acquire)) break;
             {
                 std::unique_lock<std::mutex> lk(m_mu);

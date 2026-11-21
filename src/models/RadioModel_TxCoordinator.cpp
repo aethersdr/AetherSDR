@@ -1254,10 +1254,11 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
 void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                        const QString& source, quint64 traceId, quint64 sourceMs,
                                        std::chrono::steady_clock::time_point scheduledAt,
-                                       bool hostTextGates, std::function<void()> onDownRefused)
+                                       bool hostTextGates, std::function<void()> onDownRefused,
+                                       std::chrono::steady_clock::time_point releaseAt)
 {
     QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt,
-                                     hostTextGates, onDownRefused = std::move(onDownRefused)] {
+                                     hostTextGates, onDownRefused = std::move(onDownRefused), releaseAt] {
         const auto refused = [down, &onDownRefused] {
             if (down && onDownRefused) {
                 onDownRefused();
@@ -1293,7 +1294,7 @@ void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, b
                 return;
             }
         }
-        if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
+        if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request, releaseAt)) {
             refused();
         }
     }, Qt::QueuedConnection);

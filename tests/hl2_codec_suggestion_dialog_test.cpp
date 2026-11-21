@@ -13,6 +13,10 @@
 //      currentIndexChanged and never activated) each send exactly one hw.set,
 //      and the backend follows the combo.
 //
+// And the page's CW Timing group (#7245): the Edge lead spin box is filled
+// from cwlead.get, carries an accessible name and description, and a
+// committed change sends one cwlead.set.
+//
 // No socket and no radio: an injected backend that declares the hl2
 // extension and answers hw.get/hw.set with the shape Hl2Backend replies with.
 
@@ -26,8 +30,10 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QSpinBox>
 #include <QtTest>
 
+#include <algorithm>
 #include <memory>
 
 namespace AetherSDR {
@@ -51,6 +57,8 @@ public:
     bool filterSuggested{false};
     QString board{QStringLiteral("SQUARE SDR 2")};
     QList<QVariantMap> sets;
+    int cwLead{25};
+    QList<QVariantMap> cwSets;
     Hl2HardwareBackend()
     {
         caps.family = QStringLiteral("hl2");
@@ -83,6 +91,21 @@ public:
             if (in.contains(QStringLiteral("filterBoard"))) {
                 filterBoard = in.value(QStringLiteral("filterBoard")).toInt();
                 filterSuggested = false;
+            }
+            return;
+        }
+        if (verb == QLatin1String("cwlead.get") || verb == QLatin1String("cwlead.set")) {
+            if (verb == QLatin1String("cwlead.set")) {
+                cwSets.append(arg.toMap());
+                cwLead = std::clamp(arg.toMap().value(QStringLiteral("edgeLeadMs")).toInt(), 0, 100);
+            }
+            if (id != 0) {
+                emit extensionResult(id, QVariantMap{
+                    {QStringLiteral("edgeLeadMs"), cwLead},
+                    {QStringLiteral("minMs"), 0},
+                    {QStringLiteral("maxMs"), 100},
+                    {QStringLiteral("defaultMs"), 40},
+                });
             }
             return;
         }
@@ -303,6 +326,28 @@ private slots:
         QTRY_VERIFY(page.filter->view()->isVisible());
         QTest::keyClick(page.filter->view(), Qt::Key_Return);
         QVERIFY2(backend->sets.isEmpty(), "re-choosing a stored board writes nothing");
+    }
+
+    void cwEdgeLeadIsFilledNamedAndWritesOnce()
+    {
+        RadioModel model;
+        Hl2HardwareBackend* backend = install(model, 0, false);
+        RadioSetupDialog dialog(&model);
+        (void)openPage(dialog);
+        auto* spin = dialog.findChild<QSpinBox*>(QStringLiteral("hl2CwEdgeLead"));
+        QVERIFY2(spin, "the Edge lead spin box is on the HL2 Hardware page");
+        QCOMPARE(spin->value(), 25);
+        QCOMPARE(spin->minimum(), 0);
+        QCOMPARE(spin->maximum(), 100);
+        QVERIFY2(spin->isEnabled(), "live once cwlead.get has answered");
+        QCOMPARE(spin->accessibleName(), QStringLiteral("CW edge lead"));
+        QVERIFY2(spin->accessibleDescription().contains(QStringLiteral("Default 40")),
+                 "the description states the default");
+        QVERIFY2(backend->cwSets.isEmpty(), "opening the page writes nothing");
+        spin->setValue(10);
+        QCOMPARE(backend->cwSets.size(), 1);
+        QCOMPARE(backend->cwSets.last(), (QVariantMap{{QStringLiteral("edgeLeadMs"), 10}}));
+        QCOMPARE(backend->cwLead, 10);
     }
 
     void bridgeFilterBoardChangesWriteOnceEachAndTheBackendFollows()

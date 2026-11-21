@@ -17,6 +17,14 @@ struct CwControlRequest {
     QString debugSource;
     quint64 debugTraceId{0};
     quint64 debugSourceMs{0};
+    // A scheduled key-down's own key-up instant, when its producer knows it at
+    // the start of the element (the iambic keyer does). On a key-up, the
+    // earlier instant a keyer stop cut the element to; `scheduledAt` is then
+    // still the element's deadline. Epoch zero: none. Only a backend that
+    // places edges itself reads it (HL2, #5065): it schedules both edges of
+    // an element at once, so the element's length does not depend on the
+    // key-up's own hop, and keys up at a stop instead of at the deadline.
+    std::chrono::steady_clock::time_point releaseAt{};
 };
 
 

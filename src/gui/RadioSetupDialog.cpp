@@ -4646,6 +4646,99 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     controls->append(atuChk);
     vbox->addWidget(miscGroup);
 
+    // ── CW timing (#7245) ────────────────────────────────────────────────────
+    //
+    // A setting of this computer, not of the radio (the backend keeps it in
+    // its own config object), so it is NOT in `controls`: it needs no radio
+    // identity, only a backend that answers cwlead.get / cwlead.set. Disabled
+    // until that reply has filled it, so a default it never read is not shown
+    // as the stored value.
+    auto* cwGroup = new QGroupBox("CW Timing");
+    auto* cwvb = new QVBoxLayout(cwGroup);
+    cwvb->setSpacing(6);
+    auto* cwIntro = new QLabel(
+        "AetherSDR's keyer puts each CW edge on the air a fixed lead after the sidetone, so a "
+        "busy computer does not change dit and dah lengths. A shorter lead brings the RF "
+        "closer to the sidetone for break-in (QSK); a stall longer than the lead delays the "
+        "rest of that transmission and lengthens one space.");
+    setTone(cwIntro, Tone::Hint);
+    cwIntro->setWordWrap(true);
+    cwvb->addWidget(cwIntro);
+    auto* cwRow = new QHBoxLayout;
+    auto* cwLbl = new QLabel("Edge lead:");
+    applyLabelStyle(cwLbl);
+    auto* cwLeadSpin = new QSpinBox;
+    cwLeadSpin->setObjectName(QStringLiteral("hl2CwEdgeLead"));
+    cwLeadSpin->setRange(0, 100);   // replaced by the backend's range on fill
+    cwLeadSpin->setSuffix(QStringLiteral(" ms"));
+    cwLeadSpin->setFixedWidth(100);
+    // One write per committed value, not one per keystroke.
+    cwLeadSpin->setKeyboardTracking(false);
+    cwLeadSpin->setEnabled(false);
+    cwLbl->setBuddy(cwLeadSpin);
+    cwLeadSpin->setAccessibleName(QStringLiteral("CW edge lead"));
+    cwLeadSpin->setAccessibleDescription(QStringLiteral(
+        "Delay from the keyer's sidetone to the CW edge on the air, in milliseconds. "
+        "Lower is closer to the sidetone; higher absorbs longer computer stalls. "
+        "Default 40. A change made while transmitting applies from the next transmission."));
+    cwLeadSpin->setToolTip(QStringLiteral(
+        "How long after the sidetone each CW edge from AetherSDR's keyer goes on the air.\n\n"
+        "Lower: the RF follows the sidetone more closely (break-in, QSK).\n"
+        "Higher: a longer computer stall is absorbed without changing anything on the air.\n\n"
+        "A stall longer than the lead delays the rest of that transmission, with the same\n"
+        "element lengths. Default 40 ms; a change applies from the next transmission."));
+    cwRow->addWidget(cwLbl);
+    cwRow->addWidget(cwLeadSpin);
+    cwRow->addStretch(1);
+    cwvb->addLayout(cwRow);
+    vbox->addWidget(cwGroup);
+    // Same shape as the hw.get read below: connected before the invoke,
+    // because the backend answers synchronously.
+    const QPointer<QSpinBox> cwLeadGuard(cwLeadSpin);
+    auto cwLeadFill = [cwLeadGuard](const QVariantMap& m) {
+        if (!cwLeadGuard)
+            return;
+        const QSignalBlocker block(cwLeadGuard);
+        const int lo = m.value(QStringLiteral("minMs"), 0).toInt();
+        const int hi = m.value(QStringLiteral("maxMs"), 100).toInt();
+        cwLeadGuard->setRange(lo, std::max(lo, hi));
+        cwLeadGuard->setValue(std::clamp(m.value(QStringLiteral("edgeLeadMs"), 40).toInt(), lo,
+                                         std::max(lo, hi)));
+        cwLeadGuard->setEnabled(true);
+    };
+    auto cwLeadInvoke = [this, cwLeadFill](const QString& verb, const QVariant& arg) {
+        IRadioBackend* backend = m_model->backend();
+        if (!backend || !m_model->backendDeclaresExtension(QStringLiteral("hl2")))
+            return false;
+        // Its own decade: 0x01 and 0x03..0x06 are taken (BandscopeDialog, hw.get,
+        // calibration, calibration set, SupportBundle).
+        // 0x08 is this one's; 0x07 and 0x09 are reserved for TCI's HL2
+        // extension and the IO board read.
+        constexpr quint64 kCwLeadRequestIdBase = 0x0800000000000000ull;
+        static quint64 nextCwLeadId = kCwLeadRequestIdBase;
+        const quint64 requestId = nextCwLeadId++;
+        auto* guard = new QObject(this);
+        connect(backend, &IRadioBackend::extensionResult, guard,
+                [guard, requestId, cwLeadFill](quint64 id, const QVariant& result) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+            cwLeadFill(result.toMap());
+        });
+        connect(backend, &IRadioBackend::extensionError, guard,
+                [guard, requestId](quint64 id, const QString&) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+        });
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), verb, requestId, arg);
+        return true;
+    };
+    connect(cwLeadSpin, &QSpinBox::valueChanged, this, [cwLeadInvoke](int ms) {
+        cwLeadInvoke(QStringLiteral("cwlead.set"),
+                     QVariantMap{{QStringLiteral("edgeLeadMs"), ms}});
+    });
+
     // One read path (`reseed`) and one write path (`apply`), so shown and
     // stored cannot disagree. Connections are made after the first reseed, or
     // filling the widgets would persist what was just read. QPointer guard
@@ -4654,7 +4747,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     m_hl2HardwareReseed = [this, codecGuard, codecCombo, codecSuggestedLbl, ditherChk,
                            randomChk, filterCombo, filterSuggestedLbl, hpfChk, cl1Chk,
                            atuChk, spkSlider, noRadioLbl, controls, refreshDither,
-                           refreshHpf, refreshSpeaker] {
+                           refreshHpf, refreshSpeaker, cwLeadGuard, cwLeadInvoke] {
         if (!codecGuard)
             return;
         // Through the backend's `hw.get`, not Hl2HardwareOptions: including that
@@ -4665,6 +4758,11 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
         const bool canAsk = backend
             && m_model->backendDeclaresExtension(QStringLiteral("hl2"));
+        if (cwLeadGuard) {
+            cwLeadGuard->setEnabled(false);   // until cwlead.get answers
+            if (canAsk)
+                cwLeadInvoke(QStringLiteral("cwlead.get"), QVariant());
+        }
         if (!canAsk) {
             // Nothing to read from and nothing that could persist a write.
             // Dim everything and say why, rather than leaving the last radio's

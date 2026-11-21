@@ -39,6 +39,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <chrono>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -383,6 +384,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
     }, Qt::QueuedConnection);
     AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
+    // The operator's CW edge lead (#7245), a setting of this computer. Queued:
+    // the lead is the I/O thread's; re-read at every connect below.
+    QMetaObject::invokeMethod(m_metis, "setCwEdgeLeadMs", Qt::QueuedConnection,
+                              Q_ARG(int, Hl2Settings::cwEdgeLeadMs()));
 
     // The rate-change build thread — see the member declarations. Started here
     // and never restarted: it is idle except during a pan-bandwidth crossing,
@@ -422,6 +427,19 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_cwHangTimer, &QTimer::timeout, this, [this] {
         if (!m_cwAutoKeyed) {
             return;
+        }
+        // A key-up the I/O thread shifted (#5065) reaches the wire later than
+        // its instant plus the lead; the hang counts from the wire. An atomic
+        // read, the only state of m_metis touched here.
+        if (m_metis) {
+            const auto onAir = m_metis->cwScheduledUpOnAir();
+            const auto due = onAir + std::chrono::milliseconds(m_cwHangDelayMs);
+            const auto now = std::chrono::steady_clock::now();
+            if (onAir != std::chrono::steady_clock::time_point{} && due > now) {
+                m_cwHangTimer->start(static_cast<int>(
+                    std::chrono::ceil<std::chrono::milliseconds>(due - now).count()));
+                return;
+            }
         }
         m_cwAutoKeyed = false;
         const TxCoordinator::Completion completion = std::exchange(m_cwHangCompletion, {});
@@ -536,6 +554,11 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     });
     connect(m_metis, &MetisClient::radioPttChanged, this, &Hl2Backend::onRadioPttChanged);
     connect(m_metis, &MetisClient::txRouteRefused, this, &Hl2Backend::onMetisTxRouteRefused);
+    // Once per over (#5065); queued from the I/O thread to this one. The over
+    // itself still ends with the break-in hang.
+    connect(m_metis, &MetisClient::cwOverRefused, this, [this] {
+        emit transmitFailed(tr("CW keying fell too far behind"));
+    });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         // No link, no observation: a PTT the radio last reported ends here, so the
         // model never stays in transmit on a radio it can no longer hear.
@@ -3494,7 +3517,9 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // Blocking: start() constructs the QUdpSocket, which must take the I/O
     // thread's affinity, and we need to know whether the bind succeeded.
     bool started = false;
-    QMetaObject::invokeMethod(m_metis, [this, &mp, &started] {
+    const int cwEdgeLeadMs = Hl2Settings::cwEdgeLeadMs();
+    QMetaObject::invokeMethod(m_metis, [this, &mp, &started, cwEdgeLeadMs] {
+        m_metis->setCwEdgeLeadMs(cwEdgeLeadMs);
         started = m_metis->start(mp);
     }, Qt::BlockingQueuedConnection);
     if (!started) {
@@ -5356,10 +5381,10 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 applyRxAudioMute(false);
             }
         } else if (cwBreakIn && m_cwHangTimer
-                   && m_cwHangTimer->interval() < m_unkeyUnmuteHoldMs) {
+                   && m_cwHangDelayMs < m_unkeyUnmuteHoldMs) {
             // CW full break-in with a hang shorter than the hold skips the hold
             // (#5850), or the hold would outlast the inter-element space and
-            // kill QSK. Uses m_cwHangTimer's interval (the configured hang).
+            // kill QSK. Uses the configured hang, not the timer's lead-extended interval.
             // Longer hangs and semi-break-in get the ordinary hold. Cost: the
             // receiver hears PA decay per element; inter-element space
             // (1200/WPM ms) falls below the 70 ms hold at ~17 WPM.
@@ -5429,12 +5454,27 @@ ReceiveDispatch Hl2Backend::requestCwControl(const CwControlRequest& request,
         || !cwEdgeAdmitted(request, command, capabilities().canTransmit)) {
         return ReceiveDispatch::Unsupported;
     }
-    setCwKeying(request.down, request.breakIn, request.breakInDelayMs,
-               command.operation, command.completion);
+    // A key-up a keyer stop cut short keys up at the stop: edges are placed
+    // at their instant here, so the deadline would keep the carrier on for
+    // the rest of the element (#5065). Other backends never read releaseAt.
+    const bool cut = !request.down && request.releaseAt != std::chrono::steady_clock::time_point{}
+        && request.releaseAt < request.scheduledAt;
+    keyCwEdge(request.down, request.breakIn, request.breakInDelayMs, command.operation,
+              command.completion, cut ? request.releaseAt : request.scheduledAt,
+              request.down ? request.releaseAt : std::chrono::steady_clock::time_point{});
     return ReceiveDispatch::Dispatched;
 }
 
 void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
+{
+    keyCwEdge(down, breakIn, breakInDelayMs, operation, completion, {}, {});
+}
+
+void Hl2Backend::keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
+                           const TxCoordinator::Operation& operation,
+                           const TxCoordinator::Completion& completion,
+                           std::chrono::steady_clock::time_point scheduledAt,
+                           std::chrono::steady_clock::time_point releaseAt)
 {
     if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
@@ -5463,10 +5503,15 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const 
     if (m_cwHangTimer) {
         m_cwHangTimer->stop();
     }
-    m_cwHangCompletion = {}; // a fresh element supersedes that local hang
+    // A fresh element supersedes that local hang. The earlier element's own
+    // completion is still held by its scheduled release in MetisClient.
+    m_cwHangCompletion = {};
     if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, [metis = m_metis, down, operation, completion] {
-            metis->setCwKeyDown(down, operation);
+        // A scheduled key-up's completion goes with it: MetisClient releases it
+        // once the element's release is written to EP2, not when this returns.
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, down, operation, completion, scheduledAt,
+                                            releaseAt] {
+            metis->setCwKeyDown(down, operation, scheduledAt, releaseAt, completion);
         }, Qt::QueuedConnection);
     }
 
@@ -5490,8 +5535,19 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const 
         constexpr int kCwEnvelopeReleaseMs = 6;
         m_cwHangOperation = operation;
         m_cwHangCompletion = completion;
-        m_cwHangTimer->start(std::max(kCwEnvelopeReleaseMs,
-                                      std::clamp(breakInDelayMs, 0, 2000)));
+        m_cwHangDelayMs = std::max(kCwEnvelopeReleaseMs, std::clamp(breakInDelayMs, 0, 2000));
+        // A scheduled key-up reaches the wire the over's lead after its
+        // instant (the lead in force, an atomic); the hang counts from there.
+        int untilOnAirMs = 0;
+        if (scheduledAt != std::chrono::steady_clock::time_point{} && m_metis) {
+            const auto onAir = scheduledAt + std::chrono::milliseconds(m_metis->cwEdgeLeadMs());
+            const auto ahead = onAir - std::chrono::steady_clock::now();
+            if (ahead > std::chrono::steady_clock::duration::zero()) {
+                untilOnAirMs = static_cast<int>(
+                    std::chrono::ceil<std::chrono::milliseconds>(ahead).count());
+            }
+        }
+        m_cwHangTimer->start(m_cwHangDelayMs + untilOnAirMs);
     } else if (!m_keyed && m_metis) {
         // A break-in-off key press without manual PTT produced no RF. Do not
         // leave CW owning the IQ stream after its release, or a later voice MOX
@@ -6874,6 +6930,37 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("filterBoardSuggested"), m_hwFilterBoardSuggested},
                     {QStringLiteral("detectedBoard"),
                      QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
+                });
+            }
+            return;
+        }
+        // The CW edge lead (#7245): a setting of this computer, not of the
+        // radio (Hl2Settings), so it needs no radio identity. Completes
+        // locally. A change made during an over takes effect when it ends.
+        if (verb == QLatin1String("cwlead.get") || verb == QLatin1String("cwlead.set")) {
+            int ms = Hl2Settings::cwEdgeLeadMs();
+            if (verb == QLatin1String("cwlead.set")) {
+                const QVariant v = arg.toMap().value(QStringLiteral("edgeLeadMs"));
+                bool ok = false;
+                const int asked = v.toInt(&ok);
+                if (!v.isValid() || !ok) {
+                    if (requestId != 0)
+                        emit extensionError(requestId, QStringLiteral("cwlead.set needs edgeLeadMs"));
+                    return;
+                }
+                ms = Hl2Settings::setCwEdgeLeadMs(asked);
+                if (m_metis) {
+                    QMetaObject::invokeMethod(m_metis, "setCwEdgeLeadMs", Qt::QueuedConnection,
+                                              Q_ARG(int, ms));
+                }
+                qCInfo(lcHl2) << "HL2 CW: edge lead" << ms << "ms";
+            }
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("edgeLeadMs"), ms},
+                    {QStringLiteral("minMs"), Hl2Settings::kCwEdgeLeadMinMs},
+                    {QStringLiteral("maxMs"), Hl2Settings::kCwEdgeLeadMaxMs},
+                    {QStringLiteral("defaultMs"), Hl2Settings::kCwEdgeLeadDefaultMs},
                 });
             }
             return;
