@@ -988,6 +988,11 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomCivBackend_DualReceiver.cpp
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
+    # Remote aetherd engines (family "aetherd", docs/aetherd-remote-backend.md):
+    # the socket-free pieces build everywhere; the backend needs Qt WebSockets.
+    src/core/backends/aetherd/RemoteEngineCredentials.cpp
+    src/core/backends/aetherd/RemoteEngineMapping.cpp
+    src/core/backends/aetherd/RemoteEngineScheduler.cpp
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
     src/core/dsp/SpectralEnvelope.cpp # FFT De-comb (cepstral true envelope)
     src/core/dsp/WdspChannel.cpp
@@ -2978,6 +2983,7 @@ if(Qt6WebSockets_FOUND)
     target_sources(aethercore PRIVATE
         src/core/FreeDvClient.cpp
         src/core/control/RemoteControlServer.cpp  # aetherd network listener (aetherd-remote-clients.md)
+        src/core/backends/aetherd/RemoteEngineBackend.cpp  # family "aetherd" (aetherd-remote-backend.md)
     )
     target_sources(AetherSDR PRIVATE
         src/gui/FreeDvReporterDialog.cpp

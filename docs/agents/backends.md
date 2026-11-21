@@ -31,7 +31,7 @@ landed; steps 3 and 4 are in progress — the current implementation status is
 the RFC's appendix "Implementation status", and the per-stage contracts are
 the `docs/aetherd-*.md` documents it links.
 
-`IRadioBackend` (`src/core/backends/`) has **six** implementors, selected at
+`IRadioBackend` (`src/core/backends/`) has **seven** implementors, selected at
 connect time by a `family` string through `makeBackend()`. The seam's known
 gaps and the multi-radio migration order are tracked in #5262 (M0–M6) and the
 review meta-issue #5554 — read both before changing anything in this table's
@@ -62,6 +62,7 @@ tool's `--check` on every PR and fails naming the signal you missed.
 | `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
 | `anan` | `AnanBackend` (`src/core/backends/anan/`) | ANAN-G2 receive support over openHPSDR Ethernet Protocol 2; raw-IQ RX DSP runs in-client and TX remains absent by construction |
 | `rtl` | `RtlSdrBackend` (`src/core/backends/rtl/`) | RTL-SDR USB receive backend; raw-IQ RX DSP runs in-client and the backend is RX-only by construction |
+| `aetherd` | `RemoteEngineBackend` (`src/core/backends/aetherd/`) | A remote aetherd over its WebSocket listener ([`aetherd-remote-backend.md`](../aetherd-remote-backend.md)); mirrors the engine's resources, never connects or releases its radio, RX-only by construction; `clientSettingsDomains` is empty. Needs Qt WebSockets: without it `makeBackend("aetherd")` returns `nullptr` |
 
 ### Rules for step 3 (aetherd control plane)
 
