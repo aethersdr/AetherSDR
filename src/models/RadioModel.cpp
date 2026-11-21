@@ -1548,39 +1548,9 @@ void RadioModel::setupBackend(const QString& family)
         requestAudioStream({AudioStreamKind::DaxReceive, AudioStreamAction::Remove, streamId, ch});
     });
 
-    // RadioConnection (created + owned by the backend above, on its own worker
-    // thread #502 so TCP I/O never blocks paintEvent) — wire its signals to us.
-    // Signals from RadioConnection auto-queue to main thread (#502)
-    //
-    // RadioConnection is the Flex TCP command channel; a self-IQ backend has
-    // none and m_connection is null, so each of these logged an "invalid
-    // nullptr parameter" connect. The lifecycle it would have carried arrives
-    // through the neutral IRadioBackend signals below instead, which is why the
-    // block after this one is gated on !m_connection.
+    // The transitional command-reply funnel still borrows the wire; lifecycle
+    // and endpoint state arrive exclusively through the backend.
     if (m_connection) {
-    // Each goes through a generation-checked lambda rather than straight to
-    // the member slot: see the rule-5 note at the top of this function.
-    connect(m_connection, &RadioConnection::connected, this,
-            [this, generation] {
-        if (generation != m_backendReceiverGeneration) return;
-        onConnected();
-    });
-    connect(m_connection, &RadioConnection::disconnected, this,
-            [this, generation] {
-        if (generation != m_backendReceiverGeneration) return;
-        onDisconnected();
-    });
-    connect(m_connection, &RadioConnection::errorOccurred, this,
-            [this, generation](const QString& msg) {
-        if (generation != m_backendReceiverGeneration) return;
-        onConnectionError(msg);
-    });
-    connect(m_connection, &RadioConnection::versionReceived, this,
-            [this, generation](const QString& version) {
-        if (generation != m_backendReceiverGeneration) return;
-        onVersionReceived(version);
-    });
-
     connect(m_connection, &RadioConnection::administrationCommandWritten, this,
             [this, generation](quint64 ticket, bool written) {
         if (generation == m_backendReceiverGeneration) { administrationWriteResult(ticket, written); }
@@ -1603,24 +1573,28 @@ void RadioModel::setupBackend(const QString& family)
 
     }  // if (m_connection)
 
-    // A backend without a RadioConnection reports its lifecycle through the
-    // IRadioBackend signals. The guard must mirror connectToRadio()'s dispatch
-    // (`if (m_connection) <wire> else if (m_backend) <seam>`): SimBackend vends a
-    // synthetic RadioConnection AND re-emits its lifecycle, so a "!m_flexBackend"
-    // guard would run onConnected/onDisconnected twice per event. `sim disconnect`
-    // reports through the synthetic connection; see SimBackend.cpp.
-    if (!m_connection) {
-        connect(m_backend.get(), &IRadioBackend::connected,
-                this, &RadioModel::onConnected);
-        connect(m_backend.get(), &IRadioBackend::disconnected,
-                this, &RadioModel::onDisconnected);
-        connect(m_backend.get(), &IRadioBackend::connectionError,
-                this, &RadioModel::onConnectionError);
-        // Advisory only — deliberately NOT routed through onConnectionError,
-        // which starts the reconnect timer. Re-emitted for the UI to surface.
-        connect(m_backend.get(), &IRadioBackend::configurationWarning,
-                this, &RadioModel::configurationWarning);
-    }
+    connect(m_backend.get(), &IRadioBackend::connectionSessionStarting, this,
+            [this, generation](quint64 epoch) {
+        if (generation != m_backendReceiverGeneration || m_wanConn) { return; }
+        m_statusEpoch = epoch;
+        openObservationSession(epoch);
+    });
+    connect(m_backend.get(), &IRadioBackend::connectionVersionReceived, this,
+            [this, generation](const QString& version) {
+        if (generation == m_backendReceiverGeneration && !m_wanConn) { onVersionReceived(version); }
+    });
+    connect(m_backend.get(), &IRadioBackend::connected, this, [this, generation] {
+        if (generation == m_backendReceiverGeneration && !m_wanConn) { onConnected(); }
+    });
+    connect(m_backend.get(), &IRadioBackend::disconnected, this, [this, generation] {
+        if (generation == m_backendReceiverGeneration && !m_wanConn) { onDisconnected(); }
+    });
+    connect(m_backend.get(), &IRadioBackend::connectionError, this,
+            [this, generation](const QString& message) {
+        if (generation == m_backendReceiverGeneration && !m_wanConn) { onConnectionError(message); }
+    });
+    connect(m_backend.get(), &IRadioBackend::configurationWarning,
+            this, &RadioModel::configurationWarning);
 
     // Transport counters from a backend that owns its own socket. Wired
     // unconditionally: a backend that measures nothing never emits this, and one
@@ -2543,6 +2517,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceWfmRequest>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
+    qRegisterMetaType<ConnectionSession>();
     qRegisterMetaType<RadioDelta>();
     qRegisterMetaType<RadioStatusObservation>();
     qRegisterMetaType<DvkStatusObservation>();
@@ -3109,6 +3084,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_operatingStateMaxWaitTimer, &QTimer::timeout, this,
             [this] { persistOperatingState(false); });
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
+        if (isConnected() || m_connectAttemptActive) { return; }
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
             qCDebug(lcProtocol) << "RadioModel: auto-reconnecting to" << m_lastInfo.address.toString();
             // A retry is an attempt too (#4912). This path does NOT go through
@@ -3128,13 +3104,7 @@ RadioModel::RadioModel(QObject* parent)
             if (m_declaredMaxSlices > 0)
                 m_maxSlices = m_declaredMaxSlices;
             clearAutomationSliceFixtures();
-            if (m_connection) {
-                QMetaObject::invokeMethod(m_connection, [this, epoch = beginStatusSession()] {
-                    m_connection->setLineEpoch(epoch);
-                    m_connection->connectToRadio(m_lastInfo);
-                });
-            } else if (m_backend) {
-                // Non-Flex backend: re-drive the connect through the seam.
+            if (m_backend) {
                 RadioConnectRequest req;
                 req.host   = m_lastInfo.address.toString();
                 req.port   = m_lastInfo.port;
@@ -3146,6 +3116,8 @@ RadioModel::RadioModel(QObject* parent)
                 // then fails every automatic retry.
                 populateFamilyParams(req, m_family, m_lastInfo.sessionBindAddress);
                 req.automaticReconnect = true;
+                req.requireExplicitLocalBind = m_lastInfo.bindSettings.mode == RadioBindMode::Explicit;
+                req.explicitLocalBindAddress = m_lastInfo.bindSettings.bindAddress;
                 handRestoredStateToBackend();
                 m_backend->connectRadio(req);
             }
@@ -3263,13 +3235,7 @@ QString RadioModel::connectState() const
 
 bool RadioModel::isConnected() const
 {
-    // WAN sessions leave the backend's LAN connection undialed. Check each
-    // link independently, including backends without a RadioConnection.
-    // Do not key on m_flexBackend: teardown clears it before destroying the
-    // backend, while the connection alias still carries the link state.
-    if (m_connection && m_connection->isConnected()) {
-        return true;
-    }
+    // SmartLink remains separately owned; every LAN family answers through the seam.
     if (m_wanConn && m_wanConn->isConnected()) {
         return true;
     }
@@ -4276,6 +4242,23 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    // Finish the old session before replacing its identity or cleanup state.
+    // A callback can submit newer intent during teardown; it wins over this one.
+    if (!m_wanConn && (isConnected() || m_connectAttemptActive)
+        && info.address == m_lastInfo.address && info.port == m_lastInfo.port
+        && info.serial == m_lastInfo.serial && info.family == m_lastInfo.family
+        && info.bindSettings.mode == m_lastInfo.bindSettings.mode
+        && info.bindSettings.bindAddress == m_lastInfo.bindSettings.bindAddress
+        && info.sessionBindAddress == m_lastInfo.sessionBindAddress) { return; }
+    const QPointer<RadioModel> intentOwner(this);
+    // The snapshot remains owned until the worker's queued disconnect is delivered.
+    const bool hasLanSession = m_backend && m_backend->connectionSession().has_value();
+    if (isConnected() || m_connectAttemptActive || m_wanConn || hasLanSession) {
+        const quint64 retiringIntent = m_connectionIntentRevision + 1;
+        disconnectFromRadio();
+        if (!intentOwner || m_connectionIntentRevision != retiringIntent) { return; }
+    }
+    ++m_connectionIntentRevision;
     retireObservationSession();
     const QPointer<RadioModel> setupOwner(this);
     const quint64 setupGeneration = m_setupObservationGeneration + 1;
@@ -4393,30 +4376,15 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                        info.guiClientStations,
                        info.guiClientIps,
                        info.guiClientHosts);
-    // The demo and Flex both go through the RadioConnection: the demo's
-    // connection (owned by SimBackend, RFC #4288 Route A hybrid) detects the demo
-    // serial in connectToRadio() and runs its synthetic-demo connect locally
-    // instead of dialing a socket, while a real radio dials as before. Families
-    // that own no RadioConnection (HL2) take the seam path below.
-    if (m_connection) {
-        QMetaObject::invokeMethod(m_connection, [conn = m_connection, info, epoch = beginStatusSession()] {
-            conn->setLineEpoch(epoch);
-            conn->connectToRadio(info);
-        });
-    } else if (m_backend) {
-        // aetherd Gap B (Step 2b): non-Flex families have no RadioConnection; they
-        // connect through the neutral IRadioBackend seam. The backend emits
-        // connected()/disconnected() (wired above for the m_connection-null case).
-        if (!info.family.isEmpty() && info.family != QLatin1String("flex"))
-            qCInfo(lcProtocol) << "RadioModel: connecting" << info.family
-                               << "radio via IRadioBackend seam at"
-                               << info.address.toString();
+    if (m_backend) {
         RadioConnectRequest req;
         req.host   = info.address.toString();
         req.port   = info.port;
         req.serial = info.serial;
         req.version = info.version;
         req.serialIdentity = info.serialIdentity;
+        req.requireExplicitLocalBind = info.bindSettings.mode == RadioBindMode::Explicit;
+        req.explicitLocalBindAddress = info.bindSettings.bindAddress;
         populateFamilyParams(req, info.family, info.sessionBindAddress);
         handRestoredStateToBackend();
         m_backend->connectRadio(req);
@@ -4449,6 +4417,17 @@ void RadioModel::cancelAutomaticReconnect()
 
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
+    if (!wan) { return; }
+    const QPointer<RadioModel> intentOwner(this);
+    const QPointer<WanConnection> selected(wan);
+    const bool hasLanSession = m_backend && m_backend->connectionSession().has_value();
+    if ((m_wanConn && m_wanConn != wan)
+        || (!m_wanConn && (isConnected() || m_connectAttemptActive || hasLanSession))) {
+        const quint64 retiringIntent = m_connectionIntentRevision + 1;
+        disconnectFromRadio();
+        if (!intentOwner || !selected || m_connectionIntentRevision != retiringIntent) { return; }
+    }
+    ++m_connectionIntentRevision;
     discardTuneInhibit();
     cancelRadioWake();
     qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
@@ -4791,11 +4770,14 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
 
 void RadioModel::disconnectFromRadio()
 {
+    ++m_connectionIntentRevision;
+    const RadioDisconnectRequest cleanup{m_rxAudio.streamId};
     retireObservationSession();
     resetSessionControls();
     resetAdministration();
     resetTxOperations();
     restoreTuneInhibit();
+    m_txSessionClosing = true;
     cancelRadioWake();
     m_intentionalDisconnect = true;
     ++m_rebootRevision;
@@ -4816,25 +4798,8 @@ void RadioModel::disconnectFromRadio()
         if (wan->isSocketIdle() && m_wanConn == wan) {
             onDisconnected();
         }
-    } else if (!m_connection) {
-        // aetherd Gap B (Step 2b): non-Flex families have no RadioConnection; tear
-        // down through the neutral seam. The backend emits disconnected() -> our
-        // onDisconnected (wired for the m_connection-null case in the ctor).
-        if (m_backend)
-            m_backend->disconnectRadio();
-    } else if (m_connection->isConnected()) {
-        // Graceful disconnect: remove our stream and wait for the radio reply
-        // before closing. Self "client disconnect" is rejected by the radio.
-        quint32 handle = clientHandle();
-        QString streamId = RadioStatusOwnership::streamCommandId(m_rxAudio.streamId);
-        const quint32 streamRemoveSeq = streamId.isEmpty() ? 0 : m_seqCounter.fetch_add(1);
-        QMetaObject::invokeMethod(m_connection, [this, handle, streamId,
-                                                 streamRemoveSeq]() {
-            m_connection->gracefulDisconnect(handle, streamId, streamRemoveSeq);
-        }, Qt::BlockingQueuedConnection);
-    } else {
-        QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio,
-                                  Qt::BlockingQueuedConnection);
+    } else if (m_backend) {
+        m_backend->disconnectRadio(cleanup);
     }
 }
 
@@ -4859,19 +4824,8 @@ void RadioModel::forceDisconnect()
     m_connectAttemptActive = false;  // this attempt is over; the retry re-arms it (#4912)
     if (m_wanConn) {
         m_wanConn->disconnectFromRadio();
-    } else if (!m_connection) {
-        // F3 (#4448): a non-Flex backend has no RadioConnection; tear down through
-        // the seam. Without this guard the m_connection->isConnected() below
-        // null-derefs (~250 ms after a reboot request, or on any forced drop).
-        if (m_backend)
-            m_backend->disconnectRadio();
-    } else if (m_connection->isConnected()) {
-        quint32 handle = clientHandle();
-        QMetaObject::invokeMethod(m_connection, [conn = m_connection, handle]() {
-            conn->gracefulDisconnect(handle, QString(), 0);
-        });
-    } else {
-        QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio);
+    } else if (m_backend) {
+        m_backend->disconnectRadio({0, RadioDisconnectRequest::Completion::Deferred});
     }
 }
 
@@ -7509,6 +7463,7 @@ void RadioModel::onConnected()
     restoreClientShowTxInWaterfall();
 
     emit connectionStateChanged(true);
+    if (!current()) { return; }
     // A Flex dumps its memory slots as status during the handshake below. A
     // radio without any has nothing to dump, so the bank is what populates the
     // cache — settle which store owns the session here, on the same edge, so
@@ -7994,9 +7949,7 @@ void RadioModel::cancelMultiFlexConflict()
 {
     m_multiFlexContinuation = nullptr;
     m_intentionalDisconnect = true;
-    QMetaObject::invokeMethod(m_connection, [conn = m_connection] {
-        conn->disconnectFromRadio();
-    });
+    if (m_backend) { m_backend->disconnectRadio({0, RadioDisconnectRequest::Completion::Deferred}); }
 }
 
 void RadioModel::handleForcedClientDisconnect()
@@ -8034,17 +7987,8 @@ void RadioModel::closeConnectionForTerminalDisconnect()
         return;
     }
 
-    if (!m_connection) { return; }
-    const quint32 handle = clientHandle();
-    const QString streamId = RadioStatusOwnership::streamCommandId(m_rxAudio.streamId);
-    if (m_connection->isConnected()) {
-        const quint32 streamRemoveSeq = streamId.isEmpty() ? 0 : m_seqCounter.fetch_add(1);
-        QMetaObject::invokeMethod(m_connection, [conn = m_connection, handle, streamId,
-                                                 streamRemoveSeq]() {
-            conn->gracefulDisconnect(handle, streamId, streamRemoveSeq);
-        });
-    } else {
-        QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio);
+    if (m_backend) {
+        m_backend->disconnectRadio({m_rxAudio.streamId, RadioDisconnectRequest::Completion::Deferred});
     }
 }
 
@@ -8224,11 +8168,10 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         if (!current()) { return; }
         // Set network MTU for VITA-49 packets (matches FlexLib behavior),
         // capped when the path runs over Tailscale. Decide that here, once:
-        // the connection's local address is written on its own thread, and
-        // this reply is ordered after the socket connected, so reading it now
-        // is safe where reading it later from Radio Setup would not be.
-        const QHostAddress localAddress =
-            m_connection ? m_connection->localAddress() : QHostAddress();
+        // The backend captured this endpoint on the transport thread at the
+        // accepted handshake; later TCP-worker state cannot change this copy.
+        const auto transport = m_backend ? m_backend->connectionSession() : std::nullopt;
+        const QHostAddress localAddress = transport ? transport->localAddress : QHostAddress();
         m_pathOverTailnet = reachedOverTailnet(radioAddress(), localAddress);
         // IP Configuration's gate wants the transport, not the address range:
         // the interface this end is bound to (core/TailscaleInterface.h).
@@ -8280,14 +8223,16 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         // Always (re)start on connect — re-binds socket and re-registers
         // UDP port with the radio. start() calls stop() internally if needed. (#561)
         bool streamOk = false;
+        quint16 udpPort = 0;
         if (m_wanConn) {
-            QMetaObject::invokeMethod(m_panStream, [this, &streamOk]() {
+            QMetaObject::invokeMethod(m_panStream, [this, &streamOk, &udpPort]() {
                 streamOk = m_panStream->startWan(QHostAddress(m_wanPublicIp), m_wanUdpPort);
+                udpPort = m_panStream->localPort();
             }, Qt::BlockingQueuedConnection);
         } else {
-            QMetaObject::invokeMethod(m_panStream, [this, &streamOk]() {
-                streamOk = m_panStream->start(m_connection);
-            }, Qt::BlockingQueuedConnection);
+            const ReceiveTransportResult transport = m_backend->startReceiveTransport();
+            streamOk = transport.ready;
+            udpPort = transport.localPort;
         }
 
         if (!streamOk) {
@@ -8339,7 +8284,6 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             qCDebug(lcProtocol) << "RadioModel: WAN — requested UDP registration via udp_register";
         }
 
-        const quint16 udpPort = m_panStream->localPort();
         qCInfo(lcProtocol).noquote()
             << "RadioModel: client udpport requested"
             << QStringLiteral("port=%1").arg(udpPort);
@@ -8353,10 +8297,8 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                         << "RadioModel: client udpport registered"
                         << QStringLiteral("port=%1").arg(udpPort);
                 } else if (shouldRetryLanUdpPortRegistration(m_wanConn != nullptr, code2, body)) {
-                    bool rebound = false;
-                    QMetaObject::invokeMethod(m_panStream, [this, &rebound]() {
-                        rebound = m_panStream->rebindToEphemeralPort(m_connection);
-                    }, Qt::BlockingQueuedConnection);
+                    const ReceiveTransportResult transport = m_backend->startReceiveTransport(true);
+                    const bool rebound = transport.ready;
 
                     if (!rebound) {
                         qCWarning(lcProtocol) << "RadioModel: UDP port" << udpPort
@@ -8368,7 +8310,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                         return;
                     }
 
-                    const quint16 retryUdpPort = m_panStream->localPort();
+                    const quint16 retryUdpPort = transport.localPort;
                     qCWarning(lcProtocol).noquote()
                         << "RadioModel: client udpport collision"
                         << QStringLiteral("port=%1").arg(udpPort)
@@ -8792,6 +8734,8 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    const QPointer<RadioModel> endingOwner(this);
+    const quint64 endingIntent = m_connectionIntentRevision;
     // The session that ended is the one that connected, unless a new connect
     // has already begun (a late disconnect): that newer epoch, and its
     // receive data, stay open.
@@ -8808,7 +8752,11 @@ void RadioModel::onDisconnected()
     resetAudioControls();
     resetAdministration();
     resetTransmitDaxSessionState();
-    const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
+    const auto retireDax = qScopeGuard([endingOwner, endingIntent] {
+        if (endingOwner && endingOwner->m_connectionIntentRevision == endingIntent) {
+            endingOwner->resetTransmitDaxSessionState();
+        }
+    });
     discardTuneInhibit();
     resetTuneOutputControl();
     m_transmitModel.invalidateControlIntents();
@@ -8970,7 +8918,7 @@ void RadioModel::onDisconnected()
     m_callsign.clear();
     // Clear the nickname here too, not just on the connectToRadio() seeding
     // path: connectViaWan() takes no RadioInfo and the LAN auto-reconnect timer
-    // calls m_connection->connectToRadio(m_lastInfo) directly, both bypassing
+    // calls the backend directly, both bypassing
     // RadioModel::connectToRadio(). Clearing on the disconnect side closes all
     // three paths at once, so a reconnect can never show the previous radio's
     // station label while the async info reply is in flight. (#4260 review)
@@ -9007,12 +8955,11 @@ void RadioModel::onDisconnected()
     emit audioOutputChanged();
 
     stopNetworkMonitor();
-    // stop() must run on the network thread (socket lives there). (#561)
-    // Guarded: a non-Flex backend (HL2) owns no PanadapterStream.
-    if (m_panStream) {
-        QMetaObject::invokeMethod(m_panStream, &PanadapterStream::stop,
-                                  Qt::BlockingQueuedConnection);
-        m_panStream->clearRegisteredStreams();
+    if (m_wanConn && m_panStream) {
+        QMetaObject::invokeMethod(m_panStream, [stream = m_panStream] {
+            stream->stop();
+            stream->clearRegisteredStreams();
+        }, Qt::BlockingQueuedConnection);
     }
     // The radio sends no per-stream "removed" on a hard disconnect, so reset
     // the DAX-IQ stream state + destroy pipes here too (panStream IQ
@@ -9081,6 +9028,9 @@ void RadioModel::onDisconnected()
     }
     emit infoChanged();
     emit connectionStateChanged(false);
+    // A direct observer may have selected another LAN/WAN session or destroyed
+    // the model. Its route and resources no longer belong to this teardown.
+    if (!endingOwner || m_connectionIntentRevision != endingIntent) { return; }
     // After connectionStateChanged(false): protocol adapters detach and remove
     // their slice resources on that edge, so invalidating here costs no
     // republish of a resource that is about to be removed anyway.
@@ -9115,6 +9065,8 @@ void RadioModel::onDisconnected()
 
 void RadioModel::onConnectionError(const QString& msg)
 {
+    const QPointer<RadioModel> errorOwner(this);
+    const quint64 failedIntent = m_connectionIntentRevision;
     qCWarning(lcProtocol) << "RadioModel: connection error:" << msg;
     if (m_radioWakeActive) {
         const quint64 generation = m_radioWakeGeneration;
@@ -9133,10 +9085,13 @@ void RadioModel::onConnectionError(const QString& msg)
     // a connect is in flight is part of that connect (a family switch tears the
     // old backend down mid-connectToRadio), and clearing there would report
     // "idle" for a connect that is still very much running.
-    m_connectAttemptActive = false;
     if (!m_rebootInProgress) {
         emit connectionError(msg);
     }
+    // Keep the old attempt visible during notification so a replacement intent
+    // cancels its backend owner first. Do not retire or retry the replacement.
+    if (!errorOwner || m_connectionIntentRevision != failedIntent) { return; }
+    m_connectAttemptActive = false;
     // A refused connect may never emit disconnected, but the radio can recover
     // after expiring a stale session. Keep retrying the same discovered radio.
     if (!m_wanConn && !m_intentionalDisconnect && !m_lastInfo.address.isNull()
@@ -9724,8 +9679,9 @@ QString RadioModel::selectedSourcePath() const
         return m_lastInfo.bindSettings.selectionLabel();
 
     QHostAddress resolved = m_lastInfo.sessionBindAddress;
-    if (resolved.isNull() && m_connection)
-        resolved = m_connection->localAddress();
+    if (resolved.isNull() && m_backend) {
+        if (const auto transport = m_backend->connectionSession()) { resolved = transport->localAddress; }
+    }
     resolved = usableUnicastAddress(resolved);
     if (!resolved.isNull())
         return QStringLiteral("Auto (%1)").arg(resolved.toString());
@@ -9745,8 +9701,9 @@ QString RadioModel::localTcpEndpoint() const
             return QStringLiteral("None (stream transport only)");
         return QStringLiteral("Not connected");
     }
-    const QHostAddress localAddr = m_connection->localAddress();
-    const quint16 localPort = m_connection->localTcpPort();
+    const auto transport = m_backend ? m_backend->connectionSession() : std::nullopt;
+    const QHostAddress localAddr = transport ? transport->localAddress : QHostAddress();
+    const quint16 localPort = transport ? transport->localPort : 0;
     if (localAddr.isNull() || localPort == 0)
         return QStringLiteral("Not connected");
     return endpointText(localAddr, localPort);
@@ -10919,7 +10876,8 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,
         m_pendingCallbacks.insert(seq, std::move(cb));
 
     // Queue the socket write on the connection's worker thread.
-    const quint64 transportSession = guard ? m_sessionWireGeneration : 0;
+    const quint64 transportSession = guard ? m_sessionWireGeneration
+        : m_connection->commandSessionGeneration();
     const QPointer<RadioModel> receiver(this);
     QMetaObject::invokeMethod(m_connection, [conn = m_connection, receiver, seq, command, guard, transportSession,
                                              dispatchAllowed] {
@@ -10935,7 +10893,9 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,
             }
             return;
         }
-        if (!guard) { conn->writeCommand(seq, command); }
+        if (conn->commandSessionGeneration() != transportSession) {
+            emit conn->commandResponse(seq, kNoCommandPlaneCode, QStringLiteral("Original session ended before write"));
+        } else if (!guard) { conn->writeCommand(seq, command); }
         else if (!conn->writeSessionCommand(seq, command, transportSession, *guard)) {
             emit conn->commandResponse(seq, kNoCommandPlaneCode, QStringLiteral("Original session ended before write"));
         }

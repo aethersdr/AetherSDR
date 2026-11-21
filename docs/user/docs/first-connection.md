@@ -93,6 +93,10 @@ Discovery broadcasts do not cross routers or most VPNs, and guest Wi-Fi isolatio
 
 The radio rejected AetherSDR's client registration (for example with error `F3000001`). AetherSDR closes the connection, does not retry on its own, and returns to the Connect to Radio window with the radio's error.
 
+The window stays responsive while an interrupted or canceled connection finishes
+closing. If you reconnect during that cleanup, the new connection waits until
+the old connection has closed.
+
 1. Follow the message shown: typically another client must disconnect first, or the radio needs a restart.
 2. If the **Connected Stations** dialog appears, select a station and click **Disconnect Station**; see [Multi-Flex](./multi-flex.md).
 

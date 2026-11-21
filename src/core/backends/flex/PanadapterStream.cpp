@@ -50,7 +50,7 @@ QString streamCategoryName(PanadapterStream::StreamCategory cat)
     return QStringLiteral("other");
 }
 
-QHostAddress chooseLanBindAddress(RadioConnection* conn,
+QHostAddress chooseLanBindAddress(const FlexLanEndpoint& endpoint,
                                   QString* chosenReason,
                                   QHostAddress* chosenAddress,
                                   RadioBindMode* bindMode)
@@ -60,14 +60,14 @@ QHostAddress chooseLanBindAddress(RadioConnection* conn,
     if (chosenAddress)
         *chosenAddress = QHostAddress();
     if (bindMode)
-        *bindMode = conn ? conn->bindMode() : RadioBindMode::Auto;
+        *bindMode = endpoint.requireExplicitLocalBind ? RadioBindMode::Explicit : RadioBindMode::Auto;
 
-    const QHostAddress explicitAddr = conn ? conn->explicitLocalBindAddress() : QHostAddress();
-    const QHostAddress sessionAddr = conn ? conn->sessionLocalBindAddress() : QHostAddress();
-    const QHostAddress tcpAddr = conn ? conn->localAddress() : QHostAddress();
+    const QHostAddress explicitAddr = endpoint.explicitLocalAddress;
+    const QHostAddress sessionAddr = endpoint.preferredLocalAddress;
+    const QHostAddress tcpAddr = endpoint.localTcpAddress;
 
     const LanBindAddress selected = selectLanBindAddress(
-        conn ? conn->radioAddress() : QHostAddress(), explicitAddr, sessionAddr, tcpAddr);
+        endpoint.remoteAddress, explicitAddr, sessionAddr, tcpAddr);
 
     if (chosenReason) {
         *chosenReason = selected.reason;
@@ -223,10 +223,19 @@ void PanadapterStream::applyDscpEf(const QHostAddress& destination, std::initial
 
 bool PanadapterStream::start(RadioConnection* conn)
 {
+    const FlexLanEndpoint endpoint{conn ? conn->radioAddress() : QHostAddress(),
+        conn ? conn->localAddress() : QHostAddress(), conn ? conn->sessionLocalBindAddress() : QHostAddress(),
+        conn ? conn->explicitLocalBindAddress() : QHostAddress(),
+        conn && conn->bindMode() == RadioBindMode::Explicit, conn && conn->isSyntheticDemo()};
+    return start(endpoint);
+}
+
+bool PanadapterStream::start(const FlexLanEndpoint& endpoint)
+{
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
     m_pcmProducer.start();
 
-    if (conn && conn->isSyntheticDemo()) {
+    if (endpoint.synthetic) {
         // Demo radio: nothing to bind or generate. SimBackend produces the demo's audio
         // and FFT from one NoiseMixer over the IRadioBackend seam (RFC #4288 Route A),
         // so this stream stays idle; RadioModel still harvests it as a normal pan stream.
@@ -241,7 +250,7 @@ bool PanadapterStream::start(RadioConnection* conn)
     QHostAddress chosenAddress;
     QString chosenReason;
     RadioBindMode bindMode = RadioBindMode::Auto;
-    const QHostAddress bindAddr = chooseLanBindAddress(conn, &chosenReason, &chosenAddress, &bindMode);
+    const QHostAddress bindAddr = chooseLanBindAddress(endpoint, &chosenReason, &chosenAddress, &bindMode);
     const QString bindReason = chosenReason.isEmpty() ? QStringLiteral("auto") : chosenReason;
 
     const bool bound = m_lanBindForTest ? m_lanBindForTest()
@@ -265,7 +274,7 @@ bool PanadapterStream::start(RadioConnection* conn)
 
     if (!m_lanBindForTest) {
         applyReceiveBufferSize();   // #3810 — absorb VITA-49 bursts so they don't drop
-        applyDscpEf(conn ? conn->radioAddress() : QHostAddress(), {4991, 4992});
+        applyDscpEf(endpoint.remoteAddress, {4991, 4992});
     }
     m_localAddress = m_socket->localAddress();
     m_localPort = m_socket->localPort();
@@ -276,7 +285,7 @@ bool PanadapterStream::start(RadioConnection* conn)
     // The radio learns our IP:port from the source address of this datagram.
     // This is required on firmware v1.4.0.0 where the TCP "client udpport"
     // command may return 0x50001000 ("command not supported").
-    const QHostAddress radioAddr = conn->radioAddress();
+    const QHostAddress radioAddr = endpoint.remoteAddress;
     if (!radioAddr.isNull()) {
         const QByteArray reg(1, '\x00');
         const qint64 sent = writeLanDatagram(reg, radioAddr, 4992);
@@ -298,12 +307,20 @@ bool PanadapterStream::start(RadioConnection* conn)
     m_radioAddress = radioAddr;
     m_radioPort = 4991;
 
-    m_conn = conn;
     startLanKeepalive();
     return true;
 }
 
 bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
+{
+    const FlexLanEndpoint endpoint{conn ? conn->radioAddress() : QHostAddress(),
+        conn ? conn->localAddress() : QHostAddress(), conn ? conn->sessionLocalBindAddress() : QHostAddress(),
+        conn ? conn->explicitLocalBindAddress() : QHostAddress(),
+        conn && conn->bindMode() == RadioBindMode::Explicit, conn && conn->isSyntheticDemo()};
+    return rebindToEphemeralPort(endpoint);
+}
+
+bool PanadapterStream::rebindToEphemeralPort(const FlexLanEndpoint& endpoint)
 {
     if (!m_socket) {
         qCWarning(lcVita49) << "PanadapterStream: cannot rebind UDP socket before init";
@@ -335,7 +352,7 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
     QHostAddress chosenAddress;
     QString chosenReason;
     RadioBindMode bindMode = RadioBindMode::Auto;
-    const QHostAddress bindAddr = chooseLanBindAddress(conn, &chosenReason, &chosenAddress, &bindMode);
+    const QHostAddress bindAddr = chooseLanBindAddress(endpoint, &chosenReason, &chosenAddress, &bindMode);
     const QString bindReason = chosenReason.isEmpty() ? QStringLiteral("auto") : chosenReason;
 
     const bool bound = m_lanBindForTest ? m_lanBindForTest()
@@ -352,13 +369,12 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
 
     if (!m_lanBindForTest) {
         applyReceiveBufferSize();   // #3810 — absorb VITA-49 bursts so they don't drop
-        applyDscpEf(conn ? conn->radioAddress() : QHostAddress(), {4991, 4992});
+        applyDscpEf(endpoint.remoteAddress, {4991, 4992});
     }
     m_localAddress = m_socket->localAddress();
     m_localPort = m_socket->localPort();
-    m_radioAddress = conn ? conn->radioAddress() : QHostAddress();
+    m_radioAddress = endpoint.remoteAddress;
     m_radioPort = 4991;
-    m_conn = conn;
 
     qCWarning(lcVita49).noquote()
         << "PanadapterStream: LAN VITA UDP bind"
@@ -458,7 +474,6 @@ bool PanadapterStream::startWan(const QHostAddress& radioAddr, quint16 radioUdpP
     qCDebug(lcVita49) << "PanadapterStream: WAN — bound to UDP port" << m_localPort
              << "radio=" << radioAddr.toString() << ":" << radioUdpPort;
 
-    m_conn = nullptr;  // no RadioConnection in WAN mode
     return true;
 }
 

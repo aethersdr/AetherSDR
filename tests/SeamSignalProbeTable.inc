@@ -14,6 +14,8 @@ AETHER_SEAM_PROBE(setupStatusObserved);
 AETHER_SEAM_PROBE(audioStreamChanged);
 AETHER_SEAM_PROBE(independentTxStopped);
 AETHER_SEAM_PROBE(transmitControlAnswered);
+AETHER_SEAM_PROBE(connectionSessionStarting);
+AETHER_SEAM_PROBE(connectionVersionReceived);
 AETHER_SEAM_PROBE(connected);
 AETHER_SEAM_PROBE(disconnected);
 AETHER_SEAM_PROBE(connectionError);
