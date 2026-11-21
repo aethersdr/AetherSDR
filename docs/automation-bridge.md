@@ -741,9 +741,13 @@ popup at a time and only while it is open; an empty combo is refused up front
 > was deliberately narrowed from the old `…/tune/atu/vox/…` set: `tune`/`atu`/`vox`
 > false-blocked **RX-only** buttons like **"Tune Now"** (net/spot retune) and VOX
 > toggles, and the genuine keying TUNE/ATU buttons all carry `markTxKeying()`
-> anyway, so the marker still covers them (#3918). Setpoint
-> **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
-> blocked — moving a value setter can't transmit.
+> anyway, so the marker still covers them (#3918). The **drive setpoints**
+> `RF power` and `Tune power` carry a second marker, `markTxSetpoint()`
+> (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`). They never key, so
+> TX permission does not gate them (#5851): `invoke`, the pointer verbs and
+> `transmit rfpower|tunepower` set them without it. What bounds drive is the
+> power ceiling, `AETHER_AUTOMATION_TX_MAX_POWER`, below. Other setpoints like
+> `VOX level` or `Microphone gain` are not blocked either.
 >
 > **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
 > without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
@@ -4939,8 +4943,8 @@ antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 
 ### `transmit`
 Set the transmit drive — `rfpower` (RF Power) or `tunepower` (Tune Power), 0..100.
-TX-gated like `key`, and the gate is reported **before** the value is validated so
-it cannot be probed with nonsense.
+Not TX-gated: drive never keys, so it needs no TX permission (#5851). What bounds
+it is the power ceiling.
 
 The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
 ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
@@ -4950,7 +4954,7 @@ amplifier. When a request is clamped the reply says so rather than quietly honou
 a different number than was asked for.
 
 ```json
-→ {"cmd":"transmit","action":"rfpower","value":"25"}   # gated
+→ {"cmd":"transmit","action":"rfpower","value":"25"}
 ← {"ok":true,"transmit":"rfpower","rfPower":25,"tunePower":10}
 
 → {"cmd":"transmit","action":"rfpower","value":"90"}   # ceiling of 30 in force
@@ -5309,7 +5313,7 @@ audio devices require separate hardware validation.
 | `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
-| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
+| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (bounded by the power ceiling) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |
