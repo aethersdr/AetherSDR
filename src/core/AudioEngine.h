@@ -341,6 +341,31 @@ public:
     Q_INVOKABLE void clearTxAccumulators();
     void discardTxMedia(const TxCoordinator::Context& context);
     void feedDaxTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
+    // TCI TX audio. Identical to feedDaxTxAudio() unless both
+    // setTciTxVoiceDsp(true) and setTciTxVoiceMode(true): then the audio first
+    // runs through the client TX voice chain the mic uses (EQ, compressor,
+    // tube, enhancer, reverb, final limiter).
+    // Off by default, because digital-mode TCI clients (WSJT-X, JTDX) send
+    // pre-shaped tones that a voice chain would distort; and with the option on,
+    // a TX slice in a digital mode still takes the DAX path unchanged. DAX is
+    // never affected.
+    void feedTciTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
+    // Any thread.
+    // Every switch that can open the chain is counted, so the audio thread
+    // resets it even when an off/on pair falls between two TCI blocks.
+    void setTciTxVoiceDsp(bool on) { setTciTxVoiceGate(m_tciTxVoiceDsp, on); }
+    bool tciTxVoiceDsp() const { return m_tciTxVoiceDsp.load(std::memory_order_acquire); }
+    // Any thread. True while the TX slice is in a voice mode; TciServer keeps it
+    // current. False (the default) keeps the chain out whatever the option says.
+    void setTciTxVoiceMode(bool voice) { setTciTxVoiceGate(m_tciTxVoiceMode, voice); }
+    bool tciTxVoiceMode() const { return m_tciTxVoiceMode.load(std::memory_order_acquire); }
+    // Blocks the TCI voice chain has produced since construction (any thread).
+    quint64 tciTxVoiceBlocks() const { return m_tciTxVoiceBlocks.load(std::memory_order_relaxed); }
+    // Interleaved stereo float32 in place: both channels become (L + R) / 2.
+    // The voice chain reads one channel of a duplicated-mono block, so a TCI
+    // client that fills only one side still transmits. A trailing odd sample
+    // is left as it is.
+    static void foldTciStereoToMono(QByteArray& interleavedStereoFloat32);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
     void feedDecodedSpeech(const QByteArray& pcm);
@@ -1468,6 +1493,36 @@ private:
     std::unique_ptr<WsprBeacon>         m_wsprBeacon;
     std::unique_ptr<ClientQuindarTone>  m_clientQuindarTone;
     std::unique_ptr<TxVoiceProcessor>   m_txVoiceProcessor;
+    // TCI voice through the client TX chain (setTciTxVoiceDsp). A separate
+    // instance because its input is TCI's 24 kHz, not the capture device rate,
+    // and its resamplers carry state. The stage processors are shared with the
+    // mic instance: both run on this thread, and onTxAudioReady() steps the mic
+    // aside while TCI audio is fresh, so within an over their blocks never
+    // interleave. Between overs the mic chain may run on ambient audio, so
+    // feedTciTxAudio() resets this instance whenever the TX context changes.
+    std::unique_ptr<TxVoiceProcessor>   m_tciTxVoiceProcessor;
+    std::atomic<bool> m_tciTxVoiceDsp{false};
+    std::atomic<bool> m_tciTxVoiceMode{false};
+    std::atomic<quint64> m_tciTxVoiceBlocks{0};
+    // Off-to-on switches of either gate (any thread) and the count the audio
+    // thread last reset for (audio thread only): the processor is reset when
+    // they differ.
+    std::atomic<quint32> m_tciTxVoiceDspEnables{0};
+    quint32 m_tciTxVoiceDspSeenEnables{0};
+    // Audio thread only: the over the TCI chain's state belongs to.
+    TxCoordinator::Context m_tciTxVoiceContext;
+    // Audio thread only: the last TCI block went through the TCI chain, so
+    // the mic path leaves the published chain latency to feedTciTxAudio().
+    bool m_tciTxVoiceOnPath{false};
+    // Audio thread only: an egress recovery for the TCI chain is queued.
+    bool m_tciTxVoiceEgressRecoveryQueued{false};
+    void setTciTxVoiceGate(std::atomic<bool>& gate, bool on)
+    {
+        if (on && !gate.load(std::memory_order_acquire)) {
+            m_tciTxVoiceDspEnables.fetch_add(1, std::memory_order_acq_rel);
+        }
+        gate.store(on, std::memory_order_release);
+    }
     // Audio-thread only: prevents duplicate queued recovery work after the
     // impossible matched-egress frame-count mismatch.
     bool m_txVoiceEgressRecoveryQueued{false};

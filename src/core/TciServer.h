@@ -125,6 +125,11 @@ public:
     bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
     void setLineOutPcAudioOffConsent(bool enabled);
     bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
+    // Run TCI TX audio through the client TX voice chain (EQ, compressor, ...)
+    // before it is transmitted. For voice clients; off by default because
+    // digital-mode clients send pre-shaped tones. Persists as Tci.TxVoiceDsp.
+    void setTxVoiceDsp(bool on);
+    bool txVoiceDsp() const { return m_txVoiceDsp; }
     // The application owns PC Audio preferences; refresh after its toggle.
     void updateLineOutCapture();
     // Thread-safe owning ingress, safe even if a source callback overlaps
@@ -198,6 +203,7 @@ public slots:
 signals:
     void lineOutIncludeTxChanged(bool enabled);
     void lineOutPcAudioOffConsentChanged(bool enabled);
+    void txVoiceDspChanged(bool on);
     void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
@@ -366,6 +372,9 @@ private:
                           const DaxTxAudioPermit& daxPermit);
     void retireTrxRequest(TciClient* client, const TxCoordinator::Request& request);
     bool trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& request) const;
+    // Tells AudioEngine whether the TX slice is in a voice mode, so the TX
+    // voice DSP never processes digital-mode audio (#7066).
+    void refreshTxVoiceMode();
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
@@ -490,6 +499,7 @@ private:
     void syncLineOutClient(const ClientState& client);
     bool m_lineOutIncludeTx{false};
     bool m_lineOutPcAudioOffConsent{false};
+    bool m_txVoiceDsp{false};
     bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);

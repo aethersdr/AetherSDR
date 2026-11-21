@@ -59,6 +59,15 @@ namespace {
 // quit is just an unconsumed stream + dax flag for a few extra seconds.
 constexpr int    kDaxReleaseGraceMs = 10000;
 
+// The modes whose TCI audio is pre-shaped by the client (tones, FreeDV
+// frames). They key with DAX audio and never pass the TX voice DSP.
+bool isTciDigitalMode(const QString& sliceMode)
+{
+    const QString mode = sliceMode.trimmed().toUpper();
+    return mode == QStringLiteral("DIGU") || mode == QStringLiteral("DIGL")
+        || mode == QStringLiteral("RTTY") || mode == QStringLiteral("FDV")
+        || mode == QStringLiteral("FDVU") || mode == QStringLiteral("FDVL");
+}
 
 }
 
@@ -96,6 +105,27 @@ void writeRecordingSetting(const QString& key, const QJsonValue& value)
     recording.insert(key, value);
     settings.setValue("TciRecording", QString::fromUtf8(
         QJsonDocument(recording).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+
+// TCI feature options, one nested document under the root key "Tci"
+// (Principle V): TxVoiceDsp (bool, off by default). Absent or unreadable
+// reads as all defaults. New TCI options belong in this document, not in a
+// new root key; TciRecording and the flat TciPort/TciTxGain/TciTxOverflowMode
+// keys predate it.
+QJsonObject readTciFeatureSettings()
+{
+    return QJsonDocument::fromJson(
+        AppSettings::instance().value("Tci", "{}").toString().toUtf8()).object();
+}
+
+void writeTciFeatureSetting(const QString& key, const QJsonValue& value)
+{
+    auto& settings = AppSettings::instance();
+    QJsonObject tci = readTciFeatureSettings();
+    tci.insert(key, value);
+    settings.setValue("Tci", QString::fromUtf8(
+        QJsonDocument(tci).toJson(QJsonDocument::Compact)));
     settings.save();
 }
 
@@ -185,6 +215,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         .object();
     m_lineOutIncludeTx = recording.value("lineOutIncludeTx").toBool(false);
     m_lineOutPcAudioOffConsent = recording.value("lineOutPcAudioOffConsent").toBool(false);
+    m_txVoiceDsp = readTciFeatureSettings().value("TxVoiceDsp").toBool(false);
     if (m_model) { m_model->setLineOutPcAudioOffConsent(m_lineOutPcAudioOffConsent); }
     m_io = std::make_unique<TciIoWorker>();
     m_io->setLineOutIncludeTx(m_lineOutIncludeTx);
@@ -504,6 +535,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 abortTciPtt();
             }
             m_tciDaxSlices.remove(sliceId);
+            refreshTxVoiceMode();
             // Closing the TX slice ends a GUI split without a txSliceChanged edge.
             QTimer::singleShot(kSplitSettleMs, this, [this] { publishMainSplit(); });
 
@@ -2547,10 +2579,16 @@ bool TciServer::trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& 
     if (!txSlice) {
         return false;
     }
-    const QString mode = txSlice->mode().trimmed().toUpper();
-    return mode == QStringLiteral("DIGU") || mode == QStringLiteral("DIGL")
-        || mode == QStringLiteral("RTTY") || mode == QStringLiteral("FDV")
-        || mode == QStringLiteral("FDVU") || mode == QStringLiteral("FDVL");
+    return isTciDigitalMode(txSlice->mode());
+}
+
+void TciServer::refreshTxVoiceMode()
+{
+    if (!m_audio) {
+        return;
+    }
+    const SliceModel* txSlice = m_model ? m_model->txSlice() : nullptr;
+    m_audio->setTciTxVoiceMode(txSlice && !isTciDigitalMode(txSlice->mode()));
 }
 
 void TciServer::retireTrxRequest(TciClient* client, const TxCoordinator::Request& request)
@@ -3049,7 +3087,9 @@ void TciServer::setAudioEngine(AudioEngine* audio)
     m_lineOutCaptureWanted = false;
     if (audio) {
         connect(m_io.get(), &TciIoWorker::txPcmReady, audio,
-                &AudioEngine::feedDaxTxAudio, Qt::QueuedConnection);
+                &AudioEngine::feedTciTxAudio, Qt::QueuedConnection);
+        audio->setTciTxVoiceDsp(m_txVoiceDsp);
+        refreshTxVoiceMode();
         connect(audio, &QObject::destroyed, this, [this] {
             m_audio = nullptr;
             m_lineOutCaptureWanted = false;
@@ -3065,6 +3105,15 @@ void TciServer::setAudioEngine(AudioEngine* audio)
             }, Qt::DirectConnection);
     }
     updateLineOutCapture();
+}
+
+void TciServer::setTxVoiceDsp(bool on)
+{
+    if (m_txVoiceDsp == on) { return; }
+    m_txVoiceDsp = on;
+    writeTciFeatureSetting(QStringLiteral("TxVoiceDsp"), on);
+    if (m_audio) { m_audio->setTciTxVoiceDsp(on); }
+    emit txVoiceDspChanged(on);
 }
 
 void TciServer::setLineOutIncludeTx(bool enabled)
@@ -3359,6 +3408,9 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     });
 
     connect(slice, &SliceModel::modeChanged, this, [this, slice](const QString& mode) {
+        if (slice->isTxSlice()) {
+            refreshTxVoiceMode();
+        }
         if (m_clients.isEmpty()) return;
         const int trx = m_trxMap.trxForSlice(m_model,slice);
         broadcast(QStringLiteral("modulation:%1,%2;")
@@ -3374,6 +3426,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     });
 
     connect(slice, &SliceModel::txSliceChanged, this, [this, slice](bool tx) {
+        refreshTxVoiceMode();
         const int trx = m_trxMap.trxForSlice(m_model,slice);
         // Keep the drive:/tune_drive: label cache truthful even with no
         // clients attached, so a later power change resolves the right trx
@@ -3390,6 +3443,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     // a change, so a slice that is already TX at wire time would never set it.
     if (slice->isTxSlice()) {
         m_lastTxTrx = m_trxMap.trxForSlice(m_model, slice);
+        refreshTxVoiceMode();
     }
 
     connect(slice, &SliceModel::lockedChanged, this, [this, slice](bool locked) {

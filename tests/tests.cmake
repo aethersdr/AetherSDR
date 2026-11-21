@@ -9490,6 +9490,12 @@ target_include_directories(tx_audio_context_test PRIVATE src)
 target_link_libraries(tx_audio_context_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tx_audio_context_test COMMAND tx_audio_context_test)
 
+# RFC #7066: TCI TX voice DSP routing (off, on, DAX untouched) and the mono fold.
+add_executable(tci_tx_voice_dsp_test tests/tci_tx_voice_dsp_test.cpp)
+target_include_directories(tci_tx_voice_dsp_test PRIVATE src tests)
+target_link_libraries(tci_tx_voice_dsp_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tci_tx_voice_dsp_test COMMAND tci_tx_voice_dsp_test)
+
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
 )

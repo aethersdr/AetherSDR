@@ -252,6 +252,31 @@ void TciApplet::buildUI()
     connect(m_lineOutPcAudioOffConsent, &QCheckBox::toggled, this, [this](bool enabled) {
         if (m_tciServer) { m_tciServer->setLineOutPcAudioOffConsent(enabled); }
     });
+    auto* txDspRow = new QHBoxLayout;
+    txDspRow->setContentsMargins(4, 1, 4, 2);
+    m_txVoiceDsp = new QCheckBox(tr("TX audio through TX DSP (voice clients)"), this);
+    m_txVoiceDsp->setObjectName(QStringLiteral("tciTxVoiceDsp"));
+    m_txVoiceDsp->setAccessibleName(tr("Run TCI TX audio through the TX DSP chain"));
+    m_txVoiceDsp->setAccessibleDescription(tr(
+        "When enabled, audio a TCI client transmits goes through the same TX chain as "
+        "the microphone: EQ, compressor, tube, enhancer, reverb and the "
+        "final limiter. For voice clients such as remote-operation apps. It applies "
+        "only while the TX slice is in a voice mode: in DIGU, DIGL, RTTY or FreeDV "
+        "(WSJT-X, JTDX, fldigi) the audio is sent unprocessed. "
+        "DAX audio is never affected. Off by default."));
+    m_txVoiceDsp->setToolTip(m_txVoiceDsp->accessibleDescription());
+    // TciServer owns the setting; the box shows it once a server is attached.
+    m_txVoiceDsp->setEnabled(false);
+    applyCanonSheet(m_txVoiceDsp, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    txDspRow->addWidget(m_txVoiceDsp);
+    txDspRow->addStretch();
+    outer->addLayout(txDspRow);
+    connect(m_txVoiceDsp, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_tciServer) { m_tciServer->setTxVoiceDsp(on); }
+    });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
     enableRow->setContentsMargins(4, 2, 4, 2);
@@ -465,6 +490,7 @@ void TciApplet::setTciServer(TciServer* tci)
     if (m_tciServer) {
         disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::lineOutPcAudioOffConsentChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::txVoiceDspChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
     }
     m_tciServer = tci;
@@ -476,9 +502,18 @@ void TciApplet::setTciServer(TciServer* tci)
         const QSignalBlocker blocker(m_lineOutPcAudioOffConsent);
         m_lineOutPcAudioOffConsent->setChecked(tci && tci->lineOutPcAudioOffConsent());
     }
+    {
+        const QSignalBlocker blocker(m_txVoiceDsp);
+        m_txVoiceDsp->setChecked(tci && tci->txVoiceDsp());
+        m_txVoiceDsp->setEnabled(tci != nullptr);
+    }
     if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
     if (m_lineOutPcAudioOffAvailability) { m_lineOutPcAudioOffAvailability->refreshEngaged(); }
     if (tci) {
+        connect(tci, &TciServer::txVoiceDspChanged, this, [this](bool on) {
+            const QSignalBlocker blocker(m_txVoiceDsp);
+            m_txVoiceDsp->setChecked(on);
+        });
         connect(tci, &TciServer::lineOutIncludeTxChanged, this, [this](bool enabled) {
             const QSignalBlocker blocker(m_lineOutIncludeTx);
             m_lineOutIncludeTx->setChecked(enabled);
