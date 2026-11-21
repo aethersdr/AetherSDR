@@ -1589,10 +1589,11 @@ bool WorkspaceController::applyPanLayout(const QString& layoutId)
     for (const QString& panId : panIds) {
         slotIds.append(QString::number(m_panSlots.value(panId)));
     }
-    const LegacyLayoutState legacy = readLegacyLayoutState(effectiveKnownAppletIds());
-    const QList<CanvasItem> classic = composeClassic(
-        slotIds, legacy.appletPanelVisible ? legacy.openAppletIds : QStringList{},
-        layoutId, legacy.appletsLeft);
+    // Canvas applets occupy their own freely placed items, not the classic
+    // applet-panel column. Reserving that invisible column shifts every pan
+    // on a layout change and leaves an empty strip on the docked side (#7381).
+    // Keep the legacy panel preference intact for a later return to classic.
+    const QList<CanvasItem> classic = composeClassic(slotIds, {}, layoutId, false);
     QHash<QString, NormRect> rects;
     for (const CanvasItem& item : classic) {
         if (item.id.startsWith(kPanItemPrefix)) {
