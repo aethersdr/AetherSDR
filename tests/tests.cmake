@@ -5989,6 +5989,16 @@ target_include_directories(acom_protocol_test PRIVATE src)
 target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
 add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
 
+# HF Gateway host interface (RFC #7296): pure framing, parsing and
+# formatting. No sockets, no settings.
+add_executable(modem_host_protocol_test
+    tests/modem_host_protocol_test.cpp
+    src/core/hfgateway/ModemHostProtocol.cpp
+)
+target_include_directories(modem_host_protocol_test PRIVATE src)
+target_link_libraries(modem_host_protocol_test PRIVATE Qt6::Core)
+add_test(NAME modem_host_protocol_test COMMAND modem_host_protocol_test)
+
 add_executable(lp100a_protocol_test
     tests/lp100a_protocol_test.cpp
     src/core/LpMeterProtocol.cpp
