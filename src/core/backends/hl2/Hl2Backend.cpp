@@ -9934,12 +9934,13 @@ void Hl2Backend::emitAllSliceState(bool announceBlankers)
     // Only the connect announcement re-sends every blanker: RadioModel has just
     // wiped the slices. The other re-announces (TX slice or antenna moved, a
     // receiver closed, a DSP build failed) keep every surviving slice, so a
-    // re-send would only make SliceModel re-emit all three NB signals.
-    for (Receiver& r : m_rx) {
-        if (announceBlankers) {
+    // re-send would only make SliceModel re-emit all three NB signals. The
+    // channel NR/ANF follow the same rule: their echo emits unguarded.
+    if (announceBlankers) {
+        for (Receiver& r : m_rx) {
             r.nbEchoPending = true;
+            r.dspEchoPending = true;
         }
-        r.dspEchoPending = true;
     }
     for (const auto& ids : m_ids.all())
         emitSliceState(ids.ddcIndex, true);
