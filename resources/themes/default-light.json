@@ -319,6 +319,7 @@
             "handle":              "{color.gray.50}",
             "background.disabled": "{color.gray.800}",
             "foreground.disabled": "{color.gray.500}",
+            "foreground.gateClosed": "{color.gray.500}",
             "handle.disabled":     "{color.gray.400}"
           },
           "knob": {

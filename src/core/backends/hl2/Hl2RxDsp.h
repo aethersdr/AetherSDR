@@ -17,6 +17,7 @@
 #include <optional>
 #include <vector>
 
+#include "core/backends/SquelchGate.h"
 #include "core/backends/hl2/Hl2AdcPairing.h"
 #include "core/backends/hl2/Hl2Spectrum.h"
 #include "core/dsp/WdspChannel.h"
@@ -536,6 +537,9 @@ signals:
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
     void meterUpdate(float dbfs);                           // audio-RMS S-meter
+    // The FM squelch gate, on a change only (SquelchGateReporter); Unavailable
+    // when no gate is running or the receiver is muted.
+    void squelchGateChanged(AetherSDR::SquelchGateState state);
     void iqReady(const std::vector<float>& interleavedIq);  // I,Q; see setIqTap
 
 private:
@@ -600,6 +604,8 @@ private:
     double m_squelchOffsetDb = 0.0;
     // True while the channel has refused the current request; see setSquelch().
     bool m_squelchPending = false;
+    // Rate-limits squelchGateChanged; DSP thread only.
+    SquelchGateReporter m_gateReporter;
     WdspChannel::NoiseBlankerFill m_nbFill = WdspChannel::NoiseBlankerFill::Zero;
     std::atomic<WdspChannel::NoiseBlanker> m_nbAppliedKind
         {WdspChannel::NoiseBlanker::Off};
