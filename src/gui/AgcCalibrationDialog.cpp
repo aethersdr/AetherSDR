@@ -3,11 +3,13 @@
 #include "gui/CanonIndicators.h"
 #include "core/AudioEngine.h"
 #include "core/ThemeManager.h"
+#include "core/TciServer.h"
 #include "models/MeterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QComboBox>
+#include <QDateTime>
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -260,10 +262,11 @@ void AgcCurveWidget::paintEvent(QPaintEvent*)
 
 AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
                                            AudioEngine* audio,
+                                           TciServer* tci,
                                            NoiseFloorFn noiseFloorFn,
                                            QWidget* parent)
     : CanonWindow(QStringLiteral("AGC-T Calibration"), parent),
-      m_radio(radio), m_audio(audio), m_noiseFloorFn(std::move(noiseFloorFn))
+      m_radio(radio), m_audio(audio), m_tci(tci), m_noiseFloorFn(std::move(noiseFloorFn))
 {
     setObjectName(QStringLiteral("agcCalibrationDialog"));
     theme::setContainer(this, QStringLiteral("canon/agcCalibration"));
@@ -316,9 +319,12 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_modeLabel = new QLabel(this);
     m_modeLabel->setProperty("agcRole", QStringLiteral("mode"));
     m_modeLabel->setWordWrap(true);
+    m_sourceLabel = new QLabel(this);
+    m_sourceLabel->setProperty("agcRole", QStringLiteral("hint"));
     m_quietLabel = new QLabel(this);
     m_quietLabel->setWordWrap(true);
     body->addWidget(m_modeLabel);
+    body->addWidget(m_sourceLabel);
     body->addWidget(m_quietLabel);
 
     m_curve = new AgcCurveWidget(this);
@@ -372,17 +378,17 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     connect(&m_engine, &AgcTCalibrator::quietSpotStatus, this, &AgcCalibrationDialog::onQuietSpot);
     connect(&m_engine, &AgcTCalibrator::finished, this, &AgcCalibrationDialog::onFinished);
     connect(&m_engine, &AgcTCalibrator::noAudio, this, [this] {
-        // After onFinished(), which set "Calibration stopped." The sweep listens
-        // to this computer's audio, which PC Audio off stops; so can a stall,
-        // so ask rather than say.
-        m_recLabel->setText(tr("Stopped: no audio on this computer. Is PC Audio on?"));
+        // After onFinished(), which set "Calibration stopped." The message is
+        // source-aware: TCI operators never use PC Audio for calibration.
+        if (isTciMode()) {
+            m_recLabel->setText(tr("Stopped: no TCI audio. Is your TCI client receiving on this slice?"));
+        } else {
+            m_recLabel->setText(tr("Stopped: no audio on this computer. Is PC Audio on?"));
+        }
     });
 
-    // Live audio level (cross-thread; auto-queued) and S-meter feed.
-    if (m_audio) {
-        connect(m_audio, &AudioEngine::levelChanged,
-                &m_engine, &AgcTCalibrator::onAudioLevel);
-    }
+    // Audio source is latched at sweep start (see onStartStop). S-meter feed
+    // is always from the radio model regardless of audio source.
     if (m_radio) {
         connect(&m_radio->meterModel(), &MeterModel::sLevelChanged,
                 &m_engine, &AgcTCalibrator::onSLevel);
@@ -395,10 +401,17 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_floorTimer->start();
 
     updateModeUi();
+    rewireAudioSource();
 }
 
 AgcCalibrationDialog::~AgcCalibrationDialog()
 {
+    // Sever the audio source connection before m_engine is destroyed as a
+    // member. Without this, the AudioEngine audio thread can emit levelChanged
+    // concurrently with m_engine's destructor, causing a race on m_engine's
+    // QObject state (manifests as a crash in QTimer::~QTimer).
+    disconnect(m_audioConn);
+    m_audioConn = {};
     // Destroyed without a close (the app quitting): put the AGC-T back too.
     if (m_engine.isRunning()) {
         m_engine.stop();
@@ -470,6 +483,11 @@ void AgcCalibrationDialog::connectSlice(SliceModel* slice)
     connect(slice, &SliceModel::agcModeChanged, this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::externalReceiveAgcModeChanged,
             this, &AgcCalibrationDialog::updateModeUi);
+    // Source label (TCI vs PC Audio) depends on the slice mode and DAX channel.
+    connect(slice, &SliceModel::modeChanged,
+            this, &AgcCalibrationDialog::updateModeUi);
+    connect(slice, &SliceModel::daxChannelChanged,
+            this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::agcThresholdChanged, &m_engine, &AgcTCalibrator::onValueChanged);
     connect(slice, &SliceModel::agcOffLevelChanged, &m_engine, &AgcTCalibrator::onValueChanged);
     connect(slice, &SliceModel::agcThresholdChanged, this, &AgcCalibrationDialog::refreshFromSlice);
@@ -497,8 +515,55 @@ int AgcCalibrationDialog::liveValue() const
                : m_slice->agcThreshold();
 }
 
+bool AgcCalibrationDialog::isTciMode() const
+{
+    // daxChannel() >= 1 required: host-demodulating backends (HL2, etc.) and
+    // Flex slices with no DAX channel assigned leave m_daxChannel at 0, so the
+    // rxLevel channel-match can never fire. Fall back to PC Audio for them.
+    // AGC Off (TargetLevel strategy) always uses PC Audio regardless of mode,
+    // per the 2026-11-20 ruling: the target-level solve runs against a fixed
+    // −28 dB reference that was calibrated on the PC Audio path.
+    if (!m_tci || !m_slice || m_slice->daxChannel() < 1
+            || m_slice->agcMode() == QStringLiteral("off")) {
+        return false;
+    }
+    const QString& m = m_slice->mode();
+    return m == QStringLiteral("DIGU") || m == QStringLiteral("DIGL");
+}
+
+void AgcCalibrationDialog::rewireAudioSource()
+{
+    // Connect (or re-connect) the appropriate audio source. Called whenever the
+    // source might have changed: constructor end, mode change (via updateModeUi),
+    // sweep start, and sweep finish. Keeping audio connected at all times means
+    // the manual slider path always has fresh RMS data, not just during sweeps.
+    disconnect(m_audioConn);
+    m_audioConn = {};
+    if (isTciMode()) {
+        const int daxCh = m_slice->daxChannel(); // >= 1 guaranteed by isTciMode()
+        m_audioConn = connect(m_tci, &TciServer::rxLevel,
+                              this, [this, daxCh](int ch, float rms) {
+            if (ch == daxCh) {
+                m_engine.onAudioLevel(rms);
+            }
+        });
+    } else if (m_audio) {
+        m_audioConn = connect(m_audio, &AudioEngine::levelChanged,
+                              this, [this](float rms) {
+            m_engine.onAudioLevel(rms);
+        });
+    }
+}
+
 bool AgcCalibrationDialog::nrSuppressesCalibration() const
 {
+    if (isTciMode()) {
+        // TCI audio never passes through AudioEngine, so client-side NR stages
+        // (NR2/RN2/NR4/DFNR/MNR/BNR/NNR) do not affect the calibration tap.
+        // Only radio-side NR (slice nr flag) matters here.
+        return m_slice && m_slice->nrOn();
+    }
+    // PC Audio path: all NR stages post-NR levelChanged matter.
     if (m_audio && (m_audio->nr2Enabled() || m_audio->rn2Enabled()
                   || m_audio->nr4Enabled() || m_audio->dfnrEnabled()
                   || m_audio->mnrEnabled() || m_audio->nvAfxEnabled()
@@ -528,14 +593,35 @@ void AgcCalibrationDialog::updateModeUi()
     // audio and the AGC knee is masked. Warn in the hint label; the auto-sweep
     // start path also refuses to begin until NR is off.
     if (nrSuppressesCalibration() && m_hintLabel) {
-        m_hintLabel->setText(QStringLiteral(
-            "⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR/NNR) for accurate "
-            "calibration — NR crushes the noise floor the knee detector is "
-            "looking for."));
+        m_hintLabel->setText(isTciMode()
+            ? QStringLiteral(
+                "⚠ Disable radio-side Noise Reduction (NR) for accurate "
+                "calibration — NR crushes the noise floor the knee detector is "
+                "looking for.")
+            : QStringLiteral(
+                "⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR/NNR) for accurate "
+                "calibration — NR crushes the noise floor the knee detector is "
+                "looking for."));
     } else if (m_hintLabel) {
         m_hintLabel->setText(QStringLiteral(
             "Tune to a clear spot, then Auto Sweep — or move the AGC-T "
             "slider and watch where the noise bends."));
+    }
+
+    // Update the audio source label regardless of slice state.
+    if (m_sourceLabel) {
+        if (isTciMode()) {
+            m_sourceLabel->setText(tr("Audio source: TCI (DIGU/DIGL)"));
+        } else if (m_tci && m_slice && m_slice->daxChannel() < 1
+                   && (m_slice->mode() == QStringLiteral("DIGU")
+                       || m_slice->mode() == QStringLiteral("DIGL"))) {
+            // Already in DIGU/DIGL but no DAX channel assigned — TCI can't fire.
+            m_sourceLabel->setText(tr("Audio source: PC Audio (TCI needs a DAX channel in DIGU/DIGL)"));
+        } else if (m_tci) {
+            m_sourceLabel->setText(tr("Audio source: PC Audio (switch to DIGU/DIGL with a DAX channel for TCI)"));
+        } else {
+            m_sourceLabel->setText(tr("Audio source: PC Audio"));
+        }
     }
 
     if (!m_slice) {
@@ -567,13 +653,30 @@ void AgcCalibrationDialog::updateModeUi()
     m_applyBtn->setAccessibleDescription(QString());
     m_applyBtn->setEnabled(!m_engine.isRunning() && m_engine.hasRecommendation());
     if (off) {
+        // isTciMode() returns false when agcMode == "off" (TargetLevel always
+        // uses PC Audio per the 2026-11-20 ruling), so there is no TCI branch here.
         m_modeLabel->setText(QStringLiteral(
-            "AGC: OFF — calibrating fixed gain (agc_off_level) to a comfortable "
-            "noise level. No knee in this mode."));
+            "Calibrating radio AGC-T (agc_off_level) via PC Audio — "
+            "finding a comfortable fixed gain. AGC is off; no knee in this mode."));
     } else {
-        m_modeLabel->setText(QStringLiteral(
-            "AGC: %1 — finding the knee (agc_threshold) just above the noise floor.")
-            .arg(m_slice->agcMode().toUpper()));
+        if (isTciMode()) {
+            m_modeLabel->setText(QStringLiteral(
+                "Calibrating radio AGC-T (agc_threshold) via TCI audio (%1) — "
+                "finding the knee just above the noise floor.")
+                .arg(m_slice->mode()));
+        } else {
+            m_modeLabel->setText(QStringLiteral(
+                "Calibrating radio AGC-T (agc_threshold) via PC Audio (%1) — "
+                "finding the knee just above the noise floor.")
+                .arg(m_slice->agcMode().toUpper()));
+        }
+    }
+
+    // Re-evaluate the audio source when the mode changes while the dialog is
+    // open (e.g. operator switches from DIGU to SSB). Don't rewire mid-sweep;
+    // the sweep already latched its source in onStartStop().
+    if (!m_engine.isRunning()) {
+        rewireAudioSource();
     }
 }
 
@@ -607,18 +710,29 @@ void AgcCalibrationDialog::onStartStop()
     // The user can disable NR and try again. Mirrors the quiet-spot guard
     // pattern in the engine and matches the in-hint warning text.
     if (nrSuppressesCalibration()) {
+        const QString nrMsg = isTciMode()
+            ? tr("Radio-side Noise Reduction (NR) is active and is crushing the "
+                 "audio noise floor that the AGC knee detector measures. "
+                 "Turn off NR on this slice, then try Auto Sweep again.")
+            : tr("Noise Reduction is active and is crushing the audio noise "
+                 "floor that the AGC knee detector measures. Turn off any of "
+                 "NR / NR2 / RN2 / NR4 / DFNR / MNR / BNR / NNR, then try Auto Sweep "
+                 "again.");
         ScopedChildWidget<QMessageBox> boxOwner(
             QMessageBox::Warning, QStringLiteral("Disable NR for AGC-T calibration"),
-            QStringLiteral(
-                "Noise Reduction is active and is crushing the audio noise "
-                "floor that the AGC knee detector measures. Turn off any of "
-                "NR / NR2 / RN2 / NR4 / DFNR / MNR / BNR / NNR, then try Auto Sweep "
-                "again."), QMessageBox::Ok, this);
+            nrMsg, QMessageBox::Ok, this);
         boxOwner.get()->exec();
         return;
     }
     m_curve->clear();
     m_applyBtn->setEnabled(false);
+
+    // Latch the audio source for this sweep. rewireAudioSource() chooses TCI or
+    // PC Audio from the current mode; calling it here before startAutoSweep()
+    // ensures the source is fixed for the entire sweep. DAX (TCI) is pre-AF-gain
+    // and PC Audio is post-volume — they must not mix across a single sweep.
+    rewireAudioSource();
+
     m_engine.startAutoSweep();
 }
 
@@ -674,6 +788,9 @@ void AgcCalibrationDialog::onQuietSpot(bool quiet, float marginDb)
 
 void AgcCalibrationDialog::onFinished(bool applied)
 {
+    // Sweep finished — rewire so the manual slider path keeps receiving audio.
+    rewireAudioSource();
+
     m_startStopBtn->setText(QStringLiteral("Auto Sweep"));
     if (applied) {
         m_applyBtn->setEnabled(false);

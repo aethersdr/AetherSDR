@@ -156,8 +156,16 @@ or manual selection on reconnect.
 **AGC-T calibration:** right-click the AGC-T slider, or use
 **Tools → Calibrate AGC-T...**, to calibrate the threshold against the
 measured noise floor on the active slice. It does not transmit.
-It listens to this computer's audio, so turn **PC Audio** on first: with it
-off, Auto Sweep stops at its first step, puts the setting back and says so.
+**Audio source:** the dialog shows which source it is using; the source is fixed
+when Auto Sweep starts. In **DIGU** or **DIGL** with a DAX channel assigned, it
+measures the TCI audio for that channel — a TCI client (for example WSJT-X over
+TCI) must be receiving on the slice; no PC Audio required. In every other mode,
+and in DIGU/DIGL with no DAX channel assigned, it measures this computer's audio,
+so turn **PC Audio** on first. If no audio arrives, Auto Sweep stops at its first
+step, puts the setting back and reports which source was silent. In DIGU/DIGL
+only radio-side NR blocks a sweep; client-side NR (NR2/NR4/DFNR etc.) does not
+affect TCI audio. With AGC **Off** (TargetLevel strategy), the target-level solve
+always uses PC Audio regardless of mode.
 Close the window with the corner ✕, Esc or Ctrl+W; closing it during
 an Auto Sweep stops the sweep and puts back the AGC-T it started from.
 Select manual AGC-T before calibrating. If radio Auto AGC-T or an external

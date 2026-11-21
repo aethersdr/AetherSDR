@@ -344,7 +344,7 @@ private slots:
     {
         Fixture fixture;
         AudioEngine audio;
-        AgcCalibrationDialog dialog(&fixture.radio, &audio, {});
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, nullptr, {});
         SliceModel* slice = fixture.radio.slice(0);
         dialog.setSlice(slice);
         QLabel* result = nullptr;
@@ -355,8 +355,10 @@ private slots:
         }
         QVERIFY(result);
         for (const int value : {20, 50, 80}) {
-            emit audio.levelChanged(static_cast<float>(value) / 100.0f);
+            // Status (slider move) before levelChanged so the stale-level guard
+            // sees fresh audio arriving after the value settles.
             fixture.backend->status(0, AgcThresholdMode::Manual, value);
+            emit audio.levelChanged(static_cast<float>(value) / 100.0f);
             QTest::qWait(400);
         }
         QVERIFY(result->text().startsWith(QStringLiteral("Recommended AGC-T")));
@@ -368,8 +370,8 @@ private slots:
         QCOMPARE(fixture.radio.slice(0), slice);
         dialog.setSlice(slice);
         for (const int value : {25, 55, 85}) {
-            emit audio.levelChanged(static_cast<float>(value) / 100.0f);
             fixture.backend->status(0, AgcThresholdMode::Manual, value);
+            emit audio.levelChanged(static_cast<float>(value) / 100.0f);
             QTest::qWait(400);
         }
         QVERIFY(result->text().startsWith(QStringLiteral("Recommended AGC-T")));
@@ -379,7 +381,7 @@ private slots:
     {
         Fixture fixture;
         AudioEngine audio;
-        AgcCalibrationDialog dialog(&fixture.radio, &audio, {});
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, nullptr, {});
         dialog.setSlice(fixture.radio.slice(0));
         dialog.show();
         settle();

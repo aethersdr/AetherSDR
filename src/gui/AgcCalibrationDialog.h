@@ -3,6 +3,7 @@
 #include "gui/CanonWindow.h"
 #include "core/AgcTCalibrator.h"
 
+#include <QMetaObject>
 #include <QPointer>
 #include <QVector>
 #include <QWidget>
@@ -20,6 +21,7 @@ namespace AetherSDR {
 class RadioModel;
 class SliceModel;
 class AudioEngine;
+class TciServer;
 
 // AgcCurveWidget — lightweight 2D plot of post-AGC audio noise (y, dB) versus
 // the AGC-T value (x, 0..100). Markers: current value, detected knee /
@@ -60,6 +62,7 @@ public:
 
     AgcCalibrationDialog(RadioModel* radio,
                          AudioEngine* audio,
+                         TciServer* tci,
                          NoiseFloorFn noiseFloorFn,
                          QWidget* parent = nullptr);
     ~AgcCalibrationDialog() override;
@@ -89,16 +92,32 @@ private:
     void disconnectSlice(SliceModel* slice);
     void updateModeUi();
     int  liveValue() const;
-    // Any noise reduction stage that mutates the audio before levelChanged is
-    // emitted: client-side NR2/RN2/NR4/DFNR/MNR/BNR via AudioEngine, plus the
-    // radio-side NR (slice nr flag). The calibration tap is AudioEngine's
-    // post-NR levelChanged, so any of these masks the knee we are trying to
-    // find. See aethersdr-agent review on PR #3350.
+    // Returns true when the current slice mode and DAX channel select TCI as
+    // the calibration audio source (DIGU/DIGL with daxChannel >= 1). Requires
+    // daxChannel >= 1 so that host-demodulating backends (HL2, etc.) and Flex
+    // slices without a DAX channel assigned fall back to PC Audio rather than
+    // producing a channel-match that can never fire.
+    bool isTciMode() const;
+    // Connect (or reconnect) the appropriate audio source to the calibration
+    // engine based on the current slice mode. Keeps audio live at all times —
+    // not just during auto sweeps — so the manual slider path always has fresh
+    // RMS data. Called from the constructor, updateModeUi(), onStartStop()
+    // (before startAutoSweep()), and onFinished().
+    void rewireAudioSource();
+    // Any noise reduction stage that mutates the audio before the calibration
+    // tap is emitted. For the PC-Audio path: client-side NR2/RN2/NR4/DFNR/MNR/
+    // BNR/NNR via AudioEngine, plus radio-side NR. For the TCI path: only
+    // radio-side NR — client NR runs in AudioEngine which TCI never touches.
     bool nrSuppressesCalibration() const;
 
     RadioModel*  m_radio{nullptr};
     AudioEngine* m_audio{nullptr};
+    TciServer*   m_tci{nullptr};
     NoiseFloorFn m_noiseFloorFn;
+    // Connection to whichever audio source (PC Audio or TCI) is active.
+    // Live while the dialog is open; rewired on mode/DAX change and at sweep
+    // start (which latches the source for the sweep's duration).
+    QMetaObject::Connection m_audioConn;
     // QPointer so slice removal mid-calibration doesn't dangle through the
     // polling timer or noise-floor lookup callback.
     QPointer<SliceModel> m_slice;
@@ -108,6 +127,7 @@ private:
 
     AgcCurveWidget* m_curve{nullptr};
     QLabel*         m_modeLabel{nullptr};
+    QLabel*         m_sourceLabel{nullptr};
     QLabel*         m_quietLabel{nullptr};
     QLabel*         m_recLabel{nullptr};
     QLabel*         m_hintLabel{nullptr};
