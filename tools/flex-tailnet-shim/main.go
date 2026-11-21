@@ -25,7 +25,7 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback"
 )
 
-const shimVersion = "0.5.4"
+const shimVersion = "0.5.5"
 
 // buildVariant names a non-container build, e.g. "-native" for the legacy
 // waveform package; set with -ldflags -X.
@@ -57,6 +57,8 @@ func main() {
 	node := &Node{StateDir: *stateDir, RunDir: *runDir, RadioAddr: *radioAddr, MaxMTU: *maxMTU, Discovery: disc}
 	disc.OnChange = node.RefreshRoutes
 	disc.Start()
+	node.Announcer = &Announcer{IsRadio: node.isRadio}
+	node.Announcer.Start()
 	if err := node.load(); err != nil {
 		log.Printf("state: %v; starting unprovisioned", err)
 	}

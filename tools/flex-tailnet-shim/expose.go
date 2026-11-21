@@ -40,10 +40,10 @@ const (
 
 // exposeReserved are ports an app may never publish: SSH, the SmartSDR
 // ports (4995 and 42607 take firmware and file uploads, reference/FlexLib
-// v4.3.16 Radio.cs) and the shim's own.
+// v4.3.16 Radio.cs) and the shim's own, the discovery helper feed included.
 var exposeReserved = map[int]bool{
 	22: true, radioVitaInPort: true, radioAPIPort: true, 4993: true, 4994: true, 4995: true, 42607: true,
-	ProvisionPort: true, TelemetryPort: true,
+	ProvisionPort: true, TelemetryPort: true, AnnounceFeedPort: true,
 }
 
 var (
