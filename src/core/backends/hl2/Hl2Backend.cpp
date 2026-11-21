@@ -1633,6 +1633,14 @@ void Hl2Backend::publishTransmitState(std::optional<bool> radioPtt)
     if (transmitting != m_publishedTransmit) {
         m_publishedTransmit = transmitting;
         delta.mox = transmitting;
+        // The pan's DC removal keeps a separate estimate while keyed, and goes
+        // back to receive after the same T/R hold as the audio.
+        for (Receiver& r : m_rx) {
+            if (r.dsp) {
+                QMetaObject::invokeMethod(r.dsp, "setSpectrumTransmitting", Qt::QueuedConnection,
+                    Q_ARG(bool, transmitting), Q_ARG(int, m_unkeyUnmuteHoldMs));
+            }
+        }
     }
     delta.radioPtt = radioPtt;
     emit transmitChanged(delta);
@@ -3683,6 +3691,7 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
         pushNotchTune(*r);
         // The averaged panadapter is on the old axis too.
         dropPanAverage(*r);
+        restartPanDc(*r);
     }
 
     // shift = slice - NCO: the wire places frequency F at -(F - NCO), so this
@@ -4564,6 +4573,7 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     // second, so while the operator drags, the display is effectively
     // unaveraged — which is right: an average of a moving axis is smear.
     dropPanAverage(*r);
+    restartPanDc(*r);
     // Panning one receiver can move it onto another band, which changes what the
     // SHARED filter board should be doing. Re-evaluate across every receiver.
     applyBandFilter("pan");
@@ -5108,6 +5118,16 @@ void Hl2Backend::dropPanAverage(const Receiver& r)
     if (!r.dsp || r.panAverage <= 0)
         return;
     QMetaObject::invokeMethod(r.dsp, "dropSpectrumAverage", Qt::QueuedConnection);
+}
+
+void Hl2Backend::restartPanDc(const Receiver& r)
+{
+    // The NCO moved: the pan's DC estimates restart (old-axis signal and the
+    // transmit DC of the old frequency). Not part of dropPanAverage(), which a
+    // T/R edge may also call and which must leave the DC estimates alone.
+    if (r.dsp) {
+        QMetaObject::invokeMethod(r.dsp, "restartSpectrumDc", Qt::QueuedConnection);
+    }
 }
 
 void Hl2Backend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
