@@ -1349,7 +1349,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // the Calibration page.
     QTreeWidgetItem* hwItem = addPage(radioCategory, QStringLiteral("HL2 Hardware"),
         QStringLiteral("hermes lite hl2 squaresdr square sdr codec ak4951 dither band volts "
-                       "speaker random filter board n2adr hpf cl1 reference clock gpsdo atu tuner"),
+                       "speaker random filter board n2adr hpf cl1 reference clock gpsdo atu tuner "
+                       "io board ioboard exttr fault firmware"),
         [this] { return buildHl2HardwareTab(); });
     m_hl2HardwarePageIndex = m_pageIndexes.value(QStringLiteral("HL2 Hardware"));
     setNavigationItemHidden(hwItem, !declaresHl2Extension());
@@ -4236,6 +4237,37 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     return page;
 }
 
+namespace {
+
+// One line per register of the `ioboard.status` reply (docs/HERMES.md,
+// "The IO board status read"). Raw codes where the board defines no meaning.
+QString describeIoBoardStatus(const QVariantMap& m)
+{
+    QStringList inputs;
+    for (int n = 1; n <= 5; ++n) {
+        inputs << QStringLiteral("In%1 %2").arg(n).arg(
+            m.value(QStringLiteral("in%1").arg(n)).toBool() ? QStringLiteral("high")
+                                                            : QStringLiteral("low"));
+    }
+    const int atu = m.value(QStringLiteral("antennaTuner")).toInt();
+    const QString hex = QStringLiteral("0x%1").arg(atu, 2, 16, QLatin1Char('0'));
+    const QString atuText = atu == 0      ? QStringLiteral("idle or tuned (0)")
+                            : atu == 0xEE ? QStringLiteral("tuning, asks for RF (0xee)")
+                            : atu >= 0xF0 ? QStringLiteral("tune failed (%1)").arg(hex)
+                                          : hex;
+    const int fault = m.value(QStringLiteral("fault")).toInt();
+    return QStringLiteral("Firmware major: %1\nEXTTR: %2\nInputs: %3\nAntenna tuner: %4\n"
+                          "Fault: %5")
+        .arg(QString::number(m.value(QStringLiteral("firmwareMajor")).toInt()),
+             m.value(QStringLiteral("receiving")).toBool() ? QStringLiteral("high (receive)")
+                                                           : QStringLiteral("low (transmit)"),
+             inputs.join(QStringLiteral(", ")), atuText,
+             fault == 0 ? QStringLiteral("none")
+                        : QStringLiteral("code 0x%1").arg(fault, 2, 16, QLatin1Char('0')));
+}
+
+} // namespace
+
 // HL2 Hardware tab. A Hermes-Lite 2, an HL2 with the AK4951 board and a
 // SquareSDR 2 are identical on the wire (no board ID in Protocol 1) but differ
 // in hardware (the dither bit drives a band-voltage output on the bare board
@@ -4645,6 +4677,104 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     mvb->addWidget(atuChk);
     controls->append(atuChk);
     vbox->addWidget(miscGroup);
+
+    // ── IO board status (read-only) ──────────────────────────────────────────
+    // `ioboard.status` on demand only: a read flashes the board's LED and uses
+    // the radio's one control-reply slot, so opening the page sends nothing.
+    auto* ioGroup = new QGroupBox("IO Board");
+    auto* iovb = new QVBoxLayout(ioGroup);
+    iovb->setSpacing(6);
+    auto* ioIntro = new QLabel(
+        "Reads the N2ADR IO board's status over the HL2's second I2C bus. Reading "
+        "changes nothing on the board. Most HL2s have no IO board fitted.");
+    setTone(ioIntro, Tone::Hint);
+    ioIntro->setWordWrap(true);
+    iovb->addWidget(ioIntro);
+    auto* ioReadBtn = new QPushButton("Read IO Board Status");
+    ioReadBtn->setObjectName(QStringLiteral("hl2HwIoBoardRead"));
+    ioReadBtn->setAccessibleName(QStringLiteral("Read IO board status"));
+    auto* ioStatusLbl = new QLabel("Not read.");
+    ioStatusLbl->setObjectName(QStringLiteral("hl2HwIoBoardStatus"));
+    ioStatusLbl->setAccessibleName(QStringLiteral("IO board status: Not read."));
+    ioStatusLbl->setWordWrap(true);
+    ioStatusLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    setTone(ioStatusLbl, Tone::Value);
+    iovb->addWidget(ioReadBtn, 0, Qt::AlignLeft);
+    iovb->addWidget(ioStatusLbl);
+    vbox->addWidget(ioGroup);
+
+    const QPointer<QLabel> ioStatusGuard(ioStatusLbl);
+    const auto showIoStatus = [ioStatusGuard](const QString& text, Tone tone) {
+        if (!ioStatusGuard)
+            return;
+        ioStatusGuard->setText(text);
+        // A QLabel's accessible Name is its accessibleName when one is set, so
+        // the reading goes in the name or a screen reader never hears it.
+        ioStatusGuard->setAccessibleName(QStringLiteral("IO board status: %1").arg(text));
+        setTone(ioStatusGuard, tone);
+        QAccessibleEvent ev(ioStatusGuard.data(), QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&ev);
+    };
+    const QPointer<QPushButton> ioReadGuard(ioReadBtn);
+    const auto refreshIoRead = [this, ioReadGuard] {
+        if (ioReadGuard)
+            ioReadGuard->setEnabled(m_model->isConnected()
+                && m_model->backendDeclaresExtension(QStringLiteral("hl2")));
+    };
+    refreshIoRead();
+    // The pending read's handlers; deleting it disconnects them.
+    const auto ioPending = std::make_shared<QPointer<QObject>>();
+    // After a connection change the last reading, and a pending read's late
+    // answer, are not this radio's.
+    connect(m_model, &RadioModel::connectionStateChanged, ioStatusLbl,
+            [ioPending, refreshIoRead, showIoStatus] {
+        delete ioPending->data();
+        refreshIoRead();
+        showIoStatus(QStringLiteral("Not read."), Tone::Value);
+    });
+    connect(ioReadBtn, &QPushButton::clicked, ioStatusLbl,
+            [this, ioPending, ioReadGuard, showIoStatus, refreshIoRead] {
+        IRadioBackend* backend = m_model->backend();
+        if (!backend)
+            return;
+        // Each caller of extensionResult owns one top-byte decade (see
+        // BandscopeDialog's note); 0x09 is this one's.
+        constexpr quint64 kIoRequestIdBase = 0x0900000000000000ull;
+        static quint64 nextIoId = kIoRequestIdBase;
+        const quint64 requestId = nextIoId++;
+        auto* guard = new QObject(this);
+        *ioPending = guard;
+        if (ioReadGuard)
+            ioReadGuard->setEnabled(false);
+        showIoStatus(QStringLiteral("Reading…"), Tone::Value);
+        connect(backend, &IRadioBackend::extensionResult, guard,
+                [guard, requestId, showIoStatus, refreshIoRead](quint64 id,
+                                                                const QVariant& result) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+            refreshIoRead();
+            showIoStatus(describeIoBoardStatus(result.toMap()), Tone::Value);
+        });
+        connect(backend, &IRadioBackend::extensionError, guard,
+                [guard, requestId, showIoStatus, refreshIoRead](quint64 id,
+                                                               const QString& reason) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+            refreshIoRead();
+            // Hl2Backend's error when the reply is not a board's (an empty bus).
+            if (reason == QLatin1String("No IO board answered."))
+                showIoStatus(QStringLiteral("No IO board answered: none is fitted, or it is "
+                                            "not responding."), Tone::Hint);
+            else
+                showIoStatus(QStringLiteral("Not read: %1").arg(reason), Tone::Warn);
+        });
+        // Armed before the invoke: a refusal (not connected, one pending) is
+        // emitted synchronously.
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+                                        QStringLiteral("ioboard.status"), requestId);
+    });
 
     // One read path (`reseed`) and one write path (`apply`), so shown and
     // stored cannot disagree. Connections are made after the first reseed, or
