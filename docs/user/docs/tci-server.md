@@ -344,7 +344,8 @@ as it needs, and may send none. On a Hermes-Lite 2 with one receiver, for
 example:
 
 ```
-aethersdr_ext:1,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_ext:1,tx_filter_band,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_tx_filter_band:0,100,2900;
 aethersdr_rx_antennas:0,ANT;
 aethersdr_rx_antenna:0,ANT;
 aethersdr_tx_antennas:0,ANT,RF1;
@@ -366,6 +367,34 @@ On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
   extension traffic to that client, and so does disconnecting.
 - The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
   `rx_ctun_ex`) work without the enable, as before.
+
+#### TX passband: `tx_filter_band`
+
+Offered when the connected radio has TX low and high cut controls (the Phone
+applet's), for example a Flex or a Hermes-Lite 2. Not on the simulator, an
+RTL-SDR, or an Icom without a TX bandwidth profile.
+
+```
+aethersdr_tx_filter_band:0;             # read
+aethersdr_tx_filter_band:0,100,2900;    # set low and high cut, audio Hz
+```
+
+- `<trx>` is the transmit receiver. A read or set for another one is ignored.
+  When transmit moves to another receiver, the line is sent again; the last
+  line sent names the new `<trx>`, and an earlier one may still name the old.
+- Values are positive audio Hz, as in the Phone applet; the sideband follows the
+  mode. A negative value is taken as positive and a reversed pair is swapped.
+- The value is set the way the Phone applet sets it: 0 to 10000 Hz, at least
+  50 Hz wide. On a radio with fixed edges (an Icom) it goes to the nearest ones.
+- Every change, from any source (the Phone applet, a TX profile, CAT, another
+  client), is sent as `aethersdr_tx_filter_band:<trx>,<low>,<high>;` to every
+  client that enabled the set. That is also the answer to a set. A set that the
+  limits changed but that left the passband as it was is answered to the
+  sender only. A set that changes nothing gets no answer.
+- Allowed while transmitting, as in the Phone applet.
+- The value is the operator's setting. On a Hermes-Lite 2 it applies to USB
+  and LSB voice; CW, AM, FM and the digital modes transmit with their mode's
+  own passband.
 
 #### Antennas: `rx_antenna` and `tx_antenna`
 
