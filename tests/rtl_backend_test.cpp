@@ -138,6 +138,8 @@ int main(int argc, char** argv)
               && caps.receiveAudioExport->sampleRatesHz.contains(48000),
           "RTL declares its typed native receive audio export independently of TX/IQ");
     check(!caps.hasDaxStreams,"native receive export does not advertise Flex DAX/IQ streams");
+    check(!caps.panViewHold.has_value(),
+          "no Lock view hold: the capture follows its receiver, so the view moves with the slice");
 
     check(caps.txPowerMaxWatts == 0.0, "RTL-SDR max TX power is 0");
     check(!caps.hostModulates, "RTL-SDR does not modulate on host");

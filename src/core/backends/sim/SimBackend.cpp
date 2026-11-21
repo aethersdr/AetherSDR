@@ -363,6 +363,9 @@ RadioCapabilities SimBackend::capabilities() const
     // `band_zoom=`/`segment_zoom=`, so it declares absence explicitly -- the
     // case a bare hasCommandPlane() test would have got wrong.
     caps.panZoomModes = std::nullopt;
+    // setPanCenter() echoes whatever centre is asked and a slice tune never
+    // moves it, so the whole span holds.
+    caps.panViewHold = RadioCapabilities::PanViewHold{1.0};
     caps.panFrameRateShaping = std::nullopt;  // demo; no client owner is declared for FFT FPS
     // The demo radio stores no display state: the client keeps the waterfall rate.
     caps.panWaterfallRateShaping =

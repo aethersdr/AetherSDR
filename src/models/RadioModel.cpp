@@ -1238,6 +1238,12 @@ void RadioModel::setupBackend(const QString& family)
             pan->setZoomPlacement(placement);
         }
     });
+    connect(m_backend.get(), &IRadioBackend::panViewHoldChanged, this,
+            [this](const QString& panId, bool holds) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setViewHolds(holds);
+        }
+    });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
         if (auto* pan = resolveBackendPan(panId)) pan->setRxAntenna(ant);

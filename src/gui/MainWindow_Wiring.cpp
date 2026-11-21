@@ -33,6 +33,8 @@
 #include "MainWindowHelpers.h"
 #include "OwnedSingleShotTimer.h"
 #include "PanRecenterPolicy.h"
+#include "PanViewLockPolicy.h"
+#include "ViewLockSettings.h"
 #include "PanadapterApplet.h"
 #include "ReceiveCaptureAction.h"
 #include "PanadapterMessageOverlay.h"
@@ -616,6 +618,9 @@ void MainWindow::setCenterLockForPan(const QString& panId, int sliceId, bool on,
         return;
     }
 
+    // Center Lock moves the view with the slice; a locked view cannot.
+    setViewLockForPan(panId, false, persist);
+
     m_centerLockSliceByPan.insert(panId, sliceId);
     m_centerLockSessionOnlyPans.remove(panId);
     if (persist) {
@@ -697,6 +702,221 @@ void MainWindow::syncCenterLockUi(const QString& panId)
     if (SpectrumWidget* sw = m_panStack->spectrum(panId)) {
         sw->setCenterLockSliceId(centerLockSliceForPan(panId));
     }
+}
+
+bool MainWindow::panViewLocked(const QString& panId) const
+{
+    if (panId.isEmpty() || !m_panStack) {
+        return false;
+    }
+    const SpectrumWidget* sw = m_panStack->spectrum(panId);
+    return sw && sw->viewLocked();
+}
+
+bool MainWindow::lockedViewShows(const QString& panId, double mhz) const
+{
+    if (panId.isEmpty() || !m_panStack) {
+        return false;
+    }
+    const SpectrumWidget* sw = m_panStack->spectrum(panId);
+    return sw && sw->viewLocked() && sw->frequencyInView(mhz);
+}
+
+bool MainWindow::refuseViewLockedRangeChange(const QString& panId)
+{
+    if (!panViewLocked(panId)) {
+        return false;
+    }
+    statusBar()->showMessage(tr("Lock view is on: unlock the view to pan or zoom."), 4000);
+    return true;
+}
+
+bool MainWindow::viewLockAllowsRecenter(const SliceModel* slice, double mhz,
+                                        TuneIntent intent) const
+{
+    // ExplicitPan is an operator range change: those are refused where they
+    // start (refuseViewLockedRangeChange and the widget's gestures), not here.
+    const SpectrumWidget* sw = slice && m_panStack ? m_panStack->spectrum(slice->panId())
+                                                   : nullptr;
+    if (!sw || intent == TuneIntent::ExplicitPan) {
+        return true;
+    }
+    const auto kind = (intent == TuneIntent::IncrementalTune)
+        ? PanViewLockPolicy::TuneKind::Incremental
+        : PanViewLockPolicy::TuneKind::ExplicitJump;
+    return PanViewLockPolicy::viewMayMove(sw->viewLocked(), kind, sw->frequencyInView(mhz));
+}
+
+void MainWindow::loadViewLockSettings()
+{
+    QString error;
+    m_viewLockedPanIndicesByRadio = ViewLockSettings::parse(
+        AppSettings::instance().value(ViewLockSettings::kSettingsKey, QString()).toString(),
+        &error);
+    if (!error.isEmpty()) {
+        qCWarning(lcGui).noquote()
+            << "MainWindow: ignoring invalid ViewLock settings:" << error;
+    }
+}
+
+void MainWindow::saveViewLockSettings() const
+{
+    const QString raw = ViewLockSettings::serialize(m_viewLockedPanIndicesByRadio);
+    auto& settings = AppSettings::instance();
+    if (raw.isEmpty()) {
+        settings.remove(ViewLockSettings::kSettingsKey);
+    } else {
+        settings.setValue(ViewLockSettings::kSettingsKey, raw);
+    }
+    settings.save();
+}
+
+void MainWindow::setViewLockForPan(const QString& panId, bool locked, bool persist)
+{
+    if (panId.isEmpty() || !m_panStack) {
+        return;
+    }
+    SpectrumWidget* sw = m_panStack->spectrum(panId);
+    if (!sw) {
+        return;
+    }
+
+    if (locked && viewLockHoldFraction(panId) <= 0.0) {
+        locked = false;
+    }
+
+    // Disconnected, the last radio's key still resolves, but its saved state
+    // is not what the operator is looking at: nothing of it is touched.
+    const bool saves = persist && m_radioModel.isConnected();
+    // The view cannot both hold still and follow a slice. An operator lock
+    // also drops a saved Center Lock, a pending band-recall rebind and a TCI
+    // session mark, or one would re-engage later and release the view lock.
+    if (locked && (persist || centerLockSliceForPan(panId) >= 0)) {
+        if (saves) {
+            m_centerLockSessionOnlyPans.remove(panId);
+        }
+        clearCenterLockForPan(panId, saves);
+    }
+    sw->setViewLocked(locked);
+
+    if (!persist) {
+        return;
+    }
+    if (!saves) {
+        // Only a lock waits for the next radio: unlocking a pan that showed
+        // nothing saved says nothing about that radio.
+        if (locked) {
+            m_pendingViewLockPanIndices.insert(sw->panIndex());
+        } else {
+            m_pendingViewLockPanIndices.remove(sw->panIndex());
+        }
+        return;
+    }
+    const QString radioKey = centerLockRadioKey();
+    if (radioKey.isEmpty()) {
+        return;
+    }
+    m_pendingViewLockPanIndices.remove(sw->panIndex());
+    QSet<int>& pans = m_viewLockedPanIndicesByRadio[radioKey];
+    const bool wasLocked = pans.contains(sw->panIndex());
+    if (locked) {
+        pans.insert(sw->panIndex());
+    } else {
+        pans.remove(sw->panIndex());
+    }
+    if (pans.isEmpty()) {
+        m_viewLockedPanIndicesByRadio.remove(radioKey);
+    }
+    if (wasLocked != locked) {
+        saveViewLockSettings();
+    }
+}
+
+double MainWindow::viewLockHoldFraction(const QString& panId) const
+{
+    // Permissive on disconnect (radio-capabilities-map rule 2): with no radio
+    // there is nothing to be honest about.
+    if (!m_radioModel.isConnected()) {
+        return 1.0;
+    }
+    const auto hold = m_radioModel.backendCapabilities().panViewHold;
+    const PanadapterModel* pan = m_radioModel.panadapter(panId);
+    if (!hold || (pan && !pan->viewHolds())) {
+        return 0.0;
+    }
+    return std::clamp(hold->holdableSpanFraction, 0.0, 1.0);
+}
+
+void MainWindow::syncViewLockAvailability(const QString& panId)
+{
+    SpectrumWidget* sw = m_panStack ? m_panStack->spectrum(panId) : nullptr;
+    if (!sw) {
+        return;
+    }
+    const bool wasAvailable = sw->viewLockAvailable();
+    const double holdFraction = viewLockHoldFraction(panId);
+    const bool supported = holdFraction > 0.0;
+    // A pan that offers scope modes can get its hold back by changing mode, so
+    // its reason says so; any other radio never holds.
+    const PanadapterModel* pan = m_radioModel.panadapter(panId);
+    const bool modeDependent = pan && pan->scopeModeLabels().size() > 1;
+    sw->setViewHoldFraction(supported ? holdFraction : 1.0);
+    sw->setViewLockAvailable(
+        supported,
+        modeDependent
+            ? tr("Lock view is unavailable in this scope mode: the panadapter "
+                 "follows the tuned frequency. Choose another Scope mode in the "
+                 "Display panel.")
+            : tr("Lock view is unavailable on this radio: its panadapter can "
+                 "move with the slice."));
+    if (!supported && sw->viewLocked()) {
+        // Live state only: the saved intent stays, for another radio or for
+        // this one once it can hold again.
+        setViewLockForPan(panId, false, /*persist=*/false);
+    } else if (supported && !wasAvailable) {
+        restoreViewLockForPan(panId);
+    }
+}
+
+void MainWindow::onViewLockCapabilitiesChanged(bool connected)
+{
+    if (connected) {
+        m_viewLockPendingSawConnection = true;
+    } else if (m_viewLockPendingSawConnection) {
+        m_viewLockPendingSawConnection = false;
+        m_pendingViewLockPanIndices.clear();
+    }
+    if (!m_panStack) {
+        return;
+    }
+    for (auto* applet : m_panStack->allApplets()) {
+        if (applet) {
+            syncViewLockAvailability(applet->panId());
+        }
+    }
+}
+
+void MainWindow::restoreViewLockForPan(const QString& panId)
+{
+    if (panId.isEmpty() || !m_panStack) {
+        return;
+    }
+    const QString radioKey = centerLockRadioKey();
+    SpectrumWidget* sw = m_panStack->spectrum(panId);
+    if (!m_radioModel.isConnected() || radioKey.isEmpty() || !sw) {
+        return;
+    }
+    // A lock made before connecting wins over the saved state and is saved
+    // under this radio, once the radio can hold (an Icom, after its first sweep).
+    if (m_pendingViewLockPanIndices.contains(sw->panIndex())
+        && viewLockHoldFraction(panId) > 0.0) {
+        setViewLockForPan(panId, true, /*persist=*/true);
+        return;
+    }
+    setViewLockForPan(
+        panId,
+        m_viewLockedPanIndicesByRadio.value(radioKey).contains(sw->panIndex()),
+        /*persist=*/false);
 }
 
 bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool sendCommand)
@@ -3762,8 +3982,11 @@ void MainWindow::selectBand(const QString& panId, const QString& bandName, doubl
         // Centre the window on the new band. Without this the panadapter
         // keeps the old band's NCO until the tune happens to fall outside
         // the usable passband, so a band change could leave the trace
-        // centred a whole band away from the slice that just moved.
-        m_radioModel.requestPanCenter(panId, freqMhz);
+        // centred a whole band away from the slice that just moved. A locked
+        // view already showing the target tunes in place instead.
+        if (!lockedViewShows(panId, freqMhz)) {
+            m_radioModel.requestPanCenter(panId, freqMhz);
+        }
         qCDebug(lcProtocol).noquote().nospace()
             << "MainWindow: band switch (no radio band stack) band=" << bandName
             << " pan=" << panId
@@ -4362,6 +4585,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // Don't close the last pan
         if (m_panStack->count() <= 1) return;
         clearCenterLockForPan(panId, true);
+        // Closing a pan drops its lock intent too, or the next pan that reuses
+        // this index would start locked.
+        setViewLockForPan(panId, false, /*persist=*/true);
         // Single source of truth for teardown: removePanadapter sends the
         // FlexLib-correct "display pan remove" + "display panafall remove"
         // pair, so a panafall-created pan also frees its waterfall. (#3843)
@@ -5392,7 +5618,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 PanRecenterPolicy::recenterWrite(
                     kiwiSdrPanDisplaysKiwi(pan->panId()),
                     /*widgetOwnsViewDuringGesture=*/true);
-            if (panWrite == PanRecenterPolicy::Write::RadioAndModel) {
+            // A locked view never edge-pans; the widget already stops at the
+            // edge, this keeps a stale center from reaching the radio.
+            if (panWrite == PanRecenterPolicy::Write::RadioAndModel
+                && !panViewLocked(pan->panId())) {
                 // Effective (pending-else-model) geometry, so a deferred write
                 // in flight dedupes instead of re-issuing per drag tick (#4142).
                 centerMhz = std::max(
@@ -5487,8 +5716,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             dissolveSliceLink(aSliceId, bSliceId, "menu request");
         }
     });
+    connect(sw, &SpectrumWidget::viewLockToggled,
+            this, [this, applet](bool locked) {
+        if (applet) {
+            setViewLockForPan(applet->panId(), locked);
+        }
+    });
     restoreCenterLockForPan(applet->panId());
     sw->setCenterLockSliceId(centerLockSliceForPan(applet->panId()));
+    restoreViewLockForPan(applet->panId());
     refreshSliceLinkUi();
 
     // ── Spot trigger — notify the radio/TCI clients when a spot label is clicked (#341)
@@ -5892,6 +6128,10 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
         return result;
 
     if (centerLockSliceForPan(pan->panId()) >= 0) {
+        return result;
+    }
+
+    if (!viewLockAllowsRecenter(slice, mhz, intent)) {
         return result;
     }
 

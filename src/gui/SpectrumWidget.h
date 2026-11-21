@@ -479,27 +479,31 @@ public:
     void setBandSegmentZoomAvailable(bool available, bool nativeSpan = false,
                                      const QString& blockedReason = {})
     {
+        m_bandSegZoomAvailable = available;
+        m_bandSegZoomNativeSpan = nativeSpan;
+        m_bandSegZoomBlockedReason = blockedReason;
+        // Lock view dims a pair that would otherwise be live; a pair that is
+        // dimmed for its own reason keeps it, since unlocking would not help.
+        const bool live = available && !m_viewLocked;
         const QString tip = !available
             ? (!blockedReason.isEmpty() ? blockedReason
                : nativeSpan ? tr("Waiting for the radio's scope geometry.")
                             : tr("Band and segment zoom are not available."))
+            : m_viewLocked ? viewLockZoomTip()
             : nativeSpan
                 ? tr("Zoom using the radio's scope span; the tuned frequency stays unchanged.")
                 : QString();
         // Refreshed on capability, limit and placement changes: skip no-ops.
-        if (m_zoomBandBtn && m_zoomBandBtn->isEnabled() == available
+        if (m_zoomBandBtn && m_zoomBandBtn->isEnabled() == live
             && m_zoomBandBtn->toolTip() == tip) {
             return;
         }
-        if (m_zoomBandBtn) {
-            m_zoomBandBtn->setEnabled(available);
-            m_zoomBandBtn->setToolTip(tip);
-            m_zoomBandBtn->setAccessibleDescription(tip);
-        }
-        if (m_zoomSegBtn) {
-            m_zoomSegBtn->setEnabled(available);
-            m_zoomSegBtn->setToolTip(tip);
-            m_zoomSegBtn->setAccessibleDescription(tip);
+        for (QPushButton* btn : {m_zoomBandBtn, m_zoomSegBtn}) {
+            if (btn) {
+                btn->setEnabled(live);
+                btn->setToolTip(tip);
+                btn->setAccessibleDescription(tip);
+            }
         }
     }
 
@@ -516,6 +520,9 @@ public:
     // exactly what the constructor built: enabled, no tooltip, no description.
     void setSpanControlPlacement(bool live, bool radioWide, bool spanFixed = false)
     {
+        m_spanControlLive = live;
+        m_spanControlRadioWide = radioWide;
+        m_spanControlFixed = spanFixed;
         QString outTip;
         QString inTip;
         QString desc;
@@ -534,6 +541,12 @@ public:
                       "panadapters, so its −/+ buttons are on one pane only (the one "
                       "holding the transmit slice, or the first panadapter). A span "
                       "change from any pane changes them all.");
+            outTip = desc;
+            inTip = desc;
+        }
+        if (m_viewLocked && live) {
+            live = false;
+            desc = viewLockZoomTip();
             outTip = desc;
             inTip = desc;
         }
@@ -892,6 +905,22 @@ public:
     void setSliceOverlayAdaptiveActive(int sliceId, bool active);
     void setCenterLockSliceId(int sliceId);
     int centerLockSliceId() const { return m_centerLockSliceId; }
+    // Lock view (see PanViewLockPolicy.h). setViewLocked() is the programmatic
+    // path (restore, Center Lock exclusivity); only the operator's own toggle
+    // emits viewLockToggled().
+    void setViewLocked(bool locked);
+    bool viewLocked() const { return m_viewLocked; }
+    bool viewLockAvailable() const { return m_viewLockAvailable; }
+    // Dim the Lock view button (never hide it) on a backend whose pan center is
+    // tied to the slice, saying why in the tooltip and accessible description.
+    void setViewLockAvailable(bool available, const QString& reason = QString());
+    // RadioCapabilities::PanViewHold::holdableSpanFraction (1.0 when the radio
+    // holds the whole span, or when disconnected).
+    void setViewHoldFraction(double fraction);
+    // Whether mhz is inside the hold window: the drawn range (after any
+    // edge-taper crop) narrowed to the radio's holdable fraction — what "on
+    // screen" means for Lock view.
+    bool frequencyInView(double mhz) const;
     double wfRowLowMhz() const { return m_lastWfRowLowMhz; }
     double wfRowHighMhz() const { return m_lastWfRowHighMhz; }
     // Slice Link (cross-panadapter VFO link). MainWindow pushes every current
@@ -1131,6 +1160,9 @@ signals:
     void popOutRequested(bool popOut);  // true=float, false=dock
     void sliceTxRequested(int sliceId);
     void centerLockRequested(int sliceId, bool locked);
+    // Operator clicked the Lock view button (MainWindow persists the choice and
+    // clears Center Lock on this pan).
+    void viewLockToggled(bool locked);
     void sliceLinkRequested(int aSliceId, int bSliceId, bool on);
     // Emitted when FFT bin-mapping dimensions change so MainWindow can re-push
     // xpixels/ypixels to the radio (#1511).
@@ -2359,6 +2391,25 @@ private:
     QPushButton* m_zoomBandBtn{nullptr};
     QPushButton* m_zoomOutBtn{nullptr};
     QPushButton* m_zoomInBtn{nullptr};
+    QPushButton* m_viewLockBtn{nullptr};
+    bool m_viewLocked{false};
+    bool m_viewLockAvailable{true};
+    QString m_viewLockUnavailableReason;
+    double m_viewHoldFraction{1.0};
+    // Last arguments of setBandSegmentZoomAvailable()/setSpanControlPlacement(),
+    // replayed whenever Lock view changes.
+    bool m_bandSegZoomAvailable{true};
+    bool m_bandSegZoomNativeSpan{false};
+    QString m_bandSegZoomBlockedReason;
+    bool m_spanControlLive{true};
+    bool m_spanControlRadioWide{false};
+    bool m_spanControlFixed{false};
+    QString viewLockZoomTip() const;
+    void updateViewLockToolTip();
+    // Lock view hold window width (PanViewLockPolicy::holdBandwidthMhz).
+    double viewLockHoldBandwidthMhz() const;
+    // Click-to-tune target: on-step, and kept inside a locked hold window.
+    double snapClickTarget(double rawMhz) const;
 
     // See setPanEdgeTaperEnabled()'s own comment.
     bool m_edgeTaperEnabled{false};

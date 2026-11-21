@@ -15,6 +15,15 @@
 
 namespace AetherSDR::icom {
 
+namespace {
+// SCROLL-F and Fixed keep the window still under a tuned VFO; Center and
+// SCROLL-C move it with every tune.
+bool scopeModeHoldsView(ScopeMode mode)
+{
+    return mode == ScopeMode::ScrollF || mode == ScopeMode::Fixed;
+}
+} // namespace
+
 bool IcomCivBackend::hasDualReceivers() const
 {
     return m_model && profileFor(*m_model).dualReceiver.has_value();
@@ -230,6 +239,7 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         if (modeChanged && state.visible) {
             emit panZoomPlacementChanged(QString::number(receiver), state.scopeMode == ScopeMode::Centre
                 ? PanZoomPlacement::FitAroundCenter : PanZoomPlacement::CenterAllocation);
+            emit panViewHoldChanged(QString::number(receiver), scopeModeHoldsView(state.scopeMode));
             emit panScopeModeChanged(QString::number(receiver), sweep->mode == ScopeMode::Centre ? 0
                 : sweep->mode == ScopeMode::ScrollF ? 1 : sweep->mode == ScopeMode::Fixed ? 2 : -1);
         }
@@ -342,6 +352,7 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         if (state.visible) {
             emit panZoomPlacementChanged(QString::number(frame.data[0]), state.scopeMode == ScopeMode::Centre
                 ? PanZoomPlacement::FitAroundCenter : PanZoomPlacement::CenterAllocation);
+            emit panViewHoldChanged(QString::number(frame.data[0]), scopeModeHoldsView(state.scopeMode));
             emit panScopeModeChanged(QString::number(frame.data[0]), frame.data[1] == 0 ? 0 : frame.data[1] == 3 ? 1 : frame.data[1] == 1 ? 2 : -1);
         }
     } else if (dualWatch) {
@@ -422,6 +433,7 @@ void IcomCivBackend::publishDualPan(int receiver)
     emit panZoomPlacementChanged(id, state.scopeFrames == 0 ? PanZoomPlacement::Unknown
         : state.scopeMode == ScopeMode::Centre ? PanZoomPlacement::FitAroundCenter
                                               : PanZoomPlacement::CenterAllocation);
+    emit panViewHoldChanged(id, state.scopeFrames > 0 && scopeModeHoldsView(state.scopeMode));
     emit panRangeChanged(id, state.calibration.floorDbm, state.calibration.floorDbm + state.calibration.spanDb);
     emit panBandwidthLimitsChanged(id, 0.005, 1.0);
     SliceDelta delta;

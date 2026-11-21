@@ -40,6 +40,7 @@
 #include <QFile>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -233,6 +234,14 @@ int main(int argc, char** argv)
     // the other three.
     check(caps.panSpanModel && caps.panSpanModel->radioWide,
           "one DDC rate for the whole radio — span is shared, not per-panadapter");
+
+    // Lock view can hold only the part of the span the NCO leaves alone:
+    // setSliceFrequency() re-centres once the slice is past
+    // kUsablePassbandFraction (0.8) of the half-span. Declaring the whole span
+    // would promise a still view that jumps half a span under a locked drag.
+    check(caps.panViewHold.has_value()
+              && std::abs(caps.panViewHold->holdableSpanFraction - 0.8) < 1e-12,
+          "the HL2 declares a Lock view hold of 0.8 of the span (NCO re-centre zone)");
 
     // ---- the Y axis is dBFS wearing a dBm label ----
     //

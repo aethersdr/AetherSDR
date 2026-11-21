@@ -821,6 +821,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // engaged (gui/PanZoomModeGate.h).
     caps.panZoomModes = RadioCapabilities::PanZoomModes{
         QStringLiteral("display pan set")};
+    // The pan centre is independent of the slice: tunes go out with autopan=0
+    // (only an explicit tuneAndRecenter() jump omits it), so a held slice
+    // never moves the view.
+    caps.panViewHold = RadioCapabilities::PanViewHold{1.0};
     // The radio stores a pan's FFT frame rate and reports it on connect.
     caps.panFrameRateShaping = std::nullopt;
     // Likewise the waterfall line duration: the radio's, never the client's.

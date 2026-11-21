@@ -1432,6 +1432,40 @@ void testOperatorPickEndsStartupInit()
           "and Scroll-F is never lit over the operator's pick");
 }
 
+// Lock view: the record says a scope with SCROLL-F and Fixed can hold its
+// window, and panViewHoldChanged says whether each pan holds right now.
+void testViewHoldFollowsScopeMode()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    QSignalSpy holds(&backend, &IRadioBackend::panViewHoldChanged);
+    const auto last = [&holds] { return holds.isEmpty() ? QVariant() : holds.last().at(1); };
+    Access::scopeStartup(backend);
+    check(backend.capabilities().panViewHold
+              && backend.capabilities().panViewHold->holdableSpanFraction == 1.0,
+          "a scope offering SCROLL-F and Fixed declares it can hold the whole window");
+    check(last() == QVariant(false), "nothing holds before the radio reports a scope mode");
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x03));
+    check(last() == QVariant(true), "SCROLL-F holds");
+    const qsizetype announced = holds.count();
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x03));
+    check(holds.count() == announced, "an unchanged mode announces nothing");
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x02));
+    check(last() == QVariant(false), "SCROLL-C follows the tuned frequency: no hold");
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+    check(last() == QVariant(true), "Fixed never pages, so it holds");
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x00));
+    check(last() == QVariant(false), "Center follows every tune: no hold");
+    Access::settleScope(backend);
+
+    IcomCivBackend centerOnly;
+    Access::prepare(centerOnly, "IC-7300");
+    Access::scopeStartup(centerOnly);
+    check(!centerOnly.capabilities().panViewHold, "a Center-only radio declares no hold");
+}
+
 // A sweep with no window during the hold neither confirms nor refutes the
 // edge write: the target stays and nothing is re-read.
 void testZeroWidthSweepKeepsTheHold()
@@ -2013,6 +2047,7 @@ int main(int argc, char** argv)
     testScopeFallbackCancelsQueuedScrollF();
     testScrollFSeedHoldsTheVfo();
     testOperatorPickEndsStartupInit();
+    testViewHoldFollowsScopeMode();
     testZeroWidthSweepKeepsTheHold();
     testStaleSlotReadDoesNotOverrideOurSelect();
     testCwTextLimits();
