@@ -473,7 +473,12 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ matrix.deploy_target }}"
           cmake --build driver-build -j$(sysctl -n hw.ncpu)
-          DESTDIR="$PWD/driver-root" cmake --install driver-build
+          DESTDIR="$PWD/driver-root" cmake --install driver-build --component dax_driver
+          # A DAX-only package must not touch Homebrew or developer files.
+          if [ -e driver-root/usr ]; then
+            echo "::error::DAX package includes unexpected files under /usr"
+            exit 1
+          fi
 
       - name: Verify binaries
         run: |
@@ -820,8 +825,10 @@ jobs:
           mkdir -p dmg-stage
           ditto build/AetherSDR.app dmg-stage/AetherSDR.app
           cp "AetherSDR DAX Drivers.pkg" dmg-stage/
+          cp packaging/macos/uninstall.sh "dmg-stage/Uninstall AetherSDR.command"
+          chmod +x "dmg-stage/Uninstall AetherSDR.command"
 
-          # Layout: app (left) + Applications link (right), PKG below Applications
+          # Layout: app + Applications link on top, uninstaller + DAX PKG below
           # NOTE: --background omitted intentionally. docs/assets/logo-invert.png
           # was removed in commit 4670d1d6 ("docs(assets): remove unused
           # logo-invert.png") because it was unused outside this workflow, and
@@ -839,6 +846,7 @@ jobs:
             --icon "AetherSDR.app" 150 120 \
             --hide-extension "AetherSDR.app" \
             --app-drop-link 450 120 \
+            --icon "Uninstall AetherSDR.command" 150 290 \
             --icon "AetherSDR DAX Drivers.pkg" 450 290 \
             "$DMG_FILENAME" \
             "dmg-stage/" \
