@@ -1481,6 +1481,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/DiversityPairPolicy.h": {
+  "tag": "universal",
+  "note": "Pure decision logic for which two diversity slices form one receive pair (radio diversity_index, pan fallback) \u2014 no QObject, no I/O, no model access. Canonical slice state only.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/DisplayPresence.h": {
   "tag": "ui-support",
   "note": "Host display-presence probe used to choose the desktop Qt platform before QApplication; startup/rendering plumbing, not radio state.",

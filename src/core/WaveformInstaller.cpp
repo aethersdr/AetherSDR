@@ -32,6 +32,13 @@ QList<const WaveformInstaller*>& liveInstallers()
 
 } // namespace
 
+WaveformInstallActivity* WaveformInstallActivity::instance()
+{
+    // Never destroyed: an installer may announce its end during shutdown.
+    static auto* activity = new WaveformInstallActivity;
+    return activity;
+}
+
 bool WaveformInstaller::anyInstalling()
 {
     for (const WaveformInstaller* installer : liveInstallers()) {
@@ -44,7 +51,11 @@ bool WaveformInstaller::anyInstalling()
 
 WaveformInstaller::~WaveformInstaller()
 {
+    const bool wasInstalling = isInstalling();
     liveInstallers().removeAll(this);
+    if (wasInstalling) {
+        emit WaveformInstallActivity::instance()->changed();
+    }
 }
 
 WaveformInstaller::WaveformInstaller(RadioModel* model, QObject* parent)
@@ -190,6 +201,7 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, 
     m_uploadConnected = false;
     m_activeGeneration = m_uploadState.begin(fileSize);
     const Generation generation = m_activeGeneration;
+    emit WaveformInstallActivity::instance()->changed();
 
     m_fileSize = fileSize;
     QTimer::singleShot(operationBudgetMs(fileSize), this, [this, generation] {
@@ -469,6 +481,9 @@ void WaveformInstaller::finishOperation(Generation generation,
     m_fileData.clear();
     m_uploadPort = 0;
     m_finishing = false;
+    // Before finished(): a handler there may open a modal result box, and the
+    // other windows shouldn't wait for it to close.
+    emit WaveformInstallActivity::instance()->changed();
     emit finished(success, message);
 }
 

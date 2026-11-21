@@ -921,3 +921,24 @@ Bundled at third_party/data2g/third_party/pocketfft/ as Data2G ships it.
              Copyright (C) 2024 Tan Ping Liang, Peter Bell
   License:   BSD-3-Clause
   Source:    https://github.com/mreineck/pocketfft
+
+
+39. Kroko streaming ASR model (English) — Copy Assist live preview (download-on-demand)
+--------------------------------------------------------------------------------------
+Model weights only; NOT bundled in the binary. Downloaded on first use of the
+Copy Assist live preview with the default "Kroko streaming, English
+(sherpa-onnx)" recognizer, and when the "None (live preview only)" model is
+chosen. Single source (Hugging Face), SHA-256-verified, cached under the user's
+data dir. Run by sherpa-onnx (entry 21). AetherSDR does not modify the model.
+
+  Attribution: "Kroko ASR" English community streaming model by Banafo.
+               Converted to the sherpa-onnx ONNX format (encoder, decoder,
+               joiner, tokens) by the k2-fsa/sherpa-onnx project; AetherSDR
+               uses that conversion unchanged.
+  License:     CC-BY-SA-4.0 (https://creativecommons.org/licenses/by-sa/4.0/).
+               Banafo's model card licenses its community models under
+               CC-BY-SA without naming a version; AetherSDR applies version 4.0.
+               The model is provided as-is, without warranties (see section 5
+               of the license).
+  Source:      https://huggingface.co/Banafo/Kroko-ASR
+               https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06

@@ -139,6 +139,17 @@ int main(int argc, char** argv)
               "turning frameless off on Windows restores the system title and buttons");
         check(WindowChrome::usesNativeCaption(winOff, win),
               "Windows system decorations hide the bar's caption buttons");
+        check(WindowChrome::claimsWholeWindowAsClient(winOn),
+              "Windows frameless paints through the resize band");
+        check(!WindowChrome::claimsWholeWindowAsClient(winOff),
+              "turning frameless off leaves native client sizing to Windows");
+        using OSV = QOperatingSystemVersion;
+        check(!WindowChrome::reservesClientInsets(winOn, OSV(OSV::Windows, 10, 0, 19045)),
+              "Windows 10 frameless reserves no client insets");
+        check(WindowChrome::reservesClientInsets(winOn, OSV(OSV::Windows, 10, 0, 22000)),
+              "Windows 11's first build reserves the client insets");
+        check(!WindowChrome::reservesClientInsets(winOff, OSV(OSV::Windows, 10, 0, 22000)),
+              "turning frameless off reserves no client insets on Windows 11");
         const Qt::WindowFlags macOn = WindowChrome::chromeFlags(base, true, QStringLiteral("cocoa"));
         check(WindowChrome::usesNativeCaption(macOn, QStringLiteral("cocoa")),
               "macOS frameless keeps the native traffic lights");
@@ -148,18 +159,7 @@ int main(int argc, char** argv)
               "Linux frameless draws the bar's caption buttons");
     }
 
-    // ── Windows 10 whole-window client area (#6266) ──
     {
-        using OSV = QOperatingSystemVersion;
-        const Qt::WindowFlags expanded = WindowChrome::chromeFlags({}, true, QStringLiteral("windows"));
-        const Qt::WindowFlags system = WindowChrome::chromeFlags({}, false, QStringLiteral("windows"));
-        const OSV win10(OSV::Windows, 10, 0, 19045);
-        check(WindowChrome::claimsWholeWindowAsClient(expanded, win10),
-              "Windows 10 under the expanded chrome claims the whole window as client");
-        check(!WindowChrome::claimsWholeWindowAsClient(expanded, OSV(OSV::Windows, 10, 0, 22000)),
-              "Windows 11's first build keeps Qt's non-client border");
-        check(!WindowChrome::claimsWholeWindowAsClient(system, win10),
-              "Frameless Window off keeps the system frame on Windows 10");
         // With the whole window as client the frame is zero, so restoring a
         // client rect sets the window to exactly that rect (#6303 over #6266).
         const QRect whole(157, 44, 1115, 348);
@@ -170,11 +170,7 @@ int main(int argc, char** argv)
 
     // ── The non-client resize band, which Qt reports as zero (#7077) ──
     {
-        // Windows 11 keeps the band non-client under ExpandedClientAreaHint
-        // and safeAreaMargins() returns zero on left/right/bottom, so content
-        // laid out to the client rect is drawn under it. The band is derived
-        // from SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI; these
-        // are the figures measured on Windows 11 build 26300.
+        // An 8-device-pixel resize band at 100%, measured on Windows 11.
         const QMargins at100 = WindowChrome::nonClientBandInsets(8, 1.0);
         check(at100 == QMargins(8, 0, 8, 8),
               "a 8 px band at dpr 1.0 insets left, right and bottom by 8");
@@ -201,6 +197,17 @@ int main(int argc, char** argv)
               "a zero dpr is refused rather than dividing by zero");
     }
 
+    {
+        check(WindowChrome::maximizedClientInsets({3077, 1680}, {3840, 2100}, 1.25)
+                  == QMargins(0, 0, 5, 0), "125% maximized rail fits the native client");
+        check(WindowChrome::maximizedClientInsets({2567, 1392}, {3840, 2088}, 1.5)
+                  == QMargins(0, 0, 7, 0), "150% maximized rail fits the native client");
+        check(WindowChrome::maximizedClientInsets({1200, 800}, {1500, 999}, 1.25)
+                  == QMargins(0, 0, 0, 1), "fractional bottom edge stays inside the client");
+        check(WindowChrome::maximizedClientInsets({1000, 800}, {1600, 1200}, 1.5).isNull(),
+              "a layout inside the client needs no inset");
+    }
+
     // ── The frameless size grip, which sits inside that band ──
     {
         // The grip is pinned to the bottom-right corner. Under the inset the
@@ -215,8 +222,7 @@ int main(int argc, char** argv)
         check(inset.x() + 16 + 1 + band.right() == window.width(),
               "the grip's right edge lands on the contents rect, not the window");
 
-        // Maximized, and every non-Windows-11 path: the margins are zero and
-        // the grip has to land exactly where it did before this fix.
+        // With no inset the grip sits at the window corner.
         check(WindowChrome::sizeGripOrigin(window, 16, QMargins())
                   == QPoint(1200 - 16 - 1, 800 - 16 - 1),
               "with no band the grip is in the window corner, as on main");

@@ -74,7 +74,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 - **Up to four receivers** (A–D), each with its own slice, panadapter, audio and S-meter. Add one with **Tools → Add Panadapter...**; close its pane to remove it.
 - The receivers share one converter, so the **span (sample rate), LNA gain, band and antenna are radio-wide**. Mode, passband, AGC and frequency are per receiver. The RX antenna menu offers **ANT**, the one receive input; KiwiSDR receivers, when configured, are listed beside it.
 - **After a restart** the receivers you had open come back, each with its own frequency, mode, passband, noise blanker, APF, squelch, RIT/XIT, audio gain and pan, and transmit returns to the receiver that had it. If the span allows fewer receivers than you had, the others are kept and come back on a later connect with room for them, unless you add or close a receiver first.
-- After disconnecting and reconnecting to the same HL2, transmit returns to the receiver that held it and uses that receiver’s mode and transmit passband. Reconnecting does not key the radio.
+- After disconnecting and reconnecting to the same HL2, transmit returns to the receiver that held it and uses that receiver’s mode and transmit passband. Each panadapter keeps its centre, as after a restart, unless its slice no longer fits in the middle 80 % of the span; then it is centred on the slice. Reconnecting does not key the radio.
 - **Span** snaps to 48, 96, 192 or 384 kHz. Four receivers run up to 192 kHz, three at 384 kHz. **Use low bandwidth mode** caps the span at 96 kHz. Only the pane holding the TX slice (otherwise the first docked pane) has live span buttons; the others are dimmed with the reason.
 - **Band buttons** switch the hardware filters and preamp as well as the frequency.
 - **Spots** from the DX cluster, RBN, WSJT-X, POTA and manual entry are drawn on the panadapter. Right-click a spot → **Remove Spot**.
@@ -159,6 +159,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
 - **CW** is keyed with host-timed edges, with sidetone, at the same carrier level as TUNE. CW settings are restored after a restart.
+- **CW text from a logger:** rigctld `send_morse` is keyed by AetherSDR when the transmit slice is in CW, at the CW speed and break-in setting in AetherSDR, without local sidetone. With break-in off, the logger must key PTT first, or the text is refused. TCI and FlexCAT CW text are not keyed. See [CAT Control](./cat-control.md).
 - **A key or PTT on the radio's own jack** shows as transmit and mutes the receiver for as long as the radio reports it. In a voice mode AetherSDR then keys its own modulator the way MOX does, so your microphone audio is transmitted, and releases it when the radio's PTT is released. The same refusals as MOX apply (receive-only mode, transmit inhibit, no transmit slice), and in DIGU or DIGL it is refused with "You cannot transmit voice in DIGU/DIGL mode": digital programs key through the [TCI Server](./tci-server.md). An EP6 stream gap longer than 2 s releases the followed host key, including when the first recovery attempt succeeds. A PTT that is already held when AetherSDR connects, or when the stream recovers after a dropout, is shown as transmit but keys nothing; release it and press again. A receiver-count change also requires a released level on the new stream before a new press can key; a transmission already following the radio PTT keeps its key until release. Delayed packets from the old stream can delay PTT changes for about 0.17 s at 48 kHz with one receiver; if the held PTT shows transmit without microphone audio after recovery, release it and press again. If you were already transmitting with MOX, TCI or TUNE, that transmission keeps its own release. If it ends while the radio PTT is still held, the radio stays in transmit without microphone audio until you release the PTT and press again. In CW the radio's own keyer drives it, and AetherSDR does not key.
 - **TUNE** keys at **Tune Power**, and moving Tune Power during a tune changes the carrier. Tune Power is remembered per band.
 - **Session safety:** MOX, CW PTT and TUNE requests are refused while the radio session is stopped. Stopping the session clears a held software key; reconnecting requires a fresh transmit request.
@@ -192,7 +193,7 @@ PureSignal corrects the transmitter's distortion with adaptive pre-distortion. T
 
 When one of these is missing, the PureSignal button is dimmed, and the line under it says why.
 
-**Controls.**
+**Controls.** Hover over any control in the applet for a short explanation.
 
 - **PureSignal** turns it on and off. You can turn it on or off only while you are not transmitting. If you left it on, it comes back on when you connect again, including when the link recovers from a watchdog interruption. If the HL2 cannot run it at that moment, for example because three receivers are open, it stays off and the line under the button says why. Its remembered preference stays on; to change it, first restore a configuration where PureSignal is available.
 - **Auto** calibrates again and again while you transmit. Unticking **Auto** stops new calibrations and keeps the last good correction, until you press **Reset** or turn PureSignal off.
@@ -205,6 +206,8 @@ PureSignal never keys the radio. It calibrates on transmissions you make yoursel
 **Settings** (under **▸ Settings**):
 
 - **Auto-attenuate feedback** moves the receive attenuation while keyed, so the feedback level stays in the window. Turn it off to set **TX att** by hand (−28 to 31 dB).
+- If the attenuation reaches its maximum (31 dB) and the feedback is still above the window, the state line says "Feedback too strong to calibrate at 31 dB". PureSignal cannot calibrate until the level comes down. This happens with an external amplifier's RF sampler at high power. Put a fixed attenuator (for example an SMA attenuator) in the feedback line until the level settles inside the window.
+- If the HL2 itself reports ADC overload while you transmit with PureSignal on, the state line turns red: "WARNING: ADC overload while transmitting — the feedback overdrives the receive input". The feedback is then too strong for the receive converter, and no calibration done at that level can be trusted. Add the attenuator before you transmit at that power again. The warning stays after you unkey. It clears when the radio reports a clean measurement window during a transmission or when you turn PureSignal off. At the other end, "Feedback too weak at full gain" means the coupler or sampler gives too little signal.
 - **Reset** drops the correction.
 - **Save…** writes the current correction to a file. **Restore…** loads one. The file path must be shorter than 256 bytes. WDSP file errors appear in the state line, taking priority over the ready indication. WDSP latches these errors until its transmit channel is rebuilt.
 
@@ -217,7 +220,7 @@ AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedbac
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware, the TX output and the transmit voice chain.
+- **Tools → Radio Health...** shows link, temperature, PA current (in amps, and the raw count), gateware, the TX output and the transmit voice chain.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference
@@ -225,7 +228,7 @@ AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedbac
 ### Not available on the HL2
 
 - DAX, SmartLink or Multi-Flex.
-- The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex.
+- The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex. rigctld CW text is keyed by AetherSDR instead.
 - FM repeater duplex and CTCSS encode.
 - PureSignal.
 - Line out and headphone controls: the **Line Out:** and **Headphone:** rows under **Settings → Radio Setup... → Audio → Radio Audio Outputs** are dimmed. A codec board's speaker level is under **HL2 Hardware**.
@@ -262,7 +265,7 @@ Not yet tested:
 - A change made from a CAT or TCI program reaching both the on-screen control and the radio.
 - Modes, filters and bands coming back after a restart are checked by automated tests without a radio; saved filter presets are not covered.
 - Two HL2s used from one computer.
-- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. aetherd does not transmit with an HL2.
+- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. Its AGC threshold, noise blanker, RIT and RF gain controls are checked by automated tests only. aetherd does not transmit with an HL2.
 
 ## Troubleshooting
 

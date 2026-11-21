@@ -3568,6 +3568,71 @@ void daxSelectionRecoversAfterAnOver()
         "selection becomes available once the original terminal cleanup drains");
 }
 
+void tciTxAntennaSetAfterAnOver()
+{
+    DaxTciFixture f;
+    QStringList rx;
+    f.client.textSink = [&rx](const QString& text) {
+        if (text.startsWith(QStringLiteral("aethersdr_"))) { rx << text.trimmed(); }
+        return static_cast<qint64>(text.size());
+    };
+    f.f.backend->caps.canTransmit = true;
+    SliceDelta lists;
+    lists.txAntennaList = QStringList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
+    lists.txAntenna = QStringLiteral("ANT1");
+    if (SliceModel* slice = f.f.radio.slice(0)) { slice->applyChanges(lists); }
+    f.interlock(QStringLiteral("READY"));
+    f.text(QStringLiteral("aethersdr_ext_enable:true;"));
+
+    f.text(QStringLiteral("trx:0,true,tci;"));
+    f.interlock(QStringLiteral("TRANSMITTING"));
+    f.text(QStringLiteral("trx:0,false;"));
+    f.interlock(QStringLiteral("READY"));
+    rx.clear();
+    f.text(QStringLiteral("aethersdr_tx_antenna:0,ANT2;"));
+    check(f.f.radio.slice(0) && f.f.radio.slice(0)->txAntenna() == QStringLiteral("ANT2")
+        && !rx.contains(QStringLiteral("aethersdr_tx_antenna:0,ANT1;")),
+        "a TX-antenna set is accepted after a completed over on settled RX");
+}
+
+// The once-per-keyed-period notice re-arms when a TCI over has ended on
+// settled RX, though the over's TX ownership is still unconfirmed.
+void tciTxAntennaRefusalReArmsAfterAnOver()
+{
+    DaxTciFixture f;
+    QStringList rx;
+    f.client.textSink = [&rx](const QString& text) {
+        if (text.startsWith(QStringLiteral("aethersdr_"))) { rx << text.trimmed(); }
+        return static_cast<qint64>(text.size());
+    };
+    int warnings = 0;
+    QObject::connect(&f.f.radio, &RadioModel::configurationWarning,
+                     [&warnings](const QString&) { ++warnings; });
+    f.f.backend->caps.canTransmit = true;
+    SliceDelta lists;
+    lists.txAntennaList = QStringList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
+    lists.txAntenna = QStringLiteral("ANT1");
+    if (SliceModel* slice = f.f.radio.slice(0)) { slice->applyChanges(lists); }
+    f.interlock(QStringLiteral("READY"));
+    f.text(QStringLiteral("aethersdr_ext_enable:true;"));
+
+    for (int over = 1; over <= 2; ++over) {
+        f.text(QStringLiteral("trx:0,true,tci;"));
+        f.interlock(QStringLiteral("TRANSMITTING"));
+        rx.clear();
+        f.text(QStringLiteral("aethersdr_tx_antenna:0,ANT2;"));
+        f.text(QStringLiteral("aethersdr_tx_antenna:0,ANT2;"));
+        check(f.f.radio.slice(0) && f.f.radio.slice(0)->txAntenna() == QStringLiteral("ANT1")
+            && rx.count(QStringLiteral("aethersdr_tx_antenna:0,ANT1;")) == 2 && warnings == over,
+            over == 1 ? "a TX-antenna set during a TCI over is refused and noticed once"
+                      : "the next over's refusal is noticed again after settled RX");
+        f.text(QStringLiteral("trx:0,false;"));
+        f.interlock(QStringLiteral("READY"));
+    }
+    check(f.f.radio.transmitOwnershipPending(),
+        "the notice re-armed while the over's TX ownership is still retained");
+}
+
 void tciNativeDaxInputKeepsCapturedGrant()
 {
     for (const bool beforeActivation : {false, true}) {
@@ -4094,6 +4159,8 @@ int main(int argc, char** argv)
     tciCreatesOnlyAnAbsentDaxStream();
     tciDaxCreationKeepsOriginalRequest();
     daxSelectionRecoversAfterAnOver();
+    tciTxAntennaSetAfterAnOver();
+    tciTxAntennaRefusalReArmsAfterAnOver();
     tciNativeDaxInputKeepsCapturedGrant();
     tciDeferredDaxInputCannotSurviveRetake();
     tciPromotingDaxInputCannotSurviveRetake();

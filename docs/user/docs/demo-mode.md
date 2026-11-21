@@ -31,9 +31,10 @@ The demo's name is its "not on the air" safety label, so it cannot be renamed.
 
 ## Using the Demo
 
-- One slice on one panadapter, with synthetic receive audio and spectrum.
+- One slice on one panadapter, with synthetic receive audio and spectrum. If you open a second panadapter, it draws the birdie and the RTTY stations around the first panadapter's center, so there they can appear away from their frequency.
 - The panadapter header, adaptive RX filter, auto-squelch, center lock and band recall work as they do on a radio.
 - Simulated CW is proper Morse at 18 WPM and 700 Hz.
+- In RTTY mode the demo listens as a FLEX-8400 does: lower sideband with the dial on the 2125 Hz mark. The passband is drawn around the mark and space lines, but the demo does not filter its audio. **RTTY normal** and **RTTY reversed** are test stations for the RTTY decoder, heard in RTTY mode: **RTTY normal** sends mark on the higher RF frequency and space 170 Hz below it, with the mark on the dial; **RTTY reversed** swaps the two.
 - Memory channels are stored on this computer, in the bank shared with other radios that have no memory slots of their own.
 
 ### Demo Noise applet
@@ -56,6 +57,8 @@ The **Fault Injection** row lets you see how AetherSDR handles trouble without r
 |--------|---------------|------------------|
 | CW tone | Pitch (300–1200 Hz) | A wanted CW signal |
 | Voice (speech) | | A wanted SSB voice signal |
+| RTTY normal | | A made-up RTTY station (45.45 baud, 170 Hz shift) sending mark on the higher RF frequency. Switched on, it is placed on the dial; heard in RTTY mode |
+| RTTY reversed | | The same station sending mark and space the other way round |
 | White / AWGN | | The receiver's own thermal noise |
 | Pink / hiss | | Atmospheric band noise |
 | QRN crackle | Rate | Lightning static from distant storms |

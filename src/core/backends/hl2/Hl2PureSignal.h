@@ -61,6 +61,7 @@ class Hl2TxDsp;
 
 // What the GUI sees. Plain values, copied across the thread boundary.
 struct Hl2PureSignalStatus {
+    quint64 generation = 0;    // backend enable cycle, for queued status delivery
     bool available = false;      // board, rate and receiver count allow it
     QString unavailableReason;   // why not, when !available
     bool enabled = false;
@@ -74,6 +75,8 @@ struct Hl2PureSignalStatus {
     int calibrationCount = 0;    // info[5]: successful calibrations
     int engineState = 0;         // info[15]: calcc's state
     int attenuationDb = 31;      // keyed feedback attenuation; gain = 19 - att
+    int feedbackLimit = 0;       // Hl2PsGain::limit at the att it was measured at;
+                                 // +2 is laid over it from Hl2PsOverload
     double maxTx = 0.0;          // GetPSMaxTX
     bool keyed = false;
 };
@@ -117,8 +120,73 @@ struct Hl2PsGain {
     // level (fb <= 0) needs all the gain one step gives; a level above the
     // scale is clipped, not measured, and needs as much less.
     [[nodiscard]] static int stepDb(int fb) noexcept;
+    // Whether the attenuation range has run out with the level still outside
+    // the window. +1: the most attenuation the HL2 has and the feedback is
+    // still above the window: too strong to calibrate, and only an attenuator
+    // in the feedback path (e.g. after an amplifier's sampler) brings it in.
+    // -1: full gain and a measured level still too weak (coupler or sampler
+    // missing or too loose). 0: within range. fb <= 0 is no measurement yet,
+    // so it never reads as too weak. A level above kScale is still a
+    // measurement (calcc extrapolates it), so it is +1 as well; whether the
+    // receive input is overdriven is the gateware's ADC overload report, see
+    // Hl2PsOverload.
+    [[nodiscard]] static int limit(int att, int fb) noexcept
+    {
+        if (att >= kAttMax && fb > kWindowHigh) { return 1; }
+        if (att <= kAttMin && fb > 0 && fb <= kWindowLow) { return -1; }
+        return 0;
+    }
     // 0x0a C4 while keyed: ccRxGain(19 - att).
     [[nodiscard]] static int lnaGainDbForAtt(int att) noexcept { return 19 - att; }
+};
+
+// The attenuation calcc's feedback level was measured at. info[4] keeps the
+// last attempt's level until the next attempt finishes, so right after a gain
+// move, and for as long as Hold lasts after a manual one, it describes another
+// attenuation. limit() is only answered for a level measured at the
+// attenuation in force now; otherwise 0 until a fresh attempt (#7087 review).
+class Hl2PsMeasuredAt {
+public:
+    // One GetPSInfo read. attNow is the attenuation in force while that
+    // attempt ran, i.e. before this tick's controller step moves it.
+    // The first read after reset() is a baseline, not an attempt: calcc's
+    // info[] survives PureSignal off (LRESET leaves it), so that read can
+    // carry the previous session's level. No real attempt finishes within the
+    // first tick after an enable; calcc's MOX delay alone is 200 ms.
+    void observe(bool feedbackFresh, int attempts, int attNow) noexcept
+    {
+        if (feedbackFresh && m_attempts && attempts != *m_attempts) { m_att = attNow; }
+        m_attempts = attempts;
+    }
+    [[nodiscard]] int limit(int attNow, int fb) const noexcept
+    {
+        return m_att && *m_att == attNow ? Hl2PsGain::limit(attNow, fb) : 0;
+    }
+    void reset() noexcept
+    {
+        m_att.reset();
+        m_attempts.reset();
+    }
+
+private:
+    std::optional<int> m_att;
+    std::optional<int> m_attempts;   // empty: the next read is a baseline
+};
+
+// The red "receive input overdriven" state: the HL2's own ADC overload report
+// (DATA[24], &clip_cnt: set means at least 3 clip events in the interval)
+// while PureSignal is on and the radio is keyed, when the converter sees the
+// feedback. Only a telemetry window that was keyed from start to end decides
+// it, so a strong signal on receive just before the key does not count. It
+// holds through unkey, so the operator can still read it, and clears on the
+// next keyed window without overload, or when PureSignal goes off.
+struct Hl2PsOverload {
+    [[nodiscard]] static bool next(bool current, bool psEnabled, bool keyedWholeWindow,
+                                   bool overloadInWindow) noexcept
+    {
+        if (!psEnabled) { return false; }
+        return keyedWholeWindow ? overloadInWindow : current;
+    }
 };
 
 class Hl2PsController {
@@ -246,7 +314,7 @@ public:
     [[nodiscard]] bool isEnabled() const noexcept { return m_enabled; }
 
 public slots:
-    void setEnabled(bool on);
+    void setEnabled(bool on, quint64 generation = 0);
     void setKeyed(bool keyed);
     // calcc is told the rate the feedback DDCs actually run at (the receive
     // rate), so its MOX and TX delays convert to the right sample counts.
@@ -285,6 +353,8 @@ private:
     bool m_wantAuto = false;
     bool m_keyed = false;
     WdspChannel::PureSignalInfo m_lastInfo;
+    quint64 m_generation = 0;
+    Hl2PsMeasuredAt m_measured;   // which attenuation m_lastInfo's level belongs to
     bool m_available = false;
     QString m_unavailableReason;
     int m_feedbackRateHz = 48000;
