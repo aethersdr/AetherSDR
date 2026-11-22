@@ -1,6 +1,8 @@
 #include "RadioModel.h"
+#include "HostCwTextEngine.h"
 #include "ModeVocabulary.h"
 #include "TxController.h"
+#include "core/CwxLocalKeyer.h"
 #include "core/LogManager.h"
 #include "core/SerialPortController.h"
 
@@ -8,6 +10,9 @@
 #include <QScopeGuard>
 #include <QThread>
 #include <algorithm>
+#include <functional>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR {
@@ -33,6 +38,12 @@ TxCoordinator::Producer RadioModel::registerTxProducer()
 {
     return QThread::currentThread() == thread()
         ? m_txCoordinator.registerProducer(m_desktopTxActor) : TxCoordinator::Producer{};
+}
+
+TxCoordinator::Producer RadioModel::registerTxProducerFor(const TxCoordinator::Request& input)
+{
+    return QThread::currentThread() == thread() && m_txCoordinator.acceptsRequest(input)
+        ? m_txCoordinator.registerProducer(m_txCoordinator.requestActor(input)) : TxCoordinator::Producer{};
 }
 
 std::shared_ptr<TxController> RadioModel::localTxController()
@@ -344,7 +355,7 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         return false;
     }
     const RadioCapabilities caps = backendCapabilities();
-    if ((activity == TxActivity::Cwx && !caps.hasRadioSideCwKeyer)
+    if ((activity == TxActivity::Cwx && !caps.hasRadioSideCwKeyer && !caps.hostCwKeyingControl)
         || (activity == TxActivity::Atu && !caps.hasTuner)) {
         emitInterlockNotification(tr("This radio does not support the requested transmit operation."),
                                   QStringLiteral("tx-operation-unsupported"));
@@ -874,29 +885,56 @@ bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const
         return false;
     }
     if (macroIndex < 0 || macroIndex > 12 || (macroIndex == 0 && !cwTextValidationError(text).isEmpty())) {
-        abortProducerCwx(request);
+        if (!m_hostCwText || !m_hostCwText->hasTextFor(request)) {
+            abortProducerCwx(request);
+        }
         return false;
+    }
+    const bool host = hostCwTextRoute();
+    if (host) {
+        bool held = false;
+        if (!admitHostCwx(request, text, onAdmitted, macroIndex, live, held)) {
+            // A refused append leaves the sender's playing and waiting host text alone.
+            if (!m_hostCwText || !m_hostCwText->hasTextFor(request)) {
+                abortProducerCwx(request);
+            }
+            return false;
+        }
+        if (held) {
+            return true;
+        }
     }
     bool admitted = false;
     const CwxModel::TransmissionRoute route{
-        [self, request, &admitted, &onAdmitted]() -> CwxModel::TransmissionPermit {
+        [self, request, host, &admitted, &onAdmitted]() -> CwxModel::TransmissionPermit {
             if (!self || !self->beginTxActivity(TxActivity::Cwx, &request) || !self) {
                 return {};
             }
             admitted = true;
+            if (host) {
+                // One speed source for host keying, adopted once the send is admitted.
+                self->m_cwxModel.adoptSpeed(self->m_transmitModel.cwSpeed());
+            }
             const TxCoordinator::Operation operation = self->m_txCoordinator.requestOperation(request);
             if (onAdmitted) {
                 onAdmitted();
             }
             return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
         },
-        [self, request](const QString& value, int) {
-            return self && self->dispatchCwxText(value, self->m_txCoordinator.requestOperation(request));
+        [self, request](const QString& value, int wpm) {
+            if (!self) {
+                return false;
+            }
+            return self->hostCwTextRoute() ? self->dispatchHostCwText(request, value, wpm)
+                : self->dispatchCwxText(value, self->m_txCoordinator.requestOperation(request));
         },
         [self, request](const CwTextRequest& command, int epoch, int nChars, CwxModel::TransmissionPermit current) {
-            return self ? self->dispatchCwxRequest(command, self->m_txCoordinator.requestOperation(request),
-                                                   epoch, nChars, std::move(current))
-                        : ReceiveDispatch::Unsupported;
+            if (!self) {
+                return ReceiveDispatch::Unsupported;
+            }
+            return self->hostCwTextRoute() ? self->dispatchHostCwxRequest(command)
+                : self->dispatchCwxRequest(command, self->m_txCoordinator.requestOperation(request),
+                                           epoch, nChars, std::move(current));
         },
         [self, request](int epoch, bool untrackedMacro) {
             if (self) { self->finishCwxDispatch(epoch, untrackedMacro, self->m_txCoordinator.requestIntent(request)); }
@@ -908,10 +946,172 @@ bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const
     } else {
         m_cwxModel.send(text, route);
     }
-    if (self && !admitted) {
+    // A refused append leaves the sender's playing host text alone.
+    const bool hostPlaying = self && host && m_hostCwText && m_hostCwText->playingFor(request);
+    if (self && !admitted && !hostPlaying) {
         abortProducerCwx(request);
     }
-    return admitted;
+    return admitted && (!host || hostPlaying);
+}
+
+bool RadioModel::hostCwTextRoute() const
+{
+    return m_hostCwText && hasHostCwTextKeyer();
+}
+
+bool RadioModel::cwKeyHeld() const
+{
+    return m_cwKeyActive || m_cwPaddleHeld
+        || std::any_of(m_producerCwPaddleInputs.begin(), m_producerCwPaddleInputs.end(),
+                       [](const TxCoordinator::Request& input) { return input.valid(); });
+}
+
+bool RadioModel::admitHostCwx(const TxCoordinator::Request& request, const QString& text,
+                              const std::function<void()>& onAdmitted, int macroIndex, bool live,
+                              bool& held)
+{
+    if (!m_txCoordinator.acceptsRequest(request)) {
+        return false;
+    }
+    // Every refusal below names its reason, as the radio-side path's admission does.
+    const SliceModel* tx = txSlice();
+    const auto refuse = [this, tx](const QString& message, const char* reason) {
+        emitInterlockNotification(message, QStringLiteral("cw-text-refused:%1").arg(QLatin1String(reason)),
+                                  tx ? tx->panId() : QString());
+        return false;
+    };
+    switch (hostCwTextRefusal()) {
+    case HostCwTextRefusal::None:
+        break;
+    case HostCwTextRefusal::Unsupported:
+        return refuse(tr("CW text refused: this radio cannot key CW text."), "unsupported");
+    case HostCwTextRefusal::NoTxSlice:
+        return refuse(tr("CW text refused: no slice is set to transmit."), "no-tx-slice");
+    case HostCwTextRefusal::NotCwMode:
+        return refuse(tr("CW text refused: the transmit slice is not in a CW mode."), "not-cw");
+    case HostCwTextRefusal::ReceiveOnlyMode:
+        return refuse(tr("CW text refused: the transmit slice's mode is receive-only."), "receive-only");
+    case HostCwTextRefusal::Inhibited:
+        return refuse(tr("CW text refused: transmit is inhibited on the transmit slice."), "inhibited");
+    case HostCwTextRefusal::Tuning:
+        return refuse(tr("CW text refused: TUNE is active."), "tune");
+    case HostCwTextRefusal::BreakInOffUnkeyed:
+        return refuse(tr("CW text refused: break-in is off and transmit is not keyed."), "break-in-off");
+    }
+    // A CW key or paddle already held, local or remote, keeps the key: text
+    // started now would key under it (or between paddle elements), and the
+    // key's release would cut the text's element. Host text's own elements
+    // also hold the key, so a playing run is left out.
+    if (cwKeyHeld() && !m_hostCwText->playing()) {
+        return refuse(tr("CW text refused: a CW key is held down."), "key-held");
+    }
+    // No radio holds a macro here: only the local copy can be keyed, and the
+    // bounds apply to it once {CALL} is resolved, as it will be keyed.
+    QString message = text;
+    if (macroIndex != 0) {
+        QString reason;
+        const std::optional<QString> resolved = m_cwxModel.resolvePlaceholders(m_cwxModel.macro(macroIndex - 1),
+                                                                                &reason);
+        if (!resolved) {
+            return refuse(reason, "placeholder");
+        }
+        message = *resolved;
+    }
+    if (!m_hostCwText->admitsLength(static_cast<int>(message.size()))) {
+        return refuse(tr("CW text refused: a message holds at most %1 characters, and at most %2 may wait.")
+                          .arg(HostCwTextEngine::kMaxMessageChars).arg(HostCwTextEngine::kMaxPendingChars),
+                      "length");
+    }
+    // Text the host keyer cannot key whole would be keyed in part, or not at all.
+    if (!CwxLocalKeyer::canEncode(message)) {
+        return refuse(tr("CW text refused: it holds a character the CW keyer cannot send."), "encode");
+    }
+    // Another sender's run plays: this message waits behind it (one CW stream).
+    if (m_hostCwText->playing() && !m_hostCwText->playingFor(request)) {
+        if (!m_hostCwText->hold({request, message, macroIndex, live})) {
+            return refuse(tr("CW text refused: the CW text engine is closed."), "closed");
+        }
+        held = true;
+        if (onAdmitted) {
+            onAdmitted();
+        }
+    }
+    return true;
+}
+
+ReceiveDispatch RadioModel::dispatchHostCwxRequest(const CwTextRequest& request)
+{
+    // The engine keys the text segments at their own WPM; no radio holds a macro.
+    if (request.field == CwTextRequest::Field::Speed) {
+        if (request.origin == CwTextRequest::Origin::Operator) {
+            m_transmitModel.setCwSpeed(request.value);
+        }
+        return ReceiveDispatch::LocalOnly;
+    }
+    return request.field == CwTextRequest::Field::Send ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
+}
+
+bool RadioModel::dispatchHostCwText(const TxCoordinator::Request& request, const QString& text, int wpm)
+{
+    const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+    if (!m_hostCwText || !operation.permitsDispatch(txMonotonicMs())) {
+        return false;
+    }
+    // The sender's Cwx intent lasts until the engine has keyed this segment.
+    if (m_hostCwText->play(request, text, wpm, trackCwxQueue(operation))) {
+        return true;
+    }
+    // Only this sender ends: its closed request stops CwxModel from clearing
+    // the buffer, which would drop every other sender's waiting text.
+    abortProducerCwx(request);
+    return false;
+}
+
+void RadioModel::startWaitingHostCwx()
+{
+    const QPointer<RadioModel> self(this);
+    while (self && m_hostCwText) {
+        std::optional<HostCwTextEngine::Waiting> next = m_hostCwText->takeNext();
+        if (!next) {
+            return;
+        }
+        if (!requestProducerCwx(next->sender, next->macroIndex != 0 ? QString() : next->text, {},
+                                next->macroIndex, next->live) && self) {
+            emitInterlockNotification(tr("Queued CW text was not sent: transmit refused it when its turn came."),
+                                      QStringLiteral("cw-text-queued-dropped"));
+            // The sender's other waiting text goes too; with nothing playing
+            // for it either, its request is closed.
+            if (m_hostCwText) {
+                m_hostCwText->dropWaiting(next->sender);
+                if (!m_hostCwText->playingFor(next->sender)) {
+                    abortProducerCwx(next->sender);
+                }
+            }
+        }
+    }
+}
+
+void RadioModel::hostCwTextEnded(const TxCoordinator::Request& sender, bool refused)
+{
+    if (refused) {
+        abortProducerCwx(sender);   // ends its Cwx intent and drops its waiting text
+    }
+    startWaitingHostCwx();
+}
+
+void RadioModel::createHostCwTextEngine()
+{
+    const RadioCapabilities caps = m_backend ? backendCapabilities() : RadioCapabilities{};
+    if (m_hostCwText || !m_backend || !caps.hostCwKeyingControl || caps.hasRadioSideCwKeyer) {
+        return;
+    }
+    const QPointer<RadioModel> self(this);
+    m_hostCwText = std::make_unique<HostCwTextEngine>(this,
+        [self](const TxCoordinator::Request& sender, bool refused) {
+            if (self) {
+                self->hostCwTextEnded(sender, refused);
+            }
+        });
 }
 
 void RadioModel::abortProducerCwx(const TxCoordinator::Request& request)
@@ -919,6 +1119,16 @@ void RadioModel::abortProducerCwx(const TxCoordinator::Request& request)
     if (QThread::currentThread() != thread()) {
         return;
     }
+    // Host text: only this sender's run and waiting text stop, key up now.
+    const bool hostPlaying = m_hostCwText && m_hostCwText->playingFor(request);
+    if (m_hostCwText) {
+        m_hostCwText->stop(request);
+    }
+    const auto next = qScopeGuard([this, hostPlaying] {
+        if (hostPlaying) {
+            startWaitingHostCwx();
+        }
+    });
     const TxCoordinator::Intent intent = m_txCoordinator.requestIntent(request);
     if (!intent.isActivity(TxActivity::Cwx)) {
         if (!intent.pending()) {
@@ -930,6 +1140,10 @@ void RadioModel::abortProducerCwx(const TxCoordinator::Request& request)
     const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
     if (closed.isActivity(TxActivity::Cwx) && operation.permitsCleanup()
         && intent.sameIntent(m_cwxCommandIntent)) {
+        if (m_hostCwText) {
+            endLocalTxActivity(intent);
+            return;
+        }
         // This includes the unacknowledged radio-side text tail after local
         // handoff, but never a replacement producer's queue, even in one over.
         m_cwxModel.clearBuffer();
@@ -1249,6 +1463,10 @@ bool RadioModel::transmitStartBlockedByKeyObjection(const QString& gate)
 
 void RadioModel::resetTxOperations()
 {
+    // Host CW text keys up first, while the coordinator can still deliver it.
+    if (const std::unique_ptr<HostCwTextEngine> host = std::move(m_hostCwText)) {
+        host->close();
+    }
     // Even an idle coordinator must refuse new intent while the session dies.
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
@@ -1346,7 +1564,10 @@ void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, b
                 return;
             }
         }
-        if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
+        const bool wasHostEdge = std::exchange(m_hostCwTextEdge, hostTextGates);
+        const bool sent = sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request);
+        m_hostCwTextEdge = wasHostEdge;
+        if (!sent) {
             refused();
         } else if (down && (hostTextGates || !producerCwPaddleHeld(request))) {
             // Host CW text is sent text, not a held input, like CWX: its

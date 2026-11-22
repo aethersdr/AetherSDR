@@ -1322,6 +1322,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_TxTimeout.cpp
     src/models/TxTimeoutGuard.cpp
     src/models/HostCwTextKeyer.cpp
+    src/models/HostCwTextEngine.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp

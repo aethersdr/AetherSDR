@@ -322,6 +322,43 @@ void testScheduledInstantsFollowTheGridNotTheWake()
                && f.whens[5] < epoch + milliseconds(300));
 }
 
+// A speed segment ending on a word gap ("T " then "T"): the next letter still
+// owes its CharGap, so the silence is 7 units, as inside one entry (#2417).
+void testWordGapAcrossEntries()
+{
+    Fixture f;
+    f.keyer.setElapsed(0);
+    f.keyer.start(QStringLiteral("T "), 20);
+    f.keyer.start(QStringLiteral("T"), 20);
+    for (const qint64 at : {180, 420, 600}) {
+        f.keyer.setElapsed(at);
+        f.keyer.tick();
+    }
+    const auto epoch = f.keyer.epoch();
+    expectStates("segments: dah, word gap, dah", f.states, {1, 0, 1});
+    report("segments: the second dah keys 7 units after the first one's key-up",
+           f.whens.size() == 3 && f.whens[2] == epoch + std::chrono::milliseconds(600));
+}
+
+// Live typing ("E", " ", "E"): the space's own CharGap already completes the
+// word gap, so the next letter adds none.
+void testLiveSpaceIsOneWordGap()
+{
+    Fixture f;
+    f.keyer.setElapsed(0);
+    f.keyer.start(QStringLiteral("E"), 20);
+    f.keyer.start(QStringLiteral(" "), 20);
+    f.keyer.start(QStringLiteral("E"), 20);
+    for (const qint64 at : {60, 240, 480}) {
+        f.keyer.setElapsed(at);
+        f.keyer.tick();
+    }
+    const auto epoch = f.keyer.epoch();
+    expectStates("live: dit, word gap, dit", f.states, {1, 0, 1});
+    report("live: the second dit keys 7 units after the first one's key-up",
+           f.whens.size() == 3 && f.whens[2] == epoch + std::chrono::milliseconds(480));
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -334,6 +371,8 @@ int main(int argc, char** argv)
     testStopResetsTimingEpoch();
     testNaturalDrainResetsTimingEpoch();
     testScheduledInstantsFollowTheGridNotTheWake();
+    testWordGapAcrossEntries();
+    testLiveSpaceIsOneWordGap();
 
     std::printf("\n%s\n",
                 g_failed == 0
