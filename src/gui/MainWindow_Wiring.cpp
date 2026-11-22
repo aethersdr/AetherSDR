@@ -122,7 +122,7 @@ void MainWindow::wireStatusBarMessages()
     ThemeManager::instance().applyStyleSheet(
         messageOverlay,
         QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"
-                       " background: {{color.background.1}}; font-size: 12px;"
+                       " qproperty-activityDotColor: {{color.canon.cyan}}; background: {{color.background.1}}; font-size: 12px;"
                        " border: 1px solid {{color.background.2}}; border-radius: 4px; }"));
     connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
             this, [this](ATUStatus, const QString& detail) {

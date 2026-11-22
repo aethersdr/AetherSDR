@@ -2,6 +2,11 @@
 
 #include <QAccessible>
 #include <QAccessibleEvent>
+#include <QAccessibilityHints>
+#include <QGuiApplication>
+#include <QPainter>
+#include <QStyleHints>
+#include <QVariantAnimation>
 #include <QAbstractButton>
 #include <QAbstractSlider>
 #include <QComboBox>
@@ -26,6 +31,7 @@ namespace AetherSDR {
 // above it, so showing or clearing text cannot hide controls or change layout.
 class StatusBarMessageOverlay : public QLabel {
     Q_OBJECT
+    Q_PROPERTY(QColor activityDotColor MEMBER m_dotColor)
 public:
     explicit StatusBarMessageOverlay(QStatusBar* bar, QWidget* surface = nullptr)
         : QLabel(bar->parentWidget()), m_bar(bar), m_surface(surface)
@@ -39,6 +45,18 @@ public:
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setFocusPolicy(Qt::NoFocus);
         hide();
+        m_pulse.setDuration(2000);
+        m_pulse.setLoopCount(-1);
+        m_pulse.setStartValue(1.0);
+        m_pulse.setKeyValueAt(0.5, 0.4);
+        m_pulse.setEndValue(1.0);
+        m_pulse.setEasingCurve(QEasingCurve::InOutSine);
+        connect(&m_pulse, &QVariantAnimation::valueChanged, this, [this] {
+            update(dotRect());
+        });
+        connect(QGuiApplication::styleHints()->accessibility(),
+                &QAccessibilityHints::motionPreferenceChanged,
+                this, &StatusBarMessageOverlay::syncPulse);
         bar->installEventFilter(this);
         parentWidget()->installEventFilter(this);
         if (m_surface) {
@@ -75,6 +93,32 @@ public:
     }
 
 protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        QLabel::paintEvent(event);
+        if (!m_showsActivity)
+            return;
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(m_dotColor.isValid() ? m_dotColor : palette().highlight().color());
+        if (m_pulse.state() == QAbstractAnimation::Running)
+            p.setOpacity(m_pulse.currentValue().toReal());
+        p.drawEllipse(dotRect());
+    }
+
+    void showEvent(QShowEvent* event) override
+    {
+        QLabel::showEvent(event);
+        syncPulse();
+    }
+
+    void hideEvent(QHideEvent* event) override
+    {
+        m_pulse.stop();
+        QLabel::hideEvent(event);
+    }
+
     bool eventFilter(QObject* watched, QEvent* event) override
     {
         switch (event->type()) {
@@ -92,10 +136,30 @@ protected:
     }
 
 private:
+    QRect dotRect() const { return QRect(10, (height() - 6) / 2, 6, 6); }
+
+    void syncPulse()
+    {
+        const bool animate = m_showsActivity && isVisible()
+            && QGuiApplication::styleHints()->accessibility()->motionPreference()
+                   != Qt::MotionPreference::ReducedMotion;
+        if (animate && m_pulse.state() != QAbstractAnimation::Running)
+            m_pulse.start();
+        else if (!animate)
+            m_pulse.stop();
+        update(dotRect());
+    }
+
     void selectMessage()
     {
         const QString notice = m_bar ? m_bar->currentMessage() : QString();
         const QString next = notice.isEmpty() ? m_activity : notice;
+        const bool showsActivity = notice.isEmpty() && !m_activity.isEmpty();
+        if (m_showsActivity != showsActivity) {
+            m_showsActivity = showsActivity;
+            setContentsMargins(showsActivity ? 22 : 10, 5, 10, 5);
+            syncPulse();
+        }
         if (next == m_message) {
             updateNotice(); // the same words can change source and width policy
             return;
@@ -175,6 +239,9 @@ private:
     QPointer<QWidget> m_surface;
     QPointer<QWidget> m_alternateSurface;
     QTimer m_announcementTimer;
+    QColor m_dotColor;
+    QVariantAnimation m_pulse;
+    bool m_showsActivity{};
     QString m_activity;
     QString m_message;
 };

@@ -112,6 +112,12 @@ int main(int argc, char** argv)
     notice.setAgentActivity(QStringLiteral("Testing meters"));
     check(notice.isVisible() && notice.text() == QStringLiteral("Testing meters"),
           "agent activity appears beside zoom");
+    const int activityInset = notice.contentsMargins().left();
+    bar->showMessage(QStringLiteral("Testing meters"));
+    check(notice.contentsMargins().left() < activityInset,
+          "an app notice with the same words removes the activity dot");
+    bar->clearMessage();
+    check(notice.contentsMargins().left() == activityInset, "resuming the step restores the dot");
     bar->showMessage(QStringLiteral("Operator notice"));
     notice.setAgentActivity(QStringLiteral("Testing tuning"));
     check(notice.text() == QStringLiteral("Operator notice"), "app notice takes priority");
@@ -127,7 +133,7 @@ int main(int argc, char** argv)
         const QImage image = notice.grab().toImage().convertToFormat(QImage::Format_RGB32);
         int ink = 0;
         for (int y = 0; y < image.height(); ++y)
-            for (int x = 0; x < image.width(); ++x)
+            for (int x = qCeil(20 * notice.devicePixelRatioF()); x < image.width(); ++x)
                 if (qGray(image.pixel(x, y)) < 160)
                     ++ink;
         return ink;
