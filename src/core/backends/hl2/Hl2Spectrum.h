@@ -9,10 +9,10 @@
 namespace AetherSDR::hl2 {
 
 // The HL2 panadapter path: accumulate raw IQ (normalized [-1, 1)) into fixed
-// FFT frames and produce a DC-centered magnitude spectrum in dBFS. Ported from
-// the live-validated tools/hl2/spectrum.py — Hanning-windowed, per-frame DC
-// removal (the direct-sampling ADC offset sits on I), coherent-gain normalized,
-// fftshifted so DC lands at the centre bin.
+// FFT frames and produce a DC-centered magnitude spectrum in dBFS. After
+// tools/hl2/spectrum.py, with a running DC estimate in place of its per-capture
+// mean: Hanning-windowed, the slow DC estimate removed (kDcTimeConstantS),
+// coherent-gain normalized, fftshifted so DC lands at the centre bin.
 //
 // Owns an FFTW plan; construction/destruction allocate, process() does not
 // (fftw_execute is allocation-free). FFTW's global planner is not thread-safe,
@@ -32,6 +32,36 @@ public:
     // A bin-centred steady tone of magnitude A reads 20*log10(A) plus this:
     // 20*log10(2), because the normalisation divides by half the window sum.
     static constexpr double kToneGainDb = 6.020599913279624;
+
+    // Time constant of the DC estimate subtracted before the transform, taken
+    // over every IQ sample (accumulate() included). Long, so a tone off centre
+    // barely moves it; without a sample rate it is kDcFramesWithoutRate frames.
+    static constexpr double kDcTimeConstantS = 1.0;
+    static constexpr int kDcFramesWithoutRate = 200;
+
+    // The T/R state. Our own TX can put a DC term on the IQ, so it gets its own
+    // estimate, and the receive one is frozen meanwhile. A key arms the switch;
+    // it happens where the keyed IQ arrives (kDcOnsetRun samples kDcOnsetDb over
+    // the receive power), which on the wire is ~120 ms after MOX. On release,
+    // receive resumes where the keyed IQ ends (~30 ms on the wire), at most
+    // releaseHoldMs later; neither estimate tracks in between. The transmit
+    // estimate carries to the next key (seeded from receive on the first).
+    void setTransmitting(bool on, double releaseHoldMs = 0.0) noexcept;
+    [[nodiscard]] bool dcTransmitting() const noexcept
+    {
+        return m_dcState == DcState::Tx || m_dcState == DcState::Releasing;
+    }
+    // A key has reached the T/R state: armed, transmitting or releasing.
+    [[nodiscard]] bool dcKeyed() const noexcept { return m_dcState != DcState::Rx; }
+    static constexpr double kDcOnsetDb = 20.0;
+    static constexpr int kDcOnsetRun = 64;
+
+    // Restart both DC estimates: for an NCO move. reset() (a gap) restarts the
+    // receive one only. Not part of dropAverage(), which a T/R edge may call too.
+    void restartDc() noexcept;
+    // A rebuild (span or rate change) keeps the DC estimates and the T/R state:
+    // the converter and the key are the same, only the geometry changed.
+    void carryDcFrom(const Hl2Spectrum& old) noexcept;
 
     // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
     // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting
@@ -82,10 +112,17 @@ public:
 
     // Drop the partial frame on a transport sequence gap, returning samples
     // discarded (0 = none): discard, not zero-fill, which renders as a transient.
-    // Averaging state is kept (same spectrum). A retune wants the opposite
-    // answer and calls this AND dropAverage(); buildChannel() rebuilds this
-    // object on FFT size/rate change.
+    // Averaging state is kept (same spectrum); the receive DC estimate restarts,
+    // while the transmit estimate and the T/R state carry through a gap mid-key.
+    // buildChannel() rebuilds this object on FFT size/rate change.
     std::size_t reset() noexcept
+    {
+        const std::size_t discarded = discardPartialFrame();
+        restartRxDc();
+        return discarded;
+    }
+    // The partial frame alone, for a retune: the DC estimates are kept.
+    std::size_t discardPartialFrame() noexcept
     {
         const std::size_t discarded = m_acc.size();
         m_acc.clear();
@@ -94,6 +131,8 @@ public:
 
 private:
     void computeFrame(std::vector<float>& binsDbfs);
+    void restartRxDc() noexcept;              // receive DC estimate only (a gap)
+    void trackDc(std::complex<float> s) noexcept;
 
     int m_fftSize;
     std::vector<std::complex<float>> m_acc;   // accumulation buffer (< m_fftSize)
@@ -123,6 +162,24 @@ private:
     // time averaging is switched on or the geometry changes, so the first
     // frame after a drop is TAKEN rather than blended into silence.
     bool m_haveAverage = false;
+    // Running DC estimates (trackDc()), one per T/R state. reset() (a gap)
+    // restarts the receive one, restartDc() (a retune) both; dropAverage() and
+    // T/R edges leave them.
+    struct Dc {
+        double re = 0.0;
+        double im = 0.0;
+    };
+    enum class DcState { Rx, Armed, Tx, Releasing };
+    double m_dcAlpha = 0.0;                   // per-sample weight, from the time constant
+    Dc m_rxDc;
+    Dc m_txDc;
+    double m_rxPower = 0.0;                   // receive |s|^2, same filter as m_rxDc
+    double m_dcOnsetRatio = 1.0;              // kDcOnsetDb as a power ratio
+    bool m_txDcSeeded = false;
+    DcState m_dcState = DcState::Rx;
+    int m_dcOnsetRun = 0;                     // consecutive keyed-level samples while Armed
+    std::uint64_t m_dcReleaseIn = 0;          // samples left in the release hold
+    std::uint64_t m_dcSamples = 0;            // receive samples, counted until the time constant
     // Opaque FFTW handles (kept as void* so fftw3.h stays out of the header).
     void* m_in = nullptr;                     // fftw_complex[m_fftSize]
     void* m_out = nullptr;                     // fftw_complex[m_fftSize]

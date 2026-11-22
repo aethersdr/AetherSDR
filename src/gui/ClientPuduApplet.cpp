@@ -174,6 +174,7 @@ void ClientPuduApplet::buildUI()
         };
 
         m_pooDrive = makeKnob("Drive");
+        m_pooDrive->setAccessibleLabel(tr("Body drive"));
         m_pooDrive->setRange(0.0f, 24.0f);
         m_pooDrive->setDefault(6.0f);
         m_pooDrive->setValueFromNorm([](float n) { return n * 24.0f; });
@@ -186,6 +187,7 @@ void ClientPuduApplet::buildUI()
         grid->addWidget(m_pooDrive, 1, 0, Qt::AlignHCenter);
 
         m_pooTune = makeKnob("Tune");
+        m_pooTune->setAccessibleLabel(tr("Body tune"));
         m_pooTune->setRange(50.0f, 160.0f);
         m_pooTune->setDefault(100.0f);
         m_pooTune->setValueFromNorm([](float n) { return 50.0f + n * 110.0f; });
@@ -198,6 +200,7 @@ void ClientPuduApplet::buildUI()
         grid->addWidget(m_pooTune, 1, 1, Qt::AlignHCenter);
 
         m_pooMix = makeKnob("Mix");
+        m_pooMix->setAccessibleLabel(tr("Body mix"));
         m_pooMix->setRange(0.0f, 1.0f);
         m_pooMix->setDefault(0.3f);
         m_pooMix->setValueFromNorm([](float n) { return n; });
@@ -210,6 +213,7 @@ void ClientPuduApplet::buildUI()
         grid->addWidget(m_pooMix, 1, 2, Qt::AlignHCenter);
 
         m_dooTune = makeKnob("Tune");
+        m_dooTune->setAccessibleLabel(tr("Clarity tune"));
         m_dooTune->setRange(1000.0f, 10000.0f);
         m_dooTune->setDefault(5000.0f);
         m_dooTune->setValueFromNorm([](float n) {
@@ -228,6 +232,7 @@ void ClientPuduApplet::buildUI()
         grid->addWidget(m_dooTune, 1, 4, Qt::AlignHCenter);
 
         m_dooHarmonics = makeKnob("Air");
+        m_dooHarmonics->setAccessibleLabel(tr("Clarity air"));
         m_dooHarmonics->setRange(0.0f, 24.0f);
         m_dooHarmonics->setDefault(6.0f);
         m_dooHarmonics->setValueFromNorm([](float n) { return n * 24.0f; });
@@ -240,6 +245,7 @@ void ClientPuduApplet::buildUI()
         grid->addWidget(m_dooHarmonics, 1, 5, Qt::AlignHCenter);
 
         m_dooMix = makeKnob("Mix");
+        m_dooMix->setAccessibleLabel(tr("Clarity mix"));
         m_dooMix->setRange(0.0f, 1.0f);
         m_dooMix->setDefault(0.3f);
         m_dooMix->setValueFromNorm([](float n) { return n; });

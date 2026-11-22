@@ -42,6 +42,23 @@ inline void markTxKeying(QWidget* w)
         w->setProperty(kTxKeyingProperty, true);
 }
 
+// Marker for controls that set transmit drive but never key (RF power, Tune
+// power). TX permission gates keying only; the bridge's power ceiling
+// (AETHER_AUTOMATION_TX_MAX_POWER) bounds these (#5851). Shown as
+// "txSetpoint" in dumpTree; never routes into the keying-action path.
+inline constexpr char kTxSetpointProperty[] = "aetherTxSetpoint";
+
+inline void markTxSetpoint(QWidget* w)
+{
+    if (w)
+        w->setProperty(kTxSetpointProperty, true);
+}
+
+inline bool isTxSetpointControl(const QObject* object)
+{
+    return object && object->property(kTxSetpointProperty).toBool();
+}
+
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(std::shared_ptr<const AetherSDR::TxKeyingAction>)

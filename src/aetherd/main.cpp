@@ -2,7 +2,7 @@
 #include "CredentialStartup.h"
 #include "GracefulStop.h"
 #include "GrantAdminClient.h"
-#include "core/backends/hl2/Hl2Backend.h"
+#include "core/HostTransmitPolicy.h"
 #include "core/control/ControlCredentialVault.h"
 #include "core/control/ControlEngine.h"
 #include "core/control/LocalControlServer.h"
@@ -279,9 +279,9 @@ int main(int argc, char* argv[])
     // Constructors/settings imports can pump nested event loops. Reserving
     // the endpoint closes early arrivals without admitting sessions, so no
     // client can race the one-shot target binding or see partial resources.
-    // No HL2 TX grant can exist here (independentTxReady), so the HL2 is
+    // No host-keyed TX grant can exist here (independentTxReady), so the HL2 is
     // receive only, and its receive controls qualify without idle readback.
-    AetherSDR::hl2::Hl2Backend::setHostOffersTransmit(false);
+    AetherSDR::setHostOffersTransmit(false);
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
             {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption),

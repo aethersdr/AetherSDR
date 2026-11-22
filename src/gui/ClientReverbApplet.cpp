@@ -208,6 +208,7 @@ void ClientReverbApplet::buildUI()
     row->addWidget(m_decay);
 
     m_damping = makeKnob("Damp");
+    m_damping->setAccessibleLabel(tr("Damping"));
     m_damping->setRange(0.0f, 1.0f);
     m_damping->setDefault(0.5f);
     m_damping->setValueFromNorm([](float n) { return n; });
@@ -218,6 +219,7 @@ void ClientReverbApplet::buildUI()
     row->addWidget(m_damping);
 
     m_preDly = makeKnob("Pre");
+    m_preDly->setAccessibleLabel(tr("Pre-delay"));
     m_preDly->setRange(0.0f, 100.0f);
     m_preDly->setDefault(20.0f);
     m_preDly->setValueFromNorm([](float n) { return n * 100.0f; });

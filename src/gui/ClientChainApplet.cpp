@@ -236,6 +236,8 @@ ClientChainApplet::ClientChainApplet(QWidget* parent) : QWidget(parent)
             this, &ClientChainApplet::rxDspEditRequested);
     connect(m_rxChain, &ClientRxChainWidget::nr2EnableWithWisdomRequested,
             this, &ClientChainApplet::rxNr2EnableWithWisdomRequested);
+    connect(m_rxChain, &ClientRxChainWidget::dspMethodUserToggled,
+            this, &ClientChainApplet::rxDspMethodUserToggled);
     connect(m_rxChain, &ClientRxChainWidget::stageEnabledChanged,
             this, &ClientChainApplet::rxStageEnabledChanged);
     connect(m_rxChain, &ClientRxChainWidget::chainReordered,
