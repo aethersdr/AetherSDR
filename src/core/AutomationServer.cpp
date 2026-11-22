@@ -477,6 +477,8 @@ QJsonObject describeWidget(const QWidget* w)
     // will refuse before trying them (#3646).
     if (w->property(kTxKeyingProperty).toBool())
         o[QStringLiteral("keying")] = true;
+    if (isTxSetpointControl(w))
+        o[QStringLiteral("txSetpoint")] = true;
     {
         const QVariant sliceId = w->property("sliceId");
         if (sliceId.isValid()) {
@@ -3769,7 +3771,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("transmit", {},
-            "transmit <rfpower|tunepower> <0..100> — transmit drive (TX-gated)",
+            "transmit <rfpower|tunepower> <0..100> — transmit drive (bounded by the power ceiling)",
             parseActionValueExact,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
@@ -9422,14 +9424,8 @@ QJsonObject AutomationServer::doTransmit(const QString& action, const QString& a
     const QString a = action.trimmed().toLower();
 
     if (a == QLatin1String("rfpower") || a == QLatin1String("tunepower")) {
-        // TX-gated for the same reason `key` is: these set how hard the radio
-        // will drive whatever is downstream of it — a transverter or an
-        // amplifier — so a session that may not transmit may not change them
-        // either. Reading them stays ungated via `get transmit`.
-        if (!m_txAllowed)
-            return err(QStringLiteral("blocked: transmit ") + a
-                       + QStringLiteral(" sets transmit drive — set "
-                                        "AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        // Drive, not keying: TX permission gates keying only, and the power
+        // ceiling (AETHER_AUTOMATION_TX_MAX_POWER) bounds drive (#5851).
         const QString v = arg.trimmed();
         if (v.isEmpty())
             return err(QStringLiteral("transmit ") + a
@@ -9459,7 +9455,7 @@ QJsonObject AutomationServer::doTransmit(const QString& action, const QString& a
             tx.setTunePower(applied);
 
         qCInfo(lcAutomation).noquote()
-            << "transmit" << a << applied << "(ALLOW_TX)";
+            << "transmit" << a << applied << "(drive; no TX permission needed)";
         QJsonObject reply{{QStringLiteral("ok"), true},
                           {QStringLiteral("transmit"), a},
                           {QStringLiteral("rfPower"), tx.rfPower()},

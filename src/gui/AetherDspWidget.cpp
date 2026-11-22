@@ -416,6 +416,8 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
                 this, &AetherDspWidget::syncDspSelectorFromEngine);
         connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
                 this, &AetherDspWidget::syncDspSelectorFromEngine);
+        connect(m_audio, &AudioEngine::nnrEnabledChanged,
+                this, &AetherDspWidget::syncDspSelectorFromEngine);
         connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
                 this, &AetherDspWidget::updateBnrStatus);
     }

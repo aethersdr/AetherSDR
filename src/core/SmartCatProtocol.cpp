@@ -553,6 +553,7 @@ QString SmartCatProtocol::cmdRX()
 {
     const TxCoordinator::Request request = m_pttRequest;
     m_pttRequest = {};
+    m_model->noteTxInputReleased(m_txProducer.request());
     (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
     return {};
 }

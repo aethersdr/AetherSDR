@@ -89,6 +89,15 @@ ReceiveDispatch FlexBackend::requestMemory(const MemoryRequest& request,
     }
     const auto sink = m_setupSink;
     const QPointer<FlexBackend> alive(this);
+    // FlexLib: `memory apply` lands on the radio's ACTIVE slice, while the
+    // retune below names request.sliceId. If the two differ (the radio kept
+    // another slice active, e.g. after a profile load dropped our
+    // active= write), both slices move — and with diversity, both pairs.
+    // Make the target active first so the radio and the retune agree.
+    if (request.action == Action::Recall && request.sliceId >= 0
+        && !sink(QStringLiteral("slice set %1 active=1").arg(request.sliceId), {})) {
+        return ReceiveDispatch::Unsupported;
+    }
     if (!sink(command, completion)) { return ReceiveDispatch::Unsupported; }
     if (request.action != Action::Recall || !request.recall) { return ReceiveDispatch::Dispatched; }
     const MemoryEntry& memory = *request.recall;

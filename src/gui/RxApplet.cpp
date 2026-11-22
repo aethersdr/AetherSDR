@@ -16,6 +16,7 @@
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
+#include "CenterMarkSlider.h"
 #include "ComboStyle.h"
 #include "InteractionSettings.h"
 #include "SliceColorManager.h"
@@ -65,71 +66,6 @@
 #include "core/ThemeManager.h"
 #include "FreqLineEdit.h"
 
-// Slider that resets to a default value on double-click.
-// Extends GuardedSlider for controls-lock support (#745).
-class ResetSlider : public GuardedSlider {
-public:
-    explicit ResetSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : GuardedSlider(o, parent), m_resetVal(resetVal) {}
-protected:
-    void mouseDoubleClickEvent(QMouseEvent*) override { setValue(m_resetVal); }
-private:
-    int m_resetVal;
-};
-
-// ResetSlider filled from the centre outward with a centre-mark dot, for
-// pan/balance controls whose zero is the midpoint. Overpaints the stylesheet's
-// 0→handle sub-page with groove colour, then fills centre→handle in accent,
-// clipped to exclude the handle disc.
-class CenterMarkSlider : public ResetSlider {
-public:
-    explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : ResetSlider(resetVal, o, parent) {}
-protected:
-    void paintEvent(QPaintEvent* ev) override {
-        ResetSlider::paintEvent(ev);
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-
-        auto& tm = AetherSDR::ThemeManager::instance();
-        const int cx = width() / 2;
-        const int cy = height() / 2;
-        const int grooveY = cy - 2;
-
-        QStyleOptionSlider opt;
-        initStyleOption(&opt);
-        const QRect handleRect = style()->subControlRect(
-            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
-        const int handleCx = handleRect.center().x();
-
-        // Clip out the handle so the overpaint never touches its pixels.
-        QPainterPath clip;
-        clip.addRect(rect());
-        QPainterPath handlePath;
-        handlePath.addEllipse(handleRect.adjusted(-1, -1, 1, 1));
-        p.setClipPath(clip.subtracted(handlePath));
-
-        p.setPen(Qt::NoPen);
-        if (handleCx < cx) {
-            // Sub-page already painted (0 → handle); erase it with groove
-            // colour, then add accent (handle → centre).
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, handleCx, 4));
-            p.setBrush(tm.color("color.accent"));
-            p.drawRect(QRect(handleCx, grooveY, cx - handleCx, 4));
-        } else {
-            // Sub-page already paints (0 → handle); we only want (centre
-            // → handle), so erase (0 → centre) with groove colour.
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, cx, 4));
-        }
-
-        // Centre-mark dot — visual landmark for the neutral position.
-        p.setBrush(QColor("#608090"));
-        p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
-    }
-};
-
 // Button that paints a solid left- or right-pointing triangle.
 class TriBtn : public QPushButton {
 public:
@@ -170,14 +106,6 @@ namespace AetherSDR {
 static QString percentText(int value)
 {
     return QStringLiteral("%1%").arg(value);
-}
-
-static QString panText(int value)
-{
-    if (value == 50)
-        return QStringLiteral("C");
-    return QStringLiteral("%1%2").arg(value < 50 ? QStringLiteral("L") : QStringLiteral("R"))
-                                .arg(std::abs(value - 50));
 }
 
 // ── Style constants (matching docs/style/applet-style-guide.md) ───────────────
@@ -1052,6 +980,12 @@ void RxApplet::buildUI()
             return QString::number(v);
         });
         applyPrimarySliderStyle(m_sqlSlider);
+        // A closed squelch gate dims the fill. One sheet with a property rule:
+        // a gate flip re-polishes rather than re-resolving it (#6552).
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_sqlSlider,
+            primarySliderStyleTemplate() + QStringLiteral(
+                "QSlider[squelchGate=\"closed\"]::sub-page:horizontal"
+                " { background: {{color.slider.foreground.gateClosed}}; }"));
         row->addWidget(m_sqlSlider, 1);
 
         applySqlModeVisuals();
@@ -1392,6 +1326,8 @@ void RxApplet::buildUI()
 void RxApplet::applySqlModeVisuals()
 {
     if (!m_sqlBtn) return;
+    // Declared first so it runs last, after every tooltip below is set.
+    const auto paintGate = qScopeGuard([this] { applySqlGateVisuals(); });
     const auto describeThreshold = qScopeGuard([this] {
         if (!m_exclusiveSquelch || usingExternalReceiveSquelch()
             || !m_sqlSlider || !m_sqlSlider->isEnabled()) { return; }
@@ -1484,6 +1420,52 @@ void RxApplet::applySqlModeVisuals()
         m_sqlSlider->update();
     }
     applySqlButtonDescription();
+}
+
+SquelchGateState RxApplet::shownSquelchGate() const
+{
+    if (!m_slice || m_sqlMode == SqlMode::Off || usingExternalReceiveSquelch()
+        || !m_squelchGateModes.contains(m_slice->mode(), Qt::CaseInsensitive)) {
+        return SquelchGateState::Unavailable;
+    }
+    return m_slice->squelchGate();
+}
+
+void RxApplet::applySqlGateVisuals()
+{
+    if (!m_sqlSlider) {
+        return;
+    }
+    const SquelchGateState gate = shownSquelchGate();
+    // Closed takes the dimmed fill (the sheet's squelchGate rule); open and
+    // unreported keep the applet's.
+    const QString gateName = gate == SquelchGateState::Open ? QStringLiteral("open")
+        : gate == SquelchGateState::Closed ? QStringLiteral("closed") : QString();
+    if (m_sqlSlider->property("squelchGate").toString() != gateName) {
+        m_sqlSlider->setProperty("squelchGate", gateName);
+        m_sqlSlider->style()->unpolish(m_sqlSlider);
+        m_sqlSlider->style()->polish(m_sqlSlider);
+        m_sqlSlider->update();
+    }
+    QString line;
+    if (gate == SquelchGateState::Open) {
+        line = tr("Gate open: audio passes.");
+    } else if (gate == SquelchGateState::Closed) {
+        line = tr("Gate closed: audio muted.");
+    }
+    // Only our own line is replaced, so a tooltip set elsewhere (a mode's
+    // unavailability reason) survives a gate change.
+    const auto withLine = [&](QString text, QLatin1Char sep) {
+        const QString old = sep + m_paintedSquelchGateLine;
+        if (!m_paintedSquelchGateLine.isEmpty() && text.endsWith(old)) {
+            text.chop(old.size());
+        }
+        return line.isEmpty() ? text : text + sep + line;
+    };
+    m_sqlSlider->setToolTip(withLine(m_sqlSlider->toolTip(), QLatin1Char('\n')));
+    m_sqlSlider->setAccessibleDescription(
+        withLine(m_sqlSlider->accessibleDescription(), QLatin1Char(' ')));
+    m_paintedSquelchGateLine = line;
 }
 
 void RxApplet::applySqlButtonDescription()
@@ -2185,6 +2167,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
     m_exclusiveSquelch = m_radioModel && m_radioModel->isConnected()
         ? exclusiveSquelchScaleValue(m_radioModel->backendCapabilities().squelchLevelScale) : std::nullopt;
+    m_squelchGateModes = m_radioModel && m_radioModel->isConnected()
+        ? m_radioModel->backendCapabilities().squelchGateModes : QStringList{};
     if (!m_radioModel) {
         m_filterPassband->setEnabled(true);
         m_filterPassband->setAccessibleDescription(
@@ -2262,6 +2246,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
                 [this](bool connected, const RadioCapabilities& caps) {
             m_receiveFilterControl = connected ? caps.receiveFilterControl : std::nullopt;
             m_exclusiveSquelch = connected ? exclusiveSquelchScaleValue(caps.squelchLevelScale) : std::nullopt;
+            m_squelchGateModes = connected ? caps.squelchGateModes : QStringList{};
+            applySqlGateVisuals();
             if (m_exclusiveSquelch && m_slice && !m_clientSquelchScope.hasRadioIdentity()) {
                 setSlice(m_slice);
             }
@@ -3036,6 +3022,8 @@ void RxApplet::connectSlice(SliceModel* s)
         m_afSlider->setValue(static_cast<int>(g));
     });
 
+    connect(s, &SliceModel::squelchGateChanged, this, [this] { applySqlGateVisuals(); });
+    connect(s, &SliceModel::modeChanged, this, [this] { applySqlGateVisuals(); });
     connect(s, &SliceModel::squelchChanged, this, [this, applySquelchState](bool on, int level) {
         if (m_slice && m_slice->externalReceiveReplacementActive()) {
             return;

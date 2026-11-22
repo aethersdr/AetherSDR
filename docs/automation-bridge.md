@@ -27,7 +27,7 @@ production; it only exists when you ask for it via an env var.
 | Visually check a dialog or applet layout | **Yes** — `grab <widget>` → view the PNG. |
 | Click a button or move a slider programmatically | **Yes** — `invoke <target> <action> [value]`. |
 | Read live model truth (freq, mode, center, dBm, NB/NR) | **Yes** — `get radio\|slice\|pan …`. Assert on state, no pixels. |
-| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`/`transmit`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
+| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). Drive (`transmit rfpower\|tunepower`) never keys and needs no permission; the power ceiling bounds it. |
 | Read client-side DSP / window / floor state | **Yes** — `get dsp`, `dumpTree` `windowState`, `floors`. |
 
 ---
@@ -168,8 +168,9 @@ The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
 `doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
-`atu`, `cwx`, `testtone`, `transmit` — gated by
+`atu`, `cwx`, `testtone` — gated by
 `AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), the non-keying
+`transmit` drive verb (no permission, bounded by the power ceiling) and
 `txwaterfall` display toggle, and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
@@ -741,9 +742,13 @@ popup at a time and only while it is open; an empty combo is refused up front
 > was deliberately narrowed from the old `…/tune/atu/vox/…` set: `tune`/`atu`/`vox`
 > false-blocked **RX-only** buttons like **"Tune Now"** (net/spot retune) and VOX
 > toggles, and the genuine keying TUNE/ATU buttons all carry `markTxKeying()`
-> anyway, so the marker still covers them (#3918). Setpoint
-> **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
-> blocked — moving a value setter can't transmit.
+> anyway, so the marker still covers them (#3918). The **drive setpoints**
+> `RF power` and `Tune power` carry a second marker, `markTxSetpoint()`
+> (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`). They never key, so
+> TX permission does not gate them (#5851): `invoke`, the pointer verbs and
+> `transmit rfpower|tunepower` set them without it. What bounds drive is the
+> power ceiling, `AETHER_AUTOMATION_TX_MAX_POWER`, below. Other setpoints like
+> `VOX level` or `Microphone gain` are not blocked either.
 >
 > **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
 > without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
@@ -1091,7 +1096,7 @@ cost a few integer adds per frame.
 | `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
-| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`). One key is not a rebuild: `smartMtrStrip` counts GPU frames that repainted and uploaded only the SmartMTR value-label strip, so leave it out when summing causes against `overlayRebuilds*` |
 | `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
 | `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
 | `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
@@ -1257,6 +1262,9 @@ operator setting it lowered. Where a backend withholds SWR below its own forward
 gate (the health keys `forwardPowerSwrGateCounts` and `forwardPowerSwrGateClears`), `rf`
 reports `swrResult: gate-not-reached` with the gate, the key's forward peak, the
 tone and the drive, instead of "no SWR reading".
+`meter-scale` publishes `swr` and `micPeakDbfs` only from a confirmed key and a
+fresh meter. Otherwise the value is `null` and is not judged, and `swrNote`
+says the SWR was not measurable.
 Full drive does not establish adequate stimulus: a quiet tone can still leave
 the forward reading below the gate. Check the selected tone level and
 independently measured forward power before drawing conclusions about the
@@ -1265,6 +1273,15 @@ detector or its scaling.
 The receive-only `rx-sidebands` stage judges each mode's reference tone relative
 to its own background. Silent captures and non-finite measurements do not count
 as recovered carriers, so muted audio cannot produce an `expected` pattern.
+
+The `rx-sidebands`, `sideband` and `lifecycle` stages measure through the
+automation audio capture, which needs `AETHER_AUTOMATION=1` at launch. Without
+it each of those stages reports `INCONCLUSIVE — audio capture unavailable` with
+the engine's reason, publishes no levels, and does not key. A capture that arms
+but returns no audio is reported as a missing receive-audio path, not as a
+quiet band, and `rx-sidebands` then reports `summary.pattern: no-audio`.
+`sideband` reports a refused key as INCONCLUSIVE with `keyConfirmed: false`,
+and does not key its second leg.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 
@@ -4852,6 +4869,8 @@ Bare-line forms: `modem profile hf300`, `modem on`, `modem digi status`,
 
 These verbs **key the live transmitter** and are refused unless the app was
 launched with `AETHER_AUTOMATION_ALLOW_TX=1` (the same rail as a keying `invoke`).
+The exception is [`transmit`](#transmit), which sets drive and never keys: it
+needs no TX permission, and the power ceiling bounds it (#5851).
 A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops an
 automation-originated continuous key that runs too long, and the bridge
 force-unkeys its own active TX lease on stop. Merely enabling TX permission
@@ -4927,8 +4946,8 @@ antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 
 ### `transmit`
 Set the transmit drive — `rfpower` (RF Power) or `tunepower` (Tune Power), 0..100.
-TX-gated like `key`, and the gate is reported **before** the value is validated so
-it cannot be probed with nonsense.
+Not TX-gated: drive never keys, so it needs no TX permission (#5851). What bounds
+it is the power ceiling.
 
 The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
 ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
@@ -4938,7 +4957,7 @@ amplifier. When a request is clamped the reply says so rather than quietly honou
 a different number than was asked for.
 
 ```json
-→ {"cmd":"transmit","action":"rfpower","value":"25"}   # gated
+→ {"cmd":"transmit","action":"rfpower","value":"25"}
 ← {"ok":true,"transmit":"rfpower","rfPower":25,"tunePower":10}
 
 → {"cmd":"transmit","action":"rfpower","value":"90"}   # ceiling of 30 in force
@@ -5297,7 +5316,7 @@ audio devices require separate hardware validation.
 | `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
-| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
+| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (bounded by the power ceiling) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |
