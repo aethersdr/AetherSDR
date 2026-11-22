@@ -2905,10 +2905,7 @@ RadioModel::RadioModel(QObject* parent)
         constexpr unsigned kCwActivities =
             static_cast<unsigned>(TxActivity::CwKey)
             | static_cast<unsigned>(TxActivity::Cwx);
-        const bool scopedPaddleHeld = std::any_of(m_producerCwPaddleInputs.begin(),
-            m_producerCwPaddleInputs.end(), [](const TxCoordinator::Request& input) { return input.valid(); });
-        if (m_cwKeyActive || m_cwPaddleHeld || scopedPaddleHeld || m_cwxActive
-            || (activeTxActivities() & kCwActivities) != 0) {
+        if (cwKeyHeld() || m_cwxActive || (activeTxActivities() & kCwActivities) != 0) {
             return tr("TUNE not started: CW is keyed");
         }
         return {};
@@ -6076,9 +6073,7 @@ void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
     if (std::exchange(m_remoteCwKeyRefused, false) && !down) {
         return;
     }
-    const bool was = std::exchange(m_remoteCwKeyEdge, true);
     sendCwKey(down, debugSource);
-    m_remoteCwKeyEdge = was;
 }
 
 void RadioModel::sendCwPaddle(bool dit, bool dah, const QString& debugSource,
@@ -6167,7 +6162,8 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
         return false;
     }
     // A local operator's key takes over from host text, queued senders included.
-    if (down && !ptt && !m_hostCwTextEdge && !m_remoteCwKeyEdge && m_hostCwText && m_hostCwText->playing()) {
+    // A remote key never reaches here while text plays: sendRemoteCwKey() refuses it.
+    if (down && !ptt && !m_hostCwTextEdge && m_hostCwText && m_hostCwText->playing()) {
         m_cwxModel.clearBuffer();
     }
     const TxActivity activity = ptt ? TxActivity::CwPtt : TxActivity::CwKey;

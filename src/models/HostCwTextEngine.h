@@ -49,6 +49,8 @@ public:
     int pendingChars() const;
     bool playing() const { return m_run != nullptr; }
     bool playingFor(const TxCoordinator::Request& sender) const;
+    // `sender` has a playing run or a waiting message.
+    bool hasTextFor(const TxCoordinator::Request& sender) const;
 
     // Keys one segment for `sender`, appended to its run; `done` finishes when
     // the run ends. False when another sender's run plays or no producer is free.

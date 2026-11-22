@@ -1143,7 +1143,9 @@ public:
     // A remote client's key edge (TCI keyer): sendCwKey, but it never takes
     // over from host CW text, which only a local operator input does (#7347 ruling).
     // While host text plays its key-down is refused with a notice, and the
-    // matching key-up keys nothing.
+    // matching key-up keys nothing. The other order is refused too: host text
+    // sent while a CW key is held, remote or local, is refused with
+    // cw-text-refused:key-held (admitHostCwx).
     void sendRemoteCwKey(bool down, const QString& debugSource);
     void sendCwPaddle(bool dit, bool dah, const QString& debugSource = {},
                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // iambic paddle via netcw stream
@@ -2591,6 +2593,9 @@ private:
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
     bool hostCwTextRoute() const;
+    // A CW key or paddle is held: a key element is down, or a paddle is held
+    // between iambic elements (#5422), by any source.
+    bool cwKeyHeld() const;
     bool admitHostCwx(const TxCoordinator::Request& request, const QString& text,
                       const std::function<void()>& onAdmitted, int macroIndex, bool live, bool& held);
     ReceiveDispatch dispatchHostCwxRequest(const CwTextRequest& request);
@@ -2613,7 +2618,6 @@ private:
     // in resetTxOperations() while the coordinator can still deliver the key-up.
     std::unique_ptr<HostCwTextEngine> m_hostCwText;
     bool m_hostCwTextEdge{false};   // a host-text element is being dispatched, not a paddle
-    bool m_remoteCwKeyEdge{false};  // a remote client's key edge is being dispatched
     bool m_remoteCwKeyRefused{false};  // a remote key-down was refused; its key-up keys nothing
     DvkModel         m_dvkModel;
     NavtexModel         m_navtexModel;

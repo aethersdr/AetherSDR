@@ -15,6 +15,10 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "models/TxController.h"
+#ifdef HAVE_WEBSOCKETS
+#include "core/TciProtocol.h"
+#endif
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -759,6 +763,10 @@ void testPaddleTakesOver()
     check("paddle: the paddle's key-up, then nothing: no text resumes, B's included",
           f.edges.size() == before + 3 && !f.edges.back().down);
     check("paddle: A's Cwx intent ended", !f.radio.producerRequestHasWork(a.request));
+    // The takeover leaves no key held: the next text is admitted and keys.
+    check("paddle: once the paddle is up, text is accepted again",
+          a.send(QStringLiteral("E")) && pumpUntil([&] { return f.edges.size() >= before + 5; }, 2000)
+              && f.edges.size() == before + 5);
 }
 
 // Ruling on #7347: a remote client's key edge (TCI keyer) is not the operator's
@@ -795,6 +803,164 @@ void testRemoteKeyDoesNotTakeOver()
     a.stop();
     pumpFor(50);
 }
+
+// Ruling on #7347: host text sent while a CW key is already held, by a remote
+// client or by the operator, is refused with a notice; nothing keys under the
+// key, and the key's own release is all that reaches the radio.
+void runKeyHeldRefusal(const char* label, const std::function<void(Fixture&, bool)>& key)
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& noticeKey, const QString&) {
+                         notices += noticeKey == QLatin1String("cw-text-refused:key-held") ? 1 : 0;
+                     });
+    f.radio.transmitModel().setCwSpeed(20);
+    const QString prefix = QString::fromLatin1(label);
+    const auto name = [&prefix](const char* what) { return (prefix + QStringLiteral(": ") + QLatin1String(what)).toUtf8(); };
+    key(f, true);
+    pumpFor(50);
+    check(name("the key is down").constData(), f.edges.size() == 1 && f.edges.front().down);
+    check(name("text sent under it is refused").constData(), !a.send(QStringLiteral("MM")));
+    check(name("one key-held notice").constData(), notices == 1);
+    check(name("the refused request is closed").constData(), !a.request.valid());
+    pumpFor(150);
+    check(name("nothing keys under the key").constData(), f.edges.size() == 1);
+    key(f, false);
+    pumpFor(600);
+    std::printf("       %s: %zu edges\n", label, f.edges.size());
+    check(name("only the key's own down and up").constData(), f.edges.size() == 2 && alternates(f.edges));
+    // The refusal leaves nothing held: once the key is up, text is admitted.
+    check(name("once the key is up, text is accepted").constData(), a.send(QStringLiteral("E")));
+    check(name("and keys").constData(), pumpUntil([&] { return f.edges.size() >= 4; }, 2000)
+                                             && f.edges.size() == 4 && alternates(f.edges));
+    a.stop();
+    pumpFor(50);
+}
+
+void testKeyHeldRefusesText()
+{
+    runKeyHeldRefusal("held remote key", [](Fixture& f, bool down) {
+        f.radio.sendRemoteCwKey(down, QStringLiteral("tci:keyer"));
+    });
+    // The local straight key as MainWindow keys it: a captured CwKey input.
+    TxController::Input input;
+    runKeyHeldRefusal("held straight key", [&input](Fixture& f, bool down) {
+        if (down) {
+            input = f.radio.localTxController()->capture(TxController::Activity::CwKey);
+        }
+        (void)f.radio.requestProducerCw(input.request(), down, false, true, {}, QStringLiteral("cw:straight-key"));
+    });
+}
+
+// A paddle held between two iambic elements is a held key too, though no
+// element is down: text sent in the gap is refused, from either paddle source.
+void runPaddleGapRefusal(const char* label, const std::function<void(Fixture&, bool)>& hold)
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         notices += key == QLatin1String("cw-text-refused:key-held") ? 1 : 0;
+                     });
+    f.radio.transmitModel().setCwSpeed(20);
+    const QString prefix = QString::fromLatin1(label);
+    const auto name = [&prefix](const char* what) { return (prefix + QStringLiteral(": ") + QLatin1String(what)).toUtf8(); };
+    hold(f, true);
+    f.radio.queueCwKeyEdge(true, QStringLiteral("paddle"), 0, 0, Clock::now());
+    pumpFor(60);
+    f.radio.queueCwKeyEdge(false, QStringLiteral("paddle"), 0, 0, Clock::now());
+    pumpFor(20);
+    check(name("one element, now in the gap").constData(), f.edges.size() == 2 && !f.edges.back().down);
+    check(name("text sent in the gap is refused").constData(), !a.send(QStringLiteral("MM")));
+    check(name("one key-held notice").constData(), notices == 1);
+    pumpFor(300);
+    check(name("nothing keys in the gap").constData(), f.edges.size() == 2);
+    hold(f, false);
+    check(name("released, text is accepted").constData(), a.send(QStringLiteral("E")));
+    check(name("and keys").constData(), pumpUntil([&] { return f.edges.size() >= 4; }, 2000) && f.edges.size() == 4);
+    a.stop();
+    pumpFor(50);
+}
+
+void testPaddleGapRefusesText()
+{
+    runPaddleGapRefusal("paddle gap", [](Fixture& f, bool held) { f.radio.setCwPaddleHeld(held); });
+    TxController::Input input;
+    runPaddleGapRefusal("scoped paddle gap", [&input](Fixture& f, bool held) {
+        if (held) {
+            input = f.radio.localTxController()->capture(TxController::Activity::CwKey);
+        }
+        f.radio.setProducerCwPaddleHeld(input.request(), held);
+    });
+}
+
+// Host text's own elements hold the key: a playing run's append, and a
+// second sender's message, are still admitted while one of its elements is down.
+void testSendDuringOwnElement()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    Sender b(f.radio);
+    f.radio.transmitModel().setCwSpeed(20);
+    check("own element: A plays", a.send(QStringLiteral("M")));
+    check("own element: an element of A is down",
+          pumpUntil([&] { return !f.edges.empty() && f.edges.back().down; }, 2000));
+    check("own element: A's append is accepted", a.send(QStringLiteral("E")));
+    check("own element: B's send waits, accepted", b.send(QStringLiteral("E")));
+    const bool done = pumpUntil([&] { return f.edges.size() >= 8; }, 4000);
+    pumpFor(200);
+    check("own element: M, E, then B's E key", done && f.edges.size() == 8 && alternates(f.edges));
+}
+
+// Review nit 3 on #7347: a waiting sender's refused second send leaves its
+// waiting message alone, as a playing sender's refused append leaves its run.
+void testRefusedSendKeepsWaitingText()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    Sender b(f.radio);
+    f.radio.transmitModel().setCwSpeed(20);
+    check("waiting refusal: A plays, B waits", a.send(QStringLiteral("M")) && b.send(QStringLiteral("E")));
+    check("waiting refusal: B's unencodable send is refused", !b.send(QStringLiteral("###")));
+    check("waiting refusal: B's request stays open", b.request.valid());
+    const bool done = pumpUntil([&] { return f.edges.size() >= 6; }, 4000);
+    pumpFor(300);
+    check("waiting refusal: B's waiting E still keys after A", done && f.edges.size() == 6 && alternates(f.edges));
+}
+
+#ifdef HAVE_WEBSOCKETS
+// Review nit 2 on #7347: TCI's keyer command is a remote key edge, so it does
+// not take over from host text; its key-down is refused and its key-up keys nothing.
+void testTciKeyerIsRemote()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    TciProtocol tci(&f.radio);
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         notices += key == QLatin1String("cw-text-remote-key") ? 1 : 0;
+                     });
+    f.radio.transmitModel().setCwSpeed(20);
+    check("tci keyer: A plays", a.send(QStringLiteral("MM")));
+    check("tci keyer: A's first key-down", pumpUntil([&] { return !f.edges.empty(); }, 2000));
+    pumpFor(20);
+    (void)tci.handleCommand(QStringLiteral("keyer:0,true"));
+    pumpFor(100);
+    (void)tci.handleCommand(QStringLiteral("keyer:0,false"));
+    pumpFor(10);
+    check("tci keyer: A's text is still playing", f.radio.producerRequestHasWork(a.request));
+    check("tci keyer: A's text keys whole and alone",
+          pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 3000)
+              && f.edges.size() == 8 && alternates(f.edges));
+    check("tci keyer: one refusal notice", notices == 1);
+    a.stop();
+    pumpFor(50);
+}
+#endif
 
 // Review nit 4 on #7347: a waiting sender whose run cannot start (no free
 // producer) is dropped alone; the senders behind it keep their text. B's text
@@ -856,12 +1022,15 @@ void testWaitingRefusedAtItsTurn()
                          dropped += key == QLatin1String("cw-text-queued-dropped") ? 1 : 0;
                      });
     f.radio.transmitModel().setCwSpeed(30);
-    check("turn: A plays, B waits", a.send(QStringLiteral("TEST TEST")) && b.send(QStringLiteral("E")));
+    // B's second message waits too: refused at its turn, B ends whole.
+    check("turn: A plays, B waits", a.send(QStringLiteral("TEST TEST")) && b.send(QStringLiteral("E"))
+                                        && b.send(QStringLiteral("I")));
     check("turn: A's first key-down", pumpUntil([&] { return !f.edges.empty(); }, 2000));
     setMode(f, QStringLiteral("USB"));
     pumpFor(1500);
     check("turn: the key ends up", !f.edges.empty() && !f.edges.back().down);
     check("turn: B's text was dropped with one notice", dropped == 1);
+    check("turn: B's request is closed with its text", !b.request.valid());
     setMode(f, QStringLiteral("CW"));
     const size_t before = f.edges.size();
     pumpFor(300);
@@ -1040,6 +1209,13 @@ int main(int argc, char** argv)
     testClearAll();
     testPaddleTakesOver();
     testRemoteKeyDoesNotTakeOver();
+    testKeyHeldRefusesText();
+    testPaddleGapRefusesText();
+    testSendDuringOwnElement();
+    testRefusedSendKeepsWaitingText();
+#ifdef HAVE_WEBSOCKETS
+    testTciKeyerIsRemote();
+#endif
     testWaitingRefusedAtItsTurn();
     testFailedStartDropsOnlyItsSender();
     testKeyObjectionOncePerMessage();

@@ -41,6 +41,13 @@ bool HostCwTextEngine::playingFor(const TxCoordinator::Request& sender) const
     return m_run && m_sender.sameRequest(sender);
 }
 
+bool HostCwTextEngine::hasTextFor(const TxCoordinator::Request& sender) const
+{
+    return playingFor(sender) || std::any_of(m_waiting.cbegin(), m_waiting.cend(), [&sender](const Waiting& message) {
+        return message.sender.sameRequest(sender);
+    });
+}
+
 bool HostCwTextEngine::play(const TxCoordinator::Request& sender, const QString& text, int wpm,
                            TxCoordinator::Completion done)
 {

@@ -885,7 +885,7 @@ bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const
         return false;
     }
     if (macroIndex < 0 || macroIndex > 12 || (macroIndex == 0 && !cwTextValidationError(text).isEmpty())) {
-        if (!m_hostCwText || !m_hostCwText->playingFor(request)) {
+        if (!m_hostCwText || !m_hostCwText->hasTextFor(request)) {
             abortProducerCwx(request);
         }
         return false;
@@ -894,8 +894,8 @@ bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const
     if (host) {
         bool held = false;
         if (!admitHostCwx(request, text, onAdmitted, macroIndex, live, held)) {
-            // A refused append leaves the sender's playing host text alone.
-            if (!m_hostCwText || !m_hostCwText->playingFor(request)) {
+            // A refused append leaves the sender's playing and waiting host text alone.
+            if (!m_hostCwText || !m_hostCwText->hasTextFor(request)) {
                 abortProducerCwx(request);
             }
             return false;
@@ -959,6 +959,13 @@ bool RadioModel::hostCwTextRoute() const
     return m_hostCwText && hasHostCwTextKeyer();
 }
 
+bool RadioModel::cwKeyHeld() const
+{
+    return m_cwKeyActive || m_cwPaddleHeld
+        || std::any_of(m_producerCwPaddleInputs.begin(), m_producerCwPaddleInputs.end(),
+                       [](const TxCoordinator::Request& input) { return input.valid(); });
+}
+
 bool RadioModel::admitHostCwx(const TxCoordinator::Request& request, const QString& text,
                               const std::function<void()>& onAdmitted, int macroIndex, bool live,
                               bool& held)
@@ -990,6 +997,13 @@ bool RadioModel::admitHostCwx(const TxCoordinator::Request& request, const QStri
         return refuse(tr("CW text refused: TUNE is active."), "tune");
     case HostCwTextRefusal::BreakInOffUnkeyed:
         return refuse(tr("CW text refused: break-in is off and transmit is not keyed."), "break-in-off");
+    }
+    // A CW key or paddle already held, local or remote, keeps the key: text
+    // started now would key under it (or between paddle elements), and the
+    // key's release would cut the text's element. Host text's own elements
+    // also hold the key, so a playing run is left out.
+    if (cwKeyHeld() && !m_hostCwText->playing()) {
+        return refuse(tr("CW text refused: a CW key is held down."), "key-held");
     }
     // No radio holds a macro here: only the local copy can be keyed, and the
     // bounds apply to it once {CALL} is resolved, as it will be keyed.
@@ -1065,8 +1079,13 @@ void RadioModel::startWaitingHostCwx()
                                 next->macroIndex, next->live) && self) {
             emitInterlockNotification(tr("Queued CW text was not sent: transmit refused it when its turn came."),
                                       QStringLiteral("cw-text-queued-dropped"));
+            // The sender's other waiting text goes too; with nothing playing
+            // for it either, its request is closed.
             if (m_hostCwText) {
                 m_hostCwText->dropWaiting(next->sender);
+                if (!m_hostCwText->playingFor(next->sender)) {
+                    abortProducerCwx(next->sender);
+                }
             }
         }
     }
