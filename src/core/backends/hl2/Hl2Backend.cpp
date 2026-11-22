@@ -19,6 +19,7 @@
 #include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2DspSetupPolicy.h"
 #include "core/backends/hl2/Hl2GainSplit.h"
+#include "core/backends/hl2/Hl2RxGainDuringTx.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -1009,10 +1010,10 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
             return;
         }
         // dBFS -> dBm through the shared reference (one AD9866 behind every
-        // DDC): derived full scale (+3 dB) minus LNA gain, so the trace holds
-        // still across gain changes. off == 0.0 fires only when the LNA gain
-        // equals the full-scale figure.
-        const double off = m_dbRef.offsetDb();
+        // DDC): derived full scale (+3 dB) minus the gain in force. The key
+        // state is the host's, so a frame or two in flight at each T/R edge get
+        // the other side's offset. off == 0.0: that gain equals full scale.
+        const double off = displayOffsetDb();
         if (off == 0.0) {
             emit spectrumFrameReady(ui, floatBytes(bins));
             return;
@@ -1070,7 +1071,7 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         }
         // Same reference as the spectrum -- a meter that moved on a gain
         // change while the trace stayed put would be its own kind of lie.
-        const double dbm = m_dbRef.toDbm(dbfs);
+        const double dbm = dbfs + displayOffsetDb();
 
         // Smooth EVERY sample, publish only on the tick -- SMeterSmoother,
         // per receiver so a strong signal on one does not drive another's
@@ -1646,6 +1647,13 @@ void Hl2Backend::publishTransmitState(std::optional<bool> radioPtt)
             if (r.dsp) {
                 QMetaObject::invokeMethod(r.dsp, "setSpectrumTransmitting", Qt::QueuedConnection,
                     Q_ARG(bool, transmitting), Q_ARG(int, m_unkeyUnmuteHoldMs));
+            }
+        }
+        // The AD9866 gain changes under the averaged pan at T/R when the
+        // receive gain is above the cap (Hl2RxGainDuringTx.h).
+        if (hl2::rxGainDuringTxShortfallDb(lnaEffectiveDb(), m_psEnabled) != 0) {
+            for (const auto& r : m_rx) {
+                dropPanAverage(r);
             }
         }
     }
@@ -5193,6 +5201,7 @@ void Hl2Backend::dropPanAverage(const Receiver& r)
 {
     if (!r.dsp || r.panAverage <= 0)
         return;
+    ++m_panAverageDrops;
     QMetaObject::invokeMethod(r.dsp, "dropSpectrumAverage", Qt::QueuedConnection);
 }
 
@@ -6332,6 +6341,14 @@ void Hl2Backend::finishTxTail()
     }
     m_txTailPending = false;
     applyBandFilter("unkey");
+    // The average dropped at the host's unkey edge was reseeded from tail
+    // frames still at the keyed 0x0e gain; start it again on the receive gain.
+    if (!m_radioPtt
+        && hl2::rxGainDuringTxShortfallDb(lnaEffectiveDb(), m_psEnabled) != 0) {
+        for (const auto& r : m_rx) {
+            dropPanAverage(r);
+        }
+    }
     if (m_rfDriveOwed && !m_tuning) {
         m_rfDriveOwed = false;
         applyDrive(operatorDrivePercent());
@@ -8676,6 +8693,16 @@ void Hl2Backend::applyLnaGainDb(int gainDb)
 {
     m_lnaGainDb = gainDb;
     pushEffectiveLnaGain();
+}
+
+double Hl2Backend::displayOffsetDb() const noexcept
+{
+    // While keyed the gateware runs the AD9866 at rxGainDuringTxDb(), not at
+    // the receive gain the reference holds (0x0e, Hl2RxGainDuringTx.h).
+    const bool transmitting = m_keyed || m_radioPtt;
+    const int shortfall = transmitting
+        ? hl2::rxGainDuringTxShortfallDb(lnaEffectiveDb(), m_psEnabled) : 0;
+    return m_dbRef.offsetDb() + static_cast<double>(shortfall);
 }
 
 int Hl2Backend::lnaEffectiveDb() const noexcept
