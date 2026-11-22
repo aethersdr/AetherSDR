@@ -486,11 +486,13 @@ TOOLS = [
     {
         "name": "set_agent_activity",
         "description": (
-            "Before driving AetherSDR through MCP or Computer Use, call this with a "
-            "short phrase such as Testing meters. Call again when the step changes. "
+            "Before driving AetherSDR through MCP or Computer Use, describe your test in "
+            "one sentence: say what you are doing and what you are checking. For example: "
+            "Tuning Slice A to 14.105 MHz and checking the frequency readback. "
+            "Update when the step changes. "
             "Send an empty string when finished. A competing controller returns busy."),
         "inputSchema": {"type": "object", "properties": {
-            "text": {"type": "string", "description": "Current activity, or empty to release"}
+            "text": {"type": "string", "description": "One operator-facing sentence (up to 256 characters), or empty to release"}
         }, "required": ["text"], "additionalProperties": False},
     },
     {

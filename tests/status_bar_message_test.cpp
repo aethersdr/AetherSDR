@@ -137,6 +137,11 @@ int main(int argc, char** argv)
     check(fittedInk > 0 && fittedInk == inkPixels(),
           "the fitted status notice paints the complete final glyph");
     notice.setStyleSheet({});
+    const QString detail = QStringLiteral("Comparing the simulator meter readback with the active slice "
+                                          "before and after tuning to a second signal. ").repeated(2);
+    notice.setAgentActivity(detail);
+    check(notice.width() > 640 && notice.accessibleName() == detail,
+          "agent activity can use the free span beyond the transient notice cap");
     bar->showMessage(QStringLiteral("Operator notice"));
     notice.setAgentActivity({});
     check(notice.text() == QStringLiteral("Operator notice"), "release preserves the app notice");

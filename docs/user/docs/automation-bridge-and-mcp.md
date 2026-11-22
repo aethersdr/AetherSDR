@@ -52,7 +52,8 @@ You can also start the bridge for a single run by launching with `AETHER_AUTOMAT
 
 When an agent reports its first step, the Orbit badge in the lower-left status
 bar shows its name. Its current step appears beside the Band/Segment Zoom
-controls. Radio notices temporarily take priority. Finishing, disconnecting, or
+controls. An agent can describe the test in a sentence. Hover over Orbit for
+the full text when the window is narrow. Radio notices temporarily take priority. Finishing, disconnecting, or
 five minutes of idle time clears the badge and activity. A second agent gets a
 busy response while the first agent holds the indicator.
 

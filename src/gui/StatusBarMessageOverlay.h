@@ -96,8 +96,10 @@ private:
     {
         const QString notice = m_bar ? m_bar->currentMessage() : QString();
         const QString next = notice.isEmpty() ? m_activity : notice;
-        if (next == m_message)
+        if (next == m_message) {
+            updateNotice(); // the same words can change source and width policy
             return;
+        }
         m_message = next;
         setAccessibleName(next);
         updateNotice();
@@ -116,7 +118,7 @@ private:
         }
 
         constexpr int kEdgeMargin = 8;
-        constexpr int kMaximumWidth = 640;
+        constexpr int kMaximumAppNoticeWidth = 640;
         ensurePolished();
         const QMargins margins = contentsMargins();
         const QString singleLine = m_message.simplified();
@@ -159,7 +161,9 @@ private:
             hide();
             return;
         }
-        const int noticeWidth = qMin(qMin(kMaximumWidth, space.width()), textWidth + horizontalPadding);
+        const int availableWidth = m_bar->currentMessage().isEmpty()
+            ? space.width() : qMin(kMaximumAppNoticeWidth, space.width());
+        const int noticeWidth = qMin(availableWidth, textWidth + horizontalPadding);
         setText(fontMetrics().elidedText(singleLine, Qt::ElideRight,
                                         qMax(0, noticeWidth - horizontalPadding)));
         setGeometry(space.left(), top, noticeWidth, noticeHeight);

@@ -152,7 +152,7 @@ contributors to self-verify UI changes before requesting review.
 2. Launch through `app_instance` (recommended for a fresh proof build), or
    manually with `AETHER_AUTOMATION=1 ./build/AetherSDR`.
 
-**Tools exposed** include `set_agent_activity` for activity reporting; process handoff — `app_instance`;
+**Typed tools.** Activity reporting — `set_agent_activity`; process handoff — `app_instance`;
 introspection — `bridge_status`,
 `dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
 `path` for where the PNG is written, else a temp file),
@@ -174,9 +174,12 @@ primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
 
-**Agent activity.** Before driving AetherSDR through MCP or Computer Use, call
-`set_agent_activity({"text":"Testing meters"})`. To change the step, call
-`set_agent_activity({"text":"Testing tuning"})`. Finish with
+**Agent activity.** Before driving AetherSDR through MCP or Computer Use, send
+one sentence naming the test action and what you are checking. For example, call
+`set_agent_activity({"text":"Reading the simulator’s meters to check which signal levels are available."})`.
+When the step changes, call
+`set_agent_activity({"text":"Tuning Slice A to 14.105 MHz and checking the frequency readback."})`.
+Short labels such as “Testing tuning” also work. Finish with
 `set_agent_activity({"text":""})`. Existing radio notices take priority.
 The wrapper pins the app instance and holds a local connection for the claim.
 With the raw bridge, send `{"cmd":"agentActivity","text":"Testing meters"}`

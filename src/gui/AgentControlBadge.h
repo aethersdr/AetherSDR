@@ -27,8 +27,12 @@ public:
         if (text() != agent) {
             setText(agent);
             setAccessibleName(agent.isEmpty() ? QString() : tr("Agent control: %1").arg(agent));
-            setToolTip(accessibleName());
+
         }
+        setAccessibleDescription(activity);
+        setToolTip(activity.isEmpty() ? QString()
+            : QStringLiteral("<p>%1</p><p>%2</p>").arg(accessibleName().toHtmlEscaped(),
+                                                        activity.toHtmlEscaped()));
         setVisible(!activity.isEmpty());
     }
 
