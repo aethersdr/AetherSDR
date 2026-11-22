@@ -96,12 +96,12 @@ protected:
     void paintEvent(QPaintEvent* event) override
     {
         QLabel::paintEvent(event);
-        if (!m_showsActivity)
+        if (!m_showsActivity || !m_dotColor.isValid())
             return;
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         p.setPen(Qt::NoPen);
-        p.setBrush(m_dotColor.isValid() ? m_dotColor : palette().highlight().color());
+        p.setBrush(m_dotColor);
         if (m_pulse.state() == QAbstractAnimation::Running)
             p.setOpacity(m_pulse.currentValue().toReal());
         p.drawEllipse(dotRect());

@@ -125,16 +125,17 @@ int main(int argc, char** argv)
     check(notice.text() == QStringLiteral("Testing tuning"), "only the latest step resumes");
     // A styled QLabel frame enables automatic indentation by default. Compare
     // the actual glyphs at the overlay's chosen width with an unconstrained draw.
-    notice.setStyleSheet(QStringLiteral("QLabel { color: black; background: white;"
-                                        " border: 1px solid white; font-size: 12px; }"));
+    notice.setStyleSheet(QStringLiteral("QLabel { color: palette(window-text); background: palette(window);"
+                                        " border: 1px solid palette(window); font-size: 12px; }"));
     notice.setAgentActivity(QStringLiteral("Testing meters"));
     notice.setAgentActivity(QStringLiteral("Testing tuning"));
     const auto inkPixels = [&notice] {
         const QImage image = notice.grab().toImage().convertToFormat(QImage::Format_RGB32);
+        const QRgb background = image.pixel(image.width() / 2, 0);
         int ink = 0;
         for (int y = 0; y < image.height(); ++y)
             for (int x = qCeil(20 * notice.devicePixelRatioF()); x < image.width(); ++x)
-                if (qGray(image.pixel(x, y)) < 160)
+                if (image.pixel(x, y) != background)
                     ++ink;
         return ink;
     };
