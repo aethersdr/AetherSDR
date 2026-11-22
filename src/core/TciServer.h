@@ -12,6 +12,7 @@
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
 #include "TciIqDecimator.h"
+#include "TciRxSourceSelector.h"
 #include "IcomTciUnkeySettle.h"
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
@@ -34,6 +35,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 
@@ -125,6 +127,17 @@ public:
     bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
     void setLineOutPcAudioOffConsent(bool enabled);
     bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
+    // Run TCI TX audio through the client TX voice chain (EQ, compressor, ...)
+    // before it is transmitted. For voice clients; off by default because
+    // digital-mode clients send pre-shaped tones. Persists as Tci.TxVoiceDsp.
+    void setTxVoiceDsp(bool on);
+    bool txVoiceDsp() const { return m_txVoiceDsp; }
+    // RX audio source for slice receivers (#6864): raw (default) or processed
+    // through the AetherRX DSP (client NR + RX chain), one tap per slice.
+    // Processed falls back to raw whenever it is not flowing. DAX-fed
+    // receivers and Line Out are unaffected. Persists as Tci.RxAudioSource.
+    void setRxAudioProcessed(bool on);
+    bool rxAudioProcessed() const { return m_rxAudioProcessed; }
     // The application owns PC Audio preferences; refresh after its toggle.
     void updateLineOutCapture();
     // Thread-safe owning ingress, safe even if a source callback overlaps
@@ -198,6 +211,8 @@ public slots:
 signals:
     void lineOutIncludeTxChanged(bool enabled);
     void lineOutPcAudioOffConsentChanged(bool enabled);
+    void txVoiceDspChanged(bool on);
+    void rxAudioProcessedChanged(bool on);
     void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
@@ -229,6 +244,7 @@ private slots:
     void onTextMessage(const QString& msg);
     void onBinaryMessage(const QByteArray& data);
     void broadcastStatus();
+    void onProcessedSliceAudio(int sliceId, const QByteArray& pcm24kStereoFloat);
 
 private:
     struct ClientState;
@@ -490,6 +506,14 @@ private:
     void syncLineOutClient(const ClientState& client);
     bool m_lineOutIncludeTx{false};
     bool m_lineOutPcAudioOffConsent{false};
+    bool m_txVoiceDsp{false};
+    bool m_rxAudioProcessed{false};
+    TciRxSourceSelector m_rxSource;
+    std::function<qint64()> m_rxSourceClock{[] { return TxCoordinator::monotonicMs(); }};
+    struct ProcessedSliceRx { PcmProducer producer; };
+    std::map<int, std::unique_ptr<ProcessedSliceRx>> m_processedRx;
+    bool sliceAudioWanted(int sliceId) const;
+    void releaseProcessedRx(int sliceId, bool releaseRoutes);
     bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);

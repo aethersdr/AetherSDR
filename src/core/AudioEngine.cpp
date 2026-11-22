@@ -1418,7 +1418,8 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
     {
         std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
         ExternalRxAudioSourceState* source = findSource();
-        if (!source || !externalKiwiSourceProcessing(*source)
+        if (!source
+            || !(externalKiwiSourceProcessing(*source) || source->tciSliceTap)
             || source->dspInitializationPending) {
             return true;
         }
@@ -1529,7 +1530,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
             return ok;
         }
         source->dspInitializationPending = false;
-        if (!externalKiwiSourceProcessing(*source)) {
+        if (!(externalKiwiSourceProcessing(*source) || source->tciSliceTap)) {
             return ok;
         }
         if (needNr2 && m_nr2Enabled && m_nr2 && !source->nr2) {
@@ -1883,6 +1884,7 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_wsprBeacon(std::make_unique<WsprBeacon>())
     , m_clientQuindarTone(std::make_unique<ClientQuindarTone>())
     , m_txVoiceProcessor(std::make_unique<TxVoiceProcessor>())
+    , m_tciTxVoiceProcessor(std::make_unique<TxVoiceProcessor>())
 {
     // Recorder-sidetone generator: always enabled at a fixed, audible level and
     // centre pan so a Client-Side QSO recording captures the operator's sent
@@ -1971,6 +1973,10 @@ AudioEngine::AudioEngine(QObject* parent)
     };
     m_txVoiceProcessor->setProcessors(txProcessors);
     m_txVoiceProcessor->prepare(DEFAULT_SAMPLE_RATE, 16384);
+    // TCI TX audio is always 24 kHz (TciIoWorker resamples to it), so this one
+    // is prepared once and never follows the capture device.
+    m_tciTxVoiceProcessor->setProcessors(txProcessors);
+    m_tciTxVoiceProcessor->prepare(DEFAULT_SAMPLE_RATE, 16384);
     m_wsprPumpTimer = new QTimer(this);
     m_wsprPumpTimer->setTimerType(Qt::PreciseTimer);
     m_wsprPumpTimer->setInterval(5);
@@ -6105,6 +6111,158 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             writeAudioNrIdle(pcm);
         }
     }
+}
+
+namespace {
+QString tciSliceSourceId(int sliceId)
+{
+    return QStringLiteral("tci-slice:%1").arg(sliceId);
+}
+} // namespace
+
+AudioEngine::ExternalRxAudioSourceState* AudioEngine::tciSliceSource(int sliceId)
+{
+    // Caller holds m_dspMutex. The entry lives in m_externalKiwiSources so the
+    // NR setters' per-source fan-out keeps its parameters in step; it is never
+    // enabled, so no mixing, buffering or Kiwi DSP scheduling touches it.
+    const QString id = tciSliceSourceId(sliceId);
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->tciSliceTap && source->id == id) {
+            return source.get();
+        }
+    }
+    auto source = std::make_unique<ExternalRxAudioSourceState>();
+    source->id = id;
+    source->tciSliceTap = true;
+    source->clientEffects = std::make_unique<RxClientEffects>();
+    m_externalKiwiSources.push_back(std::move(source));
+    return m_externalKiwiSources.back().get();
+}
+
+QByteArray AudioEngine::runTciSliceDsp(ExternalRxAudioSourceState& source,
+                                       const QByteArray& pcm, bool& missing)
+{
+    // Same NR selection as processMixedRxAudioData(), on this slice's own
+    // instances. An enabled processor that is absent or not yet valid yields
+    // nothing: the caller falls back to raw rather than emit unprocessed audio
+    // as "processed".
+    missing = false;
+    QByteArray nrOut;
+    if (m_rn2Enabled) {
+        if (!source.rn2 || !source.rn2->isValid()) { missing = !source.rn2; return {}; }
+        nrOut = source.rn2->process(pcm);
+    } else if (m_nr2Enabled) {
+        if (!source.nr2) { missing = true; return {}; }
+        processNr2(pcm, RxDspSource::KiwiSdr, &source);
+        nrOut = source.nr2Output;
+#ifdef HAVE_SPECBLEACH
+    } else if (m_nr4Enabled) {
+        if (!source.nr4 || !source.nr4->isValid()) { missing = !source.nr4; return {}; }
+        nrOut = source.nr4->process(pcm);
+#endif
+#ifdef HAVE_DFNR
+    } else if (m_dfnrEnabled) {
+        if (!source.dfnr || !source.dfnr->isValid()) { missing = !source.dfnr; return {}; }
+        nrOut = source.dfnr->process(pcm);
+#endif
+    } else if (m_nnrEnabled) {
+        if (!source.nnr || !source.nnr->isValid()) { missing = !source.nnr; return {}; }
+        nrOut = source.nnr->process(pcm);
+#ifdef HAVE_NVIDIA_AFX
+    } else if (m_nvAfxEnabled) {
+        if (!source.nvAfx || !source.nvAfx->isValid()) { missing = !source.nvAfx; return {}; }
+        nrOut = source.nvAfx->process(pcm);
+#endif
+#ifdef __APPLE__
+    } else if (m_mnrEnabled) {
+        if (!source.mnr || !source.mnr->isValid()) { missing = !source.mnr; return {}; }
+        nrOut = source.mnr->process(pcm);
+#endif
+    } else {
+        nrOut = pcm;
+    }
+    if (nrOut.isEmpty()) {
+        return {};
+    }
+    RxClientEffects& effects = *source.clientEffects;
+    effects.syncParametersFrom(*m_clientEqRx, *m_clientGateRx,
+        *m_clientCompRx, *m_clientTubeRx, *m_clientPuduRx);
+    RxChainModules modules;
+    modules.eq = &effects.eq();
+    modules.gate = &effects.gate();
+    modules.comp = &effects.comp();
+    modules.tube = &effects.tube();
+    modules.pudu = &effects.pudu();
+    const QByteArray* out = runRxChain(m_rxChainPacked.load(std::memory_order_acquire),
+                                       nrOut, modules, m_tciSliceChainScratch, false);
+    return out ? *out : QByteArray{};
+}
+
+void AudioEngine::processTciSliceAudio(int sliceId, const QByteArray& pcm)
+{
+    constexpr int kFrameBytes = 2 * static_cast<int>(sizeof(float));
+    if (sliceId < 0 || pcm.isEmpty() || pcm.size() % kFrameBytes != 0
+        || m_radioTransmitting) {
+        return;
+    }
+    QByteArray out;
+    QString initId;
+    {
+        std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+        ExternalRxAudioSourceState* source = tciSliceSource(sliceId);
+        bool missing = false;
+        out = runTciSliceDsp(*source, pcm, missing);
+        if (missing && !source->tciInitScheduled) {
+            source->tciInitScheduled = true;
+            initId = source->id;
+        }
+    }
+    if (!initId.isEmpty()) {
+        // Off the audio thread, like scheduleAllKiwiDspStateInitialization():
+        // model loading can take long. Raw audio covers the gap.
+        std::lock_guard<std::mutex> lock(m_dspInitializationTasksMutex);
+        if (!m_dspInitializationStopping) {
+            m_dspInitializationTasks.addFuture(QtConcurrent::run([this, initId]() {
+                if (!ensureExternalKiwiSourceDspState(initId)) {
+                    return; // stays scheduled: no retry storm on a failing model
+                }
+                std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+                for (const auto& candidate : m_externalKiwiSources) {
+                    if (candidate && candidate->tciSliceTap && candidate->id == initId) {
+                        candidate->tciInitScheduled = false;
+                    }
+                }
+            }));
+        }
+    }
+    if (out.isEmpty() || out.size() % kFrameBytes != 0) {
+        return;
+    }
+    m_tciSliceDspBlocks.fetch_add(1, std::memory_order_relaxed);
+    emit tciSliceProcessedAudioReady(sliceId, out);
+}
+
+void AudioEngine::releaseTciSliceDsp(int sliceId)
+{
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    const QString id = tciSliceSourceId(sliceId);
+    m_externalKiwiSources.erase(
+        std::remove_if(m_externalKiwiSources.begin(), m_externalKiwiSources.end(),
+            [&](const std::unique_ptr<ExternalRxAudioSourceState>& source) {
+                return source && source->tciSliceTap
+                    && (sliceId < 0 || source->id == id);
+            }),
+        m_externalKiwiSources.end());
+}
+
+int AudioEngine::tciSliceDspCount() const
+{
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    return static_cast<int>(std::count_if(
+        m_externalKiwiSources.cbegin(), m_externalKiwiSources.cend(),
+        [](const std::unique_ptr<ExternalRxAudioSourceState>& source) {
+            return source && source->tciSliceTap;
+        }));
 }
 
 void AudioEngine::updateAuxiliaryClientEffectMeters(RxClientEffects& source)
@@ -10533,6 +10691,64 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm, const TxCoordinator::C
     feedDaxTxAudioInternal(inPcm, true, false, TxAudioSource::ClientLeveled, context);
 }
 
+void AudioEngine::foldTciStereoToMono(QByteArray& interleavedStereoFloat32)
+{
+    auto* s = reinterpret_cast<float*>(interleavedStereoFloat32.data());
+    const int frames = interleavedStereoFloat32.size() / static_cast<int>(2 * sizeof(float));
+    for (int i = 0; i < frames; ++i) {
+        const float m = 0.5f * (s[2 * i] + s[2 * i + 1]);
+        s[2 * i] = m;
+        s[2 * i + 1] = m;
+    }
+}
+
+void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::Context& context)
+{
+    if (!m_tciTxVoiceDsp.load(std::memory_order_acquire) || inPcm.isEmpty()) {
+        m_tciTxVoiceDspWasOn = false;
+        feedDaxTxAudio(inPcm, context);
+        return;
+    }
+    // Same fence as feedDaxTxAudio(): the beacon owns the TX stream.
+    if (m_wsprBeacon && m_wsprBeacon->isActive()) {
+        return;
+    }
+    if (!m_tciTxVoiceDspWasOn) {
+        // Resampler and stage state from before the switch belong to other audio.
+        m_tciTxVoiceProcessor->reset();
+        m_tciTxVoiceDspWasOn = true;
+    }
+
+    QByteArray block = inPcm;
+    foldTciStereoToMono(block);
+    m_tciTxVoiceProcessor->setStageOrder(m_txChainPacked.load(std::memory_order_acquire));
+    // The client sets its own level (ClientLeveled): the PC mic slider is a mic
+    // control and is not applied here, as it is not on the bypass path either.
+    m_tciTxVoiceProcessor->setMicGain(1.0f);
+    m_tciTxVoiceProcessor->setRnnoiseEnabled(false);
+    const bool processed = m_tciTxVoiceProcessor->processCapturedFloat32(block);
+    if (m_tciTxVoiceProcessor->egressRecoveryPending()) {
+        // Serviced outside this block, as onTxAudioReady() does for the mic.
+        QMetaObject::invokeMethod(
+            this, [this]() { m_tciTxVoiceProcessor->recoverEgressAfterMismatch(); },
+            Qt::QueuedConnection);
+    }
+    if (!processed) {
+        return;
+    }
+    m_tciTxVoiceBlocks.fetch_add(1, std::memory_order_relaxed);
+
+    // The chain returns 24 kHz stereo Int16; the rest of the TCI path is float.
+    const auto* i16 = reinterpret_cast<const int16_t*>(block.constData());
+    const int n = block.size() / static_cast<int>(sizeof(int16_t));
+    QByteArray f32(n * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* f = reinterpret_cast<float*>(f32.data());
+    for (int i = 0; i < n; ++i) {
+        f[i] = static_cast<float>(i16[i]) / 32768.0f;
+    }
+    feedDaxTxAudioInternal(f32, true, false, TxAudioSource::ClientLeveled, context);
+}
+
 void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
                                          bool forceRadioDaxRoute,
@@ -10558,7 +10774,9 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
     // (WSJT-X, fldigi, PipeWire bridge, etc.) — digital modes carry
     // pre-shaped tones that would be destroyed by a voice-tuned
     // compressor or EQ.  Mic voice TX goes through onTxAudioReady,
-    // which keeps the full DSP chain.
+    // which keeps the full DSP chain. TCI voice clients can opt in
+    // with setTciTxVoiceDsp(); feedTciTxAudio() then applies the chain
+    // before calling here.
     const QByteArray& float32pcm = inPcm;
 
     // Measure DAX TX input level and emit via pcMicLevelChanged so the
