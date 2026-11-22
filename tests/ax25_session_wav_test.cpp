@@ -84,7 +84,6 @@ private slots:
         QTest::newRow("three") << 3 << false << quint32(48000);
         QTest::newRow("padded-junk") << 3 << true << quint32(48000);
         QTest::newRow("min-sample-rate") << 1 << false << quint32(10);
-
     }
 
     void loadsWholeSamples()
