@@ -12,6 +12,7 @@
 // thread; a blocking call queued behind it reads the result there.
 
 #include "TestSettingsProfile.h"
+#include "core/HostTransmitPolicy.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 
@@ -62,7 +63,7 @@ struct ConnectResult {
 
 ConnectResult connectOnce(bool hostOffersTransmit)
 {
-    Hl2Backend::setHostOffersTransmit(hostOffersTransmit);
+    AetherSDR::setHostOffersTransmit(hostOffersTransmit);
     ConnectResult out;
     {
         Hl2Backend backend;
@@ -83,7 +84,7 @@ ConnectResult connectOnce(bool hostOffersTransmit)
         out.txConfigured = Hl2RxOnlyTxChainTestAccess::txChainConfigured(backend);
         backend.disconnectRadio();
     }
-    Hl2Backend::setHostOffersTransmit(true);
+    AetherSDR::setHostOffersTransmit(true);
     return out;
 }
 

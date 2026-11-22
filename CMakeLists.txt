@@ -1001,6 +1001,8 @@ set(CORE_SOURCES
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
     src/core/RtlDeviceSettings.cpp  # accepted per-device calibration and IQ controls
     src/core/GpuSelector.cpp
+    src/core/FatalSignalRelease.cpp   # termination signals release the radio, any family
+    src/core/HostTransmitPolicy.cpp   # whether this process offers host-keyed transmit
     src/core/QtAudioBackendGuard.cpp  # pre-QApplication: keeps Qt 6.12 off a crashing PipeWire backend
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
