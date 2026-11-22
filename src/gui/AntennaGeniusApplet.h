@@ -6,6 +6,7 @@
 class QPushButton;
 class QLabel;
 class QComboBox;
+class QCheckBox;
 class QLineEdit;
 
 namespace AetherSDR {
@@ -39,6 +40,7 @@ private:
     void syncFromModel();
     void rebuildAntennaButtons();
     void updatePortDisplay(int portId);
+    void applyAntennaSelectionMode();
 
     AntennaGeniusModel* m_model{nullptr};
     bool m_updatingFromModel{false};
@@ -51,19 +53,28 @@ private:
 
     // Manual IP entry (for remote connections without UDP discovery)
     QLineEdit*   m_manualIpEdit{nullptr};
+    QCheckBox*   m_splitRxTxCheck{nullptr};
 
     // Port A widgets
     QLabel*      m_portABandLabel{nullptr};
     QLabel*      m_portAAntLabel{nullptr};
-    QWidget*     m_portABtnGrid{nullptr};
-    QList<QPushButton*> m_portABtns;
+    QLabel*      m_portARxHeading{nullptr};
+    QLabel*      m_portATxHeading{nullptr};
+    QWidget*     m_portARxBtnGrid{nullptr};
+    QWidget*     m_portATxBtnGrid{nullptr};
+    QList<QPushButton*> m_portARxBtns;
+    QList<QPushButton*> m_portATxBtns;
     QPushButton* m_portAAutoBtn{nullptr};
 
     // Port B widgets
     QLabel*      m_portBBandLabel{nullptr};
     QLabel*      m_portBAntLabel{nullptr};
-    QWidget*     m_portBBtnGrid{nullptr};
-    QList<QPushButton*> m_portBBtns;
+    QLabel*      m_portBRxHeading{nullptr};
+    QLabel*      m_portBTxHeading{nullptr};
+    QWidget*     m_portBRxBtnGrid{nullptr};
+    QWidget*     m_portBTxBtnGrid{nullptr};
+    QList<QPushButton*> m_portBRxBtns;
+    QList<QPushButton*> m_portBTxBtns;
     QPushButton* m_portBAutoBtn{nullptr};
 
     // Port sections (for hiding Port B if device has only 1 port)

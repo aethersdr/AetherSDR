@@ -6777,7 +6777,8 @@ target_link_libraries(peripheral_auth_dialog_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 set_target_properties(peripheral_auth_dialog_test PROPERTIES AUTOMOC ON)
 foreach(_case IN ITEMS automatic removal auth-read manual-recovery external-ag
-        discovery availability discovered-recovery interaction)
+        discovery availability discovered-recovery interaction ag-antenna-status
+        ag-antenna-selection-mode)
     add_test(NAME peripheral_auth_dialog_${_case}_test
         COMMAND peripheral_auth_dialog_test --case=${_case})
     set_tests_properties(peripheral_auth_dialog_${_case}_test PROPERTIES

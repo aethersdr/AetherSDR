@@ -113,9 +113,13 @@ public:
     AgPortStatus          portB()             const { return m_portB; }
     int                   lastRadioBand()     const { return m_lastRadioBand; }
 
-    // Select antenna for a port (portId: 1=A, 2=B, antennaId: 1–N).
-    // Sets rxant to antennaId. Sets txant only if the antenna has TX
-    // permission for the current band; otherwise keeps current txant.
+    // Select receive or transmit antenna independently.
+    void selectRxAntenna(int portId, int antennaId);
+    void selectTxAntenna(int portId, int antennaId);
+
+    // Legacy shared selection used by ShackSwitch and callers that do not
+    // distinguish TX/RX. The RX selection is retained while TX follows it
+    // only when the antenna is transmit-capable on the current band.
     void selectAntenna(int portId, int antennaId);
 
     // Set auto-mode for a port.
@@ -195,10 +199,17 @@ private:
     static QMap<QString, QString> parseKeyValues(const QString& text);
     AgPortStatus parsePortStatus(const QString& text) const;
 
-    // Band→antenna memory (persisted in AppSettings XML).
-    void saveBandAntenna(int portId, int bandId, int antennaId);
-    int  recallBandAntenna(int portId, int bandId) const;
-    void onBandChanged(int portId, int oldBand, int oldAnt, int newBand);
+    // Band-specific TX/RX antenna memory. New keys are direction-specific;
+    // legacy shared keys remain readable and receive new RX selections.
+    void saveBandRxAntenna(int portId, int bandId, int antennaId);
+    void saveBandTxAntenna(int portId, int bandId, int antennaId);
+    std::optional<int> recallBandRxAntenna(int portId, int bandId) const;
+    std::optional<int> recallBandTxAntenna(int portId, int bandId) const;
+    void onBandChanged(int portId, int oldBand, int oldRxAnt, int oldTxAnt, int newBand);
+    void selectAntennaPair(int portId, int rxAntenna, int txAntenna,
+                           bool saveRx, bool saveTx);
+    void recallBandAntennas(int portId, int bandId);
+    bool antennaInUseByOtherPort(int portId, int antennaId) const;
 
     // Initialization sequence after TCP connect.
     void runInitSequence();
@@ -212,6 +223,7 @@ private:
     // TCP connection
     QTcpSocket* m_tcpSocket{nullptr};
     std::function<void(const QByteArray&)> m_authCommandWriter;
+    std::function<void(const QByteArray&)> m_commandWriter;
     AgDeviceInfo m_device;
     bool m_connected{false};
     bool m_gotPrologue{false};

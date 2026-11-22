@@ -66,6 +66,36 @@ struct AntennaGeniusModelTestAccess {
     {
         model.m_authCommandWriter = [](const QByteArray&) {};
     }
+    static void setPortAntennaStatus(AntennaGeniusModel& model, int rxAntenna, int txAntenna)
+    {
+        const quint16 bandMask = quint16(1U << 5);
+        model.m_antennas = {
+            {1, QStringLiteral("Beam"), bandMask, bandMask, 0},
+            {2, QStringLiteral("Vertical"), bandMask, bandMask, 0},
+        };
+        model.m_bands = {{5, QStringLiteral("40m"), 7.0, 7.3}};
+        model.m_portA = {1, true, QStringLiteral("MANUAL"), 5,
+                         rxAntenna, txAntenna, false, false};
+        emit model.portStatusChanged(1);
+    }
+    static void prepareSelectionMode(AntennaGeniusModel& model, QStringList& commands)
+    {
+        const quint16 bandMask = quint16(1U << 5);
+        model.m_commandWriter = [&commands](const QByteArray& bytes) {
+            commands.append(QString::fromUtf8(bytes));
+        };
+        model.m_connected = true;
+        model.m_device.name = QStringLiteral("Antenna Genius");
+        model.m_device.radioPorts = 2;
+        model.m_antennas = {
+            {1, QStringLiteral("Current"), bandMask, bandMask, 0},
+            {2, QStringLiteral("Both"), bandMask, bandMask, 0},
+            {3, QStringLiteral("Receive-only"), 0, bandMask, 0},
+        };
+        model.m_bands = {{5, QStringLiteral("40m"), 7.0, 7.3}};
+        model.m_portA = {1, true, QStringLiteral("MANUAL"), 5, 1, 1, false, false};
+        model.m_portB = {2, true, QStringLiteral("MANUAL"), 5, 0, 0, false, false};
+    }
 };
 }
 
@@ -2035,6 +2065,7 @@ bool checkStatusPresentation()
         || dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"))) {
         return false;
     }
+
     // The detail status is always visible and carries the accessible state.
     if (!status->isVisible() || status->text() != QStringLiteral("Not connected")
         || status->accessibleName().isEmpty()
@@ -2118,6 +2149,59 @@ bool checkStatusPresentation()
     }
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
     return sawDisabled;
+}
+
+bool checkAgAntennaStatusLabel()
+{
+    AntennaGeniusModel model;
+    AntennaGeniusApplet applet;
+    applet.setModel(&model);
+    QLabel* label = applet.findChild<QLabel*>(QStringLiteral("agPortAAntennaStatus"));
+    if (!label) {
+        return false;
+    }
+
+    AntennaGeniusModelTestAccess::setPortAntennaStatus(model, 1, 1);
+    if (label->text() != QStringLiteral("Beam")) {
+        return false;
+    }
+
+    AntennaGeniusModelTestAccess::setPortAntennaStatus(model, 1, 2);
+    return label->text() == QStringLiteral("RX:Beam  TX:Vertical");
+}
+
+bool checkAgAntennaSelectionMode()
+{
+    AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
+    AntennaGeniusModel model;
+    QStringList commands;
+    AntennaGeniusModelTestAccess::prepareSelectionMode(model, commands);
+    AntennaGeniusApplet applet;
+    applet.setModel(&model);
+    emit model.antennasChanged();
+
+    QCheckBox* split = applet.findChild<QCheckBox*>(QStringLiteral("agSplitRxTxMode"));
+    QPushButton* bothButton = applet.findChild<QPushButton*>(QStringLiteral("agPort1RxAntenna2"));
+    QPushButton* rxOnlyButton = applet.findChild<QPushButton*>(QStringLiteral("agPort1RxAntenna3"));
+    if (!split || split->isChecked() || !bothButton || !rxOnlyButton
+        || rxOnlyButton->isEnabled()) {
+        AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
+        return false;
+    }
+
+    bothButton->click();
+    const bool coupled = commands.size() == 1
+        && commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=2"))
+        && model.portA().rxAntenna == 2 && model.portA().txAntenna == 2;
+    split->setChecked(true);
+    const bool splitEnabled = rxOnlyButton->isEnabled();
+    rxOnlyButton->click();
+    const bool splitSelection = commands.size() == 2
+        && commands.constLast().contains(QStringLiteral("port set 1 rxant=3 txant=2"))
+        && model.portA().rxAntenna == 3 && model.portA().txAntenna == 2;
+
+    AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
+    return coupled && splitEnabled && splitSelection;
 }
 
 bool checkKpa500NetworkSetup()
@@ -2741,7 +2825,8 @@ void printUsage(const char* program)
 {
     std::fprintf(stderr,
         "usage: %s [--case=automatic|removal|auth-read|manual-recovery|external-ag|"
-        "discovery|availability|discovered-recovery|interaction]\n", program);
+        "discovery|availability|discovered-recovery|interaction|ag-antenna-status|"
+        "ag-antenna-selection-mode]\n", program);
 }
 
 const char* parseCase(int argc, char** argv, bool& valid)
@@ -2758,7 +2843,8 @@ const char* parseCase(int argc, char** argv, bool& valid)
     for (const Case candidate : {Case{"automatic"}, Case{"removal"}, Case{"auth-read"},
                                  Case{"manual-recovery"}, Case{"external-ag"},
                                  Case{"discovery"}, Case{"availability"},
-                                 Case{"discovered-recovery"}, Case{"interaction"}}) {
+                                 Case{"discovered-recovery"}, Case{"interaction"},
+                                 Case{"ag-antenna-status"}, Case{"ag-antenna-selection-mode"}}) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate.name;
         }
@@ -2890,6 +2976,24 @@ int main(int argc, char** argv)
         return 1;
     }
     if (selected("interaction") && runStage("interaction", [&app] { return checkInteraction(app); }) != 0) {
+        return 1;
+    }
+    if (selected("ag-antenna-status") && runStage("ag-antenna-status", [] {
+            if (!checkAgAntennaStatusLabel()) {
+                std::fprintf(stderr, "Antenna Genius RX/TX status label regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("ag-antenna-selection-mode") && runStage("ag-antenna-selection-mode", [] {
+            if (!checkAgAntennaSelectionMode()) {
+                std::fprintf(stderr, "Antenna Genius selection mode regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
         return 1;
     }
     return 0;

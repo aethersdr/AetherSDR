@@ -1,16 +1,19 @@
 #include "AntennaGeniusApplet.h"
+#include "CanonIndicators.h"
 #include "PeripheralConnectionSource.h"
 #include "core/PeripheralSettings.h"
 #include "GuardedSlider.h"
 #include "models/AntennaGeniusModel.h"
 
 #include <QPushButton>
+#include <QCheckBox>
 #include <QLabel>
 #include <QComboBox>
 #include <QLineEdit>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QHostAddress>
 #include <QDebug>
@@ -129,6 +132,24 @@ void AntennaGeniusApplet::buildUI()
         vbox->addLayout(row);
     }
 
+    m_splitRxTxCheck = new QCheckBox(QStringLiteral("Split RX/TX"));
+    m_splitRxTxCheck->setObjectName(QStringLiteral("agSplitRxTxMode"));
+    applyCanonSheet(m_splitRxTxCheck, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    m_splitRxTxCheck->setChecked(
+        AppSettings::instance().value(QStringLiteral("AG_SplitRxTxMode"), QStringLiteral("False"))
+            .toString() == QStringLiteral("True"));
+    vbox->addWidget(m_splitRxTxCheck);
+    connect(m_splitRxTxCheck, &QCheckBox::toggled, this, [this](bool split) {
+        AppSettings::instance().setValue(
+            QStringLiteral("AG_SplitRxTxMode"), split ? QStringLiteral("True") : QStringLiteral("False"));
+        applyAntennaSelectionMode();
+        updatePortDisplay(1);
+        updatePortDisplay(2);
+    });
+
     // ── Port A section ──────────────────────────────────────────────────────
     m_portASection = new QWidget;
     {
@@ -150,6 +171,7 @@ void AntennaGeniusApplet::buildUI()
         hdr->addStretch();
 
         m_portAAntLabel = new QLabel("—");
+        m_portAAntLabel->setObjectName(QStringLiteral("agPortAAntennaStatus"));
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_portAAntLabel, "color: {{color.accent.success}}; font-size: 11px; font-weight: bold;");
         m_portAAntLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_portAAntLabel->setMinimumWidth(0);
@@ -157,13 +179,29 @@ void AntennaGeniusApplet::buildUI()
 
         pv->addLayout(hdr);
 
-        // Antenna button grid (populated when antennas are loaded)
-        m_portABtnGrid = new QWidget;
-        m_portABtnGrid->setLayout(new QGridLayout);
-        auto* gl = static_cast<QGridLayout*>(m_portABtnGrid->layout());
-        gl->setContentsMargins(0, 0, 0, 0);
-        gl->setSpacing(2);
-        pv->addWidget(m_portABtnGrid);
+        auto* selections = new QHBoxLayout;
+        selections->setContentsMargins(0, 0, 0, 0);
+        selections->setSpacing(4);
+        auto addSelectionGrid = [&](const QString& direction, QWidget*& grid, QLabel*& heading) {
+            auto* column = new QWidget;
+            auto* columnLayout = new QVBoxLayout(column);
+            columnLayout->setContentsMargins(0, 0, 0, 0);
+            columnLayout->setSpacing(1);
+            heading = new QLabel(direction);
+            heading->setStyleSheet(kLabelStyle);
+            heading->setAlignment(Qt::AlignCenter);
+            columnLayout->addWidget(heading);
+            grid = new QWidget;
+            grid->setLayout(new QGridLayout);
+            auto* gl = static_cast<QGridLayout*>(grid->layout());
+            gl->setContentsMargins(0, 0, 0, 0);
+            gl->setSpacing(2);
+            columnLayout->addWidget(grid);
+            selections->addWidget(column, 1);
+        };
+        addSelectionGrid(QStringLiteral("RX"), m_portARxBtnGrid, m_portARxHeading);
+        addSelectionGrid(QStringLiteral("TX"), m_portATxBtnGrid, m_portATxHeading);
+        pv->addLayout(selections);
 
         // AUTO button
         m_portAAutoBtn = new QPushButton("AUTO");
@@ -199,6 +237,7 @@ void AntennaGeniusApplet::buildUI()
         hdr->addStretch();
 
         m_portBAntLabel = new QLabel("—");
+        m_portBAntLabel->setObjectName(QStringLiteral("agPortBAntennaStatus"));
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_portBAntLabel, "color: {{color.accent.success}}; font-size: 11px; font-weight: bold;");
         m_portBAntLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_portBAntLabel->setMinimumWidth(0);
@@ -206,12 +245,29 @@ void AntennaGeniusApplet::buildUI()
 
         pv->addLayout(hdr);
 
-        m_portBBtnGrid = new QWidget;
-        m_portBBtnGrid->setLayout(new QGridLayout);
-        auto* gl = static_cast<QGridLayout*>(m_portBBtnGrid->layout());
-        gl->setContentsMargins(0, 0, 0, 0);
-        gl->setSpacing(2);
-        pv->addWidget(m_portBBtnGrid);
+        auto* selections = new QHBoxLayout;
+        selections->setContentsMargins(0, 0, 0, 0);
+        selections->setSpacing(4);
+        auto addSelectionGrid = [&](const QString& direction, QWidget*& grid, QLabel*& heading) {
+            auto* column = new QWidget;
+            auto* columnLayout = new QVBoxLayout(column);
+            columnLayout->setContentsMargins(0, 0, 0, 0);
+            columnLayout->setSpacing(1);
+            heading = new QLabel(direction);
+            heading->setStyleSheet(kLabelStyle);
+            heading->setAlignment(Qt::AlignCenter);
+            columnLayout->addWidget(heading);
+            grid = new QWidget;
+            grid->setLayout(new QGridLayout);
+            auto* gl = static_cast<QGridLayout*>(grid->layout());
+            gl->setContentsMargins(0, 0, 0, 0);
+            gl->setSpacing(2);
+            columnLayout->addWidget(grid);
+            selections->addWidget(column, 1);
+        };
+        addSelectionGrid(QStringLiteral("RX"), m_portBRxBtnGrid, m_portBRxHeading);
+        addSelectionGrid(QStringLiteral("TX"), m_portBTxBtnGrid, m_portBTxHeading);
+        pv->addLayout(selections);
 
         m_portBAutoBtn = new QPushButton("AUTO");
         m_portBAutoBtn->setCheckable(true);
@@ -226,6 +282,7 @@ void AntennaGeniusApplet::buildUI()
     m_sourceLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     vbox->addWidget(m_sourceLabel, 0, Qt::AlignRight);
     setConnectionSource(false);
+    applyAntennaSelectionMode();
 
     outer->addWidget(body);
 
@@ -367,8 +424,10 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
             }
             btns.clear();
         };
-        clearGrid(m_portABtnGrid, m_portABtns);
-        clearGrid(m_portBBtnGrid, m_portBBtns);
+        clearGrid(m_portARxBtnGrid, m_portARxBtns);
+        clearGrid(m_portATxBtnGrid, m_portATxBtns);
+        clearGrid(m_portBRxBtnGrid, m_portBRxBtns);
+        clearGrid(m_portBTxBtnGrid, m_portBTxBtns);
     });
 
     connect(m_model, &AntennaGeniusModel::connectionError, this,
@@ -411,7 +470,8 @@ void AntennaGeniusApplet::rebuildAntennaButtons()
     if (antennas.isEmpty()) return;
 
     // Helper: build a grid of antenna buttons for a given port.
-    auto buildGrid = [&](QWidget* gridWidget, QList<QPushButton*>& btns, int portId) {
+    auto buildGrid = [&](QWidget* gridWidget, QList<QPushButton*>& btns,
+                         int portId, bool transmit) {
         // Remove old buttons.
         auto* gl = static_cast<QGridLayout*>(gridWidget->layout());
         while (gl->count() > 0) {
@@ -421,42 +481,74 @@ void AntennaGeniusApplet::rebuildAntennaButtons()
         }
         btns.clear();
 
-        // Create a button per antenna, 4 columns.
+        // Create a button per antenna, two columns in each TX/RX selector.
         int col = 0, row = 0;
         for (const auto& ant : antennas) {
             auto* btn = new QPushButton(ant.name);
             btn->setCheckable(true);
             btn->setStyleSheet(QString(kButtonBase) + kBlueActive);
-            btn->setToolTip(QString("Antenna %1: %2").arg(ant.id).arg(ant.name));
+            btn->setToolTip(QString("%1 antenna %2: %3")
+                .arg(transmit ? QStringLiteral("TX") : QStringLiteral("RX"))
+                .arg(ant.id).arg(ant.name));
+            btn->setObjectName(QString("agPort%1%2Antenna%3")
+                .arg(portId).arg(transmit ? QStringLiteral("Tx") : QStringLiteral("Rx"))
+                .arg(ant.id));
             btn->setFixedHeight(24);
             btn->setMinimumWidth(0);
             btn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
 
             int antId = ant.id;
-            connect(btn, &QPushButton::clicked, this, [this, portId, antId]() {
+            connect(btn, &QPushButton::clicked, this, [this, portId, antId, transmit]() {
                 if (!m_model || !m_model->isConnected() || m_updatingFromModel)
                     return;
-                // Click on already-active antenna → deselect (set to 0).
                 const auto& ps = (portId == 1) ? m_model->portA() : m_model->portB();
-                if (ps.rxAntenna == antId)
-                    m_model->selectAntenna(portId, 0);
-                else
-                    m_model->selectAntenna(portId, antId);
+                if (!m_splitRxTxCheck->isChecked()) {
+                    if (ps.rxAntenna == antId && ps.txAntenna == antId) {
+                        m_model->selectAntenna(portId, 0);
+                    } else {
+                        const int band = m_model->effectiveBand(portId);
+                        if (band <= 0 || (m_model->canRxOnBand(antId, band)
+                                          && m_model->canTxOnBand(antId, band))) {
+                            m_model->selectAntenna(portId, antId);
+                        }
+                    }
+                    return;
+                }
+
+                const int selected = transmit ? ps.txAntenna : ps.rxAntenna;
+                const int next = selected == antId ? 0 : antId;
+                transmit ? m_model->selectTxAntenna(portId, next)
+                         : m_model->selectRxAntenna(portId, next);
             });
 
             gl->addWidget(btn, row, col);
             btns.append(btn);
 
-            if (++col >= 4) { col = 0; ++row; }
+            if (++col >= 2) { col = 0; ++row; }
         }
     };
 
-    buildGrid(m_portABtnGrid, m_portABtns, 1);
-    buildGrid(m_portBBtnGrid, m_portBBtns, 2);
+    buildGrid(m_portARxBtnGrid, m_portARxBtns, 1, false);
+    buildGrid(m_portATxBtnGrid, m_portATxBtns, 1, true);
+    buildGrid(m_portBRxBtnGrid, m_portBRxBtns, 2, false);
+    buildGrid(m_portBTxBtnGrid, m_portBTxBtns, 2, true);
+    applyAntennaSelectionMode();
 
     // Refresh display with current port state.
     updatePortDisplay(1);
     updatePortDisplay(2);
+}
+
+void AntennaGeniusApplet::applyAntennaSelectionMode()
+{
+    const bool split = m_splitRxTxCheck && m_splitRxTxCheck->isChecked();
+    const QString rxHeading = split ? QStringLiteral("RX") : QStringLiteral("RX + TX");
+    if (m_portARxHeading) m_portARxHeading->setText(rxHeading);
+    if (m_portBRxHeading) m_portBRxHeading->setText(rxHeading);
+    if (m_portATxBtnGrid) m_portATxBtnGrid->parentWidget()->setVisible(split);
+    if (m_portBTxBtnGrid) m_portBTxBtnGrid->parentWidget()->setVisible(split);
+    if (m_portATxHeading) m_portATxHeading->setText(QStringLiteral("TX"));
+    if (m_portBTxHeading) m_portBTxHeading->setText(QStringLiteral("TX"));
 }
 
 void AntennaGeniusApplet::updatePortDisplay(int portId)
@@ -468,7 +560,8 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
     const auto& ps = (portId == 1) ? m_model->portA() : m_model->portB();
     auto& bandLabel = (portId == 1) ? m_portABandLabel : m_portBBandLabel;
     auto& antLabel  = (portId == 1) ? m_portAAntLabel  : m_portBAntLabel;
-    auto& btns      = (portId == 1) ? m_portABtns      : m_portBBtns;
+    auto& rxBtns    = (portId == 1) ? m_portARxBtns    : m_portBRxBtns;
+    auto& txBtns    = (portId == 1) ? m_portATxBtns    : m_portBTxBtns;
     auto* autoBtn   = (portId == 1) ? m_portAAutoBtn    : m_portBAutoBtn;
 
     // Effective band: AG-reported or radio-frequency-derived.
@@ -478,8 +571,11 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
     bandLabel->setText(m_model->bandName(band));
 
     // Active antenna name
-    QString antName = m_model->antennaName(ps.rxAntenna);
-    antLabel->setText(antName);
+    const QString rxName = m_model->antennaName(ps.rxAntenna);
+    const QString txName = m_model->antennaName(ps.txAntenna);
+    antLabel->setText(ps.rxAntenna == ps.txAntenna
+        ? rxName
+        : QStringLiteral("RX:%1  TX:%2").arg(rxName, txName));
 
     // TX indicator — highlight antenna label red when transmitting.
     if (ps.transmitting) {
@@ -490,71 +586,80 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
 
     // Get the other port's selected antenna so we can block duplicates.
     const auto& otherPs = (portId == 1) ? m_model->portB() : m_model->portA();
-    int otherPortAnt = otherPs.rxAntenna;
+    const QSet<int> otherPortAntennas{otherPs.rxAntenna, otherPs.txAntenna};
 
-    // Highlight buttons and colour-code by TX/RX permission for current band.
+    // Highlight buttons and colour-code each direction by its permission.
     auto antennas = m_model->antennas();
-    for (int i = 0; i < btns.size() && i < antennas.size(); ++i) {
-        QSignalBlocker b(btns[i]);
-        int antId = antennas[i].id;
-        bool isActive = (antId == ps.rxAntenna);
+    auto updateButtons = [&](QList<QPushButton*>& btns, bool transmit) {
+        for (int i = 0; i < btns.size() && i < antennas.size(); ++i) {
+            QSignalBlocker b(btns[i]);
+            const int antId = antennas[i].id;
+            const bool split = m_splitRxTxCheck->isChecked();
+            const bool isActive = split
+                ? antId == (transmit ? ps.txAntenna : ps.rxAntenna)
+                : ps.rxAntenna == antId && ps.txAntenna == antId;
+            const bool canTx = m_model->canTxOnBand(antId, band);
+            const bool canRx = m_model->canRxOnBand(antId, band);
+            const bool permitted = split ? (transmit ? canTx : canRx) : (canTx && canRx);
 
-        // Antenna in use by the other port — disable, dim, and force unchecked.
-        bool inUseByOther = (antId == otherPortAnt && otherPortAnt > 0);
-        btns[i]->setEnabled(!inUseByOther);
-        btns[i]->setChecked(inUseByOther ? false : isActive);
+            // Antenna in use by the other port — disable, dim, and force unchecked.
+            const bool inUseByOther = antId > 0 && otherPortAntennas.contains(antId);
+            // An active but newly disallowed antenna remains selectable so the
+            // operator can clear it, while new invalid selections are blocked.
+            const bool enabled = !inUseByOther && (band <= 0 || permitted || isActive);
+            btns[i]->setEnabled(enabled);
+            btns[i]->setChecked(inUseByOther ? false : isActive);
 
-        if (inUseByOther) {
-            AetherSDR::ThemeManager::instance().applyStyleSheet(btns[i], "QPushButton { background: #101820; border: 1px solid #182028; "
-                "border-radius: 3px; padding: 2px 2px; font-size: 10px; color: {{color.background.2}}; }"
-                "QPushButton:checked { background: #202830; color: #606878; "
-                "border: 1px solid #303848; }");
-            QString otherLabel = (portId == 1) ? "Port B" : "Port A";
-            btns[i]->setToolTip(QString("%1 — in use by %2")
-                .arg(antennas[i].name, otherLabel));
-            continue;
+            if (inUseByOther) {
+                AetherSDR::ThemeManager::instance().applyStyleSheet(btns[i], "QPushButton { background: #101820; border: 1px solid #182028; "
+                    "border-radius: 3px; padding: 2px 2px; font-size: 10px; color: {{color.background.2}}; }"
+                    "QPushButton:checked { background: #202830; color: #606878; "
+                    "border: 1px solid #303848; }");
+                QString otherLabel = (portId == 1) ? "Port B" : "Port A";
+                btns[i]->setToolTip(QString("%1 — in use by %2")
+                    .arg(antennas[i].name, otherLabel));
+                continue;
+            }
+
+            if (band <= 0) {
+                btns[i]->setStyleSheet(QString(kButtonBase) + kBlueActive);
+                btns[i]->setToolTip(QString("%1 — %2 antenna")
+                    .arg(antennas[i].name, transmit ? QStringLiteral("TX") : QStringLiteral("RX")));
+            } else if (!permitted) {
+                AetherSDR::ThemeManager::instance().applyStyleSheet(btns[i], "QPushButton { background: #101820; border: 1px solid #182028; "
+                    "border-radius: 3px; padding: 2px 2px; font-size: 10px; color: {{color.background.2}}; }"
+                    "QPushButton:checked { background: #202830; color: #606878; "
+                    "border: 1px solid #303848; }");
+                if (split) {
+                    btns[i]->setToolTip(QString("%1 — not permitted for %2 on %3")
+                        .arg(antennas[i].name,
+                             transmit ? QStringLiteral("TX") : QStringLiteral("RX"),
+                             m_model->bandName(band)));
+                } else {
+                    btns[i]->setToolTip(QString("%1 — requires RX and TX permission on %2; enable Split RX/TX to select independently")
+                        .arg(antennas[i].name, m_model->bandName(band)));
+                }
+            } else if (!transmit
+                       && !m_model->canTxOnBand(antId, band)) {
+                btns[i]->setStyleSheet(QString(kButtonBase) + kAmberActive);
+                btns[i]->setToolTip(QString("%1 — RX only on %2")
+                    .arg(antennas[i].name, m_model->bandName(band)));
+            } else {
+                btns[i]->setStyleSheet(QString(kButtonBase) + kBlueActive);
+                btns[i]->setToolTip(QString("%1 — %2 on %3")
+                    .arg(antennas[i].name,
+                         transmit ? QStringLiteral("TX") : QStringLiteral("RX"),
+                         m_model->bandName(band)));
+            }
         }
+    };
+    updateButtons(rxBtns, false);
+    updateButtons(txBtns, true);
 
-        bool canTx = m_model->canTxOnBand(antId, band);
-        bool canRx = m_model->canRxOnBand(antId, band);
-
-        // Style based on TX/RX permissions:
-        //   TX+RX → blue active (normal)
-        //   RX only → amber active + "RX" suffix
-        //   No RX → dim/disabled appearance
-        if (band <= 0) {
-            // No band known — show all buttons normally
-            btns[i]->setStyleSheet(QString(kButtonBase) + kBlueActive);
-            btns[i]->setToolTip(antennas[i].name);
-        } else if (!canRx && !canTx) {
-            // No permission on this band — dim the button
-            AetherSDR::ThemeManager::instance().applyStyleSheet(btns[i], "QPushButton { background: #101820; border: 1px solid #182028; "
-                "border-radius: 3px; padding: 2px 2px; font-size: 10px; color: {{color.background.2}}; }"
-                "QPushButton:checked { background: #202830; color: #606878; "
-                "border: 1px solid #303848; }");
-            btns[i]->setToolTip(QString("%1 — no RX/TX on %2")
-                .arg(antennas[i].name, m_model->bandName(band)));
-        } else if (canRx && !canTx) {
-            // RX only — amber highlight when active
-            btns[i]->setStyleSheet(QString(kButtonBase) + kAmberActive);
-            btns[i]->setToolTip(QString("%1 — RX only on %2 (no TX)")
-                .arg(antennas[i].name, m_model->bandName(band)));
-        } else {
-            // Full TX+RX — normal blue
-            btns[i]->setStyleSheet(QString(kButtonBase) + kBlueActive);
-            btns[i]->setToolTip(QString("%1 — TX+RX on %2")
-                .arg(antennas[i].name, m_model->bandName(band)));
-        }
-    }
-
-    // Show TX antenna info alongside RX antenna.
-    bool rxCanTx = m_model->canTxOnBand(ps.rxAntenna, band);
-    if (!rxCanTx && ps.rxAntenna > 0 && band > 0) {
-        // RX antenna can't TX — show TX antenna separately
-        QString txName = m_model->antennaName(ps.txAntenna);
-        antLabel->setText(antName + "  TX:" + txName);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(antLabel, "color: {{color.accent.warning}}; font-size: 10px; font-weight: bold;");
-    }
+    if (!ps.transmitting && ps.rxAntenna > 0 && ps.txAntenna > 0
+        && ps.rxAntenna != ps.txAntenna)
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            antLabel, "color: {{color.accent.warning}}; font-size: 10px; font-weight: bold;");
 
     // AUTO button state.
     {
@@ -564,7 +669,7 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
 
     // Inhibit indicator
     if (ps.inhibited) {
-        antLabel->setText(antName + " [INHIBIT]");
+        antLabel->setText(antLabel->text() + " [INHIBIT]");
         AetherSDR::ThemeManager::instance().applyStyleSheet(antLabel, "color: {{color.accent.warning}}; font-size: 11px; font-weight: bold;");
     }
 

@@ -37,6 +37,28 @@ struct AntennaGeniusModelTestAccess {
     {
         model.m_authCommandWriter = std::move(writer);
     }
+    static void captureAntennaCommands(AntennaGeniusModel& model, QStringList& lines)
+    {
+        model.m_commandWriter = [&lines](const QByteArray& bytes) {
+            lines.append(QString::fromUtf8(bytes));
+        };
+        model.m_connected = true;
+        model.m_device.name = QStringLiteral("Antenna Genius");
+        model.m_device.radioPorts = 2;
+        const quint16 bandMask = quint16(1U << 5);
+        model.m_antennas = {
+            {1, QStringLiteral("RX-only"), 0, bandMask, 0},
+            {2, QStringLiteral("Both"), bandMask, bandMask, 0},
+            {3, QStringLiteral("TX-only"), bandMask, 0, 0},
+        };
+        model.m_bands = {{5, QStringLiteral("20m"), 14.0, 14.35}};
+        model.m_portA = {1, true, QStringLiteral("MANUAL"), 5, 1, 2, false, false};
+        model.m_portB = {2, true, QStringLiteral("MANUAL"), 5, 0, 0, false, false};
+    }
+    static void recallBand(AntennaGeniusModel& model, int portId, int bandId)
+    {
+        model.recallBandAntennas(portId, bandId);
+    }
 };
 
 // Inject only the command writer and the connected flag, never a live peer.
@@ -313,6 +335,59 @@ int main(int argc, char** argv)
           == QByteArray("C1|auth code=sample\n")); // captured PGXL form
     CHECK(peripheralAuthCommand(PeripheralAuthProtocol::AntennaGenius, QStringLiteral("sample"))
           == QByteArray("C1|auth code=sample\r\n")); // documented syntax, capture-compatible framing
+    {
+        auto& settings = AppSettings::instance();
+        const QString legacyKey = QStringLiteral("AG_Port1_Band5");
+        const QString rxKey = QStringLiteral("AG_Port1_Band5_RX");
+        const QString txKey = QStringLiteral("AG_Port1_Band5_TX");
+        settings.remove(legacyKey);
+        settings.remove(rxKey);
+        settings.remove(txKey);
+
+        AntennaGeniusModel connection;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+
+        connection.selectRxAntenna(1, 3);
+        CHECK(commands.isEmpty()); // TX-only antennas cannot be selected for RX.
+        connection.selectRxAntenna(1, 2);
+        CHECK(commands.size() == 1);
+        CHECK(commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=2")));
+
+        connection.selectTxAntenna(1, 3);
+        CHECK(commands.size() == 2);
+        CHECK(commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=3")));
+        CHECK(connection.portA().rxAntenna == 2);
+        CHECK(connection.portA().txAntenna == 3);
+        CHECK(settings.value(rxKey).toInt() == 2);
+        CHECK(settings.value(txKey).toInt() == 3);
+        CHECK(settings.value(legacyKey).toInt() == 2);
+
+        // A split pair is restored in one command and explicit zero selections
+        // are distinguished from missing settings.
+        settings.setValue(rxKey, QStringLiteral("0"));
+        settings.setValue(txKey, QStringLiteral("3"));
+        commands.clear();
+        AntennaGeniusModelTestAccess::recallBand(connection, 1, 5);
+        CHECK(commands.size() == 1);
+        CHECK(commands.constFirst().contains(
+            QStringLiteral("port set 1 rxant=0 txant=3")));
+
+        // Existing installations with one shared key migrate to both directions
+        // when the antenna has permission for both.
+        settings.remove(rxKey);
+        settings.remove(txKey);
+        settings.setValue(legacyKey, QStringLiteral("2"));
+        commands.clear();
+        AntennaGeniusModelTestAccess::recallBand(connection, 1, 5);
+        CHECK(commands.size() == 1);
+        CHECK(commands.constFirst().contains(
+            QStringLiteral("port set 1 rxant=2 txant=2")));
+
+        settings.remove(legacyKey);
+        settings.remove(rxKey);
+        settings.remove(txKey);
+    }
     checkReconnectSuppression<TgxlConnection>(QStringLiteral("tgxlReconnectTimer"),
         "V1.2.17 AUTH", "R1|0|Unauthorized", 9010);
     checkReconnectSuppression<PgxlConnection>(QStringLiteral("pgxlReconnectTimer"),
