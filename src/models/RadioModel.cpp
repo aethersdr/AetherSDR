@@ -3195,6 +3195,11 @@ RadioModel::~RadioModel()
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Cwx)) {
             m_backend->abortCwText(m_txCoordinator.cleanupFence());
         }
+        // A MOX still held here belongs to a controller copy that outlives the
+        // model (TxApplet keeps one), so the reset above released nothing.
+        if (activeTxActivities() & static_cast<unsigned>(TxActivity::Mox)) {
+            m_backend->setKeying(false, m_txCoordinator.cleanupFence());
+        }
     }
     restoreTuneInhibit();
     // Disconnect RadioModel's own connections to the wire objects BEFORE they

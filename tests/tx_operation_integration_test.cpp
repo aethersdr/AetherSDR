@@ -4089,6 +4089,34 @@ void tciPromotionRechecksPermissionAfterReply()
 #endif
 } // namespace
 
+// ~RadioModel must unkey a held MOX exactly once, whether the model holds the
+// last reference to its local TxController or a GUI copy (TxApplet) outlives it.
+void teardownReleasesHeldMoxOnce()
+{
+    for (const bool copyOutlivesModel : {false, true}) {
+        QStringList teardown;
+        std::shared_ptr<TxController> outliving;
+        {
+            auto f = std::make_unique<Fixture>();
+            std::shared_ptr<TxController> controller = f->radio.localTxController();
+            (void)controller->capture(TxController::Activity::Mox).start();
+            check(f->commands == QStringList{QStringLiteral("mox:on")},
+                  "teardown fixture: the captured MOX keys once");
+            if (copyOutlivesModel) {
+                outliving = std::move(controller);
+            }
+            controller.reset();
+            f->backend->commands = &teardown;
+            f.reset();
+        }
+        outliving.reset();
+        check(teardown == QStringList{QStringLiteral("mox:off")},
+              copyOutlivesModel
+                  ? "a MOX held through a controller copy that outlives the model unkeys once at teardown"
+                  : "a MOX held through the model's own controller unkeys once at teardown");
+    }
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("tx-operation-integration"));
@@ -4108,6 +4136,7 @@ int main(int argc, char** argv)
     queuedPrimaryKeying();
     voiceKeyerDisconnectStopsLikeMox();
     teardownAdmission();
+    teardownReleasesHeldMoxOnce();
     pendingCallbackDisconnectExpiry();
     guiRegistrationDropIsNotARejection();
     expiringCallbackCannotRepopulateTheMap();
