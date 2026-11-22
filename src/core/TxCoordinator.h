@@ -25,8 +25,11 @@ class TxCoordinator final {
     struct StopState;
 
 public:
-    enum class Activity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
-    static constexpr unsigned kAllActivities = 63;
+    enum class Activity : unsigned {
+        Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32,
+        VoiceKeyer = 64, Navtex = 128
+    };
+    static constexpr unsigned kAllActivities = 255;
     class Operation;
     class Context;
     class Request;
@@ -209,6 +212,12 @@ public:
         // input, never from the current connection at timer/output time.
         // One derivation level only; all handles share the global bound.
         [[nodiscard]] Request derive() const;
+        // Identity of the producing lifetime, for bookkeeping only (zero when
+        // none). It grants nothing and cannot capture another request.
+        [[nodiscard]] quintptr producerKey() const;
+        // Whether the producing lifetime is still valid, holding neither this
+        // request nor the producer: a bookkeeping copy must not keep work alive.
+        [[nodiscard]] std::function<bool()> producerAlive() const;
     private:
         friend class TxCoordinator;
         friend class Producer;

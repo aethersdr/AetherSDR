@@ -226,6 +226,11 @@ commands. Create a new instance to restart discovery.
   `staleAfterMs` (2000), and `limited`. The latter stays true until meter clear
   or connection reset after an invalid/over-capacity definition is excluded.
 - `identity`: `name`, `model`, `serial`, `version`, `manufacturer`.
+- `transmitTimeout`: the host transmit time-out (RFC #7021), read-only:
+  `enabled`, `timeoutS` (15–1800), `warningS` (0 = no warning) and `latched`,
+  true after an expiry until every keying input has released and the radio is
+  idle. The radio's own interlock timeout, where it has one, may end an over
+  sooner. Observation only; it grants and keys nothing.
 - `capabilities`:
   - `maxSlices`, `maxPanadapters`, `sampleRatesHz`;
   - `tuningRangeHz` with `minimum` and `maximum`;
@@ -243,6 +248,23 @@ commands. Create a new instance to restart discovery.
     minimum/maximum low cut, high cut and width; audio carries gain bounds
     0–100; pan records carry inclusive `minimumHz`/`maximumHz`. See the
     receive-control contract for eligibility.
+  - Optional `receiveDspControl`: `authority`, `maximumRitOffsetHz` and
+    `features`, an object naming each steerable host DSP feature
+    (`agcThreshold`, `noiseBlanker`, `noiseReduction`, `rit`) with the modes
+    it applies in; a feature that applies in no mode is omitted.
+  - Optional `receiveAudioPlayout`: `prefillMs` and `bufferCapMs`, the host
+    playback prefill and queue cap the backend asks for on the primary receive
+    PCM queue; null when the host defaults apply. Today only an Icom MAIN/SUB
+    radio with stereo LAN receive sets it (200 and 400 ms). It is timing
+    metadata and grants no control.
+  - Optional `radioSpeakerControl`: `authority` only, for
+    `radioSession.setRadioSpeaker` (the radio's own speaker; ANAN declares it).
+  - Optional `receivePanRfGainControl`: `authority`, inclusive
+    `minimumDb`/`maximumDb`, and `stepDb`. A backend whose stage is an
+    attenuator declares it negated (ANAN: −31 to 0).
+- `receiveObservation.radioSpeaker`: `{known, enabled}`, whether the backend is
+  feeding the radio's own speaker, as it last reported in this session; unknown
+  while disconnected.
 - `receiveObservation.cwPitch`: `{known, hz}`, the pitch the backend last
   reported in this session, with `known:false` and `hz:null` while unknown or
   disconnected. It is session-wide, shared by every CW receiver, so it lives
@@ -279,6 +301,10 @@ control methods are specified in
   required for a known ordered passband. These are backend publications,
   separate from the legacy optimistic mode/filter/audio values above. A changed
   mode invalidates previous cuts; partial fields do not invent missing partners.
+- `receiveObservation.agcThreshold` (integer 0–100), `.noiseBlanker` and
+  `.noiseReduction` (booleans): `{known, value, authority}`, backend
+  publications. `receiveObservation.rit` carries `known`, nullable `enabled`
+  and `offsetHz`, and `authority`; known needs both halves.
 - `receive.antenna`, `receive.rfGain`.
 - `receive.agc.mode`, `receive.agc.threshold`, `receive.agc.offLevel`.
 - `receive.squelch.enabled`, `receive.squelch.level`.
@@ -297,6 +323,9 @@ for control admission, observation and concurrent-intent semantics.
   `bandwidthKnown`, `centerAuthority` / `bandwidthAuthority`. Only normalized
   backend geometry updates these fields. Reconnect or an ownership change
   invalidates them, including when legacy visible geometry is retained.
+- `rfGainObservation`: `{known, value, authority}`, the RF gain in dB the
+  backend last reported applying. The `receive.rfGain` value below can be the
+  desktop slider's own; this field is not. An ownership change invalidates it.
 - `centerHz`, `centerKnown`, `bandwidthHz`.
 - `dbmRange.minimum`, `dbmRange.maximum`.
 - `bandwidthLimitsHz.minimum`, `bandwidthLimitsHz.maximum`; zero means the
@@ -399,7 +428,7 @@ by the same law the automatic RF-gain loop uses (`Hl2AutoGainPolicy.h`).
 
 ### Meters
 
-`Hl2Backend::defineMeters` defines nine meters. They reach clients through the
+`Hl2Backend::defineMeters` defines twelve meters. They reach clients through the
 generic `meter` resource; the HL2 chooses the indices, since the radio assigns
 none. Each additional receiver adds one `SLC` / `LEVEL` meter at index
 100 + receiver number (`sourceIndex` is the receiver number; same unit and
@@ -416,14 +445,21 @@ range).
 | 7 | `TX` | `ALC` | `dBFS` | -100 to 0 | Post-ALC audio peak, before the modulator |
 | 8 | `TX` | `COMPPEAK` | `dB` | 0 to 25 | Speech processor compression |
 | 9 | `TX` | `ALCGAIN` | `dB` | -20 to 0 | Gain the ALC is applying |
+| 10 | `TX` | `SC_FILT_1` | `dBFS` | -140 to 0 | Transmit audio after the ALC, into the modulator |
+| 11 | `TX` | `SC_FILT_2` | `dBFS` | -140 to 0 | Modulated transmit IQ, the modulator's output |
+| 12 | `RAD` | `PACURRENT` | `Amps` | 0 to 2.07 | PA drain current; converted from the schematic, not checked against an ammeter |
 
 `FWDPWR` and `REFPWR` are labelled uncalibrated in their definitions: the value
 comes from an uncalibrated reference curve, not a calibrated power reading.
+`SC_FILT_1` and `SC_FILT_2` are the two levels the desktop's TX filter-loss
+check compares. In FM and AM the pair cannot show a loss: the FM IQ envelope is
+constant, and the AM carrier holds the output within about 6 dB of the input.
+No pair is emitted for a window in which the modulator dropped a block.
 
 ### Not offered
 
-- Supply voltage and PA current telemetry: not offered. The HL2 sets
-  `hasSupplyVoltageTelemetry` and `hasPaCurrentTelemetry` to false.
+- Supply voltage telemetry: not offered. The HL2 sets
+  `hasSupplyVoltageTelemetry` to false.
 - `radioSession` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
   meaning uncalibrated rather than zero watts. The HL2's `txPowerBands` is not
   projected into any resource.

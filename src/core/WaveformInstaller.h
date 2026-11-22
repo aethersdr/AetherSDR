@@ -18,6 +18,22 @@ namespace AetherSDR {
 
 class RadioModel;
 
+// Tells every window that WaveformInstaller::anyInstalling() may have changed:
+// an upload started or ended in some installer. The Waveforms window and
+// AetherGPS each own an installer and gate on the other's. GUI thread only.
+class WaveformInstallActivity : public QObject {
+    Q_OBJECT
+
+public:
+    static WaveformInstallActivity* instance();
+
+signals:
+    void changed();
+
+private:
+    WaveformInstallActivity() = default;
+};
+
 // Installs radio waveform packages via the Flex file upload protocol.
 //
 // Legacy (FlexLib Radio.cs SendSSDRWaveformFile):
@@ -39,6 +55,7 @@ class WaveformInstaller : public QObject {
 
 public:
     explicit WaveformInstaller(RadioModel* model, QObject* parent = nullptr);
+    ~WaveformInstaller() override;
 
     // Backward-compatible Docker install entry point.
     void install(const QString& filePath, std::optional<RadioControlSession> session = {});
@@ -55,6 +72,10 @@ public:
     void cancel();
 
     bool isInstalling() const { return m_finishing || m_uploadState.isCurrent(m_activeGeneration); }
+    // Whether any installer in this process is uploading. The Waveforms
+    // window and AetherGPS each own one; neither may start an upload while
+    // the other's is in flight. GUI thread only.
+    static bool anyInstalling();
 
 signals:
     void progressChanged(int percent, const QString& status);

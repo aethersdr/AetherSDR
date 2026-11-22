@@ -83,7 +83,8 @@ public:
     void setCwBackendState(const QString& key, bool tuning, const QString& status, bool preparing,
                          bool canRetry, const QString& detail);
     void appendUnscoredCwText(const QString& text);
-    // Colored like appendCwText, but never dropped by the Sens threshold.
+    // Colored like appendCwText, and hidden at or above the selected
+    // decoder's own Sens threshold.
     void appendColoredCwText(const QString& text, float cost);
 #endif
     QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
@@ -95,11 +96,17 @@ public:
     int pitchRangeHigh()  const;
     // Sets both decoder range sliders to the saved shared ranges.
     void restoreCwRanges();
+    // Sets the Sens slider and its threshold to the selected decoder's saved
+    // value, and ggmorse's threshold to ggmorse's saved value even when a neural
+    // decoder is selected.  Does nothing while the slider holds an unsaved change.
+    void restoreCwSens();
+    // Saves a Sens change that is still waiting for its debounced save.
+    void flushCwSens();
 
     // RTTY decode panel
     void  setRttyPanelVisible(bool visible);
     void  appendRttyText(const QString& text, float confidence);
-    void  setRttyStats(float markLevel, float spaceLevel, float snrDb, bool locked);
+    void  setRttyStats(float level, float snrDb, bool locked);
     void  setRttyInputHint(const QString& hint, const QString& reason);
     void  clearRttyText();
     // Show the slice's mark / shift without emitting rttyMarkHzChanged /
@@ -136,9 +143,14 @@ signals:
     void pitchRangeChanged(int minHz, int maxHz);
     void speedRangeChanged(int minWpm, int maxWpm);
     void cwPanelCloseRequested();
-    // RX text that passed the confidence filter and was rendered — the
-    // stream the CW callsign spotter watches for "DE <call> <call>".
+    // RX text rendered in the pane by appendCwText(), appendColoredCwText()
+    // and appendUnscoredCwText() (scored text only after the selected
+    // decoder's Sens filter) — the stream the CW callsign spotter watches
+    // for "DE <call> <call>".
     void cwRxTextDisplayed(const QString& text);
+    // The operator picked a callsign in the CW text (double-click, or the
+    // context menu's entry): it becomes the DX call for CWX macros.
+    void cwCallsignPicked(const QString& call);
 
     // RTTY
     void rttyMarkHzChanged(int hz);
@@ -158,6 +170,8 @@ private:
     void applyCwFont();
     // Change the decoded-text font size by `delta` px, clamp, and persist (#3628).
     void adjustCwFont(int delta);
+    // The callsign at a point of the CW text's viewport, or empty.
+    QString cwCallsignAt(const QPoint& viewportPos) const;
     // Persist + clamp the CW panel height after a grip drag (#3628).
     void setCwPanelHeight(int h);
 
@@ -198,7 +212,16 @@ private:
 #ifdef HAVE_CW_RX_BACKENDS
     QComboBox*    m_cwEngineCombo{nullptr};
     QPushButton* m_cwModelAction{nullptr};
+    void          showCwSensFor(const QString& backend);
+    // Threshold for a neural decoder's colored text.  m_cwCostThreshold stays
+    // ggmorse's: the TX decode, the controller feed and MQTT read it too.
+    float         m_cwNeuralCostThreshold{1.0f};
 #endif
+    void          saveCwSens(int value);
+    // The decoder whose Sens the slider shows, and whether the slider holds
+    // a change that is not saved yet.
+    QString       m_cwSensBackend{QStringLiteral("ggmorse")};
+    bool          m_cwSensUnsaved{false};
     QWidget*      m_cwPanel{nullptr};
     QWidget*      m_cwGrip{nullptr};
     QTextEdit*    m_cwText{nullptr};

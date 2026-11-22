@@ -15,6 +15,7 @@
 #include "SpectrumWidget.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
+#include "core/CallsignUtils.h"
 #include "gui/CopyAssistSettings.h"
 #include "core/SettingsHelpers.h"
 
@@ -33,6 +34,8 @@
 #include <QPushButton>
 #include <QTextEdit>
 #include <QTextCharFormat>
+#include <QTextCursor>
+#include <QTextDocument>
 #include <QWindow>
 #include <QGuiApplication>
 #include <QClipboard>
@@ -45,6 +48,15 @@
 namespace AetherSDR {
 
 namespace {
+// The Sens slider's 0-100 as a cost threshold: text whose cost is at or above
+// it is hidden.  0 maps to 1.0 and 100 to 0.1.
+float cwSensCostThreshold(int sens) { return 1.0f - (sens / 100.0f) * 0.9f; }
+
+// ggmorse's saved Sens: a flat AppSettings key, read with this default.  The
+// neural decoders' Sens lives in CwDecodeSettings instead.
+constexpr auto kGgmorseSensKey = "CwDecoderSensitivity";
+constexpr auto kGgmorseSensDefault = "30";
+
 // fldigi's standard RTTY shifts and mark tones, the RTTY decoder's Shift and
 // Mark lists, in ascending order.
 constexpr int kRttyShiftPresetsHz[] = {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850};
@@ -215,21 +227,26 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     cwBar->addWidget(sensLabel);
     m_cwSensSlider = new GuardedSlider(Qt::Horizontal);
     m_cwSensSlider->setRange(0, 100);  // 0=show everything, 100=only high confidence
-    int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
+    int savedSens = AppSettings::instance().value(kGgmorseSensKey, kGgmorseSensDefault).toString().toInt();
     m_cwSensSlider->setValue(savedSens);
     m_cwSensSlider->setFixedWidth(60);
+    m_cwSensSlider->setAccessibleName(tr("CW decode sensitivity"));
     applyPrimarySliderStyle(m_cwSensSlider);
-    m_cwCostThreshold = 1.0f - (savedSens / 100.0f) * 0.9f;
+    // The slider clamps a hand-edited value; the threshold reads it back.
+    m_cwCostThreshold = cwSensCostThreshold(m_cwSensSlider->value());
     connectSliderSetting(m_cwSensSlider,
         [this](int v) {
-            // Map 0-100 slider to 1.0-0.1 cost threshold (inverted: higher sens = lower threshold)
-            m_cwCostThreshold = 1.0f - (v / 100.0f) * 0.9f;
+            m_cwSensUnsaved = true;
+#ifdef HAVE_CW_RX_BACKENDS
+            if (m_cwSensBackend != QLatin1String("ggmorse")) {
+                m_cwNeuralCostThreshold = cwSensCostThreshold(v);
+                return;
+            }
+#endif
+            m_cwCostThreshold = cwSensCostThreshold(v);
         },
-        [](int v) {
-            auto& settings = AppSettings::instance();
-            settings.setValue("CwDecoderSensitivity", QString::number(v));
-            settings.save();
-        });
+        // A change already flushed when the decoder moved is not saved again.
+        [this](int) { flushCwSens(); });
     cwBar->addWidget(m_cwSensSlider);
 
 #ifdef HAVE_CW_RX_BACKENDS
@@ -374,8 +391,17 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_cwText->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_cwText->setWordWrapMode(QTextOption::WrapAnywhere);
     m_cwText->setContextMenuPolicy(Qt::CustomContextMenu);
+    // A double-click on a callsign picks it as the DX call (see eventFilter).
+    m_cwText->viewport()->installEventFilter(this);
     connect(m_cwText, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
         QMenu *menu = m_cwText->createStandardContextMenu();
+        // A scroll area reports the menu position in viewport coordinates.
+        const QString call = cwCallsignAt(pos);
+        if (!call.isEmpty()) {
+            menu->addSeparator();
+            menu->addAction(tr("Use %1 as DX call").arg(call), this,
+                            [this, call] { emit cwCallsignPicked(call); });
+        }
         menu->addSeparator();
         menu->addAction(tr("Increase font size"), this, [this] { adjustCwFont(+1); });
         menu->addAction(tr("Decrease font size"), this, [this] { adjustCwFont(-1); });
@@ -535,8 +561,8 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "Squelch for the decoded text: drops characters the decoder is not confident\n"
         "about, so noise between transmissions stops filling the pane with gibberish.\n"
         "0 (default) shows every decoded character — exactly the behavior before this\n"
-        "control existed. Higher values drop more; ~38 filters what the stats bar\n"
-        "calls UNLOCK; 100 keeps only near-certain copy. Affects display only —\n"
+        "control existed. Higher values drop more: 23 hides the red letters, 45 the\n"
+        "orange ones too, and 78 keeps only the green ones. Affects display only —\n"
         "nothing is retuned and no audio changes."));
     m_rttySensSlider->setRange(0, 100);
     const int savedRttySens = RttyDecodeSettings::sensitivity();
@@ -868,6 +894,41 @@ QString PanadapterApplet::cwCostColor(float cost)
     return QStringLiteral("#ff4040");
 }
 
+void PanadapterApplet::restoreCwSens()
+{
+    if (m_cwSensUnsaved) { return; }
+    const bool ggmorse = m_cwSensBackend == QLatin1String("ggmorse");
+    // ggmorse's threshold also serves the TX decode, the controller feed and
+    // MQTT, so it follows the saved ggmorse value whichever decoder is selected.
+    // Clamped to the slider's span: a hand-edited key can be out of it.
+    const int ggmorseSens = std::clamp(
+        AppSettings::instance().value(kGgmorseSensKey, kGgmorseSensDefault).toString().toInt(),
+        m_cwSensSlider->minimum(), m_cwSensSlider->maximum());
+    m_cwCostThreshold = cwSensCostThreshold(ggmorseSens);
+    const QSignalBlocker blocker(m_cwSensSlider);
+    m_cwSensSlider->setValue(ggmorse ? ggmorseSens : CwDecodeSettings::sensitivity(m_cwSensBackend));
+#ifdef HAVE_CW_RX_BACKENDS
+    if (!ggmorse) { m_cwNeuralCostThreshold = cwSensCostThreshold(m_cwSensSlider->value()); }
+#endif
+}
+
+void PanadapterApplet::flushCwSens()
+{
+    if (m_cwSensUnsaved) { saveCwSens(m_cwSensSlider->value()); }
+}
+
+void PanadapterApplet::saveCwSens(int value)
+{
+    m_cwSensUnsaved = false;
+    if (m_cwSensBackend != QLatin1String("ggmorse")) {
+        CwDecodeSettings::setSensitivity(m_cwSensBackend, value);
+        return;
+    }
+    auto& settings = AppSettings::instance();
+    settings.setValue(kGgmorseSensKey, QString::number(value));
+    settings.save();
+}
+
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
 #ifdef HAVE_CW_RX_BACKENDS
@@ -887,7 +948,7 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
     // Switching back from TX → RX inserts a separator space so the [TX]
     // burst and the following RX text don't run together (#2417).
     if (m_lastCwTextSource == CwTextSource::Tx)
-        m_cwText->insertHtml(QStringLiteral(" "));
+        m_cwText->insertPlainText(QStringLiteral(" "));
     m_lastCwTextSource = CwTextSource::Rx;
     m_cwText->insertHtml(QString("<span style=\"color:%1\">%2</span>")
         .arg(color, clean.toHtmlEscaped()));
@@ -915,11 +976,12 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
     const QString unavailableReason = tuning ? QString{}
         : tr("%1 does not support manual decoder tuning.")
               .arg(m_cwEngineCombo->currentText());
+    // Sens works with every decoder, each on its own saved value.
+    showCwSensFor(key);
     // A description with no name gives a screen reader nothing to anchor it to
     // (docs/a11y.md; #4896), so name them here rather than only explaining why
     // they are unavailable.
-    const std::array<std::pair<QWidget*, QString>, 5> tuningControls{{
-        {m_cwSensSlider, tr("CW decode sensitivity")},
+    const std::array<std::pair<QWidget*, QString>, 4> tuningControls{{
         {m_lockPitchBtn, tr("Lock CW pitch estimate")},
         {m_lockSpeedBtn, tr("Lock CW speed estimate")},
         {m_pitchRangeSlider, tr("CW pitch search range")},
@@ -937,6 +999,16 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
         : QString{});
     if (selected) { m_cwStatsLabel->setText(status); }
 }
+void PanadapterApplet::showCwSensFor(const QString& backend)
+{
+    if (backend == m_cwSensBackend) { return; }
+    // An unsaved slider change belongs to the decoder being left.  Its
+    // debounced save reads the slider when it fires, which by then holds the
+    // incoming decoder's value.
+    flushCwSens();
+    m_cwSensBackend = backend;
+    restoreCwSens();
+}
 void PanadapterApplet::appendUnscoredCwText(const QString& text)
 {
     QString clean = text;
@@ -950,14 +1022,27 @@ void PanadapterApplet::appendUnscoredCwText(const QString& text)
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
     // For a backend that reports no per-letter score.
+
+    emit cwRxTextDisplayed(clean);
 }
 void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
 {
-    // The cost is 1 - the backend's own per-letter posterior. It picks the
-    // color (ggmorse's four bands, as theme tokens) and is never compared
-    // with the Sens threshold, which is on ggmorse's scale.
+    // The cost is 1 - the backend's own posterior (DeepFist per letter, DeepCW
+    // per chunk). It picks the color (ggmorse's four bands, as theme tokens),
+    // and text at or above this decoder's own Sens threshold is not shown.
+    // Text that is only a space is always shown, so hidden DeepFist letters
+    // never join two words, and a hidden DeepCW chunk that held a space
+    // leaves one (CwDecodeSettings::shownNeuralText).
     QString clean = text;
     clean.replace('\n', ' ');
+    const QTextDocument* doc = m_cwText->document();
+    // After a TX burst the insert below adds a separator space anyway.
+    const bool paneEndsInSpace = doc->isEmpty() || m_lastCwTextSource == CwTextSource::Tx
+        || doc->characterAt(doc->characterCount() - 2).isSpace();
+    const QString shown = CwDecodeSettings::shownNeuralText(
+        clean, cost, m_cwNeuralCostThreshold, paneEndsInSpace);
+    if (shown.isEmpty() && !clean.isEmpty()) { return; }
+    clean = shown;
     m_cwText->moveCursor(QTextCursor::End);
     if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
     m_lastCwTextSource = CwTextSource::Rx;
@@ -970,6 +1055,8 @@ void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
     QTextCursor cursor = m_cwText->textCursor();
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
+
+    emit cwRxTextDisplayed(clean);
 }
 #endif
 
@@ -990,7 +1077,7 @@ void PanadapterApplet::appendCwTextTx(const QString& text, float cost)
     // Separator space on Rx→Tx boundary so the two colored runs don't
     // visually merge.  None→Tx (panel empty) gets no leading space.
     if (m_lastCwTextSource == CwTextSource::Rx)
-        m_cwText->insertHtml(QStringLiteral(" "));
+        m_cwText->insertPlainText(QStringLiteral(" "));
     m_lastCwTextSource = CwTextSource::Tx;
     m_cwText->insertHtml(
         QString("<span style=\"color:%1\">%2</span>")
@@ -1022,6 +1109,20 @@ void PanadapterApplet::clearCwText()
     m_lastCwTextSource = CwTextSource::None;
 }
 
+QString PanadapterApplet::cwCallsignAt(const QPoint& viewportPos) const
+{
+    // cursorForPosition() answers with the nearest text position even for a
+    // point in the empty area beside or below the text; accept only a point
+    // on the cursor's own line and within a character of it.
+    const QTextCursor cursor = m_cwText->cursorForPosition(viewportPos);
+    const QRect line = m_cwText->cursorRect(cursor);
+    if (viewportPos.y() < line.top() || viewportPos.y() > line.bottom()
+        || qAbs(viewportPos.x() - line.center().x()) > m_cwText->fontMetrics().maxWidth()) {
+        return {};
+    }
+    return Callsigns::callsignAt(m_cwText->toPlainText(), cursor.position());
+}
+
 void PanadapterApplet::layoutHeader()
 {
     if (!m_titleBar || !m_headerButtons) {
@@ -1046,6 +1147,14 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
         || ((obj == m_titleBar || obj == m_headerButtons)
             && ev->type() == QEvent::LayoutRequest)) {
         layoutHeader();
+    }
+    // A double-click on a callsign in the CW text picks it as the DX call.
+    // Observe only: the text edit still selects the word.
+    if (m_cwText && obj == m_cwText->viewport() && ev->type() == QEvent::MouseButtonDblClick) {
+        const auto* me = static_cast<QMouseEvent*>(ev);
+        const QString call = me->button() == Qt::LeftButton
+            ? cwCallsignAt(me->position().toPoint()) : QString();
+        if (!call.isEmpty()) { emit cwCallsignPicked(call); }
     }
     // A decoder range is saved once the drag or key press that set it ends.
     // Observe only: the slider still handles the event itself.
@@ -1191,7 +1300,7 @@ void PanadapterApplet::setRttyMarkHz(int hz)
 
 void PanadapterApplet::setRttyShiftHz(int hz)
 {
-    if (hz <= 0) { return; }
+    if (hz < 0) { return; }
     showSliceValue(m_rttyShiftCombo, kRttyShiftPresetsHz, hz);
 }
 
@@ -1247,11 +1356,14 @@ void PanadapterApplet::setRttyInputHint(const QString& hint, const QString& reas
     setDecoderInputHint(m_rttyInputHint, text, reason, tr("RTTY receive input: %1").arg(text));
 }
 
-void PanadapterApplet::setRttyStats(float markLevel, float /* spaceLevel */, float snrDb, bool locked)
+void PanadapterApplet::setRttyStats(float level, float snrDb, bool locked)
 {
-    const int markSegs = qBound(0, qRound(markLevel * 15.0f), 15);
+    // Level bar: the decoder's average character score on the letter colors' scale,
+    // empty with no characters, full on a clean copy. 15 segments, left to right.
+    // Not driven through MeterSmoother, by maintainer ruling (#7422): the level is a
+    // per-character average that also decides LOCKED, not display ballistics.
+    const int markSegs = qBound(0, qRound(level * 15.0f), 15);
 
-    // Mark bar: 15 segments, fills left to right
     QString markBar;
     for (int i = 0; i < 15; ++i) {
         markBar += (i < markSegs)

@@ -32,6 +32,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accessory.dial.face", QString("#0070c0"));
     m_tokens.insert("color.accessory.dial.needle", QString("#e6f0fa"));
     m_tokens.insert("color.accessory.dial.rim", QString("#3a4a5a"));
+    m_tokens.insert("color.accessory.indicator.bypass.foreground", QString("#e0a000"));
+    m_tokens.insert("color.accessory.indicator.operate.foreground", QString("#00e060"));
     m_tokens.insert("color.accessory.key.bypass.background", QString("#8a6000"));
     m_tokens.insert("color.accessory.key.bypass.foreground", QString("#ffd9a0"));
     m_tokens.insert("color.accessory.key.meffa.active.background", QString("#006030"));
@@ -134,6 +136,7 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.meter.pivot.glow", QString("#ffb060"));
     m_tokens.insert("color.meter.pivot.rim", QString("#3a3e48"));
     m_tokens.insert("color.meter.rms", QString("#00b4d8"));
+    m_tokens.insert("color.meter.swr.yellow", QString("#e6d000"));
     m_tokens.insert("color.meter.thresh", QString("#ffb84d"));
     m_tokens.insert("color.networkQuality.excellent", QString("#00cc66"));
     m_tokens.insert("color.networkQuality.fair", QString("#cc9900"));

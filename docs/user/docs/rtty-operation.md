@@ -3,12 +3,12 @@ title: "RTTY Operation"
 slug: "/rtty-operation"
 description: "RTTY (Radio Teletype) is a digital mode that encodes text as two alternating audio tones — a Mark tone and a Space tone."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2
 
 :::
 
@@ -44,9 +44,9 @@ When you switch to RTTY mode, AetherSDR displays two dashed vertical lines on th
 
 When you tune to an RTTY signal, position the two dashed lines so that the Mark line sits on the higher-frequency tone and the Space line sits on the lower-frequency tone. When both tones fall on their respective lines, the signal is properly tuned and can be decoded.
 
-<img src="/img/screens/rtty-ms-lines.png" width="680" alt="Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode." />
+<img src="/img/screens/rtty-ms-lines.png" width="680" alt="Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode. The flag's DSP tab is open: noise-filter buttons, the AetherRX and AetherTX launchers, a Parameters row, and Mark 2125 and Shift 170, each between a left and a right arrow button." />
 
-*RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband.*
+*RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband. The VFO's DSP tab is open, showing Mark 2125 and Shift 170.*
 
 ```
 Panadapter view (RTTY mode):
@@ -70,11 +70,11 @@ The M/S lines appear only in **RTTY** mode. A DIGL slice shows the normal carrie
 
 When the selected slice is in **RTTY**, a decoder pane opens below the waterfall and shows the decoded text (Baudot/ITA2, with LTRS/FIGS shift tracking). Its controls are listed under [Decoder controls](#decoder-controls).
 
-The stats bar updates about twice a second with the mark and space levels, the SNR and **LOCKED** / **UNLOCK**. Baud, REV and Sens are remembered. Mark and Shift are not: they are the slice's mark and shift, which the radio holds, and a new slice starts at a 170 Hz shift.
+The stats bar updates about twice a second. Its level bar and **LOCKED** / **UNLOCK** follow how cleanly recent characters were received: a full bar and LOCKED on a clean copy, an empty bar and UNLOCK when nothing is being decoded, a steady carrier included. The dB figure compares the two tones over the same characters, so it depends on the shift as well as the signal: a clean copy reads about 6 dB at 170 Hz and 45.45 baud, about 3 dB at 85 Hz and about 9 dB at 850 Hz. Each letter is colored by how cleanly it was received: green, yellow, orange, then red. Baud, REV and Sens are remembered. Mark and Shift are not: they are the slice's mark and shift, which the radio holds, and a new slice starts at a 170 Hz shift.
 
-<img src="/img/screens/rtty-decoder-pane.png" width="1331" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
+<img src="/img/screens/rtty-decoder-pane.png" width="1226" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: 2125, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
 
-*The RTTY decoder pane under the waterfall.*
+*The RTTY decoder pane under the waterfall, with Sens raised to about 38.*
 
 #### Which audio is decoded
 
@@ -112,7 +112,7 @@ See [DAX Virtual Audio](./dax-virtual-audio.md) and [CAT Control](./cat-control.
 | **Shift** | 45, 50, 75, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz | The slice's mark-to-space shift, the same value as **Shift** on the VFO's **DSP** tab; the panadapter's space line follows it. A shift set there in 5 Hz steps (for example 175 Hz) is listed as its own entry. |
 | **Baud** | **45.45**, 50, 75, 100, 110, 150, 300 | Symbol rate |
 | **REV** | On / off | Reverse polarity — space above mark (inverted signal) |
-| **Sens** | 0–100 (default 0) | Display squelch: hides characters the decoder is not confident about, so noise between transmissions doesn't fill the pane. 0 shows everything; about 38 hides what the stats bar calls UNLOCK; 100 keeps only near-certain copy. Display only — nothing is retuned. |
+| **Sens** | 0–100 (default 0) | Display squelch: hides characters the decoder is not confident about, so noise between transmissions doesn't fill the pane. 0 shows everything; 23 hides the red letters, 45 the orange ones too, and 78 keeps only the green ones. Display only — nothing is retuned. |
 | **CPY ALL** | — | Copy all decoded text to the clipboard |
 | **CLR** | — | Clear the text |
 | **✕** | — | Close the decoder pane |
@@ -173,15 +173,18 @@ The pane opens only for a selected slice in RTTY mode, and closing it with **✕
 
 The decoder is printing noise while it has no lock.
 
-1. Raise **Sens** on the decoder bar (around 38 hides unlocked copy).
+1. Raise **Sens** on the decoder bar. Noise decodes as mostly red and orange letters, which 45 hides.
 
 ### Audio sounds like two alternating tones but no decode
 
 The tones are not on the M and S lines, or the decoder settings don't match the signal.
 
+The built-in decoder stays idle while either tone is at or below 0 Hz. It resumes automatically when both tones are above 0 Hz.
+
 1. Tune your VFO until both tones sit on their respective dashed lines.
 2. Check that **Shift**, **Baud** and **REV** match the signal.
-3. If you use external software, verify the DAX channel is routing audio correctly.
+3. With **REV** off, keep **Mark** above **Shift**. With **REV** on, keep **Mark** above 0 Hz.
+4. If you use external software, verify the DAX channel is routing audio correctly.
 
 ## See also
 

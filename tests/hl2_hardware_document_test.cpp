@@ -19,13 +19,18 @@
 //   4. An older build must not replace a document with a newer schema.
 //
 // Socket-free and radio-free: nothing here binds, discovers or connects.
-// (aethersdr/AetherSDR#5867 review follow-up.)
+// (aethersdr/AetherSDR#5867 review follow-up.) §4f's two connectRadio() calls
+// use the hl2_backend_session_scope_test seam: boardMaxRx skips the unicast
+// probe and disconnectRadio() in the same turn supersedes the DSP build, so
+// MetisClient::start() never runs.
 
+#include "TestDspBuildWait.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2HardwareOptions.h"
+#include "gui/ExperimentalRadioSupport.h"
 
 #include <QCoreApplication>
 #include <QJsonObject>
@@ -56,6 +61,57 @@ struct Hl2BoardIdentityTestAccess {
     {
         backend.m_radioSerial = serial;
         backend.loadHardwareOptions(minor);
+    }
+    // The board identity capabilities() publishes after a connect whose
+    // discovery reported `version`, and what it publishes once disconnected.
+    struct Published {
+        std::optional<RadioCapabilities::BoardIdentity> connected;
+        std::optional<RadioCapabilities::BoardIdentity> disconnected;
+    };
+    static Published identityAfterConnect(Hl2Backend& backend, const QString& serial,
+                                          const QString& version)
+    {
+        backend.m_radioSerial = serial;
+        backend.loadBoardIdentity(version);
+        backend.m_connected = true;
+        Published p;
+        p.connected = backend.capabilities().boardIdentity;
+        backend.m_connected = false;
+        p.disconnected = backend.capabilities().boardIdentity;
+        return p;
+    }
+    // The same record, but through connectRadio() itself, so the call that
+    // feeds RadioConnectRequest::version into loadBoardIdentity() is pinned.
+    // boardMaxRx skips the unicast probe and disconnectRadio() in the same turn
+    // supersedes the DSP build, so MetisClient::start() never runs and nothing
+    // binds (the hl2_backend_session_scope_test seam).
+    struct ThroughConnect {
+        std::optional<RadioCapabilities::BoardIdentity> identity;
+        bool dspBuildFinished = false;
+    };
+    static ThroughConnect identityThroughConnect(Hl2Backend& backend,
+                                                 const QString& version)
+    {
+        bool finished = false;
+        const QMetaObject::Connection done = QObject::connect(
+            &backend, &Hl2Backend::dspSetupFinished, &backend,
+            [&finished] { finished = true; });
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1; never contacted
+        req.port = 1024;
+        req.version = version;
+        req.params.insert(QStringLiteral("boardMaxRx"), 4);
+        backend.connectRadio(req);
+        backend.m_connected = true;
+        ThroughConnect out;
+        out.identity = backend.capabilities().boardIdentity;
+        backend.m_connected = false;
+        backend.disconnectRadio();
+        out.dspBuildFinished = test::awaitDspBuild("hl2_hardware_document_test",
+                                                   [&] { return finished; });
+        // `finished` is this frame's; nothing may write it after we return.
+        QObject::disconnect(done);
+        return out;
     }
 };
 }  // namespace AetherSDR::hl2
@@ -478,6 +534,82 @@ int main(int argc, char** argv)
         check(codecKeyStored(RadioSettingsScope(family, stock))
                   && filterBoardKeyStored(RadioSettingsScope(family, stock)),
               "a stock board writes its codec and filter board defaults as before");
+    }
+
+    // ---- 4f. the typed board identity, through the backend (#7311) --------
+    // RadioConnectRequest::version in, RadioCapabilities::boardIdentity out, and
+    // the support tier read from that. No display label is involved anywhere on
+    // this path, so rewording "Gateware" cannot reach the tier.
+    {
+        hl2::Hl2Backend backend;
+        const QString serial = QStringLiteral("AA:BB:CC:DD:EE:21");
+        const auto tierFor = [&](const QString& version) {
+            return experimentalRadioDescriptor(
+                QStringLiteral("hl2"), QStringLiteral("Hermes-Lite 2"),
+                hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(backend, serial, version)
+                    .connected);
+        };
+        const auto stock = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QStringLiteral("74.3"));
+        check(stock.connected && stock.connected->board == QStringLiteral("hl2")
+                  && stock.connected->gatewareMajor == 74,
+              "74.3 publishes board \"hl2\", gateware major 74");
+        check(!stock.disconnected, "and nothing once disconnected");
+        const auto bare = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QStringLiteral("74"));
+        check(bare.connected && bare.connected->board == QStringLiteral("hl2")
+                  && bare.connected->gatewareMajor == 74,
+              "a bare 74 publishes board \"hl2\", gateware major 74");
+        const auto sq2 = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QStringLiteral("75.52"));
+        check(sq2.connected && sq2.connected->board == QStringLiteral("square-sdr-2")
+                  && sq2.connected->gatewareMajor == 75,
+              "75.52 publishes board \"square-sdr-2\", gateware major 75");
+        const auto sq3 = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QStringLiteral("74.53"));
+        check(sq3.connected && sq3.connected->board == QStringLiteral("square-3"),
+              "74.53 publishes board \"square-3\"");
+        const auto none = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QString());
+        check(none.connected && none.connected->board == QStringLiteral("hl2")
+                  && !none.connected->gatewareMajor,
+              "no reported version publishes the board with no gateware major");
+
+        check(!tierFor(QStringLiteral("74.3")), "74.3 through the backend: supported");
+        check(!tierFor(QStringLiteral("74")), "74 through the backend: supported");
+        check(tierFor(QStringLiteral("73.3")).has_value(), "73.3: experimental");
+        check(tierFor(QStringLiteral("75.3")).has_value(), "75.3: experimental");
+        check(tierFor(QStringLiteral("74.52")).has_value(),
+              "a SQUARE SDR 2 on 74: experimental");
+        check(tierFor(QStringLiteral("75.52")).has_value(),
+              "a SQUARE SDR 2 on 75.52: experimental");
+        check(tierFor(QStringLiteral("74.53")).has_value(), "a SQUARE 3 on 74: experimental");
+        check(tierFor(QString()).has_value(), "no reported version: experimental");
+        check(tierFor(QStringLiteral("74x")).has_value(), "a malformed version: experimental");
+
+        {
+            hl2::Hl2Backend connecting;
+            const auto stockConnect =
+                hl2::Hl2BoardIdentityTestAccess::identityThroughConnect(
+                    connecting, QStringLiteral("74.3"));
+            check(stockConnect.dspBuildFinished, "the superseded DSP build finishes");
+            check(stockConnect.identity && stockConnect.identity->board == QStringLiteral("hl2")
+                      && stockConnect.identity->gatewareMajor == 74,
+                  "connectRadio() with version 74.3 publishes hl2 / 74");
+            // The next connect on the same backend reports no version: the
+            // previous radio's major must not survive into it.
+            const auto unknownConnect =
+                hl2::Hl2BoardIdentityTestAccess::identityThroughConnect(
+                    connecting, QString());
+            check(unknownConnect.dspBuildFinished, "and the second build finishes");
+            check(unknownConnect.identity && !unknownConnect.identity->gatewareMajor,
+                  "a reconnect with no version publishes no gateware major");
+            check(experimentalRadioDescriptor(QStringLiteral("hl2"),
+                                              QStringLiteral("Hermes-Lite 2"),
+                                              unknownConnect.identity)
+                      .has_value(),
+                  "so that reconnect is experimental, not the last radio's tier");
+        }
     }
 
     // ---- 5. an invalid scope is inert in both directions -------------------

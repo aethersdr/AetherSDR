@@ -75,6 +75,24 @@ launch** button appear under **Compute** (see *GPU acceleration*).
     blank line) is written when ASR starts, whenever you retune, and at the top
     of each new day's file — so every block of decoded text is labeled with the
     frequency it came from.
+- **Show a live preview while the model decodes** — **off by default**. Gray
+  provisional text appears within about a second of speech and is replaced,
+  segment by segment, by the selected backend's final text. Works with every
+  backend; the transcript file and screen readers get finals only. With no
+  model (**None (live preview only)**) it is forced on and its own finals are
+  the transcript. Dimmed, with the reason, where no recognizer is available. See *Live preview* under
+  Architecture.
+  - **Preview recognizer** — which streaming recognizer draws the gray text:
+    - **Kroko streaming, English (sherpa-onnx)**, the default. The first Enable
+      with the preview on downloads its model (~71 MB, four files,
+      SHA-256-pinned) into the models folder; after that it is verified and
+      reused. English only. Needs a build with sherpa-onnx (the release builds
+      have it; Intel Macs do not).
+    - **Apple speech recognition**, macOS 26+ only (Apple's on-device
+      `SpeechTranscriber`). Listed on every Mac and nowhere else: hidden, not
+      dimmed, on Windows and Linux, where no user could ever pick it. On a Mac
+      that cannot run it, dimmed, with its reason in the item's accessible
+      description. Follows the transcription language.
 - **Transcribe from unprocessed audio (bypasses NR and RX effects)** — **off by
   default**, and a fresh profile transcribes after noise reduction exactly as
   every earlier build did. Ticked, the recogniser is fed the receive audio from
@@ -251,13 +269,22 @@ the layout. Grab models from sherpa-onnx's model zoo and point at the extracted
 directory. sherpa-onnx bundles its own ONNX Runtime, which the whole app then
 shares (single runtime, no version clash).
 
-Stage it with `scripts/setup/setup-sherpa-onnx.sh` (Linux x64/aarch64 + macOS;
-`REQUIRE_ASR_SHERPA=ON` makes it a release requirement). The AppImage and DMG
-release builds run this and ship sherpa-onnx. k2-fsa publishes no aarch64
-shared-lib, so the ARM one is built by AetherSDR's own CI
+Stage it with `scripts/setup/setup-sherpa-onnx.sh` (Linux x64/aarch64 + macOS)
+or `scripts\setup\setup-sherpa-onnx.ps1` (Windows), then re-run CMake; configure
+prints `sherpa-onnx found — non-whisper ASR backend enabled`. On macOS, run
+`setup-onnxruntime.sh` first: the sherpa script links against that runtime and
+refuses to run without it. On Linux and Windows sherpa-onnx brings its own.
+`REQUIRE_ASR_SHERPA=ON` turns a missing sherpa-onnx into a configure error
+instead of a build without it. The release builds run these scripts and ship
+sherpa-onnx. k2-fsa publishes no aarch64 shared-lib, so the ARM one is built by
+AetherSDR's own CI
 ([`build-sherpa-onnx-aarch64.yml`](../.github/workflows/build-sherpa-onnx-aarch64.yml))
-and hosted on the `sherpa-onnx-libs` release. Windows is a follow-up (needs a
-`setup-sherpa-onnx.ps1`).
+and hosted on the `sherpa-onnx-libs` release.
+
+A source build without sherpa-onnx still succeeds, but has no default live
+preview recognizer: the Kroko entry is dimmed, and off macOS so is the preview
+setting. The app downloads only the Kroko *model* on first use; the library is
+a build-time dependency, so anyone building to test the preview must stage it.
 
 ## Remote backend (bring your own server)
 
@@ -270,6 +297,22 @@ Select **"Remote server…"** in the model picker (⚙ settings) and enter the e
 (e.g. `http://host:8080/v1/audio/transcriptions`), an optional API key, and the
 model name. AetherSDR ships **no server and no default endpoint**; cloud
 endpoints are entirely opt-in and user-configured.
+
+## No model (live preview only)
+
+**"None (live preview only)"** in the model picker runs no backend: the live
+preview recognizer's final text is the transcript. It is listed wherever a
+preview recognizer can run. Choosing it forces the preview on (the setting
+shows checked and locked, with the reason in its accessible description, and
+the operator's own choice comes back with any other model). Speakers are told
+apart from a model's segments, so **Label speakers** greys out the same way:
+its check mark is kept, the reason is in its tooltip and accessible
+description, and the speaker model is neither loaded nor fetched until another
+model is chosen. It suits hardware
+that cannot keep up with even whisper tiny: on a Raspberry Pi 5, tiny with the
+preview on dropped about a quarter of continuous speech, and Kroko's text was
+often more accurate than tiny's. See *No model* under *Live preview* for how
+it works.
 
 ## Architecture (contributors)
 
@@ -296,6 +339,173 @@ AudioEngine (aethercore, 24 kHz post-NR RX, or pre-NR when opted in)
   today; over the aetherd wire later — the thin UI never links whisper).
 - All inference + resampling + verification run off the audio/UI threads.
 
+### Live preview
+
+The backend still produces every final word (except with no model, below). A
+streaming recogniser only fills the wait for a segment to close:
+
+```
+AsrEngine (main thread)
+  pushAudio ─ stamps timelineStart (16 kHz samples since reset) ─┬─▶ AsrWorker (ASR thread)
+                                                                 │     AsrSegmenter ─▶ segment N closes:
+                                                                 │       previewBlockClosed(N, end) ──┐
+                                                                 │       backend.transcribe(N) ...    │
+                                                                 │       segmentText(N) / Discarded ──┤
+                                                                 │     too-short burst thrown away:   │
+                                                                 │       previewSpanDiscarded(end) ───┤
+                                                                 └─▶ LivePreviewFeeder (own thread)   │
+                                                                       ILivePreview::feed(...)        │
+                                                                       finalizeThrough(end) ◀─────────┤
+                                                                       results (recogniser threads) ──┤
+                                                                                                      ▼
+                                                     LivePreviewAssembler ─▶ previewText(N) / finalText(.., N)
+```
+
+- **Neither the preview's audio nor its results pass through the worker.** A
+  whisper decode blocks the worker for a second or more; the feeder has its
+  own thread, so the recogniser keeps hearing audio during a decode, and its
+  results queue straight to the engine. `asr_live_preview_engine_test` pins
+  both with a 1.5 s decode.
+- **One timeline.** The engine stamps every chunk it hands on with its
+  position in 16 kHz samples. The worker maps its segment edges onto that
+  timeline (it skips stale or cancelled chunks the engine counted); the
+  feeder feeds the recogniser contiguously from it. Both resample alike, so
+  they agree to within a few samples.
+- **Block N** is the audio between the ends of segments N-1 and N, keyed by
+  `AsrSegmenter::ClosedSegment::id`. The recogniser is finalised at every
+  segment close, so its text splits at the same edges, and the panel replaces
+  block N's gray text with segment N's final. A segment that yields nothing
+  removes its block. Audio the segmenter throws away as too short to be speech
+  never becomes a segment, so the worker reports where it ended and the open
+  block drops the text from it.
+- **Forced finalisation every 10 s.** In weak signal a recogniser's
+  end-of-utterance detection may never fire (Apple's did not); an utterance
+  left open for minutes finalises nearly empty. Measured with Apple's
+  recogniser on an off-air ragchew: unbounded streaming lost a 194 s stretch
+  entirely (69.6% WER); with forced finals the longest stretch without new
+  text was 19 s.
+- **Why not stream the finals too.** On the same recording, every streaming
+  configuration finalised worse than decoding each 5 s window afresh (Apple's
+  best stream 39.9% WER against 33.5% for its own windowed decode; Kroko's
+  41.9%; whisper large-v3-turbo 22.7%). Longer windows did not help. So the
+  preview supplies speed (first text in under a second, see *Recognizers*)
+  and the backend keeps its accuracy.
+- **Generations.** A reset or Clear retires the session; results carry the
+  generation they were started under and stale ones are dropped. The engine's
+  `previewText`, `previewDiscarded` and `livePreviewReset` signals all carry
+  the generation, and the panel ignores any other.
+- **Provisional text never enters the document.** Qt reports every change to
+  a `QTextEdit`'s document to assistive technology, so gray text written into
+  the transcript would be read aloud and then retracted, several times a
+  second. The document holds committed text only; the panel paints the drafts
+  over the viewport after the text (continuing the last line, or on their own
+  lines with newline-on-silence), extends the scroll range to cover them, and
+  leaves them out of copy. Screen readers, the accessible text interface and
+  the transcript file see finals only. `copy_assist_panel_test` pins this with
+  an accessibility update handler. The gray is the theme's `color.text.label`.
+
+#### Recognizers
+
+| Recognizer | Stream WER | First text (median / p90) | Cost | Where |
+|---|---|---|---|---|
+| Kroko streaming zipformer (sherpa-onnx), default | 41.9% | 0.85 s / 1.33 s | ~2% of one core | every build with sherpa-onnx |
+| Apple `SpeechTranscriber` | 39.9–42.5% | 0.57 s / 0.91 s | Neural Engine | macOS 26+ |
+
+Measured on the same off-air 40 m SSB ragchew, raw feed, forced finals every
+10 s, simulated real time; for comparison the finals from whisper
+large-v3-turbo score 22.7%. Other sherpa-onnx streaming models were measured
+and rejected: NeMo fast-conformer 80 ms / 480 ms (71% / 87%), Nemotron 0.6B
+160 ms (56–65%, 30–70% of a core), Parakeet unified 560 ms (cannot keep up on
+CPU). They lose whole stretches of weak signal; a +12 dB feed did not help.
+
+**No model (`AsrEngine::setLivePreviewTranscribes`).** The engine runs on
+`noAsrBackendFactory()`, a backend that loads at once and decodes nothing, so
+the segmenter still finds the edges and nothing else changes upstream. The
+worker's empty results are ignored. Every `finalizeThrough` is acknowledged
+(`LivePreviewCallbacks::onFinalized`) once the finals up to it have been
+delivered; when the acknowledged position is a closed block's own edge, that
+block and any older ones are complete, and the assembler hands them over
+(`commitThrough`) as `finalText`, so the panel colors them, the transcript
+file gets them and screen readers read them, as with any backend. Provisional
+text stays gray. Only an edge's own acknowledgement commits: one from the
+10 s forcing could arrive before a late edge has split its last final. The
+confidence is the recognizer's: sherpa's is the mean token probability from
+Kroko's `ys_probs`, the same measure whisper uses (Kroko's reads lower: 0.75
+on the clean demo clip, 0.52–0.74 on off-air recordings); Apple's is its
+transcription confidence averaged over the text (0.97 on the demo clip). A
+final without one commits at the neutral 0.9 the sherpa backend uses. Apple
+acknowledges 150 ms after `finalize(through:)` returns, because its final
+results travel on another task; in testing they always arrived first even
+without the wait. Speaker labels need a backend's segments and are not
+produced.
+
+**sherpa-onnx (`SherpaLivePreview.cpp`).** An online transducer with its own
+endpointing off: the segmenter's edges and the 10 s forcing decide where text
+is finalised. A sherpa stream cannot split its text at an arbitrary sample, so
+`finalizeThrough(s)` waits until 0.6 s has been fed past `s`, finishes the
+stream (1.5 s of tail padding, which Kroko's ~1.3 s decoding chunks need; 0.5
+s left the last half second of words undecoded), and takes the words whose
+first token is before `s` as the final for `[origin, s)`. Splitting between
+whole words, not tokens, keeps a word across `s` intact: cutting at the token
+turned "background" into "backgr" + "ound". A fresh stream then starts at the
+quietest 20 ms before the next word's first token (Kroko times a token 0.2–0.3
+s after the word starts), primed with 2 s of the audio before it, because a
+cold stream drops or mangles its first word; the words it hears while priming
+are already in the final and are dropped. Its results are still reported from
+`s`, so finals tile the timeline. If a segment edge arrives after a split has
+already been made past it (the 10 s forcing came first), the last final is
+split again at the edge: the same start with the words before it, then a final
+for the rest, which the assembler files under the next block. On the demo clip
+looped six times, splitting every 5 s, the split text now matches an unsplit
+decode word for word (12 word errors before); on three off-air recordings,
+word errors against the unsplit decode fell from 70/76/104 to 65/38/68
+(splitting at the feed). Priming and the wait cost about half as much CPU
+again as the stream itself (a 1 s prime cost a third, with about 15% more
+errors; 3 s, two thirds, with about 12% fewer). A stream is replaced, never
+reset, so token times are always relative to its origin. The model itself
+loads once per factory (about a second on an M2) and is shared by every
+session after it, so a retune, which starts a new session, costs a new stream,
+not a reload; the controller keeps the factory while the sherpa preview stays
+on, so engine rebuilds reuse it too. The model is
+`sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06` (sherpa-onnx's packaging
+of Banafo's Kroko community model; the model card at
+huggingface.co/Banafo/Kroko-ASR gives the license as CC-BY-SA with no version;
+AetherSDR applies CC BY-SA 4.0, with the attribution in `THIRD_PARTY_LICENSES`
+entry 39 and the user guide), fetched by
+`AsrModelManager::ensureBundle` from
+`AsrModelCatalog::sherpaLivePreviewModel()`: each file pinned by size and
+SHA-256 and verified like the whisper tiers.
+
+**Apple (`AppleLivePreview.cpp`).** The recogniser takes the Copy Assist
+language setting, so the preview has no language control of its own. That
+setting is always a whisper language code: the list has no auto-detect entry.
+The regional variant comes from the Mac's own region (System Settings →
+General → Language & Region) when Apple has that pairing: Spanish on a US Mac
+is es-US, German on a Mac set to Germany is de-DE (`regionalLocale()` in the
+Swift bridge). Otherwise `SpeechTranscriber.supportedLocale(equivalentTo:)`
+picks one, and its pick for a bare code is arbitrary (es-CL, fr-CA, de-CH on
+macOS 26). An empty code means `Locale.current`. Ready reports the locale in
+use as its message. On macOS 26 Apple covers English, Spanish, French, German,
+Italian, Portuguese, Mandarin, Cantonese, Japanese and Korean (31 locales,
+`SpeechTranscriber.supportedLocales`); anything else reports Failed with the
+reason and shows no preview. A locale not yet installed is downloaded first,
+reported as Preparing. Apple's API is Swift-only.
+`src/asr/apple/AppleLivePreview.swift` exports a C interface
+(`AppleLivePreviewC.h`) that `AppleLivePreview.cpp` wraps as an
+`ILivePreview`. CMake compiles the Swift file with `swiftc` through a custom
+command (CMake's own Swift support needs the Ninja or Xcode generator), once
+per architecture, then `lipo`s the slices. Everything Swift-side is gated on
+macOS 26 at runtime, so the app's deployment floor is unchanged. The bridge
+needs the macOS 26 SDK (Xcode 26) to compile; with an older SDK CMake builds
+the stub instead and says so. `appleLivePreviewSupported()` is false on a Mac
+before macOS 26, which dims the entry with the reason; off macOS the entry is
+not listed at all. Finalize requests reach `SpeechAnalyzer.finalize(through:)`
+in the order they were made, through one task draining a stream of positions
+(a task per request ran in no set order). Apple's results carry no word times,
+so unlike sherpa it cannot re-split a final at a segment edge that arrives
+late: the words after that edge stay under the earlier block until its final
+replaces them, then reappear under the next block when that one's final lands.
+
 ### Build flags
 
 | Flag | Default | Effect |
@@ -305,6 +515,8 @@ AudioEngine (aethercore, 24 kHz post-NR RX, or pre-NR when opted in)
 | `ENABLE_ASR_METAL` | ON (Apple) | Metal GPU backend (macOS). |
 | `REQUIRE_ASR_ONNX` | OFF | **Release guard** — fail configure if ONNX Runtime is missing (else VAD/speaker/classifier silently compile out). |
 | `REQUIRE_ASR_GPU` | OFF | **Release guard** — fail configure if no GPU backend (Vulkan/Metal) is enabled. |
+| `REQUIRE_ASR_SHERPA` | OFF | **Release guard** — fail configure if sherpa-onnx is missing (else the offline sherpa backend and the default live preview recognizer compile out). See *sherpa-onnx models* for staging it. |
+| `ENABLE_ASR_APPLE_LIVE_PREVIEW` | ON (Apple) | Build the Swift bridge for Apple's live-preview recognizer (needs the macOS 26 SDK; an older SDK builds the stub). It runs on macOS 26+; older macOS gets its entry dimmed. The default recognizer, sherpa-onnx, needs no flag beyond sherpa-onnx itself. |
 | `USE_SYSTEM_LIBWHISPER` | OFF | Link a distro libwhisper (**≥ 1.8.0**) via pkg-config instead of the vendored snapshot. |
 
 The ONNX features (Silero VAD, speaker labeling) and the signal classifier need
@@ -336,3 +548,30 @@ remote backend (mock endpoint), whisper linkage, speaker clustering
 `asr_speaker_embedder_test` (built only with ONNX Runtime; env-gated on a model +
 WAV(s)) validate the Silero VAD and the speaker embedder end-to-end. Real GPU/CPU inference is exercised by the env-gated
 `asr_whisper_backend_test` (`AETHER_ASR_TEST_MODEL` + `AETHER_ASR_TEST_PCM`).
+
+Live preview: `asr_live_preview_assembler_test` (block assignment and
+resolution, pure) and `asr_live_preview_engine_test` (feed timeline,
+finalisation at close, delivery during a slow decode, generations, off/unavailable,
+no model: commit on the edge's acknowledgement with the recogniser's confidence),
+both with a fake recogniser; `copy_assist_failure_test` (None is listed only
+where a recognizer runs, builds a transcribing engine, locks the preview on and
+greys speaker labels) and `copy_assist_settings_dialog_test` (the locked and
+greyed states keep the operator's choice); `copy_assist_panel_test` (drafts painted, not in
+the document, no accessibility text events, scroll range, generations);
+`asr_model_manager_test` (bundles: fetch, cached, partly cached, failure
+stops the bundle, mixed folders, corrupt file); `asr_live_preview_assembler_test`
+also covers a segment edge reported after the recogniser ran past it, a
+re-split final, and committing blocks for the no-model mode. The real recognizers are
+exercised by hand: `apple_live_preview_smoke <file.16k.wav> [seconds]
+[language]` (macOS 26+; prints each result with its confidence and fails
+unless every finalize request is acknowledged and no final arrives after its
+acknowledgement) and `sherpa_live_preview_smoke <model-dir>
+<file.16k.wav> [seconds]` (checks the finals tile the timeline, that
+splitting behind the feed loses no words, that split text matches an unsplit
+decode within 5% word error, so no word is cut in two, that a late segment
+edge re-splits the last final without losing words, that every finalize
+request is acknowledged once and after its finals, that finals carry a
+confidence, and that a second session reuses the loaded model), each on a 16 kHz mono float32 WAV. The
+word checks hold on clean speech such as `resources/demo_voice.wav` (looped
+to a minute or more); off-air recordings differ more, because a split
+changes what a noisy decode hears.

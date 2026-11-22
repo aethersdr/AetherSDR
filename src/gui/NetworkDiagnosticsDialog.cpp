@@ -637,9 +637,9 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
     row = 0;
     dropGrid->addWidget(makeNote(
-        "Inferred packet loss from missing VITA sequence numbers. Zero loss here does "
-        "not rule out jitter or late bursts. Late counts FFT and waterfall packets "
-        "that arrived after their frame was replaced and were discarded."), row++, 0, 1, 2);
+        "Audio, FFT, waterfall and meter loss is resolved after a short reorder wait. "
+        "Reordered counts late arrivals separately. DAX still counts arrival-order "
+        "breaks. Late counts display fragments discarded after their frame was replaced."), row++, 0, 1, 2);
     dropGrid->addWidget(new QLabel("Audio:"), row, 0);
     m_audioDropLabel = makeDim();
     dropGrid->addWidget(m_audioDropLabel, row++, 1);
@@ -2089,21 +2089,11 @@ void NetworkDiagnosticsDialog::setAllLogCategoriesVisible(bool visible)
     rebuildLogView();
 }
 
-static QString formatDrop(const PanadapterStream::CategoryStats& cs)
+static QString formatDrop(const ReceiveStreamStats::Counters& cs,
+                          ReceiveStreamStats::Category category)
 {
-    if (cs.packets == 0) {
-        return "0 / 0";
-    }
-    const double pct = (cs.errors * 100.0) / cs.packets;
-    return QString("%1 / %2 (%3%)").arg(cs.errors).arg(cs.packets).arg(pct, 0, 'f', 2);
-}
-
-static double lossPercent(const PanadapterStream::CategoryStats& cs)
-{
-    if (cs.packets <= 0) {
-        return 0.0;
-    }
-    return (cs.errors * 100.0) / cs.packets;
+    return QString("%1 / %2 (%3%)").arg(cs.errors).arg(cs.expectedPackets(category))
+        .arg(cs.lossPercent(category), 0, 'f', 2);
 }
 
 static double kbpsFromBytes(qint64 bytesDelta, double elapsedSeconds)
@@ -2344,8 +2334,8 @@ NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEng
     m_lastTxBytes = m_model->txBytes();
     m_lastSampleMs = QDateTime::currentMSecsSinceEpoch();
     m_lastAudioUnderrunCount = m_audio ? m_audio->rxBufferUnderrunCount() : 0;
-    for (int i = 0; i < PanadapterStream::CatCount; ++i) {
-        m_lastCatBytes[i] = m_model->categoryStats(static_cast<PanadapterStream::StreamCategory>(i)).bytes;
+    for (int i = 0; i < ReceiveStreamStats::Count; ++i) {
+        m_lastCatBytes[i] = m_model->categoryStats(static_cast<ReceiveStreamStats::Category>(i)).bytes;
     }
 
     connect(&m_sampleTimer, &QTimer::timeout, this, [this] {
@@ -2409,37 +2399,37 @@ void NetworkDiagnosticsHistory::sampleNow()
     // omitted rather than drawn as a flat 0 ms line. See the latency series.
     sample.rttMs = m_model->hasLinkRtt() ? m_model->lastPingRtt() : -1;
 
-    static constexpr PanadapterStream::StreamCategory cats[] = {
-        PanadapterStream::CatAudio, PanadapterStream::CatFFT,
-        PanadapterStream::CatWaterfall, PanadapterStream::CatMeter
+    static constexpr ReceiveStreamStats::Category cats[] = {
+        ReceiveStreamStats::Audio, ReceiveStreamStats::Spectrum,
+        ReceiveStreamStats::Waterfall, ReceiveStreamStats::Meter
     };
 
-    for (PanadapterStream::StreamCategory cat : cats) {
-        PanadapterStream::CategoryStats cs = m_model->categoryStats(cat);
+    for (ReceiveStreamStats::Category cat : cats) {
+        ReceiveStreamStats::Counters cs = m_model->categoryStats(cat);
         const qint64 delta = std::max<qint64>(0, cs.bytes - m_lastCatBytes[cat]);
         m_lastCatBytes[cat] = cs.bytes;
         const double rateKbps = kbpsFromBytes(delta, elapsedSeconds);
-        if (cat == PanadapterStream::CatAudio) {
+        if (cat == ReceiveStreamStats::Audio) {
             sample.audioKbps = rateKbps;
-            sample.audioLossPct = lossPercent(cs);
-        } else if (cat == PanadapterStream::CatFFT) {
+            sample.audioLossPct = cs.lossPercent(cat);
+        } else if (cat == ReceiveStreamStats::Spectrum) {
             sample.fftKbps = rateKbps;
-            sample.fftLossPct = lossPercent(cs);
-        } else if (cat == PanadapterStream::CatWaterfall) {
+            sample.fftLossPct = cs.lossPercent(cat);
+        } else if (cat == ReceiveStreamStats::Waterfall) {
             sample.waterfallKbps = rateKbps;
-            sample.waterfallLossPct = lossPercent(cs);
-        } else if (cat == PanadapterStream::CatMeter) {
+            sample.waterfallLossPct = cs.lossPercent(cat);
+        } else if (cat == ReceiveStreamStats::Meter) {
             sample.meterKbps = rateKbps;
-            sample.meterLossPct = lossPercent(cs);
+            sample.meterLossPct = cs.lossPercent(cat);
         }
     }
 
     {
-        PanadapterStream::CategoryStats cs = m_model->categoryStats(PanadapterStream::CatDAX);
-        const qint64 delta = std::max<qint64>(0, cs.bytes - m_lastCatBytes[PanadapterStream::CatDAX]);
-        m_lastCatBytes[PanadapterStream::CatDAX] = cs.bytes;
+        ReceiveStreamStats::Counters cs = m_model->categoryStats(ReceiveStreamStats::Dax);
+        const qint64 delta = std::max<qint64>(0, cs.bytes - m_lastCatBytes[ReceiveStreamStats::Dax]);
+        m_lastCatBytes[ReceiveStreamStats::Dax] = cs.bytes;
         sample.daxKbps = kbpsFromBytes(delta, elapsedSeconds);
-        sample.daxLossPct = lossPercent(cs);
+        sample.daxLossPct = cs.lossPercent(ReceiveStreamStats::Dax);
     }
 
     const qint64 curRx = m_model->rxBytes();
@@ -2585,11 +2575,11 @@ void NetworkDiagnosticsHistory::sampleTunnel(NetworkDiagnosticsSample& sample)
         }
         qint64 clientPackets = 0;
         qint64 clientBreaks = 0;
-        for (int i = 0; i < PanadapterStream::CatCount; ++i) {
-            const PanadapterStream::CategoryStats cs =
-                m_model->categoryStats(static_cast<PanadapterStream::StreamCategory>(i));
+        for (int i = 0; i < ReceiveStreamStats::Count; ++i) {
+            const ReceiveStreamStats::Counters cs =
+                m_model->categoryStats(static_cast<ReceiveStreamStats::Category>(i));
             clientPackets += cs.packets;
-            clientBreaks += cs.errors;
+            clientBreaks += cs.breaks;
         }
         const qint64 radioPackets = static_cast<qint64>(ours->radioPackets);
         const qint64 radioBreaks = static_cast<qint64>(ours->radioBreaks);
@@ -3017,9 +3007,9 @@ void NetworkDiagnosticsDialog::refresh()
                 : kNotMeasuredOnLink);
 
     // Per-category rates
-    static constexpr PanadapterStream::StreamCategory cats[] = {
-        PanadapterStream::CatAudio, PanadapterStream::CatFFT,
-        PanadapterStream::CatWaterfall, PanadapterStream::CatMeter
+    static constexpr ReceiveStreamStats::Category cats[] = {
+        ReceiveStreamStats::Audio, ReceiveStreamStats::Spectrum,
+        ReceiveStreamStats::Waterfall, ReceiveStreamStats::Meter
     };
     QLabel* rateLabels[] = { m_audioRateLabel, m_fftRateLabel, m_wfRateLabel, m_meterRateLabel };
     QLabel* dropLabels[] = { m_audioDropLabel, m_fftDropLabel, m_wfDropLabel, m_meterDropLabel };
@@ -3039,21 +3029,22 @@ void NetworkDiagnosticsDialog::refresh()
             dropLabels[i]->setText(notApplicable);
             continue;
         }
-        PanadapterStream::CategoryStats cs = m_model->categoryStats(cats[i]);
+        ReceiveStreamStats::Counters cs = m_model->categoryStats(cats[i]);
         double rateKbps = 0.0;
-        if (cats[i] == PanadapterStream::CatAudio) {
+        if (cats[i] == ReceiveStreamStats::Audio) {
             rateKbps = sample.audioKbps;
-        } else if (cats[i] == PanadapterStream::CatFFT) {
+        } else if (cats[i] == ReceiveStreamStats::Spectrum) {
             rateKbps = sample.fftKbps;
-        } else if (cats[i] == PanadapterStream::CatWaterfall) {
+        } else if (cats[i] == ReceiveStreamStats::Waterfall) {
             rateKbps = sample.waterfallKbps;
-        } else if (cats[i] == PanadapterStream::CatMeter) {
+        } else if (cats[i] == ReceiveStreamStats::Meter) {
             rateKbps = sample.meterKbps;
         }
         rateLabels[i]->setText(QString("%1 kbps").arg(static_cast<int>(rateKbps)));
-        QString drop = formatDrop(cs);
-        if (cats[i] == PanadapterStream::CatFFT
-            || cats[i] == PanadapterStream::CatWaterfall) {
+        QString drop = formatDrop(cs, cats[i]);
+        drop += QStringLiteral(" · %1 reordered").arg(cs.reordered);
+        if (cats[i] == ReceiveStreamStats::Spectrum
+            || cats[i] == ReceiveStreamStats::Waterfall) {
             drop += QStringLiteral(" \u00b7 %1 late").arg(cs.late);
         }
         dropLabels[i]->setText(drop);
@@ -3064,9 +3055,9 @@ void NetworkDiagnosticsDialog::refresh()
         m_daxRateLabel->setText(notApplicable);
         m_daxDropLabel->setText(notApplicable);
     } else {
-        PanadapterStream::CategoryStats cs = m_model->categoryStats(PanadapterStream::CatDAX);
+        ReceiveStreamStats::Counters cs = m_model->categoryStats(ReceiveStreamStats::Dax);
         m_daxRateLabel->setText(QString("%1 kbps").arg(static_cast<int>(sample.daxKbps)));
-        m_daxDropLabel->setText(formatDrop(cs));
+        m_daxDropLabel->setText(formatDrop(cs, ReceiveStreamStats::Dax));
     }
 
     // Total RX: all UDP bytes received on our VITA-49 socket
@@ -3077,18 +3068,17 @@ void NetworkDiagnosticsDialog::refresh()
     const int dropped = m_model->packetDropCount();
     const int total = m_model->packetTotalCount();
     if (total > 0) {
-        const double pct = (dropped * 100.0) / total;
         const int windowPackets = m_model->packetLossWindowPackets();
         const int windowDrops = m_model->packetLossWindowDrops();
         const double windowPct = m_model->packetLossPercent();
         m_overviewLossValue->setText(QString("%1%").arg(windowPct, 0, 'f', 2));
         m_droppedLabel->setText(
-            QString("Last %1s: %2 / %3 dropped (%4%)   Total: %5 / %6 dropped (%7%)")
+            QString("Last %1s gap events: %2 / %3 (%4%)   Total missing / DAX breaks: %5 (%6 received)")
                 .arg(m_model->packetLossWindowSeconds())
                 .arg(windowDrops)
                 .arg(windowPackets)
                 .arg(windowPct, 0, 'f', 2)
-                .arg(dropped).arg(total).arg(pct, 0, 'f', 2));
+                .arg(dropped).arg(total));
     } else {
         m_droppedLabel->setText("No packets received yet");
         m_overviewLossValue->setText("0.00%");

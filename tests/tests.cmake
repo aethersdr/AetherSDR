@@ -65,6 +65,16 @@ unset(_aether_root_code)
 unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
+# Socket-free QWidget update coalescing, trailing delivery and lifetime.
+add_executable(window_repaint_scheduler_test
+    tests/window_repaint_scheduler_test.cpp
+    src/gui/WindowRepaintScheduler.cpp)
+target_include_directories(window_repaint_scheduler_test PRIVATE src)
+target_link_libraries(window_repaint_scheduler_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME window_repaint_scheduler_test COMMAND window_repaint_scheduler_test)
+set_tests_properties(window_repaint_scheduler_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # ── Shared objects for tests that do not link aethercore (#6214) ─────────────
 # The light tests compile a few app sources themselves rather than linking the
 # engine. Each is compiled ONCE here and handed to those tests as
@@ -93,23 +103,77 @@ add_library(aether_test_async_log_writer OBJECT src/core/AsyncLogWriter.cpp)
 target_include_directories(aether_test_async_log_writer PRIVATE src)
 target_link_libraries(aether_test_async_log_writer PRIVATE Qt6::Core)
 
-# Keeps it that way: a block copied from before this change would quietly
-# bring back one compile per test. Scans this file's own text, as "Bound"
-# below does.
+# Shared GUI and theme objects: one per source, so a test links exactly what it
+# names, and any test may take them, even one linking aethercore. Only sources
+# whose includes read no feature define (HAVE_*, AETHER_*) belong here, since
+# they build without the test's defines; ControlAvailabilityRegistry.cpp reads
+# HAVE_DBUS/HAVE_PIPEWIRE through its headers and stays per test.
+function(aether_add_test_gui_object name source)
+    add_library(${name} OBJECT ${source})
+    target_include_directories(${name} PRIVATE src)
+    target_link_libraries(${name} PRIVATE Qt6::Widgets)
+    set_target_properties(${name} PROPERTIES AUTOMOC ON)
+endfunction()
+aether_add_test_gui_object(aether_test_drag_value_popup src/gui/DragValuePopup.cpp)
+aether_add_test_gui_object(aether_test_frameless_resizer src/gui/FramelessResizer.cpp)
+aether_add_test_gui_object(aether_test_frameless_title_bar src/gui/FramelessWindowTitleBar.cpp)
+aether_add_test_gui_object(aether_test_canon_window src/gui/CanonWindow.cpp)
+aether_add_test_gui_object(aether_test_canon_message_box src/gui/CanonMessageBox.cpp)
+aether_add_test_gui_object(aether_test_modem_chrome src/gui/ModemChrome.cpp)
+aether_add_test_gui_object(aether_test_persistent_dialog src/gui/PersistentDialog.cpp)
+aether_add_test_gui_object(aether_test_slice_color_manager src/gui/SliceColorManager.cpp)
+aether_add_test_gui_object(aether_test_slice_label src/gui/SliceLabel.cpp)
+aether_add_test_gui_object(aether_test_theme_manager src/core/ThemeManager.cpp)
+# ThemeManager.cpp calls seedGeneratedDefaults(), which lives only here: a test
+# that takes aether_test_theme_manager takes this too, or fails to link.
+aether_add_test_gui_object(aether_test_theme_seed src/core/ThemeSeedGenerated.cpp)
+
+# The app's resources.qrc. OBJECT keeps rcc's static registrar in every test
+# that takes it, so ":/..." resolves without Q_INIT_RESOURCE. radar.qrc and
+# tests/*.qrc stay per test.
+qt_add_resources(_aether_test_resources_cpp resources/resources.qrc)
+add_library(aether_test_resources OBJECT ${_aether_test_resources_cpp})
+target_link_libraries(aether_test_resources PRIVATE Qt6::Core)
+set_target_properties(aether_test_resources PROPERTIES AUTOMOC OFF)
+unset(_aether_test_resources_cpp)
+
+# Each shared source, and resources.qrc, appears once outside comments: in
+# its declaration above. A test that lists one again would compile it again.
+# Scans this file's own text, as "Bound" below does.
 file(READ "${CMAKE_CURRENT_LIST_FILE}" _aether_tests_text)
 string(REGEX REPLACE "#[^\n]*" "" _aether_tests_text "${_aether_tests_text}")
-string(REGEX MATCHALL
-       "\\$\\{AETHER_SETTINGS_SOURCES\\}|src/core/LogManager\\.cpp|src/core/AsyncLogWriter\\.cpp"
-       _aether_shared_source_uses "${_aether_tests_text}")
-list(LENGTH _aether_shared_source_uses _aether_shared_source_count)
-if(NOT _aether_shared_source_count EQUAL 3)
-    message(FATAL_ERROR
-        "tests/tests.cmake: a test compiles the settings store, LogManager or "
-        "AsyncLogWriter from source. Use $<TARGET_OBJECTS:aether_test_settings>, "
-        "aether_test_log_manager or aether_test_async_log_writer instead (see "
-        "\"Shared objects\" at the top of this file).")
-endif()
+foreach(_aether_shared_source IN ITEMS
+        "\\$\\{AETHER_SETTINGS_SOURCES\\}"
+        "src/core/LogManager\\.cpp"
+        "src/core/AsyncLogWriter\\.cpp"
+        "src/gui/DragValuePopup\\.cpp"
+        "src/gui/FramelessResizer\\.cpp"
+        "src/gui/FramelessWindowTitleBar\\.cpp"
+        "src/gui/CanonWindow\\.cpp"
+        "src/gui/CanonMessageBox\\.cpp"
+        "src/gui/ModemChrome\\.cpp"
+        "src/gui/PersistentDialog\\.cpp"
+        "src/gui/SliceColorManager\\.cpp"
+        "src/gui/SliceLabel\\.cpp"
+        "src/core/ThemeManager\\.cpp"
+        "src/core/ThemeSeedGenerated\\.cpp"
+        "resources/resources\\.qrc")
+    string(REGEX MATCHALL "${_aether_shared_source}" _aether_shared_source_uses
+           "${_aether_tests_text}")
+    list(LENGTH _aether_shared_source_uses _aether_shared_source_count)
+    if(NOT _aether_shared_source_count EQUAL 1)
+        string(REPLACE "\\" "" _aether_shared_source "${_aether_shared_source}")
+        message(FATAL_ERROR
+            "tests/tests.cmake: ${_aether_shared_source} appears "
+            "${_aether_shared_source_count} times outside comments; expected once, "
+            "in its shared object declaration. A test takes it as "
+            "$<TARGET_OBJECTS:aether_test_...> instead of compiling it again (see "
+            "\"Shared objects\" and \"Shared GUI and theme objects\" at the top of "
+            "this file).")
+    endif()
+endforeach()
 unset(_aether_tests_text)
+unset(_aether_shared_source)
 unset(_aether_shared_source_uses)
 unset(_aether_shared_source_count)
 
@@ -123,8 +187,8 @@ get_property(_aether_targets_before_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS
 
 # ── aether_non_test_targets: everything the root declared before this file ───
 # Built from the same baseline, so the production/test boundary has one
-# definition. Pull-request CI builds this instead of `all` (ci.yml): it runs
-# none of the tests, and compiling and linking them was most of its build
+# definition. ci.yml builds this instead of `all`, on pull requests and main:
+# it runs none of the tests, and compiling and linking them was most of its build
 # time. Every default-built executable and library the root CMakeLists.txt
 # declares above include(tests/tests.cmake) joins without a CI edit. Custom
 # targets and targets from add_subdirectory() build only when a collected
@@ -209,6 +273,35 @@ if(ENABLE_DATA2G)
         aether_hfdata aether_data2g_core Qt6::Core)
     add_test(NAME data2g_receive_model_test COMMAND data2g_receive_model_test)
     set_tests_properties(data2g_receive_model_test PROPERTIES TIMEOUT 120)
+
+    # The connected-mode adapter against a second station; no radio (RFC #7159 Stage 2).
+    add_executable(data2g_session_test tests/data2g_session_test.cpp)
+    target_link_libraries(data2g_session_test PRIVATE aether_hfdata aether_data2g_core)
+    add_test(NAME data2g_session_test COMMAND data2g_session_test)
+    # About 45 s plain and 5 min under ASan + UBSan on a fast desktop.
+    set_tests_properties(data2g_session_test PROPERTIES TIMEOUT 2400)
+
+    # The admission gate: the real worker thread, a fake transmitter, a second
+    # station, and a clock the test owns. No radio fixture.
+    add_executable(data2g_session_model_test
+        tests/data2g_session_model_test.cpp
+        src/models/Data2gSessionModel.cpp
+    )
+    target_include_directories(data2g_session_model_test PRIVATE src)
+    target_compile_definitions(data2g_session_model_test PRIVATE HAVE_DATA2G)
+    target_link_libraries(data2g_session_model_test PRIVATE
+        aether_hfdata aether_data2g_core Qt6::Core)
+    add_test(NAME data2g_session_model_test COMMAND data2g_session_model_test)
+    # About 30 s plain and 5 min under ASan + UBSan on a fast desktop.
+    set_tests_properties(data2g_session_model_test PROPERTIES TIMEOUT 2400)
+
+    # A recording the adapter did not make: two upstream data2g-host 0.4.3
+    # processes working each other, held to upstream data2g-monitor's reading.
+    add_executable(data2g_replay_test tests/data2g_replay_test.cpp)
+    target_link_libraries(data2g_replay_test PRIVATE aether_hfdata aether_data2g_core)
+    add_test(NAME data2g_replay_test COMMAND data2g_replay_test
+        "${CMAKE_SOURCE_DIR}/tests/fixtures/data2g/session-0.4.3.wav")
+    set_tests_properties(data2g_replay_test PROPERTIES TIMEOUT 120)
 endif()
 
 # Injected typed PCM and the real modem worker; no sockets, sound device or RF.
@@ -269,7 +362,7 @@ foreach(_case IN ITEMS rateMatrix bandwidthAndMono negotiatedSpeakerOutput
         transitionsAndRejection queueBudgetsAndDeviceTransitions lineOutDrainCatchUp
         effects-bypass effects-EQ
         effects-NR2 effects-RN2 effects-NR4 effects-DFNR effects-MNR kiwiDeviceRateMatrix
-        processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains)
+        processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains overflowPreservesDspHistory revokedDelayReduction steadyOutputOverflowFade rawOverflowFade boundedNrTrim delayedOverflowBounded)
     add_test(NAME audio_engine_rates_${_case}_test
         COMMAND audio_engine_rates_test --case=${_case})
     set_tests_properties(audio_engine_rates_${_case}_test PROPERTIES TIMEOUT 120)
@@ -321,7 +414,7 @@ set_tests_properties(nnr_model_publication_test PROPERTIES TIMEOUT 120)
 
 add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
     src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
-    src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
+    src/core/ClientComp.cpp src/core/ClientTube.cpp
     src/core/ClientPudu.cpp src/core/ClientPhaseRotator.cpp)
 target_include_directories(rx_client_effects_test PRIVATE src)
 add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
@@ -372,6 +465,7 @@ add_executable(control_authorization_test
     src/core/control/ControlProtocolCodec.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlCredentialVault.cpp # no HAVE_KEYCHAIN: unavailable path, never opens OS vault
@@ -381,6 +475,26 @@ target_compile_definitions(control_authorization_test PRIVATE
     AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_authorization_test PRIVATE Qt6::Core)
 add_test(NAME control_authorization_test COMMAND control_authorization_test)
+
+# Paired clients at run time through the real VaultPairingIssuer and vault
+# adapter, with in-memory QtKeychain jobs (no OS vault, sockets or radio):
+# vault-first revoke, local identities never removable, a refused write keeps
+# the client, a revoke queued behind a pairing write.
+add_executable(control_remote_clients_vault_test
+    tests/control_remote_clients_vault_test.cpp
+    tests/fakes/qt6keychain/keychain.h
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp
+    src/core/control/ControlCredentialProvisioner.cpp
+    src/core/control/VaultPairingIssuer.cpp
+)
+target_include_directories(control_remote_clients_vault_test BEFORE PRIVATE tests/fakes src)
+target_compile_definitions(control_remote_clients_vault_test PRIVATE HAVE_KEYCHAIN)
+target_link_libraries(control_remote_clients_vault_test PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(control_remote_clients_vault_test PRIVATE advapi32)
+endif()
+add_test(NAME control_remote_clients_vault_test COMMAND control_remote_clients_vault_test)
 
 # Production native-vault adapter with in-memory QtKeychain jobs: no OS vault,
 # sockets, settings or radio. Pins fallback prohibition and async lifetimes.
@@ -412,6 +526,7 @@ add_executable(control_transport_lifecycle_test
     src/core/control/ControlProtocolCodec.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlInputPump.cpp
@@ -453,6 +568,7 @@ add_executable(control_transmit_service_test
     src/core/control/TransmitControlTarget.h
     src/core/control/TransmitControlService.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlProtocolCodec.cpp
@@ -463,6 +579,38 @@ target_include_directories(control_transmit_service_test PRIVATE src)
 target_compile_definitions(control_transmit_service_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_transmit_service_test PRIVATE Qt6::Core)
 add_test(NAME control_transmit_service_test COMMAND control_transmit_service_test)
+
+# Remote clients' scoped credentials (aetherd-remote-clients.md): the scope is
+# the grant on a network session, local and remote identities never cross, and
+# a network session never reaches transmit. Socket-free.
+add_executable(control_remote_scope_test
+    tests/control_remote_scope_test.cpp
+    src/core/control/RadioConnectionTarget.h
+    src/core/control/TransmitControlTarget.h
+    src/core/control/TransmitControlService.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp)
+target_include_directories(control_remote_scope_test PRIVATE src)
+target_compile_definitions(control_remote_scope_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_remote_scope_test PRIVATE Qt6::Core)
+add_test(NAME control_remote_scope_test COMMAND control_remote_scope_test)
+
+# Remote-client pairing (aetherd-remote-clients.md §3): the code, its check
+# digits, expiry and attempt limit; pairing.begin only locally with control;
+# pairing.complete only before hello on the TLS listener, through a deferred
+# reply; the paired token's scope; v2 vault names; endpoint rules. Binds no
+# socket (the listener's refusals happen before any bind).
+add_executable(control_remote_pairing_test tests/control_remote_pairing_test.cpp)
+target_include_directories(control_remote_pairing_test PRIVATE src)
+target_link_libraries(control_remote_pairing_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME control_remote_pairing_test COMMAND control_remote_pairing_test)
 
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
@@ -495,14 +643,19 @@ target_link_libraries(unicast_endpoint_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME unicast_endpoint_test COMMAND unicast_endpoint_test)
 
 # CTR2 relay model: the destination is only the radio the owner pushes in, and
-# every unusable case keeps Start disabled with its reason. Socket-free.
+# every unusable case keeps Start disabled with its reason. Every model gets an
+# injected USB backend (no HID device is enumerated or opened). One case,
+# testSeveralDevicesAtOnce, binds a 127.0.0.1 ephemeral TCP listener (a generic
+# byte peer standing in for the radio endpoint the relays connect to); no radio
+# protocol or firmware stand-in. Exit 77 when loopback cannot be bound.
 add_executable(ctr2_proxy_model_test tests/ctr2_proxy_model_test.cpp)
-target_include_directories(ctr2_proxy_model_test PRIVATE src)
+target_include_directories(ctr2_proxy_model_test PRIVATE src tests)
 target_link_libraries(ctr2_proxy_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
 # The udev rule must grant exactly the devices the app recognises as a CTR2.
 target_compile_definitions(ctr2_proxy_model_test PRIVATE
     AETHER_CTR2_UDEV_RULES="${CMAKE_CURRENT_LIST_DIR}/../packaging/linux/70-aethersdr-ctr2.rules")
 add_test(NAME ctr2_proxy_model_test COMMAND ctr2_proxy_model_test)
+set_tests_properties(ctr2_proxy_model_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 
 # Socket-free CLOSED retention: injected HID output and an inert QTcpSocket
 # whose connectToHost() only queues an injected refusal; no socket is opened.
@@ -559,7 +712,7 @@ set_source_files_properties(tools/ctr2-firmware-reference/ctr2_link.c
     TARGET_DIRECTORY ctr2_firmware_updater_test PROPERTIES LANGUAGE C)
 set_property(TARGET ctr2_firmware_updater_test PROPERTY C_STANDARD 99)
 target_include_directories(ctr2_firmware_updater_test PRIVATE
-    src tools/ctr2-firmware-reference)
+    src tests tools/ctr2-firmware-reference)
 target_link_libraries(ctr2_firmware_updater_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME ctr2_firmware_updater_test COMMAND ctr2_firmware_updater_test)
 set_tests_properties(ctr2_firmware_updater_test PROPERTIES TIMEOUT 120)
@@ -684,6 +837,7 @@ add_executable(radio_catalogue_test
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
 target_include_directories(radio_catalogue_test PRIVATE src)
@@ -702,6 +856,7 @@ add_executable(control_connection_test
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
 target_include_directories(control_connection_test PRIVATE src)
@@ -728,6 +883,12 @@ add_executable(backend_capability_revision_test tests/backend_capability_revisio
 target_include_directories(backend_capability_revision_test PRIVATE src tests)
 target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
+
+# Shared MAIN/SUB backend with injected CI-V and PCM; no sockets or radio.
+add_executable(icom_dual_receiver_test tests/icom_dual_receiver_test.cpp)
+target_include_directories(icom_dual_receiver_test PRIVATE src tests)
+target_link_libraries(icom_dual_receiver_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_dual_receiver_test COMMAND icom_dual_receiver_test)
 
 # #5347: injected Icom model profiles, no session/transport/device.
 add_executable(icom_panadapter_capacity_test tests/icom_panadapter_capacity_test.cpp)
@@ -876,6 +1037,20 @@ target_link_libraries(aetherd_discovery_startup_test PRIVATE aethercore Qt6::Cor
 add_dependencies(aetherd_discovery_startup_test aetherd)
 add_test(NAME aetherd_discovery_startup_test
     COMMAND aetherd_discovery_startup_test $<TARGET_FILE:aetherd>)
+
+# A stop signal ends aetherd through its normal teardown, which releases the
+# radio; a second one or a stuck loop dies by the signal (POSIX signals only).
+# Socket: runs the real aetherd, which listens on the QLocalServer endpoint
+# graceful-stop-test-<pid>; a refused listen fails the case in about 1.5 s.
+if(NOT WIN32)
+    add_executable(aetherd_graceful_stop_test tests/aetherd_graceful_stop_test.cpp
+        src/aetherd/GracefulStop.cpp)
+    target_include_directories(aetherd_graceful_stop_test PRIVATE src tests)
+    target_link_libraries(aetherd_graceful_stop_test PRIVATE aethercore Qt6::Core)
+    add_dependencies(aetherd_graceful_stop_test aetherd)
+    add_test(NAME aetherd_graceful_stop_test
+        COMMAND aetherd_graceful_stop_test $<TARGET_FILE:aetherd>)
+endif()
 
 # Async bridge-start outcome policy (#4181): socket-free, the bind result is
 # injected as a bool — see AutomationBridgeSettings::recordStartOutcome().
@@ -1331,7 +1506,11 @@ add_test(NAME hl2_hardware_options_test COMMAND hl2_hardware_options_test)
 # trip, the read-modify-write that keeps a newer build's field alive, and the
 # empty-serial case that would otherwise write the family-wide default row.
 # Needs AppSettings and therefore Qt, which is why it is a second target rather
-# than more of the pure-policy one above. Still socket-free and radio-free.
+# than more of the pure-policy one above. Still socket-free and radio-free: the
+# two connectRadio() calls (§4f) take the boardMaxRx seam and are abandoned in
+# the same turn, so MetisClient::start() never runs. They still wait out the
+# WDSP channel opens (TestDspBuildWait.h), which on a cold FFTW wisdom cache
+# can take tens of seconds; that is the planner, not a hang in this test.
 add_executable(hl2_hardware_document_test
     tests/hl2_hardware_document_test.cpp)
 target_include_directories(hl2_hardware_document_test PRIVATE src tests)
@@ -1397,6 +1576,13 @@ target_include_directories(anan_rxdsp_handedness_test PRIVATE src)
 target_link_libraries(anan_rxdsp_handedness_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_rxdsp_handedness_test COMMAND anan_rxdsp_handedness_test)
 
+# ANAN FM receive is bounded by WDSP's FM limiter with the panel at unity in FM
+# only (#7252): built, live, mid-rebuild, and USB unchanged. Offline, no socket.
+add_executable(anan_rxdsp_fm_limiter_test tests/anan_rxdsp_fm_limiter_test.cpp)
+target_include_directories(anan_rxdsp_fm_limiter_test PRIVATE src)
+target_link_libraries(anan_rxdsp_fm_limiter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_rxdsp_fm_limiter_test COMMAND anan_rxdsp_fm_limiter_test)
+
 # ANAN backend -- IRadioBackend implementor. Pieces testable without a live
 # radio: capabilities() defaults, mode-string parsing, CW BFO math, and the
 # passband-reset-only-on-actual-mode-change idempotence rule.
@@ -1412,6 +1598,13 @@ target_include_directories(anan_noise_blanker_readback_test PRIVATE src tests)
 target_link_libraries(anan_noise_blanker_readback_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_noise_blanker_readback_test COMMAND anan_noise_blanker_readback_test)
 set_tests_properties(anan_noise_blanker_readback_test PROPERTIES TIMEOUT 120)
+
+# The desktop's RIT control reaches the ANAN receiver through RadioModel's typed
+# slice-control dispatch (#7255). Socket-free: P2Client is never started.
+add_executable(anan_desktop_rit_test tests/anan_desktop_rit_test.cpp)
+target_include_directories(anan_desktop_rit_test PRIVATE src tests)
+target_link_libraries(anan_desktop_rit_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_desktop_rit_test COMMAND anan_desktop_rit_test)
 
 # ANAN speaker stream (DDC Audio, PC -> radio) -- the SEND PLUMBING: queue,
 # whole-packet boundary, sequence counter, overflow policy and enable gate, read
@@ -1620,16 +1813,9 @@ add_test(NAME icom_power_clamp_model_test COMMAND icom_power_clamp_model_test)
 #   cmake --build build --target icom_live_probe
 #   ./build/icom_live_probe ic-705.local <user> <password>
 add_executable(icom_live_probe EXCLUDE_FROM_ALL
-    tests/icom_live_probe.cpp
-    src/core/TxCoordinator.cpp
-    src/core/backends/icom/IcomSession.cpp
-    src/core/backends/icom/IcomStream.cpp
-    src/core/backends/icom/IcomProtocol.cpp
-    src/core/backends/icom/CivCodec.cpp
-    src/core/backends/icom/IcomScope.cpp
-    src/core/backends/icom/IcomAudio.cpp)
+    tests/icom_live_probe.cpp)
 target_include_directories(icom_live_probe PRIVATE src)
-target_link_libraries(icom_live_probe PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(icom_live_probe PRIVATE aethercore Qt6::Core Qt6::Network)
 
 # IcomCIV live CI-V ADDRESS probe — also REQUIRES A REAL RADIO, also EXCLUDE_FROM_ALL.
 # Drives IcomCivBackend (not IcomSession) because the address resolution under
@@ -1802,6 +1988,13 @@ add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.c
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_squelch_audio_test COMMAND hl2_rxdsp_squelch_audio_test)
+
+# HL2 FM receive is bounded by WDSP's FM limiter, built or entered live, and
+# the limiter flag leaves USB and AM output unchanged (#7222).
+add_executable(hl2_rxdsp_fm_limiter_test tests/hl2_rxdsp_fm_limiter_test.cpp)
+target_include_directories(hl2_rxdsp_fm_limiter_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_fm_limiter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_fm_limiter_test COMMAND hl2_rxdsp_fm_limiter_test)
 
 add_executable(hl2_rx_dsp_declaration_test tests/hl2_rx_dsp_declaration_test.cpp)
 target_include_directories(hl2_rx_dsp_declaration_test PRIVATE src tests)
@@ -2187,6 +2380,13 @@ target_include_directories(hl2_metis_link_counters_test PRIVATE src)
 target_link_libraries(hl2_metis_link_counters_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_metis_link_counters_test COMMAND hl2_metis_link_counters_test)
 
+# A session to a peer on this host (hpsdrsim at 127.0.0.1) binds loopback so
+# its replies pass MetisClient's sender filter; LAN targets are unchanged.
+add_executable(hl2_sim_loopback_bind_test tests/hl2_sim_loopback_bind_test.cpp)
+target_include_directories(hl2_sim_loopback_bind_test PRIVATE src)
+target_link_libraries(hl2_sim_loopback_bind_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_sim_loopback_bind_test COMMAND hl2_sim_loopback_bind_test)
+
 # HL2 linkStats seam, both halves: the backend's publish cadence and liveness,
 # and RadioModel's readouts and absent-vs-zero predicates. No socket.
 add_executable(hl2_link_stats_seam_test tests/hl2_link_stats_seam_test.cpp)
@@ -2219,6 +2419,18 @@ add_test(NAME client_eq_smoothing_test COMMAND client_eq_smoothing_test)
 set_tests_properties(client_eq_smoothing_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
 
+# ClientFinalLimiter, the look-ahead brickwall at the end of the TX chain: no
+# sample above the ceiling at any look-ahead without the safety clip, the delay
+# and reported latency are the look-ahead, the gain ramps instead of stepping,
+# and a look-ahead or enable change fades the delay tap. Standalone DSP.
+add_executable(client_final_limiter_test
+    tests/client_final_limiter_test.cpp
+    src/core/ClientFinalLimiter.cpp
+)
+target_include_directories(client_final_limiter_test PRIVATE src)
+target_link_libraries(client_final_limiter_test PRIVATE Qt6::Core)
+add_test(NAME client_final_limiter_test COMMAND client_final_limiter_test)
+
 add_executable(client_comp_test
     tests/client_comp_test.cpp
     src/core/ClientComp.cpp
@@ -2228,7 +2440,7 @@ target_include_directories(client_comp_test PRIVATE src)
 
 add_executable(slice_label_test
     tests/slice_label_test.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_label>
     $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(slice_label_test PRIVATE src)
@@ -2327,7 +2539,6 @@ set_tests_properties(split_qsy_settings_test PROPERTIES TIMEOUT 30)
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.
-qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
 add_executable(mode_filter_presets_test
     tests/mode_filter_presets_test.cpp
     src/gui/ModeFilterPresets.cpp
@@ -2378,14 +2589,14 @@ set_tests_properties(compact_metrics_test PROPERTIES
 # needs the theming stack behind it — same set theme_manager_test links.
 add_executable(modem_chrome_test
     tests/modem_chrome_test.cpp
-    src/gui/ModemChrome.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    src/gui/DragValuePopup.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(modem_chrome_test PRIVATE src)
 target_link_libraries(modem_chrome_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2396,13 +2607,13 @@ set_tests_properties(modem_chrome_test PROPERTIES
 add_executable(stage_tab_bar_drag_test
     tests/stage_tab_bar_drag_test.cpp
     src/gui/StageTabBar.cpp
-    src/gui/ModemChrome.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(stage_tab_bar_drag_test PRIVATE src)
 target_link_libraries(stage_tab_bar_drag_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2413,12 +2624,12 @@ set_tests_properties(stage_tab_bar_drag_test PROPERTIES
 add_executable(comp_makeup_fader_test
     tests/comp_makeup_fader_test.cpp
     src/gui/ClientCompMeter.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(comp_makeup_fader_test PRIVATE src)
 target_link_libraries(comp_makeup_fader_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2428,13 +2639,13 @@ set_tests_properties(comp_makeup_fader_test PROPERTIES
 
 add_executable(theme_manager_test
     tests/theme_manager_test.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    src/gui/DragValuePopup.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2446,13 +2657,13 @@ set_tests_properties(theme_manager_test PROPERTIES
 # move when startSystemMove() is unavailable, and closes on QKeySequence::Close.
 add_executable(canon_window_test
     tests/canon_window_test.cpp
-    src/gui/CanonWindow.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(canon_window_test PRIVATE src)
 target_link_libraries(canon_window_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2468,13 +2679,13 @@ add_executable(callsign_lookup_dialog_test
     tests/callsign_lookup_dialog_test.cpp
     src/gui/CallsignLookupDialog.cpp
     src/gui/CallsignCard.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(callsign_lookup_dialog_test PRIVATE src tests)
 target_link_libraries(callsign_lookup_dialog_test PRIVATE
@@ -2490,11 +2701,11 @@ set_tests_properties(callsign_lookup_dialog_test PROPERTIES
 add_executable(radio_health_dialog_test
     tests/radio_health_dialog_test.cpp
     src/gui/RadioHealthDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_health_dialog_test PRIVATE src tests)
 target_link_libraries(radio_health_dialog_test PRIVATE
@@ -2511,11 +2722,11 @@ set_tests_properties(radio_health_dialog_test PROPERTIES
 add_executable(whats_new_dialog_test
     tests/whats_new_dialog_test.cpp
     src/gui/WhatsNewDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(whats_new_dialog_test PRIVATE src tests)
 target_link_libraries(whats_new_dialog_test PRIVATE
@@ -2532,12 +2743,12 @@ set_tests_properties(whats_new_dialog_test PROPERTIES
 add_executable(profile_import_export_dialog_test
     tests/profile_import_export_dialog_test.cpp
     src/gui/ProfileImportExportDialog.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(profile_import_export_dialog_test PRIVATE src tests)
 target_link_libraries(profile_import_export_dialog_test PRIVATE
@@ -2554,12 +2765,12 @@ set_tests_properties(profile_import_export_dialog_test PROPERTIES
 add_executable(midi_mapping_dialog_test
     tests/midi_mapping_dialog_test.cpp
     src/gui/MidiMappingDialog.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(midi_mapping_dialog_test PRIVATE src tests)
 target_link_libraries(midi_mapping_dialog_test PRIVATE
@@ -2578,13 +2789,13 @@ add_executable(support_dialog_test
     src/gui/SupportDialog.cpp
     src/gui/FramelessMessageBox.cpp
     src/gui/ResetSettingsPrompts.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(support_dialog_test PRIVATE src tests)
 target_link_libraries(support_dialog_test PRIVATE
@@ -2605,14 +2816,14 @@ add_executable(theme_editor_dialog_test
     src/gui/ThemeInspector.cpp
     src/gui/GradientEditorDialog.cpp
     src/gui/CompactColorPicker.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(theme_editor_dialog_test PRIVATE src tests)
 target_link_libraries(theme_editor_dialog_test PRIVATE
@@ -2631,12 +2842,12 @@ add_executable(firmware_install_dialog_test
     tests/firmware_install_dialog_test.cpp
     src/gui/FirmwareInstallDialog.cpp
     src/gui/Ctr2ProxyPanel.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(firmware_install_dialog_test PRIVATE src tests)
 target_link_libraries(firmware_install_dialog_test PRIVATE
@@ -2651,11 +2862,11 @@ set_tests_properties(firmware_install_dialog_test PROPERTIES
 add_executable(mqtt_settings_dialog_test
     tests/mqtt_settings_dialog_test.cpp
     src/gui/MqttSettingsDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(mqtt_settings_dialog_test PRIVATE src tests)
 target_link_libraries(mqtt_settings_dialog_test PRIVATE
@@ -2669,15 +2880,15 @@ set_tests_properties(mqtt_settings_dialog_test PROPERTIES
 # clicked, and none when it is closed instead.
 add_executable(canon_message_box_test
     tests/canon_message_box_test.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(canon_message_box_test PRIVATE src)
 target_link_libraries(canon_message_box_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2692,15 +2903,15 @@ set_tests_properties(canon_message_box_test PROPERTIES
 add_executable(reset_settings_prompts_test
     tests/reset_settings_prompts_test.cpp
     src/gui/ResetSettingsPrompts.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(reset_settings_prompts_test PRIVATE src tests)
 target_link_libraries(reset_settings_prompts_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2715,17 +2926,17 @@ add_executable(shortcut_dialog_test
     tests/shortcut_dialog_test.cpp
     src/gui/ShortcutDialog.cpp
     src/gui/KeyboardMapWidget.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/core/ShortcutManager.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(shortcut_dialog_test PRIVATE src)
 target_link_libraries(shortcut_dialog_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2739,13 +2950,13 @@ set_tests_properties(shortcut_dialog_test PROPERTIES
 add_executable(canon_surface_test
     tests/canon_surface_test.cpp
     src/gui/CanonSurface.cpp
-    src/gui/CanonWindow.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(canon_surface_test PRIVATE src)
 target_link_libraries(canon_surface_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2760,12 +2971,12 @@ set_tests_properties(canon_surface_test PROPERTIES
 add_executable(panadapter_header_test
     tests/panadapter_header_test.cpp
     src/gui/PanadapterHeader.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(panadapter_header_test PRIVATE src)
 target_link_libraries(panadapter_header_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2773,7 +2984,7 @@ add_test(NAME panadapter_header_test COMMAND panadapter_header_test)
 set_tests_properties(panadapter_header_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Compiled-in theme seed (#3184).  DELIBERATELY has no ${THEME_TEST_RESOURCES}:
+# Compiled-in theme seed (#3184).  DELIBERATELY has no aether_test_resources:
 # with the theme resource linked, the ThemeManager constructor loads Default
 # Dark straight after seeding and the JSON hides whatever the seed actually
 # contains — which is how nine seed tokens drifted unnoticed for months.
@@ -2783,8 +2994,8 @@ set_tests_properties(panadapter_header_test PROPERTIES
 # availableThemes() is empty so that mistake fails loudly instead.
 add_executable(theme_seed_test
     tests/theme_seed_test.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -2798,16 +3009,15 @@ set_tests_properties(theme_seed_test PROPERTIES
 # Panadapter overlay collapse semantics for owner-managed status cards (#4387):
 # a collapse must shrink the card, survive owner re-assertion, and never make
 # the indicator disappear while its condition still holds.
-qt_add_resources(PAN_OVERLAY_TEST_RESOURCES resources/resources.qrc)
 add_executable(panadapter_message_overlay_test
     tests/panadapter_message_overlay_test.cpp
     src/gui/PanadapterMessageOverlay.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${PAN_OVERLAY_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(panadapter_message_overlay_test PRIVATE src)
 target_link_libraries(panadapter_message_overlay_test PRIVATE
@@ -2822,10 +3032,10 @@ set_tests_properties(panadapter_message_overlay_test PROPERTIES
 add_executable(favorites_picker_selection_test
     tests/favorites_picker_selection_test.cpp
     src/gui/FavoritesPickerDialog.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(favorites_picker_selection_test PRIVATE src tests)
 target_compile_definitions(favorites_picker_selection_test PRIVATE
@@ -2844,14 +3054,14 @@ set_tests_properties(favorites_picker_selection_test PROPERTIES
 add_executable(settings_browser_dialog_test
     tests/settings_browser_dialog_test.cpp
     src/gui/SettingsBrowserDialog.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
     src/gui/FramelessMessageBox.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(settings_browser_dialog_test PRIVATE src tests)
 target_link_libraries(settings_browser_dialog_test PRIVATE
@@ -2984,6 +3194,7 @@ set_tests_properties(app_settings_safety_explicit-profile-path-isolation
 
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
+    src/core/backends/flex/FlexDisplayStatus.cpp
     src/models/PanadapterModel.cpp
     src/core/PerfTelemetry.cpp
     $<TARGET_OBJECTS:aether_test_log_manager>
@@ -3006,7 +3217,7 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     list(REMOVE_ITEM _spectrum_gesture_sources src/main.cpp)
     # Manual --flex-squelch-bridge-fixture starts the app's own QLocalServer
     # and discovery listener with injected normalized state, never a radio peer.
-    # The registered CTest path remains socket-free.
+    # spectrum_confirmed_geometry_test's registered CTest paths stay socket-free.
     add_executable(spectrum_confirmed_geometry_test
         tests/spectrum_confirmed_geometry_test.cpp ${_spectrum_gesture_sources})
     target_include_directories(spectrum_confirmed_geometry_test PRIVATE
@@ -3029,6 +3240,44 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     add_test(NAME spectrum_trace_bins_widget_test
         COMMAND spectrum_confirmed_geometry_test --trace-bins)
     set_tests_properties(spectrum_trace_bins_widget_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+
+    # #7314: the CW decoder's Sens follows it to another pan.
+    add_executable(cw_sens_pan_move_test
+        tests/cw_sens_pan_move_test.cpp ${_spectrum_gesture_sources})
+    target_include_directories(cw_sens_pan_move_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(cw_sens_pan_move_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_DEFINITIONS>)
+    target_compile_options(cw_sens_pan_move_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_OPTIONS>)
+    target_link_libraries(cw_sens_pan_move_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,LINK_LIBRARIES>)
+    add_test(NAME cw_sens_pan_move_test COMMAND cw_sens_pan_move_test)
+    set_tests_properties(cw_sens_pan_move_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+
+    # #5204: the TX waterfall mask must follow the TX slice's filter even when
+    # the radio's echo lands mid-drag. Its own executable rather than another
+    # mode of the gesture binary: that one links RtlSdrBackend unconditionally,
+    # so it cannot build where librtlsdr is absent. This one needs only the
+    # desktop GUI sources. Socket: it builds a real MainWindow, which binds the
+    # app's own discovery listener on UDP 4992 (ShareAddress). It never
+    # connects, and a refused bind only schedules a retry, so the result never
+    # waits on it.
+    add_executable(tx_waterfall_mask_filter_drag_test
+        tests/tx_waterfall_mask_filter_drag_test.cpp ${_spectrum_gesture_sources})
+    target_include_directories(tx_waterfall_mask_filter_drag_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(tx_waterfall_mask_filter_drag_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_DEFINITIONS>)
+    target_compile_options(tx_waterfall_mask_filter_drag_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_OPTIONS>)
+    target_link_libraries(tx_waterfall_mask_filter_drag_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,LINK_LIBRARIES>)
+    add_test(NAME tx_waterfall_mask_filter_drag_test
+        COMMAND tx_waterfall_mask_filter_drag_test)
+    set_tests_properties(tx_waterfall_mask_filter_drag_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
 endif()
 
@@ -3360,8 +3609,8 @@ add_executable(workspace_canvas_widget_test
     src/gui/workspace/WorkspaceCanvas.cpp
     src/gui/workspace/WorkspaceGeometry.cpp
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -3434,14 +3683,14 @@ add_test(NAME workspace_interaction_test COMMAND workspace_interaction_test)
 # restoring panel-docked.
 add_executable(workspace_container_mode_test
     tests/workspace_container_mode_test.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
     src/gui/containers/ContainerManager.cpp
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -3460,7 +3709,7 @@ set_tests_properties(workspace_container_mode_test PROPERTIES
 # an unusable store fails the enable without moving a widget.
 add_executable(workspace_controller_test
     tests/workspace_controller_test.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
     src/gui/containers/ContainerManager.cpp
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
@@ -3476,8 +3725,8 @@ add_executable(workspace_controller_test
     src/gui/workspace/WorkspaceMigration.cpp
     src/gui/workspace/WorkspaceStore.cpp
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -3585,14 +3834,13 @@ add_test(NAME band_shortcut_data_test COMMAND band_shortcut_data_test)
 # QRM voice detection — a label carrying no recognised emission token silently
 # switches voice markers off for that spectrum. Reads the shipped resource, so
 # the assertion is about the file that actually ships (#4723).
-qt_add_resources(BANDPLAN_VOICE_LABELS_TEST_RESOURCES resources/resources.qrc)
 add_executable(bandplan_voice_labels_test
     tests/bandplan_voice_labels_test.cpp
     src/core/VoiceSignalDetector.cpp
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
-    ${BANDPLAN_VOICE_LABELS_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(bandplan_voice_labels_test PRIVATE src)
 target_link_libraries(bandplan_voice_labels_test PRIVATE Qt6::Core Qt6::Gui)
@@ -3601,14 +3849,13 @@ add_test(NAME bandplan_voice_labels_test COMMAND bandplan_voice_labels_test)
 # IARU R1 / SSA rows match their charts, including the optional `usage`
 # annotation; loads through BandPlanManager so parser and resource are
 # checked together (#4667).
-qt_add_resources(BANDPLAN_USAGE_RESOURCE_TEST_RESOURCES resources/resources.qrc)
 add_executable(bandplan_usage_resource_test
     tests/bandplan_usage_resource_test.cpp
     src/models/BandPlanManager.cpp
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
-    ${BANDPLAN_USAGE_RESOURCE_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(bandplan_usage_resource_test PRIVATE src)
 target_link_libraries(bandplan_usage_resource_test PRIVATE Qt6::Core Qt6::Gui)
@@ -3660,6 +3907,23 @@ target_include_directories(tx_mic_channel_normalizer_test PRIVATE
 )
 target_link_libraries(tx_mic_channel_normalizer_test PRIVATE Qt6::Core)
 add_test(NAME tx_mic_channel_normalizer_test COMMAND tx_mic_channel_normalizer_test)
+
+# The packed TX chain order: 16 four-bit slots round-trip, an order that does
+# not fit is reported instead of truncated, and the load-time migration keeps
+# the saved order and appends stages an upgrade adds (RFC #4836 precursor).
+add_executable(tx_chain_layout_test tests/tx_chain_layout_test.cpp)
+target_include_directories(tx_chain_layout_test PRIVATE src)
+target_link_libraries(tx_chain_layout_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_chain_layout_test COMMAND tx_chain_layout_test)
+
+# The chain order between AudioEngine and the settings file: persisted equals
+# running, a saved list keeps its order and gains missing stages, and repeated
+# names from a hand-edited file or an imported preset are dropped, not packed.
+# Isolated settings (TestSettingsProfile); no audio device, no radio.
+add_executable(tx_chain_settings_test tests/tx_chain_settings_test.cpp)
+target_include_directories(tx_chain_settings_test PRIVATE src tests)
+target_link_libraries(tx_chain_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME tx_chain_settings_test COMMAND tx_chain_settings_test)
 
 add_executable(tx_voice_processor_test
     tests/tx_voice_processor_test.cpp
@@ -3772,6 +4036,17 @@ add_executable(vita_sequence_loss_log_test tests/vita_sequence_loss_log_test.cpp
 target_include_directories(vita_sequence_loss_log_test PRIVATE src)
 target_link_libraries(vita_sequence_loss_log_test PRIVATE aethercore Qt6::Core)
 add_test(NAME vita_sequence_loss_log_test COMMAND vita_sequence_loss_log_test)
+
+# Socket-free bounded VITA resequencing and actual PCM/Opus decode/PLC.
+add_executable(vita_rx_reorder_test tests/vita_rx_reorder_test.cpp)
+target_include_directories(vita_rx_reorder_test PRIVATE src)
+target_link_libraries(vita_rx_reorder_test PRIVATE Qt6::Core)
+add_test(NAME vita_rx_reorder_test COMMAND vita_rx_reorder_test)
+
+add_executable(vita_rx_reorder_audio_test tests/vita_rx_reorder_audio_test.cpp)
+target_include_directories(vita_rx_reorder_audio_test PRIVATE src)
+target_link_libraries(vita_rx_reorder_audio_test PRIVATE aethercore Qt6::Core)
+add_test(NAME vita_rx_reorder_audio_test COMMAND vita_rx_reorder_audio_test)
 
 # RadioModel restarts remote_audio_rx's VITA-49 sequence tracking when the radio
 # reports the stream adopted or removed (#6285). Socket-free: status lines go to
@@ -4130,7 +4405,7 @@ add_executable(dvk_panel_theme_test
     tests/dvk_panel_theme_test.cpp
     src/gui/DvkPanel.cpp
     src/gui/RoundedMenu.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(dvk_panel_theme_test PRIVATE src tests)
 target_link_libraries(dvk_panel_theme_test PRIVATE aetherdesktop_support Qt6::Widgets)
@@ -4144,7 +4419,7 @@ set_tests_properties(dvk_panel_theme_test PROPERTIES
 add_executable(status_indicator_test
     tests/status_indicator_test.cpp
     src/gui/StatusIndicator.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(status_indicator_test PRIVATE src tests)
 target_link_libraries(status_indicator_test PRIVATE aetherdesktop_support Qt6::Widgets)
@@ -4234,6 +4509,16 @@ target_include_directories(tx_audio_path_policy_test PRIVATE src)
 target_link_libraries(tx_audio_path_policy_test PRIVATE Qt6::Core)
 add_test(NAME tx_audio_path_policy_test COMMAND tx_audio_path_policy_test)
 
+# #6331: socket-free status row sizing and notices; no radio peer.
+add_executable(status_bar_message_test
+    tests/status_bar_message_test.cpp
+    src/gui/StatusBarMessageOverlay.h
+)
+target_include_directories(status_bar_message_test PRIVATE src)
+target_link_libraries(status_bar_message_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME status_bar_message_test COMMAND status_bar_message_test)
+set_tests_properties(status_bar_message_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # #7078: socket-free voice-key notice and MIC readiness policy.
 add_executable(tx_voice_key_notice_test tests/tx_voice_key_notice_test.cpp)
 target_include_directories(tx_voice_key_notice_test PRIVATE src)
@@ -4260,9 +4545,9 @@ add_executable(firmware_close_dialog_test
     src/gui/UpdatesWindow.cpp
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_canon_window>
 )
 target_include_directories(firmware_close_dialog_test PRIVATE src tests)
 target_link_libraries(firmware_close_dialog_test PRIVATE
@@ -4276,22 +4561,22 @@ set_tests_properties(firmware_close_dialog_test PROPERTIES
 # #5778: production dialog with injected capability/connection state; no sockets or peers.
 add_executable(flex_control_visibility_test
     tests/flex_control_visibility_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
 )
@@ -4305,22 +4590,24 @@ set_tests_properties(flex_control_visibility_test PROPERTIES
 # Radio Setup pages must not show a parentless widget while building (macOS focus steal).
 add_executable(radio_setup_no_transient_window_test
     tests/radio_setup_no_transient_window_test.cpp
-    src/gui/DragValuePopup.cpp
+    src/gui/ClientEqOutputFader.cpp
+    src/gui/ShackSwitchApplet.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
 )
@@ -4335,10 +4622,9 @@ set_tests_properties(radio_setup_no_transient_window_test PROPERTIES
 # #5507: the production Radio Setup dialog against a backend that reports no
 # region, driven by RadioDelta over the real IRadioBackend::radioChanged route.
 # Same target shape as flex_control_visibility_test above — no sockets, no peers.
-# ${THEME_TEST_RESOURCES} -- set by this file's own
-# qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc), above -- is
-# what puts :/themes/default-dark.json and :/themes/default-light.json in this
-# binary. Without it ThemeManager still resolves color.accent.bright --
+# $<TARGET_OBJECTS:aether_test_resources> (resources.qrc, see "Shared GUI and
+# theme objects" at the top of this file) is what puts :/themes/default-dark.json
+# and :/themes/default-light.json in this binary. Without it ThemeManager still resolves color.accent.bright --
 # ThemeSeedGenerated.cpp compiles the dark values in -- but scanAvailableThemes()
 # finds nothing in :/themes/, so availableThemes() is empty and setActiveTheme()
 # cannot switch. #5857's slot switches the theme and reads the colour back, which
@@ -4346,25 +4632,25 @@ set_tests_properties(radio_setup_no_transient_window_test PROPERTIES
 # token to re-resolve.
 add_executable(radio_setup_region_field_test
     tests/radio_setup_region_field_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_region_field_test PRIVATE src tests)
 target_link_libraries(radio_setup_region_field_test PRIVATE
@@ -4375,26 +4661,26 @@ set_tests_properties(radio_setup_region_field_test PROPERTIES
 
 add_executable(radio_setup_operations_test
     tests/radio_setup_operations_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
     src/gui/TxBandDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_operations_test PRIVATE src tests)
 target_link_libraries(radio_setup_operations_test PRIVATE
@@ -4405,31 +4691,31 @@ set_tests_properties(radio_setup_operations_test PROPERTIES
 
 # #5896: RadioSetupDialog's caption labels and line edits across a LIVE theme
 # switch.  Same target shape as radio_setup_region_field_test above, plus
-# ${THEME_TEST_RESOURCES}: without :/themes/ compiled in, ThemeSeedGenerated.cpp
+# aether_test_resources: without :/themes/ compiled in, ThemeSeedGenerated.cpp
 # still resolves every token so a construction-time reading succeeds, but
 # availableThemes() is empty and setActiveTheme() has nothing to switch to --
 # and the switch is the only thing that can see this defect.
 add_executable(radio_setup_label_theme_token_test
     tests/radio_setup_label_theme_token_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_label_theme_token_test PRIVATE src tests)
 target_link_libraries(radio_setup_label_theme_token_test PRIVATE
@@ -4440,25 +4726,25 @@ set_tests_properties(radio_setup_label_theme_token_test PROPERTIES
 
 add_executable(radio_setup_window_size_test
     tests/radio_setup_window_size_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_window_size_test PRIVATE src tests)
 target_link_libraries(radio_setup_window_size_test PRIVATE
@@ -4469,25 +4755,25 @@ set_tests_properties(radio_setup_window_size_test PROPERTIES
 
 add_executable(radio_setup_pair_grid_test
     tests/radio_setup_pair_grid_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_pair_grid_test PRIVATE src tests)
 target_link_libraries(radio_setup_pair_grid_test PRIVATE
@@ -4504,25 +4790,25 @@ set_tests_properties(radio_setup_pair_grid_test PROPERTIES
 # through rebuildBackendForTest() and never connected -- no socket.
 add_executable(radio_setup_max_power_field_test
     tests/radio_setup_max_power_field_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_max_power_field_test PRIVATE src tests)
 target_link_libraries(radio_setup_max_power_field_test PRIVATE
@@ -4536,25 +4822,25 @@ set_tests_properties(radio_setup_max_power_field_test PROPERTIES
 # the SDK's `interlock` timing text with one. Injected backend; no socket.
 add_executable(radio_setup_tx_timing_fields_test
     tests/radio_setup_tx_timing_fields_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_tx_timing_fields_test PRIVATE src tests)
 target_link_libraries(radio_setup_tx_timing_fields_test PRIVATE
@@ -4569,25 +4855,25 @@ set_tests_properties(radio_setup_tx_timing_fields_test PROPERTIES
 # unchanged. Injected backend; no socket.
 add_executable(radio_setup_recording_mode_dim_test
     tests/radio_setup_recording_mode_dim_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_recording_mode_dim_test PRIVATE src tests)
 target_link_libraries(radio_setup_recording_mode_dim_test PRIVATE
@@ -4603,25 +4889,25 @@ set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
 # no socket.
 add_executable(radio_setup_headphone_output_gate_test
     tests/radio_setup_headphone_output_gate_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_headphone_output_gate_test PRIVATE src tests)
 target_link_libraries(radio_setup_headphone_output_gate_test PRIVATE
@@ -4634,25 +4920,25 @@ set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
 # Injected hl2 extension backend; no socket and no radio.
 add_executable(hl2_codec_suggestion_dialog_test
     tests/hl2_codec_suggestion_dialog_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(hl2_codec_suggestion_dialog_test PRIVATE src tests)
 target_link_libraries(hl2_codec_suggestion_dialog_test PRIVATE
@@ -4671,25 +4957,25 @@ set_tests_properties(tune_output_control_test PROPERTIES LABELS "headless")
 # Socket-free Flex nickname encoding and production Radio Setup editing.
 add_executable(radio_nickname_test
     tests/radio_nickname_test.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 # MainWindow's status-bar consumers have no socket-free construction seam.
 target_compile_definitions(radio_nickname_test PRIVATE
@@ -4706,11 +4992,11 @@ set_tests_properties(radio_nickname_test PROPERTIES
 # the radio's band values and TX profile; no sockets.
 add_executable(tune_output_dialog_test
     tests/tune_output_dialog_test.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/TxBandDialog.cpp
     src/gui/ControlAvailabilityRegistry.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(tune_output_dialog_test PRIVATE src tests)
 target_link_libraries(tune_output_dialog_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
@@ -4724,10 +5010,10 @@ set_tests_properties(tune_output_dialog_test PROPERTIES
 if(HIDAPI_FOUND)
     add_executable(rc28_mapping_dialog_test
         tests/rc28_mapping_dialog_test.cpp
-        src/gui/CanonWindow.cpp
+        $<TARGET_OBJECTS:aether_test_canon_window>
         src/gui/RC28MappingDialog.cpp
-        src/gui/FramelessResizer.cpp
-        ${THEME_TEST_RESOURCES}
+        $<TARGET_OBJECTS:aether_test_frameless_resizer>
+        $<TARGET_OBJECTS:aether_test_resources>
     )
     target_include_directories(rc28_mapping_dialog_test PRIVATE src tests)
     target_link_libraries(rc28_mapping_dialog_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
@@ -4741,25 +5027,25 @@ endif()
 # sends the wire text everywhere else. Real backends, never connected; no socket.
 add_executable(radio_setup_show_tx_waterfall_test
     tests/radio_setup_show_tx_waterfall_test.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_setup_show_tx_waterfall_test PRIVATE src tests)
 target_link_libraries(radio_setup_show_tx_waterfall_test PRIVATE
@@ -4796,6 +5082,18 @@ else()
 endif()
 add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 
+# Remote-session predicates (bandwidth defaults; IP Configuration), header-only.
+add_executable(remote_session_test tests/remote_session_test.cpp)
+target_include_directories(remote_session_test PRIVATE src)
+target_link_libraries(remote_session_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME remote_session_test COMMAND remote_session_test)
+
+# Tailscale-interface check for IP Configuration's gate, injected interfaces.
+add_executable(tailscale_interface_test tests/tailscale_interface_test.cpp)
+target_include_directories(tailscale_interface_test PRIVATE src)
+target_link_libraries(tailscale_interface_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME tailscale_interface_test COMMAND tailscale_interface_test)
+
 # In-radio tailnet shim client: wire parsing and request bodies, socket-free.
 add_executable(tailnet_shim_client_test
     tests/tailnet_shim_client_test.cpp
@@ -4811,13 +5109,12 @@ add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 # The radio health agent: the bundled package matches its pin and is a valid
 # legacy waveform; its readout parses, refuses and summarizes. Socket-free;
 # writes only to a QTemporaryDir.
-qt_add_resources(RADIO_HEALTH_TEST_RESOURCES resources/resources.qrc)
 add_executable(radio_health_client_test
     tests/radio_health_client_test.cpp
     src/core/RadioHealthClient.cpp
     src/core/LegacyWaveformPackage.cpp
     src/core/ZipArchive.cpp
-    ${RADIO_HEALTH_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(radio_health_client_test PRIVATE src)
 target_link_libraries(radio_health_client_test PRIVATE Qt6::Core Qt6::Network)
@@ -4828,17 +5125,39 @@ else()
 endif()
 add_test(NAME radio_health_client_test COMMAND radio_health_client_test)
 
+# The AetherGPS sky view's gpsd client (tools/aether-gps): SKY satellites
+# parse and are bounded, DOP-only SKY and other classes are refused,
+# constellations follow gnssid or gpsd's PRN ranges, the stream reassembles
+# split lines and survives an overlong one, and only LAN or tailnet addresses
+# are tried. The bundled packages match their pins and the legacy one is a
+# valid waveform. Socket-free; writes only to a QTemporaryDir.
+add_executable(gpsd_sky_client_test
+    tests/gpsd_sky_client_test.cpp
+    src/core/GpsdSkyClient.cpp
+    src/core/AetherGpsPackage.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/ZipArchive.cpp
+    $<TARGET_OBJECTS:aether_test_resources>
+)
+target_include_directories(gpsd_sky_client_test PRIVATE src)
+target_link_libraries(gpsd_sky_client_test PRIVATE Qt6::Core Qt6::Network)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(gpsd_sky_client_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(gpsd_sky_client_test PRIVATE zlibstatic)
+endif()
+add_test(NAME gpsd_sky_client_test COMMAND gpsd_sky_client_test)
+
 # The WSPR receiver on the radio (tools/wspr-agent): status and settings
 # JSON parse and are bounded, the settings body round-trips, a spot becomes
 # a SpotHub DxSpot, only LAN or tailnet addresses are tried, and the bundled
 # package matches its pin. Socket-free; writes only to a QTemporaryDir.
-qt_add_resources(WSPR_AGENT_TEST_RESOURCES resources/resources.qrc)
 add_executable(wspr_agent_test
     tests/wspr_agent_test.cpp
     src/core/WsprAgent.cpp
     src/core/LegacyWaveformPackage.cpp
     src/core/ZipArchive.cpp
-    ${WSPR_AGENT_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(wspr_agent_test PRIVATE src)
 target_link_libraries(wspr_agent_test PRIVATE Qt6::Core Qt6::Network)
@@ -4879,12 +5198,11 @@ target_include_directories(band_plan_zoom_test PRIVATE src)
 target_link_libraries(band_plan_zoom_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME band_plan_zoom_test COMMAND band_plan_zoom_test)
 
-qt_add_resources(KIWISDR_DX_SPOTS_TEST_RESOURCES resources/resources.qrc)
 add_executable(kiwisdr_dx_spots_test
     tests/kiwisdr_dx_spots_test.cpp
     src/models/BandPlanManager.cpp
     $<TARGET_OBJECTS:aether_test_settings>
-    ${KIWISDR_DX_SPOTS_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(kiwisdr_dx_spots_test PRIVATE src tests)
 target_link_libraries(kiwisdr_dx_spots_test PRIVATE Qt6::Core Qt6::Gui)
@@ -5317,9 +5635,9 @@ add_executable(updates_window_test
     src/gui/UpdatesWindow.cpp
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_canon_window>
 )
 target_include_directories(updates_window_test PRIVATE src tests)
 target_link_libraries(updates_window_test PRIVATE
@@ -5400,12 +5718,6 @@ add_executable(client_gate_test
     src/core/ClientGate.cpp
 )
 target_include_directories(client_gate_test PRIVATE src)
-
-add_executable(client_deess_test
-    tests/client_deess_test.cpp
-    src/core/ClientDeEss.cpp
-)
-target_include_directories(client_deess_test PRIVATE src)
 
 add_executable(client_tube_test
     tests/client_tube_test.cpp
@@ -5498,6 +5810,23 @@ target_include_directories(wsjtx_dial_tracker_test PRIVATE src)
 target_link_libraries(wsjtx_dial_tracker_test PRIVATE Qt6::Core)
 add_test(NAME wsjtx_dial_tracker_test COMMAND wsjtx_dial_tracker_test)
 
+# SpotHub WSJT-X feed: Rx/Tx frequency overlay (#4526). Header-only and
+# Qt-Core-only, same lane as wsjtx_dial_tracker_test above — pins the dial+
+# offset resolution and the refuse-rather-than-guess fallback when Status's
+# later fields could not be read, AND (RFC #4526 review item 1) the actual
+# QDataStream byte parsing in parseWsjtxStatusBody() — field order/framing
+# for DX Call/Report/Tx Mode/Tx Enabled/Transmitting/Decoding/[Rx DF/Tx DF] —
+# via hand-built buffers using the same wsjtxReadQString/wsjtxReadBool
+# primitives WsjtxClient.cpp itself calls (WsjtxWireHelpers.h). Still does
+# NOT link WsjtxClient.cpp/LogManager/AppSettings — parseWsjtxStatusBody()
+# is exercised directly, header-only, same as the rest of this target.
+add_executable(wsjtx_status_freq_test
+    tests/wsjtx_status_freq_test.cpp
+)
+target_include_directories(wsjtx_status_freq_test PRIVATE src)
+target_link_libraries(wsjtx_status_freq_test PRIVATE Qt6::Core)
+add_test(NAME wsjtx_status_freq_test COMMAND wsjtx_status_freq_test)
+
 add_executable(n1mm_spot_client_test
     tests/n1mm_spot_client_test.cpp
     src/core/N1MMSpotParser.cpp
@@ -5527,9 +5856,11 @@ add_test(NAME eibi_client_test COMMAND eibi_client_test)
 add_executable(navtex_model_test
     tests/navtex_model_test.cpp
     src/models/NavtexModel.cpp
+    src/core/backends/flex/FlexTransmitServiceStatus.cpp
 )
-target_include_directories(navtex_model_test PRIVATE src)
+target_include_directories(navtex_model_test PRIVATE src tests)
 target_link_libraries(navtex_model_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME navtex_model_test COMMAND navtex_model_test)
 
 add_executable(flex_waveform_model_test
     tests/flex_waveform_model_test.cpp
@@ -5742,10 +6073,10 @@ add_test(NAME kat500_model_test COMMAND kat500_model_test)
 add_executable(kxpa100_applet_test tests/kxpa100_applet_test.cpp
     src/gui/Kxpa100Applet.cpp src/models/Kxpa100Model.cpp src/models/Kxpa100Model_Maintenance.cpp src/models/Kxpa100Model.h
     src/core/Kxpa100Protocol.cpp src/core/Kxpa100Maintenance.cpp
-    src/gui/CanonSurface.cpp src/gui/CanonWindow.cpp src/gui/DragValuePopup.cpp
-    src/core/ThemeManager.cpp src/core/ThemeSeedGenerated.cpp
+    src/gui/CanonSurface.cpp $<TARGET_OBJECTS:aether_test_canon_window> $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_theme_manager> $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings> $<TARGET_OBJECTS:aether_test_log_manager>
-    $<TARGET_OBJECTS:aether_test_async_log_writer> ${THEME_TEST_RESOURCES})
+    $<TARGET_OBJECTS:aether_test_async_log_writer> $<TARGET_OBJECTS:aether_test_resources>)
 target_include_directories(kxpa100_applet_test PRIVATE src tests)
 target_link_libraries(kxpa100_applet_test PRIVATE Qt6::Core Qt6::Network Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME kxpa100_applet_test COMMAND kxpa100_applet_test)
@@ -5753,10 +6084,10 @@ set_tests_properties(kxpa100_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM
 add_executable(kat500_applet_test tests/kat500_applet_test.cpp
     src/gui/Kat500Applet.cpp src/models/Kat500Model.cpp src/models/Kat500Model.h
     src/core/Kat500Protocol.cpp src/core/Kat500Maintenance.cpp
-    src/gui/CanonSurface.cpp src/gui/CanonWindow.cpp src/gui/DragValuePopup.cpp
-    src/core/ThemeManager.cpp src/core/ThemeSeedGenerated.cpp
+    src/gui/CanonSurface.cpp $<TARGET_OBJECTS:aether_test_canon_window> $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_theme_manager> $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings> $<TARGET_OBJECTS:aether_test_log_manager>
-    $<TARGET_OBJECTS:aether_test_async_log_writer> ${THEME_TEST_RESOURCES})
+    $<TARGET_OBJECTS:aether_test_async_log_writer> $<TARGET_OBJECTS:aether_test_resources>)
 target_include_directories(kat500_applet_test PRIVATE src tests)
 target_link_libraries(kat500_applet_test PRIVATE Qt6::Core Qt6::Network Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME kat500_applet_test COMMAND kat500_applet_test)
@@ -5764,9 +6095,9 @@ set_tests_properties(kat500_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=
 add_executable(kxpa100_advanced_widget_test tests/kxpa100_advanced_widget_test.cpp
     src/gui/Kxpa100AdvancedWidget.cpp src/models/Kxpa100Model.cpp src/models/Kxpa100Model_Maintenance.cpp src/models/Kxpa100Model.h
     src/core/Kxpa100Protocol.cpp src/core/Kxpa100Maintenance.cpp
-    src/core/ThemeManager.cpp src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager> $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings> $<TARGET_OBJECTS:aether_test_log_manager>
-    $<TARGET_OBJECTS:aether_test_async_log_writer> ${THEME_TEST_RESOURCES})
+    $<TARGET_OBJECTS:aether_test_async_log_writer> $<TARGET_OBJECTS:aether_test_resources>)
 target_include_directories(kxpa100_advanced_widget_test PRIVATE src tests)
 target_link_libraries(kxpa100_advanced_widget_test PRIVATE Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test)
 add_test(NAME kxpa100_advanced_widget_test COMMAND kxpa100_advanced_widget_test)
@@ -5776,9 +6107,9 @@ target_compile_definitions(kxpa100_advanced_widget_test PRIVATE KXPA100_FIXTURE_
 add_executable(kat500_advanced_widget_test tests/kat500_advanced_widget_test.cpp
     src/gui/Kat500AdvancedWidget.cpp src/models/Kat500Model.cpp src/models/Kat500Model.h
     src/core/Kat500Protocol.cpp src/core/Kat500Maintenance.cpp
-    src/core/ThemeManager.cpp src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager> $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings> $<TARGET_OBJECTS:aether_test_log_manager>
-    $<TARGET_OBJECTS:aether_test_async_log_writer> ${THEME_TEST_RESOURCES})
+    $<TARGET_OBJECTS:aether_test_async_log_writer> $<TARGET_OBJECTS:aether_test_resources>)
 target_include_directories(kat500_advanced_widget_test PRIVATE src tests)
 target_link_libraries(kat500_advanced_widget_test PRIVATE Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test)
 add_test(NAME kat500_advanced_widget_test COMMAND kat500_advanced_widget_test)
@@ -5791,6 +6122,14 @@ add_executable(kpa500_protocol_test
 target_include_directories(kpa500_protocol_test PRIVATE src)
 target_link_libraries(kpa500_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kpa500_protocol_test COMMAND kpa500_protocol_test)
+
+# Socket-free priority mapping for the KPA500 status indicator (RFC #7092).
+add_executable(kpa500_state_test
+    tests/kpa500_state_test.cpp
+)
+target_include_directories(kpa500_state_test PRIVATE src)
+target_link_libraries(kpa500_state_test PRIVATE Qt6::Core)
+add_test(NAME kpa500_state_test COMMAND kpa500_state_test)
 
 # Socket-free injected KPA500 transport: liveness and stale-snapshot recovery.
 add_executable(kpa500_connection_test
@@ -5840,15 +6179,15 @@ add_executable(kpa500_applet_test
     src/models/MeterModel.cpp
     src/gui/Kpa500Applet.cpp
     src/gui/CanonSurface.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/core/Kpa500Protocol.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(kpa500_applet_test PRIVATE src tests)
 target_link_libraries(kpa500_applet_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -6027,11 +6366,48 @@ if (ENABLE_ASR)
     target_include_directories(asr_segmenter_test PRIVATE src)
     add_test(NAME asr_segmenter_test COMMAND asr_segmenter_test)
 
+    add_executable(asr_live_preview_assembler_test
+        tests/asr_live_preview_assembler_test.cpp
+        src/asr/LivePreviewAssembler.cpp
+    )
+    target_include_directories(asr_live_preview_assembler_test PRIVATE src)
+    target_link_libraries(asr_live_preview_assembler_test PRIVATE Qt6::Core)
+    add_test(NAME asr_live_preview_assembler_test COMMAND asr_live_preview_assembler_test)
+
+    # Engine live-preview plumbing with a fake recogniser and fake backend.
+    add_executable(asr_live_preview_engine_test
+        tests/asr_live_preview_engine_test.cpp
+        src/asr/AsrEngine.cpp
+        src/asr/AsrSegmenter.cpp
+        src/asr/LivePreviewAssembler.cpp
+        src/asr/SileroVad.cpp    # AsrEngine references it (stub without HAVE_ONNX)
+        src/asr/Fbank.cpp
+        src/asr/SpeakerEmbedder.cpp
+        src/asr/SpeakerClusterer.cpp
+        src/core/Resampler.cpp
+    )
+    target_include_directories(asr_live_preview_engine_test PRIVATE src ${CMAKE_SOURCE_DIR}/third_party/r8brain)
+    target_link_libraries(asr_live_preview_engine_test PRIVATE Qt6::Core Qt6::Test)
+    set_target_properties(asr_live_preview_engine_test PROPERTIES AUTOMOC ON)
+    add_test(NAME asr_live_preview_engine_test COMMAND asr_live_preview_engine_test)
+
+    # Apple live-preview bridge on a real recording; needs macOS 26 and the
+    # on-device model, so it is run by hand.
+    if (APPLE)
+        add_executable(apple_live_preview_smoke tests/apple_live_preview_smoke.cpp) # not registered: manual, needs a recording and macOS 26
+        target_link_libraries(apple_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+    endif()
+
+    # sherpa-onnx live preview on a real recording and model; run by hand.
+    add_executable(sherpa_live_preview_smoke tests/sherpa_live_preview_smoke.cpp) # not registered: manual, needs a recording and a streaming model
+    target_link_libraries(sherpa_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+
     # Engine orchestration: fake backend, worker thread, no whisper/model.
     add_executable(asr_engine_test
         tests/asr_engine_test.cpp
         src/asr/AsrEngine.cpp
         src/asr/AsrSegmenter.cpp
+        src/asr/LivePreviewAssembler.cpp
         src/asr/SileroVad.cpp    # AsrEngine references it (stub without HAVE_ONNX)
         src/asr/Fbank.cpp
         src/asr/SpeakerEmbedder.cpp
@@ -6177,9 +6553,9 @@ if (ENABLE_ASR)
         src/gui/CopyAssistSettingsDialog.cpp
         src/gui/AsrAudioTap.cpp
         src/gui/ControlAvailabilityRegistry.cpp
-        src/gui/PersistentDialog.cpp
-        src/gui/FramelessResizer.cpp
-        src/gui/FramelessWindowTitleBar.cpp
+        $<TARGET_OBJECTS:aether_test_persistent_dialog>
+        $<TARGET_OBJECTS:aether_test_frameless_resizer>
+        $<TARGET_OBJECTS:aether_test_frameless_title_bar>
     )
     add_dependencies(copy_assist_failure_test aether_build_identity)
     target_include_directories(copy_assist_failure_test PRIVATE src "${AETHER_BUILD_ID_DIR}")
@@ -6195,11 +6571,11 @@ if (ENABLE_ASR)
         tests/copy_assist_settings_dialog_test.cpp
         src/gui/CopyAssistSettingsDialog.cpp
         src/gui/CopyAssistSettings.cpp
-        src/gui/PersistentDialog.cpp
-        src/gui/FramelessResizer.cpp
-        src/gui/FramelessWindowTitleBar.cpp
-        src/core/ThemeManager.cpp
-        src/core/ThemeSeedGenerated.cpp
+        $<TARGET_OBJECTS:aether_test_persistent_dialog>
+        $<TARGET_OBJECTS:aether_test_frameless_resizer>
+        $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+        $<TARGET_OBJECTS:aether_test_theme_manager>
+        $<TARGET_OBJECTS:aether_test_theme_seed>
         $<TARGET_OBJECTS:aether_test_settings>
         $<TARGET_OBJECTS:aether_test_log_manager>
         $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -6214,13 +6590,12 @@ endif()
 
 # Approved V12 cross-needle meter construction: versioned face resource,
 # two-pivot mechanics, SWR math/guide registration, RX parking and rendering.
-qt_add_resources(CROSS_NEEDLE_METER_TEST_RESOURCES resources/resources.qrc)
 add_executable(cross_needle_meter_test
     tests/cross_needle_meter_test.cpp
     src/gui/AnalogMeterFaceTheme.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
     src/gui/CrossNeedleMeterWidget.cpp
-    ${CROSS_NEEDLE_METER_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(cross_needle_meter_test PRIVATE src)
 target_link_libraries(cross_needle_meter_test PRIVATE
@@ -6244,12 +6619,12 @@ add_executable(s_meter_geometry_test
     src/models/RadioSwrValidityFilter.cpp
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${CROSS_NEEDLE_METER_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(s_meter_geometry_test PRIVATE src)
 target_link_libraries(s_meter_geometry_test PRIVATE
@@ -6262,7 +6637,7 @@ set_tests_properties(s_meter_geometry_test PROPERTIES
 
 add_executable(hgauge_range_test
     tests/hgauge_range_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(hgauge_range_test PRIVATE src src/gui)
 target_link_libraries(hgauge_range_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
@@ -6279,7 +6654,7 @@ set_tests_properties(hgauge_range_test PROPERTIES
 # dropped and the meter keeps updating.
 add_executable(hgauge_hover_popup_test
     tests/hgauge_hover_popup_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(hgauge_hover_popup_test PRIVATE src src/gui)
 target_link_libraries(hgauge_hover_popup_test PRIVATE
@@ -6315,7 +6690,7 @@ set_tests_properties(range_slider_a11y_test PROPERTIES
 # HGauge.h is listed so AUTOMOC picks up RelayBar's Q_OBJECT (header-only class).
 add_executable(relay_bar_a11y_test
     tests/relay_bar_a11y_test.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/HGauge.h
 )
 target_include_directories(relay_bar_a11y_test PRIVATE src)
@@ -6336,8 +6711,8 @@ set_tests_properties(relay_bar_a11y_test PROPERTIES
 add_executable(tgxl_panel_widgets_test
     tests/tgxl_panel_widgets_test.cpp
     src/gui/AccessoryPanelWidgets.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -6377,13 +6752,13 @@ set_tests_properties(automation_sensitive_grab_command_test PROPERTIES
 add_executable(peripheral_auth_dialog_test
     tests/peripheral_auth_dialog_test.cpp
     tests/fakes/PeripheralAuthStoreFake.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/RadioSetupDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -6391,10 +6766,10 @@ add_executable(peripheral_auth_dialog_test
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/AntennaGeniusApplet.cpp
     src/gui/ShackSwitchApplet.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h)
 target_include_directories(peripheral_auth_dialog_test PRIVATE tests/fakes src tests)
@@ -6461,14 +6836,14 @@ set_tests_properties(pgxl_direct_protocol_test PROPERTIES SKIP_RETURN_CODE 77)
 # Existing loopback QTcpServer binds for the live status portion of this test.
 add_executable(pgxl_panel_test
     tests/pgxl_panel_test.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
     src/gui/AmpApplet.cpp
     src/gui/AccessoryPanelWidgets.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/AmpModel.cpp
     src/core/PgxlConnection.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
@@ -6509,13 +6884,13 @@ add_executable(tgxl_docked_parity_test
     tests/tgxl_docked_parity_test.cpp
     src/gui/TunerApplet.cpp
     src/gui/AccessoryPanelWidgets.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/TunerModel.cpp
     src/models/MeterModel.cpp
     src/models/BandSettings.cpp
     src/core/TgxlConnection.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
@@ -6536,13 +6911,13 @@ add_executable(tgxl_antenna_names_test
     tests/tgxl_antenna_names_test.cpp
     src/gui/TunerApplet.cpp
     src/gui/AccessoryPanelWidgets.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/TunerModel.cpp
     src/models/MeterModel.cpp
     src/models/BandSettings.cpp
     src/core/TgxlConnection.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
@@ -6563,13 +6938,13 @@ add_executable(tgxl_applet_ports_test
     tests/tgxl_applet_ports_test.cpp
     src/gui/TunerApplet.cpp
     src/gui/AccessoryPanelWidgets.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/TunerModel.cpp
     src/models/MeterModel.cpp
     src/models/BandSettings.cpp
     src/core/TgxlConnection.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
@@ -6652,6 +7027,23 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME rtl_package_closure_test
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_rtl_package.py)
+    # not registered: opt-in reproducer for the RTL async cancellation
+    # lifetime fix (#7397). It compiles the pinned, patched librtlsdr.c
+    # against an injected libusb (no device, no socket), and only the release
+    # recipes fetch that source into .rtl-deps-build. Build this target by
+    # name after scripts/setup/setup-rtl-deps.* has run; it exits 77 without
+    # the sources. See docs/rtl-release-packaging.md.
+    set(rtl_async_sanitizer)
+    if(NOT WIN32)
+        set(rtl_async_sanitizer --sanitize)
+    endif()
+    add_custom_target(rtl_async_cancellation_test
+        COMMAND ${PYTHON3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup/test-rtl-async-cancellation.py
+                ${rtl_async_sanitizer}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        USES_TERMINAL
+        VERBATIM)
     add_test(NAME capability_record_parser
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_capability_records.py)
@@ -6760,7 +7152,7 @@ set_tests_properties(automation_menu_lookup_test PROPERTIES ENVIRONMENT "QT_QPA_
 add_executable(automation_gauge_verb_test
     tests/automation_gauge_verb_test.cpp
     # HGauge.h's hover popup is header-inline and calls into this.
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(automation_gauge_verb_test PRIVATE src)
 target_link_libraries(automation_gauge_verb_test PRIVATE aethercore Qt6::Widgets)
@@ -6778,7 +7170,7 @@ add_executable(aetherlab_window_test
     tests/aetherlab_window_test.cpp
     src/gui/AetherLabWidget.cpp
     src/gui/CanonSurface.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
 )
 target_include_directories(aetherlab_window_test PRIVATE src)
 target_link_libraries(aetherlab_window_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
@@ -6930,6 +7322,18 @@ target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
 add_test(NAME shortcut_manager_test COMMAND shortcut_manager_test)
 
+# One action declaration published to keyboard and MIDI (ControlActionRegistry).
+# Socket-free: no radio, no MIDI device, no settings file.
+add_executable(control_action_registry_test
+    tests/control_action_registry_test.cpp
+    src/gui/ControlActionRegistry.cpp
+    src/core/ShortcutManager.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(control_action_registry_test PRIVATE src)
+target_link_libraries(control_action_registry_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Test)
+add_test(NAME control_action_registry_test COMMAND control_action_registry_test)
+
 # Actual Qt key delivery, socket-free; no radio or transmitter is constructed.
 add_executable(window_shortcut_test
     tests/window_shortcut_test.cpp
@@ -6976,6 +7380,7 @@ add_executable(mqtt_radio_state_test
     src/core/MqttRadioState.cpp
     src/models/TransmitModel.cpp
     src/core/ClientQuindarTone.cpp
+    src/core/TxOffDelaySettings.cpp
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>
@@ -7346,6 +7751,14 @@ target_include_directories(cwx_control_routing_test PRIVATE src)
 target_link_libraries(cwx_control_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME cwx_control_routing_test COMMAND cwx_control_routing_test)
 
+# hasCwTextKeyer() (#7146 part 1) and the hostCwKeyingControl declarations of
+# every real backend; no text-CW surface moved yet. Injected backend, no socket.
+add_executable(cw_text_capability_test tests/cw_text_capability_test.cpp)
+target_include_directories(cw_text_capability_test PRIVATE src tests)
+target_link_libraries(cw_text_capability_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME cw_text_capability_test COMMAND cw_text_capability_test)
+
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
@@ -7367,9 +7780,11 @@ add_executable(voice_keyer_dvk_model_test
     src/models/DvkModel.cpp
     src/models/DvkModel.h
     src/models/VoiceKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/models/VoiceKeyer.h
+    src/core/backends/flex/FlexTransmitServiceStatus.cpp
 )
-target_include_directories(voice_keyer_dvk_model_test PRIVATE src)
+target_include_directories(voice_keyer_dvk_model_test PRIVATE src tests)
 target_link_libraries(voice_keyer_dvk_model_test PRIVATE Qt6::Core)
 add_test(NAME voice_keyer_dvk_model_test COMMAND voice_keyer_dvk_model_test)
 
@@ -7383,11 +7798,12 @@ add_executable(dvk_panel_test
     # The slot context menu goes through roundMenuTree().
     src/gui/RoundedMenu.cpp
     src/models/VoiceKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/models/VoiceKeyer.h
     # DvkPanel.cpp applies theme stylesheets through ThemeManager; pull in the
     # manager + its logging deps so the test links (as cwx_panel_test does).
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_settings>
@@ -7435,6 +7851,7 @@ add_executable(local_voice_keyer_test
     src/core/VoiceKeyerWavDecoder.cpp
     src/core/Resampler.cpp
     src/core/GeneratedAudioTransmitter.cpp
+    src/core/TxCoordinator.cpp
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_settings>
@@ -7573,6 +7990,15 @@ target_link_libraries(mon_vox_roads_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME mon_vox_roads_test COMMAND mon_vox_roads_test)
 
+# #7105: rigctl send_morse / stop_morse on a radio with no radio-side text
+# buffer key host-timed elements through RadioModel's per-edge CW gates; the
+# radio-side keyer still uses CWX. Injected backend, no socket, nothing keyed.
+add_executable(rigctl_host_cw_text_test tests/rigctl_host_cw_text_test.cpp)
+target_include_directories(rigctl_host_cw_text_test PRIVATE src tests)
+target_link_libraries(rigctl_host_cw_text_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME rigctl_host_cw_text_test COMMAND rigctl_host_cw_text_test)
+
 # #5775 / #5776: the receiver letters (slice tabs, CAT VFO targets) follow a
 # backend's capacity declared after connect. Injected backend, no socket.
 add_executable(receiver_slot_count_test tests/receiver_slot_count_test.cpp)
@@ -7585,8 +8011,8 @@ add_executable(health_applet_test
     tests/health_applet_test.cpp
     src/gui/HealthApplet.cpp
     src/models/MeterModel.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -7606,10 +8032,10 @@ set_tests_properties(health_applet_test PROPERTIES
 add_executable(meter_applet_capability_test
     tests/meter_applet_capability_test.cpp
     src/gui/MeterApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/MeterModel.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -7631,10 +8057,10 @@ set_tests_properties(meter_applet_capability_test PROPERTIES
 add_executable(meter_applet_voltage_state_test
     tests/meter_applet_voltage_state_test.cpp
     src/gui/MeterApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/MeterModel.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -7684,7 +8110,6 @@ add_test(NAME spectrum_pattern_test COMMAND spectrum_pattern_test)
 add_executable(noise_mixer_test
     tests/noise_mixer_test.cpp
     src/core/backends/sim/NoiseMixer.cpp
-    resources/resources.qrc          # for the bundled demo voice clip (:/demo_voice.wav)
 )
 target_include_directories(noise_mixer_test PRIVATE src)
 target_link_libraries(noise_mixer_test PRIVATE Qt6::Core)
@@ -7731,6 +8156,12 @@ if(AETHER_ENABLE_FLEX_RETRY_SOCKET_TEST)
     set_tests_properties(radio_connection_retry_test PROPERTIES TIMEOUT 120)
 endif()
 
+# Socket-free production decoder -> backend -> model path on the actual worker.
+add_executable(flex_receive_path_test tests/flex_receive_path_test.cpp)
+target_include_directories(flex_receive_path_test PRIVATE src tests)
+target_link_libraries(flex_receive_path_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME flex_receive_path_test COMMAND flex_receive_path_test)
+
 add_executable(flex_backend_lifecycle_test tests/flex_backend_lifecycle_test.cpp)
 target_include_directories(flex_backend_lifecycle_test PRIVATE src)
 target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)
@@ -7758,6 +8189,13 @@ target_include_directories(owned_single_shot_timer_test PRIVATE src)
 target_link_libraries(owned_single_shot_timer_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME owned_single_shot_timer_test COMMAND owned_single_shot_timer_test)
 
+# Socket-free LAN/WAN ingress, display ownership and lifecycle regressions.
+add_executable(flex_display_observation_test tests/flex_display_observation_test.cpp)
+target_include_directories(flex_display_observation_test PRIVATE src tests)
+target_link_libraries(flex_display_observation_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_display_observation_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_display_observation_test COMMAND flex_display_observation_test)
+
 # aetherd RFC 2.3 template — pan decode/normalize chain (incl. wnb_level guard).
 add_executable(aetherd_pan_decode_test tests/aetherd_pan_decode_test.cpp)
 target_include_directories(aetherd_pan_decode_test PRIVATE src)
@@ -7784,10 +8222,24 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_rx_audio_test COMMAND tci_rx_audio_test)
 
+    add_executable(tci_host_iq_test tests/tci_host_iq_test.cpp)
+    target_include_directories(tci_host_iq_test PRIVATE src tests)
+    target_link_libraries(tci_host_iq_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_host_iq_test COMMAND tci_host_iq_test)
+
     add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
     target_include_directories(tci_trxmap_test PRIVATE src)
     target_link_libraries(tci_trxmap_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_trxmap_test COMMAND tci_trxmap_test)
+
+    # Socket-free: the tx_sensors gate (TciServer::txSensorsKeyed) against the
+    # real RadioModel, and the TX ownership reset on disconnect. No TciServer
+    # is started; no listener, client or radio.
+    add_executable(tci_tx_sensors_gate_test tests/tci_tx_sensors_gate_test.cpp)
+    target_include_directories(tci_tx_sensors_gate_test PRIVATE src tests)
+    target_link_libraries(tci_tx_sensors_gate_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_tx_sensors_gate_test COMMAND tci_tx_sensors_gate_test)
 
     add_executable(tci_automation_test tests/tci_automation_test.cpp)
     target_include_directories(tci_automation_test PRIVATE src tests)
@@ -7795,6 +8247,19 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets
     )
     add_test(NAME tci_automation_test COMMAND tci_automation_test)
+
+    # Socket-owning test: aetherd's own network listener is the subject. It
+    # binds 127.0.0.1 on an EPHEMERAL port and a local socket in a private
+    # runtime directory, with in-process clients only: the certificate pin,
+    # pairing, the paired token, a change mirrored between a local and a
+    # network client, the session budget and frame rules. Skips (77) without
+    # the openssl tool that makes its throwaway certificate.
+    add_executable(remote_control_loopback_test tests/remote_control_loopback_test.cpp)
+    target_include_directories(remote_control_loopback_test PRIVATE src)
+    target_link_libraries(remote_control_loopback_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME remote_control_loopback_test COMMAND remote_control_loopback_test)
+    set_tests_properties(remote_control_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
     # Socket-owning test: our own TCI server is the subject, so this is inside
     # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
@@ -7809,6 +8274,41 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
     set_tests_properties(tci_server_review_test PROPERTIES TIMEOUT 45)
+
+    # The opt-in extension set: enable, capability list, per-client gate.
+    # Socket-free; the transport is injected.
+    add_executable(tci_extension_set_test tests/tci_extension_set_test.cpp)
+    target_include_directories(tci_extension_set_test PRIVATE src tests)
+    target_link_libraries(tci_extension_set_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_extension_set_test COMMAND tci_extension_set_test)
+
+    # A client that never enables the set gets the same bytes as from a server
+    # without it. Socket-free; `--print-transcript` dumps them for a diff.
+    add_executable(tci_extension_zero_traffic_test tests/tci_extension_zero_traffic_test.cpp)
+    target_include_directories(tci_extension_zero_traffic_test PRIVATE src tests)
+    target_link_libraries(tci_extension_zero_traffic_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
+
+    # The extension set's receive gain and overload groups.
+    add_executable(tci_ext_rx_gain_test tests/tci_ext_rx_gain_test.cpp)
+    target_include_directories(tci_ext_rx_gain_test PRIVATE src tests)
+    target_link_libraries(tci_ext_rx_gain_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_rx_gain_test COMMAND tci_ext_rx_gain_test)
+    # The extension set's antenna groups (aethersdr_rx_antenna, aethersdr_tx_antenna).
+    add_executable(tci_ext_antennas_test tests/tci_ext_antennas_test.cpp)
+    target_include_directories(tci_ext_antennas_test PRIVATE src tests)
+    target_link_libraries(tci_ext_antennas_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_antennas_test COMMAND tci_ext_antennas_test)
+    # The extension set's span group (aethersdr_rx_span_rates, aethersdr_rx_span).
+    add_executable(tci_ext_span_test tests/tci_ext_span_test.cpp)
+    target_include_directories(tci_ext_span_test PRIVATE src tests)
+    target_link_libraries(tci_ext_span_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_span_test COMMAND tci_ext_span_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -7968,9 +8468,12 @@ target_include_directories(hl2_unkey_hold_test PRIVATE src)
 target_link_libraries(hl2_unkey_hold_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_unkey_hold_test COMMAND hl2_unkey_hold_test)
 
-# #5998: the HL2's own PTT/key input is an observation: transmit state and receive
-# mute, never a key. Socket-free; EP6 status frames are fed to the backend's own
-# MetisClient. One leg waits out the 2 s silence timeout.
+# #5998: the HL2's own PTT/key input mutes receive and shows transmit, and a
+# fresh press after a seen release keys the host through RadioModel's gated
+# producer path. A PTT held at stream start, after silence or a restart, or
+# carried by a rewound or duplicate EP6 packet, keys nothing. Socket-free; EP6
+# status frames and receiver-count restarts use the backend's own MetisClient
+# with injected sinks. Two legs wait out the 2 s silence timeout.
 add_executable(hl2_hardware_ptt_state_test tests/hl2_hardware_ptt_state_test.cpp)
 target_include_directories(hl2_hardware_ptt_state_test PRIVATE src tests)
 target_link_libraries(hl2_hardware_ptt_state_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -8059,9 +8562,9 @@ add_test(NAME bandscope_analyzer_test COMMAND bandscope_analyzer_test)
 add_executable(bandscope_trace_render_test
     tests/bandscope_trace_render_test.cpp
     src/gui/BandscopeDialog.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
     src/gui/ClientEqFftAnalyzer.cpp
 )
 target_include_directories(bandscope_trace_render_test PRIVATE src tests)
@@ -8130,6 +8633,8 @@ find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME check_a11y_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_a11y_test.py)
+    add_test(NAME check_command_plane_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_command_plane_test.py)
 endif()
 
 # #5262 M3a: the three-state control doctrine as a mechanism. Pins the two
@@ -8141,9 +8646,9 @@ endif()
 add_executable(meter_applet_supply_availability_test
     tests/meter_applet_supply_availability_test.cpp
     src/gui/MeterApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/ControlAvailabilityRegistry.cpp
-    ${THEME_TEST_RESOURCES})
+    $<TARGET_OBJECTS:aether_test_resources>)
 target_include_directories(meter_applet_supply_availability_test PRIVATE src)
 target_link_libraries(meter_applet_supply_availability_test PRIVATE aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 set_target_properties(meter_applet_supply_availability_test PROPERTIES AUTOMOC ON)
@@ -8156,7 +8661,7 @@ set_tests_properties(meter_applet_supply_availability_test PROPERTIES
 add_executable(control_availability_registry_test
     tests/control_availability_registry_test.cpp
     src/gui/ControlAvailabilityRegistry.cpp
-    ${THEME_TEST_RESOURCES})
+    $<TARGET_OBJECTS:aether_test_resources>)
 target_include_directories(control_availability_registry_test PRIVATE src)
 target_link_libraries(control_availability_registry_test PRIVATE aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 set_target_properties(control_availability_registry_test PROPERTIES AUTOMOC ON)
@@ -8171,7 +8676,7 @@ add_executable(dax_iq_rate_limits_test
     tests/dax_iq_rate_limits_test.cpp
     src/gui/DaxIqApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
-    ${THEME_TEST_RESOURCES})
+    $<TARGET_OBJECTS:aether_test_resources>)
 target_include_directories(dax_iq_rate_limits_test PRIVATE src tests)
 target_link_libraries(dax_iq_rate_limits_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
 add_test(NAME dax_iq_rate_limits_test COMMAND dax_iq_rate_limits_test)
@@ -8471,6 +8976,16 @@ target_link_libraries(radiocert_gated_meter_test PRIVATE aethercore Qt6::Core Qt
 set_target_properties(radiocert_gated_meter_test PROPERTIES AUTOMOC ON)
 add_test(NAME radiocert_gated_meter_test COMMAND radiocert_gated_meter_test)
 
+# #7083, #7084 — radiocert does not report a reading it never took: a refused or
+# silent audio capture is INCONCLUSIVE, and a stale or refused-key meter value
+# is null, never judged. Socket-free, never keys; the audio stages spin ~15 s.
+add_executable(radiocert_unmeasured_test tests/radiocert_unmeasured_test.cpp)
+target_include_directories(radiocert_unmeasured_test PRIVATE src tests)
+target_link_libraries(radiocert_unmeasured_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(radiocert_unmeasured_test PROPERTIES AUTOMOC ON)
+add_test(NAME radiocert_unmeasured_test COMMAND radiocert_unmeasured_test)
+set_tests_properties(radiocert_unmeasured_test PROPERTIES TIMEOUT 90)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -8492,6 +9007,11 @@ set_target_properties(aetherd_transmit_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_transmit_decode_test COMMAND aetherd_transmit_decode_test)
 
 # aetherd RFC 2.3 (RadioModel residual): radio-global wire → typed delta.
+add_executable(flex_radio_observation_test tests/flex_radio_observation_test.cpp)
+target_include_directories(flex_radio_observation_test PRIVATE src tests)
+target_link_libraries(flex_radio_observation_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME flex_radio_observation_test COMMAND flex_radio_observation_test)
+
 add_executable(aetherd_radio_decode_test tests/aetherd_radio_decode_test.cpp)
 target_include_directories(aetherd_radio_decode_test PRIVATE src)
 target_link_libraries(aetherd_radio_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -8611,9 +9131,16 @@ target_link_libraries(aetherd_amp_decode_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherd_amp_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_amp_decode_test COMMAND aetherd_amp_decode_test)
 
-add_executable(tuner_model_test tests/tuner_model_test.cpp)
+add_executable(tuner_model_test
+    tests/tuner_model_test.cpp
+    src/models/TunerModel.cpp
+    src/core/TgxlConnection.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
 target_include_directories(tuner_model_test PRIVATE src)
-target_link_libraries(tuner_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
+target_link_libraries(tuner_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 set_target_properties(tuner_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME tuner_model_test COMMAND tuner_model_test)
 
@@ -8629,8 +9156,16 @@ target_link_libraries(aetherd_amp_tuner_encode_test PRIVATE aethercore Qt6::Core
 set_target_properties(aetherd_amp_tuner_encode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_amp_tuner_encode_test COMMAND aetherd_amp_tuner_encode_test)
 
+# No sockets are opened: parser input, injected backends, and transport callbacks only.
+add_executable(flex_setup_observation_test tests/flex_setup_observation_test.cpp)
+target_include_directories(flex_setup_observation_test PRIVATE src tests)
+target_link_libraries(flex_setup_observation_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_setup_observation_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_setup_observation_test COMMAND flex_setup_observation_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
+    src/core/backends/flex/FlexSetupStatus.cpp
     src/models/UsbCableModel.cpp
 )
 target_include_directories(usb_cable_model_test PRIVATE src)
@@ -8823,13 +9358,13 @@ add_executable(stored_control_dialogs_test
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MemoryDialog.cpp
     src/gui/MemoryCommands.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(stored_control_dialogs_test PRIVATE src tests)
 target_link_libraries(stored_control_dialogs_test PRIVATE aethercore Qt6::Core Qt6::Widgets Qt6::Test)
@@ -8886,11 +9421,40 @@ target_include_directories(tune_inhibit_restore_test PRIVATE src tests)
 target_link_libraries(tune_inhibit_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tune_inhibit_restore_test COMMAND tune_inhibit_restore_test)
 
+# Typed transmit services, injected final writers, and lifecycle races; no sockets or RF.
+add_executable(transmit_services_test tests/transmit_services_test.cpp)
+target_include_directories(transmit_services_test PRIVATE src tests)
+target_link_libraries(transmit_services_test PRIVATE aethercore Qt6::Core)
+add_test(NAME transmit_services_test COMMAND transmit_services_test)
+
+# A key objection (RFC #6237) at every key-on gate, never on an un-key, CW once
+# per message, VOX on, DVK, NAVTEX and the tuner's own autotune. An injected
+# backend records what is dispatched; no socket, no radio, no device.
+add_executable(key_objection_gate_test tests/key_objection_gate_test.cpp)
+target_include_directories(key_objection_gate_test PRIVATE src tests)
+target_link_libraries(key_objection_gate_test PRIVATE aethercore Qt6::Core)
+add_test(NAME key_objection_gate_test COMMAND key_objection_gate_test)
 # Socket-free production NetCW encoder, scheduler, session and local PTT lifecycle.
 add_executable(flex_cw_controls_test tests/flex_cw_controls_test.cpp)
 target_include_directories(flex_cw_controls_test PRIVATE src tests)
 target_link_libraries(flex_cw_controls_test PRIVATE aethercore Qt6::Core)
 add_test(NAME flex_cw_controls_test COMMAND flex_cw_controls_test)
+
+# Host transmit time-out (RFC #7021): the timer, warning and release latch on
+# an injected clock. Pure policy, no Qt event loop, no socket.
+add_executable(tx_timeout_guard_test
+    tests/tx_timeout_guard_test.cpp
+    src/models/TxTimeoutGuard.cpp)
+target_include_directories(tx_timeout_guard_test PRIVATE src)
+target_link_libraries(tx_timeout_guard_test PRIVATE Qt6::Core)
+add_test(NAME tx_timeout_guard_test COMMAND tx_timeout_guard_test)
+
+# The same time-out on RadioModel's arming, stop and admission paths. Socket-
+# free: a bare RadioModel, the keyed edge emitted by hand, the clock injected.
+add_executable(tx_timeout_radio_model_test tests/tx_timeout_radio_model_test.cpp)
+target_include_directories(tx_timeout_radio_model_test PRIVATE src tests)
+target_link_libraries(tx_timeout_radio_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_timeout_radio_model_test COMMAND tx_timeout_radio_model_test)
 
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
@@ -8959,12 +9523,12 @@ add_test(NAME transmit_model_apd_test COMMAND transmit_model_apd_test)
 add_executable(system_info_dialog_test
     tests/system_info_dialog_test.cpp
     src/gui/SystemInfoDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     src/core/SystemInfo.cpp
     src/core/SystemInfoCollector.cpp
     src/core/MemoryTelemetry.cpp
@@ -8973,7 +9537,7 @@ add_executable(system_info_dialog_test
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(system_info_dialog_test PRIVATE src tests)
 target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets Qt6::Test)
@@ -8989,18 +9553,18 @@ set_tests_properties(system_info_dialog_test PROPERTIES
 add_executable(help_dialog_test
     tests/help_dialog_test.cpp
     src/gui/HelpDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
     # HelpDialog.cpp calls ThemeManager::resolve() post-Phase-2 migration;
     # pull in the manager + its logging deps so the test links.
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(help_dialog_test PRIVATE src tests)
 # AETHER_SOURCE_DIR: the link test opens the real resources/help page.
@@ -9019,11 +9583,11 @@ set_tests_properties(help_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=of
 add_executable(swr_sweep_license_dialog_test
     tests/swr_sweep_license_dialog_test.cpp
     src/gui/SwrSweepLicenseDialog.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -9062,9 +9626,9 @@ if(Qt6WebSockets_FOUND)
         tests/freedv_reporter_message_test.cpp
         src/gui/FreeDvReporterDialog.cpp
         src/gui/FreeDvReporterModel.cpp
-        src/gui/CanonWindow.cpp
-        src/gui/FramelessResizer.cpp
-        ${THEME_TEST_RESOURCES}
+        $<TARGET_OBJECTS:aether_test_canon_window>
+        $<TARGET_OBJECTS:aether_test_frameless_resizer>
+        $<TARGET_OBJECTS:aether_test_resources>
     )
     target_include_directories(freedv_reporter_message_test PRIVATE src)
     target_link_libraries(freedv_reporter_message_test PRIVATE
@@ -9082,15 +9646,15 @@ endif()
 add_executable(flex_control_dialog_size_test
     tests/flex_control_dialog_size_test.cpp
     src/gui/FlexControlDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/SliceLabel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_slice_label>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/KiwiSdrProtocol.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -9110,19 +9674,19 @@ set_tests_properties(flex_control_dialog_size_test PROPERTIES
 add_executable(aethercontrol_window_test
     tests/aethercontrol_window_test.cpp
     src/gui/FlexControlDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/SliceLabel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_slice_label>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/KiwiSdrProtocol.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(aethercontrol_window_test PRIVATE src)
 target_link_libraries(aethercontrol_window_test PRIVATE
@@ -9138,9 +9702,9 @@ set_tests_properties(aethercontrol_window_test PROPERTIES
 add_executable(multiflex_dashboard_window_test
     tests/multiflex_dashboard_window_test.cpp
     src/gui/MultiFlexDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(multiflex_dashboard_window_test PRIVATE src tests)
 target_link_libraries(multiflex_dashboard_window_test PRIVATE
@@ -9156,8 +9720,8 @@ set_tests_properties(multiflex_dashboard_window_test PROPERTIES
 add_executable(nr2_wisdom_window_test
     tests/nr2_wisdom_window_test.cpp
     src/gui/Nr2WisdomDialog.cpp
-    src/gui/CanonWindow.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(nr2_wisdom_window_test PRIVATE src tests)
 target_link_libraries(nr2_wisdom_window_test PRIVATE
@@ -9171,8 +9735,8 @@ set_tests_properties(nr2_wisdom_window_test PROPERTIES
 add_executable(connection_workspace_test
     tests/connection_workspace_test.cpp
     src/gui/ConnectionPanel.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
 )
 target_include_directories(connection_workspace_test PRIVATE src tests)
 target_link_libraries(connection_workspace_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
@@ -9183,10 +9747,10 @@ set_tests_properties(connection_workspace_test PROPERTIES ENVIRONMENT "QT_QPA_PL
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
 )
 target_include_directories(connection_panel_size_test PRIVATE src tests)
 target_link_libraries(connection_panel_size_test PRIVATE
@@ -9204,10 +9768,10 @@ set_tests_properties(connection_panel_size_test PROPERTIES
 add_executable(connection_panel_source_pick_test
     tests/connection_panel_source_pick_test.cpp
     src/gui/ConnectionPanel.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
 )
 target_include_directories(connection_panel_source_pick_test PRIVATE src tests)
 target_link_libraries(connection_panel_source_pick_test PRIVATE
@@ -9240,8 +9804,8 @@ set_tests_properties(minimal_mode_exit_order_test PROPERTIES
 add_executable(startup_autoconnect_lockout_test
     tests/startup_autoconnect_lockout_test.cpp
     src/gui/ConnectionPanel.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
 )
 target_include_directories(startup_autoconnect_lockout_test PRIVATE src tests)
 target_link_libraries(startup_autoconnect_lockout_test PRIVATE
@@ -9265,7 +9829,7 @@ set_tests_properties(startup_autoconnect_lockout_test PROPERTIES
 # wall clock, milliseconds to run.
 add_executable(frameless_resizer_test
     tests/frameless_resizer_test.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
 )
 target_include_directories(frameless_resizer_test PRIVATE src tests)
 target_link_libraries(frameless_resizer_test PRIVATE
@@ -9316,11 +9880,11 @@ endif()
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
     src/gui/PanLayoutDialog.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
@@ -9337,7 +9901,7 @@ set_tests_properties(pan_layout_dialog_size_test PROPERTIES
 add_executable(spectrum_overlay_wheel_guard_test
     tests/spectrum_overlay_wheel_guard_test.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
-    src/gui/DragValuePopup.cpp   # GuardedSlider.h (ControlsLock coverage)
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>   # GuardedSlider.h (ControlsLock coverage)
 )
 target_include_directories(spectrum_overlay_wheel_guard_test PRIVATE src)
 target_link_libraries(spectrum_overlay_wheel_guard_test PRIVATE
@@ -9355,7 +9919,7 @@ add_executable(spectrum_overlay_band_highlight_test
     src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/MemoryBrowsePanel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/DspParamPopup.cpp
 )
 target_include_directories(spectrum_overlay_band_highlight_test PRIVATE src)
@@ -9391,7 +9955,7 @@ add_executable(spectrum_overlay_mouse_boundary_test
     src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/MemoryBrowsePanel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/DspParamPopup.cpp
 )
 target_include_directories(spectrum_overlay_mouse_boundary_test PRIVATE src tests)
@@ -9428,7 +9992,7 @@ add_executable(spectrum_overlay_dax_availability_test
     src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/MemoryBrowsePanel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/DspParamPopup.cpp
 )
 target_include_directories(spectrum_overlay_dax_availability_test PRIVATE src)
@@ -9465,7 +10029,7 @@ add_executable(noise_floor_range_test
     src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/MemoryBrowsePanel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/DspParamPopup.cpp
 )
 target_include_directories(noise_floor_range_test PRIVATE src tests)
@@ -9499,9 +10063,9 @@ set_tests_properties(noise_floor_range_test PROPERTIES
 add_executable(waveform_env_control_test
     tests/waveform_env_control_test.cpp
     src/gui/WaveformEnvironmentDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
 )
 target_include_directories(waveform_env_control_test PRIVATE src tests)
 target_link_libraries(waveform_env_control_test PRIVATE
@@ -9512,15 +10076,36 @@ add_test(NAME waveform_env_control_test COMMAND waveform_env_control_test)
 set_tests_properties(waveform_env_control_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# AetherGPS install state shared by the AetherGPS window and the Waveforms
+# window: one wait-for-the-list state per radio, and every window hearing
+# when any upload ends. Injected waveform status and a RadioModel with no
+# backend; no sockets, radio or TX.
+add_executable(aethergps_tools_test
+    tests/aethergps_tools_test.cpp
+    src/gui/AetherGpsTools.cpp
+    src/gui/WaveformEnvironmentDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+)
+target_include_directories(aethergps_tools_test PRIVATE src tests)
+target_link_libraries(aethergps_tools_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(aethergps_tools_test PROPERTIES AUTOMOC ON)
+add_test(NAME aethergps_tools_test COMMAND aethergps_tools_test)
+set_tests_properties(aethergps_tools_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # SmartSDR 4.3 NTP time sources (#6953): validation, Flex capability and wire
 # text, `ntp_sources` decode, the subscription, the remove-and-create edit and
 # the Radio Setup Time page. Recording sinks and injected status; no socket.
 add_executable(ntp_sources_test
     tests/ntp_sources_test.cpp
     src/gui/NtpSourcesPage.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/ControlAvailabilityRegistry.cpp
 )
 target_include_directories(ntp_sources_test PRIVATE src tests)
@@ -9548,7 +10133,7 @@ add_executable(spectrum_overlay_auto_rf_gain_refusal_test
     src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/MemoryBrowsePanel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/DspParamPopup.cpp
 )
 target_include_directories(spectrum_overlay_auto_rf_gain_refusal_test PRIVATE src)
@@ -9610,12 +10195,13 @@ add_test(NAME midi_relative_cc_decoder_test COMMAND midi_relative_cc_decoder_tes
 add_executable(ulanzi_dial_mapper_dialog_test
     tests/ulanzi_dial_mapper_dialog_test.cpp
     src/gui/UlanziDialMapperDialog.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    ${THEME_TEST_RESOURCES}
+    src/gui/ControlActionRegistry.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(ulanzi_dial_mapper_dialog_test PRIVATE src tests)
 target_link_libraries(ulanzi_dial_mapper_dialog_test PRIVATE
@@ -9778,6 +10364,25 @@ add_executable(hl2_tx_alc_test
 )
 target_include_directories(hl2_tx_alc_test PRIVATE src)
 add_test(NAME hl2_tx_alc_test COMMAND hl2_tx_alc_test)
+
+# PureSignal's control loop, driven tick by tick, and the 0x0a/DDC facts it
+# relies on. Socket-free; also drives a real, unkeyed TXA channel offline.
+add_executable(hl2_puresignal_test
+    tests/hl2_puresignal_test.cpp
+)
+target_include_directories(hl2_puresignal_test PRIVATE src)
+target_link_libraries(hl2_puresignal_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_puresignal_test COMMAND hl2_puresignal_test)
+
+# Private disk profile, child-process restart, injected link edges and applet
+# error presentation. MetisClient is never started: no socket or peer.
+add_executable(hl2_puresignal_state_test tests/hl2_puresignal_state_test.cpp
+    src/gui/PureSignalApplet.cpp $<TARGET_OBJECTS:aether_test_drag_value_popup> $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed> $<TARGET_OBJECTS:aether_test_resources>)
+target_include_directories(hl2_puresignal_state_test PRIVATE src tests)
+target_link_libraries(hl2_puresignal_state_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME hl2_puresignal_state_test COMMAND hl2_puresignal_state_test)
+
 
 add_executable(hl2_dsp_readback_test
     tests/hl2_dsp_readback_test.cpp
@@ -10027,10 +10632,18 @@ target_include_directories(slice_link_policy_test PRIVATE src)
 target_link_libraries(slice_link_policy_test PRIVATE Qt6::Core)
 add_test(NAME slice_link_policy_test COMMAND slice_link_policy_test)
 
+# Which two diversity slices form one receive pair (#4891).
+add_executable(diversity_pair_policy_test
+    tests/diversity_pair_policy_test.cpp
+)
+target_include_directories(diversity_pair_policy_test PRIVATE src)
+target_link_libraries(diversity_pair_policy_test PRIVATE Qt6::Core)
+add_test(NAME diversity_pair_policy_test COMMAND diversity_pair_policy_test)
+
 # Container system Phase 1 tests — needs QApplication + Widgets.
 add_executable(container_widget_test
     tests/container_widget_test.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
@@ -10038,8 +10651,8 @@ add_executable(container_widget_test
     # through ThemeManager::applyStyleSheet — pull in the manager + its
     # logging deps so the test links.  ThemeManager's compiled-in
     # seedBuiltinDefaults() means we don't need the theme resource here.
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -10058,15 +10671,15 @@ add_executable(mini_pan_widget_test
     tests/mini_pan_widget_test.cpp
     src/gui/MiniPanScope.cpp
     src/gui/MiniPanApplet.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
     $<TARGET_OBJECTS:aether_test_settings>
     src/core/MiniPanSettings.cpp
-    src/core/ThemeManager.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
     # ThemeManager.cpp calls seedGeneratedDefaults(), which lives ONLY in the
     # generated seed TU — every other ThemeManager consumer in this file pairs
     # the two, and omitting it is a link error, not a compile one.
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -10093,13 +10706,13 @@ add_executable(hl2_pc_audio_lock_test
     # so the resizer + frameless title bar come along; ThemeManager pulls its
     # logging deps, same as container_widget_test.
     src/gui/FramelessMessageBox.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -10125,13 +10738,13 @@ add_executable(titlebar_headphone_mute_test
     # TitleBar's dialogs are frameless, so the resizer + frameless title bar
     # come along; ThemeManager pulls its logging deps.
     src/gui/FramelessMessageBox.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -10158,13 +10771,13 @@ add_executable(mixer_control_availability_test
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp
     src/gui/FramelessMessageBox.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -10186,16 +10799,16 @@ add_executable(unified_title_bar_test
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp
     src/gui/FramelessMessageBox.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(unified_title_bar_test PRIVATE src)
 target_link_libraries(unified_title_bar_test PRIVATE
@@ -10255,15 +10868,15 @@ set_tests_properties(filter_passband_widget_test PROPERTIES
 
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
     src/gui/AmpApplet.cpp
     src/gui/AccessoryPanelWidgets.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/models/AmpModel.cpp
     src/core/PgxlConnection.cpp
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -10344,7 +10957,7 @@ add_executable(spectrum_overlay_fft_fps_bounds_test
     src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/MemoryBrowsePanel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/DspParamPopup.cpp
 )
 target_include_directories(spectrum_overlay_fft_fps_bounds_test PRIVATE src tests)
@@ -10380,7 +10993,7 @@ add_executable(spectrum_overlay_memory_layout_test
     src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/MemoryBrowsePanel.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/DspParamPopup.cpp
 )
 target_include_directories(spectrum_overlay_memory_layout_test PRIVATE src tests)
@@ -10418,10 +11031,10 @@ add_executable(rx_applet_squelch_reconciliation_test
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10441,19 +11054,19 @@ set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
 # #6506: real RX applet and automation reflection, injected session only.
 add_executable(auto_agc_threshold_gui_test
     tests/auto_agc_threshold_gui_test.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
     src/gui/AgcCalibrationDialog.cpp
-    src/gui/CanonWindow.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10479,10 +11092,10 @@ add_executable(vfo_meter_overlay_invalidation_test
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10508,10 +11121,10 @@ add_executable(vfo_dax_reserved_test
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10538,10 +11151,10 @@ add_executable(fm_filter_controls_test
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10568,10 +11181,10 @@ add_executable(wfm_controls_test
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10598,10 +11211,10 @@ add_executable(vfo_dsp_launcher_width_test
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10618,21 +11231,51 @@ add_test(NAME vfo_dsp_launcher_width_test
 set_tests_properties(vfo_dsp_launcher_width_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Socket-free NRS requests/readback through the production bridge dispatcher,
-# model, Flex encoder and VFO. Firmware/status/transport are injected; no listener.
-add_executable(nrs_level_range_test
-    tests/nrs_level_range_test.cpp
-    ${THEME_TEST_RESOURCES}
+# The VFO DSP tab's RTTY Mark/Shift ◀ ▶ and label scroll stay inside the app's
+# range (#7093). Same socket-free build as the launcher-width test above.
+add_executable(vfo_rtty_step_limits_test
+    tests/vfo_rtty_step_limits_test.cpp
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(vfo_rtty_step_limits_test PRIVATE src)
+target_link_libraries(vfo_rtty_step_limits_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME vfo_rtty_step_limits_test
+         COMMAND vfo_rtty_step_limits_test)
+set_tests_properties(vfo_rtty_step_limits_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Socket-free NRS requests/readback through the production bridge dispatcher,
+# model, Flex encoder and VFO. Firmware/status/transport are injected; no listener.
+add_executable(nrs_level_range_test
+    tests/nrs_level_range_test.cpp
+    $<TARGET_OBJECTS:aether_test_resources>
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    src/gui/FilterPassbandWidget.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10650,7 +11293,7 @@ add_test(NAME nrs_level_range_test COMMAND nrs_level_range_test)
 # setter through a local object operand.
 add_executable(client_dsp_knob_dispatch_test
     tests/client_dsp_knob_dispatch_test.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
     src/gui/ClientCompKnob.cpp
     src/gui/ClientCompApplet.cpp
     src/gui/ClientCompCurveWidget.cpp
@@ -10658,10 +11301,10 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientGateCurveWidget.cpp
     src/gui/ClientTubeApplet.cpp
     src/gui/ClientTubeCurveWidget.cpp
-    src/gui/ClientDeEssApplet.cpp
-    src/gui/ClientDeEssCurveWidget.cpp
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
+    src/gui/StripTubePanel.cpp
+    src/gui/ClientLevelMeter.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
 target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)
@@ -10675,17 +11318,17 @@ set_tests_properties(nrs_level_range_test PROPERTIES
 # named aethersdr-dsp-reset-fixture, never a firmware peer.
 add_executable(dsp_parameter_reset_test
     tests/dsp_parameter_reset_test.cpp
-    ${THEME_TEST_RESOURCES}
+    $<TARGET_OBJECTS:aether_test_resources>
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10711,10 +11354,10 @@ add_executable(gui_nested_lifetime_test
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/FilterPassbandWidget.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/SliceLabel.cpp
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    $<TARGET_OBJECTS:aether_test_slice_label>
     src/gui/PhaseKnob.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
@@ -10722,10 +11365,10 @@ add_executable(gui_nested_lifetime_test
     src/gui/AdaptiveFilterControls.cpp
     src/gui/GuardedSlider.h
     src/gui/NetSchedulerDialog.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
 )
 target_include_directories(gui_nested_lifetime_test PRIVATE src tests)
 target_link_libraries(gui_nested_lifetime_test PRIVATE
@@ -10741,10 +11384,10 @@ set_tests_properties(gui_nested_lifetime_test PROPERTIES
 add_executable(net_scheduler_dialog_test
     tests/net_scheduler_dialog_test.cpp
     src/gui/NetSchedulerDialog.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
 )
 target_include_directories(net_scheduler_dialog_test PRIVATE src tests)
 target_link_libraries(net_scheduler_dialog_test PRIVATE
@@ -10759,10 +11402,10 @@ set_tests_properties(net_scheduler_dialog_test PROPERTIES
 add_executable(net_scheduler_modes_test
     tests/net_scheduler_modes_test.cpp
     src/gui/NetSchedulerDialog.cpp
-    src/gui/CanonMessageBox.cpp
-    src/gui/CanonWindow.cpp
-    src/gui/ModemChrome.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
 )
 target_include_directories(net_scheduler_modes_test PRIVATE src tests)
 target_link_libraries(net_scheduler_modes_test PRIVATE
@@ -10774,28 +11417,41 @@ set_tests_properties(net_scheduler_modes_test PROPERTIES
 
 # Injected serial transport and backend only: no sockets, serial ports or RF.
 add_executable(kxpa100_tx_controls_test tests/kxpa100_tx_controls_test.cpp
-    src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp src/gui/FramelessWindowTitleBar.cpp)
+    src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer> $<TARGET_OBJECTS:aether_test_frameless_title_bar>)
 target_include_directories(kxpa100_tx_controls_test PRIVATE src tests)
 target_link_libraries(kxpa100_tx_controls_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
 add_test(NAME kxpa100_tx_controls_test COMMAND kxpa100_tx_controls_test)
 set_tests_properties(kxpa100_tx_controls_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(kat500_tx_controls_test tests/kat500_tx_controls_test.cpp
-    src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp src/gui/FramelessWindowTitleBar.cpp)
+    src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer> $<TARGET_OBJECTS:aether_test_frameless_title_bar>)
 target_include_directories(kat500_tx_controls_test PRIVATE src tests)
 target_link_libraries(kat500_tx_controls_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
 add_test(NAME kat500_tx_controls_test COMMAND kat500_tx_controls_test)
 set_tests_properties(kat500_tx_controls_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(band_applet_test
+    tests/band_applet_test.cpp
+    src/gui/BandApplet.cpp
+)
+target_include_directories(band_applet_test PRIVATE src)
+target_link_libraries(band_applet_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(band_applet_test PROPERTIES AUTOMOC ON)
+add_test(NAME band_applet_test COMMAND band_applet_test)
+set_tests_properties(band_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
     src/gui/AtuPreTuneDialog.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
 )
 target_include_directories(tx_applet_power_reconciliation_test PRIVATE src)
 target_link_libraries(tx_applet_power_reconciliation_test PRIVATE
@@ -10814,9 +11470,9 @@ add_executable(two_tone_tune_gate_test
     tests/two_tone_tune_gate_test.cpp
     src/gui/TxApplet.cpp
     src/gui/AtuPreTuneDialog.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
 )
 target_include_directories(two_tone_tune_gate_test PRIVATE src)
 target_link_libraries(two_tone_tune_gate_test PRIVATE
@@ -10835,9 +11491,9 @@ add_executable(tx_output_metering_test
     tests/tx_output_metering_test.cpp
     src/gui/TxApplet.cpp
     src/gui/AtuPreTuneDialog.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
 )
 target_include_directories(tx_output_metering_test PRIVATE src tests)
 target_link_libraries(tx_output_metering_test PRIVATE
@@ -10852,7 +11508,7 @@ set_tests_properties(tx_output_metering_test PROPERTIES
 add_executable(phone_tx_filter_numeric_entry_test
     tests/phone_tx_filter_numeric_entry_test.cpp
     src/gui/PhoneApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
 target_include_directories(phone_tx_filter_numeric_entry_test PRIVATE src)
@@ -10870,7 +11526,7 @@ set_tests_properties(phone_tx_filter_numeric_entry_test PROPERTIES
 add_executable(phone_applet_dexp_visibility_test
     tests/phone_applet_dexp_visibility_test.cpp
     src/gui/PhoneApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
 target_include_directories(phone_applet_dexp_visibility_test PRIVATE src)
@@ -10891,7 +11547,7 @@ set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
 add_executable(phone_applet_vox_disarm_test
     tests/phone_applet_vox_disarm_test.cpp
     src/gui/PhoneApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
 target_include_directories(phone_applet_vox_disarm_test PRIVATE src tests)
@@ -10903,13 +11559,29 @@ add_test(NAME phone_applet_vox_disarm_test COMMAND phone_applet_vox_disarm_test)
 set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# CW speed entry survives repeated capability limits between keystrokes.
+# Real applet/model, offscreen; no radio or sockets.
+add_executable(phone_cw_speed_entry_test
+    tests/phone_cw_speed_entry_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+)
+target_include_directories(phone_cw_speed_entry_test PRIVATE src)
+target_link_libraries(phone_cw_speed_entry_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_cw_speed_entry_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_speed_entry_test COMMAND phone_cw_speed_entry_test)
+set_tests_properties(phone_cw_speed_entry_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # PhoneCwApplet — the APF row on the CW face (#4879). Widget-level, offscreen:
 # slice rebind must not stack handlers, the capability gate, and the model
 # round trip in both directions. No radio, no sockets.
 add_executable(phone_cw_applet_apf_test
     tests/phone_cw_applet_apf_test.cpp
     src/gui/PhoneCwApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(phone_cw_applet_apf_test PRIVATE src)
 target_link_libraries(phone_cw_applet_apf_test PRIVATE
@@ -10923,7 +11595,7 @@ set_tests_properties(phone_cw_applet_apf_test PROPERTIES
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(phone_cw_mic_gain_authority_test PRIVATE src)
 target_compile_definitions(phone_cw_mic_gain_authority_test PRIVATE
@@ -10940,7 +11612,7 @@ set_tests_properties(phone_cw_mic_gain_authority_test PROPERTIES
 add_executable(phone_cw_level_meter_state_test
     tests/phone_cw_level_meter_state_test.cpp
     src/gui/PhoneCwApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(phone_cw_level_meter_state_test PRIVATE src)
 target_link_libraries(phone_cw_level_meter_state_test PRIVATE
@@ -10958,7 +11630,7 @@ set_tests_properties(phone_cw_level_meter_state_test PROPERTIES
 add_executable(phone_cw_alc_gauge_fill_test
     tests/phone_cw_alc_gauge_fill_test.cpp
     src/gui/PhoneCwApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(phone_cw_alc_gauge_fill_test PRIVATE src)
 target_link_libraries(phone_cw_alc_gauge_fill_test PRIVATE
@@ -10975,7 +11647,7 @@ set_tests_properties(phone_cw_alc_gauge_fill_test PROPERTIES
 add_executable(phone_cw_acc_availability_test
     tests/phone_cw_acc_availability_test.cpp
     src/gui/PhoneCwApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
 )
 target_include_directories(phone_cw_acc_availability_test PRIVATE src)
 target_link_libraries(phone_cw_acc_availability_test PRIVATE
@@ -10993,7 +11665,7 @@ add_executable(phone_mon_vox_availability_test
     tests/phone_mon_vox_availability_test.cpp
     src/gui/PhoneApplet.cpp
     src/gui/PhoneCwApplet.cpp
-    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
 target_include_directories(phone_mon_vox_availability_test PRIVATE src)
@@ -11008,14 +11680,14 @@ set_tests_properties(phone_mon_vox_availability_test PROPERTIES
 
 add_executable(container_manager_test
     tests/container_manager_test.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
     src/gui/containers/ContainerManager.cpp
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -11027,14 +11699,14 @@ set_target_properties(container_manager_test PROPERTIES AUTOMOC ON)
 
 add_executable(container_nesting_test
     tests/container_nesting_test.cpp
-    src/gui/FramelessResizer.cpp
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
     src/gui/containers/ContainerManager.cpp
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
     $<TARGET_OBJECTS:aether_test_settings>
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_theme_manager>
+    $<TARGET_OBJECTS:aether_test_theme_seed>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
@@ -11075,8 +11747,8 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Real applet with injected receive capabilities; no sockets/audio devices.
 if(NOT WIN32)
     add_executable(dax_receive_applet_test tests/dax_receive_applet_test.cpp
-        src/gui/DaxApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
-        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+        src/gui/DaxApplet.cpp src/gui/MeterSlider.h $<TARGET_OBJECTS:aether_test_drag_value_popup>
+        $<TARGET_OBJECTS:aether_test_slice_label> $<TARGET_OBJECTS:aether_test_slice_color_manager>
         src/gui/ControlAvailabilityRegistry.cpp)
     target_include_directories(dax_receive_applet_test PRIVATE src tests)
     target_link_libraries(dax_receive_applet_test PRIVATE aetherdesktop_support Qt6::Widgets)
@@ -11102,8 +11774,8 @@ target_link_libraries(dax_tx_media_context_test PRIVATE aethercore Qt6::Core)
 add_test(NAME dax_tx_media_context_test COMMAND dax_tx_media_context_test)
 
 add_executable(dax_tx_applet_test tests/dax_tx_applet_test.cpp
-    src/gui/DaxApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
-    src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+    src/gui/DaxApplet.cpp src/gui/MeterSlider.h $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_slice_label> $<TARGET_OBJECTS:aether_test_slice_color_manager>
     src/gui/ControlAvailabilityRegistry.cpp)
 target_include_directories(dax_tx_applet_test PRIVATE src tests)
 target_link_libraries(dax_tx_applet_test PRIVATE aetherdesktop_support Qt6::Widgets)
@@ -11112,8 +11784,8 @@ set_tests_properties(dax_tx_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=
 
 if(TARGET Qt6::WebSockets)
     add_executable(tci_applet_test tests/tci_applet_test.cpp
-        src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
-        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+        src/gui/TciApplet.cpp src/gui/MeterSlider.h $<TARGET_OBJECTS:aether_test_drag_value_popup>
+        $<TARGET_OBJECTS:aether_test_slice_label> $<TARGET_OBJECTS:aether_test_slice_color_manager>
         src/gui/ControlAvailabilityRegistry.cpp)
     target_include_directories(tci_applet_test PRIVATE src tests)
     target_link_libraries(tci_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
@@ -11121,8 +11793,8 @@ if(TARGET Qt6::WebSockets)
     set_tests_properties(tci_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     add_executable(tci_rx_applet_test tests/tci_rx_applet_test.cpp
-        src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
-        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+        src/gui/TciApplet.cpp src/gui/MeterSlider.h $<TARGET_OBJECTS:aether_test_drag_value_popup>
+        $<TARGET_OBJECTS:aether_test_slice_label> $<TARGET_OBJECTS:aether_test_slice_color_manager>
         src/gui/ControlAvailabilityRegistry.cpp)
     target_include_directories(tci_rx_applet_test PRIVATE src tests)
     target_link_libraries(tci_rx_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
@@ -11131,6 +11803,8 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    flex_receive_path_test
+    flex_setup_observation_test
     session_control_test
     audio_control_routing_test
     dax_tx_backend_test
@@ -11140,6 +11814,7 @@ set(AETHER_SETTINGS_CONSUMERS
     bandstack_cat_controls_test
     two_tone_tune_gate_test
     tx_output_metering_test
+    icom_dual_receiver_test
     update_controller_test
     update_installer_test
     update_stager_test
@@ -11171,13 +11846,20 @@ set(AETHER_SETTINGS_CONSUMERS
     squelch_level_scale_test
     hl2_pan_create_async_test
     hl2_session_memory_test
+    hl2_puresignal_state_test
     anan_backend_test
     anan_noise_blanker_readback_test
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_extension_set_test
+    tci_extension_zero_traffic_test
+    tci_ext_rx_gain_test
+    tci_ext_antennas_test
+    tci_ext_span_test
     tci_applet_test
     tci_rx_applet_test
+    tci_host_iq_test
     bandscope_trace_render_test
     decoder_audio_routing_test
     ax25_receive_model_test
@@ -11222,6 +11904,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rc28_mapping_dialog_test
     pan_display_drop_notice_test
     backend_capability_revision_test
+    flex_radio_observation_test
     icom_panadapter_capacity_test
     backend_receive_contract_test
     receive_intent_routing_test
@@ -11233,9 +11916,12 @@ set(AETHER_SETTINGS_CONSUMERS
     phone_mon_vox_availability_test
     dax_iq_rate_limits_test
     offline_health_registry_test
+    rigctl_host_cw_text_test
     tx_operation_integration_test
     flex_cw_controls_test
     tune_inhibit_restore_test
+    transmit_services_test
+    key_objection_gate_test
     tx_audio_context_test
     backend_slice_lifecycle_test
     slice_lifecycle_routing_test
@@ -11295,6 +11981,7 @@ set(AETHER_SETTINGS_CONSUMERS
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test
+    flex_display_observation_test
     control_slice_frequency_test
     control_receive_test
     control_telemetry_test
@@ -11308,6 +11995,7 @@ set(AETHER_SETTINGS_CONSUMERS
     comp_makeup_fader_test
     stage_tab_bar_drag_test
     aether_tx_profiles_test
+    tx_chain_settings_test
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
@@ -11328,6 +12016,7 @@ set(AETHER_SETTINGS_CONSUMERS
     kxpa100_advanced_widget_test
     kat500_advanced_widget_test
     panadapter_header_test
+    cw_sens_pan_move_test
     theme_seed_test
     panadapter_message_overlay_test
     app_settings_safety_test
@@ -11351,6 +12040,7 @@ set(AETHER_SETTINGS_CONSUMERS
     s_meter_geometry_test
     qrz_callsign_test
     shortcut_manager_test
+    control_action_registry_test
     window_shortcut_test
     antenna_alias_test
     mqtt_settings_test
@@ -11412,6 +12102,7 @@ set(AETHER_SETTINGS_CONSUMERS
     spectrum_overlay_auto_rf_gain_refusal_test
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
+    tuner_model_test
     tgxl_docked_parity_test
     tgxl_antenna_names_test
     tgxl_applet_ports_test
@@ -12099,6 +12790,18 @@ if(HAVE_PIPEWIRE)
     add_test(NAME pipewire_rx_bridge_test COMMAND pipewire_rx_bridge_test)
 endif()
 
+# Socket-free receive buffering: lifecycle, metadata, overload and worker delivery.
+add_executable(flex_receive_data_test tests/flex_receive_data_test.cpp
+    src/core/backends/flex/FlexReceiveData.cpp)
+target_include_directories(flex_receive_data_test PRIVATE src)
+target_link_libraries(flex_receive_data_test PRIVATE Qt6::Core)
+add_test(NAME flex_receive_data_test COMMAND flex_receive_data_test)
+# Socket-free production LAN/WAN ingress and typed slice ownership lifecycle.
+add_executable(flex_slice_observation_test tests/flex_slice_observation_test.cpp)
+target_include_directories(flex_slice_observation_test PRIVATE src tests)
+target_link_libraries(flex_slice_observation_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_slice_observation_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_slice_observation_test COMMAND flex_slice_observation_test)
 # M4 waveform/file-transfer admission, wire encoding and staged export validation.
 add_executable(file_transfer_control_test tests/file_transfer_control_test.cpp)
 target_include_directories(file_transfer_control_test PRIVATE src tests)
@@ -12114,3 +12817,28 @@ add_executable(transfer_lifecycle_test tests/transfer_lifecycle_test.cpp)
 target_include_directories(transfer_lifecycle_test PRIVATE src)
 target_link_libraries(transfer_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME transfer_lifecycle_test COMMAND transfer_lifecycle_test)
+
+# The update and firmware HTTP transport retries a connection reset before
+# receiving bytes, but never repeats a partial, rejected or oversized transfer.
+# Binds an ephemeral 127.0.0.1 TCP listener to serve versioned HTTP/1.1 replies.
+add_executable(capped_download_test
+    tests/capped_download_test.cpp
+    src/core/CappedDownload.cpp
+)
+target_include_directories(capped_download_test PRIVATE src)
+target_link_libraries(capped_download_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(capped_download_test PROPERTIES AUTOMOC ON)
+add_test(NAME capped_download_test COMMAND capped_download_test)
+set_tests_properties(capped_download_test PROPERTIES TIMEOUT 30)
+
+# Which failures the update and firmware transport retries before a body
+# arrives, including the HTTP/2 refusals a loopback peer cannot produce.
+# Socket-free.
+add_executable(capped_download_retry_policy_test
+    tests/capped_download_retry_policy_test.cpp
+    src/core/CappedDownload.cpp
+)
+target_include_directories(capped_download_retry_policy_test PRIVATE src)
+target_link_libraries(capped_download_retry_policy_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(capped_download_retry_policy_test PROPERTIES AUTOMOC ON)
+add_test(NAME capped_download_retry_policy_test COMMAND capped_download_retry_policy_test)

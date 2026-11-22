@@ -86,9 +86,9 @@ their nicknames on this computer.
 | Page | What it covers |
 |------|----------------|
 | **Radio** | Radio information (serial, hardware version, region, options), identification (model, nickname, callsign), license info and the firmware version (**FW Version**; to update it, see [Firmware Update](./firmware-update.md)) |
-| **Network** | The radio's IP address, mask, MAC and gateway; DHCP/static IP configuration; **Advanced**: Enforce Private IP Connections, **Agent Automation (MCP)** (see [Automation Bridge and MCP](./automation-bridge-and-mcp.md)), Network MTU and the VITA-49 RX buffer (see [Low Bandwidth Connections](./low-bandwidth-connections.md)) |
+| **Network** | The radio's IP address, mask, MAC and gateway; DHCP/static IP configuration (dimmed, with the reason, over SmartLink, a manual-IP connection, or a connection that runs through Tailscale; a radio reached over another VPN, such as WireGuard or OpenVPN, counts as local); **Advanced**: Enforce Private IP Connections, **Agent Automation (MCP)** (see [Automation Bridge and MCP](./automation-bridge-and-mcp.md)), Network MTU and the VITA-49 RX buffer (see [Low Bandwidth Connections](./low-bandwidth-connections.md)) |
 | **GPS** | Whether a GPS is installed, position, grid, altitude, satellites and lock status. The full dashboard is **Tools → AetherGPS...**. See [AetherClock and GPS](./aetherclock-and-gps.md). Hidden on radios without GPS hardware. |
-| **Time** | The radio's own NTP time sources: which server it is synced to, each source's state, stratum and reach, and **Add…**, **Edit…**, **Remove** and an **Enabled** box per source. Radios on SmartSDR v4.3.16 or later; dimmed with the reason on older firmware. See [NTP Time Sources](./ntp-time-sources.md). |
+| **Time** | A live NTP dashboard with the selected reference, source health, GPSDO status, and eight-poll reachability. Ten numbered server tabs provide configuration, **Enabled on radio**, and **Remove**. Radios on SmartSDR v4.3.16 or later; dimmed with the reason on older firmware. See [NTP Time Sources](./ntp-time-sources.md). |
 | **Calibration** | Host-side frequency calibration in ppb, for radios that cannot calibrate themselves ([Hermes-Lite 2](./hermes-lite-2.md)). Hidden on FlexRadio, which calibrates on the Receive page. |
 | **RTL Receiver** | ppm correction, IQ DC suppression and serial for an [RTL-SDR](./rtl-sdr.md) dongle. Only when one is connected. |
 | **HL2 Hardware** | Board variant, dither, companion filter board, CL1 external 10 MHz reference and tuner for the [Hermes-Lite 2](./hermes-lite-2.md). Only when an HL2 is connected. |
@@ -117,7 +117,7 @@ The table shows the current TX profile's values and follows the radio while it's
 | Page | What it covers |
 |------|----------------|
 | **Audio** | The radio's Line Out, Headphone and Front Speaker outputs; audio compression for SmartLink and tailnet connections; packet-loss smoothing; **Prevent system sleep while connected**; PC audio devices, Audio Boost and Audio Buffer; recording. See [Audio Settings](./audio-settings.md). |
-| **Transmit** | TX timings (ACC TX, TX delay, timeout), TX REQ interlock polarity (RCA, Accessory), **PTT Mic Override** (firmware v4.3 and later; see [TX Controls](./tx-controls.md#hardware-ptt-and-the-tx-source)), Max Power, Show TX in Waterfall, Slice/TX Follow, and **TX Band Settings** (per-band RF/tune power, PTT inhibit, interlocks and RCA suppression during TUNE on firmware 4.3 and later). The Show TX in Waterfall choice is remembered per [Hermes-Lite 2](./hermes-lite-2.md); a FlexRadio owns and reports its setting. See [TX Controls](./tx-controls.md). |
+| **Transmit** | TX timings (ACC TX, TX delay, timeout), **Transmit time-out (this computer)**, TX REQ interlock polarity (RCA, Accessory), **PTT Mic Override** (firmware v4.3 and later; see [TX Controls](./tx-controls.md#hardware-ptt-and-the-tx-source)), Max Power, Show TX in Waterfall, Slice/TX Follow, and **TX Band Settings** (per-band RF/tune power, PTT inhibit, interlocks and RCA suppression during TUNE on firmware 4.3 and later). The Show TX in Waterfall choice is remembered per [Hermes-Lite 2](./hermes-lite-2.md); a FlexRadio owns and reports its setting. See [TX Controls](./tx-controls.md). |
 | **Phone & CW** | Microphone bias and +20 dB boost; CW iambic mode, paddle swap, sideband and CWX sync, and CW decoder RX/TX decode; Digital (RTTY mark default). See [CW Decoder](./cw-decoder.md) and [CWX Panel](./cwx-panel.md). |
 | **Receive** | Frequency offset (GPSDO detection, manual calibration) and the 10 MHz reference source |
 | **Filters** | Voice, CW and Digital filter sharpness (Low Latency ↔ Sharp Filters) with Auto buttons, and **Use Low Latency Filters for Digital Modes** |
@@ -167,14 +167,22 @@ The connected radio or this build cannot use that control.
 The **Timings (in ms)** group on **Transmit** requires a connected radio that
 supports those controls. **Timeout (sec):** is entered in seconds; the other
 timings are entered in milliseconds. The Demo does not implement these settings.
+**TX Off Delay (ms):** is the exception: AetherSDR stores it on this computer, so
+it can be edited while disconnected. See
+[TX off delay](./tx-controls.md#tx-off-delay).
 
 1. Connect to your radio before editing a timing.
 2. Enter a whole number. Negative delays are treated as zero; invalid or
    excessively large entries are not sent and restore the radio's reported value.
 
+On a radio with no timeout of its own, **Timeout (sec):** stays dimmed and the
+**Transmit time-out (this computer)** group below it is the time-out that
+applies. See [Transmit time-out](./tx-controls.md#transmit-time-out).
+
 ### Calibration is interrupted by a disconnect
 
 On **Receive → Frequency Offset**, **Start** begins radio-side calibration.
+Disconnecting cancels the displayed calibration attempt; reconnect before starting again.
 An accepted request is not a completed calibration; completion comes from the
 radio's status. The reference frequency and correction reset must each be
 accepted before calibration starts. A rejected or unanswered step stops the
@@ -196,6 +204,13 @@ Radio connection is not part of Radio Setup.
 2. Tick **Connect to last radio on start up** in the connect panel if you want AetherSDR to connect automatically at launch.
 
 See [First Connection](./first-connection.md) and [Manual Connection](./manual-connection.md).
+
+License information clears when its radio session ends. Subscription expiry is
+shown separately from feature availability: the radio’s feature reports decide
+which licensed controls are available. Filter sharpness edits are retained after the radio accepts them; later radio
+status takes precedence. Filter sharpness status updates preserve settings
+omitted from a partial radio report, and the controls follow confirmed changes
+made by another client.
 
 ## See also
 
