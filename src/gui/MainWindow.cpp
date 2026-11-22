@@ -1263,6 +1263,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, updateAetherDspPolicy);
     connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
             this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::nnrEnabledChanged,
+            this, updateAetherDspPolicy);
     // Start the CW-sidetone record pump on the audio thread (#2539): queued so
     // its QTimer is created + started on m_audio's thread after the move.
     QMetaObject::invokeMethod(m_audio, [ae = m_audio]() { ae->startCwRecordPump(); },

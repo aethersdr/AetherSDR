@@ -60,8 +60,10 @@ interleaved L/R samples. Important cases:
 ## RX speaker path
 
 The global AetherDSP mode policy permits automatic NR in USB, LSB, DSB, AM,
-SAM, FM, NFM, FMN, DFM, WFM and WBFM. DFM is an explicit FM-data
-compatibility exception. Any receiving, unmuted, positive-gain slice
+AME, SAM, FM, NFM, FMN, WFM and WBFM: the shared analog-voice table,
+`isAnalogVoiceMode()` in `src/models/ModeVocabulary.h`, which `isVoiceMode()`
+(the voice keyer and Copy Assist gates) also reads. DFM is FM data and is
+restricted. Any receiving, unmuted, positive-gain slice
 with a populated mode outside that list restricts the mixed speaker stream;
 this includes runtime-registered digital waveforms. Empty modes during slice
 creation express no restriction. The policy remembers the selected method
@@ -69,8 +71,7 @@ while automatically disabled and restores it when the mix becomes compatible;
 an explicit user override wins until the restriction clears. A manual method
 selection through a method button, shortcut, controller, AetherNR checkbox or
 RX-chain DSP tile in a compatible mode also replaces any pending automatic-restore
-memory, so the latest selection owns persistence and the next restriction. This receive
-processing list is independent of voice-keyer and Copy Assist availability.
+memory, so the latest selection owns persistence and the next restriction.
 
 ```mermaid
 flowchart TD

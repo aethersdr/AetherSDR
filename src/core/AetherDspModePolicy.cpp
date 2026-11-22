@@ -1,5 +1,7 @@
 #include "AetherDspModePolicy.h"
 
+#include "models/ModeVocabulary.h"
+
 namespace AetherSDR {
 
 bool aetherDspModeRequiresDisable(QStringView mode)
@@ -10,14 +12,10 @@ bool aetherDspModeRequiresDisable(QStringView mode)
         return false;
     }
 
-    // Automatic speech NR is limited to known compatible receive modes;
-    // waveform authors can register arbitrary digital mode names. This RX
-    // processing list is independent of voice-keyer/Copy Assist availability.
-    // DFM is an explicit FM-data compatibility exception.
-    return !(mode == u"USB" || mode == u"LSB" || mode == u"DSB"
-        || mode == u"AM" || mode == u"SAM"
-        || mode == u"FM" || mode == u"NFM" || mode == u"FMN" || mode == u"DFM"
-        || mode == u"WFM" || mode == u"WBFM");
+    // Automatic speech NR is limited to the shared analog-voice table;
+    // waveform authors can register arbitrary digital mode names, and DFM is
+    // FM data.
+    return !isAnalogVoiceMode(mode);
 }
 
 bool aetherDspMixRequiresDisable(const QList<AetherDspSliceAudioState>& slices)
@@ -46,22 +44,23 @@ AetherDspModePolicy::Action AetherDspModePolicy::update(
         }
     }
 
-    // Keep the remembered method until the queued engine enable is observed.
-    // This also preserves the intended restart state if the app closes in the
-    // short interval between a mode change and the audio-thread callback.
-    if (!restricted && !m_autoDisabledMethod.isEmpty()
-        && enabled == m_autoDisabledMethod) {
+    // Keep the remembered method until a method is observed running in a
+    // compatible mode: the queued restore itself, or a different method a
+    // profile or preset load switched on without a user gesture. While the
+    // queued enable is still in flight nothing is enabled, so the memory also
+    // preserves the intended restart state if the app closes in that interval.
+    if (!restricted && !m_autoDisabledMethod.isEmpty() && !enabled.isEmpty()) {
         m_autoDisabledMethod.clear();
     }
 
-    // Disable an audible method under restriction. Re-disable also fires when
-    // the still-remembered method is the one enabled — a restriction that recurs
-    // after a restore but before the queued enable is observed (rapid mode
-    // churn) would otherwise be skipped and leave the method processing a
-    // CW/digital stream. `!enabled.isEmpty()` already means a method is on, so
-    // there is nothing to re-emit once it is off.
-    if (restricted && !m_userOverride && !enabled.isEmpty()
-        && (m_autoDisabledMethod.isEmpty() || m_autoDisabledMethod == enabled)) {
+    // Disable any audible method under restriction unless the user chose it
+    // there. That covers a restriction that recurs after a restore but before
+    // the queued enable is observed (rapid mode churn), and a different method
+    // a profile or preset load switched on while restricted: either would
+    // otherwise keep processing a CW/digital stream. The method disabled last
+    // is the one remembered. `!enabled.isEmpty()` already means a method is
+    // on, so there is nothing to re-emit once it is off.
+    if (restricted && !m_userOverride && !enabled.isEmpty()) {
         m_autoDisabledMethod = enabled;
         return {ActionKind::Disable, enabled};
     }

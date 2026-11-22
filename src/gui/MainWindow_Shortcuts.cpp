@@ -1742,7 +1742,15 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() {
             auto* s = activeSlice();
             if (!s) return;
-            m_aetherDspModePolicy.noteUserOverride();
+            // Every step but off → NR changes a client method. That one only
+            // turns on the radio's own NR, so it leaves a remembered client
+            // method for the automatic restore.
+            const bool stepsClientMethod = m_audio->dfnrEnabled()
+                || m_audio->nr4Enabled() || m_audio->nr2Enabled() || s->nrOn()
+                || !m_radioModel.radioSideNoiseReductionAvailable();
+            if (stepsClientMethod) {
+                m_aetherDspModePolicy.noteUserOverride();
+            }
             if (m_audio->dfnrEnabled()) {
                 // DFNR → off
                 QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setDfnrEnabled(false); });

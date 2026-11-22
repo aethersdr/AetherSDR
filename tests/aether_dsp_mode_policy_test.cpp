@@ -29,16 +29,16 @@ int main()
           QStringLiteral("NT"), QStringLiteral("DSTR"),
           QStringLiteral("FDV"), QStringLiteral("FDVU"),
           QStringLiteral("FDVL"), QStringLiteral("DRM"),
-          QStringLiteral("FUTURE-WAVEFORM")}) {
+          QStringLiteral("DFM"), QStringLiteral("FUTURE-WAVEFORM")}) {
         expect(qPrintable(mode + QStringLiteral(" disables AetherDSP")),
                aetherDspModeRequiresDisable(mode));
     }
 
     for (const QString& mode :
          {QStringLiteral("LSB"), QStringLiteral("USB"),
-          QStringLiteral("AM"), QStringLiteral("SAM"),
+          QStringLiteral("AM"), QStringLiteral("AME"), QStringLiteral("SAM"),
           QStringLiteral("FM"), QStringLiteral("NFM"), QStringLiteral("FMN"),
-          QStringLiteral("DFM"), QStringLiteral("DSB"),
+          QStringLiteral("DSB"),
           QStringLiteral("WFM"), QStringLiteral("WBFM"), QString()}) {
         expect(qPrintable(mode + QStringLiteral(" allows AetherDSP")),
                !aetherDspModeRequiresDisable(mode));
@@ -245,6 +245,36 @@ int main()
     expect("race: re-restriction before engine confirm re-disables",
            action.kind == AetherDspModePolicy::ActionKind::Disable
                && action.method == QStringLiteral("NR2"));
+
+    // A pending restore replaced by a method switched on without a user
+    // gesture (an AetherRX profile or preset load): the method now running in
+    // a compatible mode owns the memory, so the next restriction disables it
+    // instead of skipping it while the stale NNR is still remembered.
+    AetherDspModePolicy profilePolicy;
+    profilePolicy.update(true, QStringLiteral("NNR"));   // disable, remembers NNR
+    profilePolicy.update(false, {});                      // restore -> Enable NNR
+    action = profilePolicy.update(false, QStringLiteral("RN2"));  // profile load
+    expect("profile: another compatible method replaces the pending restore",
+           action.kind == AetherDspModePolicy::ActionKind::None
+               && profilePolicy.methodForPersistence(QStringLiteral("RN2"))
+                      == QStringLiteral("RN2"));
+    action = profilePolicy.update(true, QStringLiteral("RN2"));
+    expect("profile: next restriction disables the loaded method",
+           action.kind == AetherDspModePolicy::ActionKind::Disable
+               && action.method == QStringLiteral("RN2"));
+
+    // The same load while still restricted: NNR is remembered from the CW
+    // disable, then a profile switches RN2 on in CW. RN2 must come off too.
+    AetherDspModePolicy restrictedLoad;
+    restrictedLoad.update(true, QStringLiteral("NNR"));   // disable, remembers NNR
+    action = restrictedLoad.update(true, QStringLiteral("RN2"));
+    expect("profile in CW: a loaded method is disabled under restriction",
+           action.kind == AetherDspModePolicy::ActionKind::Disable
+               && action.method == QStringLiteral("RN2"));
+    action = restrictedLoad.update(false, {});
+    expect("profile in CW: the loaded method is the one restored",
+           action.kind == AetherDspModePolicy::ActionKind::Enable
+               && action.method == QStringLiteral("RN2"));
 
     return failures == 0 ? 0 : 1;
 }
