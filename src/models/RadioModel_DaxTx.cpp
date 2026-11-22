@@ -96,6 +96,15 @@ bool RadioModel::prepareTciDaxTxStream(const TxCoordinator::Request& input,
     return true;
 }
 
+bool RadioModel::transmitIdleForSelection() const
+{
+    // A locally completed over retains its TX actor until qualified stop
+    // evidence. Non-keying selection may use fresh RX without clearing it.
+    return !transmitOwnershipPending()
+        || (m_txCoordinator.hasUnconfirmedLocalCompletion() && m_daxTxSelectionRxObserved
+            && m_pendingTxDeliveries == 0 && !m_txCoordinator.hasInFlightDispatches());
+}
+
 QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
 {
     if (!isConnected() || m_txSessionClosing) {
@@ -112,12 +121,7 @@ QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
     }
     const bool preparingDax = std::any_of(m_daxTxInputs.cbegin(), m_daxTxInputs.cend(),
         [](const TxCoordinator::Request::Weak& input) { return input.lock().valid(); });
-    // A locally completed over retains its TX actor until qualified stop
-    // evidence. Non-keying selection may use fresh RX without clearing it.
-    const bool locallyIdle = !transmitOwnershipPending()
-        || (m_txCoordinator.hasUnconfirmedLocalCompletion() && m_daxTxSelectionRxObserved
-            && m_pendingTxDeliveries == 0 && !m_txCoordinator.hasInFlightDispatches());
-    if (!radioReceivingForTransmitDax() || !locallyIdle || preparingDax || m_daxTxCreatePending
+    if (!radioReceivingForTransmitDax() || !transmitIdleForSelection() || preparingDax || m_daxTxCreatePending
         || m_wsprTxInput.originalSessionCurrent()) {
         return tr("Finish the current transmission or transmit preparation before changing DAX TX stream selection.");
     }

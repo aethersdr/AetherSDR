@@ -4668,6 +4668,56 @@ void VfoWidget::onSmartMtrRepainted()
     emit smartMtrLabelsChanged();
 }
 
+namespace {
+
+// The SmartMTR value-label layout, shared by drawSmartMtrLabels() and
+// smartMtrLabelsCoverageRect() so the GPU redraw band cannot drift from what
+// is drawn.
+struct SmartMtrLabelLayout {
+    SmartMtrGeometry g;
+    QFont font;
+    double lineH{0.0};    // one text row
+    double stripTop{0.0}; // labels sit just below the flag
+    double lineW{1.0};    // marker line width
+};
+
+SmartMtrLabelLayout smartMtrLabelLayout(const QFont& baseFont,
+                                        const QRect& meterRect,
+                                        int flagBottom)
+{
+    using namespace SmartMtrUnits;
+    SmartMtrLabelLayout l;
+    l.g = SmartMtrGeometry::fit(meterRect);
+    l.font = baseFont;
+    l.font.setPixelSize(qMax(8, qRound(l.g.len(kLabelHeightNormal))));
+    l.font.setWeight(QFont::Light);
+    l.lineH = QFontMetricsF(l.font).height();
+    l.stripTop = flagBottom + 2.0;
+    l.lineW = qMax(1.0, l.g.len(1.0));
+    return l;
+}
+
+} // namespace
+
+QRect VfoWidget::smartMtrLabelsCoverageRect() const
+{
+    if (!m_smartMtrWidget || !m_smartMtr || m_collapsed
+        || m_smartMtrWidget->size().isEmpty() || !parentWidget()
+        || m_smartMtrWidget->extremeLabels().isEmpty()) {
+        return {};
+    }
+    const auto l = smartMtrLabelLayout(font(), m_smartMtrWidget->rect(),
+                                       y() + height());
+    // Marker movement affects the entire width; only these two text rows
+    // need to be repainted. The pad holds the ±1 px text outline and the
+    // round-capped marker halo, which reaches (lineW + 2) / 2 past each end.
+    const double pad = qMax(3.0, (l.lineW + 2.0) / 2.0 + 1.0);
+    const int top = qFloor(l.stripTop - pad);
+    const int bottom = qCeil(l.stripTop + 2.0 * l.lineH + pad);
+    return QRect(0, top, parentWidget()->width(), bottom - top)
+        .intersected(parentWidget()->rect());
+}
+
 void VfoWidget::drawSmartMtrLabels(QPainter& p) const
 {
     using namespace SmartMtrUnits;
@@ -4685,18 +4735,17 @@ void VfoWidget::drawSmartMtrLabels(QPainter& p) const
     if (labels.isEmpty())
         return;
 
-    const auto g = SmartMtrGeometry::fit(m_smartMtrWidget->rect());
-
-    QFont f = font();
-    f.setPixelSize(qMax(8, qRound(g.len(kLabelHeightNormal))));
-    f.setWeight(QFont::Light);
+    const auto layout = smartMtrLabelLayout(font(), m_smartMtrWidget->rect(),
+                                            y() + height());
+    const auto& g = layout.g;
+    const QFont& f = layout.font;
     const QFontMetricsF fm(f);
-    const double lineH = fm.height();
+    const double lineH = layout.lineH;
 
     const double gap = 2.0;                       // px between line and labels
-    const double stripTop = y() + height() + 2.0; // labels sit just below the flag
+    const double stripTop = layout.stripTop;
     const double lineBottom = stripTop + 2.0 * lineH;
-    const double lineW = qMax(1.0, g.len(1.0));
+    const double lineW = layout.lineW;
     const double kUnitDim = 0.55; // unit text + connector line dim factor
 
     p.save();

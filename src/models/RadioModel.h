@@ -1035,6 +1035,11 @@ public:
     bool independentTxReady() const;
     bool transmitRecovering() const { return m_txCoordinator.recovering(); }
     bool transmitOwnershipPending() const { return m_txCoordinator.hasOwnership(); }
+    // Idle for a non-keying selection (DAX TX stream, TCI TX antenna): no TX
+    // ownership, or only a locally completed over still awaiting qualified
+    // stop evidence, with fresh settled RX seen since and nothing of it still
+    // on its way to the radio. Ownership itself is retained either way.
+    bool transmitIdleForSelection() const;
     void emergencyTransmitStop();
     // A station condition outside the radio that objects to a key-on from this
     // application: empty is no objection, anything else is the sentence shown
@@ -2345,6 +2350,7 @@ private:
     friend class NtpSourcesTestAccess;
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
+    friend class TciSpanExtensionTest;
     friend class TransmitDaxHoldTestAccess;
     void expirePendingCallbacks(const QString& reason);
 

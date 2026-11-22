@@ -220,7 +220,7 @@ AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedbac
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware, the TX output and the transmit voice chain.
+- **Tools → Radio Health...** shows link, temperature, PA current (in amps, and the raw count), gateware, the TX output and the transmit voice chain.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference
@@ -265,7 +265,7 @@ Not yet tested:
 - A change made from a CAT or TCI program reaching both the on-screen control and the radio.
 - Modes, filters and bands coming back after a restart are checked by automated tests without a radio; saved filter presets are not covered.
 - Two HL2s used from one computer.
-- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. aetherd does not transmit with an HL2.
+- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. Its AGC threshold, noise blanker, RIT and RF gain controls are checked by automated tests only. aetherd does not transmit with an HL2.
 
 ## Troubleshooting
 
