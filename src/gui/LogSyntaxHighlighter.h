@@ -4,6 +4,7 @@
 
 #include "core/ThemeManager.h"
 
+#include <QColor>
 #include <QFont>
 #include <QPointer>
 #include <QRegularExpression>
@@ -73,22 +74,48 @@ protected:
     }
 
 private:
+    // color.log.* is the log viewers' own text group: every value clears
+    // 4.5:1 on color.canon.nested, the ground both panes draw on, in both
+    // bundled themes. color.canon.category.* stays marks-only (#7037).
     void applyThemeColors()
     {
         const auto& tm = ThemeManager::instance();
-        m_timeFormat.setForeground(tm.color(m_scope, "color.canon.muted"));
-        m_debugFormat.setForeground(tm.color(m_scope, "color.canon.muted"));
-        m_infoFormat.setForeground(tm.color(m_scope, "color.canon.category.cyan"));
-        m_warningFormat.setForeground(tm.color(m_scope, "color.canon.category.amber"));
-        m_criticalFormat.setForeground(tm.color(m_scope, "color.canon.category.rose"));
-        m_categoryFormat.setForeground(tm.color(m_scope, "color.canon.ink"));
+        const QColor time     = tm.color(m_scope, "color.log.time");
+        const QColor info     = tm.color(m_scope, "color.log.info");
+        const QColor warning  = tm.color(m_scope, "color.log.warning");
+        const QColor critical = tm.color(m_scope, "color.log.critical");
+        const QColor category = tm.color(m_scope, "color.log.category");
+        const QColor number   = tm.color(m_scope, "color.log.number");
+        const QColor protocol = tm.color(m_scope, "color.log.protocol");
+
+        // themeChanged also fires on every Theme Editor token edit; only
+        // re-run the document when a log color actually moved.
+        const bool unchanged = m_timeFormat.foreground().color() == time
+            && m_infoFormat.foreground().color() == info
+            && m_warningFormat.foreground().color() == warning
+            && m_criticalFormat.foreground().color() == critical
+            && m_categoryFormat.foreground().color() == category
+            && m_numberFormat.foreground().color() == number
+            && m_protocolFormat.foreground().color() == protocol;
+        if (unchanged && m_formatsResolved) {
+            return;
+        }
+
+        m_timeFormat.setForeground(time);
+        m_debugFormat.setForeground(time);
+        m_infoFormat.setForeground(info);
+        m_warningFormat.setForeground(warning);
+        m_criticalFormat.setForeground(critical);
+        m_categoryFormat.setForeground(category);
         m_categoryFormat.setFontWeight(QFont::Bold);
-        m_numberFormat.setForeground(tm.color(m_scope, "color.canon.category.teal"));
-        m_protocolFormat.setForeground(tm.color(m_scope, "color.canon.category.violet"));
+        m_numberFormat.setForeground(number);
+        m_protocolFormat.setForeground(protocol);
+        m_formatsResolved = true;
         rehighlight();
     }
 
     QPointer<const QWidget> m_scope;
+    bool m_formatsResolved = false;
     QTextCharFormat m_timeFormat;
     QTextCharFormat m_debugFormat;
     QTextCharFormat m_infoFormat;

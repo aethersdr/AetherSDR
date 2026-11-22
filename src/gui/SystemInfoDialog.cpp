@@ -1192,7 +1192,7 @@ void SystemInfoDialog::refreshOverview()
 
 QWidget* SystemInfoDialog::buildLogsTab()
 {
-    auto* page = new QWidget;
+    auto* page = new QWidget(this);  // in the dialog's theme scope before the log highlighter resolves
     m_logsPage = page;
     auto* layout = new QVBoxLayout(page);
 
