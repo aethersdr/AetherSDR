@@ -167,7 +167,7 @@ void loadWisdomOnce()
 }
 
 // Write the wisdom cache now, at the end of open() under g_setupMutex. Eager
-// because at-exit hooks don't run on Hl2EmergencyStop's re-raised signal,
+// because at-exit hooks don't run on FatalSignalRelease's re-raised signal,
 // crashes or force-quit. Per-open cost is ~10-50 KB on the I/O thread.
 // Write-then-rename because other processes (other instances, ctest -j8)
 // share the file: fftw_export_wisdom_to_filename truncates first and FFTW
@@ -1085,6 +1085,24 @@ bool WdspChannel::setNoiseReduction(bool enabled, int level) noexcept
     return true;
 }
 
+bool WdspChannel::setAutoNotch(bool enabled, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive || m_config.analogReceiveDsp
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        m_liveAnfSet = true;
+        m_liveAnfEnabled = enabled;
+        m_liveAnfLevel = std::clamp(level, 0, 100);
+        SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(m_liveAnfLevel), 0.1);
+        SetRXAANFRun(m_channelId, m_liveAnfEnabled ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)
@@ -1832,10 +1850,16 @@ bool WdspChannel::open() noexcept
             }
             RXANBPSetNotchesRun(m_channelId,
                 receive.manualNotchEnabled || !receive.trackingNotches.empty() ? 1 : 0);
-        } else if (m_liveNrSet) {
-            // close() frees the ANR stage; restore a live caller's request.
-            SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
-            SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
+        } else {
+            // close() frees the ANR and ANF stages; restore a live caller's requests.
+            if (m_liveNrSet) {
+                SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
+                SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
+            }
+            if (m_liveAnfSet) {
+                SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(m_liveAnfLevel), 0.1);
+                SetRXAANFRun(m_channelId, m_liveAnfEnabled ? 1 : 0);
+            }
         }
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));

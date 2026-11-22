@@ -179,7 +179,8 @@ baseline warn; a new violation or a grown baseline errors.
   tracked-legacy set warns, new usage errors). EB2 is a per-file **count**, so
   a lateral swap inside a tracked file passes flat.
 - **EB3** — no file **above the radio seam** (all of `src/gui/`, `src/core/`,
-  `src/models/`, plus `src/main.cpp` and `src/MacStartupAbortGuard.{h,cpp}`,
+  `src/models/`, the `src/aetherd/` shell, plus `src/main.cpp` and
+  `src/MacStartupAbortGuard.{h,cpp}`,
   **except** `src/core/backends/`) may include a **vendor header** — a
   radio-family wire class tagged `vendor(...)` in
   `docs/architecture/aetherd-touchpoint-tags.json`. Accessory transports are

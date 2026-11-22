@@ -4,6 +4,7 @@
 #include "AppActivity.h"
 #include "TciProtocol.h"
 #include "TciHl2Extension.h"
+#include "TciTxPassbandExtension.h"
 #include "TciRxGainExtension.h"
 #include "core/backends/AutoRfGainControl.h"
 #include "TciAntennaExtension.h"
@@ -437,7 +438,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 m_tciPttWantsAudio = false;
                 clearTciPttClient();
                 stopTxChrono();
+                // No message can be built while disconnected: park the
+                // hw_sensors timer; the connect below re-arms it.
+                m_hwSensorsTimer->stop();
                 return;
+            }
+            // Wake hw_sensors: due times kept while parked are in the past.
+            if (m_running.load(std::memory_order_acquire)) {
+                for (const auto& cs : m_clients) {
+                    if (cs.hwSensorsEnabled) {
+                        m_hwSensorsTimer->start(0);
+                        break;
+                    }
+                }
             }
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) {
@@ -684,6 +697,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     m_meterTimer = new QTimer(this);
     m_meterTimer->setInterval(200);
     connect(m_meterTimer, &QTimer::timeout, this, &TciServer::broadcastStatus);
+    m_hwSensorsTimer = new QTimer(this);
+    m_hwSensorsTimer->setSingleShot(true);
+    // A coarse timer may fire up to 5% early, miss the due time and re-arm.
+    m_hwSensorsTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_hwSensorsTimer, &QTimer::timeout, this, &TciServer::serviceHwSensors);
 
     // Rate limiter for drive:/tune_drive: — see queuePowerBroadcast().
     m_powerRateTimer = new QTimer(this);
@@ -697,6 +715,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         broadcastPower();
         m_powerRateTimer->start();
     });
+
+    registerTxPassbandGroup();
 
     // Extension set, HL2 group: the same limiter for the filter board notice.
     m_hl2FilterNotice = std::make_unique<TciExtensionNotice>(
@@ -715,7 +735,6 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 &TciServer::onHl2TransmitStateChanged);
     }
     registerHl2Group();
-
     registerAntennaGroups();
 
     // Extension set, span: the same limiter as drive: for its notification,
@@ -799,6 +818,7 @@ bool TciServer::start(quint16 requestedPort)
 void TciServer::stopIo()
 {
     m_meterTimer->stop();
+    m_hwSensorsTimer->stop();
     m_daxReleaseTimer->stop();
     m_powerRateTimer->stop();
     m_pendingTrxRequest.reset();
@@ -1249,6 +1269,7 @@ QVector<TciClientInfo> TciServer::connectedClients() const
         info.iq           = !cs.iqReceivers.isEmpty();
         info.rxSensors    = cs.rxSensorsEnabled;
         info.txSensors    = cs.txSensorsEnabled;
+        info.hwSensors    = cs.hwSensorsEnabled;
         out.append(info);
     }
     return out;
@@ -1606,6 +1627,22 @@ void TciServer::onTextMessage(const QString& msg)
                                     .arg(client.txSensorsEnabled ? "true" : "false"));
             qCInfo(lcCat) << "TCI: tx_sensors" << (client.txSensorsEnabled ? "enabled" : "disabled");
             emit clientsChanged();
+            continue;
+        }
+        // §HW_SENSORS_ENABLE is unidirectional: no reply is defined.
+        if (trimmed.startsWith("hw_sensors_enable:")) {
+            const std::optional<TciProtocol::HwSensorsEnable> request =
+                TciProtocol::parseHwSensorsEnable(trimmed.mid(trimmed.indexOf(':') + 1));
+            if (request) {
+                client.hwSensorsEnabled = request->enabled;
+                client.hwSensorsIntervalMs = request->intervalMs;
+                client.hwSensorsDueAtMs = m_tciPttTelemetryClock.elapsed();
+                qCInfo(lcCat) << "TCI: hw_sensors"
+                              << (request->enabled ? "enabled" : "disabled")
+                              << request->intervalMs << "ms";
+                m_hwSensorsTimer->start(0);
+                emit clientsChanged();
+            }
             continue;
         }
         if (trimmed == QLatin1String("aethersdr_ext_enable")
@@ -2617,6 +2654,12 @@ void TciServer::retireTrxRequest(TciClient* client, const TxCoordinator::Request
     state->pttDaxPermit = DaxTxAudioPermit::blocked();
     state->pttWantsAudio = false;
     if (m_model) {
+        // Not a release of the time-out latch: a trx true captured before a
+        // time-out stop is refused here and must not reopen it. Callers retire
+        // a trx true that did not key, any request of a client no longer live
+        // (an off released in handleTrxRequest()), or, in the Icom unkey
+        // settle, the holder's own repeat, held only until the next unkey.
+        m_model->noteTxKeyDownRefused(request);
         m_model->requestProducerPttOff(request, wantsAudio ? TransmitModel::PttSource::Dax
                                                         : TransmitModel::PttSource::TciHardware);
     }
@@ -2639,6 +2682,12 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         txRequest = state->pttRequest;
         daxPermit = state->pttDaxPermit;
         wantsAudio = state->pttWantsAudio;
+        if (!request.transmitting && m_model) {
+            // The client's explicit off is its release of the time-out latch,
+            // whatever became of its request: refused, retired or deferred.
+            // TciIoWorker::captureTextInputs() captures no request for an off.
+            m_model->noteTxInputReleased(state->txProducer.request());
+        }
         if (!request.transmitting) {
             state->pttRequest = {};
             state->pttDaxPermit = DaxTxAudioPermit::blocked();
@@ -3438,6 +3487,10 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         // leaves the cache pointing at the outgoing slice for the brief
         // band-change gap, which is the value drive should still use.
         if (tx) m_lastTxTrx = trx;
+        // The TX passband line names the TX trx, so a move re-sends it to
+        // enabled clients. Either edge can be the last one applied; the
+        // posted, rate-limited send reads the TX trx when it runs.
+        queueTxPassbandNotice();
         // Both edges of a TX move fire here, and a band change drops TX for
         // ~340 ms; publish once it has settled.
         QTimer::singleShot(kSplitSettleMs, this, [this] { publishMainSplit(); });
@@ -4117,6 +4170,76 @@ TciExtensionSet::Result TciServer::handleHl2(const QString& name, const QStringL
     return result;
 }
 
+int TciServer::extensionTxTrx() const
+{
+    const int trx = m_trxMap.txSliceTrxOrNone(m_model);
+    return trx < 0 ? m_lastTxTrx : trx;
+}
+
+bool TciServer::txPassbandOffered() const
+{
+    return m_model
+        && TciTxPassbandExtension::offered(m_model->isConnected(),
+                                           m_model->backendCapabilities());
+}
+
+QString TciServer::txPassbandStateLine() const
+{
+    const TransmitModel& tx = m_model->transmitModel();
+    return TciTxPassbandExtension::stateLine(extensionTxTrx(), tx.txFilterLow(), tx.txFilterHigh());
+}
+
+// The TX passband group (RFC #7181). A set goes through
+// TransmitModel::setTxFilter(), the desktop control's path and clamps.
+void TciServer::registerTxPassbandGroup()
+{
+    TciExtensionSet::Group group;
+    group.token = QString::fromLatin1(TciTxPassbandExtension::kToken);
+    group.commands = QStringList{QString::fromLatin1(TciTxPassbandExtension::kCommand)};
+    group.offered = [this] { return txPassbandOffered(); };
+    group.stateLines = [this] { return QStringList{txPassbandStateLine()}; };
+    group.handle = [this](const QString&, const QStringList& args) {
+        return handleTxPassband(args);
+    };
+    registerExtensionGroup(std::move(group));
+    // Posted, so a ClientEq drag step (low, then high) goes out as one pair,
+    // then rate-limited like drive:.
+    m_txPassbandNotice = std::make_unique<TciExtensionNotice>(
+        this, kPowerRateLimitMs, [this] { return broadcastTxPassband(); });
+    if (m_model) {
+        connect(&m_model->transmitModel(), &TransmitModel::txFilterCutoffChanged,
+                this, [this](int, int) { queueTxPassbandNotice(); });
+    }
+}
+
+TciExtensionSet::Result TciServer::handleTxPassband(const QStringList& args)
+{
+    const std::optional<TciTxPassbandExtension::Request> request
+        = TciTxPassbandExtension::parse(args);
+    if (!request || request->trx != extensionTxTrx() || !txPassbandOffered()) {
+        return {};
+    }
+    TciExtensionSet::Result result;
+    if (!request->isSet) {
+        result.reply = txPassbandStateLine();
+        return result;
+    }
+    TransmitModel& tx = m_model->transmitModel();
+    const auto wanted = TciTxPassbandExtension::normalise(
+        request->lowHz, request->highHz, m_model->backendCapabilities());
+    const int lowBefore = tx.txFilterLow();
+    const int highBefore = tx.txFilterHigh();
+    tx.setTxFilter(wanted.lowHz, wanted.highHz);
+    // A change is notified to every enabled client. A clamp that changed
+    // nothing still tells the requester what was applied.
+    const bool changed = tx.txFilterLow() != lowBefore || tx.txFilterHigh() != highBefore;
+    const bool clamped = tx.txFilterLow() != request->lowHz || tx.txFilterHigh() != request->highHz;
+    if (!changed && clamped) {
+        result.reply = txPassbandStateLine();
+    }
+    return result;
+}
+
 // Why a filter board set cannot be applied now, or empty. Read again when a
 // held set is applied, since the radio may have keyed in between.
 QString TciServer::hl2SetRefusal() const
@@ -4198,10 +4321,8 @@ void TciServer::flushHl2Set()
                         refused = true;
                     }
                 });
-        m_hl2OwnSetInFlight = true;
         m_model->invokeBackendExtension(QString::fromLatin1(TciHl2Extension::kToken),
                                         QStringLiteral("hw.set"), id, request);
-        m_hl2OwnSetInFlight = false;
     }
     if (refused) {
         answerRefused(QStringLiteral("TCI: the HL2 filter board cannot change while the "
@@ -4253,10 +4374,11 @@ void TciServer::onHl2ExtensionStatus(const QString& ns, const QString& kind,
     const QPair<int, bool> filter = hl2FilterOf(fields);
     const bool moved = !m_hl2LastFilter || *m_hl2LastFilter != filter;
     m_hl2LastFilter = filter;
-    if (moved && !m_hl2OwnSetInFlight && m_hl2SetPending) {
+    if (moved && m_hl2SetPending) {
         // The board moved elsewhere (the setup page) after a TCI set was held:
         // the operator's change is newer, so the held set is dropped. The
-        // notice below tells the client what stands.
+        // notice below tells the client what stands. A TCI set's own status
+        // finds nothing held: flushHl2Set() took the set before its hw.set.
         m_hl2SetPending.reset();
         m_hl2SetRequester = nullptr;
     }
@@ -4280,6 +4402,22 @@ bool TciServer::broadcastHl2FilterBoard()
         return false;
     }
     broadcastExtension(line);
+    return true;
+}
+
+void TciServer::queueTxPassbandNotice()
+{
+    m_txPassbandNotice->queue();
+}
+
+bool TciServer::broadcastTxPassband()
+{
+    const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
+        [](const ClientState& client) { return client.extensionsEnabled; });
+    if (!anyEnabled || !txPassbandOffered()) {
+        return false;
+    }
+    broadcastExtension(txPassbandStateLine());
     return true;
 }
 
@@ -5665,6 +5803,41 @@ void TciServer::broadcastStatus()
                     .arg(m_cachedAlc, 0, 'f', 1);
             sendClientText(cs.socket, message);
         }
+    }
+}
+
+void TciServer::serviceHwSensors()
+{
+    // Disconnected: park until connectionStateChanged(true) re-arms.
+    if (!m_model || !m_model->isConnected()) {
+        m_hwSensorsTimer->stop();
+        return;
+    }
+    const qint64 now = m_tciPttTelemetryClock.elapsed();
+    std::optional<QString> message;
+    bool built = false;
+    qint64 nextDue = -1;
+    for (ClientState& cs : m_clients) {
+        if (!cs.hwSensorsEnabled) {
+            continue;
+        }
+        if (cs.hwSensorsDueAtMs <= now) {
+            if (!built) {
+                built = true;
+                message = TciProtocol::hwSensorsMessage(TciProtocol::hwSensorReadings(
+                    m_model->backendCapabilities(), m_model->meterModel(), m_model->family()));
+            }
+            if (message) {
+                sendClientText(cs.socket, *message);
+            }
+            cs.hwSensorsDueAtMs = now + cs.hwSensorsIntervalMs;
+        }
+        nextDue = nextDue < 0 ? cs.hwSensorsDueAtMs : std::min(nextDue, cs.hwSensorsDueAtMs);
+    }
+    if (nextDue >= 0 && m_running.load(std::memory_order_acquire)) {
+        m_hwSensorsTimer->start(static_cast<int>(std::max<qint64>(0, nextDue - now)));
+    } else {
+        m_hwSensorsTimer->stop();
     }
 }
 

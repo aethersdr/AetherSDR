@@ -76,6 +76,14 @@ audio_stop:0;            # stop it
 
 ## Using TCI with other programs
 
+**A client that goes silent is dropped.** After 5 s without any message from a
+client, AetherSDR sends it a WebSocket ping, which every standard WebSocket
+library answers by itself. A client that has sent nothing, not even that
+answer, for 15 s is disconnected; if it was transmitting, the radio unkeys.
+This covers a client that loses power or network without closing its
+connection, which would otherwise stay keyed until the operating system gives up
+on it, often after more than ten minutes.
+
 When a VFO-B request needs a new receiver, AetherSDR waits for its acknowledged
 identity and radio status before selecting it for TX. A delayed reply cannot
 adopt another client's receiver. Disconnecting, stopping TCI, or closing the
@@ -267,7 +275,7 @@ AetherSDR implements the TCI 2.0 command set, including:
 | Audio streaming | `audio_start/stop`, `audio_samplerate`, `audio_stream_sample_type`, `audio_stream_channels`, `audio_stream_samples` |
 | IQ | `iq_start/stop`, `iq_samplerate` |
 | Spots | `spot`, `spot_delete`, `spot_clear`, `clicked_on_spot` |
-| Sensors | `rx_sensors_enable`, `tx_sensors_enable`, `rx_channel_sensors`, `tx_sensors` |
+| Sensors | `rx_sensors_enable`, `tx_sensors_enable`, `hw_sensors_enable`, `rx_channel_sensors`, `tx_sensors`, `hw_sensors` |
 | Digital | `digl_offset`, `digu_offset` |
 
 Notes:
@@ -300,6 +308,7 @@ Notes:
 ```
 rx_sensors_enable:true;    # S-meter updates
 tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting or tuning
+hw_sensors_enable:true,500;  # supply voltage, current and temperature
 ```
 
 RX sensors broadcast each receiver's S-meter in dBm:
@@ -311,6 +320,23 @@ rx_channel_sensors:0,0,-97.3;
 TX sensors broadcast during transmit and tune, including ALC. They follow this
 station's own transmission only: on a multiFLEX radio, another station's
 transmission sends none.
+
+Hardware sensors go only to the client that enabled them, as
+`hw_sensors:<volts>,<amps>,<°C>;`, every 30–1000 ms (200 ms when the interval
+is left out). `hw_sensors_enable` gets no reply. A value the radio does not
+measure is sent as `NaN`, because the three fields are positional and the
+specification forbids empty arguments. No radio reports its current
+consumption, so the second field is always `NaN`. A Hermes-Lite 2 reports
+temperature only:
+
+```
+hw_sensors:NaN,NaN,42.0;
+```
+
+A FLEX reports supply voltage and temperature. An ANAN reports its supply rail
+only, `hw_sensors:<volts>,NaN,NaN;`. An Icom sends `NaN` in the first field:
+its Vd meter is the PA drain voltage, not the supply voltage the field names.
+A radio that measures none of the three sends nothing.
 
 The SWR field is the same trusted SWR the S-meter shows. A reading taken
 without measurable forward power, for example in a speech pause, does not
@@ -345,7 +371,8 @@ as it needs, and may send none. On a Hermes-Lite 2 with one receiver, for
 example:
 
 ```
-aethersdr_ext:1,hl2,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_ext:1,tx_filter_band,hl2,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_tx_filter_band:0,100,2900;
 aethersdr_hl2_filter_board:n2adr_rxtx,false;
 aethersdr_rx_antennas:0,ANT;
 aethersdr_rx_antenna:0,ANT;
@@ -368,6 +395,34 @@ On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
   extension traffic to that client, and so does disconnecting.
 - The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
   `rx_ctun_ex`) work without the enable, as before.
+
+#### TX passband: `tx_filter_band`
+
+Offered when the connected radio has TX low and high cut controls (the Phone
+applet's), for example a Flex or a Hermes-Lite 2. Not on the simulator, an
+RTL-SDR, or an Icom without a TX bandwidth profile.
+
+```
+aethersdr_tx_filter_band:0;             # read
+aethersdr_tx_filter_band:0,100,2900;    # set low and high cut, audio Hz
+```
+
+- `<trx>` is the transmit receiver. A read or set for another one is ignored.
+  When transmit moves to another receiver, the line is sent again; the last
+  line sent names the new `<trx>`, and an earlier one may still name the old.
+- Values are positive audio Hz, as in the Phone applet; the sideband follows the
+  mode. A negative value is taken as positive and a reversed pair is swapped.
+- The value is set the way the Phone applet sets it: 0 to 10000 Hz, at least
+  50 Hz wide. On a radio with fixed edges (an Icom) it goes to the nearest ones.
+- Every change, from any source (the Phone applet, a TX profile, CAT, another
+  client), is sent as `aethersdr_tx_filter_band:<trx>,<low>,<high>;` to every
+  client that enabled the set. That is also the answer to a set. A set that the
+  limits changed but that left the passband as it was is answered to the
+  sender only. A set that changes nothing gets no answer.
+- Allowed while transmitting, as in the Phone applet.
+- The value is the operator's setting. On a Hermes-Lite 2 it applies to USB
+  and LSB voice; CW, AM, FM and the digital modes transmit with their mode's
+  own passband.
 
 #### Hermes-Lite 2 hardware: `hl2`
 

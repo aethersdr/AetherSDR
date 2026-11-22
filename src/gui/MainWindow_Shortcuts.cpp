@@ -1700,6 +1700,7 @@ void MainWindow::registerShortcutActions()
         });
     m_shortcutManager.registerAction("nr2_toggle", "NR2 Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             if (m_audio->nr2Enabled()) {
                 QMetaObject::invokeMethod(m_audio, [this]() {
                     m_audio->setNr2Enabled(false);
@@ -1710,18 +1711,21 @@ void MainWindow::registerShortcutActions()
         });
     m_shortcutManager.registerAction("rn2_toggle", "RN2 (RNNoise) Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setRn2Enabled(!m_audio->rn2Enabled());
             });
         });
     m_shortcutManager.registerAction("nr4_toggle", "NR4 Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setNr4Enabled(!m_audio->nr4Enabled());
             });
         });
     m_shortcutManager.registerAction("dfnr_toggle", "DFNR Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setDfnrEnabled(!m_audio->dfnrEnabled());
             });
@@ -1738,6 +1742,15 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() {
             auto* s = activeSlice();
             if (!s) return;
+            // Every step but off → NR changes a client method. That one only
+            // turns on the radio's own NR, so it leaves a remembered client
+            // method for the automatic restore.
+            const bool stepsClientMethod = m_audio->dfnrEnabled()
+                || m_audio->nr4Enabled() || m_audio->nr2Enabled() || s->nrOn()
+                || !m_radioModel.radioSideNoiseReductionAvailable();
+            if (stepsClientMethod) {
+                m_aetherDspModePolicy.noteUserOverride();
+            }
             if (m_audio->dfnrEnabled()) {
                 // DFNR → off
                 QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setDfnrEnabled(false); });

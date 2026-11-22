@@ -1312,7 +1312,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
-        QStringLiteral("tx transmit rf power tune ptt mic override band settings"), [this] { return buildTxTab(); });
+        QStringLiteral("tx transmit rf power tune ptt mic override band settings time-out timeout tot"),
+        [this] { return buildTxTab(); });
     addPage(signalCategory, QStringLiteral("Phone & CW"),
         QStringLiteral("phone cw keyer break-in sidetone microphone voice"), [this] { return buildPhoneCwTab(); });
     addPage(signalCategory, QStringLiteral("Receive"),
@@ -3011,6 +3012,83 @@ QWidget* RadioSetupDialog::buildTxTab()
         applyTimingAvailability();
         connect(m_model, &RadioModel::connectionStateChanged, group,
                 applyTimingAvailability);
+
+
+        vbox->addWidget(group);
+    }
+
+    // Host transmit time-out (RFC #7021): runs on every radio. Where the radio
+    // has no timeout of its own, this is the timeout that applies; the radio's
+    // Timeout field above stays dimmed with its reason.
+    {
+        auto* group = new QGroupBox(tr("Transmit time-out (this computer)"));
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* enable = new QCheckBox(tr("Stop transmitting after"));
+        // No bare "transmit" token: the TX guard would take it for a keying
+        // control, and it only ever stops transmission.
+        enable->setAccessibleName(tr("Time-out enabled, stops transmission"));
+        grid->addWidget(enable, 0, 0);
+        auto* timeoutSpin = new QSpinBox;
+        timeoutSpin->setRange(TxTimeoutSettings::kMinimumTimeoutS, TxTimeoutSettings::kMaximumTimeoutS);
+        timeoutSpin->setSuffix(tr(" s"));
+        timeoutSpin->setAccessibleName(tr("Transmit time-out (seconds)"));
+        grid->addWidget(timeoutSpin, 0, 1);
+
+        auto* warnLbl = new QLabel(tr("Warn before (sec):"));
+        applyLabelStyle(warnLbl);
+        grid->addWidget(warnLbl, 1, 0);
+        auto* warningSpin = new QSpinBox;
+        warningSpin->setRange(0, TxTimeoutSettings::kMaximumWarningS);
+        warningSpin->setSpecialValueText(tr("Off"));
+        warningSpin->setSuffix(tr(" s"));
+        warningSpin->setAccessibleName(tr("Transmit time-out warning (seconds before)"));
+        grid->addWidget(warningSpin, 1, 1);
+        grid->setColumnStretch(2, 1);
+
+        const QString tip = tr(
+            "Stops any transmission that lasts longer than this, whatever keyed it: "
+            "MOX, PTT, footswitch, TCI, CAT, DAX, TUNE or the radio's own PTT. "
+            "After a time-out nothing transmits again until every PTT input has been "
+            "released and keyed anew.\n"
+            "Where the radio has its own Timeout above, the radio's applies too.\n"
+            "Stored on this computer, for this radio.");
+        for (QWidget* w : {static_cast<QWidget*>(enable), static_cast<QWidget*>(timeoutSpin),
+                           static_cast<QWidget*>(warningSpin)}) {
+            w->setToolTip(tip);
+            w->setAccessibleDescription(tip);
+        }
+
+        const auto refresh = [this, group, enable, timeoutSpin, warningSpin] {
+            const TxTimeoutSettings settings = m_model->txTimeoutSettings();
+            const QSignalBlocker b1(enable);
+            const QSignalBlocker b2(timeoutSpin);
+            const QSignalBlocker b3(warningSpin);
+            enable->setChecked(settings.enabled);
+            timeoutSpin->setValue(settings.timeoutS);
+            warningSpin->setValue(settings.warningS);
+            timeoutSpin->setEnabled(settings.enabled);
+            warningSpin->setEnabled(settings.enabled);
+            const bool connected = m_model->isConnected();
+            group->setEnabled(connected);
+            group->setToolTip(connected ? QString()
+                : tr("Unavailable: connect to a radio to set its transmit time-out."));
+        };
+        const auto store = [this, enable, timeoutSpin, warningSpin, refresh] {
+            TxTimeoutSettings settings;
+            settings.enabled = enable->isChecked();
+            settings.timeoutS = timeoutSpin->value();
+            settings.warningS = warningSpin->value();
+            (void)m_model->setTxTimeoutSettings(settings);
+            refresh();
+        };
+        connect(enable, &QCheckBox::toggled, this, store);
+        connect(timeoutSpin, &QSpinBox::editingFinished, this, store);
+        connect(warningSpin, &QSpinBox::editingFinished, this, store);
+        connect(m_model, &RadioModel::txTimeoutSettingsChanged, group, refresh);
+        connect(m_model, &RadioModel::connectionStateChanged, group, refresh);
+        refresh();
 
         vbox->addWidget(group);
     }

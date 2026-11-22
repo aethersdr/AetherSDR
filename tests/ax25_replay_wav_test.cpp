@@ -24,12 +24,14 @@ QByteArray chunk(const char* id, const QByteArray& payload)
 }
 
 QByteArray wav(const QByteArray& payload, bool oddJunk,
-               quint16 format = 3, quint16 channels = 1, quint16 bits = 32)
+               quint16 format = 3, quint16 channels = 1, quint16 bits = 32, quint32 sampleRate = 48000)
 {
     // WAVE_FORMAT_IEEE_FLOAT, mono, 48000 Hz, 192000 bytes/s, four-byte blocks.
     QByteArray header = QByteArray::fromHex("0300010080bb000000ee020004002000");
     qToLittleEndian(format, header.data());
     qToLittleEndian(channels, header.data() + 2);
+    qToLittleEndian(sampleRate, header.data() + 4);
+    qToLittleEndian(sampleRate * 4, header.data() + 8);
     qToLittleEndian(bits, header.data() + 14);
     QByteArray body("WAVE", 4);
     body += chunk("fmt ", header);
@@ -83,16 +85,19 @@ private slots:
     {
         QTest::addColumn<int>("count");
         QTest::addColumn<bool>("oddJunk");
-        QTest::newRow("one") << 1 << false;
-        QTest::newRow("two") << 2 << false;
-        QTest::newRow("three") << 3 << false;
-        QTest::newRow("padded-junk") << 3 << true;
+        QTest::addColumn<quint32>("rate");
+        QTest::newRow("one") << 1 << false << quint32(48000);
+        QTest::newRow("two") << 2 << false << quint32(48000);
+        QTest::newRow("three") << 3 << false << quint32(48000);
+        QTest::newRow("padded-junk") << 3 << true << quint32(48000);
+        QTest::newRow("min-sample-rate") << 1 << false << quint32(10);
     }
 
     void loadsWholeSamples()
     {
         QFETCH(int, count);
         QFETCH(bool, oddJunk);
+        QFETCH(quint32, rate);
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         const QString path = dir.filePath(QStringLiteral("complete.wav"));
@@ -100,7 +105,7 @@ private slots:
         QVERIFY(file.open(QIODevice::WriteOnly));
         // Float32 encodings of 0.5, -0.25, and 1.0, in WAV's little-endian order.
         const QByteArray payload = QByteArray::fromHex("0000003f000080be0000803f").first(count * 4);
-        const QByteArray bytes = wav(payload, oddJunk);
+        const QByteArray bytes = wav(payload, oddJunk, 3, 1, 32, rate);
         QCOMPARE(file.write(bytes), bytes.size());
         file.close();
 
@@ -108,7 +113,7 @@ private slots:
         int sampleRate = 0;
         QString error;
         QVERIFY2(AetherSDR::Ax25ReplayWav::loadWav(path, samples, sampleRate, error), qPrintable(error));
-        QCOMPARE(sampleRate, 48000);
+        QCOMPARE(sampleRate, static_cast<int>(rate));
         QCOMPARE(samples.size(), static_cast<size_t>(count));
         QCOMPARE(std::memcmp(samples.data(), payload.constData(), static_cast<size_t>(payload.size())), 0);
     }
@@ -143,6 +148,37 @@ private slots:
         QVERIFY(!AetherSDR::Ax25ReplayWav::loadWav(path, samples, sampleRate, error));
         QCOMPARE(error, QStringLiteral("expected mono float32 WAV (got fmt=%1 ch=%2 bits=%3)")
                             .arg(format).arg(channels).arg(bits));
+        QVERIFY(samples.empty());
+    }
+
+    void rejectsInvalidSampleRates_data()
+    {
+        QTest::addColumn<quint32>("rate");
+        QTest::newRow("zero") << quint32(0);
+        QTest::newRow("one") << quint32(1);
+        QTest::newRow("eight") << quint32(8);
+        QTest::newRow("nine") << quint32(9);
+        QTest::newRow("overflow") << quint32(0x80000000u);
+    }
+
+    void rejectsInvalidSampleRates()
+    {
+        QFETCH(quint32, rate);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath(QStringLiteral("lowrate.wav"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        const QByteArray bytes = wav(QByteArray(4, '\0'), false, 3, 1, 32, rate);
+        QCOMPARE(file.write(bytes), bytes.size());
+        file.close();
+
+        std::vector<float> samples;
+        int sampleRate = 0;
+        QString error;
+        QVERIFY(!AetherSDR::Ax25ReplayWav::loadWav(path, samples, sampleRate, error));
+        QCOMPARE(error, QStringLiteral("invalid WAV sample rate: %1 Hz (minimum 10 Hz)")
+                            .arg(static_cast<int>(rate)));
         QVERIFY(samples.empty());
     }
 };
