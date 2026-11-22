@@ -2107,6 +2107,11 @@ void MainWindow::registerMidiParams()
 
     reg("rx.nr2Enable", "NR2 (Spectral)", "RX", P::Toggle, 0, 1,
         [this](float v) {
+            // Only a value that changes the method is a selection; a controller
+            // resending its current state is not.
+            if ((v > 0.5f) != m_audio->nr2Enabled()) {
+                m_aetherDspModePolicy.noteUserOverride();
+            }
             if (v > 0.5f) {
                 enableNr2WithWisdom();
             } else {
@@ -2116,15 +2121,36 @@ void MainWindow::registerMidiParams()
         [this]() -> float { return m_audio->nr2Enabled() ? 1 : 0; });
 
     reg("rx.rn2Enable", "RN2 (RNNoise)", "RX", P::Toggle, 0, 1,
-        [this](float v) { QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setRn2Enabled(v > 0.5f); }); },
+        [this](float v) {
+            // Only a value that changes the method is a selection; a controller
+            // resending its current state is not.
+            if ((v > 0.5f) != m_audio->rn2Enabled()) {
+                m_aetherDspModePolicy.noteUserOverride();
+            }
+            QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setRn2Enabled(v > 0.5f); });
+        },
         [this]() -> float { return m_audio->rn2Enabled() ? 1 : 0; });
 
     reg("rx.nr4Enable", "NR4 (Spectral Bleach)", "RX", P::Toggle, 0, 1,
-        [this](float v) { QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4Enabled(v > 0.5f); }); },
+        [this](float v) {
+            // Only a value that changes the method is a selection; a controller
+            // resending its current state is not.
+            if ((v > 0.5f) != m_audio->nr4Enabled()) {
+                m_aetherDspModePolicy.noteUserOverride();
+            }
+            QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4Enabled(v > 0.5f); });
+        },
         [this]() -> float { return m_audio->nr4Enabled() ? 1 : 0; });
 
     reg("rx.dfnrEnable", "DFNR (DeepFilter)", "RX", P::Toggle, 0, 1,
-        [this](float v) { QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrEnabled(v > 0.5f); }); },
+        [this](float v) {
+            // Only a value that changes the method is a selection; a controller
+            // resending its current state is not.
+            if ((v > 0.5f) != m_audio->dfnrEnabled()) {
+                m_aetherDspModePolicy.noteUserOverride();
+            }
+            QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrEnabled(v > 0.5f); });
+        },
         [this]() -> float { return m_audio->dfnrEnabled() ? 1 : 0; });
 
     reg("rx.stepUp", "Step Size Up", "RX", P::Trigger, 0, 1,
