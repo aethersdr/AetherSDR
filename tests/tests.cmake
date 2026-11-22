@@ -8350,6 +8350,12 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tci_ext_span_test PRIVATE
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_ext_span_test COMMAND tci_ext_span_test)
+    # The extension set's transmit ceiling (aethersdr_tx_power_max).
+    add_executable(tci_ext_tx_power_max_test tests/tci_ext_tx_power_max_test.cpp)
+    target_include_directories(tci_ext_tx_power_max_test PRIVATE src tests)
+    target_link_libraries(tci_ext_tx_power_max_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_tx_power_max_test COMMAND tci_ext_tx_power_max_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -11949,6 +11955,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_ext_rx_gain_test
     tci_ext_antennas_test
     tci_ext_span_test
+    tci_ext_tx_power_max_test
     tci_applet_test
     tci_rx_applet_test
     tci_host_iq_test

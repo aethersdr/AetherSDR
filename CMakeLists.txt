@@ -1125,6 +1125,7 @@ set(CORE_SOURCES
     src/core/TciRxGainExtension.cpp
     src/core/TciAntennaExtension.cpp
     src/core/TciSpanExtension.cpp
+    src/core/TciTxPowerExtension.cpp
     src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
     src/core/MqttClient.cpp

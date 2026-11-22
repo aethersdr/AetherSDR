@@ -15,6 +15,7 @@
 #include "IcomTciUnkeySettle.h"
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
+#include "core/backends/RadioCapabilities.h"
 #include "core/backends/SliceLifecycleRequest.h"
 #include "models/RadioSwrValidityFilter.h"
 
@@ -97,6 +98,7 @@ class TciServer : public QObject {
     friend class TciTxPassbandExtensionTest;
     friend class TciRxGainExtensionTest;
     friend class TciSpanExtensionTest;
+    friend class TciTxPowerExtensionTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -355,6 +357,20 @@ private:
     bool broadcastSpan();
     void armSpanAnswerTimer();
     void broadcastBinary(const QByteArray& data);
+    // Extension group `tx_power_max` (TciTxPowerExtension.h).
+    struct TxPowerMax {
+        int trx{-1};     // -1: not offered
+        int tenths{0};   // TciTxPowerExtension::tenths()
+        bool operator==(const TxPowerMax&) const = default;
+    };
+    void registerTxPowerMaxGroup();
+    void wireTxPowerMaxSlice(SliceModel* slice);
+    // From the live capability record; `limits` set, from that cached copy.
+    TxPowerMax currentTxPowerMax(const RadioCapabilities* limits = nullptr) const;
+    bool txPowerMaxOffered() const;
+    QString txPowerMaxLine(const TxPowerMax& state) const;
+    TciExtensionSet::Result handleTxPowerMax(const QStringList& args);
+    bool broadcastTxPowerMax();
     // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
     enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
     static constexpr int kAntennaLineKinds = 4;
@@ -704,6 +720,12 @@ private:
     // a notice carries what moved; a dispatched set owes its trx a line even
     // when the radio kept the span it had.
     std::unique_ptr<TciExtensionNotice> m_spanNotice;
+    // Extension set, transmit ceiling. The last state sent to enabled clients,
+    // kept with none enabled too; the limits are copied on each capability edge
+    // so a retune is checked without a backend capability rebuild.
+    std::unique_ptr<TciExtensionNotice> m_txPowerMaxNotice;
+    TxPowerMax        m_txPowerMaxAnnounced;
+    RadioCapabilities m_txPowerLimits;
     QTimer*           m_spanAnswerTimer{nullptr};  // the nearest owed deadline
     QHash<int, qint64> m_spanAnnounced;
     QString           m_spanRatesAnnounced;

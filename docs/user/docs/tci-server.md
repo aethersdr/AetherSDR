@@ -371,7 +371,7 @@ as it needs, and may send none. On a Hermes-Lite 2 with one receiver, for
 example:
 
 ```
-aethersdr_ext:1,tx_filter_band,hl2,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_ext:1,tx_filter_band,hl2,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload,tx_power_max;
 aethersdr_tx_filter_band:0,100,2900;
 aethersdr_hl2_filter_board:n2adr_rxtx,false;
 aethersdr_rx_antennas:0,ANT;
@@ -382,6 +382,7 @@ aethersdr_rx_rf_gain_range:0,-12,48,1;
 aethersdr_rx_rf_gain:0,20;
 aethersdr_rx_auto_rf_gain:false;
 aethersdr_rx_overload:clean,false,0;
+aethersdr_tx_power_max:0,5.0;
 ```
 
 On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
@@ -625,6 +626,31 @@ aethersdr_rx_span:1,192000;       # set it
   the span. A span below a client's `iq_samplerate` therefore also lowers the
   IQ rate, and `iq_samplerate:` is sent again with the rate the frames now
   carry. It never goes above the radio's rate.
+
+#### Transmit power ceiling: `tx_power_max`
+
+Offered while the connected radio can transmit and says how much power it can
+put out at the frequency of the transmitting receiver. Read only.
+
+```
+aethersdr_tx_power_max;           # read: aethersdr_tx_power_max:0,5.0;
+aethersdr_tx_power_max:0;         # the same, naming the transmitting receiver
+```
+
+- `aethersdr_tx_power_max:<trx>,<watts>;` is the radio's maximum transmit
+  power in watts, with one decimal place, at the frequency of `<trx>`, the
+  receiver that transmits. A Hermes-Lite 2 reports `5.0`; an Icom reports its
+  model's rated power, per band where the model has a band table. It is the
+  radio's ceiling, not the drive setting and not a measurement.
+- There is one line, for the receiver that transmits. A read naming another
+  receiver is ignored, and so is anything after the receiver.
+- The line is sent again when the value or the receiver changes: tuning into
+  a band with another ceiling, moving transmit to another receiver, or the
+  radio reporting new capabilities. Tuning within a band sends nothing.
+- Where the ceiling at the frequency is 0 W, the item leaves the list, and it
+  comes back with its line when the radio tunes to where it can transmit. A
+  receive-only radio, such as an RTL-SDR, is not offered it, nor is a radio
+  that does not state its ceiling (a Flex, an ANAN, the simulator).
 
 ## Known issues
 

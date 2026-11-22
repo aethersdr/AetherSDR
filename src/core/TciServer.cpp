@@ -10,6 +10,7 @@
 #include "TciAntennaExtension.h"
 #include "TciSpanExtension.h"
 #include "core/backends/IRadioBackend.h"
+#include "TciTxPowerExtension.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
 #include "AppSettings.h"
@@ -783,6 +784,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     for (int ch = 1; ch <= 8; ++ch) { m_io->setRxGain(ch, m_rxChannelGain[ch - 1]); }
     // After the trx map is seeded and wired, which the gain lines name.
     registerRxGainGroups();
+    registerTxPowerMaxGroup();
 }
 
 TciServer::~TciServer()
@@ -5278,6 +5280,133 @@ bool TciServer::broadcastSpan()
     for (const QString& line : std::as_const(lines)) {
         broadcastExtension(line);
     }
+    return true;
+}
+
+// ── Extension set: transmit ceiling ─────────────────────────────────────────
+// Read only. The line names the trx of the TX slice; a retune is checked
+// against the cached limits and sends nothing until the ceiling moves.
+void TciServer::registerTxPowerMaxGroup()
+{
+    m_txPowerMaxNotice = std::make_unique<TciExtensionNotice>(
+        this, kPowerRateLimitMs, [this] { return broadcastTxPowerMax(); });
+    TciExtensionSet::Group group;
+    group.token = QString::fromLatin1(TciTxPowerExtension::kToken);
+    group.commands = QStringList{QString::fromLatin1(TciTxPowerExtension::kCommand)};
+    group.offered = [this] { return txPowerMaxOffered(); };
+    group.stateLines = [this] {
+        const QString line = txPowerMaxLine(currentTxPowerMax());
+        return line.isEmpty() ? QStringList{} : QStringList{line};
+    };
+    group.handle = [this](const QString&, const QStringList& args) {
+        return handleTxPowerMax(args);
+    };
+    group.resent = [this] { m_txPowerMaxAnnounced = currentTxPowerMax(); };
+    registerExtensionGroup(std::move(group));
+    if (!m_model) {
+        return;
+    }
+    m_txPowerLimits = TciTxPowerExtension::limits(m_model->backendCapabilities());
+    m_txPowerMaxAnnounced = currentTxPowerMax();
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this](bool, const RadioCapabilities& caps) {
+        m_txPowerLimits = TciTxPowerExtension::limits(caps);
+        m_txPowerMaxNotice->queue();
+    });
+    connect(m_model, &RadioModel::sliceAdded, this, [this](SliceModel* slice) {
+        wireTxPowerMaxSlice(slice);
+        m_txPowerMaxNotice->queue();
+    });
+    connect(m_model, &RadioModel::sliceRemoved, this,
+            [this](int) { m_txPowerMaxNotice->queue(); });
+    for (SliceModel* slice : m_model->slices()) {
+        wireTxPowerMaxSlice(slice);
+    }
+}
+
+void TciServer::wireTxPowerMaxSlice(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+    const QPointer<SliceModel> guard(slice);
+    connect(slice, &SliceModel::frequencyChanged, this, [this, guard](double) {
+        if (guard && guard->isTxSlice()
+            && currentTxPowerMax(&m_txPowerLimits) != m_txPowerMaxAnnounced) {
+            m_txPowerMaxNotice->queue();
+        }
+    });
+    // A band change drops TX for ~340 ms; look once it has settled.
+    connect(slice, &SliceModel::txSliceChanged, this, [this](bool) {
+        QTimer::singleShot(kSplitSettleMs, this, [this] { m_txPowerMaxNotice->queue(); });
+    });
+}
+
+TciServer::TxPowerMax TciServer::currentTxPowerMax(const RadioCapabilities* limits) const
+{
+    TxPowerMax state;
+    if (!m_model || !m_model->isConnected()) {
+        return state;
+    }
+    const SliceModel* tx = m_model->txSlice();
+    const int trx = tx ? m_trxMap.trxForSlice(m_model, tx) : -1;
+    const bool hasTxSlice = trx >= 0 && tx->frequency() > 0.0;
+    const double frequencyHz = hasTxSlice ? tx->frequency() * 1.0e6 : 0.0;
+    bool canTransmit = false;
+    double watts = 0.0;
+    if (limits) {
+        canTransmit = limits->canTransmit;
+        watts = TciTxPowerExtension::wattsAt(*limits, frequencyHz);
+    } else {
+        const RadioCapabilities caps = m_model->backendCapabilities();
+        canTransmit = caps.canTransmit;
+        watts = TciTxPowerExtension::wattsAt(caps, frequencyHz);
+    }
+    if (TciTxPowerExtension::offered(true, canTransmit, hasTxSlice, watts)) {
+        state.trx = trx;
+        state.tenths = TciTxPowerExtension::tenths(watts);
+    }
+    return state;
+}
+
+bool TciServer::txPowerMaxOffered() const
+{
+    return currentTxPowerMax().trx >= 0;
+}
+
+QString TciServer::txPowerMaxLine(const TxPowerMax& state) const
+{
+    return state.trx < 0 ? QString() : TciTxPowerExtension::line(state.trx, state.tenths / 10.0);
+}
+
+TciExtensionSet::Result TciServer::handleTxPowerMax(const QStringList& args)
+{
+    TciExtensionSet::Result result;
+    const std::optional<int> trx = TciTxPowerExtension::parseRead(args);
+    const TxPowerMax current = currentTxPowerMax();
+    if (trx && current.trx >= 0 && (*trx < 0 || *trx == current.trx)) {
+        result.reply = txPowerMaxLine(current);
+    }
+    return result;
+}
+
+// A ceiling that went to 0 W, or a TX slice that went, moves the gate; the
+// list resend then carries the new state, or its absence.
+bool TciServer::broadcastTxPowerMax()
+{
+    const TxPowerMax current = currentTxPowerMax();
+    if (!anyExtensionClient()) {
+        m_txPowerMaxAnnounced = current;
+        return false;
+    }
+    if (announceExtensionSet() || current == m_txPowerMaxAnnounced) {
+        return false;
+    }
+    m_txPowerMaxAnnounced = current;
+    if (current.trx < 0) {
+        return false;
+    }
+    broadcastExtension(txPowerMaxLine(current));
     return true;
 }
 
