@@ -4371,8 +4371,10 @@ void tciPromotionRechecksPermissionAfterReply()
 #endif
 } // namespace
 
-// ~RadioModel must unkey a held MOX exactly once, whether the model holds the
-// last reference to its local TxController or a GUI copy (TxApplet) outlives it.
+// ~RadioModel must unkey a held MOX, whether the model holds the last reference
+// to its local TxController or a GUI copy (TxApplet) outlives it. This backend
+// completes writes synchronously, so it sees exactly one mox:off; a queued
+// transport can see a second, redundant one.
 void teardownReleasesHeldMoxOnce()
 {
     for (const bool copyOutlivesModel : {false, true}) {

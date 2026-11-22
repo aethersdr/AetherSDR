@@ -3201,8 +3201,9 @@ RadioModel::~RadioModel()
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Cwx)) {
             m_backend->abortCwText(m_txCoordinator.cleanupFence());
         }
-        // A MOX still held here belongs to a controller copy that outlives the
-        // model (TxApplet keeps one), so the reset above released nothing.
+        // Still active: a MOX held through a controller copy that outlives the
+        // model (TxApplet keeps one), or one the reset above released whose
+        // queued unkey has not completed. A second unkey is redundant, never a key.
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Mox)) {
             m_backend->setKeying(false, m_txCoordinator.cleanupFence());
         }
