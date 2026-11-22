@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 290 touchpoint headers (234 core, 56 models) — 290/290 tagged, 0/290 converted.
+**Totals:** 291 touchpoint headers (235 core, 56 models) — 291/291 tagged, 0/291 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -214,6 +214,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/NoiseFloorAutoAdjustGate.h` | 2 | universal — The ONE predicate deciding whether the noise-floor auto-adjust may move the display reference level, as an OR over two backend-neutral properties (a real dBm-range echo, or absolute spectrum bins). Deliberately free of Qt and of RadioCapabilities so the widget and its test read the same function rather than two copies; the UI reaching it is the seam working, not coupling. Family backends populate the capability it is called with. | unconverted |
 | `core/backends/NtpSourceRequest.h` | 1 | universal — Seam vocabulary for a radio-held NTP time source list: the definition and request types with the firmware's id/address/description allowlists, the reported source state and its present-only delta. No wire text; FlexBackend encodes and decodes it (SmartSDR 4.3.16) and capabilities().ntpSourceControl gates it. | unconverted |
 | `core/backends/RadioCapabilities.h` | 19 | universal — Backend-neutral capability descriptor consumed above the radio seam. Universal by definition; family implementations populate it. | unconverted |
+| `core/backends/SquelchGate.h` | 1 | universal — Family-neutral squelch gate state (SliceDelta::squelchGate) and its sample-counted publication hold, SquelchGateReporter. No wire text and no family header; the HL2 receive DSP fills it from WDSP fmsq, and RxApplet shows it on the SQL slider. | unconverted |
 | `core/backends/SquelchLevelScale.h` | 2 | universal — Where a slice's squelch level sits on the panadapter's vertical axis, as a backend-published record (RadioCapabilities::squelchLevelScale) plus the mode filter and Auto-SQL predicate both the widget and MainWindow read, so the SQL line and Auto SQL share one gate. No family name or wire concept; each backend declares its own map or leaves it absent (#6092). | unconverted |
 | `core/backends/WaveformEnvRequest.h` | 2 | universal — Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it. | unconverted |
 | `core/backends/anan/AnanDiscovery.h` | 2 | vendor(anan) — openHPSDR Protocol 2 discovery and ANAN-G2 identity handling. Family-specific discovery belongs below the ANAN backend seam. | unconverted |

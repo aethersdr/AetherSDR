@@ -1078,6 +1078,18 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
             emit meterUpdate(sliceMeterName(ui), *out);
     });
 
+    connect(dsp, &Hl2RxDsp::squelchGateChanged, this,
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](SquelchGateState gate) {
+        const auto* ids = m_ids.byUi(ui);
+        const Receiver* receiver = ids ? rx(ids->ddcIndex) : nullptr;
+        if (!producer || !receiver || receiver->dsp != producer.data()) {
+            return;
+        }
+        SliceDelta d;
+        d.squelchGate = gate;
+        emit sliceChanged(ui, d);
+    });
+
     // The name the lambda above publishes under has to EXIST as a definition or
     // MeterModel has nowhere to put the value. Declared here rather than in
     // defineMeters() because this runs once per receiver, at both connect and
@@ -2620,6 +2632,12 @@ RadioCapabilities Hl2Backend::capabilities() const
         }
         sql.autoSquelch = false;
         c.squelchLevelScale = sql;
+    }
+    // fmsq's gate is read back per block (Hl2RxDsp::squelchGateChanged).
+    for (const QString& mode : publishedModeStrings()) {
+        if (WdspChannel::squelchStageFor(modeFromString(mode)) == WdspChannel::SquelchStage::Fm) {
+            c.squelchGateModes << mode;
+        }
     }
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours

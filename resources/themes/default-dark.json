@@ -327,6 +327,7 @@
             "handle":              "{color.gray.200}",
             "background.disabled": "{color.gray.850}",
             "foreground.disabled": "{color.gray.600}",
+            "foreground.gateClosed": "{color.gray.600}",
             "handle.disabled":     "{color.gray.500}"
           },
           "knob": {

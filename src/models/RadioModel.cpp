@@ -2523,6 +2523,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::controlRequested,
             this, &RadioModel::dispatchTransmitControl, Qt::DirectConnection);
     qRegisterMetaType<WfmStereoStatus>();
+    qRegisterMetaType<SquelchGateState>();
     qRegisterMetaType<WfmReceptionDiagnostics>();
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
@@ -7618,6 +7619,7 @@ void RadioModel::stageSessionModelsForReconnect()
             unavailableWfm.chainMode = QString();
             unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
             unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+            unavailableWfm.squelchGate = SquelchGateState::Unavailable;
             slice->applyChanges(unavailableWfm);
             m_staleSlices.insert(slice->sliceId(), slice);
         }
