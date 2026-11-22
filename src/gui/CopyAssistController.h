@@ -1,6 +1,7 @@
 #pragma once
 
 #include "asr/AsrCrashMarker.h"
+#include "asr/LivePreview.h"
 
 #include <QObject>
 #include <QPointer>
@@ -33,6 +34,7 @@ enum class AsrBackendKind {
     Whisper,    // local whisper.cpp (a catalog tier or a user "custom" file)
     Remote,     // RemoteAsrBackend over HTTP
     SherpaOnnx, // sherpa-onnx offline model (a user-picked model directory)
+    None,       // no model: the live preview's text is the transcript
 };
 
 // Per-engine state for a queued speaker-embedder load. Download/verification
@@ -137,6 +139,20 @@ private:
     void reconcileAfterGpuFallback();
     void buildEngine();  // (re)create the engine+tap for the current backend
     void applyTuning();  // push saved VAD tuning into the engine
+    void applyLivePreview(); // switch the engine's live preview to the saved setting
+    // The recognizer the preview uses: the stored choice, or the other one when
+    // this computer cannot run the stored one.
+    bool livePreviewOn() const; // the setting, or forced on by the None model
+    bool speakerLabelsOn() const; // the setting, unless the None model has no segments
+    QString livePreviewRecognizer() const;
+    // Copy Assist is on with the sherpa preview, so its model is needed now.
+    bool previewModelWanted() const;
+    // The sherpa (Kroko, English-only) preview is on while the transcription
+    // language is set to another language, so its gray text will be nonsense.
+    bool previewLanguageMismatch() const;
+    // Fetch (or verify the cached) default preview model when it is wanted;
+    // applyLivePreview() runs again once it is ready.
+    void ensurePreviewModelIfWanted();
     void abandonEnable(const QString& reason);
     void requestEnable(); // defer local Whisper until async GPU discovery finishes
     void beginEnable();
@@ -182,6 +198,11 @@ private:
     AsrModelManager* m_models = nullptr;
     AsrModelManager* m_vadModels = nullptr; // separate manager for the Silero VAD model
     AsrModelManager* m_speakerModels = nullptr; // manager for the speaker-embedding model
+    AsrModelManager* m_previewModels = nullptr; // manager for the live-preview model bundle
+    QString m_previewModelDir; // verified this session; empty until then
+    // Held while the sherpa preview is on, so its loaded model survives engine
+    // rebuilds; dropped when the preview is off or uses another recognizer.
+    LivePreviewFactory m_sherpaPreviewFactory;
     AsrAudioTap* m_tap = nullptr;
     bool m_constructed = false; // true after the initial buildEngine (guards restore)
     bool m_useGpuDefaultIfAvailable = false; // cleared by any explicit tier choice

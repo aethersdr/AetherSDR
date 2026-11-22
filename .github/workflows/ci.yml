@@ -1,8 +1,8 @@
 name: CI
 
 # ── THE TEST GATE IN THIS FILE IS FROZEN ─────────────────────────────────────
-# This workflow does not run the test suite, and on pull requests it does
-# not build it either: Linux builds aether_non_test_targets (declared in
+# This workflow does not run the test suite, and it does not build it
+# either, on pull requests or main: Linux builds aether_non_test_targets (declared in
 # tests/tests.cmake), macOS builds that plus its gate tests, and Windows
 # lists its targets explicitly. The Linux `build` job runs NO tests; the only
 # `ctest -R` steps are the ones listed in .github/ci-test-gate.txt, kept on
@@ -140,24 +140,24 @@ jobs:
       #   check-macos     0.3 / 0.5 GB (57.63%)
       #   check-windows   628 MiB / 1 GiB (61%)
       #
-      # Budget at 1500M, against the repo's 10 GiB cache allowance, with
-      # cache-cleanup.yml's KEEP=1. Entry sizes are MEASURED on refs/heads/main
-      # from the "Save" steps, except Linux which is extrapolated from the
-      # ~95% ratio at the new cap:
-      #   Linux    ~1.4 GiB entry x 1 retained  = 1.4 GiB
-      #   Windows  ~1.02 GiB x 1                = 1.0 GiB
-      #   macOS    ~0.44 GiB x 1                = 0.4 GiB
-      #   canary   ~0.94 GiB x 1                = 0.9 GiB
-      #   deps (Qt 1.3, install-qt 0.4, DeepFilterNet, FFTW, qtkeychain)
-      #                                         ~ 1.8 GiB
-      #                                         --------
-      #                                         ~ 5.5 GiB
-      # That is the post-prune FLOOR, not what LRU evaluates. prune-main runs
-      # on workflow_run AFTER a main save, so between the save and the prune
-      # every prefix briefly holds two entries — a transient peak of about
-      # (1.4+1.02+0.44+0.94)x2 + 1.8 = ~9.4 GiB, and main runs are not
-      # serialised (cancel-in-progress is off for main), so those windows can
-      # overlap. Budget against the peak, not the floor.
+      # Budget against the repo's 10 GiB cache allowance, with
+      # cache-cleanup.yml's KEEP=1 (Linux and Full Suite at ~95% of their caps;
+      # the others measured from their "Save" steps):
+      #   Linux build  750M cap                  ~0.71 GiB
+      #   Full Suite   2000M cap (full-suite.yml) ~1.86 GiB
+      #   Windows      ~1.02 GiB per MSVC version ~1.02 GiB (2.04 mid-rollout)
+      #   macOS        500M cap                  ~0.44 GiB
+      #   canary                                 ~0.94 GiB
+      #   deps (Qt, DeepFilterNet, FFTW, qtkeychain) ~1.8 GiB
+      #                                          ---------
+      #   post-prune floor                       ~6.8 GiB (~7.8 mid-rollout)
+      # That is not what LRU evaluates. prune-main runs on workflow_run AFTER a
+      # save, so each prefix briefly holds two entries; if every prefix did at
+      # once the peak would be (0.71+1.86+1.02+0.44+0.94)x2 + 1.8 = ~11.7 GiB,
+      # over the allowance. Accepted: each prune follows its save by minutes,
+      # so the windows rarely coincide. Full Suite's is the longest (its prune
+      # waits for ctest unless a CI completion prunes first). If "Report repo
+      # cache usage" in cache-cleanup.yml nears 10 GiB, lower Full Suite's cap.
       # The canary line is system-libs-canary.yml's cache; it was missed by an
       # earlier revision of this table and by cache-cleanup.yml's PREFIXES
       # alike, so if you add a compiler cache in ANY workflow, add it to both.
@@ -169,7 +169,12 @@ jobs:
       # refs/tags is transient and cache-cleanup.yml's sweep reclaims it.
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
-      CCACHE_MAXSIZE: 1500M
+      #
+      # 750M: this job builds no tests. Building aether_non_test_targets with
+      # these flags into an empty ccache wrote 189 MB (1,367 compiles, measured
+      # locally 2026-11-19), so 750M holds about four builds' worth of churn.
+      # Raise it if "ccache stats" shows Cleanups climbing and hits falling.
+      CCACHE_MAXSIZE: 750M
 
     steps:
       - name: Free runner disk
@@ -262,15 +267,13 @@ jobs:
           # AETHER_GPU_SPECTRUM=ON is stated rather than left to the CMake
           # default so the assertion below has a request to check against.
           #
-          # AETHER_SHARED_CORE=ON: on pushes to main, where this job builds
-          # `all`, the test executables link one libaethercore.so instead of
-          # each carrying a static copy of the core, which keeps the tree at
-          # ~4 GB instead of ~53 GB (#6962). Pull requests build no tests.
-          # Release workflows still link the core statically.
+          # AETHER_SHARED_CORE=ON: this job builds no tests, but full-suite.yml
+          # builds `all` with this same configure, where it keeps the tree at
+          # ~4 GB instead of ~53 GB (#6962). It stays here so this job's
+          # objects hit for Full Suite's ccache-linux-build- fallback; change
+          # both files together. Release workflows link the core statically.
           # -g1, not RelWithDebInfo's -g: line tables only, so backtraces keep
           # file:line at a fraction of the debug size.
-          # full-suite.yml configures identically and restores this job's
-          # ccache, so change both together.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             -DAETHER_SHARED_CORE=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
@@ -308,16 +311,16 @@ jobs:
           }
           grep "GPU spectrum rendering enabled" configure.log
 
-      # PRs build aether_non_test_targets (tests/tests.cmake): the root-directory
+      # Builds aether_non_test_targets (tests/tests.cmake): the root-directory
       # apps, tools and libraries, without anything from tests/tests.cmake.
-      # This job runs none of those tests, and they were about two thirds of
-      # its build time. Pushes to main still build `all`, because
-      # full-suite.yml restores the ccache this job saves from main. So a PR
-      # that breaks only a test's compile merges green, then turns this job
-      # and full-suite.yml red on main, and the ccache (saved only from a
-      # green main build) stays frozen until the test is fixed. Fix forward.
+      # This job runs none of those tests, and on main they were 80% of its
+      # compiles (3,604 of 4,516 on 2026-11-18), so a header change taken by
+      # many tests cost 25-45 min here. full-suite.yml compiles the test tree on
+      # every main push anyway, and saves its own cache for it
+      # (ccache-linux-full-). A PR that breaks only a test's compile still
+      # merges green and turns full-suite.yml red on main. Fix forward.
       - name: Build
-        run: cmake --build build -j$(nproc) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets' || '' }}
+        run: cmake --build build -j$(nproc) --target aether_non_test_targets
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
@@ -611,31 +614,43 @@ jobs:
         shell: pwsh
         run: .\scripts\setup\setup-deepfilter.ps1
 
-      # Restored BEFORE sccache first runs, so the server sees a populated
-      # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
-      # since it survives the key drift that made the exact-key GHA backend
-      # miss 100%. Same save-on-main split as the Linux ccache step.
-      - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: D:\sccache
-          key: sccache-windows-
-          restore-keys: |
-            sccache-windows-
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-
       # CMAKE_CXX_COMPILER_LAUNCHER is honoured by Ninja and Make
       # generators, NOT by the Visual Studio / MSBuild generator that
       # CMake selects by default on windows-latest.  Switch to Ninja so
       # cl.exe invocations actually route through sccache.  msvc-dev-cmd
       # puts the MSVC toolchain on PATH (cl.exe, link.exe, etc.) so
-      # Ninja can find them.
+      # Ninja can find them. It runs before the sccache restore because it
+      # also exports VCToolsVersion, which the cache key needs.
       - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         with:
           arch: x64
+
+      # Restored BEFORE sccache first runs, so the server sees a populated
+      # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
+      # since it survives the key drift that made the exact-key GHA backend
+      # miss 100%. Same save-on-main split as the Linux ccache step.
+      #
+      # The key carries the MSVC toolset version because sccache hashes the
+      # compiler, so objects from another MSVC are a 100% miss. GitHub rolls a
+      # new runner image out over days and serves both meanwhile: with one
+      # shared entry, whichever MSVC saved last made every run on the other
+      # build cold, overrun the Build timeout and never save (2026-11-18/19,
+      # 14.51 vs 14.52). cache-cleanup.yml keeps one entry PER VERSION. The
+      # bare-prefix fallback only matters when this version has no entry yet;
+      # it may restore the wrong MSVC's objects, which miss, which costs only
+      # the ~10 s download, and sccache's LRU replaces them as it saves.
+      - name: Restore sccache objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: D:\sccache
+          key: sccache-windows-${{ env.VCToolsVersion }}-
+          restore-keys: |
+            sccache-windows-${{ env.VCToolsVersion }}-
+            sccache-windows-
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
 
       - name: Setup hidapi (HID encoder support)
         # Needed for the Ulanzi Dial Windows backend (#3239) and the
@@ -891,7 +906,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: D:\sccache
-          key: sccache-windows-${{ github.run_id }}
+          key: sccache-windows-${{ env.VCToolsVersion }}-${{ github.run_id }}
 
   # macOS build check — runs on every PR (no path gating), same rationale
   # as check-windows above.  Catches Q_OS_MACOS / CoreAudio / Cocoa-bridge
@@ -1117,7 +1132,7 @@ jobs:
         run: bash scripts/setup/setup-qtkeychain.sh
 
       - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@dbeefd73e8e2ffc1bbc412570072735eb4db3607
+        uses: hendrikmuhs/ccache-action@e91f31892a1d1b8c44424b1a94c0b7f52d337168
         with:
           key: ccache-macos-ci
           max-size: 500M
@@ -1185,13 +1200,12 @@ jobs:
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
 
-      # PRs build aether_non_test_targets plus the two gate tests run
-      # below; same reasoning as the Linux job's Build step. Main builds `all`
-      # so the ccache it saves stays warm for test sources. A gate test added
-      # to a ctest -R step here must also join this --target list: its PR
-      # otherwise fails at ctest with "Could not find executable".
+      # Builds aether_non_test_targets plus the two gate tests run below, on
+      # PRs and main alike; same reasoning as the Linux job's Build step. A
+      # gate test added to a ctest -R step here must also join this --target
+      # list: its PR otherwise fails at ctest with "Could not find executable".
       - name: Build
-        run: cmake --build build -j$(sysctl -n hw.ncpu) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test' || '' }}
+        run: cmake --build build -j$(sysctl -n hw.ncpu) --target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test
 
       - name: Run macOS MNR regression test
         run: ctest --test-dir build -R '^mac_nr_filter_test$' --no-tests=error --output-on-failure
@@ -1264,9 +1278,10 @@ jobs:
 # Compiler-cache strategy: restore everywhere, save only on main
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# All three build jobs restore their compiler cache on every run but save only
-# from a green build of main. This section records why, because the previous
-# arrangement was a reasonable-looking pattern that failed silently for months.
+# All three build jobs, and full-suite.yml's test build, restore their
+# compiler cache on every run but save only from a green build of main. This
+# section records why, because the previous arrangement was a
+# reasonable-looking pattern that failed silently for months.
 #
 # WHAT WENT WRONG BEFORE
 #
@@ -1339,7 +1354,7 @@ jobs:
 #   resolve to the most recent match, so run N's cache is unreachable the moment
 #   run N+1 saves, and an unreachable entry is never accessed again — so nothing
 #   refreshes its LRU position and nothing deletes it. Left alone, main writes
-#   ~4.3 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
+#   ~5 GiB per push, several times a day, and would pin the repo at its allowance on its
 #   own. That job prunes each prefix to the newest 1 (was 2 until #5548; the
 #   second copy alone put main over the allowance once every cache had filled
 #   to its cap). (Retention is itself a configurable policy as of 2025-11;

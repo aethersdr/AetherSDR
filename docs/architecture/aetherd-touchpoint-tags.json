@@ -17,6 +17,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/SquelchGate.h": {
+  "tag": "universal",
+  "note": "Family-neutral squelch gate state (SliceDelta::squelchGate) and its sample-counted publication hold, SquelchGateReporter. No wire text and no family header; the HL2 receive DSP fills it from WDSP fmsq, and RxApplet shows it on the SQL slider.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/WaveformEnvRequest.h": {
   "tag": "universal",
   "note": "Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it.",
@@ -422,6 +428,12 @@
  "core/GpuSelector.h": {
   "tag": "ui-support",
   "note": "GPU enumeration + persisted QRhi render-adapter choice applied at app startup; pure client rendering plumbing",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/FatalSignalRelease.h": {
+  "tag": "universal",
+  "note": "Family-neutral termination-signal release (#7163): the app shells install the SIGTERM/SIGINT/SIGHUP/SIGQUIT handlers, and each backend that holds a radio registers an async-signal-safe release (the HL2 its pre-armed stop datagram). Holds function pointers only; no wire code, no vendor ties.",
   "split": "",
   "confidence": "high"
  },
@@ -1381,7 +1393,7 @@
  },
  "core/backends/hl2/Hl2EmergencyStop.h": {
   "tag": "vendor(hl2)",
-  "note": "Async-signal-safe release path for the Hermes-Lite 2 (an HL2 left streaming at a dead host keeps sending EP6, stops answering discovery, and needs a physical power cycle \u2014 reproduced three times). Family wire behavior invoked from main.cpp's signal handler; pre-existing coupling, frozen into the EB3 baseline. Generalizes to an engine-level 'release every backend on fatal signal' hook.",
+  "note": "Async-signal-safe release path for the Hermes-Lite 2 (an HL2 left streaming at a dead host keeps sending EP6, stops answering discovery, and needs a physical power cycle \u2014 reproduced three times). Family wire behavior below the seam: armEmergencyStop() registers fireEmergencyStop() with core/FatalSignalRelease.h, whose handlers the app shells install (#7163), so no file above the seam includes it.",
   "split": "",
   "confidence": "high"
  },
@@ -1454,6 +1466,12 @@
  "models/SliceLinkPolicy.h": {
   "tag": "universal",
   "note": "Pure decision logic for Slice Link (cross-panadapter VFO link) \u2014 echo classification on integer Hz, no QObject, no I/O, no model access. Canonical slice state only.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/DiversityPairPolicy.h": {
+  "tag": "universal",
+  "note": "Pure decision logic for which two diversity slices form one receive pair (radio diversity_index, pan fallback) \u2014 no QObject, no I/O, no model access. Canonical slice state only.",
   "split": "",
   "confidence": "high"
  },

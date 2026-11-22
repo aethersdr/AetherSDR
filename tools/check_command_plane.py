@@ -42,12 +42,12 @@ So the receiver is resolved explicitly rather than guessed from the directory:
      sites and are subtracted.
 
 WHERE IT LOOKS. The same above-seam definition check_engine_boundary.py uses
-(src/gui + src/core + src/models, plus the src/ root shell files), minus
-src/core/backends/ — that is where the wire text is SUPPOSED to live, and M4's
-direction is moving encode there. The first version scanned only models and gui,
-which missed WfmDemodulator.cpp's two live emissions in src/core/ and made the
-"backends/flex is excluded" claim describe an exclusion that did not exist,
-since nothing under src/core/ was read at all.
+(src/gui + src/core + src/models + src/aetherd, plus the src/ root shell
+files), minus src/core/backends/ — that is where the wire text is SUPPOSED to
+live, and M4's direction is moving encode there. The first version scanned only
+models and gui, which missed WfmDemodulator.cpp's two live emissions in
+src/core/ and made the "backends/flex is excluded" claim describe an exclusion
+that did not exist, since nothing under src/core/ was read at all.
 
 PER-FILE, NOT A TOTAL. A total lets one subsystem's conversion pay for another's
 regression; per-file means a converted file cannot quietly refill. A file absent
@@ -85,7 +85,8 @@ REPO = Path(__file__).resolve().parent.parent
 # The settled above-seam definition (check_engine_boundary.py:65). Kept in the
 # same shape deliberately: two different answers to "what is above the seam"
 # would be a bug generator.
-ABOVE_SEAM_DIRS = [REPO / "src" / "gui", REPO / "src" / "core", REPO / "src" / "models"]
+ABOVE_SEAM_DIRS = [REPO / "src" / "gui", REPO / "src" / "core", REPO / "src" / "models",
+                   REPO / "src" / "aetherd"]
 # The same three root shell files the sibling lists — not just main.cpp. The
 # docstring's reason for copying this definition was that two answers to "what
 # is above the seam" is a bug generator; a THIRD answer is no better (#5619
@@ -107,6 +108,9 @@ SCANNED_SUFFIXES = (".h", ".hpp", ".cpp", ".cc", ".mm")
 # files vanish, every row degrades to a cheerful "clear!" notice, and the
 # ratchet disarms while CI stays green. Observed on the first version.
 ABOVE_SEAM_DIR_FLOOR = 20
+# The aetherd shell is small by design (8 files today); half of that still
+# proves the scan found it.
+ABOVE_SEAM_DIR_FLOORS = {REPO / "src" / "aetherd": 4}
 
 # ---- receiver classification -------------------------------------------------
 #
@@ -301,10 +305,11 @@ def scan() -> dict[str, int]:
             n = count_for(path)
             if n:
                 current[rel] = n
-        if seen < ABOVE_SEAM_DIR_FLOOR:
+        floor = ABOVE_SEAM_DIR_FLOORS.get(root, ABOVE_SEAM_DIR_FLOOR)
+        if seen < floor:
             raise SystemExit(
                 f"check_command_plane: {root} yielded only {seen} file(s), below the "
-                f"{ABOVE_SEAM_DIR_FLOOR} floor — the scan is vacuous and the ratchet "
+                f"{floor} floor — the scan is vacuous and the ratchet "
                 f"would disarm silently. Run from the repo root, or update "
                 f"ABOVE_SEAM_DIRS if the tree moved.")
     for path in ABOVE_SEAM_FILES:

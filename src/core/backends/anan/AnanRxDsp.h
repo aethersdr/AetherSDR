@@ -47,6 +47,10 @@ public:
     // the audio rate -- see the note in configure() (mirrors Hl2RxDsp's
     // kWdspDspSampleRateHz exactly; this is a WDSP fact, not a radio fact).
     static constexpr int kWdspDspSampleRateHz = 48000;
+    // RXA panel gain in FM only: the panel runs after the FM limiter, and
+    // WDSP's 4.0 would take its ~0.9 bound past full scale. Other ANAN modes
+    // keep 4.0 (#7252).
+    static constexpr double kFmRxPanelGain = 1.0;
 
     struct Config {
         int inputSampleRateHz = 48000;   // the receiver's IQ sample rate

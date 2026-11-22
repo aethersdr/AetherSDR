@@ -18,7 +18,7 @@
 // NO RADIO IS NEEDED, and nothing here asserts anything about the wire. The
 // per-receiver meters are declared by buildReceivers() -> openReceiverDsp(),
 // which runs during the DSP build and long before the link comes up; that is
-// also why defineMeters()' fixed 1..9 catalogue never appears below, since it
+// also why defineMeters()' fixed catalogue never appears below, since it
 // is emitted from the linkUp handler that a socket-free test never reaches.
 //
 // TWO OF THE PATHS ARE DRIVABLE FROM HERE, and they are the two that never emit
