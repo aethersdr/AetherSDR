@@ -201,7 +201,7 @@ jobs:
           # bakes in that nothing downstream can correct, so a 14.0 tree must
           # never restore into a 12.0 build — that would silently recreate the
           # bug this change exists to remove.
-          key: macos-deps-${{ matrix.label }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-macos-deps.sh', 'scripts/setup/setup-rtl-deps.sh', 'scripts/setup/rtl-dependencies.json') }}
+          key: macos-deps-${{ matrix.label }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-macos-deps.sh', 'scripts/setup/setup-rtl-deps.sh', 'scripts/setup/rtl-dependencies.json', 'scripts/setup/apply-rtl-patches.py') }}
 
       # ~8 min cold, then cached until the script or the target changes — the
       # same deal third_party/qtkeychain already has. That cost buys the DMG a
@@ -289,7 +289,7 @@ jobs:
         run: bash scripts/setup/setup-sherpa-onnx.sh
 
       - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@dbeefd73e8e2ffc1bbc412570072735eb4db3607
+        uses: hendrikmuhs/ccache-action@e91f31892a1d1b8c44424b1a94c0b7f52d337168
         with:
           key: ccache-macos-${{ matrix.label }}
           max-size: 500M

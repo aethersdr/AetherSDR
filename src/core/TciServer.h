@@ -21,6 +21,7 @@
 #include <QWebSocketProtocol>  // CloseCode for the m_rxClose test seam
 #include <QObject>
 #include <QPointer>
+#include <QDeadlineTimer>
 #include <QElapsedTimer>
 #include <QHash>
 #include <QJsonObject>
@@ -88,6 +89,7 @@ class TciServer : public QObject {
     friend class TciAntennaExtensionTest;
     friend class TciExtensionSetTest;
     friend class TciRxGainExtensionTest;
+    friend class TciSpanExtensionTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -292,6 +294,22 @@ private:
     bool broadcastRxAutoGain();
     bool broadcastRxOverload();
     bool anyExtensionClient() const;
+    // Extension group `rx_span` (TciSpanExtension.h).
+    void registerSpanGroup();
+    void wireSpanSlice(SliceModel* slice);
+    void wireSpanPan(PanadapterModel* pan);
+    bool spanOffered() const;
+    QString spanRatesLine() const;
+    // The span of trx's pan in Hz, with the pan's limits (0 when unknown);
+    // nullopt when trx has no live slice or its pan has no model.
+    std::optional<qint64> spanForTrx(int trx, qint64* minHz = nullptr,
+                                     qint64* maxHz = nullptr) const;
+    QHash<int, qint64> currentSpans() const;
+    QStringList spanStateLines() const;
+    TciExtensionSet::Result handleSpan(const QString& name, const QStringList& args);
+    void queueSpanNotice();
+    bool broadcastSpan();
+    void armSpanAnswerTimer();
     void broadcastBinary(const QByteArray& data);
     // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
     enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
@@ -313,7 +331,8 @@ private:
     // refuses (requestTxRoute).
     bool extensionKeyed() const;
     // Clears the refusal latch once nothing is keyed any more.
-    void rearmTxAntennaRefusal();
+    // Unkeyed: the next keyed refusal (TX antenna, span) warns again.
+    void rearmKeyedRefusals();
     // Every end of a TCI key goes through here, so the latch is re-armed.
     void clearTciPttClient();
     // A slice's list moved: a resend to every enabled client carries it,
@@ -609,6 +628,25 @@ private:
     std::unique_ptr<TciExtensionNotice> m_antennaNotice;
     // A refused keyed TX-antenna set warns once per keyed period; cleared on unkey.
     bool              m_txAntennaRefusalWarned{false};
+    // The same for a refused keyed span set, where span is the sample rate.
+    bool              m_spanRefusalWarned{false};
+    // Extension set, span notice. The last values sent to enabled clients, so
+    // a notice carries what moved; a dispatched set owes its trx a line even
+    // when the radio kept the span it had.
+    std::unique_ptr<TciExtensionNotice> m_spanNotice;
+    QTimer*           m_spanAnswerTimer{nullptr};  // the nearest owed deadline
+    QHash<int, qint64> m_spanAnnounced;
+    QString           m_spanRatesAnnounced;
+    // A dispatched set, per trx: the pan it waits on, the span and centre then,
+    // and its own deadline. Only a report after the dispatch can answer it.
+    struct SpanAnswer {
+        QString panId;
+        qint64  spanHz{0};
+        double  centerMhz{0.0};
+        bool    reported{false};
+        QDeadlineTimer deadline;
+    };
+    QHash<int, SpanAnswer> m_spanAnswerOwed;
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};

@@ -33,7 +33,9 @@ int main()
         }
     };
     expectNear(0,   0.500f, "floor (and the default): every character passes");
-    expectNear(38,  0.671f, "documented starting value: the decoder's ~3 dB lock point (snr = 10*log10(c/(1-c)))");
+    expectNear(23,  0.6035f, "documented: the first value above the red band (0.60), hides every red letter");
+    expectNear(45,  0.7025f, "documented: the first value above the orange band (0.70), hides orange too");
+    expectNear(78,  0.851f, "documented: the first value above the yellow band (0.85), only green is left");
     expectNear(50,  0.725f, "midpoint");
     expectNear(100, 0.950f, "ceiling");
     expectNear(-5,  0.500f, "clamped below");

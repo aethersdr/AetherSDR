@@ -118,6 +118,7 @@ void FlexWaveformModel::clear()
     m_wfpPowered   = false;
     m_wfpReady     = false;
     m_wfpIpAddress.clear();
+    emit cleared();
     emit waveformsChanged();
     emit wfpStatusChanged();
     emit statusReportsChanged();

@@ -9,6 +9,7 @@
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "models/MeterModel.h"
+#include "models/SliceModel.h"
 
 #include "TestSettingsProfile.h"
 #include "TestDspBuildWait.h"
@@ -301,6 +302,71 @@ void aNewPanTakesItsRememberedAgcOffLevel()
     const int ui = Access::lastReceiverUi(backend);
     check(offLevel.value(ui, -1) == 61,
           "a new receiver opens on the AGC-off level remembered for its index");
+    AetherSDR::test::spinUntil(
+        [&] { return Access::lastReceiverDspChannel(backend) >= 0; });
+}
+
+// The linkUp handler announces every open receiver's blanker: RadioModel has
+// just wiped the slices, and the receive observation reads d.nb, so without it
+// slice.setNoiseBlanker is refused on receiver A until the blanker is toggled.
+void theLinkUpAnnouncesEveryBlanker()
+{
+    Hl2Backend backend;
+    if (!Access::rebuildReceivers(backend, 1)) {
+        check(false, "the injected receiver setup succeeds");
+        return;
+    }
+    QList<SliceDelta> echoes;
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                     [&echoes](int id, const SliceDelta& d) { if (id == 0) echoes.append(d); });
+    Access::linkUp(backend);
+    check(backend.isConnected(), "the injected link edge reaches the backend");
+    SliceModel announced(0);
+    for (const SliceDelta& d : echoes) {
+        announced.applyChanges(d);
+    }
+    check(announced.receiveObservation().noiseBlanker
+              && !*announced.receiveObservation().noiseBlanker,
+          "the linkUp announcement makes receiver A's blanker observed, off");
+    const int before = static_cast<int>(echoes.size());
+    backend.setSliceAudioGain(0, 40);
+    bool republished = false;
+    for (int i = before; i < echoes.size(); ++i) {
+        republished = republished || echoes.at(i).nb.has_value();
+    }
+    check(echoes.size() > before && !republished,
+          "negative control: a later echo does not republish the blanker");
+}
+
+// A receiver opened after connect announces its blanker, as the connect-time
+// announcement does for the receivers already open: the slice's receive
+// observation reads d.nb, and slice.setNoiseBlanker is admitted only on it.
+void aNewPanAnnouncesItsBlanker()
+{
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    QHash<int, QList<SliceDelta>> echoes;
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                     [&echoes](int id, const SliceDelta& d) { echoes[id].append(d); });
+    check(backend.createPanadapter(), "a second receiver is admitted");
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setSliceAudioGain(ui, 40);
+    const QList<SliceDelta> seen = echoes.value(ui);
+    check(seen.size() >= 2, "the new receiver is announced and then echoes");
+    if (seen.size() < 2) {
+        return;
+    }
+    SliceModel announced(ui);
+    announced.applyChanges(seen.front());
+    check(announced.receiveObservation().noiseBlanker
+              && !*announced.receiveObservation().noiseBlanker,
+          "a new receiver's announcement makes its blanker observed, off");
+    SliceModel echoOnly(ui);
+    echoOnly.applyChanges(seen.back());
+    check(!echoOnly.receiveObservation().noiseBlanker,
+          "negative control: a later echo does not republish the blanker");
     AetherSDR::test::spinUntil(
         [&] { return Access::lastReceiverDspChannel(backend) >= 0; });
 }
@@ -855,6 +921,8 @@ int main(int argc, char** argv)
     theGuiThreadIsNotHeld();
     aPanSeededInADataModeCarriesTheHeldAgc();
     aNewPanTakesItsRememberedAgcOffLevel();
+    theLinkUpAnnouncesEveryBlanker();
+    aNewPanAnnouncesItsBlanker();
     theBuildRunsOnTheBuildThread();
     aStaleFailureDoesNotCloseTheReuser();
     aStaleSuccessIsNotWrittenOntoTheReuser();

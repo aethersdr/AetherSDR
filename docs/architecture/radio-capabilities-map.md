@@ -153,10 +153,11 @@ are declared decides whether the FM width presets show and whether the passband
 widget is enabled or replaced by the "Filter unavailable" placeholder, and a
 declared row range-checks saved presets for its mode.
 `receivePanRfGainControl` gates `panadapter.setRfGain` and `radioSpeakerControl`
-gates `radioSession.setRadioSpeaker` the same way; only ANAN declares them. `receiveDspControl`
+gates `radioSession.setRadioSpeaker` the same way; ANAN declares both and the HL2
+declares the first. `receiveDspControl`
 gates `slice.setAgcThreshold`, `slice.setNoiseBlanker`, `slice.setNoiseReduction`
-and `slice.setRit` per observed mode, but only with a known authority, which only
-ANAN sets: RTL's record keeps an unknown authority and stays GUI gating. On the
+and `slice.setRit` per observed mode, but only with a known authority, which ANAN
+and the HL2 set: RTL's record keeps an unknown authority and stays GUI gating. On the
 desktop the record decides which DSP buttons the VFO shows, per declared feature.
 Null or unknown authority fails closed. Their full per-backend support matrix,
 range contracts, TX-idle restrictions and remaining no-op/coupling limitations

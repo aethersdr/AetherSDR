@@ -42,6 +42,7 @@
 #include <QEvent>
 #include <QEventLoop>
 #include <QElapsedTimer>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QTimer>
 #include <QThread>
@@ -186,6 +187,12 @@ public:
             server.m_io->dispatchText(socket.id());
         }
     }
+    // The I/O worker captures the next text's request but holds it from the
+    // model, as a busy event loop would.
+    static void holdNativeTciText(TciServer& server, TciClient& socket)
+    {
+        server.m_io->m_clients[socket.id()].textInFlight = true;
+    }
     static TxCoordinator::Request tciClientRequest(TciServer& server, TciClient& socket)
     { return server.clientStateFor(&socket)->pttRequest; }
     static TxCoordinator::Context tciMedia(const TciServer& server) { return server.m_tciTxContext; }
@@ -244,6 +251,24 @@ public:
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
     static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
     static TxCoordinator& coordinator(RadioModel& radio) { return radio.m_txCoordinator; }
+    // Host transmit time-out (RFC #7021): injected clock, hand-emitted keyed edge.
+    static void txTimeoutClock(RadioModel& radio, qint64* now)
+    { radio.m_txTimeout.setClock([now] { return *now; }); }
+    static void radioKeyedEdge(RadioModel& radio, bool on)
+    {
+        radio.m_radioTransmitting = on;
+        emit radio.radioTransmittingChanged(on);
+    }
+    static void txTimeoutTick(RadioModel& radio) { radio.onTxTimeoutTick(); }
+#ifdef HAVE_WEBSOCKETS
+    // What abortTciPtt()'s 1250 ms fail-closed barrier does when it ends with
+    // the radio idle: lift it and drain the deferred PTT input.
+    static void endTciUnkeyBarrier(TciServer& server)
+    {
+        server.m_tciPttCancelPending = false;
+        server.drainDeferredRoutingAndPtt();
+    }
+#endif
     static void stopEvidence(RadioModel& radio, const TxStopEvidence& evidence)
     {
         radio.acknowledgeIndependentTxStop(evidence);
@@ -2926,6 +2951,263 @@ void testInjectionReopensAdmission()
               "rebuildBackendForTest reopens admission like setBackendForTest");
     }
 }
+// RFC #7021 latch through the real producers (d274): a client that keeps
+// asking to transmit after the time-out is refused every time, and only its
+// own off followed by a new on keys again. The refused key's teardown, on
+// whichever route the producer uses, is never a release.
+void txTimeoutLatchThroughProducers()
+{
+    const auto drain = [] {
+        for (int i = 0; i != 6; ++i) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        }
+    };
+    const auto expire = [&drain](Fixture& f, qint64& now) {
+        TxOperationIntegrationTestAccess::radioKeyedEdge(f.radio, true);
+        now += 180000;
+        TxOperationIntegrationTestAccess::txTimeoutTick(f.radio);
+        drain();
+        TxOperationIntegrationTestAccess::radioKeyedEdge(f.radio, false);
+        drain();
+    };
+#ifdef HAVE_WEBSOCKETS
+    {
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/TCI: the client keys through TciServer");
+        expire(f, now);
+        check(f.radio.txTimeoutLatched(), "TOT/TCI: the expiry latches while the client holds trx true");
+        bool allRefused = true;
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+            drain();
+            TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/TCI: every re-sent trx true after the expiry is refused (d274)");
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/TCI: the client's trx false releases the latch");
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/TCI: a new trx true after the release keys again");
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+        drain();
+    }
+    {
+        // d276: through the native IO path, with TciServer's real 1250 ms
+        // refusal barrier. Re-sends outpace the barrier, so one is still
+        // deferred when the off arrives; the off must release the latch and
+        // the deferred on must never key.
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        const auto send = [&](const char* text) {
+            TxOperationIntegrationTestAccess::nativeTciText(server, socket, QString::fromLatin1(text));
+            drain();
+            AetherTest::pumpFor(20);
+        };
+        send("trx:0,true;");
+        check(f.commands.contains("mox:on"), "TOT/TCI native: the client keys through the IO path");
+        expire(f, now);
+        f.commands.clear();
+        send("trx:0,true;");   // refused; arms the refusal barrier
+        send("trx:0,true;");   // deferred behind the barrier
+        AetherTest::pumpFor(400);
+        send("trx:0,true;");   // still deferred
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI native: re-sends inside the barrier are held");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(),
+              "TOT/TCI native: an off while a re-send is still deferred releases the latch (d276)");
+        AetherTest::pumpFor(1400);   // the barrier ends and drains
+        check(!f.commands.contains("mox:on"),
+              "TOT/TCI native: the deferred re-send never keys after the off");
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.commands.contains("mox:on"), "TOT/TCI native: a new trx true after the off keys");
+        send("trx:0,false;");
+        AetherTest::pumpFor(1400);
+
+        // The d276 sequence: the last re-send was refused and retired, and the
+        // barrier has ended, before the off arrives. The IO path carries no
+        // request for an off, so only the client's producer can release it.
+        send("trx:0,true;");
+        expire(f, now);
+        f.commands.clear();
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI native: each answered re-send is refused");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(),
+              "TOT/TCI native: an off after the last re-send was answered releases the latch (d276)");
+        AetherTest::pumpFor(1400);
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.commands.contains("mox:on"), "TOT/TCI native: and the next trx true keys");
+        send("trx:0,false;");
+    }
+    {
+        // oz457 on HL2 (4 of 11 expiries re-keyed): a repeat trx true captured
+        // on the I/O path just before the stop is invalidated by it, refused
+        // before admission and retired through retireTrxRequest(). That
+        // teardown is not a release, so the client's next repeat is refused.
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        const auto send = [&](const char* text) {
+            TxOperationIntegrationTestAccess::nativeTciText(server, socket, QString::fromLatin1(text));
+            drain();
+            AetherTest::pumpFor(20);
+        };
+        send("trx:0,true;");
+        check(f.commands.contains("mox:on"), "TOT/TCI captured: the client keys through the IO path");
+        TxOperationIntegrationTestAccess::holdNativeTciText(server, socket);
+        TxOperationIntegrationTestAccess::nativeTciText(server, socket, QStringLiteral("trx:0,true;"));
+        check(TxOperationIntegrationTestAccess::queuedNativeTciRequest(server, socket).valid(),
+              "TOT/TCI captured: the repeat is captured on the IO path, not yet promoted");
+        expire(f, now);
+        check(f.radio.txTimeoutLatched()
+                  && !TxOperationIntegrationTestAccess::queuedNativeTciRequest(server, socket).valid(),
+              "TOT/TCI captured: the time-out stop latches and invalidates the captured repeat");
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::releaseNativeTciText(server, socket, false);
+        drain();
+        AetherTest::pumpFor(1400);   // the refusal barrier ends and drains
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI captured: the stale repeat is refused and its retirement is not a release");
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI captured: the client's next repeated trx true is still refused");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(), "TOT/TCI captured: the client's trx false releases");
+    }
+#endif
+    {
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        RigctlProtocol cat(&f.radio);
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: the client keys through its producer");
+        expire(f, now);
+        bool allRefused = f.radio.txTimeoutLatched();
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            (void)cat.handleLine("T 1");
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/rigctl: every re-sent T 1 after the expiry is refused");
+        (void)cat.handleLine("T 0");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/rigctl: T 0 releases the latch");
+        f.commands.clear();
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: a new T 1 after the release keys again");
+        (void)cat.handleLine("T 0");
+        drain();
+        // A refused T 1 and its T 0 handled in one turn: the off still releases.
+        (void)cat.handleLine("T 1");
+        drain();
+        expire(f, now);
+        (void)cat.handleLine("T 1");
+        (void)cat.handleLine("T 0");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/rigctl: T 0 queued behind a refused T 1 releases");
+        f.commands.clear();
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: and the next T 1 keys");
+        (void)cat.handleLine("T 0");
+        drain();
+    }
+    {
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        SmartCatProtocol cat(&f.radio);
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: the client keys through its producer");
+        expire(f, now);
+        bool allRefused = f.radio.txTimeoutLatched();
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            (void)cat.processCommand("TX");
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/SmartCAT: every re-sent TX after the expiry is refused");
+        (void)cat.processCommand("RX");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/SmartCAT: RX releases the latch");
+        f.commands.clear();
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: a new TX after the release keys again");
+        (void)cat.processCommand("RX");
+        drain();
+        (void)cat.processCommand("TX");
+        drain();
+        expire(f, now);
+        (void)cat.processCommand("TX");   // refused
+        (void)cat.processCommand("RX");   // same turn, same request
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/SmartCAT: RX right after a refused TX releases");
+        f.commands.clear();
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: and the next TX keys");
+        (void)cat.processCommand("RX");
+        drain();
+    }
+    {
+        // CWX is sent text with no off: a CAT client's send_morse during an
+        // over must not hold the latch once the expiry stopped it.
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        RigctlProtocol cat(&f.radio);
+        (void)cat.handleLine("\\send_morse CQ CQ");
+        drain();
+        check(f.commands.filter(QRegularExpression(QStringLiteral("^cwx:(?!abort)"))).size() == 1,
+              "TOT/rigctl CWX: send_morse is admitted through the client's producer");
+        expire(f, now);
+        f.commands.clear();
+        const auto desktop = f.radio.localTxController()->capture(TxController::Activity::Mox);
+        const bool latched = f.radio.txTimeoutLatched();
+        check(!latched && desktop.start() && f.commands.contains("mox:on"),
+              "TOT/rigctl CWX: after the expiry, radio idle, local MOX is admitted");
+        desktop.stop();
+        drain();
+    }
+}
+
 void protocolProducerLifetimes()
 {
     const auto drain = [] {
@@ -4178,6 +4460,7 @@ int main(int argc, char** argv)
     grantedModelPreflightAndCancellation();
     grantedModelSessionAndActivityBoundaries();
     protocolProducerLifetimes();
+    txTimeoutLatchThroughProducers();
     producerNormalTails();
     producerTuneAndAtu();
     producerCwxQueue();

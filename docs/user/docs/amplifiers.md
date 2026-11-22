@@ -191,6 +191,22 @@ The button appears after a valid amplifier reply, not just an open connection.
 Once detected, it stays available while that connection remains open, including during
 power-off or lost replies, so you can wake the amp or inspect **Debug**. Closing
 the connection hides the button; reconnecting requires a fresh reply.
+
+The main-window status bar also shows a passive **KPA** indicator beside the
+PGXL indicator. It appears after amplifier detection and stays visible when
+the radio disconnects. Closing the amplifier connection hides it.
+
+| State | Meaning | Color |
+|---|---|---|
+| **FAULT** | The amplifier reports a fault; takes priority over other states | Red |
+| **TX** | Fresh power-on and Operate readbacks, with forward power at least 5 W | Red |
+| **OPERATE** | Confirmed power on and Operate | Green |
+| **STANDBY** | Confirmed power on and Standby | Amber |
+| **OFF** | Confirmed power off | Muted |
+| **–** | The amplifier is not responding or the required readback is unknown or stale | Muted |
+
+The indicator reports status; use the applet to change amplifier settings.
+
 The applet shows power with a peak marker, SWR, temperature,
 voltage, current, confirmed band and amplifier state. **Standby**, **Operate**,
 **Fan min**, **Speaker alarm**, **Clear fault**, and the **ON**/**OFF** button
