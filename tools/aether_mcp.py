@@ -60,6 +60,7 @@ SERVER_INFO = {"name": "aethersdr-automation", "version": "1.0.0"}
 REQUEST_TIMEOUT_S = 60
 MAX_INLINE_IMAGE_BYTES = 800_000  # larger grabs are returned as a path only
 
+_activity_bridge = None
 _gesture_bridge = None
 _gesture_socket_path = None
 _owned_app = None
@@ -95,6 +96,8 @@ def discover_sockets():
 
 
 def bridge_socket_path():
+    if _activity_bridge is not None:
+        return _activity_bridge.sock_path
     if _owned_app is not None and _owned_app["process"].poll() is None:
         return _owned_app["socket"]
     override = os.environ.get("AETHER_MCP_SOCKET")
@@ -145,8 +148,10 @@ class Bridge:
             pass  # best-effort teardown — a close failure is not actionable
 
 
-def bridge_request(obj, timeout=REQUEST_TIMEOUT_S):
+def bridge_request(obj, timeout=REQUEST_TIMEOUT_S, *, renew_activity=True):
     """Connect, send one request (with the token, if set), return the response."""
+    if renew_activity and obj.get("cmd") not in ("ping", "verbs", "whoami", "agentActivity"):
+        _renew_agent_activity()
     sock_path = bridge_socket_path()
     if not sock_path:
         raise RuntimeError(
@@ -171,6 +176,55 @@ def _authenticated_request(obj):
     if token and "token" not in obj:
         return dict(obj, token=token)
     return obj
+
+
+def _close_activity_bridge():
+    global _activity_bridge
+    if _activity_bridge is not None:
+        _activity_bridge.close()
+        _activity_bridge = None
+
+
+def _renew_agent_activity():
+    if _activity_bridge is None:
+        return
+    # Keep ordinary requests on their own transports (timeouts and streaming
+    # replies vary). Only work from this wrapper can renew its held connection.
+    try:
+        response = _activity_bridge.request(_authenticated_request(
+            {"cmd": "agentActivity", "action": "renew"}))
+    except (OSError, ValueError):
+        _close_activity_bridge()
+        raise RuntimeError("Activity connection lost; select the app and report the step again") from None
+    if not response.get("active"):
+        raise RuntimeError("Activity claim ended; report the current step again or release it")
+
+
+def _set_agent_activity(args):
+    global _activity_bridge
+    text = args.get("text")
+    if not isinstance(text, str):
+        return error_result("text must be a string; send an empty string to finish")
+    new_connection = _activity_bridge is None
+    if new_connection:
+        path = bridge_socket_path()
+        if path is None:
+            return error_result("No running AetherSDR automation bridge found")
+        _activity_bridge = Bridge(path)
+    try:
+        result = _activity_bridge.request(_authenticated_request(
+            {"cmd": "agentActivity", "text": text}))
+    except Exception:
+        _close_activity_bridge()
+        raise
+    if not text or (not result.get("ok") and (new_connection or result.get("error") == "busy")):
+        _close_activity_bridge()
+    if not result.get("ok"):
+        return error_result(result.get("error", "activity rejected"))
+    return text_result(result)
+
+
+atexit.register(_close_activity_bridge)
 
 
 def _close_gesture_bridge():
@@ -386,6 +440,7 @@ def _handle_shutdown_signal(signum, _frame):
     # would (reap the owned child so the app, its socket, and the shared
     # app/radio lock don't leak; release the held gesture transport), then die
     # with the default disposition so the exit status still reflects the signal.
+    _close_activity_bridge()
     _stop_owned_app()
     _close_gesture_bridge()
     try:
@@ -428,6 +483,16 @@ def prune_tree(node, needle):
 # --------------------------------------------------------------------------
 
 TOOLS = [
+    {
+        "name": "set_agent_activity",
+        "description": (
+            "Before driving AetherSDR through MCP or Computer Use, call this with a "
+            "short phrase such as Testing meters. Call again when the step changes. "
+            "Send an empty string when finished. A competing controller returns busy."),
+        "inputSchema": {"type": "object", "properties": {
+            "text": {"type": "string", "description": "Current activity, or empty to release"}
+        }, "required": ["text"], "additionalProperties": False},
+    },
     {
         "name": "app_instance",
         "description": (
@@ -874,12 +939,16 @@ def _maybe_suggest(resp, target):
 
 
 def handle_tool(name, args):
+    if name == "set_agent_activity":
+        return _set_agent_activity(args)
     if name == "app_instance":
         global _owned_app
         action = str(args.get("action") or "").strip().lower()
         if action not in ("launch", "status", "stop"):
             return error_result("app_instance action must be launch, status, or stop")
         if action == "stop":
+            if _owned_app and _activity_bridge and _activity_bridge.sock_path == _owned_app["socket"]:
+                _close_activity_bridge()
             return text_result(_stop_owned_app())
         if action == "status":
             if _owned_app is None:
@@ -940,6 +1009,8 @@ def handle_tool(name, args):
                     "this MCP server already owns a running AetherSDR instance; stop it first")
             _remove_owned_socket(_owned_app)
             _owned_app = None
+        if _activity_bridge is not None:
+            return error_result("Release agent activity before switching to a new instance")
         if not os.environ.get("AETHER_MCP_TOKEN"):
             return error_result(
                 "secure launch requires AETHER_MCP_TOKEN in this MCP server environment")
@@ -1244,6 +1315,7 @@ def handle_tool(name, args):
             time.sleep(interval)
 
     if name == "gesture":
+        _renew_agent_activity()
         global _gesture_bridge, _gesture_socket_path
         action = str(args.get("action") or "").strip().lower()
         if action not in ("begin", "move", "end", "cancel", "status"):
@@ -1384,7 +1456,7 @@ def resource_read(uri):
     req = _RESOURCE_REQUESTS.get(uri)
     if req is None:
         return None
-    data = bridge_request(req)
+    data = bridge_request(req, renew_activity=False)
     return {"contents": [{"uri": uri, "mimeType": "application/json",
                           "text": json.dumps(data, indent=2)}]}
 

@@ -152,7 +152,7 @@ contributors to self-verify UI changes before requesting review.
 2. Launch through `app_instance` (recommended for a fresh proof build), or
    manually with `AETHER_AUTOMATION=1 ./build/AetherSDR`.
 
-**Tools exposed** (25 typed tools): process handoff — `app_instance`;
+**Tools exposed** include `set_agent_activity` for activity reporting; process handoff — `app_instance`;
 introspection — `bridge_status`,
 `dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
 `path` for where the PNG is written, else a temp file),
@@ -173,6 +173,17 @@ primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `txwaterfall` display toggle, and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
+
+**Agent activity.** Before driving AetherSDR through MCP or Computer Use, call
+`set_agent_activity({"text":"Testing meters"})`. To change the step, call
+`set_agent_activity({"text":"Testing tuning"})`. Finish with
+`set_agent_activity({"text":""})`. Existing radio notices take priority.
+The wrapper pins the app instance and holds a local connection for the claim.
+With the raw bridge, send `{"cmd":"agentActivity","text":"Testing meters"}`
+on a connection you keep open. The same connection can replace or clear the
+text. A competing caller receives `busy`. Closing the owner connection,
+stopping the bridge or five minutes of inactivity clears the badge and notice.
+Observe-only sessions cannot claim the indicator.
 
 **Prompts and resources.** The server also exposes an MCP **prompt**,
 `validate_ui_change` (the loop below as a guided workflow — pass your
@@ -5239,10 +5250,11 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 83 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 84 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
+| `agentActivity` | — | Report operator-visible activity on a held connection (JSON text, empty to release) |
 | `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |

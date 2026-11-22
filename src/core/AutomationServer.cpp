@@ -2316,8 +2316,44 @@ int AutomationServer::sliceLinkPeerOf(const SliceModel* s) const
 }
 
 AutomationServer::AutomationServer(QObject* parent)
-    : QObject(parent)
+    : QObject(parent), m_activityTimer(new QTimer(this))
 {
+    m_activityTimer->setSingleShot(true);
+    m_activityTimer->setTimerType(Qt::PreciseTimer);
+    m_activityTimer->setInterval(std::chrono::minutes(5));
+    connect(m_activityTimer, &QTimer::timeout, this, &AutomationServer::clearAgentActivity);
+}
+
+void AutomationServer::clearAgentActivity()
+{
+    m_activityTimer->stop();
+    m_activityOwner.clear();
+    if (!m_activityText.isEmpty()) {
+        m_activityText.clear();
+        emit agentActivityChanged({}, {});
+    }
+}
+
+QJsonObject AutomationServer::setAgentActivity(QLocalSocket* socket, const QString& text)
+{
+    if (!socket)
+        return err(QStringLiteral("activity requires a live connection"));
+    if (m_activityOwner && m_activityOwner != socket)
+        return err(QStringLiteral("busy"));
+    if (text.isEmpty()) {
+        clearAgentActivity();
+    } else {
+        const QString line = text.simplified();
+        if (line.isEmpty() || line.size() > 256)
+            return err(QStringLiteral("activity must be a short plain-text phrase (up to 256 characters)"));
+        m_activityOwner = socket;
+        m_activityTimer->start();
+        if (m_activityText != line) {
+            m_activityText = line;
+            emit agentActivityChanged(line, m_agentStation);
+        }
+    }
+    return {{QStringLiteral("ok"), true}, {QStringLiteral("active"), !text.isEmpty()}};
 }
 
 AutomationServer::~AutomationServer()
@@ -2478,6 +2514,7 @@ bool AutomationServer::start(const QString& serverName)
 
 void AutomationServer::stop()
 {
+    clearAgentActivity();
     ++m_stationScheduleRevision;
     disconnect(m_stationConnection);
     const QPointer<AutomationServer> self(this);
@@ -2569,6 +2606,7 @@ void AutomationServer::stop()
 void AutomationServer::setAuthToken(const QString& token)
 {
     if (m_authToken != token) {
+        clearAgentActivity();
         m_authToken = token;
         forceUnkey("automation authorization rotated");
     }
@@ -2577,6 +2615,7 @@ void AutomationServer::setAuthToken(const QString& token)
 void AutomationServer::setReadOnly(bool readOnly)
 {
     if (m_readOnly != readOnly) {
+        clearAgentActivity();
         m_readOnly = readOnly;
         forceUnkey("automation observe-only permission changed");
     }
@@ -2704,6 +2743,8 @@ void AutomationServer::onDisconnected()
     auto* sock = qobject_cast<QLocalSocket*>(sender());
     if (!sock)
         return;
+    if (sock == m_activityOwner)
+        clearAgentActivity();
     cancelGesture(sock, QStringLiteral("gesture owner disconnected"));
     m_buffers.remove(sock);
     if (m_logSubscribers.remove(sock) && m_logSubscribers.isEmpty() && m_logDrain)
@@ -2973,6 +3014,18 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             v.push_back({std::move(name), std::move(aliases), std::move(help),
                          std::move(parse), std::move(dispatch)});
         };
+
+        add("agentActivity", {}, "Report operator-visible activity on a held connection (JSON text, empty to release)",
+            [](const QList<QByteArray>&, A&) { return err(QStringLiteral("use JSON with a text string")); },
+            [](AutomationServer& self, A& args, QLocalSocket* sock) {
+                if (args.action == QLatin1String("renew")) {
+                    if (sock && self.m_activityOwner == sock)
+                        self.m_activityTimer->start();
+                    return QJsonObject{{QStringLiteral("ok"), true},
+                                       {QStringLiteral("active"), sock && self.m_activityOwner == sock}};
+                }
+                return self.setAgentActivity(sock, args.value);
+            });
 
         add("ping", {}, "liveness check → app + version + build identity + whether a token is required",
             parseNothing,
@@ -3973,6 +4026,12 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         else if (v.isDouble()) a.value = QString::number(v.toDouble());
         else if (v.isBool())   a.value = v.toBool() ? QStringLiteral("true")
                                                     : QStringLiteral("false");
+        if (cmd == QLatin1String("agentActivity")) {
+            const auto text = obj.value(QStringLiteral("text"));
+            if (a.action != QLatin1String("renew") && !text.isString())
+                return err(QStringLiteral("agentActivity requires a text string"));
+            a.value = text.toString();
+        }
         a.model    = obj.value(QStringLiteral("model")).toString();
         a.selector = obj.value(QStringLiteral("selector")).toString();
         a.property = obj.value(QStringLiteral("property")).toString();
@@ -4110,6 +4169,10 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                                     "-> Network to allow driving."));
     }
 
+    if (sock && sock == m_activityOwner && spec->name != QLatin1String("agentActivity")
+        && spec->name != QLatin1String("ping") && spec->name != QLatin1String("verbs")
+        && spec->name != QLatin1String("whoami"))
+        m_activityTimer->start();
     return spec->dispatch(*this, a, sock);
 }
 

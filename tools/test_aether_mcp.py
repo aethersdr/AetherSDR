@@ -18,6 +18,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_mcp  # noqa: E402
@@ -218,6 +219,34 @@ def test_token_attached():
         aether_mcp.bridge_socket_path = orig_sockpath
         aether_mcp.bridge_request = orig_req
         del os.environ["AETHER_MCP_TOKEN"]
+
+
+def test_agent_activity_session():
+    bridge = Mock(sock_path="/tmp/first.sock")
+    bridge.request.side_effect = [
+        {"ok": True, "active": True}, {"ok": True, "active": True},
+        {"ok": True, "active": True}, {"ok": True, "active": False}]
+    with patch.object(aether_mcp, "Bridge", return_value=bridge) as factory, \
+         patch.dict(os.environ, {"AETHER_MCP_SOCKET": "/tmp/first.sock"}, clear=False):
+        try:
+            result = aether_mcp.handle_tool("set_agent_activity", {})
+            check("missing text cannot accidentally release activity", result.get("isError"))
+            aether_mcp.handle_tool("set_agent_activity", {"text": "Testing meters"})
+            os.environ["AETHER_MCP_SOCKET"] = "/tmp/second.sock"
+            check("active wrapper pins its selected application",
+                  aether_mcp.bridge_socket_path() == "/tmp/first.sock")
+            aether_mcp._renew_agent_activity()
+            aether_mcp.handle_tool("set_agent_activity", {"text": "Testing tuning"})
+            aether_mcp.handle_tool("set_agent_activity", {"text": ""})
+            requests = [args[0][0] for args in bridge.request.call_args_list]
+            check("claim, test work, update and release share the owner connection",
+                  factory.call_count == 1 and len(requests) == 4
+                  and [r.get("text") for r in requests] == ["Testing meters", None, "Testing tuning", ""]
+                  and requests[1].get("action") == "renew")
+            check("release closes the connection and drops the instance pin",
+                  bridge.close.call_count == 1 and aether_mcp.bridge_socket_path() == "/tmp/second.sock")
+        finally:
+            aether_mcp._close_activity_bridge()
 
 
 def test_gesture_session():
@@ -822,6 +851,7 @@ def test_read_only_reflected():
 if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
+    test_agent_activity_session()
     test_gesture_session()
     test_owned_process_shutdown()
     test_secure_app_instance()

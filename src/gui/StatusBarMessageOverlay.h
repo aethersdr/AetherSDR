@@ -51,16 +51,13 @@ public:
                 QAccessible::updateAccessibility(&event);
             }
         });
-        connect(bar, &QStatusBar::messageChanged, this, [this](const QString& message) {
-            m_message = message;
-            setAccessibleName(message);
-            updateNotice();
-            if (message.isEmpty()) {
-                m_announcementTimer.stop();
-            } else {
-                m_announcementTimer.start();
-            }
-        });
+        connect(bar, &QStatusBar::messageChanged, this, &StatusBarMessageOverlay::selectMessage);
+    }
+
+    void setAgentActivity(const QString& activity)
+    {
+        m_activity = activity;
+        selectMessage();
     }
 
     // The workspace canvas replaces the pan stack while it is mounted; it is
@@ -92,6 +89,21 @@ protected:
     }
 
 private:
+    void selectMessage()
+    {
+        const QString notice = m_bar ? m_bar->currentMessage() : QString();
+        const QString next = notice.isEmpty() ? m_activity : notice;
+        if (next == m_message)
+            return;
+        m_message = next;
+        setAccessibleName(next);
+        updateNotice();
+        if (next.isEmpty())
+            m_announcementTimer.stop();
+        else
+            m_announcementTimer.start();
+    }
+
     void updateNotice()
     {
         if (m_message.isEmpty() || !m_bar || !m_bar->isVisible()) {
@@ -156,6 +168,7 @@ private:
     QPointer<QWidget> m_surface;
     QPointer<QWidget> m_alternateSurface;
     QTimer m_announcementTimer;
+    QString m_activity;
     QString m_message;
 };
 

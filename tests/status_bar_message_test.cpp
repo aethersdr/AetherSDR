@@ -109,6 +109,20 @@ int main(int argc, char** argv)
               && notice.testAttribute(Qt::WA_TransparentForMouseEvents),
           "notices leave focus and pointer input alone");
 
+    notice.setAgentActivity(QStringLiteral("Testing meters"));
+    check(notice.isVisible() && notice.text() == QStringLiteral("Testing meters"),
+          "agent activity appears beside zoom");
+    bar->showMessage(QStringLiteral("Operator notice"));
+    notice.setAgentActivity(QStringLiteral("Testing tuning"));
+    check(notice.text() == QStringLiteral("Operator notice"), "app notice takes priority");
+    bar->clearMessage();
+    check(notice.text() == QStringLiteral("Testing tuning"), "only the latest step resumes");
+    bar->showMessage(QStringLiteral("Operator notice"));
+    notice.setAgentActivity({});
+    check(notice.text() == QStringLiteral("Operator notice"), "release preserves the app notice");
+    bar->clearMessage();
+    check(!notice.isVisible(), "released activity cannot reappear");
+
     const QString longMessage = QStringLiteral("A long status message ").repeated(100);
     bar->showMessage(longMessage);
     QApplication::processEvents();

@@ -370,6 +370,7 @@ signals:
     // both branches of that callback; RadioSetupDialog uses it to reconcile
     // the Network-tab toggle. MainWindow persists the result independently.
     void automationBridgeStartResult(bool ok);
+    void agentActivityChanged(const QString& text, const QString& agent);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -2000,7 +2001,6 @@ private:
     void openFirmwareUpdate();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
-    QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
     QLabel* m_gpsLabel{nullptr};
     QLabel* m_gpsStatusLabel{nullptr};
     QLabel* m_bandStackIndicator{nullptr};

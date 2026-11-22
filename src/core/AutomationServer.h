@@ -335,6 +335,9 @@ public:
     void setReadOnly(bool readOnly);
     bool readOnly() const { return m_readOnly; }
 
+signals:
+    void agentActivityChanged(const QString& text, const QString& agent);
+
 private slots:
     void onNewConnection();
     void onReadyRead();
@@ -743,6 +746,12 @@ private:
     QString       m_discoveryEntry;   // this instance's <pid>.json in m_discoveryDir
     QString       m_label;            // AETHER_AUTOMATION_LABEL (human instance tag)
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
+    QPointer<QLocalSocket> m_activityOwner;
+    QString m_activityText;
+    QTimer* m_activityTimer{};
+    QJsonObject setAgentActivity(QLocalSocket* socket, const QString& text);
+    void clearAgentActivity();
+
     struct PointerGesture {
         std::shared_ptr<TxPointerAction> txAction;
         QPointer<QLocalSocket> owner;

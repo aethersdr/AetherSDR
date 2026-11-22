@@ -3485,6 +3485,8 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     // Provably null here: the early return above covers every live server,
     // listening or still waiting for its token.
     m_automation = std::make_unique<AutomationServer>();
+    connect(m_automation.get(), &AutomationServer::agentActivityChanged,
+            this, &MainWindow::agentActivityChanged);
 
     // dumpTree reports the status-bar message (#4864) by reading a generic
     // dynamic property — core/ must not know the QStatusBar type

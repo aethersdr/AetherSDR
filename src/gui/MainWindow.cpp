@@ -15,6 +15,7 @@
 
 #include "MainWindowHelpers.h"
 #include "StatusBarLayout.h"
+#include "AgentControlBadge.h"
 #include "MixerControlAvailability.h"
 #include "WindowGeometryRestore.h"
 
@@ -6088,27 +6089,9 @@ void MainWindow::buildUI()
         return sep;
     };
 
-    // Automation indicator chip — visible ONLY when the agent automation bridge
-    // is active (AETHER_AUTOMATION). Uses the canonical AppSettings automation
-    // agent name so the chip and tooltip match the identity announced to the
-    // radio. Legacy environment names are resolved by AppSettings. (#3646)
-    // Kept deliberately separate from the station-nickname label so it never
-    // fights radio status updates.
-    if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
-        const QString agent = AppSettings::instance().automationAgentName();
-        m_automationChip = new QLabel(QStringLiteral("\U0001F916 ") + agent);
-        m_automationChip->setObjectName(QStringLiteral("automationChip"));
-        m_automationChip->setAccessibleName(
-            QStringLiteral("Agent automation bridge active: %1").arg(agent));
-        m_automationChip->setStyleSheet(
-            "QLabel { color: #0b0e12; background: #f0a000; font-weight: bold;"
-            " font-size: 18px; border-radius: 4px; padding: 2px 10px; }");
-        m_automationChip->setToolTip(
-            QStringLiteral("Agent automation bridge active — other MultiFlex stations see this client as \"%1\"")
-                .arg(agent));
-        hbox->addWidget(m_automationChip);
-        addSep();
-    }
+    auto* orbit = new AgentControlBadge(m_statusBarContainer);
+    hbox->addWidget(orbit);
+    connect(this, &MainWindow::agentActivityChanged, orbit, &AgentControlBadge::showActivity);
 
     // Hidden connection state label (used by connect/disconnect logic)
     m_connStatusLabel = new QLabel("", this);
