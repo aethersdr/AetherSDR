@@ -183,7 +183,7 @@ void MainWindow::registerControlActions()
     reg.add(A::level("rf_power", "tx.rfPower", "RF Power", "TX", 0, 100, 5,
         [this](float v) { m_radioModel.transmitModel().setRfPower(static_cast<int>(v)); },
         [this]() -> float { return m_radioModel.transmitModel().rfPower(); })
-        .when(canTransmit));
+        .when(canTransmit).transmitDrive());
     reg.add(A::level("mic_level", "phone.micLevel", "Mic Level", "TX", 0, 100, 5,
         [this](float v) { m_radioModel.transmitModel().setMicLevel(static_cast<int>(v)); },
         [this]() -> float { return m_radioModel.transmitModel().micLevel(); })
