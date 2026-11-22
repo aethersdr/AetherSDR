@@ -407,7 +407,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 m_tciPttWantsAudio = false;
                 clearTciPttClient();
                 stopTxChrono();
+                // No message can be built while disconnected: park the
+                // hw_sensors timer; the connect below re-arms it.
+                m_hwSensorsTimer->stop();
                 return;
+            }
+            // Wake hw_sensors: due times kept while parked are in the past.
+            if (m_running.load(std::memory_order_acquire)) {
+                for (const auto& cs : m_clients) {
+                    if (cs.hwSensorsEnabled) {
+                        m_hwSensorsTimer->start(0);
+                        break;
+                    }
+                }
             }
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) {
@@ -654,6 +666,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     m_meterTimer = new QTimer(this);
     m_meterTimer->setInterval(200);
     connect(m_meterTimer, &QTimer::timeout, this, &TciServer::broadcastStatus);
+    m_hwSensorsTimer = new QTimer(this);
+    m_hwSensorsTimer->setSingleShot(true);
+    // A coarse timer may fire up to 5% early, miss the due time and re-arm.
+    m_hwSensorsTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_hwSensorsTimer, &QTimer::timeout, this, &TciServer::serviceHwSensors);
 
     // Rate limiter for drive:/tune_drive: — see queuePowerBroadcast().
     m_powerRateTimer = new QTimer(this);
@@ -751,6 +768,7 @@ bool TciServer::start(quint16 requestedPort)
 void TciServer::stopIo()
 {
     m_meterTimer->stop();
+    m_hwSensorsTimer->stop();
     m_daxReleaseTimer->stop();
     m_powerRateTimer->stop();
     m_pendingTrxRequest.reset();
@@ -1201,6 +1219,7 @@ QVector<TciClientInfo> TciServer::connectedClients() const
         info.iq           = !cs.iqReceivers.isEmpty();
         info.rxSensors    = cs.rxSensorsEnabled;
         info.txSensors    = cs.txSensorsEnabled;
+        info.hwSensors    = cs.hwSensorsEnabled;
         out.append(info);
     }
     return out;
@@ -1558,6 +1577,22 @@ void TciServer::onTextMessage(const QString& msg)
                                     .arg(client.txSensorsEnabled ? "true" : "false"));
             qCInfo(lcCat) << "TCI: tx_sensors" << (client.txSensorsEnabled ? "enabled" : "disabled");
             emit clientsChanged();
+            continue;
+        }
+        // §HW_SENSORS_ENABLE is unidirectional: no reply is defined.
+        if (trimmed.startsWith("hw_sensors_enable:")) {
+            const std::optional<TciProtocol::HwSensorsEnable> request =
+                TciProtocol::parseHwSensorsEnable(trimmed.mid(trimmed.indexOf(':') + 1));
+            if (request) {
+                client.hwSensorsEnabled = request->enabled;
+                client.hwSensorsIntervalMs = request->intervalMs;
+                client.hwSensorsDueAtMs = m_tciPttTelemetryClock.elapsed();
+                qCInfo(lcCat) << "TCI: hw_sensors"
+                              << (request->enabled ? "enabled" : "disabled")
+                              << request->intervalMs << "ms";
+                m_hwSensorsTimer->start(0);
+                emit clientsChanged();
+            }
             continue;
         }
         if (trimmed == QLatin1String("aethersdr_ext_enable")
@@ -5257,6 +5292,41 @@ void TciServer::broadcastStatus()
                     .arg(m_cachedAlc, 0, 'f', 1);
             sendClientText(cs.socket, message);
         }
+    }
+}
+
+void TciServer::serviceHwSensors()
+{
+    // Disconnected: park until connectionStateChanged(true) re-arms.
+    if (!m_model || !m_model->isConnected()) {
+        m_hwSensorsTimer->stop();
+        return;
+    }
+    const qint64 now = m_tciPttTelemetryClock.elapsed();
+    std::optional<QString> message;
+    bool built = false;
+    qint64 nextDue = -1;
+    for (ClientState& cs : m_clients) {
+        if (!cs.hwSensorsEnabled) {
+            continue;
+        }
+        if (cs.hwSensorsDueAtMs <= now) {
+            if (!built) {
+                built = true;
+                message = TciProtocol::hwSensorsMessage(TciProtocol::hwSensorReadings(
+                    m_model->backendCapabilities(), m_model->meterModel(), m_model->family()));
+            }
+            if (message) {
+                sendClientText(cs.socket, *message);
+            }
+            cs.hwSensorsDueAtMs = now + cs.hwSensorsIntervalMs;
+        }
+        nextDue = nextDue < 0 ? cs.hwSensorsDueAtMs : std::min(nextDue, cs.hwSensorsDueAtMs);
+    }
+    if (nextDue >= 0 && m_running.load(std::memory_order_acquire)) {
+        m_hwSensorsTimer->start(static_cast<int>(std::max<qint64>(0, nextDue - now)));
+    } else {
+        m_hwSensorsTimer->stop();
     }
 }
 
