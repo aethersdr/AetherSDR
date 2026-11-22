@@ -612,6 +612,15 @@ void AgcCalibrationDialog::updateModeUi()
     if (m_sourceLabel) {
         if (isTciMode()) {
             m_sourceLabel->setText(tr("Audio source: TCI (DIGU/DIGL)"));
+        } else if (m_tci && m_slice
+                   && m_slice->agcMode() == QStringLiteral("off")
+                   && m_slice->daxChannel() >= 1
+                   && (m_slice->mode() == QStringLiteral("DIGU")
+                       || m_slice->mode() == QStringLiteral("DIGL"))) {
+            // AGC Off (TargetLevel) always uses PC Audio regardless of mode or DAX channel
+            // (2026-11-20 ruling). Tell the operator explicitly rather than showing the
+            // "switch to DIGU/DIGL" hint, which would be confusing when they already are.
+            m_sourceLabel->setText(tr("Audio source: PC Audio (AGC Off always uses PC Audio)"));
         } else if (m_tci && m_slice && m_slice->daxChannel() < 1
                    && (m_slice->mode() == QStringLiteral("DIGU")
                        || m_slice->mode() == QStringLiteral("DIGL"))) {

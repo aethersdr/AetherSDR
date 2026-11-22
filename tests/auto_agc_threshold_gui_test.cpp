@@ -5,6 +5,9 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#ifdef HAVE_WEBSOCKETS
+#include "core/TciServer.h"
+#endif
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
 #include "core/ThemeManager.h"
@@ -157,6 +160,23 @@ public:
         delta.agcOffLevel = offLevel;
         delta.agcThresholdMode = AgcThresholdMode::Manual;
         emit sliceChanged(0, delta);
+    }
+
+    // Test helper for the source-selection matrix: set mode + agcMode + daxChannel
+    // independently of the agcThresholdMode plumbing used by status().
+    void modeStatus(int sliceId, const QString& mode, const QString& agcMode, int daxCh)
+    {
+        SliceDelta delta;
+        delta.active        = true;
+        delta.frequency     = 14.25;
+        delta.mode          = mode;
+        delta.filterLow     = 100;
+        delta.filterHigh    = 2800;
+        delta.agcMode       = agcMode;
+        delta.agcThreshold  = 65;
+        delta.agcThresholdMode = AgcThresholdMode::Manual;
+        delta.daxChannel    = daxCh;
+        emit sliceChanged(sliceId, delta);
     }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
@@ -454,6 +474,66 @@ private slots:
         fixture.backend->status(0, AgcThresholdMode::Automatic);
         settle();
         QVERIFY(!startStop->isEnabled());
+    }
+
+    void calibrationDialogSourceSelection()
+    {
+        // Source-selection matrix: isTciMode() gates TCI audio on
+        //   DIGU/DIGL + daxChannel >= 1 + agcMode != "off"
+        // Verified indirectly through the sourceLabel (agcRole="hint"), which
+        // is the public observable for the private isTciMode() predicate.
+#ifdef HAVE_WEBSOCKETS
+        Fixture fixture;
+        TciServer tci(&fixture.radio);
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        settle();
+
+        QLabel* source = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("hint")) {
+                source = label;
+                break;
+            }
+        }
+        QVERIFY(source);
+
+        const auto setMode = [&](const QString& mode, const QString& agcMode, int daxCh) {
+            fixture.backend->modeStatus(0, mode, agcMode, daxCh);
+            settle();
+        };
+
+        // 1. DIGU + daxChannel=1 + agcMode="med" → TCI
+        setMode(QStringLiteral("DIGU"), QStringLiteral("med"), 1);
+        QCOMPARE(source->text(),
+            QStringLiteral("Audio source: TCI (DIGU/DIGL)"));
+
+        // 2. DIGL + daxChannel=1 + agcMode="slow" → TCI
+        setMode(QStringLiteral("DIGL"), QStringLiteral("slow"), 1);
+        QCOMPARE(source->text(),
+            QStringLiteral("Audio source: TCI (DIGU/DIGL)"));
+
+        // 3. DIGU + daxChannel=1 + agcMode="off" → PC Audio
+        //    AGC Off (TargetLevel) always uses PC Audio per the 2026-11-20 ruling;
+        //    this is the core of the isTciMode() agcMode check that ON8ST required.
+        setMode(QStringLiteral("DIGU"), QStringLiteral("off"), 1);
+        QCOMPARE(source->text(),
+            QStringLiteral("Audio source: PC Audio (AGC Off always uses PC Audio)"));
+
+        // 4. DIGU + daxChannel=0 + agcMode="med" → PC Audio (no DAX channel)
+        setMode(QStringLiteral("DIGU"), QStringLiteral("med"), 0);
+        QCOMPARE(source->text(),
+            QStringLiteral("Audio source: PC Audio (TCI needs a DAX channel in DIGU/DIGL)"));
+
+        // 5. USB + daxChannel=1 + agcMode="med" → PC Audio (not DIGU/DIGL)
+        setMode(QStringLiteral("USB"), QStringLiteral("med"), 1);
+        QCOMPARE(source->text(),
+            QStringLiteral("Audio source: PC Audio (switch to DIGU/DIGL with a DAX channel for TCI)"));
+#else
+        QSKIP("HAVE_WEBSOCKETS not set; TCI source-selection test requires TciServer");
+#endif
     }
 
     void initTestCase()
