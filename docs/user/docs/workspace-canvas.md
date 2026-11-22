@@ -44,7 +44,7 @@ In edit posture:
 
 Positions are stored as fractions of the canvas, so a layout made on a 3840 × 1600 screen comes back in proportion on 1920 × 1080.
 
-When you choose **Tools → Add Panadapter...**, the selected pan layout rearranges the main-canvas pans across the full canvas width. Applets keep their own canvas positions; the applet-panel docking preference is used only in Classic mode, so it cannot leave an empty strip beside the pans.
+When a pan layout is applied (adding a panadapter, the panadapter layout selector, or the automation `workspace pan-layout` verb), the main-canvas pans are rearranged beside the applet columns that stand along the left or right edge of the canvas, so no pan ends up underneath one. A column counts when the applets along that edge cover at least half the canvas height; a small meter in a corner or a short bar along the bottom stays an overlay and does not narrow the pans. Applets placed away from both edges do not narrow the pans either. If the columns would leave the pans less than a quarter of the canvas width, the pans use the full width instead. Applets keep their own positions. The Classic applet panel's docking preference applies only in Classic mode, so it cannot leave an empty strip beside the pans.
 
 ### Named workspaces
 

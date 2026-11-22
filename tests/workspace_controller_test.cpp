@@ -383,6 +383,14 @@ int main(int argc, char** argv)
         report("...and the pan slot takes the remainder",
                nearly(canvas.itemRect(QStringLiteral("pan:0")).w,
                       1.0 - AetherSDR::kClassicAppletColumnWidth));
+        // A layout pick on the reset canvas keeps the pans clear of the
+        // column Reset to Classic just placed.
+        report("a layout pick after Reset to Classic keeps the pan clear of the column",
+               ctl.applyPanLayout(QStringLiteral("1"))
+                   && canvas.itemRect(QStringLiteral("pan:0")).right()
+                          <= canvas.itemRect(QStringLiteral("applet:RX")).x + 1e-9
+                   && nearly(canvas.itemRect(QStringLiteral("pan:0")).w,
+                             1.0 - AetherSDR::kClassicAppletColumnWidth));
 
         // Drag-out over the panel returns the applet to it; a drag-out over
         // nothing is an abort the canvas already restored.
@@ -544,33 +552,139 @@ int main(int argc, char** argv)
                    && canvas.layout().zOf(QStringLiteral("pan:1"))
                           < canvas.layout().zOf(QStringLiteral("applet:TX")));
 
+        // A canvas pan layout composes into the band beside the applet
+        // columns the canvas actually shows. The Classic panel's saved keys
+        // say nothing about where canvas applets sit: here they claim a
+        // left-docked RX panel while no applet stands on the left edge, and
+        // no strip may be reserved for it (#7381).
+        {
+            const QString pan0 = ctl.panItemIdFor(QStringLiteral("0x40000000"));
+            const QString pan1 = ctl.panItemIdFor(QStringLiteral("0x40000002"));
+            const auto setApplets = [&](const NormRect& rxRect,
+                                        const NormRect& txRect) {
+                canvas.setItemRect(QStringLiteral("applet:RX"), rxRect);
+                canvas.setItemRect(QStringLiteral("applet:TX"), txRect);
+                canvas.setItemRect(pan0, NormRect{0.0, 0.0, 1.0, 1.0});
+                canvas.setItemRect(pan1, NormRect{0.0, 0.0, 1.0, 1.0});
+                ctl.commitPlacement();
+            };
+            const auto rectIs = [&](const QString& id, double x, double y,
+                                    double w, double h) {
+                const NormRect r = canvas.itemRect(id);
+                return nearly(r.x, x) && nearly(r.y, y) && nearly(r.w, w)
+                       && nearly(r.h, h);
+            };
+            const double col = AetherSDR::kClassicAppletColumnWidth;
+
+            AppSettings::instance().setValue(QStringLiteral("AppletPanelVisible"),
+                                             QStringLiteral("True"));
+            AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
+                                             QStringLiteral("True"));
+            AppSettings::instance().setValue(QStringLiteral("Applet_RX"),
+                                             QStringLiteral("True"));
+            AppSettings::instance().save();
+            setApplets(NormRect{0.40, 0.10, col, 0.30},
+                       NormRect{0.40, 0.50, col, 0.30});
+            report("two canvas pans fill width despite the hidden left panel",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, 0.0, 0.0, 1.0, 0.5)
+                       && rectIs(pan1, 0.0, 0.5, 1.0, 0.5));
+
+            // The migrated / reset Classic column on the right: the pans
+            // stop at its left edge, whatever the saved keys claim.
+            setApplets(NormRect{1.0 - col, 0.0, col, 0.5},
+                       NormRect{1.0 - col, 0.5, col, 0.5});
+            report("pans stop at an applet column on the right edge",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, 0.0, 0.0, 1.0 - col, 0.5)
+                       && rectIs(pan1, 0.0, 0.5, 1.0 - col, 0.5));
+
+            // A column on the left edge: the pans start at its right edge.
+            setApplets(NormRect{0.0, 0.0, col, 0.5},
+                       NormRect{0.0, 0.5, col, 0.5});
+            report("pans start after an applet column on the left edge",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, col, 0.0, 1.0 - col, 0.5)
+                       && rectIs(pan1, col, 0.5, 1.0 - col, 0.5));
+
+            // A Classic column that wrapped to two widths reserves both.
+            setApplets(NormRect{1.0 - col, 0.0, col, 1.0},
+                       NormRect{1.0 - 2.0 * col, 0.0, col, 1.0});
+            report("a wrapped applet column reserves its full width",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, 0.0, 0.0, 1.0 - 2.0 * col, 0.5));
+
+            // Columns on both edges: the pans take the band between them.
+            setApplets(NormRect{0.0, 0.0, col, 1.0},
+                       NormRect{1.0 - col, 0.0, col, 1.0});
+            report("pans take the band between columns on both edges",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, col, 0.0, 1.0 - 2.0 * col, 0.5));
+
+            // An applet that overlaps a column from the pan side floats over
+            // the pans; it does not widen the column to its far edge.
+            setApplets(NormRect{0.0, 0.0, col, 1.0},
+                       NormRect{col - 0.05, 0.20, 0.5, 0.30});
+            report("an applet overlapping a column does not widen it",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, col, 0.0, 1.0 - col, 0.5));
+
+            // Coverage guard: an edge reserves a column only when its
+            // chained applets cover at least half the canvas height. A small
+            // corner meter and a short bar along the bottom are overlays.
+            setApplets(NormRect{0.0, 0.0, 0.1, 0.1},
+                       NormRect{0.40, 0.50, col, 0.30});
+            report("a small corner applet does not reserve a column",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, 0.0, 0.0, 1.0, 0.5));
+            setApplets(NormRect{0.0, 0.9, 0.6, 0.1},
+                       NormRect{0.40, 0.10, col, 0.30});
+            report("a short bar along an edge does not reserve a column",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, 0.0, 0.0, 1.0, 0.5));
+            // Coverage is the column's union, not any one applet's height.
+            setApplets(NormRect{1.0 - col, 0.0, col, 0.3},
+                       NormRect{1.0 - col, 0.3, col, 0.3});
+            report("short applets stacked into a column reserve it together",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, 0.0, 0.0, 1.0 - col, 0.5));
+
+            // Floor guard: a band under a quarter of the width is a sliver;
+            // the pans take the full width instead.
+            setApplets(NormRect{0.0, 0.0, 0.4, 1.0},
+                       NormRect{0.6, 0.0, 0.4, 1.0});
+            report("columns leaving a sliver fall back to full width",
+                   ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, 0.0, 0.0, 1.0, 0.5));
+
+            // A closed applet keeps its home in the document but occupies
+            // no canvas width.
+            setApplets(NormRect{0.40, 0.10, col, 0.30},
+                       NormRect{1.0 - col, 0.0, col, 1.0});
+            tx->setContainerVisible(false);
+            report("a closed applet's home reserves no column",
+                   !canvas.contains(QStringLiteral("applet:TX"))
+                       && ctl.applyPanLayout(QStringLiteral("2v"))
+                       && rectIs(pan0, 0.0, 0.0, 1.0, 0.5));
+            tx->setContainerVisible(true);
+
+            AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
+                                             QStringLiteral("False"));
+            AppSettings::instance().save();
+        }
+
         // A layout-selector change while canvas mode owns the pans must
         // replace the stale stored pan rectangles, not merely rearrange the
         // hidden legacy splitter. It changes only active-main live pans:
         // applets and extra surfaces remain the operator arranged them.
-        // Reflow the same first two pans with the legacy panel preference on:
-        // canvas applets already have independent positions, so no strip is
-        // reserved for the invisible panel on either side (#7381).
-        const QString initialPan0 = ctl.panItemIdFor(QStringLiteral("0x40000000"));
-        const QString initialPan1 = ctl.panItemIdFor(QStringLiteral("0x40000002"));
-        canvas.setItemRect(initialPan0, NormRect{0.0, 0.0, 1.0, 1.0});
-        canvas.setItemRect(initialPan1, NormRect{0.0, 0.0, 1.0, 1.0});
-        ctl.commitPlacement();
-        AppSettings::instance().setValue(QStringLiteral("AppletPanelVisible"),
-                                         QStringLiteral("True"));
-        AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
-                                         QStringLiteral("True"));
-        AppSettings::instance().setValue(QStringLiteral("Applet_RX"),
-                                         QStringLiteral("True"));
-        AppSettings::instance().save();
-        report("two canvas pans fill width despite the hidden left panel",
-               ctl.applyPanLayout(QStringLiteral("2v"))
-                   && nearly(canvas.itemRect(initialPan0).x, 0.0)
-                   && nearly(canvas.itemRect(initialPan0).w, 1.0)
-                   && nearly(canvas.itemRect(initialPan0).h, 0.5)
-                   && nearly(canvas.itemRect(initialPan1).x, 0.0)
-                   && nearly(canvas.itemRect(initialPan1).w, 1.0)
-                   && nearly(canvas.itemRect(initialPan1).y, 0.5));
+        // The applets stand in the Classic column on the right, as first
+        // enable and Reset to Classic place them.
+        canvas.setItemRect(QStringLiteral("applet:RX"),
+                           NormRect{1.0 - AetherSDR::kClassicAppletColumnWidth,
+                                    0.0, AetherSDR::kClassicAppletColumnWidth, 0.5});
+        canvas.setItemRect(QStringLiteral("applet:TX"),
+                           NormRect{1.0 - AetherSDR::kClassicAppletColumnWidth,
+                                    0.5, AetherSDR::kClassicAppletColumnWidth, 0.5});
         auto* panD2 = new QWidget(&panOwner);
         auto* panE2 = new QWidget(&panOwner);
         pans.insert(QStringLiteral("0x40000010"), panD2);
@@ -601,24 +715,24 @@ int main(int argc, char** argv)
         AppSettings::instance().save();
         report("canvas pan layout accepts canonical 4v",
                ctl.applyPanLayout(QStringLiteral("4v")));
-        const double classicPanWidth = 1.0;
+        const double canvasPanWidth = 1.0 - AetherSDR::kClassicAppletColumnWidth;
         report("4v replaces stale pan rectangles with canonical cells",
                nearly(canvas.itemRect(pan0).x, 0.0)
                    && nearly(canvas.itemRect(pan0).y, 0.0)
-                   && nearly(canvas.itemRect(pan0).w, classicPanWidth)
+                   && nearly(canvas.itemRect(pan0).w, canvasPanWidth)
                    && nearly(canvas.itemRect(pan0).h, 0.25)
                    && nearly(canvas.itemRect(pan1).y, 0.25)
                    && nearly(canvas.itemRect(pan2).y, 0.50)
                    && nearly(canvas.itemRect(pan3).y, 0.75));
-        // The classic applet panel is hidden while canvas mode is active.
-        // Saved docking preferences must not shrink or shift canvas pans.
+        // The hidden Classic panel's docking key cannot move the pans off
+        // the column the applets actually occupy.
         AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
                                          QStringLiteral("True"));
         AppSettings::instance().save();
         report("left-docked applet preference cannot leave a canvas gap",
                ctl.applyPanLayout(QStringLiteral("4v"))
                    && nearly(canvas.itemRect(pan0).x, 0.0)
-                   && nearly(canvas.itemRect(pan0).w, 1.0));
+                   && nearly(canvas.itemRect(pan0).w, canvasPanWidth));
         AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
                                          QStringLiteral("False"));
         AppSettings::instance().save();
@@ -653,13 +767,13 @@ int main(int argc, char** argv)
                ctl.applyPanLayout(QStringLiteral("2x2"))
                    && nearly(canvas.itemRect(pan0).x, 0.0)
                    && nearly(canvas.itemRect(pan0).y, 0.0)
-                   && nearly(canvas.itemRect(pan0).w, classicPanWidth / 2.0)
+                   && nearly(canvas.itemRect(pan0).w, canvasPanWidth / 2.0)
                    && nearly(canvas.itemRect(pan0).h, 0.5)
-                   && nearly(canvas.itemRect(pan1).x, classicPanWidth / 2.0)
+                   && nearly(canvas.itemRect(pan1).x, canvasPanWidth / 2.0)
                    && nearly(canvas.itemRect(pan1).y, 0.0)
                    && nearly(canvas.itemRect(pan2).x, 0.0)
                    && nearly(canvas.itemRect(pan2).y, 0.5)
-                   && nearly(canvas.itemRect(pan3).x, classicPanWidth / 2.0)
+                   && nearly(canvas.itemRect(pan3).x, canvasPanWidth / 2.0)
                    && nearly(canvas.itemRect(pan3).y, 0.5));
         WorkspaceDocument persisted;
         const bool parsedStored = WorkspaceDocument::fromStoredJson(
@@ -678,9 +792,9 @@ int main(int argc, char** argv)
             }
         }
         report("2x2 canonical geometry reached stored workspace JSON",
-               persistedPan3 && nearly(persistedPan3->rect.x, classicPanWidth / 2.0)
+               persistedPan3 && nearly(persistedPan3->rect.x, canvasPanWidth / 2.0)
                    && nearly(persistedPan3->rect.y, 0.5)
-                   && nearly(persistedPan3->rect.w, classicPanWidth / 2.0)
+                   && nearly(persistedPan3->rect.w, canvasPanWidth / 2.0)
                    && nearly(persistedPan3->rect.h, 0.5));
 
         // A shrink can remove a pan whose radio id sorts last even though its

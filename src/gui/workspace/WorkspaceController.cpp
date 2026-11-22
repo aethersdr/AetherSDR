@@ -54,6 +54,105 @@ QString docSurfaceForItem(const Workspace& ws, const QString& itemId)
     }
     return QString();
 }
+
+// The horizontal band a canvas pan layout composes into: the full canvas
+// width minus the applet columns standing along its left and right edges.
+// The band comes from where the applets actually sit on the canvas, not from
+// the Classic panel's saved keys: those can disagree with the canvas, which
+// either strands an empty strip beside the pans (#7381) or, when ignored,
+// runs every pan underneath an applet column.
+//
+// A column is every applet chained to an edge: one whose outer side is on
+// the edge, then any applet whose outer side starts where a chained one
+// ends, and so on, so a Classic column that wrapped to two or three widths
+// counts in full. An applet attached to neither edge floats over the pans
+// and reserves nothing, and so does one that merely overlaps a column from
+// inside the pan area. One spanning the whole width cannot be avoided
+// horizontally and is skipped.
+//
+// Two guards keep an overlay from passing for a column (maintainer ruling
+// on #7386): an edge reserves its column only when the chained applets
+// together cover at least kMinColumnCoverage of the canvas height, so a
+// small corner meter or a short bar along the bottom does not narrow the
+// pans; and if the band left over is narrower than kMinPanBandWidth, the
+// pans take the full width rather than a sliver the canvas would draw at
+// its pixel floor anyway.
+constexpr double kMinColumnCoverage = 0.5;
+constexpr double kMinPanBandWidth = 0.25;
+
+// The length of [0, 1] covered by the union of the rects' vertical extents.
+double verticalCoverage(QList<NormRect> rects)
+{
+    std::sort(rects.begin(), rects.end(),
+              [](const NormRect& a, const NormRect& b) { return a.y < b.y; });
+    double covered = 0.0;
+    double reach = 0.0;
+    for (const NormRect& r : rects) {
+        const double top = qMax(reach, qBound(0.0, r.y, 1.0));
+        const double bottom = qBound(0.0, r.bottom(), 1.0);
+        if (bottom > top) {
+            covered += bottom - top;
+            reach = bottom;
+        }
+    }
+    return covered;
+}
+
+NormRect panBandBesideApplets(const QList<NormRect>& applets)
+{
+    // Snapping puts an applet dragged to an edge exactly on it; one grid step
+    // of slack still counts a column placed by hand a hair off the edge.
+    constexpr double kTouch = 1.0 / WorkspaceCanvas::kSnapGridColumns;
+    const auto meetsAny = [](double side, const QList<double>& seams) {
+        for (double seam : seams) {
+            if (qAbs(side - seam) <= kTouch) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Seams are the edge itself plus every chained applet's inner side.
+    QList<double> leftSeams{0.0};
+    QList<double> rightSeams{1.0};
+    double left = 0.0;
+    double right = 1.0;
+    QList<NormRect> leftColumn;
+    QList<NormRect> rightColumn;
+    QList<bool> chained(applets.size(), false);
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (qsizetype i = 0; i < applets.size(); ++i) {
+            const NormRect& r = applets.at(i);
+            if (chained.at(i) || (r.x <= kTouch && r.right() >= 1.0 - kTouch)) {
+                continue;
+            }
+            if (meetsAny(r.x, leftSeams)) {
+                chained[i] = true;
+                leftColumn.append(r);
+                leftSeams.append(r.right());
+                left = qMax(left, r.right());
+                grew = true;
+            } else if (meetsAny(r.right(), rightSeams)) {
+                chained[i] = true;
+                rightColumn.append(r);
+                rightSeams.append(r.x);
+                right = qMin(right, r.x);
+                grew = true;
+            }
+        }
+    }
+    if (verticalCoverage(leftColumn) < kMinColumnCoverage) {
+        left = 0.0;
+    }
+    if (verticalCoverage(rightColumn) < kMinColumnCoverage) {
+        right = 1.0;
+    }
+    if (right - left < kMinPanBandWidth) {
+        return NormRect{0.0, 0.0, 1.0, 1.0};
+    }
+    return NormRect{left, 0.0, right - left, 1.0};
+}
 }  // namespace
 
 const QString WorkspaceController::kPanStackItemId = QStringLiteral("panstack");
@@ -1589,15 +1688,26 @@ bool WorkspaceController::applyPanLayout(const QString& layoutId)
     for (const QString& panId : panIds) {
         slotIds.append(QString::number(m_panSlots.value(panId)));
     }
-    // Canvas applets occupy their own freely placed items, not the classic
-    // applet-panel column. Reserving that invisible column shifts every pan
-    // on a layout change and leaves an empty strip on the docked side (#7381).
-    // Keep the legacy panel preference intact for a later return to classic.
+    // Compose the cells into the band beside the applet columns the main
+    // canvas actually shows, measured where they are drawn now. Closed items
+    // keep their home rect in the document and floating or panel-docked
+    // applets are not on the canvas; neither occupies any canvas width.
+    QList<NormRect> appletRects;
+    for (const CanvasItem& item : main->items) {
+        if (item.id.startsWith(kAppletItemPrefix) && !item.closed
+            && m_canvas->contains(item.id)) {
+            appletRects.append(m_canvas->itemRect(item.id));
+        }
+    }
+    const NormRect band = panBandBesideApplets(appletRects);
     const QList<CanvasItem> classic = composeClassic(slotIds, {}, layoutId, false);
     QHash<QString, NormRect> rects;
     for (const CanvasItem& item : classic) {
         if (item.id.startsWith(kPanItemPrefix)) {
-            rects.insert(item.id, item.rect);
+            NormRect r = item.rect;
+            r.x = band.x + r.x * band.w;
+            r.w *= band.w;
+            rects.insert(item.id, r);
         }
     }
 
