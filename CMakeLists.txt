@@ -1120,6 +1120,7 @@ set(CORE_SOURCES
     src/core/TciRoutingState.cpp
     src/core/TciExtensionSet.cpp
     src/core/TciExtensionNotice.cpp
+    src/core/TciTxPassbandExtension.cpp
     src/core/TciRxGainExtension.cpp
     src/core/TciAntennaExtension.cpp
     src/core/TciSpanExtension.cpp

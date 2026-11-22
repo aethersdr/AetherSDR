@@ -90,6 +90,7 @@ class TciServer : public QObject {
     friend class TciAntennaExtensionTest;
     friend class TciHwSensorsTestAccess;
     friend class TciExtensionSetTest;
+    friend class TciTxPassbandExtensionTest;
     friend class TciRxGainExtensionTest;
     friend class TciSpanExtensionTest;
 
@@ -280,6 +281,14 @@ private:
     bool announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
+    // Extension group `tx_filter_band` (TciTxPassbandExtension.h).
+    void registerTxPassbandGroup();
+    TciExtensionSet::Result handleTxPassband(const QStringList& args);
+    bool txPassbandOffered() const;
+    QString txPassbandStateLine() const;
+    int extensionTxTrx() const;
+    void queueTxPassbandNotice();
+    bool broadcastTxPassband();
     // Extension groups `rx_rf_gain`, `rx_auto_rf_gain`, `rx_overload`
     // (TciRxGainExtension.h).
     void registerRxGainGroups();
@@ -633,6 +642,8 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Extension set, TX passband notice: posted, then rate-limited.
+    std::unique_ptr<TciExtensionNotice> m_txPassbandNotice;
     // Extension set, antenna notices: per line kind, the trx numbers pending.
     std::array<QSet<int>, kAntennaLineKinds> m_antennaPending;
     std::unique_ptr<TciExtensionNotice> m_antennaNotice;
