@@ -60,10 +60,12 @@ int main()
     for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
                                 QStringLiteral("AM"), QStringLiteral("SAM"),
                                 QStringLiteral("FM"), QStringLiteral("NFM"),
-                                QStringLiteral("DFM")}) {
+                                QStringLiteral("DSB")}) {
         report("transmittable voice modes retain keyer availability",
                isVoiceTransmitMode(mode, receiveOnlyModes));
     }
+    report("FM data (DFM) is not a transmit voice mode",
+           !isVoiceTransmitMode(QStringLiteral("DFM"), receiveOnlyModes));
     report("backend-declared receive-only voice modes are all excluded",
            !isVoiceTransmitMode(QStringLiteral("SAM"), {QStringLiteral("SAM")}));
     report("an empty mode never becomes a transmit voice mode",

@@ -200,13 +200,15 @@ public:
     {
         m_modemAutomationHandler = std::move(handler);
     }
+    // Arguments are (id, allowTx, txCeilingArmed, controller).
     void setShortcutAutomationHandler(
-        std::function<int(const QString&, bool, const std::shared_ptr<TxController>&)> handler)
+        std::function<int(const QString&, bool, bool, const std::shared_ptr<TxController>&)> handler)
     {
         m_shortcutAutomationHandler = std::move(handler);
     }
+    // Arguments are (spec, press, allowTx, txCeilingArmed, controller).
     void setKeyEventAutomationHandler(
-        std::function<int(const QString&, bool, bool, const std::shared_ptr<TxController>&)> handler)
+        std::function<int(const QString&, bool, bool, bool, const std::shared_ptr<TxController>&)> handler)
     {
         m_keyEventAutomationHandler = std::move(handler);
     }
@@ -838,9 +840,9 @@ private:
     QElapsedTimer m_txKeyClock;   // monotonic, never restarted by repeated key-on
     TxCoordinator::Operation m_txBridgeOperation;
     std::shared_ptr<TxController> m_txController;
-    std::function<int(const QString&, bool, const std::shared_ptr<TxController>&)>
-        m_shortcutAutomationHandler;
     std::function<int(const QString&, bool, bool, const std::shared_ptr<TxController>&)>
+        m_shortcutAutomationHandler;
+    std::function<int(const QString&, bool, bool, bool, const std::shared_ptr<TxController>&)>
         m_keyEventAutomationHandler;
     bool m_txAuthorizationChanging{false};
     quint64 m_txPermissionEpoch{0}; // revocation fences already queued widget actions

@@ -977,9 +977,21 @@ void TransmitModel::loadMicProfile(const QString& name)
 
 // ── VOX commands ────────────────────────────────────────────────────────────
 
+QString TransmitModel::voxOnRefusal() const
+{
+    return m_voxAdmission ? m_voxAdmission().trimmed() : QString();
+}
+
 void TransmitModel::setVoxEnable(bool on)
 {
     if (refuseControlOffThread()) { return; }
+    if (on) {
+        if (const QString refusal = voxOnRefusal(); !refusal.isEmpty()) {
+            emit phoneStateChanged();  // a pressed toggle follows the unchanged state
+            emit voxEnableRefused(refusal);
+            return;
+        }
+    }
     const auto field = TransmitControlRequest::Field::VoxEnabled;
     const auto current = captureControlIntent(field);
     m_voxEnable = on;  // optimistic update — radio may not echo
@@ -995,6 +1007,12 @@ void TransmitModel::setVoxEnable(bool on)
 quint64 TransmitModel::requestVoxEnable(bool on)
 {
     if (refuseControlOffThread()) { return 0; }
+    if (on) {
+        if (const QString refusal = voxOnRefusal(); !refusal.isEmpty()) {
+            emit voxEnableRefused(refusal);
+            return 0;   // no ticket: no answer will come
+        }
+    }
     const auto field = TransmitControlRequest::Field::VoxEnabled;
     // A VOX intent like an operator click, so a click after it supersedes it.
     captureControlIntent(field);

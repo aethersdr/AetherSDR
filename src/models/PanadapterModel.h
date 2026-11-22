@@ -89,6 +89,10 @@ public:
     // UI slider's own value.
     void recordRfGainObservation(int gainDb);
     std::optional<int> reportedRfGain() const { return m_reportedRfGain; }
+    // The RF gain last dispatched through RadioModel::requestPanDisplay. While
+    // it differs from rfGain() a write is still in flight.
+    void noteRfGainRequest(int gainDb) { m_requestedRfGain = gainDb; }
+    std::optional<int> requestedRfGain() const { return m_requestedRfGain; }
     // Force an infoChanged with the current values — for a backend re-asserting
     // a span it refused to change. See the definition.
     void republishCenterBandwidth();
@@ -314,6 +318,7 @@ private:
     std::optional<qint64> m_reportedCenterHz;
     std::optional<qint64> m_reportedBandwidthHz;
     std::optional<int> m_reportedRfGain;
+    std::optional<int> m_requestedRfGain;
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};
     float       m_maxDbm{-40.0f};

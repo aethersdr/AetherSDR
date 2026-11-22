@@ -76,6 +76,8 @@ signals:
     // Forwarded from ClientRxChainWidget when single-click re-enables
     // NR2 from LastClientNr; MainWindow runs the wisdom-prep path.
     void rxNr2EnableWithWisdomRequested();
+    // Explicit method-enable intent, separate from passive engine/UI sync.
+    void rxDspMethodUserToggled();
     void rxStageEnabledChanged(AudioEngine::RxChainStage stage, bool enabled);
     // Emitted after a successful drag-reorder of the RX chain.  Mirrors
     // chainReordered() above on the TX side.

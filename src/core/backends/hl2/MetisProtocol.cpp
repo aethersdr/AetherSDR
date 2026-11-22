@@ -1,5 +1,6 @@
 #include "core/backends/hl2/MetisProtocol.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2RxGainDuringTx.h"
 
 #include <algorithm>   // std::max, for the variance clamp in Ep4Stats::rmsDbfs
 #include <cmath>
@@ -169,6 +170,16 @@ Cc ccAdcAssign() noexcept
     // RX1..RX7 -> ADC0, TX attenuation 0. All-zero payload is the correct value
     // for a single-ADC Phase-1 receiver; what matters is that the bank is sent.
     return {kC0AdcAssignOrTxGain, 0x00, 0x00, 0x00, 0x00};
+}
+
+Cc ccTxLnaGain(int rxGainDb, bool pureSignal) noexcept
+{
+    Cc b = ccAdcAssign();
+    if (rxGainDuringTxEngaged(rxGainDb, pureSignal)) {
+        const int code = kRxGainDuringTxCapDb - kLnaGainMinDb;
+        b[3] = static_cast<std::uint8_t>(0x80 | 0x40 | code);
+    }
+    return b;
 }
 
 Cc ccRegister(int addr, std::uint32_t data) noexcept

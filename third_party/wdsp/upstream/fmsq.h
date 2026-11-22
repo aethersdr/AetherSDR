@@ -71,6 +71,7 @@ typedef struct _fmsq
 	FIRCORE p;
 	EQIMP peqimp;
 	double* impulse;
+	long gatePublished;					// AetherSDR patch 24: 1 while the gate passes audio, 0 while muted
 } fmsq, *FMSQ;
 
 extern FMSQ create_fmsq (int run, int size, double* insig, double* outsig, double* trigger, int rate, double fc, 
@@ -96,5 +97,7 @@ extern __declspec (dllexport) void SetRXAFMSQThreshold (int channel, double thre
 extern __declspec (dllexport) void SetRXAFMSQNC (int channel, int nc);
 
 extern __declspec (dllexport) void SetRXAFMSQMP (int channel, int mp);
+// AetherSDR patch 24: the gate state at the end of the last processed block.
+extern __declspec (dllexport) int GetRXAFMSQGateOpen (int channel);
 
 #endif

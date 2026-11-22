@@ -6,8 +6,10 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 #include <optional>
@@ -183,6 +185,24 @@ private:
     };
     static SwrAtKey classifySwrAtKey(bool haveSwr, const SwrGateReading& gate,
                                      int drivePercent, double toneDbfs);
+
+    // Arms the automation audio capture. False, with the engine's reason in
+    // *why, when it refused: a refused capture records nothing, so a stage
+    // that carried on would report silence as a measurement (#7083).
+    bool armCapture(int durationMs, const QStringList& points, QString* why);
+    static QString captureUnavailableConcern(const QString& why);
+
+    // What meter-scale concludes from one keyed snapshot. A reading counts only
+    // if the key was confirmed and the meter is fresh; otherwise its value is
+    // null, never the leftover (#7084). Separate so it is testable unkeyed.
+    struct MeterScaleReading {
+        QJsonValue micPeakDbfs;
+        QJsonValue swr;
+        QString swrNote;
+        QStringList problems;
+    };
+    static MeterScaleReading judgeMeterScale(bool keyedOk, const QJsonObject& keyed,
+                                             double toneDbfs);
 
     // Drive used for the sideband probe only. Enough to measure, low enough
     // that the receiver listening to its own transmitter is not driven into

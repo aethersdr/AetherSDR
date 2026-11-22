@@ -144,6 +144,7 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte,
                           m_params.ditherBit, m_params.randomBit);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
+    m_ccTxLnaGain = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
     m_ccRxFreq.assign(1, ccRxFreq(0, m_params.rxFrequencyHz));
     m_ccTxFreq = ccTxFreq(m_params.rxFrequencyHz);
     m_ccTxDrive = ccTxDrive(0, false);
@@ -230,9 +231,9 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
     std::vector<QHostAddress> localAddresses;
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
         const auto flags = iface.flags();
-        if (!flags.testFlag(QNetworkInterface::IsUp)
-            || !flags.testFlag(QNetworkInterface::IsRunning)
-            || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+        if (!discoveryWalksInterface(flags.testFlag(QNetworkInterface::IsUp)
+                                         && flags.testFlag(QNetworkInterface::IsRunning),
+                                     flags.testFlag(QNetworkInterface::IsLoopBack), broadcast)) {
             continue;
         }
         for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
@@ -286,6 +287,19 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
     return found;
 }
 
+bool MetisClient::discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                          const QHostAddress& target)
+{
+    return upAndRunning && isLoopbackInterface == target.isLoopback();
+}
+
+QHostAddress MetisClient::sessionBindAddress(const QHostAddress& host, const QHostAddress& requested)
+{
+    if (host.protocol() == QAbstractSocket::IPv4Protocol && host.isLoopback())
+        return QHostAddress(QHostAddress::LocalHost);
+    return requested.isNull() ? QHostAddress(QHostAddress::AnyIPv4) : requested;
+}
+
 int MetisClient::effectiveNumRx(const Params& p)
 {
     int n = p.numRx < 1 ? 1 : p.numRx;
@@ -320,6 +334,7 @@ bool MetisClient::start(const Params& params)
     // A new session's first config bank may move the radio's filter relays.
     m_lastConfigBus2Sent = kConfigBus2Unknown;
     m_ccGain = ccRxGain(m_params.lnaGainDb);
+    m_ccTxLnaGain = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
     // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
     // brings each slice up. The BANK COUNT is fixed here and never re-derived
     // per packet, so the round robin and the EP6 demux cannot disagree about how
@@ -397,8 +412,7 @@ bool MetisClient::start(const Params& params)
         return m_startTransportForTest(params);
 
     m_socket = new QUdpSocket(this);
-    const QHostAddress bindAddress = params.localAddress.isNull()
-        ? QHostAddress::AnyIPv4 : params.localAddress;
+    const QHostAddress bindAddress = sessionBindAddress(m_host, params.localAddress);
     if (!m_socket->bind(bindAddress, 0)) {
         m_socket->deleteLater();
         m_socket = nullptr;
@@ -870,7 +884,8 @@ void MetisClient::setPureSignal(bool enabled, quint64 generation)
         relayoutReceivers(before);
     else
         applyPureSignalNcos();
-    queueOneShotIfRunning(currentGainBank());
+    // The 0x0a and 0x0e order depends on the direction: applyTxLnaGain().
+    applyTxLnaGain(/*alsoGainBank=*/true);
 }
 
 void MetisClient::setPureSignalTxGainDb(int db)
@@ -1112,6 +1127,27 @@ void MetisClient::setLnaGainDb(int db)
 {
     m_params.lnaGainDb = db;
     m_ccGain = ccRxGain(db);
+    applyTxLnaGain();
+}
+
+void MetisClient::applyTxLnaGain(bool alsoGainBank)
+{
+    const Cc bank = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
+    if (bank == m_ccTxLnaGain) {
+        if (alsoGainBank)
+            queueOneShotIfRunning(currentGainBank());
+        return;
+    }
+    m_ccTxLnaGain = bank;
+    // Ahead of the rotation, so a key straight after a gain change finds it.
+    // Releasing [15] makes ad9866.v load rx_gain at once, even keyed, so the
+    // new 0x0a must already be there; engaging it must land before 0x0a.
+    const bool releasing = (bank[3] & 0x80) == 0;
+    if (releasing)
+        queueOneShotIfRunning(currentGainBank());
+    queueOneShotIfRunning(bank);
+    if (!releasing && alsoGainBank)
+        queueOneShotIfRunning(currentGainBank());
 }
 
 void MetisClient::setBandFilter(int ocFilterByte)
@@ -2082,7 +2118,6 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
     if (!m_txIqContext.permitsDispatch(TxCoordinator::monotonicMs())) {
         abandonTxIq();
     }
-    static const Cc kCcAdc = ccAdcAssign();
     // Cleared here rather than only on confirmation: a packet built and then
     // thrown away (a test, or a caller that inspects the bytes) must not leave
     // a stale claim that some later packet carried the request.
@@ -2129,7 +2164,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         // next EP2 frame instead of timing out unseen.
         m_requestOnBuiltPacket = true;
     } else {
-        // The rotation is every receiver's NCO, then gain, then ADC assignment:
+        // The rotation is every receiver's NCO, then gain, then 0x0e (ADC
+        // assignment / TX LNA gain):
         // numRx + 2 slots. Each receiver's NCO is RE-ASSERTED rather than sent
         // once, for the same reason the config bank is — a radio that resets or
         // reconnects mid-session must not be left with a stale NCO on the
@@ -2148,7 +2184,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         else if (slot == nFreq)
             b = currentGainBank();
         else if (slot == nFreq + 1)
-            b = kCcAdc;
+            b = m_ccTxLnaGain;
         else
             b = txDriveBank();
         ++m_roundRobin;

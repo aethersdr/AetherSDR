@@ -1030,9 +1030,14 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
     } else if (!request.valid()) {
         return rprt(-1);
     }
-    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive, request]() {
+    const TxCoordinator::Request release = tx ? TxCoordinator::Request{} : m_txProducer.request();
+    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive, request,
+                                        release]() {
         if (tx && !request.valid()) {
             return;
+        }
+        if (!tx) {
+            model->noteTxInputReleased(release);
         }
         // Non-split: ensure this protocol's bound slice is the TX slice so the
         // correct slice is used for transmission. Split: leave the split TX slice
