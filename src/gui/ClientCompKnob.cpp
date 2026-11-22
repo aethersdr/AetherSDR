@@ -28,6 +28,7 @@ namespace AetherSDR {
 
 namespace {
 constexpr float kWheelNormStep = 0.01f; // 1% per wheel notch or arrow key
+constexpr float kPageNormStep = 0.10f;  // 10% per Page Up/Page Down
 constexpr int kAccessibilitySettleMs = 250;
 }
 
@@ -35,7 +36,9 @@ class ClientCompKnobAccessible : public QAccessibleWidget,
                                  public QAccessibleValueInterface {
 public:
     explicit ClientCompKnobAccessible(ClientCompKnob* knob)
-        : QAccessibleWidget(knob, QAccessible::Dial) {}
+        // Slider, not Dial: Qt's Windows UIA bridge maps Dial to a custom
+        // control type, so JAWS and NVDA would not announce a slider.
+        : QAccessibleWidget(knob, QAccessible::Slider) {}
 
     void* interface_cast(QAccessible::InterfaceType type) override
     {
@@ -59,6 +62,9 @@ public:
     QVariant minimumStepSize() const override
     {
         const ClientCompKnob* k = knob();
+        if (k->m_physicalStep > 0.0f) {
+            return k->m_physicalStep;
+        }
         const float next = k->m_norm <= 1.0f - kWheelNormStep
             ? k->m_norm + kWheelNormStep : k->m_norm - kWheelNormStep;
         const float physical = k->m_fromNorm ? k->m_fromNorm(next)
@@ -86,8 +92,7 @@ public:
             return;
         }
         if (action == increaseAction() || action == decreaseAction()) {
-            const float delta = action == increaseAction() ? kWheelNormStep : -kWheelNormStep;
-            knob()->applyNorm(knob()->m_norm + delta);
+            knob()->stepBy(action == increaseAction() ? 1 : -1, false);
         } else {
             QAccessibleWidget::doAction(action);
         }
@@ -145,8 +150,7 @@ ClientCompKnob::ClientCompKnob(QWidget* parent) : QWidget(parent)
     setMinimumSize(58, 64);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent, false);
-    setAccessibleDescription(tr("Arrow keys adjust the value; hold Shift for fine adjustment. "
-                               "Home selects the minimum and End selects the maximum."));
+    setAccessibleDescription(continuousKeyDescription());
     m_accessibilityTimer.setSingleShot(true);
     m_accessibilityTimer.setInterval(kAccessibilitySettleMs);
     connect(&m_accessibilityTimer, &QTimer::timeout, this, [this] {
@@ -197,9 +201,22 @@ ClientCompKnob::ClientCompKnob(QWidget* parent) : QWidget(parent)
 void ClientCompKnob::setLabel(const QString& text)
 {
     m_label = text;
-    setAccessibleName(text);
-    m_valueEdit->setAccessibleName(tr("%1 value").arg(text));
+    if (m_accessibleLabel.isEmpty()) {
+        applyAccessibleLabel(text);
+    }
     update();
+}
+
+void ClientCompKnob::setAccessibleLabel(const QString& name)
+{
+    m_accessibleLabel = name;
+    applyAccessibleLabel(name.isEmpty() ? m_label : name);
+}
+
+void ClientCompKnob::applyAccessibleLabel(const QString& name)
+{
+    setAccessibleName(name);
+    m_valueEdit->setAccessibleName(tr("%1 value").arg(name));
 }
 
 void ClientCompKnob::setRange(float minPhysical, float maxPhysical)
@@ -319,18 +336,101 @@ void ClientCompKnob::focusOutEvent(QFocusEvent* ev)
     QWidget::focusOutEvent(ev);
 }
 
+void ClientCompKnob::setPhysicalStep(float step)
+{
+    m_physicalStep = std::max(step, 0.0f);
+    setAccessibleDescription(m_physicalStep > 0.0f
+        ? tr("Arrow keys and Page Up/Page Down step the value. "
+             "Home selects the minimum and End selects the maximum.")
+        : continuousKeyDescription());
+}
+
+QString ClientCompKnob::continuousKeyDescription()
+{
+    return tr("Arrow keys adjust the value; hold Shift for fine adjustment. "
+              "Page Up and Page Down make large steps. "
+              "Home selects the minimum and End selects the maximum.");
+}
+
+void ClientCompKnob::pageBy(int direction)
+{
+    if (m_physicalStep > 0.0f) {
+        stepBy(direction, false);
+        return;
+    }
+    applyNorm(m_norm + direction * kPageNormStep);
+}
+
+void ClientCompKnob::stepBy(int direction, bool fine)
+{
+    if (m_physicalStep > 0.0f) {
+        // Step from the nearest whole step: a drag can leave the knob between
+        // stages until the owner's refresh snaps it back.
+        const float base = m_minPhys
+            + std::round((m_physical - m_minPhys) / m_physicalStep) * m_physicalStep;
+        setValueFromUser(base + direction * m_physicalStep);
+        return;
+    }
+    applyNorm(m_norm + direction * kWheelNormStep * (fine ? kFineMultiplier : 1.0f));
+}
+
+bool ClientCompKnob::valueEditorHasFocus() const
+{
+    return m_valueEdit && m_valueEdit->hasFocus();
+}
+
+bool ClientCompKnob::event(QEvent* ev)
+{
+    // MainWindow binds the arrows as operating shortcuts (tune, AF gain), and
+    // an enabled QShortcut consumes its key before keyPressEvent (#5483).
+    // Claim the keys this knob documents for as long as it has focus.
+    // Not while the inline value editor has focus: it keeps Qt's own handling.
+    if (ev->type() == QEvent::ShortcutOverride && !valueEditorHasFocus()) {
+        auto* ke = static_cast<QKeyEvent*>(ev);
+        const auto mods = ke->modifiers() & ~(Qt::ShiftModifier | Qt::KeypadModifier);
+        switch (ke->key()) {
+        case Qt::Key_Up:
+        case Qt::Key_Down:
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+        case Qt::Key_Home:
+        case Qt::Key_End:
+        case Qt::Key_PageUp:
+        case Qt::Key_PageDown:
+            if (mods == Qt::NoModifier) {
+                ke->accept();
+                return true;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return QWidget::event(ev);
+}
+
 void ClientCompKnob::keyPressEvent(QKeyEvent* ev)
 {
-    const float step = kWheelNormStep * ((ev->modifiers() & Qt::ShiftModifier)
-        ? kFineMultiplier : 1.0f);
+    if (valueEditorHasFocus()) {
+        // Propagated from the inline value editor: don't step mid-edit.
+        QWidget::keyPressEvent(ev);
+        return;
+    }
+    const bool fine = ev->modifiers() & Qt::ShiftModifier;
     switch (ev->key()) {
     case Qt::Key_Up:
     case Qt::Key_Right:
-        applyNorm(m_norm + step);
+        stepBy(1, fine);
         break;
     case Qt::Key_Down:
     case Qt::Key_Left:
-        applyNorm(m_norm - step);
+        stepBy(-1, fine);
+        break;
+    case Qt::Key_PageUp:
+        pageBy(1);
+        break;
+    case Qt::Key_PageDown:
+        pageBy(-1);
         break;
     case Qt::Key_Home:
         applyNorm(0.0f);
@@ -585,6 +685,13 @@ void ClientCompKnob::mouseDoubleClickEvent(QMouseEvent* ev)
 void ClientCompKnob::wheelEvent(QWheelEvent* ev)
 {
     const int ticks = ev->angleDelta().y() / 120;
+    if (m_physicalStep > 0.0f) {
+        if (ticks != 0) {
+            stepBy(ticks, false);
+        }
+        ev->accept();
+        return;
+    }
     const float scale = (ev->modifiers() & Qt::ShiftModifier)
                           ? kFineMultiplier : 1.0f;
     applyNorm(m_norm + ticks * kWheelNormStep * scale);

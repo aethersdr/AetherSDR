@@ -25,6 +25,11 @@ public:
     // Caller-facing label drawn above the knob (e.g. "Ratio", "Attack").
     void setLabel(const QString& text);
 
+    // Spoken name when the painted label is ambiguous out of context, e.g.
+    // "Body mix" for a "Mix" knob under a "Body" heading. Names the knob and
+    // its inline value editor; setLabel() keeps it once set.
+    void setAccessibleLabel(const QString& name);
+
     // Physical value range (inclusive).  Only used to clamp external
     // setValue() calls; the actual normalised range is always 0..1.
     void setRange(float minPhysical, float maxPhysical);
@@ -62,6 +67,12 @@ public:
     void setValue(float physical);
     float value() const { return m_physical; }
 
+    // Discrete controls (e.g. compressor Phase stages): arrow keys and the
+    // accessible increase/decrease actions move by this many physical units.
+    // 0 (the default) steps by 1% of travel. The mouse wheel steps the same
+    // way, and Shift gives no finer step on a discrete knob.
+    void setPhysicalStep(float step);
+
 signals:
     void valueChanged(float physical);
 
@@ -73,6 +84,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* ev) override;
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     void wheelEvent(QWheelEvent* ev) override;
+    bool event(QEvent* ev) override;
     bool eventFilter(QObject* obj, QEvent* ev) override;
     void keyPressEvent(QKeyEvent* ev) override;
     void focusInEvent(QFocusEvent* ev) override;
@@ -82,6 +94,11 @@ private:
     friend class ClientCompKnobAccessible;
     void applyNorm(float norm);
     void setValueFromUser(float physical);
+    void stepBy(int direction, bool fine);
+    bool valueEditorHasFocus() const;
+    void pageBy(int direction);
+    static QString continuousKeyDescription();
+    void applyAccessibleLabel(const QString& name);
     void scheduleAccessibleAnnouncement();
     QString formatValue() const;
     QRect valueRect() const;          // bottom-area rect for the value text
@@ -110,6 +127,8 @@ private:
     // commits.  Closes #2655.
     QLineEdit*  m_valueEdit{nullptr};
     QTimer      m_accessibilityTimer;
+    QString     m_accessibleLabel;
+    float       m_physicalStep{0.0f};
     QString     m_lastAccessibleText;
 };
 

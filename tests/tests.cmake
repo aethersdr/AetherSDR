@@ -11048,6 +11048,15 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
     src/gui/StripTubePanel.cpp
+    src/gui/StripCompPanel.cpp
+    src/gui/ClientCompEditorCanvas.cpp
+    src/gui/ClientCompLimiterButton.cpp
+    src/gui/ClientCompMeter.cpp
+    src/gui/ClientCompThresholdFader.cpp
+    src/gui/ClientPuduApplet.cpp
+    src/gui/ClientPuduEditor.cpp
+    src/gui/StripPuduPanel.cpp
+    src/gui/PooDooLogo.cpp
     src/gui/ClientLevelMeter.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
@@ -11055,6 +11064,8 @@ target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)
 target_link_libraries(client_dsp_knob_dispatch_test PRIVATE
     aethercore Qt6::Widgets Qt6::Test)
 add_test(NAME client_dsp_knob_dispatch_test COMMAND client_dsp_knob_dispatch_test)
+set_tests_properties(client_dsp_knob_dispatch_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 set_tests_properties(nrs_level_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
