@@ -1001,6 +1001,8 @@ set(CORE_SOURCES
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
     src/core/RtlDeviceSettings.cpp  # accepted per-device calibration and IQ controls
     src/core/GpuSelector.cpp
+    src/core/FatalSignalRelease.cpp   # termination signals release the radio, any family
+    src/core/HostTransmitPolicy.cpp   # whether this process offers host-keyed transmit
     src/core/QtAudioBackendGuard.cpp  # pre-QApplication: keeps Qt 6.12 off a crashing PipeWire backend
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
@@ -1121,7 +1123,9 @@ set(CORE_SOURCES
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
     src/core/TciExtensionSet.cpp
+    src/core/TciHl2Extension.cpp
     src/core/TciExtensionNotice.cpp
+    src/core/TciTxPassbandExtension.cpp
     src/core/TciRxGainExtension.cpp
     src/core/TciAntennaExtension.cpp
     src/core/TciSpanExtension.cpp
@@ -1319,6 +1323,8 @@ set(MODEL_SOURCES
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_AudioControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
+    src/models/RadioModel_TxTimeout.cpp
+    src/models/TxTimeoutGuard.cpp
     src/models/HostCwTextKeyer.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
@@ -1376,6 +1382,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_Shortcuts.cpp
     src/gui/MainWindow_ControlActions.cpp
     src/gui/ControlActionRegistry.cpp
+    src/gui/ShortcutTooltips.cpp
     src/gui/MainWindow_DigitalModes.cpp
     src/gui/MainWindow_Spots.cpp
     src/gui/MainWindow_SwrSweep.cpp

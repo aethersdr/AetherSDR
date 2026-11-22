@@ -2395,6 +2395,12 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::reconcileAdministration);
     connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::reconcileAdministration);
     m_desktopTxActor = m_txCoordinator.registerActor({true, 0});
+    m_txTimeoutTimer = new QTimer(this);
+    m_txTimeoutTimer->setInterval(250);
+    connect(m_txTimeoutTimer, &QTimer::timeout, this, &RadioModel::onTxTimeoutTick);
+    connect(this, &RadioModel::radioTransmittingChanged, this, &RadioModel::onTxTimeoutTransmitting);
+    connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::loadTxTimeoutSettings);
+    connect(this, &RadioModel::infoChanged, this, &RadioModel::loadTxTimeoutSettings);
     // FlexLib APD.cs matches against the transmit slice, else the active one.
     m_transmitModel.setApdTxSliceResolver([this]() -> std::optional<TransmitModel::ApdTxSlice> {
         SliceModel* slice = txSlice();
@@ -2517,6 +2523,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::controlRequested,
             this, &RadioModel::dispatchTransmitControl, Qt::DirectConnection);
     qRegisterMetaType<WfmStereoStatus>();
+    qRegisterMetaType<SquelchGateState>();
     qRegisterMetaType<WfmReceptionDiagnostics>();
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
@@ -3181,6 +3188,10 @@ RadioModel::~RadioModel()
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
     m_independentTxGrants.reset(); // stop while every model member is still alive
+    // The local controls' TxController aborts its held inputs back into this
+    // model when it is destroyed, and the implicit member teardown would run
+    // that after m_slices is gone (it is declared later).
+    m_localTxController.reset();
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
@@ -3190,6 +3201,12 @@ RadioModel::~RadioModel()
         }
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Cwx)) {
             m_backend->abortCwText(m_txCoordinator.cleanupFence());
+        }
+        // Still active: a MOX held through a controller copy that outlives the
+        // model (TxApplet keeps one), or one the reset above released whose
+        // queued unkey has not completed. A second unkey is redundant, never a key.
+        if (activeTxActivities() & static_cast<unsigned>(TxActivity::Mox)) {
+            m_backend->setKeying(false, m_txCoordinator.cleanupFence());
         }
     }
     restoreTuneInhibit();
@@ -4190,6 +4207,9 @@ void RadioModel::applyInterlockStatus(const InterlockStatusDelta& d)
 
             // Emit raw radio TX state regardless of ownership — used by DAX
             // passthrough when an external app triggers PTT (#752).
+            // Only TRANSMITTING counts: UNKEY_REQUESTED is idle, also for the
+            // host transmit time-out, which disarms there and can clear its
+            // latch there, even if the radio still has RF up.
             const bool radioTx = (state == "TRANSMITTING");
             m_radioTransmitting = radioTx;
             m_interlockState = state;
@@ -5587,7 +5607,13 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
             m_transmitModel.expireTxOffDelayNow();
         }
     }
+    const int radioTimeoutBefore = m_transmitModel.interlockTimeout();
     m_transmitModel.applyChanges(delta);
+    // With nothing stored, the host time-out default follows the radio's own:
+    // republish it (dialog, aetherd) when the radio reports a new one.
+    if (!m_txTimeoutStored && m_transmitModel.interlockTimeout() != radioTimeoutBefore) {
+        emit txTimeoutSettingsChanged();
+    }
     if (delta.radioPtt) {
         followRadioPtt(*delta.radioPtt);
     }
@@ -5611,6 +5637,12 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
 // own release. CW keys itself.
 void RadioModel::followRadioPtt(bool down)
 {
+    m_radioPttObservedDown = down;
+    if (!down && m_radioPttProducer.valid()) {
+        // The jack's release is a release even when the host key was refused
+        // or already ended by a time-out.
+        noteTxTimeoutRelease(m_radioPttProducer.request());
+    }
     if (!down) {
         if (m_radioPttKeyed) {
             m_radioPttKeyed = false;
@@ -5652,6 +5684,9 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 bool RadioModel::setProducerTransmit(const TxCoordinator::Request& request, bool tx,
                                      TransmitModel::PttSource source)
 {
+    if (!tx) {
+        noteTxTimeoutRelease(request);
+    }
     const bool accepted = setTransmitImpl(tx, source, &request);
     if (tx && !accepted) {
         // Synchronous notifications may refuse after admission. Retire the
@@ -6124,6 +6159,9 @@ bool RadioModel::requestProducerCw(const TxCoordinator::Request& request, bool d
                                   std::chrono::steady_clock::time_point scheduledAt,
                                   const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs)
 {
+    if (!down) {
+        noteTxTimeoutRelease(request);
+    }
     return sendCwInput(down, ptt, notifySidetone, debugSource, debugTraceId, debugSourceMs, scheduledAt, &request);
 }
 
@@ -7668,6 +7706,7 @@ void RadioModel::stageSessionModelsForReconnect()
             unavailableWfm.chainMode = QString();
             unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
             unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+            unavailableWfm.squelchGate = SquelchGateState::Unavailable;
             slice->applyChanges(unavailableWfm);
             m_staleSlices.insert(slice->sliceId(), slice);
         }

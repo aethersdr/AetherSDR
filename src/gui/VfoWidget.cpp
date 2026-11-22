@@ -27,6 +27,7 @@
 #include "ComboStyle.h"
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
+#include "CenterMarkSlider.h"
 #include "RxApplet.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
@@ -121,65 +122,6 @@ protected:
     }
 private:
     const float& m_value;
-};
-
-// Slider that resets to a default value on double-click.
-// Extends GuardedSlider for controls-lock support (#745).
-class ResetSlider : public GuardedSlider {
-public:
-    explicit ResetSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : GuardedSlider(o, parent), m_resetVal(resetVal) {}
-protected:
-    void mouseDoubleClickEvent(QMouseEvent*) override { setValue(m_resetVal); }
-private:
-    int m_resetVal;
-};
-
-// ResetSlider filled from the centre outward with a centre-mark dot, for pan /
-// balance controls. Over-paints the stylesheet's (0 -> handle) sub-page with
-// groove colour, then fills (centre -> handle) in accent, clipped around the
-// handle disc.
-class CenterMarkSlider : public ResetSlider {
-public:
-    explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : ResetSlider(resetVal, o, parent) {}
-protected:
-    void paintEvent(QPaintEvent* ev) override {
-        ResetSlider::paintEvent(ev);
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-
-        auto& tm = AetherSDR::ThemeManager::instance();
-        const int cx = width() / 2;
-        const int cy = height() / 2;
-        const int grooveY = cy - 2;
-
-        QStyleOptionSlider opt;
-        initStyleOption(&opt);
-        const QRect handleRect = style()->subControlRect(
-            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
-        const int handleCx = handleRect.center().x();
-
-        QPainterPath clip;
-        clip.addRect(rect());
-        QPainterPath handlePath;
-        handlePath.addEllipse(handleRect.adjusted(-1, -1, 1, 1));
-        p.setClipPath(clip.subtracted(handlePath));
-
-        p.setPen(Qt::NoPen);
-        if (handleCx < cx) {
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, handleCx, 4));
-            p.setBrush(tm.color("color.accent"));
-            p.drawRect(QRect(handleCx, grooveY, cx - handleCx, 4));
-        } else {
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, cx, 4));
-        }
-
-        p.setBrush(QColor("#608090"));
-        p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
-    }
 };
 
 // Button that paints a solid left- or right-pointing triangle.
@@ -2293,10 +2235,17 @@ void VfoWidget::buildTabContent()
         }
 
         // DSP button tooltips
-        m_nrBtn->setToolTip("Radio-side noise reduction \u2014 attenuates uncorrelated background noise.");
+        // Not "radio-side": on a radio that sends IQ (HL2, ANAN, RTL) this is the
+        // NR inside this computer's receive channel, and the AetherRX modules are
+        // a different stage with similar names, so the tooltip says which is which.
+        m_nrBtn->setToolTip("Receiver noise reduction \u2014 attenuates uncorrelated background noise. "
+                            "Runs in the radio, or, for a radio that sends IQ, in this computer's receive "
+                            "channel, so TCI clients and decoders get the processed audio too. "
+                            "Not the AetherRX modules (NR2, RN2, ...), which run later, on the audio this computer plays.");
         m_nbBtn->setToolTip("Noise blanker \u2014 detects and removes fast impulse noise from sparks and switching sources. "
                             "Where this host runs the blanker, clicking again selects NB2, which reconstructs the blanked window instead of silencing it.");
-        m_anfBtn->setToolTip("Auto notch filter \u2014 detects and cancels persistent unwanted tones.");
+        m_anfBtn->setToolTip("Auto notch filter \u2014 detects and cancels persistent unwanted tones. "
+                             "Runs in the radio, or, for a radio that sends IQ, in this computer's receive channel.");
         m_apfBtn->setToolTip("CW audio peaking filter \u2014 narrows the audio passband around the CW pitch frequency to improve S/N.");
         m_nrlBtn->setToolTip("Leaky LMS adaptive filter \u2014 preserves correlated signals while removing uncorrelated noise. Best for daily SSB/CW.");
         m_nrsBtn->setToolTip("Spectral subtraction with voice activity detection \u2014 cuts noise most aggressively between words.");
