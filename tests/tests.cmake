@@ -10441,8 +10441,9 @@ add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
 target_include_directories(hl2_gain_restore_test PRIVATE src tests)
 target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
-# A receive-only HL2 (aetherd) builds no transmit chain on connect; the
-# transmit-capable backend still does. Same socket-free harness as above.
+# A receive-only HL2 (aetherd) builds no transmit chain on connect and declares
+# txPowerMaxWatts 0; the transmit-capable backend builds it and declares 5 W.
+# Same socket-free harness as above.
 add_executable(hl2_rx_only_tx_chain_test tests/hl2_rx_only_tx_chain_test.cpp)
 target_include_directories(hl2_rx_only_tx_chain_test PRIVATE src tests)
 target_link_libraries(hl2_rx_only_tx_chain_test PRIVATE aethercore Qt6::Core)

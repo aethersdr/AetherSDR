@@ -1065,7 +1065,7 @@ backend side the whole time.
 | `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists. On the HL2 it is also the complete span set — see `panSpanModel` below |
 | `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | The span IS the rate, so `sampleRatesHz` is every deliverable span and its first entry is a floor |
 | `dbmAxisIsCalibrated()` | — (absent ⇒ ✅) | ❌ | — (absent ⇒ ✅) | Whether the dBm axis is absolute. HL2 reads it off `Hl2DbReference::isCalibrated()` |
-| `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
+| `txPowerMaxWatts` | — (0.0) | 5.0 (0.0 receive only) | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
 | `hasAmplifier` | — (❌) | ❌ | ❌ | The AMP applet is driven by `TunerModel::presenceChanged`, not by this |
 | `extensions` | — | — | — | The namespaced vendor bag; never populated |
 
