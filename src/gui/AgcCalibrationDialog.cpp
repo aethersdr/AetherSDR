@@ -380,15 +380,14 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     connect(&m_engine, &AgcTCalibrator::noAudio, this, [this] {
         // After onFinished(), which set "Calibration stopped." The message is
         // source-aware: TCI operators never use PC Audio for calibration.
-        if (isTciMode()) {
+        if (m_tciActive) {
             m_recLabel->setText(tr("Stopped: no TCI audio. Is your TCI client receiving on this slice?"));
         } else {
             m_recLabel->setText(tr("Stopped: no audio on this computer. Is PC Audio on?"));
         }
     });
 
-    // Audio source is latched at sweep start (see onStartStop). S-meter feed
-    // is always from the radio model regardless of audio source.
+    // S-meter feed is always from the radio model regardless of audio source.
     if (m_radio) {
         connect(&m_radio->meterModel(), &MeterModel::sLevelChanged,
                 &m_engine, &AgcTCalibrator::onSLevel);
@@ -520,9 +519,9 @@ bool AgcCalibrationDialog::isTciMode() const
     // daxChannel() >= 1 required: host-demodulating backends (HL2, etc.) and
     // Flex slices with no DAX channel assigned leave m_daxChannel at 0, so the
     // rxLevel channel-match can never fire. Fall back to PC Audio for them.
-    // AGC Off (TargetLevel strategy) always uses PC Audio regardless of mode,
-    // per the 2026-11-20 ruling: the target-level solve runs against a fixed
-    // −28 dB reference that was calibrated on the PC Audio path.
+    // AGC Off (TargetLevel strategy) always uses PC Audio regardless of mode:
+    // the target-level solve runs against a fixed −28 dB reference calibrated
+    // on the PC Audio path.
     if (!m_tci || !m_slice || m_slice->daxChannel() < 1
             || m_slice->agcMode() == QStringLiteral("off")) {
         return false;
@@ -537,9 +536,12 @@ void AgcCalibrationDialog::rewireAudioSource()
     // source might have changed: constructor end, mode change (via updateModeUi),
     // sweep start, and sweep finish. Keeping audio connected at all times means
     // the manual slider path always has fresh RMS data, not just during sweeps.
+    // m_tciActive latches the result so labels name the wired source, not the
+    // live mode (which can change mid-sweep without rewiring). (#7263)
+    m_tciActive = isTciMode();
     disconnect(m_audioConn);
     m_audioConn = {};
-    if (isTciMode()) {
+    if (m_tciActive) {
         const int daxCh = m_slice->daxChannel(); // >= 1 guaranteed by isTciMode()
         m_audioConn = connect(m_tci, &TciServer::rxLevel,
                               this, [this, daxCh](int ch, float rms) {
@@ -578,6 +580,13 @@ bool AgcCalibrationDialog::nrSuppressesCalibration() const
 
 void AgcCalibrationDialog::updateModeUi()
 {
+    // Rewire the audio source first so m_tciActive is current before any label
+    // below reads it. Don't rewire mid-sweep; the sweep latched its source in
+    // onStartStop() and must not switch sources until it finishes.
+    if (!m_engine.isRunning()) {
+        rewireAudioSource();
+    }
+
     const bool externalReceive =
         m_slice && m_slice->externalReceiveReplacementActive();
     const QString mode = m_slice
@@ -593,7 +602,7 @@ void AgcCalibrationDialog::updateModeUi()
     // audio and the AGC knee is masked. Warn in the hint label; the auto-sweep
     // start path also refuses to begin until NR is off.
     if (nrSuppressesCalibration() && m_hintLabel) {
-        m_hintLabel->setText(isTciMode()
+        m_hintLabel->setText(m_tciActive
             ? QStringLiteral(
                 "⚠ Disable radio-side Noise Reduction (NR) for accurate "
                 "calibration — NR crushes the noise floor the knee detector is "
@@ -610,16 +619,15 @@ void AgcCalibrationDialog::updateModeUi()
 
     // Update the audio source label regardless of slice state.
     if (m_sourceLabel) {
-        if (isTciMode()) {
+        if (m_tciActive) {
             m_sourceLabel->setText(tr("Audio source: TCI (DIGU/DIGL)"));
         } else if (m_tci && m_slice
                    && m_slice->agcMode() == QStringLiteral("off")
-                   && m_slice->daxChannel() >= 1
                    && (m_slice->mode() == QStringLiteral("DIGU")
                        || m_slice->mode() == QStringLiteral("DIGL"))) {
-            // AGC Off (TargetLevel) always uses PC Audio regardless of mode or DAX channel
-            // (2026-11-20 ruling). Tell the operator explicitly rather than showing the
-            // "switch to DIGU/DIGL" hint, which would be confusing when they already are.
+            // AGC Off (TargetLevel) always uses PC Audio regardless of mode or DAX channel.
+            // Show this before the daxChannel < 1 branch so the user is not told to assign
+            // a DAX channel when doing so would still not enable TCI.
             m_sourceLabel->setText(tr("Audio source: PC Audio (AGC Off always uses PC Audio)"));
         } else if (m_tci && m_slice && m_slice->daxChannel() < 1
                    && (m_slice->mode() == QStringLiteral("DIGU")
@@ -663,12 +671,12 @@ void AgcCalibrationDialog::updateModeUi()
     m_applyBtn->setEnabled(!m_engine.isRunning() && m_engine.hasRecommendation());
     if (off) {
         // isTciMode() returns false when agcMode == "off" (TargetLevel always
-        // uses PC Audio per the 2026-11-20 ruling), so there is no TCI branch here.
+        // uses PC Audio), so there is no TCI branch here.
         m_modeLabel->setText(QStringLiteral(
             "Calibrating radio AGC-T (agc_off_level) via PC Audio — "
             "finding a comfortable fixed gain. AGC is off; no knee in this mode."));
     } else {
-        if (isTciMode()) {
+        if (m_tciActive) {
             m_modeLabel->setText(QStringLiteral(
                 "Calibrating radio AGC-T (agc_threshold) via TCI audio (%1) — "
                 "finding the knee just above the noise floor.")
@@ -681,12 +689,6 @@ void AgcCalibrationDialog::updateModeUi()
         }
     }
 
-    // Re-evaluate the audio source when the mode changes while the dialog is
-    // open (e.g. operator switches from DIGU to SSB). Don't rewire mid-sweep;
-    // the sweep already latched its source in onStartStop().
-    if (!m_engine.isRunning()) {
-        rewireAudioSource();
-    }
 }
 
 void AgcCalibrationDialog::refreshFromSlice()

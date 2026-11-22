@@ -96,7 +96,9 @@ private:
     // the calibration audio source (DIGU/DIGL with daxChannel >= 1). Requires
     // daxChannel >= 1 so that host-demodulating backends (HL2, etc.) and Flex
     // slices without a DAX channel assigned fall back to PC Audio rather than
-    // producing a channel-match that can never fire.
+    // producing a channel-match that can never fire. Also returns false when
+    // agcMode() == "off": TargetLevel always uses PC Audio (the reference was
+    // calibrated on that path).
     bool isTciMode() const;
     // Connect (or reconnect) the appropriate audio source to the calibration
     // engine based on the current slice mode. Keeps audio live at all times —
@@ -118,6 +120,10 @@ private:
     // Live while the dialog is open; rewired on mode/DAX change and at sweep
     // start (which latches the source for the sweep's duration).
     QMetaObject::Connection m_audioConn;
+    // Latched result of isTciMode() at the last rewireAudioSource() call.
+    // Labels read this so they name the source that is actually feeding the
+    // engine, not the live mode (which can change mid-sweep). (#7263)
+    bool m_tciActive{false};
     // QPointer so slice removal mid-calibration doesn't dangle through the
     // polling timer or noise-floor lookup callback.
     QPointer<SliceModel> m_slice;

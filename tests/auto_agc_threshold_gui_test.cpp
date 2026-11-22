@@ -510,15 +510,29 @@ private slots:
         QCOMPARE(source->text(),
             QStringLiteral("Audio source: TCI (DIGU/DIGL)"));
 
+        // 1a. Mode-only flip: DIGU → USB (daxChannel and agcMode unchanged).
+        //     Triggers a single modeChanged signal, so updateModeUi() runs once.
+        //     The label must reflect the new (PC Audio) source immediately, not
+        //     carry the previous TCI latch. Fails if rewireAudioSource() is
+        //     called after the labels rather than before them.
+        setMode(QStringLiteral("USB"), QStringLiteral("med"), 1);
+        QCOMPARE(source->text(),
+            QStringLiteral("Audio source: PC Audio (switch to DIGU/DIGL with a DAX channel for TCI)"));
+
         // 2. DIGL + daxChannel=1 + agcMode="slow" → TCI
         setMode(QStringLiteral("DIGL"), QStringLiteral("slow"), 1);
         QCOMPARE(source->text(),
             QStringLiteral("Audio source: TCI (DIGU/DIGL)"));
 
-        // 3. DIGU + daxChannel=1 + agcMode="off" → PC Audio
-        //    AGC Off (TargetLevel) always uses PC Audio per the 2026-11-20 ruling;
-        //    this is the core of the isTciMode() agcMode check that ON8ST required.
+        // 3a. DIGU + daxChannel=1 + agcMode="off" → PC Audio (AGC Off, dax≥1)
         setMode(QStringLiteral("DIGU"), QStringLiteral("off"), 1);
+        QCOMPARE(source->text(),
+            QStringLiteral("Audio source: PC Audio (AGC Off always uses PC Audio)"));
+
+        // 3b. DIGU + daxChannel=0 + agcMode="off" → same message; AGC-Off branch
+        //     must come before the daxChannel<1 branch so the user is not told to
+        //     assign a DAX channel when doing so would still not enable TCI.
+        setMode(QStringLiteral("DIGU"), QStringLiteral("off"), 0);
         QCOMPARE(source->text(),
             QStringLiteral("Audio source: PC Audio (AGC Off always uses PC Audio)"));
 

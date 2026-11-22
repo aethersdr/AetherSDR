@@ -134,7 +134,7 @@ On RTL-SDR FM/FM-N, **AUTO** uses each receiver's own detector noise estimate, i
 
 ### AGC
 
-<img src="/img/screens/rx-agc-calibration.png" width="460" alt="AGC-T Calibration window. The heading reads AGC: MED, finding the knee (agc_threshold) just above the noise floor, with a warning that a signal is in the passband and you should tune to a clear spot. An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the centre, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
+<img src="/img/screens/rx-agc-calibration.png" width="391" alt="AGC-T Calibration window for Slice B. The heading reads Calibrating radio AGC-T (agc_threshold) via TCI audio (DIGU), finding the knee just above the noise floor. Below it, Audio source: TCI (DIGU/DIGL), and a check mark with Quiet spot (signal 5.7 dB over floor). An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the center, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
 
 *The AGC-T Calibration window.*
 
