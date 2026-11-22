@@ -223,6 +223,27 @@ public:
         return orderIndex == 0 ? LockRight : LockLeft;
     }
 
+    // Side of an RTTY flag. RTTY puts a lone flag to the right of the
+    // passband, clear of the mark/space tone cues (#5097), but that default
+    // never replaces a side an earlier pass locked: a diversity or split pair
+    // in RTTY keeps its two flags on opposite sides. Applied unconditionally,
+    // it stacked a diversity pair's flags on the same spot (#7215).
+    static FlagDir rttyFlagDir(bool sideAlreadyLocked, FlagDir lockedDir)
+    {
+        return sideAlreadyLocked ? lockedDir : ForceRight;
+    }
+
+    // Marker x for an RTTY flag. A right-side flag starts just past the high
+    // filter edge, as before; a left-side flag ends just before the low edge,
+    // so it sits outside the passband instead of across the tone cues (#7215).
+    static constexpr int kRttyFlagEdgeGapPx = 4;
+    static int rttyFlagAnchorX(int lowEdgeX, int highEdgeX, FlagDir dir)
+    {
+        return (dir == ForceLeft || dir == LockLeft)
+            ? lowEdgeX - kRttyFlagEdgeGapPx
+            : highEdgeX + kRttyFlagEdgeGapPx;
+    }
+
     static FlagPlacement placementForMarker(int markerX,
                                             int specTop,
                                             int widgetWidth,
@@ -270,6 +291,7 @@ public:
     // on top of the slice markers. No-op unless the SmartMTR meter + value labels
     // are active and the flag is expanded. Coordinates are SpectrumWidget-local.
     void drawSmartMtrLabels(QPainter& p) const;
+    QRect smartMtrLabelsCoverageRect() const;
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) were
     // removed from the VFO DSP grid; that family lives in the spectrum

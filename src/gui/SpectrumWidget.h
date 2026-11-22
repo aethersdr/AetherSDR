@@ -2417,6 +2417,12 @@ private:
     QImage m_overlayStatic;     // screen-space chrome — drawn ABOVE FFT
     QImage m_overlayFrequency;  // frequency-anchored markers — drawn ABOVE FFT
     QImage m_frequencyScalePreviewImage;  // narrow partial-upload staging strip
+    // Preserve only the pre-label pixels in the SmartMTR text band. Meter
+    // animation can then restore/repaint/upload this band without touching the
+    // frequency overlay, background or other screen-space chrome.
+    QImage m_smartMtrLabelBaseStrip;
+    QRect m_smartMtrLabelStripPx;
+    bool m_smartMtrLabelsDirty{false};
     bool m_overlayStaticDirty{true};
     bool m_overlayNeedsUpload{true};
     bool m_overlayFrequencyNeedsUpload{true};
@@ -2579,6 +2585,12 @@ private:
             clock.start();
         }
     } m_panStats;
+
+    // SmartMTR value change: GPU builds restore and re-upload only the label
+    // band; otherwise identical to markOverlayDirty("smartMtr").
+    void invalidateSmartMtrLabels();
+    // Union of every flag's label band, in widget coordinates.
+    QRect smartMtrLabelsCoverageRect() const;
 
     // Mark the static overlay for repaint and schedule a frame update.
     // In non-GPU mode this is just update(). `cause` feeds the panstats

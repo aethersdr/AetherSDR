@@ -1984,6 +1984,13 @@ target_include_directories(hl2_rxdsp_notch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_notch_audio_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_notch_audio_test COMMAND hl2_rxdsp_notch_audio_test)
 
+# The HL2 receive channel's own NR (WDSP ANR) and auto notch (ANF), measured
+# on the audio through the real Hl2RxDsp.
+add_executable(hl2_rxdsp_channel_nr_anf_test tests/hl2_rxdsp_channel_nr_anf_test.cpp)
+target_include_directories(hl2_rxdsp_channel_nr_anf_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_channel_nr_anf_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_channel_nr_anf_test COMMAND hl2_rxdsp_channel_nr_anf_test)
+
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)
@@ -6123,6 +6130,14 @@ target_include_directories(kpa500_protocol_test PRIVATE src)
 target_link_libraries(kpa500_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kpa500_protocol_test COMMAND kpa500_protocol_test)
 
+# Socket-free priority mapping for the KPA500 status indicator (RFC #7092).
+add_executable(kpa500_state_test
+    tests/kpa500_state_test.cpp
+)
+target_include_directories(kpa500_state_test PRIVATE src)
+target_link_libraries(kpa500_state_test PRIVATE Qt6::Core)
+add_test(NAME kpa500_state_test COMMAND kpa500_state_test)
+
 # Socket-free injected KPA500 transport: liveness and stale-snapshot recovery.
 add_executable(kpa500_connection_test
     tests/kpa500_connection_test.cpp
@@ -6358,11 +6373,48 @@ if (ENABLE_ASR)
     target_include_directories(asr_segmenter_test PRIVATE src)
     add_test(NAME asr_segmenter_test COMMAND asr_segmenter_test)
 
+    add_executable(asr_live_preview_assembler_test
+        tests/asr_live_preview_assembler_test.cpp
+        src/asr/LivePreviewAssembler.cpp
+    )
+    target_include_directories(asr_live_preview_assembler_test PRIVATE src)
+    target_link_libraries(asr_live_preview_assembler_test PRIVATE Qt6::Core)
+    add_test(NAME asr_live_preview_assembler_test COMMAND asr_live_preview_assembler_test)
+
+    # Engine live-preview plumbing with a fake recogniser and fake backend.
+    add_executable(asr_live_preview_engine_test
+        tests/asr_live_preview_engine_test.cpp
+        src/asr/AsrEngine.cpp
+        src/asr/AsrSegmenter.cpp
+        src/asr/LivePreviewAssembler.cpp
+        src/asr/SileroVad.cpp    # AsrEngine references it (stub without HAVE_ONNX)
+        src/asr/Fbank.cpp
+        src/asr/SpeakerEmbedder.cpp
+        src/asr/SpeakerClusterer.cpp
+        src/core/Resampler.cpp
+    )
+    target_include_directories(asr_live_preview_engine_test PRIVATE src ${CMAKE_SOURCE_DIR}/third_party/r8brain)
+    target_link_libraries(asr_live_preview_engine_test PRIVATE Qt6::Core Qt6::Test)
+    set_target_properties(asr_live_preview_engine_test PROPERTIES AUTOMOC ON)
+    add_test(NAME asr_live_preview_engine_test COMMAND asr_live_preview_engine_test)
+
+    # Apple live-preview bridge on a real recording; needs macOS 26 and the
+    # on-device model, so it is run by hand.
+    if (APPLE)
+        add_executable(apple_live_preview_smoke tests/apple_live_preview_smoke.cpp) # not registered: manual, needs a recording and macOS 26
+        target_link_libraries(apple_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+    endif()
+
+    # sherpa-onnx live preview on a real recording and model; run by hand.
+    add_executable(sherpa_live_preview_smoke tests/sherpa_live_preview_smoke.cpp) # not registered: manual, needs a recording and a streaming model
+    target_link_libraries(sherpa_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+
     # Engine orchestration: fake backend, worker thread, no whisper/model.
     add_executable(asr_engine_test
         tests/asr_engine_test.cpp
         src/asr/AsrEngine.cpp
         src/asr/AsrSegmenter.cpp
+        src/asr/LivePreviewAssembler.cpp
         src/asr/SileroVad.cpp    # AsrEngine references it (stub without HAVE_ONNX)
         src/asr/Fbank.cpp
         src/asr/SpeakerEmbedder.cpp
@@ -6982,6 +7034,23 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME rtl_package_closure_test
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_rtl_package.py)
+    # not registered: opt-in reproducer for the RTL async cancellation
+    # lifetime fix (#7397). It compiles the pinned, patched librtlsdr.c
+    # against an injected libusb (no device, no socket), and only the release
+    # recipes fetch that source into .rtl-deps-build. Build this target by
+    # name after scripts/setup/setup-rtl-deps.* has run; it exits 77 without
+    # the sources. See docs/rtl-release-packaging.md.
+    set(rtl_async_sanitizer)
+    if(NOT WIN32)
+        set(rtl_async_sanitizer --sanitize)
+    endif()
+    add_custom_target(rtl_async_cancellation_test
+        COMMAND ${PYTHON3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup/test-rtl-async-cancellation.py
+                ${rtl_async_sanitizer}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        USES_TERMINAL
+        VERBATIM)
     add_test(NAME capability_record_parser
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_capability_records.py)
@@ -7895,6 +7964,15 @@ add_executable(tci_sql_level_test tests/tci_sql_level_test.cpp)
 target_include_directories(tci_sql_level_test PRIVATE src tests)
 target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
+# TCI hw_sensors_enable / hw_sensors (TCI 2.1 §HW_SENSORS): a TciClient text
+# sink attached to the production onTextMessage(). Socket-free: nothing is
+# bound, opened or keyed.
+if(Qt6WebSockets_FOUND)
+    add_executable(tci_hw_sensors_test tests/tci_hw_sensors_test.cpp)
+    target_include_directories(tci_hw_sensors_test PRIVATE src tests)
+    target_link_libraries(tci_hw_sensors_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_hw_sensors_test COMMAND tci_hw_sensors_test)
+endif()
 # An HL2 pan centre outside receivePanCenterControl stops at the edge, in the
 # backend and in the pan model. A real, unconnected Hl2Backend behind
 # RadioModel. Socket-free.
@@ -8229,6 +8307,13 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
 
+    # The extension set's TX passband group (aethersdr_tx_filter_band).
+    add_executable(tci_ext_tx_passband_test tests/tci_ext_tx_passband_test.cpp)
+    target_include_directories(tci_ext_tx_passband_test PRIVATE src tests)
+    target_link_libraries(tci_ext_tx_passband_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_tx_passband_test COMMAND tci_ext_tx_passband_test)
+
     # The extension set's receive gain and overload groups.
     add_executable(tci_ext_rx_gain_test tests/tci_ext_rx_gain_test.cpp)
     target_include_directories(tci_ext_rx_gain_test PRIVATE src tests)
@@ -8241,6 +8326,12 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tci_ext_antennas_test PRIVATE
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_ext_antennas_test COMMAND tci_ext_antennas_test)
+    # The extension set's span group (aethersdr_rx_span_rates, aethersdr_rx_span).
+    add_executable(tci_ext_span_test tests/tci_ext_span_test.cpp)
+    target_include_directories(tci_ext_span_test PRIVATE src tests)
+    target_link_libraries(tci_ext_span_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_span_test COMMAND tci_ext_span_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -8515,6 +8606,16 @@ add_executable(wideband_converter_view_test tests/wideband_converter_view_test.c
 target_include_directories(wideband_converter_view_test PRIVATE src)
 target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
+
+# Termination signals release the radio for any family (#7163): forked children
+# report over a pipe; the HL2 is armed on a pipe fd, never fired. No sockets.
+if(NOT WIN32)
+    add_executable(fatal_signal_release_test tests/fatal_signal_release_test.cpp)
+    target_include_directories(fatal_signal_release_test PRIVATE src)
+    target_link_libraries(fatal_signal_release_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME fatal_signal_release_test COMMAND fatal_signal_release_test)
+    set_tests_properties(fatal_signal_release_test PROPERTIES TIMEOUT 60)
+endif()
 
 # HL2 emergency stop (#4581): arm/disarm/fire, and a re-arm racing a fire.
 # SOCKETS: three UDP sockets on 127.0.0.1 (kernel-chosen ports): two sinks for
@@ -9372,6 +9473,22 @@ target_include_directories(flex_cw_controls_test PRIVATE src tests)
 target_link_libraries(flex_cw_controls_test PRIVATE aethercore Qt6::Core)
 add_test(NAME flex_cw_controls_test COMMAND flex_cw_controls_test)
 
+# Host transmit time-out (RFC #7021): the timer, warning and release latch on
+# an injected clock. Pure policy, no Qt event loop, no socket.
+add_executable(tx_timeout_guard_test
+    tests/tx_timeout_guard_test.cpp
+    src/models/TxTimeoutGuard.cpp)
+target_include_directories(tx_timeout_guard_test PRIVATE src)
+target_link_libraries(tx_timeout_guard_test PRIVATE Qt6::Core)
+add_test(NAME tx_timeout_guard_test COMMAND tx_timeout_guard_test)
+
+# The same time-out on RadioModel's arming, stop and admission paths. Socket-
+# free: a bare RadioModel, the keyed edge emitted by hand, the clock injected.
+add_executable(tx_timeout_radio_model_test tests/tx_timeout_radio_model_test.cpp)
+target_include_directories(tx_timeout_radio_model_test PRIVATE src tests)
+target_link_libraries(tx_timeout_radio_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_timeout_radio_model_test COMMAND tx_timeout_radio_model_test)
+
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
@@ -9992,6 +10109,27 @@ add_test(NAME waveform_env_control_test COMMAND waveform_env_control_test)
 set_tests_properties(waveform_env_control_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# AetherGPS install state shared by the AetherGPS window and the Waveforms
+# window: one wait-for-the-list state per radio, and every window hearing
+# when any upload ends. Injected waveform status and a RadioModel with no
+# backend; no sockets, radio or TX.
+add_executable(aethergps_tools_test
+    tests/aethergps_tools_test.cpp
+    src/gui/AetherGpsTools.cpp
+    src/gui/WaveformEnvironmentDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+)
+target_include_directories(aethergps_tools_test PRIVATE src tests)
+target_link_libraries(aethergps_tools_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(aethergps_tools_test PROPERTIES AUTOMOC ON)
+add_test(NAME aethergps_tools_test COMMAND aethergps_tools_test)
+set_tests_properties(aethergps_tools_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # SmartSDR 4.3 NTP time sources (#6953): validation, Flex capability and wire
 # text, `ntp_sources` decode, the subscription, the remove-and-create edit and
 # the Radio Setup Time page. Recording sinks and injected status; no socket.
@@ -10336,8 +10474,9 @@ add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
 target_include_directories(hl2_gain_restore_test PRIVATE src tests)
 target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
-# A receive-only HL2 (aetherd) builds no transmit chain on connect; the
-# transmit-capable backend still does. Same socket-free harness as above.
+# A receive-only HL2 (aetherd) builds no transmit chain on connect and declares
+# txPowerMaxWatts 0; the transmit-capable backend builds it and declares 5 W.
+# Same socket-free harness as above.
 add_executable(hl2_rx_only_tx_chain_test tests/hl2_rx_only_tx_chain_test.cpp)
 target_include_directories(hl2_rx_only_tx_chain_test PRIVATE src tests)
 target_link_libraries(hl2_rx_only_tx_chain_test PRIVATE aethercore Qt6::Core)
@@ -11199,6 +11338,15 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
     src/gui/StripTubePanel.cpp
+    src/gui/StripCompPanel.cpp
+    src/gui/ClientCompEditorCanvas.cpp
+    src/gui/ClientCompLimiterButton.cpp
+    src/gui/ClientCompMeter.cpp
+    src/gui/ClientCompThresholdFader.cpp
+    src/gui/ClientPuduApplet.cpp
+    src/gui/ClientPuduEditor.cpp
+    src/gui/StripPuduPanel.cpp
+    src/gui/PooDooLogo.cpp
     src/gui/ClientLevelMeter.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
@@ -11206,6 +11354,8 @@ target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)
 target_link_libraries(client_dsp_knob_dispatch_test PRIVATE
     aethercore Qt6::Widgets Qt6::Test)
 add_test(NAME client_dsp_knob_dispatch_test COMMAND client_dsp_knob_dispatch_test)
+set_tests_properties(client_dsp_knob_dispatch_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 set_tests_properties(nrs_level_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
@@ -11759,6 +11909,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_volume_test
     hl2_bandstack_digital_agc_test
     tci_sql_level_test
+    tci_hw_sensors_test
     hl2_pan_center_range_test
     tci_agc_gain_test
     radio_model_client_state_test
@@ -11775,8 +11926,10 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     tci_extension_set_test
     tci_extension_zero_traffic_test
+    tci_ext_tx_passband_test
     tci_ext_rx_gain_test
     tci_ext_antennas_test
+    tci_ext_span_test
     tci_applet_test
     tci_rx_applet_test
     tci_host_iq_test

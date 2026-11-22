@@ -33,6 +33,8 @@ ClientTubeApplet::ClientTubeApplet(Side side, QWidget* parent)
     , m_side(side)
 {
     theme::setContainer(this, QStringLiteral("applet/tube"));
+    setAccessibleName(side == Side::Rx ? tr("Receive tube preamp")
+                                      : tr("Transmit tube preamp"));
     buildUI();
     hide();
 }

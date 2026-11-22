@@ -27,7 +27,7 @@ production; it only exists when you ask for it via an env var.
 | Visually check a dialog or applet layout | **Yes** — `grab <widget>` → view the PNG. |
 | Click a button or move a slider programmatically | **Yes** — `invoke <target> <action> [value]`. |
 | Read live model truth (freq, mode, center, dBm, NB/NR) | **Yes** — `get radio\|slice\|pan …`. Assert on state, no pixels. |
-| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`/`transmit`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
+| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). Drive (`transmit rfpower\|tunepower`) never keys and needs no permission; the power ceiling bounds it. |
 | Read client-side DSP / window / floor state | **Yes** — `get dsp`, `dumpTree` `windowState`, `floors`. |
 
 ---
@@ -168,8 +168,9 @@ The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
 `doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
-`atu`, `cwx`, `testtone`, `transmit` — gated by
+`atu`, `cwx`, `testtone` — gated by
 `AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), the non-keying
+`transmit` drive verb (no permission, bounded by the power ceiling) and
 `txwaterfall` display toggle, and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
@@ -1114,7 +1115,7 @@ cost a few integer adds per frame.
 | `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
-| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`). One key is not a rebuild: `smartMtrStrip` counts GPU frames that repainted and uploaded only the SmartMTR value-label strip, so leave it out when summing causes against `overlayRebuilds*` |
 | `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
 | `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
 | `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
@@ -4901,6 +4902,8 @@ Bare-line forms: `modem profile hf300`, `modem on`, `modem digi status`,
 
 These verbs **key the live transmitter** and are refused unless the app was
 launched with `AETHER_AUTOMATION_ALLOW_TX=1` (the same rail as a keying `invoke`).
+The exception is [`transmit`](#transmit), which sets drive and never keys: it
+needs no TX permission, and the power ceiling bounds it (#5851).
 A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops an
 automation-originated continuous key that runs too long, and the bridge
 force-unkeys its own active TX lease on stop. Merely enabling TX permission

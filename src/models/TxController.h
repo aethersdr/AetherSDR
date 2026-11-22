@@ -58,6 +58,11 @@ public:
     [[nodiscard]] bool valid() const;
     [[nodiscard]] bool originalSessionCurrent() const;
     [[nodiscard]] bool sameController(const std::shared_ptr<TxController>& other) const;
+    // Whether this controller's producer captured the request. Identity only.
+    [[nodiscard]] bool ownsRequest(const TxCoordinator::Request& request) const
+    {
+        return m_producer.ownsRequest(request);
+    }
     // A compound input (for example a double-click) may prepare its second
     // activation after the first changed the UI. Restrict every fresh request
     // it captures to the original input epoch, never to callback-time state.

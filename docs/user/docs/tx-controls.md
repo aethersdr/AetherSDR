@@ -333,6 +333,42 @@ autotune, or transmissions keyed by other programs through TCI, DAX or CAT.
 
 The audio controls stay in place as the timer appears and fades. In minimal mode, the hidden timer reserves no space.
 
+### Transmit time-out
+
+AetherSDR stops any transmission that lasts longer than the time-out, whatever
+keyed it: MOX, PTT, a footswitch, a controller, TCI, CAT, DAX, TUNE, ATU or the
+radio's own PTT. The default is **180 s**. Set it in **Transmit time-out (this
+computer)** on the **Transmit** page of Radio Setup:
+
+- **Stop transmitting after**: on by default, 15 to 1800 seconds.
+- **Warn before (sec):**: a notice and a short beep this many seconds before
+  the stop. The default is 10; **Off** turns the warning off.
+
+It is stored on this computer, for each radio. On a FlexRadio the radio's own
+**Timeout (sec):** applies as well. Until this group has stored anything, its
+time-out follows the radio's and is never shorter than it. Once it has stored
+a value (any edit here, or leaving one of its boxes), the stored values apply,
+even if the radio's Timeout is raised later. On a radio without a timeout of
+its own, **Timeout (sec):** stays dimmed and this group is the time-out that
+applies. On a FlexRadio shared by several stations (multiFLEX), only this
+station's own transmissions are timed; another station's over is left to the
+radio.
+
+When it stops a transmission, a notification says **Transmit time-out:
+transmission stopped after N s**. Nothing transmits again until every PTT input
+has been released, including a CAT or TCI program that keeps asking to
+transmit, and you key again. If the radio's own PTT input is still held, the
+notification says so. A CAT or TCI program sees the radio go back to receive.
+On a FlexRadio the time-out counts only while the radio reports TRANSMITTING:
+once it reports UNKEY_REQUESTED, the time-out treats it as idle, even if the
+radio still has RF up.
+
+With full break-in, where the radio returns to receive between elements, each
+element is its own key-down, so the time-out bounds a key held down, not a whole
+over. With semi break-in, where the hang time is longer than the gaps between
+characters, and with CWX, the voice keyer or NAVTEX, the radio stays keyed
+across the whole message, so a long message is cut at the time-out.
+
 ## Using AetherTX (Aetherial Audio)
 
 The client-side transmit voice chain — RN2 microphone denoising, Tube, EQ,

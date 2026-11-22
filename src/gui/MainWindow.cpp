@@ -1263,6 +1263,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, updateAetherDspPolicy);
     connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
             this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::nnrEnabledChanged,
+            this, updateAetherDspPolicy);
     // Start the CW-sidetone record pump on the audio thread (#2539): queued so
     // its QTimer is created + started on m_audio's thread after the move.
     QMetaObject::invokeMethod(m_audio, [ae = m_audio]() { ae->startCwRecordPump(); },
@@ -3319,6 +3321,8 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         // the same handler the docked applet and the floating editor use.
         // The AetherNR checkbox restoring NR2: same FFTW-wisdom prep the
         // method buttons inside the page already route through (#2275).
+        connect(m_rxDialog, &AetherRxDialog::dspMethodUserToggled,
+                this, [this]() { m_aetherDspModePolicy.noteUserOverride(); });
         connect(m_rxDialog, &AetherRxDialog::nr2EnableWithWisdomRequested,
                 this, &MainWindow::enableNr2WithWisdom);
         connect(m_rxDialog, &AetherRxDialog::cutoffsDragRequested,
@@ -3838,7 +3842,7 @@ void MainWindow::applyWindowsCaptionStyles()
     }
     const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
     const LONG_PTR desired = style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
-    // On Windows 10 this frame change is also what routes WM_NCCALCSIZE
+    // On Windows this frame change is also what routes WM_NCCALCSIZE
     // through nativeEvent() before setFramelessWindow() and the startup
     // re-apply measure the client rect; Qt answered it at creation.
     if (style != desired) {
@@ -3913,26 +3917,20 @@ void MainWindow::restoreNativeClientRect(const QString& role)
 
 void MainWindow::applyNonClientBandInsets()
 {
-    // The band is only lost under the expanded client area: with native chrome
-    // the frame is outside the window rect entirely, and on Windows 10
-    // nativeEvent's WM_NCCALCSIZE branch already claims it back.
-    //
-    // Maximized is excluded: Windows pushes the band off-screen, so the client
-    // rect already covers the work area and an inset would leave a dead strip.
     QMargins insets;
-#ifdef Q_OS_WIN
-    if (windowFlags().testFlag(Qt::ExpandedClientAreaHint) && !isFullScreen()
-        && !isMaximized()
-        && !WindowChrome::claimsWholeWindowAsClient(windowFlags(),
-                                                    QOperatingSystemVersion::current())) {
-        if (const HWND hwnd = reinterpret_cast<HWND>(winId())) {
+    if (!isFullScreen()
+        && WindowChrome::reservesClientInsets(windowFlags(), QOperatingSystemVersion::current())) {
+        const HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (isMaximized() && IsZoomed(hwnd)) {
+            insets = WindowChrome::maximizedClientInsets(size(), nativeClientRect().size(),
+                                                         devicePixelRatioF());
+        } else if (!isMaximized() && hwnd) {
             const UINT dpi = GetDpiForWindow(hwnd);
             const int band = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
                            + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
             insets = WindowChrome::nonClientBandInsets(band, devicePixelRatioF());
         }
     }
-#endif
     if (contentsMargins() == insets) {
         // The margins are already right, but the grip may not be: showing it
         // from setFramelessWindow() changes no size and so sends no
@@ -3942,9 +3940,9 @@ void MainWindow::applyNonClientBandInsets()
     }
     // QMainWindow's layout honours the window's own margins, so this insets
     // the central widget — the title bar included, since it sits in the
-    // central widget's vbox — and the status bar. Only the top is left alone,
-    // for the caption's own row. The title bar's side bands are lost the same
-    // way, and nothing doubles: TitleBar::updateChromeLayout() adds
+    // central widget's vbox — and the status bar. The top is always left
+    // alone, for the caption's own row; maximized, only the right and bottom
+    // are inset. Nothing doubles: TitleBar::updateChromeLayout() adds
     // contentInsets(), which is safeAreaMargins() and 0 on those edges here.
     setContentsMargins(insets);
     // The window's size has not changed, so no resizeEvent re-places the grip,
@@ -4023,9 +4021,9 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
         const QRect rect(window.left, window.top,
                          window.right - window.left, window.bottom - window.top);
-        // The client area's top-left in screen pixels. GetWindowRect includes
-        // the invisible DWM resize border and Qt's geometry does not, so the
-        // caption gate anchors here instead — see logicalScreenPoint().
+        // The client area's top-left in screen pixels. Maximized, the client
+        // is inset from GetWindowRect and Qt's geometry follows the client, so
+        // the caption gate anchors here instead — see logicalScreenPoint().
         POINT clientOrigin{0, 0};
         ClientToScreen(msg->hwnd, &clientOrigin);
         // The bar's height is in logical pixels and WM_NCHITTEST is physical.
@@ -4042,11 +4040,11 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
             WindowChrome::expandedFrameHit(point, rect, borderX, borderY, captionHeight));
         return true;
     }
-    // The whole window is client area, inset only while maximized so nothing
+    // Claim the resize band so Windows cannot paint a light strip between
+    // the DWM border and the client. Inset only while maximized so nothing
     // sits past the screen edge; the WM_NCHITTEST above keeps the edges resizable.
     if (msg && result && msg->message == WM_NCCALCSIZE && msg->wParam
-        && WindowChrome::claimsWholeWindowAsClient(windowFlags(),
-                                                   QOperatingSystemVersion::current())) {
+        && WindowChrome::claimsWholeWindowAsClient(windowFlags())) {
         if (IsZoomed(msg->hwnd) && !isFullScreen()) {
             const UINT dpi = GetDpiForWindow(msg->hwnd);
             const int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
@@ -4198,6 +4196,13 @@ void MainWindow::reapplyStartupGeometryAfterShow()
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
+#ifdef Q_OS_WIN
+    // A maximize can deliver the widget size after the window-state event.
+    if (isMaximized() && event->oldSize() != event->size()) {
+        applyNonClientBandInsets();
+        return;
+    }
+#endif
     positionSizeGrip();
 }
 
@@ -4207,7 +4212,8 @@ void MainWindow::positionSizeGrip()
     // overlaying the status bar.  Direct child of MainWindow so the
     // grip's native dotted-texture paint isn't suppressed by the
     // status-bar stylesheet.  Inside the contents margins, which hold the
-    // Windows 11 non-client band (applyNonClientBandInsets()) and are 0
+    // Windows 11 resize band while restored and Qt's excess over the native
+    // client while maximized (applyNonClientBandInsets()), and are 0
     // everywhere else.
     if (m_sizeGrip) {
         m_sizeGrip->move(WindowChrome::sizeGripOrigin(size(), m_sizeGrip->width(),
@@ -4227,8 +4233,7 @@ void MainWindow::changeEvent(QEvent* event)
     QMainWindow::changeEvent(event);
 
 #ifdef Q_OS_WIN
-    // The inset applies only while restored, so maximizing and restoring have
-    // to re-run it. A DPI change arrives at event(), not here.
+    // Restored and maximized windows reserve different margins.
     if (event && event->type() == QEvent::WindowStateChange) {
         applyNonClientBandInsets();
     }
@@ -4666,6 +4671,13 @@ void MainWindow::cancelTransmitFromIndicator()
 
     m_pttHoldActive = false;
     m_cwStraightKeyActive = false;
+    // The reset swallows the paddles' own releases, so it releases them.
+    if (m_cwPaddleInputHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_cwPaddleInput, false);
+    }
+    if (m_serialCwPaddleHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_serialCwPaddleInput, false);
+    }
     m_cwLeftPaddleActive = false;
     m_cwRightPaddleActive = false;
     m_cwPaddleInputHeld = false;
@@ -4787,6 +4799,9 @@ void MainWindow::captureLocalCwPaddleInput(bool held)
             m_cwPaddleController = std::make_shared<TxController>(&m_radioModel);
         }
         m_cwPaddleInput = m_cwPaddleController->capture(TxController::Activity::CwKey).request();
+    }
+    if (held != m_cwPaddleInputHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_cwPaddleInput, held);
     }
     m_cwPaddleInputHeld = held;
 }
@@ -6626,6 +6641,37 @@ void MainWindow::buildUI()
         vbox->addWidget(m_pgxlStateLabel);
     }
     hbox->addWidget(m_pgxlContainer);
+
+    // KPA500 main-window indicator — RFC #7092.
+    // Passive widget (no click / no aetherStateCycle): show/hide on detectedChanged only.
+    m_kpa500Separator = addSep();
+    m_kpa500Separator->setVisible(false);
+
+    m_kpa500Container = new QWidget;
+    m_kpa500Container->setObjectName(QStringLiteral("kpa500Indicator"));
+    m_kpa500Container->setToolTip("Elecraft KPA500");
+    m_kpa500Container->setAccessibleName("KPA500: Unknown");
+    m_kpa500Container->setVisible(false);
+    {
+        auto* vbox = new QVBoxLayout(m_kpa500Container);
+        vbox->setContentsMargins(0, 0, 0, 4);
+        vbox->setSpacing(0);
+        vbox->setAlignment(Qt::AlignVCenter);
+        m_kpa500Indicator = new QLabel("KPA");
+        m_kpa500Indicator->setAlignment(Qt::AlignCenter);
+        m_kpa500StateLabel = new QLabel(QStringLiteral("–"));
+        m_kpa500StateLabel->setAlignment(Qt::AlignCenter);
+        {
+            QFont f = m_kpa500StateLabel->font();
+            f.setPixelSize(11);
+            const int minW = QFontMetrics(f).horizontalAdvance("STANDBY") + 16;
+            m_kpa500StateLabel->setMinimumWidth(minW);
+            m_kpa500Container->setMinimumWidth(minW);
+        }
+        vbox->addWidget(m_kpa500Indicator);
+        vbox->addWidget(m_kpa500StateLabel);
+    }
+    hbox->addWidget(m_kpa500Container);
 
     addSep();
 

@@ -128,7 +128,8 @@ int main(int argc, char** argv)
     // which WINS the merge and overwrites whatever the poller actually read
     // from the radio.
     for (const char* key : {"ptt", "temperatureRaw", "forwardPowerRaw",
-                            "reversePowerRaw", "biasCurrentRaw", "txFifoFillMsbs"}) {
+                            "reversePowerRaw", "biasCurrentRaw", "paCurrentA",
+                            "txFifoFillMsbs"}) {
         const QString k = QString::fromLatin1(key);
         check(snap.order.contains(k) && !snap.values.contains(k),
               qPrintable(QStringLiteral("in-band '%1' is published as 'not reported' "

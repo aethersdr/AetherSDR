@@ -39,6 +39,10 @@ std::optional<GainRange> panRange(const PanadapterModel& pan);
 
 // The radio routes a pan RF gain write (RadioModel::setPanRfGainFor).
 bool declaresPanRfGain(const RadioCapabilities& caps);
+// A set of `gainDb` on `pan` would change nothing: the backend declares a
+// repeated RF gain write a no-op (a Flex, not an HL2), the pan already reports
+// that gain, and no write of another value is still in flight (#7445).
+bool rfGainRepeatIsNoop(const RadioCapabilities& caps, const PanadapterModel& pan, int gainDb);
 // rx_rf_gain: that, connected, and at least one receiver's pan with a range.
 bool gainOffered(bool connected, const RadioCapabilities& caps, bool anyPanRange);
 // rx_overload: a backend that observes its converter (#7176's record).

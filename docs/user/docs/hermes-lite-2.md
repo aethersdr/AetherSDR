@@ -14,7 +14,7 @@ applies_to: ["Hermes-Lite 2"]
 
 AetherSDR can operate a **Hermes-Lite 2** (HL2) over openHPSDR Protocol 1. The HL2 is **supported** in the desktop application: board id 6 over Ethernet, with gateware 74 ([#7257](https://github.com/aethersdr/AetherSDR/issues/7257)). **Windows is not yet certified**: no Windows `radiocert` run has been posted yet ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)). Other gateware, other boards, the wider Hermes-Lite family and aetherd remain experimental (see [Supported Radios](./supported-radios.md)). An HL2 on gateware 74 shows no EXPERIMENTAL badge. Other gateware, or a board that names itself in its gateware version (such as **SQUARE SDR 2 gateware**), shows the **EXPERIMENTAL** badge in the title bar and an "Experimental radio support" notice when you connect.
 
-The HL2 has no on-board DSP, so AetherSDR does the demodulation, filtering, AGC, noise blanking and transmit modulation on your computer, using WDSP.
+The HL2 has no on-board DSP, so AetherSDR does the demodulation, filtering, AGC, noise blanking, noise reduction and transmit modulation on your computer, using WDSP.
 
 ## Where to go next
 
@@ -73,7 +73,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 
 - **Up to four receivers** (A–D), each with its own slice, panadapter, audio and S-meter. Add one with **Tools → Add Panadapter...**; close its pane to remove it.
 - The receivers share one converter, so the **span (sample rate), LNA gain, band and antenna are radio-wide**. Mode, passband, AGC and frequency are per receiver. The RX antenna menu offers **ANT**, the one receive input; KiwiSDR receivers, when configured, are listed beside it.
-- **After a restart** the receivers you had open come back, each with its own frequency, mode, passband, noise blanker, APF, squelch, RIT/XIT, audio gain and pan, and transmit returns to the receiver that had it. If the span allows fewer receivers than you had, the others are kept and come back on a later connect with room for them, unless you add or close a receiver first.
+- **After a restart** the receivers you had open come back, each with its own frequency, mode, passband, noise blanker, NR, ANF, APF, squelch, RIT/XIT, audio gain and pan, and transmit returns to the receiver that had it. If the span allows fewer receivers than you had, the others are kept and come back on a later connect with room for them, unless you add or close a receiver first.
 - After disconnecting and reconnecting to the same HL2, transmit returns to the receiver that held it and uses that receiver’s mode and transmit passband. Each panadapter keeps its centre, as after a restart, unless its slice no longer fits in the middle 80 % of the span; then it is centred on the slice. Reconnecting does not key the radio.
 - **Span** snaps to 48, 96, 192 or 384 kHz. Four receivers run up to 192 kHz, three at 384 kHz. **Use low bandwidth mode** caps the span at 96 kHz. Only the pane holding the TX slice (otherwise the first docked pane) has live span buttons; the others are dimmed with the reason.
 - **Band buttons** switch the hardware filters and preamp as well as the frequency.
@@ -148,7 +148,8 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 - **Manual notches:** right-click the panadapter → **Add TNF at X MHz**. Drag a notch sideways to move it and up or down to change its width; right-click it to remove it. Notches keep tracking as you tune, and are remembered across restarts. See [TNF (Tracking Notch Filters)](./tnf-tracking-notch-filters.md).
 - **NB** cycles Off → **NB** → **NB2** → Off. Both run WDSP impulse blankers on the raw IQ, ahead of the demodulator, and both are held during transmit. **NB** silences each impulse; **NB2** reconstructs the blanked window from the samples either side, which sounds better when an impulse lands on a signal and worse when the noise is dense. While NB2 runs, an **NB2** fill selector appears under the DSP controls: **Zero**, **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**. Neither blanker is offered in FM.
-- Client-side noise reduction works as on any radio; see [DSP Noise Mitigation](./dsp-noise-mitigation.md).
+- **NR** and **ANF** are on the VFO flag's **DSP** tab. They run WDSP's noise reduction (ANR) and auto notch (ANF) inside the receiver's own channel, ahead of the AGC, so TCI programs, decoders and aetherd get the processed audio as well as your speakers. Each receiver keeps its own setting and level, and both are remembered across restarts. NR is not offered in FM; ANF only in USB, LSB, DSB, AM and SAM, because in CW and the data modes the steady tone it removes is the signal. A setting you made in another mode comes back when you return to one where it runs.
+- The **AetherRX** noise reduction methods (NR2, RN2 and the others) are a separate stage. They run later, on the audio your computer plays, and do not reach TCI programs or decoders. Both can run at once; see [DSP Noise Mitigation](./dsp-noise-mitigation.md).
 
 ## Transmit
 
@@ -220,7 +221,7 @@ AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedbac
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware, the TX output and the transmit voice chain.
+- **Tools → Radio Health...** shows link, temperature, PA current (in amps, and the raw count), gateware, the TX output and the transmit voice chain.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference
@@ -230,9 +231,8 @@ AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedbac
 - DAX, SmartLink or Multi-Flex.
 - The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex. rigctld CW text is keyed by AetherSDR instead.
 - FM repeater duplex and CTCSS encode.
-- PureSignal.
 - Line out and headphone controls: the **Line Out:** and **Headphone:** rows under **Settings → Radio Setup... → Audio → Radio Audio Outputs** are dimmed. A codec board's speaker level is under **HL2 Hardware**.
-- Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied."
+- Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied." The transmit time-out that applies is **Transmit time-out (this computer)** on the same page; see [Transmit time-out](./tx-controls.md#transmit-time-out).
 - Controls the HL2 cannot honor are dimmed with their reason, or refuse with a notice.
 
 ## Known issues
@@ -260,12 +260,12 @@ Not yet tested:
 - Transmit linearity: intermodulation (IMD) has not been measured with a calibrated instrument.
 - CW sent with a key on the radio's own jack.
 - What the radio does when AetherSDR disconnects, hangs or crashes while transmitting. Refusing to transmit while the session is stopped is checked by automated tests only, not on a radio.
-- Receive audio in each mode, end to end on a radio. AGC, a manual notch and squelch are checked by automated tests without a radio, in USB only.
+- Receive audio in each mode, end to end on a radio. AGC, a manual notch, squelch, NR and ANF are checked by automated tests without a radio, in USB only (NR and ANF also in CW for the mode rule).
 - Receive on 10 m free of spurs from the radio itself.
 - A change made from a CAT or TCI program reaching both the on-screen control and the radio.
 - Modes, filters and bands coming back after a restart are checked by automated tests without a radio; saved filter presets are not covered.
 - Two HL2s used from one computer.
-- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. aetherd does not transmit with an HL2.
+- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. Its AGC threshold, noise blanker, noise reduction, RIT and RF gain controls are checked by automated tests only. aetherd does not transmit with an HL2.
 
 ## Troubleshooting
 

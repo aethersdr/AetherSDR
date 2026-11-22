@@ -40,6 +40,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -81,6 +82,8 @@ public:
     bool hasAuto{true};
     bool radioWide{false};
     bool refuseArm{false};
+    bool noopRepeats{false};  // a Flex's declaration; the HL2 makes none (#7445)
+    bool holdEcho{false};     // keep a write in flight until releaseEchoes()
     bool armed{false};
     int armCalls{0};
     QStringList panIds;
@@ -92,7 +95,8 @@ public:
     {
         RadioCapabilities caps;
         if (declaresRfGain) {
-            caps.panDisplayControl = PanDisplayControl{{PanDisplayField::RfGain}, {}};
+            caps.panDisplayControl = PanDisplayControl{{PanDisplayField::RfGain}, {},
+                noopRepeats ? QSet<PanDisplayField>{PanDisplayField::RfGain} : QSet<PanDisplayField>{}};
         }
         if (observesOverload) {
             caps.frontEndOverloadObservation = RadioCapabilities::FrontEndOverloadObservation{};
@@ -104,10 +108,23 @@ public:
     void setPanRfGain(const QString& panId, int gainDb) override
     {
         writes.append({panId, gainDb});
+        if (holdEcho) {
+            held.append({panId, gainDb});
+            return;
+        }
         for (const QString& id : radioWide ? panIds : QStringList{panId}) {
             echo(id, gainDb);
         }
     }
+    void releaseEchoes()
+    {
+        holdEcho = false;
+        const auto pending = std::exchange(held, {});
+        for (const auto& [id, gainDb] : pending) {
+            echo(id, gainDb);
+        }
+    }
+    QList<QPair<QString, int>> held;
 
     void setArmed(bool on) override
     {
@@ -604,6 +621,87 @@ void autoGain()
     check(extensionLines(b.rx).isEmpty(), "the plain client received no aethersdr_ byte");
 }
 
+// #7445: a set of the gain already in force is written only where that write
+// is not a no-op. On the HL2 it ends a session pin and records band memory
+// (#5402), so it must still reach the backend; a Flex declares the repeat a
+// no-op and is spared the round trip, unless another value is still in flight.
+void sameValueSet()
+{
+    RadioModel flexModel;
+    RadioModel hl2Model;
+    const auto repeatIsNoop = [](RadioModel& model, const char* family) {
+        if (!model.rebuildBackendForTest(QString::fromLatin1(family)) || !model.backend()) {
+            return std::optional<bool>{};
+        }
+        const auto control = model.backend()->capabilities().panDisplayControl;
+        return std::optional<bool>{control && control->repeatIsNoop(PanDisplayField::RfGain)};
+    };
+    const std::optional<bool> flexNoop = repeatIsNoop(flexModel, "flex");
+    const std::optional<bool> hl2Noop = repeatIsNoop(hl2Model, "hl2");
+    check(flexNoop && *flexNoop, "the Flex backend declares a repeated RF gain write a no-op");
+    check(hl2Noop && !*hl2Noop, "the HL2 backend does not: its RF gain write has side effects");
+
+    Fixture f;
+    TciServer server(&f.model);
+    f.backend->observesOverload = false;
+    f.backend->hasAuto = false;
+    emit f.model.capabilitiesChanged(true, f.backend->capabilities());
+    Wire a;
+    TciRxGainExtensionTest::attach(server, a.client, f.model);
+    settle(600);
+    f.publishRange(f.pan0, -8, 32, 8);
+    f.publishGain(f.pan0, 0);
+    a.send("aethersdr_ext_enable:true;");
+    settle();
+    a.take();
+
+    // HL2 contract: no declaration, so the same-value set is still written.
+    a.send("aethersdr_rx_rf_gain:0,8;");
+    settle();
+    a.take();
+    qsizetype before = f.backend->writes.size();
+    a.send("aethersdr_rx_rf_gain:0,8;");
+    settle();
+    check(f.backend->writes.size() == before + 1 && f.backend->writes.last().second == 8
+              && a.take().isEmpty(),
+          "without the declaration (HL2) a same-value set still reaches the backend, unanswered");
+
+    // Flex contract: the repeat is skipped, the reply rules are unchanged.
+    f.backend->noopRepeats = true;
+    emit f.model.capabilitiesChanged(true, f.backend->capabilities());
+    settle();
+    a.take();
+    before = f.backend->writes.size();
+    a.send("aethersdr_rx_rf_gain:0,8;");
+    settle();
+    check(f.backend->writes.size() == before && a.take().isEmpty(),
+          "with the declaration (Flex) a same-value set writes nothing and stays quiet");
+    a.send("aethersdr_rx_rf_gain:0,11;");
+    settle();
+    check(f.backend->writes.size() == before && a.take() == lines({"aethersdr_rx_rf_gain:0,8;"}),
+          "a set snapped onto the current value writes nothing and is answered to the sender");
+    a.send("aethersdr_rx_rf_gain:0,16;");
+    settle();
+    check(f.backend->writes.size() == before + 1 && f.backend->writes.last().second == 16
+              && a.take() == lines({"aethersdr_rx_rf_gain:0,16;"}),
+          "a changed value is still written with the declaration");
+
+    // A write of another value still in flight: the "same" value is not a no-op.
+    f.backend->holdEcho = true;
+    a.send("aethersdr_rx_rf_gain:0,24;");
+    a.send("aethersdr_rx_rf_gain:0,16;");
+    check(f.backend->writes.size() == before + 3 && f.backend->writes.last().second == 16,
+          "a set back to the reported gain while another write is in flight is written");
+    f.backend->releaseEchoes();
+    settle();
+    a.take();
+    before = f.backend->writes.size();
+    a.send("aethersdr_rx_rf_gain:0,16;");
+    settle();
+    check(f.panOf(0)->rfGain() == 16 && f.backend->writes.size() == before,
+          "once the radio reports the last write, its repeat is skipped again");
+}
+
 // The gate, on an injected backend: offered exactly while it declares the
 // observation record, with the model's reading (unobserved before any).
 void overloadGate()
@@ -733,6 +831,7 @@ int main(int argc, char** argv)
     offeredPerBackend();
     grammar();
     rfGain();
+    sameValueSet();
     autoGain();
     overloadGate();
     hl2Backend();

@@ -71,12 +71,6 @@ public:
     explicit Hl2Backend(QObject* parent = nullptr);
     ~Hl2Backend() override;
 
-    // Whether this process has a transmit path for the HL2. The desktop does;
-    // aetherd does not (no HL2 TX grant exists), so it sets false and the HL2
-    // declares itself receive only, which its receive controls require.
-    // Read once, at construction.
-    static void setHostOffersTransmit(bool offers);
-
     RadioCapabilities capabilities() const override;
     // Demodulates in-process (Hl2RxDsp); there is no VITA-49 stream at all.
     bool ownsRxAudio() const override { return true; }
@@ -493,7 +487,7 @@ private:
 
     void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
-    void emitAllSliceState();
+    void emitAllSliceState(bool announceBlankers = false);
     void emitAllPanState();
     void pushInitialState();
     // Put every receiver's AGC pair where this session should come up: remembered
@@ -709,7 +703,9 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
-        // A restored blanker still to be published once (emitSliceState).
+        // A blanker whose kind changed, that was restored, whose receiver just
+        // opened, or that the connect announcement re-sends, still to be
+        // published once (emitSliceState).
         bool nbEchoPending = false;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes
@@ -717,6 +713,17 @@ private:
         // Hl2RxDsp::kDefaultApfLevel / kDefaultAgcOffLevel (the test pins it).
         bool apfOn = false;
         int  apfLevel = 50;
+        // The receive channel's own NR (WDSP ANR) and automatic notch (ANF),
+        // held the same way. Defaults are SliceModel's (off, level 50).
+        bool nrOn = false;
+        int  nrLevel = 50;
+        bool anfOn = false;
+        int  anfLevel = 50;
+        // NR/ANF still to be published once, like nbEchoPending: SliceModel
+        // emits nrChanged/anfChanged for every echo that carries them.
+        bool dspEchoPending = false;   // seed, restore, re-announce: both
+        bool nrEchoPending = false;    // one NR request: echo NR alone
+        bool anfEchoPending = false;   // one ANF request: echo ANF alone
         int  agcOffLevel = 10;
 
         // The operator's panadapter averaging, held for the same reason: a
@@ -852,8 +859,14 @@ private:
     // This receiver's NCO just moved: the averaged bins describe the old
     // frequency axis. Called beside pushNotchTune() at the two retune sites.
     void dropPanAverage(const Receiver& r);
+    void restartPanDc(const Receiver& r);
     // Same, for the APF (centred on the current CW pitch) and the AGC-off level.
     void pushApf(const Receiver& r);
+    // Same, for the channel's NR and ANF (Receiver::nrOn/anfOn and levels).
+    void pushChannelNoiseFilters(const Receiver& r);
+    // requestSliceDsp()'s Nr/Anf arm: the receive channel's own ANR and ANF,
+    // per receiver. Not setSliceNoiseReduction/AutoNotch, which name radio DSP.
+    void setSliceChannelNoiseFilter(int sliceId, const SliceDspRequest& request);
     void pushAgcOffLevel(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC. Never m_rx,
@@ -965,7 +978,8 @@ private:
     static QString sliceMeterName(int uiNumber);
 
     // Meter index for a receiver's "SLC"/"LEVEL". Receiver 0 keeps index 1 (as
-    // defineMeters() declares); the rest use a band clear of the fixed 1..9.
+    // defineMeters() declares); the rest use a band starting at
+    // kSliceLevelMeterBase, clear of the fixed catalogue below it.
     static int sliceLevelMeterIndex(int uiNumber);
 
     // Mixing scratch: per-receiver samples awaiting peers, and a reused summing
@@ -1304,8 +1318,9 @@ private:
 
     // Meter ballistics: the S-meter's rate gate and EMA are SMeterSmoother's
     // (WdspSMeter.h), shared with AnanBackend (100 ms tick, attack 0.5, decay 0.15),
-    // fed ~47 readings/s at any sample rate. Indices 1..9 are defineMeters()' fixed
-    // catalogue; receivers above the first take kSliceLevelMeterBase + uiNumber.
+    // fed ~47 readings/s at any sample rate. Indices below kSliceLevelMeterBase are
+    // defineMeters()' fixed catalogue; receivers above the first take
+    // kSliceLevelMeterBase + uiNumber.
     static constexpr int kSliceLevelMeterBase = 100;
     // S-meter state is per receiver (Receiver::sMeter). PA temperature rides the
     // 10 Hz telemetry and needs only a symmetric EMA against ADC low-bit flicker.

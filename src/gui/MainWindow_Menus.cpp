@@ -26,7 +26,6 @@
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
-#include "ClientChainApplet.h"
 #include "CwxPanel.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
@@ -1016,14 +1015,6 @@ void MainWindow::buildMenuBar()
         showOrRaiseCanon(m_settingsBrowserDialog,
                          [this] { return new SettingsBrowserDialog(this); });
     });
-    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
-        // Single-click re-enable of NR2 from LastClientNr also runs
-        // through enableNr2WithWisdom (#2275 — direct enable can crash).
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxNr2EnableWithWisdomRequested,
-                this, &MainWindow::enableNr2WithWisdom);
-    }
-
     settingsMenu->addSeparator();
 
     // CAT: unified port manager (rigctld / TS-2000 / FlexCAT per port)
@@ -1579,12 +1570,6 @@ void MainWindow::buildMenuBar()
     connect(dspAction, &QAction::triggered, this, [this] {
         ensureAetherRxDialog();
     });
-    // RX chain DSP tile double-click opens it too — same entry point.
-    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxDspEditRequested,
-                this, [dspAction]() { dspAction->trigger(); });
-    }
 
     // The three checkable panel toggles re-read their own state after the
     // handler runs: triggered() fires *after* Qt has flipped the check mark, and
