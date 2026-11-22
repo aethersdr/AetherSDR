@@ -26,6 +26,7 @@
 #include "ComboStyle.h"
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
+#include "CenterMarkSlider.h"
 #include "RxApplet.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
@@ -119,65 +120,6 @@ protected:
     }
 private:
     const float& m_value;
-};
-
-// Slider that resets to a default value on double-click.
-// Extends GuardedSlider for controls-lock support (#745).
-class ResetSlider : public GuardedSlider {
-public:
-    explicit ResetSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : GuardedSlider(o, parent), m_resetVal(resetVal) {}
-protected:
-    void mouseDoubleClickEvent(QMouseEvent*) override { setValue(m_resetVal); }
-private:
-    int m_resetVal;
-};
-
-// ResetSlider filled from the centre outward with a centre-mark dot, for pan /
-// balance controls. Over-paints the stylesheet's (0 -> handle) sub-page with
-// groove colour, then fills (centre -> handle) in accent, clipped around the
-// handle disc.
-class CenterMarkSlider : public ResetSlider {
-public:
-    explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : ResetSlider(resetVal, o, parent) {}
-protected:
-    void paintEvent(QPaintEvent* ev) override {
-        ResetSlider::paintEvent(ev);
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-
-        auto& tm = AetherSDR::ThemeManager::instance();
-        const int cx = width() / 2;
-        const int cy = height() / 2;
-        const int grooveY = cy - 2;
-
-        QStyleOptionSlider opt;
-        initStyleOption(&opt);
-        const QRect handleRect = style()->subControlRect(
-            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
-        const int handleCx = handleRect.center().x();
-
-        QPainterPath clip;
-        clip.addRect(rect());
-        QPainterPath handlePath;
-        handlePath.addEllipse(handleRect.adjusted(-1, -1, 1, 1));
-        p.setClipPath(clip.subtracted(handlePath));
-
-        p.setPen(Qt::NoPen);
-        if (handleCx < cx) {
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, handleCx, 4));
-            p.setBrush(tm.color("color.accent"));
-            p.drawRect(QRect(handleCx, grooveY, cx - handleCx, 4));
-        } else {
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, cx, 4));
-        }
-
-        p.setBrush(QColor("#608090"));
-        p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
-    }
 };
 
 // Button that paints a solid left- or right-pointing triangle.

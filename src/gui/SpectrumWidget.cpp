@@ -354,7 +354,11 @@ void assignModeForcedDirections(const QVector<SpectrumWidget::SliceOverlay>& ove
 {
     for (const SpectrumWidget::SliceOverlay& overlay : overlays) {
         if (drawsRttyToneCues(overlay.mode)) {
-            dirMap[overlay.sliceId] = VfoWidget::ForceRight;
+            // Runs after the diversity and split passes: a pair lock wins (#7215).
+            const auto locked = dirMap.constFind(overlay.sliceId);
+            const bool isLocked = locked != dirMap.constEnd();
+            dirMap[overlay.sliceId] = VfoWidget::rttyFlagDir(
+                isLocked, isLocked ? *locked : VfoWidget::Auto);
         }
     }
 }
@@ -2540,7 +2544,7 @@ bool SpectrumWidget::vfoFlagOnLeftForSlice(
             int x = mhzToX(markerMhz);
             if (drawsRttyToneCues(overlay.mode)) {
                 const double hiMhz = markerMhz + overlay.filterHighHz / 1.0e6;
-                x = mhzToX(hiMhz) + 4;
+                x = mhzToX(hiMhz) + VfoWidget::kRttyFlagEdgeGapPx;
             }
             vfos.append({overlay.sliceId, x, widget, overlay.splitPartnerId, &overlay});
         }
@@ -16262,7 +16266,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
             if (drawsRttyToneCues(so.mode)) {
                 const double hiMhz =
                     so.freqMhz + so.filterHighHz / 1.0e6;
-                x = mhzToX(hiMhz) + 4;
+                x = mhzToX(hiMhz) + VfoWidget::kRttyFlagEdgeGapPx;
             }
             vfos.append({so.sliceId, x, flag, so.splitPartnerId, &so});
         }
@@ -16278,6 +16282,19 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
     assignSplitPairDirections(vfos, directionBySlice);
     assignModeForcedDirections(m_sliceOverlays, directionBySlice);
 
+    // An RTTY marker sits at a filter edge, and which edge depends on the
+    // side the flag is drawn: the high edge for a right-side flag, the low
+    // edge for one locked left (#7215). Every other mode keeps its x.
+    const auto anchorX = [this](const VfoPos& vfo, VfoWidget::FlagDir direction) {
+        if (!vfo.overlay || !drawsRttyToneCues(vfo.overlay->mode)) {
+            return vfo.x;
+        }
+        const SliceOverlay& so = *vfo.overlay;
+        return VfoWidget::rttyFlagAnchorX(
+            mhzToX(so.freqMhz + so.filterLowHz / 1.0e6),
+            mhzToX(so.freqMhz + so.filterHighHz / 1.0e6), direction);
+    };
+
     if (vfos.size() == 1) {
         VfoWidget::FlagDir direction =
             directionBySlice.value(vfos[0].sliceId, VfoWidget::Auto);
@@ -16287,7 +16304,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 *vfos[0].overlay, vfos[0].w, vfos[0].x, specW);
         }
         vfos[0].w->updatePosition(
-            vfos[0].x, specRect.top() + flagTopPad(), direction);
+            anchorX(vfos[0], direction), specRect.top() + flagTopPad(), direction);
         return;
     }
 
@@ -16300,7 +16317,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 deconflictedVfoFlagDirection(vfos, index, panelW, specW);
         }
         vfos[index].w->updatePosition(
-            vfos[index].x, specRect.top() + flagTopPad(), direction);
+            anchorX(vfos[index], direction), specRect.top() + flagTopPad(), direction);
     }
 }
 
