@@ -12,21 +12,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### PureSignal on the Hermes-Lite 2 · a host transmit time-out on every keying path · WSJT-X Rx/Tx markers on the panadapter · Copy Assist live preview · TCI gains IQ from the HL2 and an opt-in AetherSDR extension set · a release page that carries only what you download
 
-79 merged changes from 16 human contributors and three Dependabot updates within that total. The Hermes-Lite 2 gains PureSignal adaptive predistortion, noise reduction and auto notch, and a receiver that no longer drowns in its own transmit. Every transmission, whatever keyed it, is now bounded by a host time-out, and a phone-mode unkey can wait for the speech tail to air. WSJT-X's Rx and Tx frequencies show on the panadapter, Copy Assist shows provisional text while it decodes, and TCI clients get IQ from the HL2 and an opt-in set of AetherSDR controls. This is also the first release whose GitHub page carries only what people download; signatures, symbol archives and the Store upload are on updates.aethersdr.com.
+79 merged changes from 16 human contributors and three Dependabot updates within that total. The Hermes-Lite 2 gains PureSignal adaptive predistortion, noise reduction and auto notch, and a receiver that no longer drowns in its own transmit. This station's transmissions, whatever keyed them, are now bounded by a host time-out, on by default at 180 s, and a phone-mode unkey can wait for the speech tail to air. WSJT-X's Rx and Tx frequencies show on the panadapter, Copy Assist shows provisional text while it decodes, and TCI clients get IQ from the HL2 and an opt-in set of AetherSDR controls. This is also the first release whose GitHub page carries only what people download; signatures, symbol archives and the Store upload are on updates.aethersdr.com.
 
 ### Transmit
 
-- **A host transmit time-out (#7404).** One timer in the model layer bounds every transmission, whatever keyed it. When it expires it unkeys, says so, and stays latched until every input that held a key has let go and a new key-down arrives (RFC #7021).
+- **A host transmit time-out (#7404), on by default at 180 s.** One timer bounds this station's transmissions, whatever keyed them. When it expires it unkeys, says so, and stays latched until every input that held a key has let go and a new key-down arrives. On a FlexRadio its initial default is never shorter than the radio's own timeout. Set 15 to 1800 s, or turn it off, on Radio Setup's Transmit page (RFC #7021).
 - **TX off delay (#7059).** An optional hold, 0 to 2000 ms and off by default, keeps the radio keyed after a phone-mode PTT release so speech still on its way to the radio airs. A PC mic goes silent 300 ms into the hold.
-- A station key objection can refuse any key-on this application starts; no device registers one yet (#7338). A TCI client that owns PTT and stops answering keepalives is dropped, so it can't leave the radio keyed (#7402). TCI sends `tx_sensors` during tune and radio-keyed TX (#7052).
+- A station key objection can refuse any key-on this application starts; no device registers one yet (#7338). A TCI client that owns PTT and stops answering keepalives is dropped after 15 s, and the radio unkeys (#7402). TCI sends `tx_sensors` during tune and radio-keyed TX (#7052).
 - The bridge's TX permission gates keying only; RF and Tune power are drive, bounded by the power ceiling on every bridge route (#7414, #7417).
 
 ### Hermes-Lite 2
 
 - **PureSignal (#7018, #7087).** Adaptive predistortion through WDSP's `calcc` stage, with its own applet, and a warning when the feedback attenuation runs out, as with an external amplifier's sampler.
-- **A receiver that survives its own transmit.** The gateware holds the receiver at +8 dB for exactly the TX time (#7401), and the pan's DC removal uses a running estimate, so the line at the pan center while transmitting is gone (#7405).
-- **Noise reduction and auto notch** in the HL2's receive channel (#7423). PA current in amps in Radio Health (#7435), and the IO board's status on the HL2 Hardware page (#7436).
-- The HL2's own PTT keys host modulation in voice modes (#7067). `rigctl` `send_morse` sends CW text through the host keyer when the radio has no text buffer (#7106, #7335, #7347).
+- **A receiver that survives its own transmit.** With PureSignal off, the gateware caps keyed receive gain at +8 dB; lower gains stay unchanged (#7401). With PureSignal on, PureSignal controls keyed gain instead. The pan's DC removal uses a running estimate, removing the center line while transmitting (#7405).
+- **Noise reduction and auto notch** in the HL2's receive channel (#7423). PA current in amps in Radio Health, not yet checked against an ammeter (#7435), and the IO board's status on the HL2 Hardware page (#7436).
+- The HL2's own PTT keys host modulation in voice modes (#7067). `rigctl` `send_morse` sends CW text through the host keyer when the radio has no text buffer (#7106). A host CW text engine behind CWX is in place, which no surface reaches yet (#7335, #7347, RFC #7146).
 - A same-radio reconnect keeps the pan center (#7374), a simulator on 127.0.0.1 connects again (#7441), discovery keeps its sockets instead of freezing the GUI on macOS (#7478), the 5 W rating is declared when transmit is offered (#7510), and aetherd reaches the HL2's receive DSP and RF gain (#7336).
 
 ### Panadapter, decoders and Copy Assist
@@ -40,7 +40,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### TCI and CAT
 
 - **IQ from host-demodulating radios (#6859, #7412).** An HL2 now streams receiver IQ to TCI clients, and a backlog no longer retires every client (RFC #6863).
-- **An opt-in AetherSDR extension set (#7185).** A client sends `aethersdr_ext_enable:true;` and gets a capability list; before that, nothing changes on the wire. It carries RF gain, automatic RF gain and front-end overload (#7196, #7472), RX and TX antennas (#7197), span (#7199), the TX passband (#7191) and HL2 hardware settings (#7198).
+- **An opt-in AetherSDR extension set (#7185, RFC #7181).** A client sends `aethersdr_ext_enable:true;` and gets a capability list; before that, nothing changes on the wire. It carries RF gain, automatic RF gain and front-end overload (#7196, #7472), RX and TX antennas (#7197), span (#7199), the TX passband (#7191) and HL2 hardware settings (#7198).
 - `hw_sensors_enable` / `hw_sensors` from TCI 2.1, from the radio's declared vitals (#7180).
 
 ### FlexRadio, diversity and accessories

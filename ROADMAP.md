@@ -142,7 +142,8 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   61.43 MHz span with mode, filter, AGC threshold, noise blanker, noise
   reduction, RIT, the step attenuator as RF gain and the radio's own speaker.
   v26.11.4 bounds FM receive audio with WDSP's FM limiter. The codec is
-  multi-DDC capable but `AnanBackend` still drives one receiver; remaining is the second receiver on its own DDC, then transmit.
+  multi-DDC capable but `AnanBackend` still drives one receiver; remaining is
+  the second receiver on its own DDC, then transmit.
 - **RTL-SDR — experimental, receive-only** — `librtlsdr` discovery with one
   panadapter and one host-demodulated slice (AM, FM, SSB, CW) on builds carrying
   the libraries, from v26.9.2. v26.9.3 added a bounded receiver lifecycle
@@ -227,7 +228,7 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   transmit and says "not measured" on RF1's gauges, halves the TX DSP block,
   fixes keying refusals after an over, keeps restart state per mode and per
   receiver, and names SQUARE SDR 2 and SQUARE 3. v26.11.4 adds PureSignal
-  adaptive predistortion, holds the receiver at +8 dB while transmitting,
+  adaptive predistortion, caps keyed receive gain at +8 dB with PureSignal off,
   removes the pan's DC with a running estimate, adds noise reduction and auto
   notch, keys host modulation from the radio's own PTT, reads PA current and
   the IO board status, and streams receiver IQ to TCI clients. Keyed rendering and hardware-PTT validation remain outstanding.
@@ -430,13 +431,12 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 
 - [#4840](https://github.com/aethersdr/AetherSDR/issues/4840) — IC-9700 support for dual VFOs / slices for satellite use
 - [#7506](https://github.com/aethersdr/AetherSDR/issues/7506) — Experimental Icom IC-7110 receive support with MAIN tuning and a selectable MAIN/SUB scope
-- [#7433](https://github.com/aethersdr/AetherSDR/issues/7433) — Auto ESC: one-click diversity phase/gain sweep, with optional memory per beam heading
 - [#7432](https://github.com/aethersdr/AetherSDR/issues/7432) — Show the Antenna Genius's selected antenna name on the radio's ANT1/ANT2 buttons
-- [#7430](https://github.com/aethersdr/AetherSDR/issues/7430) — Publish the clicked spot (call, frequency, bearing, distance) over MQTT for rotator and station controllers
 
 **Audio, DSP and transmit**
 
 - [#7408](https://github.com/aethersdr/AetherSDR/issues/7408) — RTTY decoder: make REV swap mark and space, so one press fixes an inverted station
+- [#7433](https://github.com/aethersdr/AetherSDR/issues/7433) — Auto ESC: one-click diversity phase/gain sweep, with optional memory per beam heading
 
 **Interface and workflow**
 
@@ -444,6 +444,7 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 - [#3689](https://github.com/aethersdr/AetherSDR/issues/3689) — Net Reminder Scheduler — post-merge follow-ups (#3684)
 - [#7508](https://github.com/aethersdr/AetherSDR/issues/7508) — Full-hairline Orbit badge for agent control and activity beside Band/Segment Zoom
 - [#7434](https://github.com/aethersdr/AetherSDR/issues/7434) — Export and import workspace canvases as .aetherws files
+- [#7430](https://github.com/aethersdr/AetherSDR/issues/7430) — Publish the clicked spot (call, frequency, bearing, distance) over MQTT for rotator and station controllers
 
 **Project infrastructure**
 
@@ -456,14 +457,16 @@ complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 
 - **PureSignal on the Hermes-Lite 2** — WDSP's adaptive predistortion, with an
   applet and a warning when the feedback attenuation runs out (v26.11.4).
-- **A host transmit time-out** — one timer bounds every transmission, whatever
-  keyed it, and latches until every input lets go. RFC #7021 (v26.11.4).
+- **A host transmit time-out** — on by default at 180 s, it bounds this
+  station's transmissions, whatever keyed them, and latches until every input
+  lets go. RFC #7021 (v26.11.4).
 - **WSJT-X Rx/Tx markers** — each WSJT-X instance's receive and transmit
   offsets as live brackets on the panadapter and waterfall. RFC #5586 (v26.11.4).
 - **Copy Assist live preview** — provisional text while the model decodes.
   RFC #7193 (v26.11.4).
 - **TCI IQ from the HL2 and an AetherSDR extension set** — opt-in controls for
-  RF gain, antennas, span, the TX passband and HL2 hardware. RFC #6863 (v26.11.4).
+  RF gain, antennas, span, the TX passband and HL2 hardware. RFCs #6863 and
+  #7181 (v26.11.4).
 - **Radio connection workspace** — Locations, operator profiles and SmartLink
   accounts in one workspace, two recent-radio shortcuts with a drawer for the
   rest, and a confirmed handoff between radios. RFC #6561 (v26.11.3).
