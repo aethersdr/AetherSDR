@@ -166,11 +166,10 @@ inline constexpr std::uint8_t kC0AdcGain = 0x14;  // addr 0x0a: AD9866 LNA gain
 //   generic openHPSDR: per-receiver ADC assignment. C1 = RX1..RX4 (2 bits each,
 //                      LSB first), C2 = RX5..RX7, C3[4:0] TX att.
 //   Hermes-Lite 2:     TX LNA gain. [15] enable HW-managed TX gain, [14] its
-//                      LNA mode, [13:8] the gain.
+//                      LNA mode, [13:8] the gain (ad9866.v, FAST_LNA).
 // It must be sent: a conforming multi-ADC device (hpsdrsim rx_adc[] = -1)
-// streams all-zero IQ until assigned. All-zero is inert on the HL2. The T/R
-// gain switch and PureSignal would need a real value here, which the round
-// robin would zero every third frame.
+// streams all-zero IQ until assigned. All-zero is inert on the HL2; the round
+// robin carries ccTxLnaGain(), whose only non-zero byte is C3 (generic: TX att).
 inline constexpr std::uint8_t kC0AdcAssignOrTxGain = 0x1C;
 
 // addr 0x39: sync / reset. DATA[7:4] = 0x8 resets every decimation filter
@@ -265,6 +264,10 @@ Cc ccGain(int db, bool pureSignal) noexcept;
 // ADC0, so every field is zero; the bank still has to be SENT for a conforming
 // device to route ADC samples to RX1 at all.
 Cc ccAdcAssign() noexcept;
+// The 0x0e bank the round robin sends: ccAdcAssign() plus, when
+// rxGainDuringTxEngaged(), C3 = [15] enable | [14] native mode | [13:8] code
+// of kRxGainDuringTxCapDb. The gateware swaps it in for exactly the TX time.
+Cc ccTxLnaGain(int rxGainDb, bool pureSignal) noexcept;
 // One-shot filter-pipeline reset. UNUSED — read the warning at kC0Sync before
 // calling this from anywhere.
 Cc ccPipelineReset() noexcept;
@@ -523,6 +526,9 @@ struct Hl2Telemetry {
     int adcSamples = 0;
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
+    // Enable cycle that covered this whole keyed ADC window, or zero when the
+    // window cannot be attributed to PureSignal feedback.
+    std::uint64_t psAdcGeneration = 0;
 
     // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] over responses
     // that carry a measurement (ForwardPowerWindow::observe skips the rest; the
@@ -851,6 +857,16 @@ int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
 [[nodiscard]] constexpr double hl2TemperatureCelsius(int raw) noexcept
 {
     return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
+}
+
+// PA drain current in amps from `biasCurrentRaw`, shared like the above. HL2
+// schematic: 0.04 ohm shunt R123, INA199A1 (gain 50) U14, then R108 270 ohm /
+// R109 1 kohm into AIN2 of the slow ADC; the same 3.26 V reference as above.
+// Quisk's Code2Current and hl2setup's hl2.cxx agree. Not checked against a meter.
+[[nodiscard]] constexpr double hl2PaCurrentAmps(int raw) noexcept
+{
+    return (3.26 * (static_cast<double>(raw) / 4096.0)) / 50.0 / 0.04
+           * (1270.0 / 1000.0);
 }
 
 // EP4 wideband bandscope: a second radio->host stream on the EP6 socket,

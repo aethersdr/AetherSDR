@@ -189,6 +189,16 @@ public:
                                const QHostAddress& broadcast = QHostAddress::Broadcast,
                                quint16 port = kMetisPort);
 
+    // A peer on this host (hpsdrsim at 127.0.0.1) replies from the address it was
+    // sent from: from a LAN-bound socket, the LAN address, which onReadyRead()'s
+    // sender filter (m_host:m_port only) drops. So a loopback target is probed
+    // from loopback interfaces only, and an IPv4 loopback target's session binds
+    // 127.0.0.1 (::1 keeps the wildcard bind); every other target is unchanged.
+    [[nodiscard]] static bool discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                                      const QHostAddress& target);
+    [[nodiscard]] static QHostAddress sessionBindAddress(const QHostAddress& host,
+                                                         const QHostAddress& requested);
+
     // start()/stop() and every live-control setter below MUST execute on this
     // object's own thread: start() constructs the QUdpSocket, and a socket takes
     // the affinity of the thread that creates it. Hl2Backend owns an I/O thread
@@ -233,7 +243,7 @@ public:
     // edge queues the bank at once so the feedback gain switches with T/R. The
     // caller owns availability: a board with fewer than four DDCs streams
     // nothing on the missing ones, so Hl2Backend never asks for it there.
-    Q_INVOKABLE void setPureSignal(bool enabled);
+    void setPureSignal(bool enabled, quint64 generation);
     // AD9866 gain during a PureSignal transmission, dB (-12..+48). The
     // controller works in attenuation, att = 19 - dB (Hl2PsGain).
     Q_INVOKABLE void setPureSignalTxGainDb(int db);
@@ -241,6 +251,8 @@ public:
     [[nodiscard]] int pureSignalTxGainDb() const noexcept { return m_psTxGainDb; }
     // The 0x0a bank as the round robin sends it right now. Public for tests.
     [[nodiscard]] Cc currentGainBank() const noexcept;
+    // The 0x0e bank as the round robin sends it right now. Public for tests.
+    [[nodiscard]] Cc currentTxLnaGainBank() const noexcept { return m_ccTxLnaGain; }
     // Select the companion filter board's band filter (MetisProtocol kOc* bits).
     // Latched into the config register, which rides bank A of every EP2 frame, so the
     // relays follow within one frame (~2.6 ms at 48 kHz). Not also queued as a
@@ -811,6 +823,8 @@ private:
     // object's thread (event-driven), so no synchronization is needed today.
     Cc m_ccConfig{};
     Cc m_ccGain{};
+    // 0x0e: ccTxLnaGain() of the current receive gain and PureSignal state.
+    Cc m_ccTxLnaGain{};
     // One NCO bank per receiver, indexed by DDC. Sized to effectiveNumRx() at
     // start(); every entry is a distinct register (0x02..0x08), so this is an
     // array of banks rather than one bank with a varying payload.
@@ -821,6 +835,10 @@ private:
     int m_psTxGainDb = -12;
     // DDC2 and DDC3 onto the TX NCO when PureSignal is on. Idempotent.
     void applyPureSignalNcos();
+    // Rebuild m_ccTxLnaGain; queue it once when it changed, with 0x0a ahead of
+    // it when [15] is released and behind it (alsoGainBank) when it engages.
+    // alsoGainBank queues 0x0a even when 0x0e is unchanged. Idempotent.
+    void applyTxLnaGain(bool alsoGainBank = false);
     // setReceiverCount()'s body once the new count is in m_params.
     void relayoutReceivers(int before);
     // Queue (or re-queue) the twenty-four VersaClock banks, and remove any
@@ -1145,6 +1163,8 @@ private:
     // rate exists: downstream sees a ~10 Hz emit of a bit cycling up to ~190 times/s.
     int m_adcWindowSamples = 0;
     int m_adcWindowOverload = 0;
+    quint64 m_psGeneration = 0;
+    quint64 m_psAdcWindowGeneration = 0;
     // Forward-power maximum for the same window; see
     // Hl2Telemetry::forwardPowerPeakRaw for why the last value is not enough.
     ForwardPowerWindow m_fwdWindow;

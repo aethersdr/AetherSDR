@@ -62,6 +62,9 @@ private:
     QCheckBox* m_lineOutIncludeTx{nullptr};
     QCheckBox* m_lineOutPcAudioOffConsent{nullptr};
     QCheckBox* m_txVoiceDsp{nullptr};
+    // Shown while the radio offers the HL2 hardware group of the extension set.
+    QCheckBox* m_allowHl2HardwareChanges{nullptr};
+    void updateHl2HardwareRow();
     ControlAvailabilityRegistry* m_lineOutAvailability{nullptr};
     ControlAvailabilityRegistry* m_lineOutPcAudioOffAvailability{nullptr};
     QLineEdit*   m_tciPort{nullptr};

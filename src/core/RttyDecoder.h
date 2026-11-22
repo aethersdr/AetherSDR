@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <vector>
 
 namespace AetherSDR {
 
@@ -50,12 +51,18 @@ public slots:
     void setReversePolarity(bool rev);
 
 signals:
-    // confidence: 0.5 = weak, 1.0 = perfect (mark/space ratio during character)
+    // confidence: the character's weakest data bit. 0.5 = its two tones were equal;
+    // 1.0 = it reached the tone share a clean signal reaches with these filters.
     void textDecoded(const QString& text, float confidence);
 
-    // markLevel/spaceLevel are fractional envelope strengths (0–1, sum ≈ 1).
-    // snrDb > 3 typically means locked.
-    void statsUpdated(float markLevel, float spaceLevel, float snrDb, bool locked);
+    // About twice a second. level: the averaged character score on the confidence scale,
+    // 0 (no characters, or a coin flip) to 1 (a clean copy). snrDb: the averaged tone share
+    // of the read tone over the other, in dB. locked: characters are being framed with a
+    // good average score. With no valid character for 1.5 s: 0, 0, false.
+    void statsUpdated(float level, float snrDb, bool locked);
+    // The statistics were reset: start, a new source, or resetInput(). Emitted just before
+    // the neutral statsUpdated(0, 0, false), which an ordinary reading can also send.
+    void statsReset();
 
 private:
     void queueResetStats(quint64 generation);
@@ -100,6 +107,20 @@ private:
     BiquadState  m_spaceState;
     double       m_markEnv{};
     double       m_spaceEnv{};
+
+    // Character score and LOCKED (worker thread only). Each data bit is scored by the
+    // tone energy over the settled 0.4 bit before it is read; a character scores its
+    // weakest bit. LOCKED, the dB figure and the level come from an average of scores.
+    std::vector<double> m_eRingMark, m_eRingSpace;
+    int    m_eRingPos{0};
+    double m_eSumMark{0.0}, m_eSumSpace{0.0};
+    double m_cleanShare{0.8};          // the share that scores 1.0, from the filters' cross-talk
+    double m_frameWeakest{1.0};
+    double m_avgShare{0.0};            // average over valid frames since the last reset or 1.5 s without one
+    int    m_avgFrames{0};             // frames in that average, counted up to kMeanCharacters
+    bool   m_lockState{false};
+    qint64 m_samplesSinceFrame{0};
+    bool         m_filtersValid{false};
 };
 
 } // namespace AetherSDR

@@ -71,12 +71,6 @@ public:
     explicit Hl2Backend(QObject* parent = nullptr);
     ~Hl2Backend() override;
 
-    // Whether this process has a transmit path for the HL2. The desktop does;
-    // aetherd does not (no HL2 TX grant exists), so it sets false and the HL2
-    // declares itself receive only, which its receive controls require.
-    // Read once, at construction.
-    static void setHostOffersTransmit(bool offers);
-
     RadioCapabilities capabilities() const override;
     // Demodulates in-process (Hl2RxDsp); there is no VITA-49 stream at all.
     bool ownsRxAudio() const override { return true; }
@@ -213,6 +207,9 @@ public:
     [[nodiscard]] int lnaAutoOffsetDb() const noexcept { return m_lnaAutoOffsetDb; }
     [[nodiscard]] int lnaBaselineDb() const noexcept { return m_lnaGainDb; }
     [[nodiscard]] int lnaEffectiveDb() const noexcept;
+    // dBFS -> dBm offset for the pan and S-meter: m_dbRef's, plus the dB the
+    // receiver is held below lnaEffectiveDb() while transmitting.
+    [[nodiscard]] double displayOffsetDb() const noexcept;
     [[nodiscard]] bool autoRfGainEnabled() const noexcept { return m_autoRfGainEnabled; }
 
     // Max attenuation the loop may apply, in dB below the operator's baseline. The
@@ -366,6 +363,9 @@ private:
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
     friend struct Hl2TxRouteTestAccess;
+    friend struct Hl2RxGainDuringTxTestAccess;
+    // Arms and ends the transmit tail, for tci_ext_hl2_hw_test's hw.set refusal.
+    friend struct Hl2HwSetTailTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
     // A rising edge is offered to RadioModel as TransmitDelta::radioPtt only when
@@ -493,7 +493,7 @@ private:
 
     void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
-    void emitAllSliceState();
+    void emitAllSliceState(bool announceBlankers = false);
     void emitAllPanState();
     void pushInitialState();
     // Put every receiver's AGC pair where this session should come up: remembered
@@ -547,6 +547,8 @@ private:
     QString m_psUnavailableReason;
     int m_psFeedbackRateHz = 0;
     Hl2PureSignalStatus m_psStatus;
+    quint64 m_psGeneration = 0;
+    bool m_psAdcOverload = false;
     // The operator's PureSignal preferences. GUI thread; the backend owns them
     // and persists them per radio as the "PureSignal" radio_settings document
     // (one coupler, one feedback attenuation), loaded on every connect.
@@ -647,6 +649,9 @@ private:
     // wire, and re-evaluate the band filter. The single path for a hardware
     // change whoever asked for it (setup dialog, automation bridge, connect).
     void applyHardwareOptions(const Hl2HardwareOptions& next, bool persist);
+    // The options as hw.get, hw.set and the `hl2`/`hw` extensionStatus report
+    // them: one map, so the three cannot disagree.
+    [[nodiscard]] QVariantMap hardwareOptionsReport() const;
     // Raise or clear the gateware ATU request, honouring m_hw.atuGateware.
     // Called from the same two places that start and end a TUNE.
     void applyAtuTuneRequest(bool tuning);
@@ -707,7 +712,9 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
-        // A restored blanker still to be published once (emitSliceState).
+        // A blanker whose kind changed, that was restored, whose receiver just
+        // opened, or that the connect announcement re-sends, still to be
+        // published once (emitSliceState).
         bool nbEchoPending = false;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes
@@ -715,6 +722,17 @@ private:
         // Hl2RxDsp::kDefaultApfLevel / kDefaultAgcOffLevel (the test pins it).
         bool apfOn = false;
         int  apfLevel = 50;
+        // The receive channel's own NR (WDSP ANR) and automatic notch (ANF),
+        // held the same way. Defaults are SliceModel's (off, level 50).
+        bool nrOn = false;
+        int  nrLevel = 50;
+        bool anfOn = false;
+        int  anfLevel = 50;
+        // NR/ANF still to be published once, like nbEchoPending: SliceModel
+        // emits nrChanged/anfChanged for every echo that carries them.
+        bool dspEchoPending = false;   // seed, restore, re-announce: both
+        bool nrEchoPending = false;    // one NR request: echo NR alone
+        bool anfEchoPending = false;   // one ANF request: echo ANF alone
         int  agcOffLevel = 10;
 
         // The operator's panadapter averaging, held for the same reason: a
@@ -828,6 +846,9 @@ private:
     // open: receiver A's extras, and the whole entry for any a numRx param opened.
     void seedOpenReceiversFromMemory();
     void seedReceiverExtras(Receiver& r, const Receiver& memory) const;
+    // The pan centre r comes up on: `ncoHz` while r listens inside its usable
+    // window at the current rate, else r's tuned frequency.
+    [[nodiscard]] double panCentreKeptOrRecentred(const Receiver& r, double ncoHz) const;
     [[nodiscard]] static QJsonObject receiverMemoryJson(const Receiver& r);
     // Nullopt for an entry with no usable frequency or mode; other bad fields drop alone.
     [[nodiscard]] std::optional<Receiver> receiverFromMemory(const QJsonObject& o) const;
@@ -844,12 +865,20 @@ private:
     void pushSquelch(const Receiver& r);
     // Same, for the panadapter averaging (Receiver::panAverage / weighted).
     void pushPanAveraging(const Receiver& r);
-    // This receiver's NCO just moved: the averaged bins describe the old
-    // frequency axis. Called beside pushNotchTune() at the two retune sites.
+    // The averaged bins no longer describe this receiver: its NCO moved (the
+    // two retune sites) or the AD9866 gain changed at T/R (publishTransmitState).
     void dropPanAverage(const Receiver& r);
+    void restartPanDc(const Receiver& r);
     // Same, for the APF (centred on the current CW pitch) and the AGC-off level.
     void pushApf(const Receiver& r);
+    // Same, for the channel's NR and ANF (Receiver::nrOn/anfOn and levels).
+    void pushChannelNoiseFilters(const Receiver& r);
+    // requestSliceDsp()'s Nr/Anf arm: the receive channel's own ANR and ANF,
+    // per receiver. Not setSliceNoiseReduction/AutoNotch, which name radio DSP.
+    void setSliceChannelNoiseFilter(int sliceId, const SliceDspRequest& request);
     void pushAgcOffLevel(const Receiver& r);
+    // Drops dropPanAverage() has requested this session; read by tests.
+    quint64 m_panAverageDrops = 0;
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC. Never m_rx,
     // whose push_back/erase can move storage under the fan-out. Rebuilt by
@@ -960,7 +989,8 @@ private:
     static QString sliceMeterName(int uiNumber);
 
     // Meter index for a receiver's "SLC"/"LEVEL". Receiver 0 keeps index 1 (as
-    // defineMeters() declares); the rest use a band clear of the fixed 1..9.
+    // defineMeters() declares); the rest use a band starting at
+    // kSliceLevelMeterBase, clear of the fixed catalogue below it.
     static int sliceLevelMeterIndex(int uiNumber);
 
     // Mixing scratch: per-receiver samples awaiting peers, and a reused summing
@@ -1299,8 +1329,9 @@ private:
 
     // Meter ballistics: the S-meter's rate gate and EMA are SMeterSmoother's
     // (WdspSMeter.h), shared with AnanBackend (100 ms tick, attack 0.5, decay 0.15),
-    // fed ~47 readings/s at any sample rate. Indices 1..9 are defineMeters()' fixed
-    // catalogue; receivers above the first take kSliceLevelMeterBase + uiNumber.
+    // fed ~47 readings/s at any sample rate. Indices below kSliceLevelMeterBase are
+    // defineMeters()' fixed catalogue; receivers above the first take
+    // kSliceLevelMeterBase + uiNumber.
     static constexpr int kSliceLevelMeterBase = 100;
     // S-meter state is per receiver (Receiver::sMeter). PA temperature rides the
     // 10 Hz telemetry and needs only a symmetric EMA against ADC low-bit flicker.

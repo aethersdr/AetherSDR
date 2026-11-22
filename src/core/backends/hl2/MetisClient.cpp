@@ -142,6 +142,7 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte,
                           m_params.ditherBit, m_params.randomBit);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
+    m_ccTxLnaGain = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
     m_ccRxFreq.assign(1, ccRxFreq(0, m_params.rxFrequencyHz));
     m_ccTxFreq = ccTxFreq(m_params.rxFrequencyHz);
     m_ccTxDrive = ccTxDrive(0, false);
@@ -228,9 +229,9 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
     std::vector<QHostAddress> localAddresses;
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
         const auto flags = iface.flags();
-        if (!flags.testFlag(QNetworkInterface::IsUp)
-            || !flags.testFlag(QNetworkInterface::IsRunning)
-            || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+        if (!discoveryWalksInterface(flags.testFlag(QNetworkInterface::IsUp)
+                                         && flags.testFlag(QNetworkInterface::IsRunning),
+                                     flags.testFlag(QNetworkInterface::IsLoopBack), broadcast)) {
             continue;
         }
         for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
@@ -284,6 +285,19 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
     return found;
 }
 
+bool MetisClient::discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                          const QHostAddress& target)
+{
+    return upAndRunning && isLoopbackInterface == target.isLoopback();
+}
+
+QHostAddress MetisClient::sessionBindAddress(const QHostAddress& host, const QHostAddress& requested)
+{
+    if (host.protocol() == QAbstractSocket::IPv4Protocol && host.isLoopback())
+        return QHostAddress(QHostAddress::LocalHost);
+    return requested.isNull() ? QHostAddress(QHostAddress::AnyIPv4) : requested;
+}
+
 int MetisClient::effectiveNumRx(const Params& p)
 {
     int n = p.numRx < 1 ? 1 : p.numRx;
@@ -318,6 +332,7 @@ bool MetisClient::start(const Params& params)
     // A new session's first config bank may move the radio's filter relays.
     m_lastConfigBus2Sent = kConfigBus2Unknown;
     m_ccGain = ccRxGain(m_params.lnaGainDb);
+    m_ccTxLnaGain = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
     // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
     // brings each slice up. The BANK COUNT is fixed here and never re-derived
     // per packet, so the round robin and the EP6 demux cannot disagree about how
@@ -370,6 +385,8 @@ bool MetisClient::start(const Params& params)
     // denominator that belongs to neither.
     m_adcWindowSamples = 0;
     m_adcWindowOverload = 0;
+    m_psGeneration = 0;
+    m_psAdcWindowGeneration = 0;
     m_telemetry.adcSamples = 0;
     m_telemetry.adcOverloadSamples = 0;
     m_telemetry.adcWindowMs = 0;
@@ -393,8 +410,7 @@ bool MetisClient::start(const Params& params)
         return m_startTransportForTest(params);
 
     m_socket = new QUdpSocket(this);
-    const QHostAddress bindAddress = params.localAddress.isNull()
-        ? QHostAddress::AnyIPv4 : params.localAddress;
+    const QHostAddress bindAddress = sessionBindAddress(m_host, params.localAddress);
     if (!m_socket->bind(bindAddress, 0)) {
         m_socket->deleteLater();
         m_socket = nullptr;
@@ -520,6 +536,7 @@ void MetisClient::onWatchdogTick()
         // retry returns early, and a PTT still shown (or a release still armed) from
         // before the gap would let the resumed stream key without a fresh press.
         // Idempotent on the later ticks of the same silence.
+        m_psAdcWindowGeneration = 0;
         clearRadioPtt();
         // Stage 1: re-send the run command before declaring link loss. If the gateware
         // halted because EP2 stopped (dsopenhpsdr1.v's watchdog drops `run`), resuming
@@ -843,8 +860,12 @@ void MetisClient::setReceiverCount(int count)
     relayoutReceivers(before);
 }
 
-void MetisClient::setPureSignal(bool enabled)
+void MetisClient::setPureSignal(bool enabled, quint64 generation)
 {
+    if (generation != m_psGeneration) {
+        m_psAdcWindowGeneration = 0;
+        m_psGeneration = generation;
+    }
     if (enabled == m_params.pureSignal)
         return;
     const int before = effectiveNumRx();
@@ -854,7 +875,8 @@ void MetisClient::setPureSignal(bool enabled)
         relayoutReceivers(before);
     else
         applyPureSignalNcos();
-    queueOneShotIfRunning(currentGainBank());
+    // The 0x0a and 0x0e order depends on the direction: applyTxLnaGain().
+    applyTxLnaGain(/*alsoGainBank=*/true);
 }
 
 void MetisClient::setPureSignalTxGainDb(int db)
@@ -928,6 +950,7 @@ void MetisClient::relayoutReceivers(int before)
 
     // STOP first. Past this point the radio sends nothing, so there is no packet
     // that could be decoded against the wrong layout.
+    m_psAdcWindowGeneration = 0;
     countTx(sendCommandDatagram(metisStop(m_watchdogEnabled)));
 
     m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte,
@@ -1094,6 +1117,27 @@ void MetisClient::setLnaGainDb(int db)
 {
     m_params.lnaGainDb = db;
     m_ccGain = ccRxGain(db);
+    applyTxLnaGain();
+}
+
+void MetisClient::applyTxLnaGain(bool alsoGainBank)
+{
+    const Cc bank = ccTxLnaGain(m_params.lnaGainDb, m_params.pureSignal);
+    if (bank == m_ccTxLnaGain) {
+        if (alsoGainBank)
+            queueOneShotIfRunning(currentGainBank());
+        return;
+    }
+    m_ccTxLnaGain = bank;
+    // Ahead of the rotation, so a key straight after a gain change finds it.
+    // Releasing [15] makes ad9866.v load rx_gain at once, even keyed, so the
+    // new 0x0a must already be there; engaging it must land before 0x0a.
+    const bool releasing = (bank[3] & 0x80) == 0;
+    if (releasing)
+        queueOneShotIfRunning(currentGainBank());
+    queueOneShotIfRunning(bank);
+    if (!releasing && alsoGainBank)
+        queueOneShotIfRunning(currentGainBank());
 }
 
 void MetisClient::setBandFilter(int ocFilterByte)
@@ -1442,6 +1486,9 @@ bool MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         keyed = false;
     }
     m_mox = keyed;
+    if (m_mox != was || newOver) {
+        m_psAdcWindowGeneration = 0;
+    }
     m_overFlushOwed = m_overFlushOwed || m_mox;
     m_moxOperation = keyed
         ? (cwBreakIn ? operation.heldCwKeying() : operation.heldKeying()) : operation;
@@ -1796,7 +1843,6 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
     if (!m_txIqContext.permitsDispatch(TxCoordinator::monotonicMs())) {
         abandonTxIq();
     }
-    static const Cc kCcAdc = ccAdcAssign();
     // Cleared here rather than only on confirmation: a packet built and then
     // thrown away (a test, or a caller that inspects the bytes) must not leave
     // a stale claim that some later packet carried the request.
@@ -1843,7 +1889,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         // next EP2 frame instead of timing out unseen.
         m_requestOnBuiltPacket = true;
     } else {
-        // The rotation is every receiver's NCO, then gain, then ADC assignment:
+        // The rotation is every receiver's NCO, then gain, then 0x0e (ADC
+        // assignment / TX LNA gain):
         // numRx + 2 slots. Each receiver's NCO is RE-ASSERTED rather than sent
         // once, for the same reason the config bank is — a radio that resets or
         // reconnects mid-session must not be left with a stale NCO on the
@@ -1862,7 +1909,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         else if (slot == nFreq)
             b = currentGainBank();
         else if (slot == nFreq + 1)
-            b = kCcAdc;
+            b = m_ccTxLnaGain;
         else
             b = txDriveBank();
         ++m_roundRobin;
@@ -2241,7 +2288,7 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     // The loss accounting above lets rewinds and duplicates through, and their IQ
     // is still delivered. Their ptt_resp is not: a level from before the newest one
     // already believed cannot authorize another press.
-    const bool pttFresh = acceptPttSequence(*seq);
+    const bool ep6Fresh = acceptPttSequence(*seq);
 
     // Telemetry rides in the C&C bytes of each EP6 frame. The radio
     // free-runs through the classic response addresses, so this arrives
@@ -2263,7 +2310,7 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
             } else {
                 const bool wasRadioPtt = m_telemetry.ptt;
                 m_telemetry.apply(*resp);
-                if (!pttFresh) {
+                if (!ep6Fresh) {
                     // A stale frame's level is old news: it neither presses,
                     // releases, nor arms. The rest of its telemetry still applies.
                     m_telemetry.ptt = wasRadioPtt;
@@ -2282,6 +2329,10 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
                 // an ACK's raddr is a command address.
                 if (resp->raddr == 0x00 && m_telemetry.adcOverload) {
                     ++m_adcWindowSamples;
+                    if (!ep6Fresh) {
+                        // A reordered ADC response can belong to receive or an older over.
+                        m_psAdcWindowGeneration = 0;
+                    }
                     if (*m_telemetry.adcOverload)
                         ++m_adcWindowOverload;
                 }
@@ -2309,6 +2360,11 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
         m_telemetryEmitClock.restart();
         m_telemetry.adcSamples = m_adcWindowSamples;
         m_telemetry.adcOverloadSamples = m_adcWindowOverload;
+        // Attribute the completed window here, before it is queued to the GUI.
+        const bool psKeyed = m_mox && m_params.pureSignal;
+        m_telemetry.psAdcGeneration = psKeyed && m_adcWindowSamples > 0
+            ? m_psAdcWindowGeneration : 0;
+        m_psAdcWindowGeneration = psKeyed ? m_psGeneration : 0;
         m_adcWindowSamples = 0;
         m_adcWindowOverload = 0;
         m_telemetry.forwardPowerPeakRaw = m_fwdWindow.peak;

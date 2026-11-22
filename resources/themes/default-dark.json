@@ -158,6 +158,15 @@
             "confidence.fair":   "#ff9020",
             "confidence.low":    "#ff4040"
           },
+          "log": {
+            "time":     "#8598b4",
+            "category": "#eaf2fb",
+            "info":     "#5de3ff",
+            "protocol": "#c4a1ff",
+            "warning":  "#f0a35e",
+            "critical": "#fca5a5",
+            "number":   "#7bf2dc"
+          },
           "meter": {
             "crst":   "{color.red.500}",
             "rms":    "{color.blue.500}",
@@ -207,7 +216,9 @@
             "key.meffa.active.border":     "#008040",
             "key.meffa.active.hover":      "#007040",
             "key.meffa.active.foreground": "{color.gray.50}",
-            "key.meffa.standby.foreground": "#008040"
+            "key.meffa.standby.foreground": "#008040",
+            "indicator.operate.foreground": "#00e060",
+            "indicator.bypass.foreground":  "#e0a000"
           },
           "waterfall.colormap": {
             "default": {
@@ -316,6 +327,7 @@
             "handle":              "{color.gray.200}",
             "background.disabled": "{color.gray.850}",
             "foreground.disabled": "{color.gray.600}",
+            "foreground.gateClosed": "{color.gray.600}",
             "handle.disabled":     "{color.gray.500}"
           },
           "knob": {

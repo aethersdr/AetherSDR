@@ -226,6 +226,11 @@ commands. Create a new instance to restart discovery.
   `staleAfterMs` (2000), and `limited`. The latter stays true until meter clear
   or connection reset after an invalid/over-capacity definition is excluded.
 - `identity`: `name`, `model`, `serial`, `version`, `manufacturer`.
+- `transmitTimeout`: the host transmit time-out (RFC #7021), read-only:
+  `enabled`, `timeoutS` (15–1800), `warningS` (0 = no warning) and `latched`,
+  true after an expiry until every keying input has released and the radio is
+  idle. The radio's own interlock timeout, where it has one, may end an over
+  sooner. Observation only; it grants and keys nothing.
 - `capabilities`:
   - `maxSlices`, `maxPanadapters`, `sampleRatesHz`;
   - `tuningRangeHz` with `minimum` and `maximum`;
@@ -423,7 +428,7 @@ by the same law the automatic RF-gain loop uses (`Hl2AutoGainPolicy.h`).
 
 ### Meters
 
-`Hl2Backend::defineMeters` defines eleven meters. They reach clients through the
+`Hl2Backend::defineMeters` defines twelve meters. They reach clients through the
 generic `meter` resource; the HL2 chooses the indices, since the radio assigns
 none. Each additional receiver adds one `SLC` / `LEVEL` meter at index
 100 + receiver number (`sourceIndex` is the receiver number; same unit and
@@ -442,6 +447,7 @@ range).
 | 9 | `TX` | `ALCGAIN` | `dB` | -20 to 0 | Gain the ALC is applying |
 | 10 | `TX` | `SC_FILT_1` | `dBFS` | -140 to 0 | Transmit audio after the ALC, into the modulator |
 | 11 | `TX` | `SC_FILT_2` | `dBFS` | -140 to 0 | Modulated transmit IQ, the modulator's output |
+| 12 | `RAD` | `PACURRENT` | `Amps` | 0 to 2.07 | PA drain current; converted from the schematic, not checked against an ammeter |
 
 `FWDPWR` and `REFPWR` are labelled uncalibrated in their definitions: the value
 comes from an uncalibrated reference curve, not a calibrated power reading.
@@ -452,11 +458,15 @@ No pair is emitted for a window in which the modulator dropped a block.
 
 ### Not offered
 
-- Supply voltage and PA current telemetry: not offered. The HL2 sets
-  `hasSupplyVoltageTelemetry` and `hasPaCurrentTelemetry` to false.
+- Supply voltage telemetry: not offered. The HL2 sets
+  `hasSupplyVoltageTelemetry` to false.
 - `radioSession` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
-  meaning uncalibrated rather than zero watts. The HL2's `txPowerBands` is not
-  projected into any resource.
+  because aetherd constructs it receive only (`canTransmit` false). A host
+  whose transmit gate is open reports the 5 W nominal rating, not a
+  calibration. The gate is the host's offer of transmit, and under the
+  automation bridge also the bridge's launch answer, so an automation run
+  without transmit reports `0.0` too.
+  The HL2's `txPowerBands` is not projected into any resource.
 
 ### Extensions
 

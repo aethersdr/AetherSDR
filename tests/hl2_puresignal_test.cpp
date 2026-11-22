@@ -81,8 +81,64 @@ void gainStep()
           "window is 128 < fb <= 181");
     check(Gain::clampAtt(-40) == -28 && Gain::clampAtt(40) == 31,
           "attenuation clamps to -28..31");
+    check(Gain::limit(31, 200) == 1 && Gain::limit(31, 255) == 1 && Gain::limit(31, 181) == 0
+              && Gain::limit(30, 250) == 0,
+          "too strong only at the most attenuation with the level above the window");
+    check(Gain::limit(31, 256) == 1 && Gain::limit(31, 400) == 1 && Gain::limit(30, 300) == 0,
+          "a level above the scale is a measurement too: +1, never +2");
+    check(Gain::limit(-28, 100) == -1 && Gain::limit(-28, 0) == 0 && Gain::limit(-27, 100) == 0,
+          "too weak only at full gain with a measured level below the window");
     check(Gain::lnaGainDbForAtt(31) == -12 && Gain::lnaGainDbForAtt(-28) == 47,
           "gain is 19 - att, inside the LNA's -12..+48 dB");
+}
+
+void limitNeedsALevelMeasuredHere()
+{
+    std::printf("\n  the limit belongs to the attenuation the level was measured at\n");
+    AetherSDR::hl2::Hl2PsMeasuredAt m;
+    check(m.limit(31, 220) == 0, "nothing measured yet: no limit");
+    // Auto-attenuate at 28 reads 220; the controller steps to 31.
+    m.observe(true, 1, 28);
+    check(m.limit(28, 220) == 0, "at 28 a hot level is not yet a limit");
+    check(m.limit(31, 220) == 0, "stepped onto 31: the 28 dB level is no +1");
+    m.observe(true, 1, 31);
+    check(m.limit(31, 220) == 0, "the same attempt read again does not count as measured at 31");
+    m.observe(true, 2, 31);
+    check(m.limit(31, 220) == 1, "a fresh attempt at 31 still too strong: +1");
+    check(m.limit(31, 300) == 1, "a level above the scale there: still +1");
+    // Hold: calcc measures no more; the operator drags the slider.
+    check(m.limit(30, 220) == 0, "a manual move away drops the warning");
+    check(m.limit(31, 220) == 1, "and back to where it was measured restores it");
+    m.observe(false, 3, 31);
+    check(m.limit(31, 220) == 1, "an attempt that measured nothing keeps the last level's att");
+    m.observe(true, 4, -28);
+    check(m.limit(-28, 100) == -1, "a fresh weak level at full gain: -1");
+    m.reset();
+    check(m.limit(-28, 100) == 0, "reset forgets it");
+
+    // PureSignal off and on: calcc's info[] survives LRESET, so the first
+    // read after the enable carries the previous session's attempt.
+    AetherSDR::hl2::Hl2PsMeasuredAt offOn;
+    offOn.observe(true, 4, 25);
+    offOn.observe(true, 5, 25);
+    offOn.reset();
+    offOn.observe(true, 5, 31);
+    check(offOn.limit(31, 240) == 0, "off/on: the previous session's level is no +1 at 31");
+    offOn.observe(true, 6, 31);
+    check(offOn.limit(31, 240) == 1, "off/on: a fresh high level at 31 reports +1");
+}
+
+void overloadState()
+{
+    std::printf("\n  the red state is the ADC overload report while keyed\n");
+    using O = AetherSDR::hl2::Hl2PsOverload;
+    check(O::next(false, true, true, true), "keyed window with overload: on");
+    check(!O::next(false, true, false, true),
+          "a window not keyed from start to end does not set it");
+    check(O::next(true, true, false, false), "it holds through unkey");
+    check(!O::next(true, true, true, false), "a clean keyed window clears it");
+    check(!O::next(true, false, false, false) && !O::next(false, false, true, true),
+          "PureSignal off: never");
 }
 
 void autoOnAndOff()
@@ -399,20 +455,20 @@ void receiverCountUnderFloor()
     {
         MetisClient c;
         MetisClientTestAccess::setBoardMaxRx(c, 4);
-        c.setPureSignal(true);
+        c.setPureSignal(true, 1);
         check(c.effectiveNumRx() == 4, "PS on: four DDCs");
         c.setReceiverCount(2);
         check(c.effectiveNumRx() == 4, "second receiver under the floor: still four");
-        c.setPureSignal(false);
+        c.setPureSignal(false, 2);
         check(c.effectiveNumRx() == 2, "PS off keeps the receiver added under it");
     }
     {
         MetisClient c;
         MetisClientTestAccess::setBoardMaxRx(c, 4);
         c.setReceiverCount(2);
-        c.setPureSignal(true);
+        c.setPureSignal(true, 1);
         c.setReceiverCount(1);
-        c.setPureSignal(false);
+        c.setPureSignal(false, 2);
         check(c.effectiveNumRx() == 1, "PS off keeps the receiver removed under it");
     }
 }
@@ -457,6 +513,7 @@ void statusFields()
     s.calibrationCount = 3;
     s.engineState = Hl2PsController::LStayOn;
     s.attenuationDb = 12;
+    s.feedbackLimit = 1;
     s.keyed = true;
     const QVariantMap f = hl2::pureSignalStatusFields(s);
     check(f.value(QStringLiteral("available")).toBool()
@@ -467,7 +524,8 @@ void statusFields()
     check(f.value(QStringLiteral("feedbackLevel")).toInt() == 150
           && f.value(QStringLiteral("calibrationCount")).toInt() == 3
           && f.value(QStringLiteral("engineState")).toInt() == 8
-          && f.value(QStringLiteral("attenuationDb")).toInt() == 12, "values reach the map");
+          && f.value(QStringLiteral("attenuationDb")).toInt() == 12
+          && f.value(QStringLiteral("feedbackLimit")).toInt() == 1, "values reach the map");
     check(f.value(QStringLiteral("attMin")).toInt() == -28
           && f.value(QStringLiteral("attMax")).toInt() == 31, "the map carries the att range");
     check(f.value(QStringLiteral("feedbackWindowLow")).toInt() == 128
@@ -485,6 +543,8 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     gainStep();
+    limitNeedsALevelMeasuredHere();
+    overloadState();
     autoOnAndOff();
     singleCalibration();
     singleGivesUp();

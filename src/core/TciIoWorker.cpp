@@ -24,11 +24,36 @@ constexpr int kTxChronoPollMs = 5;
 constexpr qint64 kTxSummaryEveryBlocks = 48;
 constexpr qsizetype kMailboxBytes = 4 * 1024 * 1024;
 constexpr qsizetype kMailboxItems = 256;
+constexpr qsizetype kStreamMailboxBytes = 1024 * 1024;   // beside the control budget
+constexpr qsizetype kStreamMailboxItems = 64;
 constexpr qsizetype kTextBytes = 64 * 1024;
 }
 
-TciIoWorker::TciIoWorker(QObject* parent) : QObject(parent), m_txChronoTimer(this)
+TciIoWorker::TciIoWorker(QObject* parent)
+    : QObject(parent), m_keepAliveTimer(this), m_txChronoTimer(this)
 {
+    m_keepAliveNow = [] { return TxCoordinator::monotonicMs(); };
+    m_keepAlivePing = [this](quint64 id) {
+        const auto it = m_clients.constFind(id);
+        if (it != m_clients.cend() && it->socket) { it->socket->ping(); }
+    };
+    // abort(), not close(): a graceful close to a peer that has stopped reading
+    // waits for the write buffer to drain, so disconnected may never fire.
+    m_keepAliveAbort = [this](quint64 id) {
+        const auto it = m_clients.constFind(id);
+        if (it != m_clients.cend() && it->socket) { it->socket->abort(); }
+    };
+    m_keepAliveTimer.setInterval(int(TciKeepAlive::kPollMs));
+    connect(&m_keepAliveTimer, &QTimer::timeout, this, &TciIoWorker::checkKeepAlive);
+    m_textSend = [this](quint64 id, const QString& message) {
+        const auto it = m_clients.constFind(id);
+        if (it == m_clients.cend() || !it->socket || !it->lifetime->live.load()) { return; }
+        if (it->socket->bytesToWrite() > kMaxRxBacklogBytes - message.size() * 4) {
+            closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI output backlog"));
+            return;
+        }
+        it->socket->sendTextMessage(message);
+    };
     m_rxSend = [this](quint64 id, const QByteArray& data) { return sendBinary(id, data); };
     m_rxBacklog = [this](quint64 id) {
         const auto client = m_clients.constFind(id);
@@ -109,6 +134,7 @@ bool TciIoWorker::start(quint16 requestedPort)
         return false;
     }
     connect(m_server, &QWebSocketServer::newConnection, this, &TciIoWorker::acceptConnections);
+    m_keepAliveTimer.start();
     return true;
 }
 
@@ -122,8 +148,11 @@ void TciIoWorker::stop()
         m_accepting = false;
         m_mailbox.clear();
         m_mailboxBytes = 0;
+        m_streamItems = 0;
+        m_streamBytes = 0;
         m_overloaded = false;
     }
+    m_keepAliveTimer.stop();
     stopChrono();
     for (const Client& client : std::as_const(m_clients)) {
         client.lifetime->live.store(false, std::memory_order_release);
@@ -152,16 +181,40 @@ void TciIoWorker::stop()
 
 bool TciIoWorker::post(std::function<void()> work, qsizetype bytes)
 {
+    return enqueue(std::move(work), bytes, false);
+}
+
+bool TciIoWorker::postStream(std::function<void()> work, qsizetype bytes)
+{
+    return enqueue(std::move(work), bytes, true);
+}
+
+bool TciIoWorker::enqueue(std::function<void()> work, qsizetype bytes, bool stream)
+{
     // Before start(), socket-free tests use the same engine in its owner
     // context. Production ingress always enters the bounded mailbox.
     if (QThread::currentThread() == thread()) { work(); return true; }
     QMutexLocker lock(&m_mailboxMutex);
     if (!m_accepting) { return false; }
-    const bool fits = bytes >= 0 && bytes <= kMailboxBytes - m_mailboxBytes
-        && m_mailbox.size() < kMailboxItems;
+    // Control and stream work are bounded separately, so stream frames can
+    // never take the room a control item needs.
+    const qsizetype usedBytes = stream ? m_streamBytes : m_mailboxBytes - m_streamBytes;
+    const qsizetype usedItems = stream ? m_streamItems : qsizetype(m_mailbox.size()) - m_streamItems;
+    const bool fits = bytes >= 0
+        && bytes <= (stream ? kStreamMailboxBytes : kMailboxBytes) - usedBytes
+        && usedItems < (stream ? kStreamMailboxItems : kMailboxItems);
     if (fits) {
-        m_mailbox.push_back({std::move(work), bytes});
+        m_mailbox.push_back({std::move(work), bytes, stream});
         m_mailboxBytes += bytes;
+        if (stream) { ++m_streamItems; m_streamBytes += bytes; }
+    } else if (stream) {
+        const quint64 dropped = ++m_droppedStreamPosts;
+        if (!m_streamPostDropLog.isValid() || m_streamPostDropLog.elapsed() >= kStreamDropLogMs) {
+            m_streamPostDropLog.start();
+            lock.unlock();
+            qCWarning(lcCat) << "TCI: IQ frame dropped, worker mailbox behind: dropped=" << dropped;
+        }
+        return false;
     } else {
         m_overloaded = true;
     }
@@ -180,13 +233,14 @@ void TciIoWorker::drain()
         {
             QMutexLocker lock(&m_mailboxMutex);
             overloaded = std::exchange(m_overloaded, false);
-            if (overloaded) { m_mailbox.clear(); m_mailboxBytes = 0; }
+            if (overloaded) { m_mailbox.clear(); m_mailboxBytes = 0; m_streamItems = 0; m_streamBytes = 0; }
             if (m_mailbox.empty()) {
                 m_drainScheduled = false;
             } else {
                 next = std::move(m_mailbox.front());
                 m_mailbox.pop_front();
                 m_mailboxBytes -= next.bytes;
+                if (next.stream) { --m_streamItems; m_streamBytes -= next.bytes; }
             }
         }
         if (overloaded) {
@@ -217,6 +271,7 @@ void TciIoWorker::acceptConnections()
         Client client;
         client.socket = socket;
         client.lifetime = std::make_shared<TciClientLifetime>();
+        client.keepAlive = TciKeepAlive(m_keepAliveNow());
         const quint64 id = client.lifetime->id;
         m_clients.insert(id, client);
         connect(socket, &QWebSocket::textMessageReceived, this, [this, id](const QString& text) {
@@ -225,33 +280,92 @@ void TciIoWorker::acceptConnections()
         connect(socket, &QWebSocket::binaryMessageReceived, this, [this, id](const QByteArray& data) {
             receiveBinary(id, data);
         });
+        // Text and binary messages renew the deadline in receiveText()/receiveBinary().
+        connect(socket, &QWebSocket::pong, this, [this, id] { heardFrom(id); });
         connect(socket, &QWebSocket::errorOccurred, this, [this, id, socket](QAbstractSocket::SocketError error) {
             auto it = m_clients.find(id);
             if (it != m_clients.end()) { it->error = int(error); it->errorText = socket->errorString(); }
         });
-        connect(socket, &QWebSocket::disconnected, this, [this, id, socket] {
-            auto it = m_clients.find(id);
-            if (it == m_clients.end()) { return; }
-            it->lifetime->live.store(false, std::memory_order_release);
-            it->producer.invalidate();
-            const int error = it->error;
-            const QString errorText = it->errorText;
-            if (m_txClient == id) { stopChrono(); }
-            m_rxClients.remove(id);
-            // Keep the retired entry against the eight-client cap until the
-            // controller acknowledges it. Rapid connect/close churn cannot
-            // enqueue an unbounded number of GUI lifecycle notifications.
-            emit clientClosed(id, int(socket->closeCode()), error, errorText);
-            socket->deleteLater();
-        });
+        connect(socket, &QWebSocket::disconnected, this, [this, id] { socketDisconnected(id); });
         emit clientOpened(client.lifetime, socket->peerAddress(), socket->peerPort());
     }
+}
+
+void TciIoWorker::socketDisconnected(quint64 id)
+{
+    auto it = m_clients.find(id);
+    if (it == m_clients.end() || it->disconnected) { return; }
+    it->disconnected = true;
+    it->lifetime->live.store(false, std::memory_order_release);
+    it->producer.invalidate();
+    const int error = it->error;
+    const QString errorText = it->errorText;
+    QWebSocket* socket = it->socket.data();
+    const int closeCode = it->abortCloseCode >= 0 ? it->abortCloseCode
+        : socket ? int(socket->closeCode()) : int(QWebSocketProtocol::CloseCodeAbnormalDisconnection);
+    if (m_txClient == id) { stopChrono(); }
+    m_rxClients.remove(id);
+    // Keep the retired entry against the eight-client cap until the
+    // controller acknowledges it. Rapid connect/close churn cannot
+    // enqueue an unbounded number of GUI lifecycle notifications.
+    emit clientClosed(id, closeCode, error, errorText);
+    if (socket) { socket->deleteLater(); }
+}
+
+void TciIoWorker::heardFrom(quint64 id)
+{
+    const auto it = m_clients.find(id);
+    // A retired client's frames are dropped unread; they must not hold its close open.
+    if (it != m_clients.end() && it->lifetime->live.load(std::memory_order_acquire)) {
+        it->keepAlive.heard(m_keepAliveNow());
+    }
+}
+
+// Also polls a client already closing gracefully, so a close that stalls on a
+// peer that stopped reading still ends in an abort.
+void TciIoWorker::checkKeepAlive()
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    const qint64 now = m_keepAliveNow();
+    const QList<quint64> ids = m_clients.keys();
+    for (const quint64 id : ids) {
+        const auto it = m_clients.find(id);
+        if (it == m_clients.end() || it->disconnected) { continue; }
+        const bool live = it->lifetime && it->lifetime->live.load(std::memory_order_acquire);
+        switch (it->keepAlive.poll(now)) {
+        case TciKeepAlive::Action::None:
+            break;
+        case TciKeepAlive::Action::Ping:
+            if (live) { m_keepAlivePing(id); }
+            break;
+        case TciKeepAlive::Action::Abort:
+            abortClient(id, QStringLiteral("TCI keepalive timeout"));
+            break;
+        }
+    }
+}
+
+// Retires the client and aborts the transport, then reaches clientClosed (and
+// the controller's PTT abort) without waiting on the socket to report it.
+void TciIoWorker::abortClient(quint64 id, const QString& reason)
+{
+    const auto it = m_clients.find(id);
+    if (it == m_clients.end() || it->disconnected) { return; }
+    qCWarning(lcCat) << "TCI: aborting client=" << id << "reason=" << reason
+                     << "silent_ms=" << it->keepAlive.silentMs(m_keepAliveNow())
+                     << "pending_bytes=" << (it->socket ? it->socket->bytesToWrite() : -1);
+    it->abortCloseCode = int(QWebSocketProtocol::CloseCodeAbnormalDisconnection);
+    if (it->errorText.isEmpty()) { it->errorText = reason; }
+    m_keepAliveAbort(id);
+    // Retires the entry; a no-op when abort() already emitted disconnected.
+    socketDisconnected(id);
 }
 
 void TciIoWorker::receiveText(quint64 id, const QString& text)
 {
     auto it = m_clients.find(id);
     if (it == m_clients.end() || !it->lifetime->live.load()) { return; }
+    it->keepAlive.heard(m_keepAliveNow());
     const qsizetype bytes = text.size() * sizeof(QChar);
     if (bytes > kTextBytes - it->textBytes || it->texts.size() >= 64) {
         closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
@@ -333,13 +447,7 @@ void TciIoWorker::acknowledgeText(quint64 id)
 
 void TciIoWorker::sendText(quint64 id, const QString& message)
 {
-    const auto it = m_clients.constFind(id);
-    if (it == m_clients.cend() || !it->socket || !it->lifetime->live.load()) { return; }
-    if (it->socket->bytesToWrite() > kMaxRxBacklogBytes - message.size() * 4) {
-        closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI output backlog"));
-        return;
-    }
-    it->socket->sendTextMessage(message);
+    m_textSend(id, message);
 }
 
 qint64 TciIoWorker::sendBinary(quint64 id, const QByteArray& message)
@@ -839,6 +947,7 @@ void TciIoWorker::sendTxChronoFrame(quint64 client)
 
 void TciIoWorker::receiveBinary(quint64 id, const QByteArray& data)
 {
+    heardFrom(id);
     const TxCoordinator::Context context = m_tciTxContext;
     if (id != m_txClient || !context.permitsDispatch(TxCoordinator::monotonicMs())) { return; }
     if (data.size() < static_cast<int>(sizeof(TciAudioHeader))) return;

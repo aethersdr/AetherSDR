@@ -26,7 +26,6 @@
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
-#include "ClientChainApplet.h"
 #include "CwxPanel.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
@@ -35,6 +34,7 @@
 #include "PersistentDialog.h"
 #include "RC28MappingDialog.h"
 #include "ShortcutDialog.h"
+#include "ShortcutTooltips.h"
 #include "RadioHealthDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "SpectrumWidget.h"
@@ -648,6 +648,9 @@ void MainWindow::buildMenuBar()
         m_keyboardShortcutsEnabled = on;
         s_keyboardShortcutsEnabled = on;
         syncOperatingShortcutsEnabled();
+        if (m_shortcutTooltips) {
+            m_shortcutTooltips->setShortcutsEnabled(on);
+        }
         AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
         AppSettings::instance().save();
     });
@@ -1009,12 +1012,6 @@ void MainWindow::buildMenuBar()
     connect(&m_radioModel, &RadioModel::tuneOutputControlChanged, this,
             syncTuneOutputOwnership);
 
-    auto* dspAction = settingsMenu->addAction("AetherRX...");
-    dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
-    connect(dspAction, &QAction::triggered, this, [this] {
-        ensureAetherRxDialog();
-    });
-
     auto* settingsBrowserAction = settingsMenu->addAction("Settings Browser...");
     settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
                                                           // title — macOS #883
@@ -1022,19 +1019,6 @@ void MainWindow::buildMenuBar()
         showOrRaiseCanon(m_settingsBrowserDialog,
                          [this] { return new SettingsBrowserDialog(this); });
     });
-    // RX chain DSP tile double-click also opens the full AetherDSP
-    // Settings dialog — same entry point as the Settings menu action.
-    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxDspEditRequested,
-                this, [dspAction]() { dspAction->trigger(); });
-        // Single-click re-enable of NR2 from LastClientNr also runs
-        // through enableNr2WithWisdom (#2275 — direct enable can crash).
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxNr2EnableWithWisdomRequested,
-                this, &MainWindow::enableNr2WithWisdom);
-    }
-
     settingsMenu->addSeparator();
 
     // CAT: unified port manager (rigctld / TS-2000 / FlexCAT per port)
@@ -1582,6 +1566,14 @@ void MainWindow::buildMenuBar()
     addPanAction->setEnabled(false);
     connect(addPanAction, &QAction::triggered,
             this, &MainWindow::showAddPanadapterDialog);
+
+    // AetherRX and AetherTX sit together (#7384). AetherRX opens a dialog and
+    // is not checkable.
+    auto* dspAction = toolsMenu->addAction("AetherRX...");
+    dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
+    connect(dspAction, &QAction::triggered, this, [this] {
+        ensureAetherRxDialog();
+    });
 
     // The three checkable panel toggles re-read their own state after the
     // handler runs: triggered() fires *after* Qt has flipped the check mark, and

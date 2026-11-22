@@ -29,6 +29,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <vector>
 #include <cstdio>
 #include <string>
@@ -94,6 +95,10 @@ int main(int argc, char** argv)
     cfg.dspBlockSize = 1024;
     cfg.fftSize = 256;
     cfg.mode = WdspChannel::Mode::Usb;
+    // FM's default width, where fmsq's width offset is 0, so the FM thresholds
+    // below are the plain level map. amsq does not depend on the filter.
+    cfg.filterLowHz = -8000.0;
+    cfg.filterHighHz = 8000.0;
 
     Hl2RxDsp dsp;
     check(!dsp.appliedSquelch().has_value(), "no channel, nothing applied");
@@ -223,6 +228,65 @@ int main(int argc, char** argv)
         a = onChain();
         check(a && std::abs(a->threshold - gateAt(lna, 50)) < 1e-9,
               "and moves back when the LNA is restored");
+        Hl2SquelchTestAccess::tearDown(backend);
+    }
+
+    // 8. The gate readback (#6552 option C): FM noise alone at level 100
+    //    reads Closed, a muted receiver and squelch off read Unavailable, and
+    //    the backend declares the gate in FM only.
+    {
+        Hl2RxDsp::Config fm = cfg;
+        fm.mode = WdspChannel::Mode::Fm;
+        fm.blockForOutput = true;   // every block yields output: the checks below count blocks
+        Hl2RxDsp gateDsp;
+        std::vector<AetherSDR::SquelchGateState> seen;
+        QObject::connect(&gateDsp, &Hl2RxDsp::squelchGateChanged, &gateDsp,
+                         [&](AetherSDR::SquelchGateState s) { seen.push_back(s); });
+        check(gateDsp.configure(fm, &err), "configure FM for the gate readback");
+        gateDsp.setSquelch(true, 100, 0.0);
+        std::uint32_t lcg = 6552u;
+        const auto noiseBlock = [&lcg]() {
+            std::vector<std::complex<float>> iq(126);
+            for (auto& z : iq) {
+                lcg = lcg * 1664525u + 1013904223u;
+                const float a = static_cast<float>(lcg >> 8) / 16777216.0f - 0.5f;
+                lcg = lcg * 1664525u + 1013904223u;
+                const float b = static_cast<float>(lcg >> 8) / 16777216.0f - 0.5f;
+                z = {0.02f * a, 0.02f * b};
+            }
+            return iq;
+        };
+        for (int b = 0; b < 200; ++b) {   // ~0.5 s at 48 kHz
+            gateDsp.processIqBlock(noiseBlock());
+        }
+        check(!seen.empty() && seen.back() == AetherSDR::SquelchGateState::Closed,
+              "FM noise alone at level 100 reports the gate Closed");
+        gateDsp.setAudioMuted(true);
+        for (int b = 0; b < 200; ++b) {
+            gateDsp.processIqBlock(noiseBlock());
+        }
+        check(!seen.empty() && seen.back() == AetherSDR::SquelchGateState::Unavailable,
+              "a muted receiver reports no gate");
+        gateDsp.setAudioMuted(false);
+        gateDsp.setSquelch(false, 100, 0.0);
+        for (int b = 0; b < 20; ++b) {
+            gateDsp.processIqBlock(noiseBlock());
+        }
+        check(!seen.empty() && seen.back() == AetherSDR::SquelchGateState::Unavailable,
+              "squelch off reports no gate");
+        const std::size_t before = seen.size();
+        gateDsp.setMode(WdspChannel::Mode::Usb);
+        gateDsp.setSquelch(true, 50, 0.0);
+        for (int b = 0; b < 40; ++b) {
+            gateDsp.processIqBlock(noiseBlock());
+        }
+        check(seen.size() == before, "USB (amsq) reports no gate");
+
+        Hl2Backend backend;
+        const QStringList modes = backend.capabilities().squelchGateModes;
+        check(modes.contains(QStringLiteral("FM")) && !modes.contains(QStringLiteral("USB"))
+                  && !modes.contains(QStringLiteral("AM")),
+              "the HL2 declares the squelch gate in FM and not in amsq's modes");
         Hl2SquelchTestAccess::tearDown(backend);
     }
 

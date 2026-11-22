@@ -1,7 +1,7 @@
 #!/bin/bash
 # setup-onnxruntime.sh — stage a prebuilt ONNX Runtime for Linux/macOS.
 #
-# Downloads the official ONNX Runtime prebuilt for the host OS/arch and places
+# Downloads the pinned ONNX Runtime prebuilt for the host OS/arch and places
 # headers + shared library under third_party/onnxruntime/ ready for CMake (which
 # checks that dir first). Powers the CNN signal classifier AND the ASR ONNX
 # features (Silero VAD + speaker labeling). Release builds run this so those
@@ -33,8 +33,8 @@ os="$(uname -s)"
 arch="$(uname -m)"
 case "${os}-${arch}" in
     Linux-x86_64)        asset="linux-x64"     sha="547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f" ;;
-    Linux-aarch64|Linux-arm64) asset="linux-aarch64" sha="3e4d83ac06924a32a07b6d7f91ce6f852876153fc0bbdf931bf517a140bfbe48" ;;
-    Darwin-arm64)        asset="osx-arm64"     sha="545e81c58152353acb0d1e8bd6ce4b62f830c0961f5b3acfedc790ffd76e477a" ;;
+    Linux-aarch64|Linux-arm64) asset="linux-aarch64" sha="9a312602ee83bbbd0df21c0467033251e3df8573028b5b8bbbda6f745cbcbe87" ;;
+    Darwin-arm64)        asset="osx-arm64"     sha="1218b8a18f142e7e6c6bd34961423e4ea8e38d3cc05e1c2349490de2ec48334a" ;;
     Darwin-x86_64)
         echo "ERROR: ONNX Runtime ${ORT_VERSION} has no Intel-macOS prebuilt (arm64 only). Stage" >&2
         echo "sherpa-onnx (universal2, bundles the same runtime) or build ONNX Runtime from source." >&2
@@ -45,7 +45,10 @@ case "${os}-${arch}" in
 esac
 
 pkg="onnxruntime-${asset}-${ORT_VERSION}"
-url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${pkg}.tgz"
+# Microsoft's GitHub release is gone; this repo hosts the archives. linux-x64 is
+# Microsoft's original. The others are rebuilt from Microsoft's signed NuGet
+# package by tools/repack_onnxruntime.py, which reproduces these pins exactly.
+url="https://github.com/aethersdr/AetherSDR/releases/download/onnxruntime-${ORT_VERSION}/${pkg}.tgz"
 tgz="${REPO_ROOT}/third_party/${pkg}.tgz"
 
 mkdir -p "${REPO_ROOT}/third_party"

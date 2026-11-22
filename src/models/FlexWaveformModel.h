@@ -70,6 +70,8 @@ public:
 
 signals:
     void waveformsChanged();
+    // clear() ran: the session ended, so no reply or list is coming for it.
+    void cleared();
     // Only the environment of an existing container changed; the list, and any
     // selection in it, is unchanged.
     void environmentChanged(const QString& name);

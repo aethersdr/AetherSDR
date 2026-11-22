@@ -32,6 +32,7 @@
 #endif
 #include "core/AppSettings.h"
 #include "core/BandStackSettings.h"
+#include "core/CwxMacroTemplateSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/ShutdownTrace.h"
 #include "core/CwTrace.h"
@@ -50,6 +51,8 @@
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
 #include "TransmitInhibitPolicy.h"
+#include "HostCwTextEngine.h"
+#include "ModeVocabulary.h"
 #include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
@@ -2393,6 +2396,12 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::reconcileAdministration);
     connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::reconcileAdministration);
     m_desktopTxActor = m_txCoordinator.registerActor({true, 0});
+    m_txTimeoutTimer = new QTimer(this);
+    m_txTimeoutTimer->setInterval(250);
+    connect(m_txTimeoutTimer, &QTimer::timeout, this, &RadioModel::onTxTimeoutTick);
+    connect(this, &RadioModel::radioTransmittingChanged, this, &RadioModel::onTxTimeoutTransmitting);
+    connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::loadTxTimeoutSettings);
+    connect(this, &RadioModel::infoChanged, this, &RadioModel::loadTxTimeoutSettings);
     // FlexLib APD.cs matches against the transmit slice, else the active one.
     m_transmitModel.setApdTxSliceResolver([this]() -> std::optional<TransmitModel::ApdTxSlice> {
         SliceModel* slice = txSlice();
@@ -2515,6 +2524,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::controlRequested,
             this, &RadioModel::dispatchTransmitControl, Qt::DirectConnection);
     qRegisterMetaType<WfmStereoStatus>();
+    qRegisterMetaType<SquelchGateState>();
     qRegisterMetaType<WfmReceptionDiagnostics>();
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
@@ -2814,6 +2824,12 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.bypass"), 0,
                                        QVariantMap{{QStringLiteral("on"), on}});
     });
+    // Asked by the tuner before a start on either route, the radio relay or its
+    // own port-9010 link; never for an abort, which is the same verb.
+    m_tunerModel.setAutotuneAdmission([this]() { return keyObjectionMessage(); });
+    connect(&m_tunerModel, &TunerModel::autotuneRefused, this, [this](const QString& message) {
+        emitKeyObjectionNotice(message, QStringLiteral("tuner-autotune"));
+    });
     connect(&m_tunerModel, &TunerModel::autotuneRequested, this, [this](){
         // TX interlock gate (was a commandReady string-sniff on "tgxl autotune").
         if (transmitStartBlockedByInhibit(QStringLiteral("tgxl-autotune")))
@@ -2856,7 +2872,32 @@ RadioModel::RadioModel(QObject* parent)
     });
 
     m_transmitModel.setPttPreflight([this](TransmitModel::PttSource source) {
-        return localPttInterlockMessage(source);
+        m_keyObjectionPreflightGate.clear();
+        if (QString message = localPttInterlockMessage(source); !message.isEmpty()) {
+            return message;
+        }
+        // The radio's own refusals above come first; a station objection is
+        // then reported through pttBlocked like them.
+        QString objection = keyObjectionMessage();
+        if (!objection.isEmpty()) {
+            m_keyObjectionPreflightGate = source == TransmitModel::PttSource::Tune
+                ? QStringLiteral("tune-start") : QStringLiteral("xmit");
+        }
+        return objection;
+    });
+    // VOX on hands the key to the radio, so switching it on is a key-on. It is
+    // asked even during an over: refusing it rolls back nothing on the air,
+    // and an admitted VOX would key on audio after the un-key.
+    m_transmitModel.setVoxAdmission([this]() { return firstKeyObjection(); });
+    connect(&m_transmitModel, &TransmitModel::voxEnableRefused, this, [this](const QString& message) {
+        emitKeyObjectionNotice(message, QStringLiteral("vox-enable"));
+    });
+    // A radio that reports keyed during a CW message ends it by reporting
+    // un-keyed (cwMessageRunning()), not by the break-in delay.
+    connect(this, &RadioModel::radioTransmittingChanged, this, [this](bool keyed) {
+        if (m_cwMessageOpen && keyed) {
+            m_cwMessageSawKeyed = true;
+        }
     });
     // No TUNE start while a client CW source is keying (#5422): the radio
     // would come up with no carrier and stay in TX with tune=1.
@@ -2864,16 +2905,18 @@ RadioModel::RadioModel(QObject* parent)
         constexpr unsigned kCwActivities =
             static_cast<unsigned>(TxActivity::CwKey)
             | static_cast<unsigned>(TxActivity::Cwx);
-        const bool scopedPaddleHeld = std::any_of(m_producerCwPaddleInputs.begin(),
-            m_producerCwPaddleInputs.end(), [](const TxCoordinator::Request& input) { return input.valid(); });
-        if (m_cwKeyActive || m_cwPaddleHeld || scopedPaddleHeld || m_cwxActive
-            || (activeTxActivities() & kCwActivities) != 0) {
+        if (cwKeyHeld() || m_cwxActive || (activeTxActivities() & kCwActivities) != 0) {
             return tr("TUNE not started: CW is keyed");
         }
         return {};
     });
     connect(&m_transmitModel, &TransmitModel::pttBlocked,
             this, [this](const QString& message) {
+        if (const QString gate = std::exchange(m_keyObjectionPreflightGate, QString());
+            !gate.isEmpty()) {
+            emitKeyObjectionNotice(message, gate);
+            return;
+        }
         const QString panId = txSlice() ? txSlice()->panId() : QString();
         emitInterlockNotification(
             message,
@@ -2919,6 +2962,13 @@ RadioModel::RadioModel(QObject* parent)
     // No CWX text while TUNE is active (#5422): the radio keys it at TUNE power.
     m_cwxModel.setSendAvailability([this] { return m_transmitModel.admitsCwxSend(); });
     m_cwxModel.setTransmissionAdmission([this]() -> CwxModel::TransmissionPermit {
+        // Host-keyed text needs its sender's request (requestProducerCwx).
+        if (m_backend && !backendCapabilities().hasRadioSideCwKeyer
+            && backendCapabilities().hostCwKeyingControl) {
+            emitInterlockNotification(tr("This radio does not support the requested transmit operation."),
+                                      QStringLiteral("tx-operation-unsupported"));
+            return {};
+        }
         const std::shared_ptr<TxController> controller = localTxController();
         if (!controller) {
             return {};
@@ -2938,12 +2988,24 @@ RadioModel::RadioModel(QObject* parent)
         Q_UNUSED(wpm);
         return dispatchCwxText(text, m_cwxCommandOperation);
     });
+    m_cwxModel.setMacroTemplateStore({
+        [this](int idx) { return CwxMacroTemplateSettings::load(settingsScope(), idx); },
+        [this](int idx, const QString& typed) {
+            // Disconnected edits are drafts. settingsScope() can still name
+            // the last radio after disconnect.
+            if (!isConnected() || m_txSessionClosing || m_expiringPendingCallbacks) { return; }
+            CwxMacroTemplateSettings::save(settingsScope(), idx, typed);
+        },
+    });
     connect(&m_cwxModel, &CwxModel::requestRejected, this, [this](const QString& reason) {
         emit radioMessageReceived(reason, MessageSeverity::Warning);
     });
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
         const TxCoordinator::Intent intent = m_cwxCommandIntent;
         const TxCoordinator::Operation operation = m_cwxCommandOperation;
+        if (m_hostCwText) {
+            m_hostCwText->stopAll();   // operator clear: queued senders included
+        }
         (void)m_txCoordinator.requestIntentEnd(intent);
         m_cwxActive = false;
         m_cwxDrainArmed = false;
@@ -2973,6 +3035,10 @@ RadioModel::RadioModel(QObject* parent)
         }
     });
     connect(&m_dvkModel, &DvkModel::licenseRefusedChanged, this,
+            [this](bool) { emit licenseFeaturesChanged(); });
+    // A firmware without the DVK API changes hasVoiceKeyer(); the same pass
+    // that follows the entitlement re-reads it (#7156).
+    connect(&m_dvkModel, &DvkModel::unsupportedChanged, this,
             [this](bool) { emit licenseFeaturesChanged(); });
     connect(&m_dvkModel, &DvkModel::controlRequested, this, &RadioModel::dispatchDvk, Qt::DirectConnection);
     connect(&m_dvkModel, &DvkModel::operationSettled, this, [this](quint64 requestId) {
@@ -3022,11 +3088,10 @@ RadioModel::RadioModel(QObject* parent)
     // Direct port-9010 autotune bypasses autotuneRequested; arm the same window
     // so the radio's TRANSMITTING edge can't beat the tuner's tuning=1.
     connect(&m_tunerModel, &TunerModel::directAutotuneStarted, this, [this]() {
-        // Standby is assumed to refuse the tune; do not arm for it.
-        // OPERATE is only known from relayed status, so a direct-only (manual
-        // IP) tuner has no handle and is not gated.
-        if (!m_tunerModel.handle().isEmpty() && !m_tunerModel.isOperate())
+        // Standby is assumed to refuse a tune on either transport.
+        if (!m_tunerModel.isOperate()) {
             return;
+        }
         m_tgxlTune.arm(txMonotonicMs());
     });
     // A TGXL tune latches the cycle as a tune carrier (tuning=1 may land after
@@ -3131,6 +3196,11 @@ RadioModel::~RadioModel()
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
     m_independentTxGrants.reset(); // stop while every model member is still alive
+    m_hostCwText.reset();          // key up while every model member is still alive
+    // The local controls' TxController aborts its held inputs back into this
+    // model when it is destroyed, and the implicit member teardown would run
+    // that after m_slices is gone (it is declared later).
+    m_localTxController.reset();
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
@@ -3140,6 +3210,12 @@ RadioModel::~RadioModel()
         }
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Cwx)) {
             m_backend->abortCwText(m_txCoordinator.cleanupFence());
+        }
+        // Still active: a MOX held through a controller copy that outlives the
+        // model (TxApplet keeps one), or one the reset above released whose
+        // queued unkey has not completed. A second unkey is redundant, never a key.
+        if (activeTxActivities() & static_cast<unsigned>(TxActivity::Mox)) {
+            m_backend->setKeying(false, m_txCoordinator.cleanupFence());
         }
     }
     restoreTuneInhibit();
@@ -4053,6 +4129,9 @@ void RadioModel::applyInterlockStatus(const InterlockStatusDelta& d)
 
             // Emit raw radio TX state regardless of ownership — used by DAX
             // passthrough when an external app triggers PTT (#752).
+            // Only TRANSMITTING counts: UNKEY_REQUESTED is idle, also for the
+            // host transmit time-out, which disarms there and can clear its
+            // latch there, even if the radio still has RF up.
             const bool radioTx = (state == "TRANSMITTING");
             m_radioTransmitting = radioTx;
             m_interlockState = state;
@@ -5042,6 +5121,52 @@ bool RadioModel::hasRadioSideCwKeyer() const
     return backendCapabilities().hasRadioSideCwKeyer;
 }
 
+bool RadioModel::hasHostCwTextKeyer() const
+{
+    if (!m_backend || !isConnected()) {
+        return false;
+    }
+    const RadioCapabilities caps = backendCapabilities();
+    return !caps.hasRadioSideCwKeyer && caps.hostCwKeyingControl.has_value() && caps.canTransmit;
+}
+
+bool RadioModel::hasCwTextKeyer() const
+{
+    return hasRadioSideCwKeyer() || hasHostCwTextKeyer();
+}
+
+RadioModel::HostCwTextRefusal RadioModel::hostCwTextRefusal() const
+{
+    if (!hasHostCwTextKeyer()) {
+        return HostCwTextRefusal::Unsupported;
+    }
+    const SliceModel* tx = txSlice();
+    if (!tx) {
+        return HostCwTextRefusal::NoTxSlice;
+    }
+    // Text from a logger keys only a CW slice; a paddle's edge in SSB is the
+    // operator's own act and is not gated here.
+    if (!AetherSDR::isCwMode(tx->mode())) {
+        return HostCwTextRefusal::NotCwMode;
+    }
+    if (AetherSDR::modeIsReceiveOnly(backendCapabilities(), tx->mode())) {
+        return HostCwTextRefusal::ReceiveOnlyMode;
+    }
+    if (!transmitInhibitMessageForSlice(tx).isEmpty()) {
+        return HostCwTextRefusal::Inhibited;
+    }
+    // Every key-down would be refused while TUNE is active (admitsCwKeyEdge).
+    if (!m_transmitModel.admitsCwxSend()) {
+        return HostCwTextRefusal::Tuning;
+    }
+    // Break-in off: the backend keys CW only under an MOX/PTT already held
+    // (Hl2Backend::setCwKeying), so without one the text would not go out.
+    if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
+        return HostCwTextRefusal::BreakInOffUnkeyed;
+    }
+    return HostCwTextRefusal::None;
+}
+
 bool RadioModel::hasCwTextProgress() const
 {
     if (!m_backend || !isConnected()) {
@@ -5097,7 +5222,8 @@ bool RadioModel::hasVoiceKeyer() const
     if (!m_backend || !isConnected()) {
         return true;   // nothing attached — assume present, see the header
     }
-    return backendCapabilities().hasVoiceKeyer;
+    // The family has one, but this firmware may predate its API (#7156).
+    return backendCapabilities().hasVoiceKeyer && !m_dvkModel.unsupported();
 }
 
 bool RadioModel::hasDaxStreams() const
@@ -5403,7 +5529,13 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
             m_transmitModel.expireTxOffDelayNow();
         }
     }
+    const int radioTimeoutBefore = m_transmitModel.interlockTimeout();
     m_transmitModel.applyChanges(delta);
+    // With nothing stored, the host time-out default follows the radio's own:
+    // republish it (dialog, aetherd) when the radio reports a new one.
+    if (!m_txTimeoutStored && m_transmitModel.interlockTimeout() != radioTimeoutBefore) {
+        emit txTimeoutSettingsChanged();
+    }
     if (delta.radioPtt) {
         followRadioPtt(*delta.radioPtt);
     }
@@ -5427,6 +5559,12 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
 // own release. CW keys itself.
 void RadioModel::followRadioPtt(bool down)
 {
+    m_radioPttObservedDown = down;
+    if (!down && m_radioPttProducer.valid()) {
+        // The jack's release is a release even when the host key was refused
+        // or already ended by a time-out.
+        noteTxTimeoutRelease(m_radioPttProducer.request());
+    }
     if (!down) {
         if (m_radioPttKeyed) {
             m_radioPttKeyed = false;
@@ -5468,6 +5606,9 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 bool RadioModel::setProducerTransmit(const TxCoordinator::Request& request, bool tx,
                                      TransmitModel::PttSource source)
 {
+    if (!tx) {
+        noteTxTimeoutRelease(request);
+    }
     const bool accepted = setTransmitImpl(tx, source, &request);
     if (tx && !accepted) {
         // Synchronous notifications may refuse after admission. Retire the
@@ -5681,6 +5822,12 @@ void RadioModel::publishBackendTransmitEdge(bool tx)
     if (!m_backend || m_flexBackend || m_radioTransmitting == tx)
         return;
     m_radioTransmitting = tx;
+    // With no interlock status this edge is the only settled-RX evidence, as
+    // interlock READY is on a Flex; transmitIdleForSelection() still waits
+    // for the key-up's delivery. Set before the emit, as the interlock path.
+    if (m_interlockState.isEmpty()) {
+        m_daxTxSelectionRxObserved = radioReceivingForTransmitDax();
+    }
     emit radioTransmittingChanged(tx);
 }
 
@@ -5908,6 +6055,35 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     (void)sendCwInput(down, false, true, debugSource, debugTraceId, debugSourceMs, {});
 }
 
+void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    // A remote key-down while host CW text plays is refused, never keyed beside
+    // it; the key-up of a refused key-down unkeys nothing.
+    if (down && m_hostCwText && m_hostCwText->playing()) {
+        m_remoteCwKeyRefused = true;
+        qCWarning(lcCw).noquote() << "CW key-down refused: host CW text is playing source=" << debugSource;
+        const SliceModel* tx = txSlice();
+        emitInterlockNotification(tr("Remote CW key refused: CW text is playing."),
+                                  QStringLiteral("cw-text-remote-key"), tx ? tx->panId() : QString());
+        return;
+    }
+    if (std::exchange(m_remoteCwKeyRefused, false) && !down) {
+        return;
+    }
+    // A remote key-up with no accepted remote key-down before it (a stray or
+    // unparseable TCI keyer state) would cut host text's element: the text owns
+    // the key and keys its own key-up, so the edge is ignored.
+    if (!down && !m_remoteCwKeyDown && m_hostCwText && m_hostCwText->playing()) {
+        qCWarning(lcCw).noquote() << "CW key-up ignored: host CW text owns the key source=" << debugSource;
+        return;
+    }
+    const bool accepted = sendCwInput(down, false, true, debugSource, 0, 0, {});
+    m_remoteCwKeyDown = down && accepted;
+}
+
 void RadioModel::sendCwPaddle(bool dit, bool dah, const QString& debugSource,
                               quint64 debugTraceId, quint64 debugSourceMs)
 {
@@ -5934,6 +6110,9 @@ bool RadioModel::requestProducerCw(const TxCoordinator::Request& request, bool d
                                   std::chrono::steady_clock::time_point scheduledAt,
                                   const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs)
 {
+    if (!down) {
+        noteTxTimeoutRelease(request);
+    }
     return sendCwInput(down, ptt, notifySidetone, debugSource, debugTraceId, debugSourceMs, scheduledAt, &request);
 }
 
@@ -5963,6 +6142,25 @@ bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
     return accepted;
 }
 
+bool RadioModel::cwMessageRunning()
+{
+    if (!m_cwMessageOpen) {
+        return false;
+    }
+    // The radio's keyed state continues a message only while it is this
+    // client's; another client holding TX must not keep the message open.
+    if (m_cwKeyActive || (m_radioTransmitting && m_txOwnedByUs)) {
+        return true;
+    }
+    // The radio never reported keyed: the message ends with the break-in delay.
+    if (!m_cwMessageSawKeyed && m_cwMessageLastUpMs >= 0
+        && txMonotonicMs() - m_cwMessageLastUpMs < std::max(0, m_transmitModel.cwDelay())) {
+        return true;
+    }
+    m_cwMessageOpen = false;
+    return false;
+}
+
 bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
                                  const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                                  std::chrono::steady_clock::time_point scheduledAt,
@@ -5970,6 +6168,11 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
 {
     if (QThread::currentThread() != thread()) {
         return false;
+    }
+    // A local operator's key takes over from host text, queued senders included.
+    // A remote key never reaches here while text plays: sendRemoteCwKey() refuses it.
+    if (down && !ptt && !m_hostCwTextEdge && m_hostCwText && m_hostCwText->playing()) {
+        m_cwxModel.clearBuffer();
     }
     const TxActivity activity = ptt ? TxActivity::CwPtt : TxActivity::CwKey;
     // TUNE refuses a key-down, never the key-up that releases an old element.
@@ -5981,7 +6184,11 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
         }
         return false;
     }
-    if (down && !beginTxActivity(activity, request)) {
+    // An element inside a running message is not a new key-on: the objection
+    // is asked at a message's first element only. Every other gate in
+    // beginTxActivity() is still asked per element.
+    const bool continuesMessage = down && !ptt && cwMessageRunning();
+    if (down && !beginTxActivity(activity, request, !continuesMessage)) {
         if (request) {
             (void)m_txCoordinator.closeRequest(*request);
         }
@@ -6031,6 +6238,13 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
         }
     }
     if (!receiver) { return accepted; }
+    if (accepted && !ptt) {
+        if (down && !continuesMessage) {
+            m_cwMessageOpen = true;
+            m_cwMessageSawKeyed = m_radioTransmitting;
+        }
+        m_cwMessageLastUpMs = down ? -1 : txMonotonicMs();
+    }
     if (accepted && epoch == m_cwCommandEpoch && !ptt) {
         const bool previous = m_cwKeyActive;
         m_cwKeyActive = down;
@@ -7309,6 +7523,7 @@ void RadioModel::onConnected()
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();
     m_txSessionClosing = false;
+    createHostCwTextEngine();
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_connectAttemptActive = false;  // the attempt landed (#4912)
     m_reconnectTimer.stop();
@@ -7448,6 +7663,7 @@ void RadioModel::stageSessionModelsForReconnect()
             unavailableWfm.chainMode = QString();
             unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
             unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+            unavailableWfm.squelchGate = SquelchGateState::Unavailable;
             slice->applyChanges(unavailableWfm);
             m_staleSlices.insert(slice->sliceId(), slice);
         }
@@ -8369,7 +8585,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::DaxIq));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Radio));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Codec));
-            requestSessionControl(SessionControlRequest::subscription(SessionTopic::Dvk));
+            subscribeDvk();
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Navtex));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::UsbCable));
             requestSessionControl(SessionControlRequest::subscription(SessionTopic::Spot));
@@ -8722,12 +8938,15 @@ void RadioModel::onDisconnected()
     m_txRequested = false;
     m_cwKeyActive = false;
     m_cwPaddleHeld = false;   // a paddle held across a disconnect must not keep TUNE refused (#5422)
+    m_remoteCwKeyDown = false;
+    m_cwMessageOpen = false;
     m_producerCwPaddleInputs.clear();
     m_cwxActive = false;
     m_cwxDrainArmed = false;
     // Reset the CWX drain watch and bump its epoch so a watch armed mid-macro
     // at disconnect can't wedge the monotonic guard after reconnect. (#3949)
     m_cwxModel.resetDrainWatch();
+    m_cwxModel.setDxCall({});
     m_lastInterlockSource.clear();
     m_lastInterlockNotificationKey.clear();
     m_lastInterlockNotificationMs = 0;
@@ -11306,6 +11525,7 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     // Injected backends bypass onConnected(), but replacement must still drain
     // the old session before test callers can exercise the new one.
     m_txSessionClosing = false;
+    createHostCwTextEngine();
 }
 
 void RadioModel::rebuildBackendForFamily(const QString& family)

@@ -920,6 +920,10 @@ struct RadioCapabilities {
     bool hasModeIndependentSquelch = false;
     // The squelch level's place on the pan axis. Absent: no SQL line, no Auto SQL.
     std::optional<SquelchLevelScale> squelchLevelScale;
+    // Modes in which the backend reports whether its squelch gate is open, by
+    // IRadioBackend::sliceChanged with SliceDelta::squelchGate. The SQL slider
+    // shows the gate in these modes only. Empty: no gate is reported.
+    QStringList squelchGateModes;
     bool hasAmCarrierLevel = false;
 
     // The radio's own VOX and SSB transmit monitor (Flex by its command plane;
@@ -1038,6 +1042,13 @@ struct RadioCapabilities {
     // the permissive disconnected rule applies; bridge/rigctl/SmartCAT return an
     // error. False means no text buffer, not no CW.
     bool hasRadioSideCwKeyer = false;
+
+    // Engaged when a host text keyer may send client-timed elements through
+    // requestCwControl(Kind::Carrier). A backend with a native text buffer may
+    // accept carrier edges for a paddle and leave this fallback absent.
+    // Asked via RadioModel::hasHostCwTextKeyer() / hasCwTextKeyer() (#7146).
+    struct HostCwKeyingControl {};
+    std::optional<HostCwKeyingControl> hostCwKeyingControl;
 
     // Shape of that text keyer. These fields keep shared callers honest when
     // two radios both accept text but expose different surrounding contracts:

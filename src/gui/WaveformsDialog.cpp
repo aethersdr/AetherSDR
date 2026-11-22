@@ -1,4 +1,5 @@
 #include "WaveformsDialog.h"
+#include "AetherGpsTools.h"
 #include "CanonIndicators.h"
 #include "core/DigitalVoiceWaveformProcess.h"
 #include "core/DigitalVoiceWaveformSettings.h"
@@ -1387,6 +1388,10 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // The WSPR receiver ships inside AetherSDR, pinned like the health tools.
     m_installWsprAction = installMenu->addAction(
         tr("WSPR Receiver"), this, &WaveformsDialog::onInstallWsprClicked);
+    // AetherGPS ships inside AetherSDR too; the AetherGPS window's checkbox
+    // installs the same package.
+    m_installAetherGpsAction = installMenu->addAction(
+        tr("AetherGPS"), this, &WaveformsDialog::onInstallAetherGpsClicked);
     installMenu->addSeparator();
     installMenu->addAction(tr("Legacy Waveform (.ssdr_waveform)..."),
                            this, &WaveformsDialog::onInstallLegacyClicked);
@@ -1497,6 +1502,21 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::refreshWaveformList);
     connect(&wfModel, &FlexWaveformModel::waveformsChanged,
             this, &WaveformsDialog::updateHealthBar);
+    // The AetherGPS entry follows the radio's list and the AetherGPS window's
+    // installs; the Install button follows every window's uploads.
+    m_gpsTools = new AetherGpsTools(m_radioModel, this);
+    connect(m_gpsTools, &AetherGpsTools::changed,
+            this, &WaveformsDialog::updateInstallButtonState);
+    // The AetherGPS row's Remove follows the shared wait.
+    connect(m_gpsTools, &AetherGpsTools::changed, this, [this] {
+        const bool awaiting = m_gpsTools->awaitingRadio();
+        if (awaiting != m_gpsAwaitingShown) {
+            m_gpsAwaitingShown = awaiting;
+            refreshWaveformList();
+        }
+    });
+    connect(WaveformInstallActivity::instance(), &WaveformInstallActivity::changed,
+            this, &WaveformsDialog::updateInstallButtonState);
     connect(&wfModel, &FlexWaveformModel::commandFinished,
             this, &WaveformsDialog::onWaveformCommandFinished);
     connect(&wfModel, &FlexWaveformModel::restarted,
@@ -1624,6 +1644,26 @@ void WaveformsDialog::updateInstallButtonState()
         m_installWsprAction->setToolTip(wsprTip);
         m_installWsprAction->setStatusTip(wsprTip);
     }
+    if (m_installAetherGpsAction) {
+        // AetherGPS's checkbox's own gate: the container on a radio with a
+        // Waveform Processor, under the Docker gate; any other, the legacy
+        // waveform. Busy also covers an AetherGPS change from either window
+        // that the radio has yet to list.
+        const bool gpsBusy = busy || (m_gpsTools && m_gpsTools->busy());
+        // m_gpsTools exists whenever there is a model.
+        const bool blocked = !m_gpsTools || m_gpsTools->blocker() != AetherGpsBlocker::None;
+        const bool installed = m_gpsTools && m_gpsTools->installed();
+        m_installAetherGpsAction->setEnabled(!gpsBusy && !blocked && !installed);
+        const QString gpsTip = busy ? tr("A waveform install is already in progress.")
+            : gpsBusy               ? tr("Waiting for the radio to finish the last AetherGPS change.")
+            : blocked               ? m_gpsTools->blockerReason()
+            : installed             ? tr("AetherGPS is already installed on this radio.")
+                                    : tr("Install AetherGPS (version %1), which shares the radio's GPS "
+                                         "on your network.")
+                                          .arg(QString::fromLatin1(AetherGpsPackage::kVersion));
+        m_installAetherGpsAction->setToolTip(gpsTip);
+        m_installAetherGpsAction->setStatusTip(gpsTip);
+    }
     if (busy) {
         m_installDockerAction->setToolTip(tr("A waveform install is already in progress."));
     } else if (dockerReady) {
@@ -1674,6 +1714,41 @@ void WaveformsDialog::onInstallWsprClicked()
         return;
     }
     installWspr(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::onInstallAetherGpsClicked()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    installAetherGps(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+bool WaveformsDialog::installAetherGps(bool docker)
+{
+    if (docker) {
+        const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+        if (!blocker.isEmpty()) {
+            showDockerWfpNotReadyDialog(this, blocker);
+            return false;
+        }
+    }
+    QString error;
+    const QString path = AetherGpsTools::writePackage(docker, &error);
+    if (path.isEmpty()) {
+        ScopedChildWidget<CanonMessageBox> box(tr("AetherGPS Not Installed"), error, this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
+        box.get()->exec();
+        return false;
+    }
+    const QPointer<AetherGpsTools> tools(m_gpsTools);
+    installWaveformPath(docker, path, m_radioModel, m_radioModel->controlSession(), false,
+                        [tools](bool ok) {
+                            if (ok && tools) {
+                                tools->awaitListing(true);   // until the radio lists it
+                            }
+                        });
+    return true;
 }
 
 bool WaveformsDialog::installWspr(bool docker)
@@ -2102,7 +2177,8 @@ void WaveformsDialog::installWaveformFile(const QString& title,
 }
 
 void WaveformsDialog::installWaveformPath(bool docker, const QString& path, RadioModel* model,
-                                          const RadioControlSession& session, bool quiet)
+                                          const RadioControlSession& session, bool quiet,
+                                          const std::function<void(bool ok)>& finished)
 {
     const QPointer<RadioModel> modelGuard(model);
     if (!modelGuard || m_radioModel != modelGuard.data() || !modelGuard->controlSessionCurrent(session)) {
@@ -2179,7 +2255,10 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
     });
 
     connect(m_installer, &WaveformInstaller::finished,
-            this, [this, progress](bool ok, const QString& msg) {
+            this, [this, progress, finished](bool ok, const QString& msg) {
+                if (finished) {
+                    finished(ok);
+                }
                 progress->close();
                 progress->deleteLater();
                 updateInstallButtonState();
@@ -2524,11 +2603,10 @@ void WaveformsDialog::refreshWaveformList()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-    // The radio health agent is the health bar's, and AetherGPS is AetherGPS's
-    // checkbox: neither is a row of its own.
+    // The radio health agent is the health bar's, not a row of its own.
     QList<FlexWaveformEntry> waveforms;
     for (const FlexWaveformEntry& entry : wfModel.waveforms()) {
-        if (!isRadioHealthWaveform(entry.name, entry.isContainer) && !isAetherGpsWaveform(entry.name)) {
+        if (!isRadioHealthWaveform(entry.name, entry.isContainer)) {
             waveforms.append(entry);
         }
     }
@@ -2660,8 +2738,15 @@ void WaveformsDialog::refreshWaveformList()
             });
         }
 
+        // Dimmed with the reason on a radio whose firmware refuses the command
+        // (FLEX-6000, #6990). It is presented like Environment… above, but the
+        // gate is the radio platform here, not a backend capability.
         auto* restartBtn = new QPushButton(tr("Restart"), actionWidget);
         restartBtn->setAccessibleName(tr("Restart waveform %1").arg(name));
+        const QString restartUnavailable = waveformRestartUnavailableReason(
+            m_radioModel ? m_radioModel->capabilities().platform : RadioPlatform::Unknown);
+        restartBtn->setToolTip(restartUnavailable);
+        restartBtn->setAccessibleDescription(restartUnavailable);
         connect(restartBtn, &QPushButton::clicked, this, [this, name]() {
             setRowNotice(name, tr("Restarting…"), QStringLiteral("pending"), true);
             m_radioModel->flexWaveformModel().requestRestart(name);
@@ -2680,6 +2765,9 @@ void WaveformsDialog::refreshWaveformList()
                 || !model->controlSessionCurrent(session)) { return; }
             setRowNotice(name, isContainer ? tr("Removing…") : tr("Uninstalling…"),
                          QStringLiteral("pending"), true);
+            if (isAetherGpsWaveform(name) && m_gpsTools) {
+                m_gpsTools->awaitListing(false);   // holds the AetherGPS checkbox too
+            }
             if (isContainer) {
                 m_radioModel->flexWaveformModel().requestRemoveContainer(name);
             } else {
@@ -2687,8 +2775,10 @@ void WaveformsDialog::refreshWaveformList()
             }
         });
 
-        restartBtn->setEnabled(!rowPending);
-        removeBtn->setEnabled(!rowPending);
+        restartBtn->setEnabled(restartUnavailable.isEmpty() && !rowPending);
+        // An AetherGPS change from the AetherGPS window holds its row too.
+        const bool gpsChanging = isAetherGpsWaveform(name) && m_gpsTools && m_gpsTools->awaitingRadio();
+        removeBtn->setEnabled(!rowPending && !gpsChanging);
         const int actionButtonWidth = std::max({
             installedWaveformActionButtonWidth(restartBtn, removeBtn),
             styledWaveformActionButtonWidth(restartBtn),
@@ -2821,9 +2911,15 @@ void WaveformsDialog::onWaveformCommandFinished(const QString& action, const QSt
     } else if (!ok) {
         // A successful removal takes the row away; only a failure needs words.
         setRowNotice(name, tr("Remove failed: %1").arg(why), QStringLiteral("error"), false);
+        if (isAetherGpsWaveform(name) && m_gpsTools) {
+            m_gpsTools->stopWaiting();
+        }
     } else {
         m_rowNotices.remove(name);
         refreshWaveformList();
+        if (isAetherGpsWaveform(name) && m_gpsTools) {
+            m_gpsTools->awaitListing(false);   // until the radio drops it
+        }
     }
 }
 

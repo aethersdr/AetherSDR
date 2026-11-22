@@ -4,9 +4,11 @@
 // the drive register is read both from the health rows and from the EP2
 // packet MetisClient would send.
 
+#include "core/backends/MeterDef.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2Settings.h"
+#include "core/backends/hl2/Hl2TelemetryService.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -21,10 +23,12 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QSet>
 #include <QSignalSpy>
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -102,6 +106,21 @@ struct Hl2TxGateTestAccess {
             b.m_swrGate.accept(0);
     }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
+    static void defineMeters(Hl2Backend& b) { b.defineMeters(); }
+    static void updatePollState(Hl2Backend& b) { b.updateTelemetryPollState(); }
+    static int sliceLevelMeterBase() { return Hl2Backend::kSliceLevelMeterBase; }
+    static quint64 setPureSignal(Hl2Backend& b, bool on)
+    {
+        return b.setPureSignalEnabled(on) ? b.m_psGeneration : 0;
+    }
+    static QVariantMap pureSignalFields(const Hl2Backend& b) { return b.pureSignalFields(); }
+    static void deliverPureSignalStatus(Hl2Backend& b, const Hl2PureSignalStatus& status)
+    {
+        QMetaObject::invokeMethod(b.m_pureSignal, [controller = b.m_pureSignal, status] {
+            emit controller->statusChanged(status);
+        }, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
+    }
     // Streaming as telemetryLinkState() judges it, with no socket: connected, and
     // the EP6 counter "just advanced" (hl2LinkStateFor() consults only those two
     // while connected; the held-by-other branch needs disconnected). Nothing in
@@ -251,6 +270,85 @@ static void capabilitiesSeam()
               && live.maxPanadapters == live.maxSlices,
           "connected: maxSlices is the receiver ceiling, not a fixed 1");
     Access::metisEdge(b, "linkDown");
+}
+
+// PA current: not declared calibrated, defined as RAD:PACURRENT in amps, and converted by the
+// schematic's chain (0.04 ohm, x50, 270/1k divider, 3.26 V over 4096 counts).
+static void paCurrentMeter()
+{
+    Hl2Backend b;
+    check(!b.capabilities().hasPaCurrentTelemetry,
+          "does not declare calibrated PA current before an ammeter run");
+    check(hl2::hl2PaCurrentAmps(0) == 0.0, "0 counts is 0 A");
+    check(std::abs(hl2::hl2PaCurrentAmps(1000) - 0.5053955078125) < 1e-9,
+          "1000 counts is 0.5054 A, the divider included (0.3979 A without it)");
+    check(std::abs(hl2::hl2PaCurrentAmps(4095) - 2.0695946044921874) < 1e-9,
+          "full scale, 4095 counts, is 2.07 A");
+
+    QSignalSpy defs(&b, &IRadioBackend::meterDefined);
+    Access::defineMeters(b);
+    bool defined = false;
+    for (const auto& args : defs) {
+        const auto d = args.at(0).value<MeterDef>();
+        if (d.source == QStringLiteral("RAD") && d.name == QStringLiteral("PACURRENT"))
+            defined = d.unit == QStringLiteral("Amps") && d.low == 0.0
+                && std::abs(d.high - 2.0695946044921874) < 1e-9;
+    }
+    check(defined, "RAD:PACURRENT is defined in Amps, 0 to full scale");
+    // The fixed catalogue stays below the per-receiver band (#7324): a fixed
+    // index at or above kSliceLevelMeterBase would collide with SLC:LEVEL of a
+    // receiver, silently.
+    QList<int> fixedIndices;
+    for (const auto& args : defs)
+        fixedIndices.append(args.at(0).value<MeterDef>().index);
+    const bool belowBand = std::all_of(fixedIndices.cbegin(), fixedIndices.cend(),
+        [](int i) { return i >= 1 && i < Access::sliceLevelMeterBase(); });
+    check(!fixedIndices.isEmpty() && belowBand
+              && QSet<int>(fixedIndices.cbegin(), fixedIndices.cend()).size()
+                     == fixedIndices.size(),
+          "defineMeters' fixed indices are unique and below kSliceLevelMeterBase");
+
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    hl2::Hl2Telemetry t;
+    t.biasCurrentRaw = 1000;
+    Access::publish(b, t);
+    double amps = std::nan("");
+    for (const auto& args : meters) {
+        if (args.at(0).toString() == QStringLiteral("RAD:PACURRENT"))
+            amps = args.at(1).toDouble();
+    }
+    check(amps == hl2::hl2PaCurrentAmps(1000), "publishTelemetry emits RAD:PACURRENT in amps");
+    meters.clear();
+    Access::publish(b, hl2::Hl2Telemetry{});
+    bool emptyEmitted = false;
+    for (const auto& args : meters)
+        emptyEmitted |= args.at(0).toString() == QStringLiteral("RAD:PACURRENT");
+    check(!emptyEmitted, "no reading, no PACURRENT sample (never a 0 A)");
+
+    // Not streaming: the stream-free poller's reading drives the meter, as it
+    // does RAD:PATEMP, so the needle cannot hold a pre-stall value.
+    hl2::Hl2TelemetryService svc;
+    hl2::DiscoveryReply reply;
+    reply.biasCurrentRaw = 10;
+    hl2::Hl2TelemetryServiceTestAccess::placeReply(svc, reply);
+    b.setTelemetryService(&svc);
+    meters.clear();
+    Access::updatePollState(b);
+    double polled = std::nan("");
+    for (const auto& args : meters) {
+        if (args.at(0).toString() == QStringLiteral("RAD:PACURRENT"))
+            polled = args.at(1).toDouble();
+    }
+    check(polled == hl2::hl2PaCurrentAmps(10),
+          "not streaming: RAD:PACURRENT follows the stream-free reading");
+    meters.clear();
+    hl2::Hl2TelemetryServiceTestAccess::placeReply(svc, hl2::DiscoveryReply{});
+    Access::updatePollState(b);
+    bool polledEmpty = false;
+    for (const auto& args : meters)
+        polledEmpty |= args.at(0).toString() == QStringLiteral("RAD:PACURRENT");
+    check(!polledEmpty, "stream-free reply with no reading: no PACURRENT sample");
+    b.setTelemetryService(nullptr);
 }
 
 static void linkLifecycle()
@@ -919,6 +1017,112 @@ static KeyOnReplay replayKeyOn(std::span<const Hl2KeyOnRaddr1> rows, int phaseMs
     return out;
 }
 
+#if AETHER_HL2_TX_TXA
+static void pureSignalOverloadAcrossQueuedDelivery()
+{
+    using MetisAccess = hl2::MetisClientTestAccess;
+    Hl2Backend backend;
+    Access::fakeStreamingLink(backend, true);
+    const quint64 generation = Access::setPureSignal(backend, true);
+    const auto feedbackLimit = [&] {
+        return Access::pureSignalFields(backend).value(QStringLiteral("feedbackLimit")).toInt();
+    };
+    hl2::MetisClient metis;
+    metis.enableTransmit(true);
+    MetisAccess::setStreaming(metis);
+    metis.setPureSignal(true, generation);
+    hl2::Hl2Telemetry window;
+    QObject::connect(&metis, &hl2::MetisClient::telemetryUpdated,
+                     [&](const hl2::Hl2Telemetry& t) { window = t; });
+    std::uint8_t sequence = 0;
+    const auto sample = [&](bool overload, bool closeWindow) {
+        std::array<std::uint8_t, hl2::kUsbPacketSize> packet{};
+        packet[0] = 0xEF; packet[1] = 0xFE; packet[2] = 0x01; packet[3] = 0x06;
+        packet[7] = sequence++;
+        packet[8] = packet[9] = packet[10] = 0x7F;
+        packet[12] = overload ? 0x03 : 0x02; // TX permitted, ADC overload in bit 24
+        if (closeWindow) {
+            MetisAccess::dueEmit(metis);
+        } else {
+            MetisAccess::holdEmit(metis);
+        }
+        MetisAccess::feedDatagram(metis, packet);
+    };
+    const TxTestAuthority tx;
+
+    sample(true, false); // still receiving
+    metis.setMox(true, tx.operation);
+    Access::setKeyedFlag(backend, true);
+    sample(false, true); // first window straddles key-down
+    check(window.adcOverloadSamples == 1 && window.psAdcGeneration == 0,
+          "PureSignal: a pre-key overload is counted but cannot be attributed to feedback");
+    Access::publish(backend, window);
+    check(feedbackLimit() == 0, "PureSignal: delivery after key-down cannot turn RX overload red");
+
+    sample(true, true);
+    const hl2::Hl2Telemetry keyedOverload = window;
+    check(keyedOverload.psAdcGeneration == generation,
+          "PureSignal: a whole keyed ADC window carries the enable cycle");
+    metis.setMox(false, tx.operation);
+    Access::setKeyedFlag(backend, false);
+    Access::publish(backend, keyedOverload);
+    check(feedbackLimit() == 2, "PureSignal: overload acquired while keyed can arrive after unkey");
+
+    sample(false, true);
+    Access::publish(backend, window);
+    check(feedbackLimit() == 2, "PureSignal: a receive window does not clear the warning");
+    Access::setPureSignal(backend, false);
+    const quint64 enabledAgain = Access::setPureSignal(backend, true);
+    check(feedbackLimit() == 0, "PureSignal: off/on clears overload before the next telemetry tick");
+    Access::publish(backend, keyedOverload);
+    check(feedbackLimit() == 0, "PureSignal: a queued window from before off/on stays retired");
+
+    metis.setPureSignal(true, enabledAgain);
+    metis.setMox(true, tx.operation);
+    sample(false, true);
+    sample(true, true);
+    Access::publish(backend, window);
+    check(feedbackLimit() == 2, "PureSignal: the new enable cycle can report overload");
+    sample(false, true);
+    check(window.adcSamples > 0 && window.adcOverloadSamples == 0,
+          "PureSignal: a clean window contains fresh ADC observations");
+    Access::publish(backend, window);
+    check(feedbackLimit() == 0, "PureSignal: a clean keyed window clears the warning");
+}
+
+static void pureSignalAttenuationReply()
+{
+    Hl2Backend backend;
+    Access::fakeStreamingLink(backend, true);
+    const quint64 generation = Access::setPureSignal(backend, true);
+    hl2::Hl2PureSignalStatus measured;
+    measured.generation = generation;
+    measured.enabled = true;
+    measured.attenuationDb = 31;
+    measured.feedbackLimit = 1;
+    Access::deliverPureSignalStatus(backend, measured);
+
+    QSignalSpy replies(&backend, &IRadioBackend::extensionResult);
+    const auto request = [&](const char* name, const QVariant& argument = {}) {
+        backend.invokeExtension(QStringLiteral("hl2"), QString::fromLatin1(name), 1, argument);
+        return replies.takeLast().at(1).toMap();
+    };
+    const auto limit = [](const QVariantMap& fields) {
+        return fields.value(QStringLiteral("feedbackLimit")).toInt();
+    };
+    check(limit(request("puresignal.autoatt", false)) == 1,
+          "PureSignal: a measurement at the same attenuation can remain visible");
+    const QVariantMap moved = request("puresignal.att", 30);
+    check(moved.value(QStringLiteral("attenuationDb")).toInt() == 30 && limit(moved) == 0,
+          "PureSignal: manual attenuation reply cannot carry the previous setting's limit");
+    Access::setPureSignal(backend, false);
+    Access::setPureSignal(backend, true);
+    Access::deliverPureSignalStatus(backend, measured);
+    check(limit(request("puresignal.att", 31)) == 0,
+          "PureSignal: queued calibration work from an earlier enable cycle stays retired");
+}
+#endif
+
 // TX:FWDPWR at key-on, replayed from recorded RADDR-1 words (Hl2KeyOnRaddr1Fixture.h)
 // at ten phases of the publish window. No transmitter, no radio: replayKeyOn
 // sets only the backend's keyed flag, which selects the window-peak branch.
@@ -1103,9 +1307,11 @@ int main(int argc, char** argv)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<NotchDelta>();
+    qRegisterMetaType<MeterDef>();
     check(Hl2Settings::spanMhz() == 0.0, "isolated profile starts with no remembered span");
 
     capabilitiesSeam();
+    paCurrentMeter();
     linkLifecycle();
     iqTapEndsWithTheSession();
     connectWithoutEp6();
@@ -1119,6 +1325,10 @@ int main(int argc, char** argv)
     swrKeyOnWindowsEveryOver();
     forwardPowerSkippedHealthRow();
     swrGateHealthRows();
+#if AETHER_HL2_TX_TXA
+    pureSignalOverloadAcrossQueuedDelivery();
+    pureSignalAttenuationReply();
+#endif
     forwardPowerKeyOnReplay();
     panAveragingSeam();
     restoredDiguTxPassband();
