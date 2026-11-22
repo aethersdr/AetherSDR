@@ -8318,6 +8318,13 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
 
+    # The extension set's HL2 hardware group (aethersdr_hl2_*).
+    add_executable(tci_ext_hl2_hw_test tests/tci_ext_hl2_hw_test.cpp)
+    target_include_directories(tci_ext_hl2_hw_test PRIVATE src tests)
+    target_link_libraries(tci_ext_hl2_hw_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_hl2_hw_test COMMAND tci_ext_hl2_hw_test)
+
     # The extension set's TX passband group (aethersdr_tx_filter_band).
     add_executable(tci_ext_tx_passband_test tests/tci_ext_tx_passband_test.cpp)
     target_include_directories(tci_ext_tx_passband_test PRIVATE src tests)
@@ -11937,6 +11944,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     tci_extension_set_test
     tci_extension_zero_traffic_test
+    tci_ext_hl2_hw_test
     tci_ext_tx_passband_test
     tci_ext_rx_gain_test
     tci_ext_antennas_test

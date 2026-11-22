@@ -38,6 +38,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
+| **Allow TCI clients to change HL2 hardware** | Shown while a Hermes-Lite 2 is connected. Lets a client that enabled the [AetherSDR extension set](#aethersdr-extension-set) change the HL2 filter board setting. Off by default; clients can read the setting either way. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -370,8 +371,9 @@ as it needs, and may send none. On a Hermes-Lite 2 with one receiver, for
 example:
 
 ```
-aethersdr_ext:1,tx_filter_band,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_ext:1,tx_filter_band,hl2,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
 aethersdr_tx_filter_band:0,100,2900;
+aethersdr_hl2_filter_board:n2adr_rxtx,false;
 aethersdr_rx_antennas:0,ANT;
 aethersdr_rx_antenna:0,ANT;
 aethersdr_tx_antennas:0,ANT,RF1;
@@ -421,6 +423,46 @@ aethersdr_tx_filter_band:0,100,2900;    # set low and high cut, audio Hz
 - The value is the operator's setting. On a Hermes-Lite 2 it applies to USB
   and LSB voice; CW, AM, FM and the digital modes transmit with their mode's
   own passband.
+
+#### Hermes-Lite 2 hardware: `hl2`
+
+Offered while a Hermes-Lite 2 is connected (a radio that answers the HL2
+settings of **Radio Setup → HL2 Hardware**). Not on any other radio.
+
+```
+aethersdr_hl2_filter_board;                     # read
+aethersdr_hl2_filter_board:n2adr_txonly,true;   # set the board and its HPF
+aethersdr_hl2_ioboard_status;                   # read the IO board, once
+```
+
+- **Changes need the operator's permission.** A set is accepted only while
+  **Allow TCI clients to change HL2 hardware** is on in the
+  [TCI Server applet](#the-tci-server-applet). It is off by default. While it
+  is off, every set is refused the way the refusals below are: the client that
+  sent it gets the setting that stands, and AetherSDR shows the reason. Reads
+  always work.
+- **Filter board.** `<board>` is `none`, `n2adr_rxtx` (N2ADR, receive and
+  transmit) or `n2adr_txonly` (N2ADR, transmit only); `<hpf>` is the 3 MHz
+  high-pass, `true` or `false`. This is the HL2 Hardware page's setting and is
+  saved the same way. The high-pass applies to `n2adr_txonly` only, as on that
+  page; with another board a set leaves it as it is. A set is refused while
+  transmitting or tuning, or while the radio is still finishing a
+  transmission, because the board's relays follow the transmit
+  filter: the client that sent it gets the setting that stands, and AetherSDR
+  shows the reason. It is also refused before the radio has an identity to
+  save the setting against. Every change, from the page or another client, is
+  sent as `aethersdr_hl2_filter_board:<board>,<hpf>;` to every client that
+  enabled the set. A change made on the page wins over a client's set that
+  had not been applied yet. With the setting on, a set that changes nothing gets no
+  answer, unless it asked for an HPF the board does not use; then it gets the
+  setting that stands.
+- **IO board status.** Read from the N2ADR IO board when asked, and answered
+  only to the client that asked:
+  `aethersdr_hl2_ioboard_status:<pins>,<receiving>,<in1>,<in2>,<in3>,<in4>,<in5>,<tuner>,<fault>,<firmware>;`
+  (`<pins>` the input pin byte, `<tuner>` 238 = send RF, 0 = tuned, 240 or
+  more = failed). `aethersdr_hl2_ioboard_status:none;` when no IO board
+  answers, the radio is not connected, or another read is still pending. It is
+  never sent unasked.
 
 #### Antennas: `rx_antenna` and `tx_antenna`
 

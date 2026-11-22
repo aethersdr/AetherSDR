@@ -252,6 +252,28 @@ void TciApplet::buildUI()
     connect(m_lineOutPcAudioOffConsent, &QCheckBox::toggled, this, [this](bool enabled) {
         if (m_tciServer) { m_tciServer->setLineOutPcAudioOffConsent(enabled); }
     });
+    auto* hl2Row = new QHBoxLayout;
+    hl2Row->setContentsMargins(4, 1, 4, 2);
+    m_allowHl2HardwareChanges = new QCheckBox(
+        tr("Allow TCI clients to change\nHL2 hardware"), this);
+    m_allowHl2HardwareChanges->setObjectName(QStringLiteral("tciAllowHl2HardwareChanges"));
+    m_allowHl2HardwareChanges->setAccessibleName(tr("Allow TCI clients to change HL2 hardware"));
+    m_allowHl2HardwareChanges->setAccessibleDescription(tr(
+        "When on, a TCI client that enabled the AetherSDR extension set can change the "
+        "Hermes-Lite 2 filter board setting. When off, such a change is refused; clients "
+        "can still read it. Off by default."));
+    m_allowHl2HardwareChanges->setToolTip(m_allowHl2HardwareChanges->accessibleDescription());
+    m_allowHl2HardwareChanges->setVisible(false);
+    applyCanonSheet(m_allowHl2HardwareChanges, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    hl2Row->addWidget(m_allowHl2HardwareChanges);
+    hl2Row->addStretch();
+    outer->addLayout(hl2Row);
+    connect(m_allowHl2HardwareChanges, &QCheckBox::toggled, this, [this](bool allowed) {
+        if (m_tciServer) { m_tciServer->setHl2HardwareChangesAllowed(allowed); }
+    });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
     enableRow->setContentsMargins(4, 2, 4, 2);
@@ -343,6 +365,18 @@ void TciApplet::buildUI()
     });
 }
 
+// The HL2 hardware row is shown only while the radio offers that group, as
+// the server does: a connected backend that declares the `hl2` namespace.
+void TciApplet::updateHl2HardwareRow()
+{
+    const bool offered = m_model && m_tciServer && m_model->isConnected()
+        && m_model->backendDeclaresExtension(QStringLiteral("hl2"));
+    m_allowHl2HardwareChanges->setVisible(offered);
+    const QSignalBlocker blocker(m_allowHl2HardwareChanges);
+    m_allowHl2HardwareChanges->setChecked(m_tciServer
+                                          && m_tciServer->hl2HardwareChangesAllowed());
+}
+
 void TciApplet::updateTciStatus()
 {
     if (!m_tciStatus) {
@@ -381,6 +415,7 @@ void TciApplet::setRadioModel(RadioModel* model)
         m_lineOutPcAudioOffConsent->setEnabled(false);
         m_lineOutPcAudioOffConsent->setAccessibleDescription(
             tr("Line Out consent requires a connected radio and a TCI server."));
+        updateHl2HardwareRow();
         return;
     }
     m_lineOutAvailability = new ControlAvailabilityRegistry(*model, this);
@@ -396,7 +431,9 @@ void TciApplet::setRadioModel(RadioModel* model)
     connect(model, &RadioModel::capabilitiesChanged, this,
         [this](bool, const RadioCapabilities&) {
             if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+            updateHl2HardwareRow();
         });
+    updateHl2HardwareRow();
 
     // Slice → DAX channel mapping drives both DAX and TCI RX indicators.
     // TCI RX1-8 carry the same DAX channels (PanadapterStream::daxPcmReady
@@ -465,6 +502,7 @@ void TciApplet::setTciServer(TciServer* tci)
     if (m_tciServer) {
         disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::lineOutPcAudioOffConsentChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::hl2HardwareChangesAllowedChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
     }
     m_tciServer = tci;
@@ -491,9 +529,12 @@ void TciApplet::setTciServer(TciServer* tci)
                 m_lineOutPcAudioOffAvailability->refreshEngaged();
             }
         });
+        connect(tci, &TciServer::hl2HardwareChangesAllowedChanged, this,
+                [this](bool) { updateHl2HardwareRow(); });
         connect(tci, &TciServer::clientCountChanged,
                 this, [this]() { updateTciStatus(); });
     }
+    updateHl2HardwareRow();
     updateTciStatus();
 #else
     (void)tci;

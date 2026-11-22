@@ -1119,6 +1119,7 @@ set(CORE_SOURCES
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
     src/core/TciExtensionSet.cpp
+    src/core/TciHl2Extension.cpp
     src/core/TciExtensionNotice.cpp
     src/core/TciTxPassbandExtension.cpp
     src/core/TciRxGainExtension.cpp

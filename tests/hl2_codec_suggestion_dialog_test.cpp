@@ -11,7 +11,10 @@
 //   3. a keyboard change, suggested or stored, sends exactly one hw.set;
 //   4. the automation bridge's setCurrentIndex / setCurrentText (which emit
 //      currentIndexChanged and never activated) each send exactly one hw.set,
-//      and the backend follows the combo.
+//      and the backend follows the combo;
+//   5. a change made elsewhere (a TCI client), announced on
+//      extensionStatus("hl2", "hw"), is shown without a write, and leaves a
+//      speaker level the operator is dragging where the drag holds it.
 //
 // No socket and no radio: an injected backend that declares the hl2
 // extension and answers hw.get/hw.set with the shape Hl2Backend replies with.
@@ -26,6 +29,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QSlider>
 #include <QtTest>
 
 #include <memory>
@@ -49,8 +53,10 @@ public:
     bool suggested{true};
     int filterBoard{1};
     bool filterSuggested{false};
+    int speaker{100};
     QString board{QStringLiteral("SQUARE SDR 2")};
     QList<QVariantMap> sets;
+    int gets{0};
     Hl2HardwareBackend()
     {
         caps.family = QStringLiteral("hl2");
@@ -84,9 +90,11 @@ public:
                 filterBoard = in.value(QStringLiteral("filterBoard")).toInt();
                 filterSuggested = false;
             }
+            speaker = in.value(QStringLiteral("speakerLevelPercent"), speaker).toInt();
             return;
         }
         if (verb == QLatin1String("hw.get") && id != 0) {
+            ++gets;
             emit extensionResult(id, QVariantMap{
                 {QStringLiteral("codec"), codec},
                 {QStringLiteral("ditherBit"), true},
@@ -95,13 +103,21 @@ public:
                 {QStringLiteral("n2adrHpf"), false},
                 {QStringLiteral("cl1RefClock"), false},
                 {QStringLiteral("atuGateware"), false},
-                {QStringLiteral("speakerLevelPercent"), 100},
+                {QStringLiteral("speakerLevelPercent"), speaker},
                 {QStringLiteral("codecSuggested"), suggested},
                 {QStringLiteral("filterBoardSuggested"), filterSuggested},
                 {QStringLiteral("detectedBoard"), board},
             });
         }
         // Other hl2 verbs (the Calibration page's) get no reply.
+    }
+    // As Hl2Backend after a hw.set from another caller.
+    void changedElsewhere(int board)
+    {
+        filterBoard = board;
+        filterSuggested = false;
+        emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("hw"),
+                             QVariantMap{{QStringLiteral("filterBoard"), board}});
     }
 };
 
@@ -322,6 +338,49 @@ private slots:
         QCOMPARE(backend->sets.size(), 2);
         QCOMPARE(backend->sets.last(), (QVariantMap{{QStringLiteral("filterBoard"), 0}}));
         QCOMPARE(backend->filterBoard, 0);
+    }
+
+    // A TCI client or the bridge changed the board while the page is open.
+    void aChangeElsewhereIsShownWithoutAWrite()
+    {
+        RadioModel model;
+        Hl2HardwareBackend* backend = install(model, 2, false, 1, false);
+        RadioSetupDialog dialog(&model);
+        const Page page = openPage(dialog);
+        QVERIFY2(page.filter, "board combo found");
+        QCOMPARE(page.filter->currentData().toInt(), 1);
+        const int gets = backend->gets;
+        emit backend->extensionStatus(QStringLiteral("anan"), QStringLiteral("droop"), {});
+        QCOMPARE(backend->gets, gets);   // CONTROL: another status reads nothing
+        backend->changedElsewhere(2);
+        QCOMPARE(page.filter->currentData().toInt(), 2);
+        QVERIFY2(backend->sets.isEmpty(), "showing the change writes nothing");
+    }
+
+    void aChangeElsewhereLeavesASpeakerDragAlone()
+    {
+        RadioModel model;
+        Hl2HardwareBackend* backend = install(model, 2, false, 1, false);
+        RadioSetupDialog dialog(&model);
+        const Page page = openPage(dialog);
+        auto* speaker = dialog.findChild<QSlider*>(QStringLiteral("hl2HwSpeakerLevel"));
+        QVERIFY2(page.filter && speaker, "board combo and speaker slider found");
+        QCOMPARE(speaker->value(), 100);
+        speaker->setSliderDown(true);   // the operator holds the handle
+        speaker->setValue(40);          // and drags it
+        backend->changedElsewhere(2);
+        QCOMPARE(page.filter->currentData().toInt(), 2);   // the reseed ran
+        QCOMPARE(speaker->value(), 40);
+        QVERIFY2(backend->sets.isEmpty(), "the reseed writes nothing");
+        speaker->setSliderDown(false);  // the release writes the drag, once
+        QCOMPARE(backend->sets.size(), 1);
+        QCOMPARE(backend->sets.first(),
+                 (QVariantMap{{QStringLiteral("speakerLevelPercent"), 40}}));
+
+        // CONTROL: with the handle released, a change elsewhere is shown.
+        backend->speaker = 70;
+        backend->changedElsewhere(1);
+        QCOMPARE(speaker->value(), 70);
     }
 };
 
