@@ -270,6 +270,7 @@ void Hl2Discovery::sweepNow()
     if (m_sockets.isEmpty())
         return;
     const auto pkt = discoveryRequest();
+    QList<QUdpSocket*> broken;
     for (QUdpSocket* socket : std::as_const(m_sockets)) {
         const QHostAddress local = socket->localAddress();
         QHostAddress directedBroadcast;
@@ -311,16 +312,25 @@ void Hl2Discovery::sweepNow()
             m_notices.sendSucceeded(local);
         } else {
             m_notices.sendFailed(local, error);
+            broken.append(socket);
         }
+    }
+    // A socket that could send nothing may have been invalidated by the OS
+    // (sleep/wake, address flap) while staying BoundState; it is rebound on
+    // the next sweep. close() after only failed sends does not stall.
+    for (QUdpSocket* socket : std::as_const(broken)) {
+        m_sockets.removeOne(socket);
+        socket->close();
+        socket->deleteLater();
     }
 }
 
 void Hl2Discovery::refreshSockets()
 {
-    // Sockets persist across sweeps; only those whose address went away are
-    // closed. This runs on the GUI thread, and under a macOS socket content
-    // filter close() on a socket that sent both a directed and a limited
-    // broadcast can block for ~1 s.
+    // Sockets persist across sweeps; here only those whose address went away
+    // are closed (sweepNow() drops ones that could send nothing). This runs on
+    // the GUI thread, and under a macOS socket content filter close() on a
+    // socket that sent both a directed and a limited broadcast can block ~1 s.
     QList<QHostAddress> wanted;
     QHash<QString, QString> ifaceNameOf;   // address -> interface display name
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
@@ -347,6 +357,8 @@ void Hl2Discovery::refreshSockets()
         if (socket->state() == QAbstractSocket::BoundState
             && wanted.removeOne(local)) {
             kept.append(socket);
+            // Refresh the name in case the address moved to another interface.
+            m_notices.bindSucceeded(ifaceNameOf.value(local.toString()), local);
         } else {
             socket->close();
             socket->deleteLater();
