@@ -21,6 +21,7 @@
 #include <QWebSocketProtocol>  // CloseCode for the m_rxClose test seam
 #include <QObject>
 #include <QPointer>
+#include <QDeadlineTimer>
 #include <QElapsedTimer>
 #include <QHash>
 #include <QJsonObject>
@@ -29,7 +30,10 @@
 #include <QPair>
 #include <QSet>
 #include <QString>
+#include <QVariant>
+#include <QVariantMap>
 #include <QVector>
+#include <array>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -42,6 +46,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
+class IRadioBackend;
 class AudioEngine;
 class SliceModel;
 class PanadapterModel;
@@ -65,6 +70,7 @@ struct TciClientInfo {
     bool    iq{false};
     bool    rxSensors{false};
     bool    txSensors{false};
+    bool    hwSensors{false};
 };
 
 // TCI WebSocket server — exposes radio state and audio over the TCI protocol.
@@ -84,8 +90,13 @@ class TciServer : public QObject {
     friend class TciHostIqTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
+    friend class TciAntennaExtensionTest;
+    friend class TciHwSensorsTestAccess;
     friend class TciExtensionSetTest;
+    friend class TciHl2ExtensionTest;
+    friend class TciTxPassbandExtensionTest;
     friend class TciRxGainExtensionTest;
+    friend class TciSpanExtensionTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -121,6 +132,11 @@ public:
     bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
     void setLineOutPcAudioOffConsent(bool enabled);
     bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
+    // "Allow TCI clients to change HL2 hardware", off by default: whether an
+    // aethersdr_hl2_* set is accepted. Reads answer either way. Persisted in
+    // the TciExtensions settings object.
+    void setHl2HardwareChangesAllowed(bool allowed);
+    bool hl2HardwareChangesAllowed() const { return m_hl2HardwareChangesAllowed; }
     // The application owns PC Audio preferences; refresh after its toggle.
     void updateLineOutCapture();
     // Thread-safe owning ingress, safe even if a source callback overlaps
@@ -194,6 +210,7 @@ public slots:
 signals:
     void lineOutIncludeTxChanged(bool enabled);
     void lineOutPcAudioOffConsentChanged(bool enabled);
+    void hl2HardwareChangesAllowedChanged(bool allowed);
     void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
@@ -214,6 +231,10 @@ signals:
     // master volume slider — m_audio->setRxVolume() (or lineout when PC
     // audio is off) plus persistence to AppSettings.
     void masterVolumeRequested(int pct);
+    // An `aethersdr_rx_antenna` set names a listed port for this slice, even
+    // the one in use: emitted before the set, as the RX antenna menus emit
+    // flexRxAntennaSelected, so MainWindow releases a KiwiSDR virtual antenna.
+    void rxAntennaSetByTci(int sliceId);
 
 private slots:
     void onClientOpened(std::shared_ptr<TciClientLifetime> lifetime, QHostAddress address, quint16 endpointPort);
@@ -221,6 +242,10 @@ private slots:
     void onTextMessage(const QString& msg);
     void onBinaryMessage(const QByteArray& data);
     void broadcastStatus();
+    // Sends hw_sensors to each enabled client whose interval is due, then
+    // re-arms m_hwSensorsTimer for the earliest next one. Parked (stopped)
+    // while the radio is disconnected; the reconnect re-arms it.
+    void serviceHwSensors();
 
 private:
     struct ClientState;
@@ -266,6 +291,33 @@ private:
     bool announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
+    // Extension group `hl2` (TciHl2Extension.h).
+    void registerHl2Group();
+    TciExtensionSet::Result handleHl2(const QString& name, const QStringList& args);
+    bool hl2Offered() const;
+    QStringList hl2StateLines();
+    // hw.get, answered synchronously by the backend; nullopt if it did not.
+    std::optional<QVariantMap> hl2Hardware();
+    QString hl2FilterBoardLine();
+    void bindHl2Backend();
+    void onHl2ExtensionResult(quint64 requestId, const QVariant& result);
+    void onHl2ExtensionError(quint64 requestId, const QString& reason);
+    void onHl2ExtensionStatus(const QString& ns, const QString& kind, const QVariantMap& fields);
+    void queueHl2FilterNotice();
+    bool broadcastHl2FilterBoard();
+    QString hl2SetRefusal() const;
+    void warnHl2SetRefused(const QString& refusal);
+    void onHl2TransmitStateChanged();
+    // Applies the newest filter board set held in the rate window.
+    void flushHl2Set();
+    // Extension group `tx_filter_band` (TciTxPassbandExtension.h).
+    void registerTxPassbandGroup();
+    TciExtensionSet::Result handleTxPassband(const QStringList& args);
+    bool txPassbandOffered() const;
+    QString txPassbandStateLine() const;
+    int extensionTxTrx() const;
+    void queueTxPassbandNotice();
+    bool broadcastTxPassband();
     // Extension groups `rx_rf_gain`, `rx_auto_rf_gain`, `rx_overload`
     // (TciRxGainExtension.h).
     void registerRxGainGroups();
@@ -286,7 +338,52 @@ private:
     bool broadcastRxAutoGain();
     bool broadcastRxOverload();
     bool anyExtensionClient() const;
+    // Extension group `rx_span` (TciSpanExtension.h).
+    void registerSpanGroup();
+    void wireSpanSlice(SliceModel* slice);
+    void wireSpanPan(PanadapterModel* pan);
+    bool spanOffered() const;
+    QString spanRatesLine() const;
+    // The span of trx's pan in Hz, with the pan's limits (0 when unknown);
+    // nullopt when trx has no live slice or its pan has no model.
+    std::optional<qint64> spanForTrx(int trx, qint64* minHz = nullptr,
+                                     qint64* maxHz = nullptr) const;
+    QHash<int, qint64> currentSpans() const;
+    QStringList spanStateLines() const;
+    TciExtensionSet::Result handleSpan(const QString& name, const QStringList& args);
+    void queueSpanNotice();
+    bool broadcastSpan();
+    void armSpanAnswerTimer();
     void broadcastBinary(const QByteArray& data);
+    // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
+    enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
+    static constexpr int kAntennaLineKinds = 4;
+    static_assert(static_cast<int>(AntennaLine::TxSelection) + 1 == kAntennaLineKinds);
+    void registerAntennaGroups();
+    void wireSliceAntennas(SliceModel* slice);
+    TciExtensionSet::Result handleAntenna(bool tx, const QString& name,
+                                          const QStringList& args);
+    bool antennaOffered(bool tx) const;
+    QStringList antennaWireList(bool tx, const SliceModel* slice) const;
+    QStringList antennaStateLines(bool tx) const;
+    QString antennaLine(AntennaLine kind, int trx) const;
+    // Keyed, for the extension set's refusals: a transmit operation still
+    // held (a finished over awaiting stop evidence is not, once fresh RX is
+    // seen: RadioModel::transmitIdleForSelection()), the radio transmitting,
+    // TransmitModel transmitting, tuning or in MOX, or a TCI key held. Unlike ReceiveControlGuard::checkTransmit() it
+    // has no radio-confirmed idle term: in the HL2 transmit tail the backend
+    // refuses (requestTxRoute).
+    bool extensionKeyed() const;
+    // Clears the refusal latch once nothing is keyed any more.
+    // Unkeyed: the next keyed refusal (TX antenna, span) warns again.
+    void rearmKeyedRefusals();
+    // Every end of a TCI key goes through here, so the latch is re-armed.
+    void clearTciPttClient();
+    // A slice's list moved: a resend to every enabled client carries it,
+    // else the one line is queued.
+    void antennaListMoved(AntennaLine kind, SliceModel* slice);
+    void queueAntennaNotice(AntennaLine kind, int trx);
+    bool broadcastAntennas();
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
     SliceModel* sliceForTrxStrict(int trx) const;
@@ -383,6 +480,9 @@ private:
         quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
+        bool         hwSensorsEnabled{false};
+        int          hwSensorsIntervalMs{TciProtocol::kHwSensorsDefaultIntervalMs};
+        qint64       hwSensorsDueAtMs{-1};   // m_tciPttTelemetryClock time
         bool         extensionsEnabled{false};  // sent aethersdr_ext_enable:true
         QString      extensionsAdvertised;      // last aethersdr_ext: line sent
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
@@ -437,6 +537,7 @@ private:
     void syncLineOutClient(const ClientState& client);
     bool m_lineOutIncludeTx{false};
     bool m_lineOutPcAudioOffConsent{false};
+    bool m_hl2HardwareChangesAllowed{false};
     bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);
@@ -499,6 +600,25 @@ private:
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
     TciExtensionSet m_extensions;
+    // The client whose extension command is being handled, for a group whose
+    // answer arrives later (aethersdr_hl2_ioboard_status).
+    QPointer<TciClient> m_extensionRequester;
+    // Extension set, HL2 group. Request ids in their own decade (0x07..), so
+    // they cannot answer or be answered by the setup page's or the bridge's.
+    quint64           m_hl2NextRequestId{0x0700000000000000ull};
+    QPointer<IRadioBackend> m_hl2Backend;
+    QList<QMetaObject::Connection> m_hl2Connections;
+    QHash<quint64, QPointer<TciClient>> m_hl2IoBoardPending;
+    std::unique_ptr<TciExtensionNotice> m_hl2FilterNotice;
+    // Filter board and HPF the enabled clients were last sent (state lines or
+    // a hw status); a notice is queued when a status moves them.
+    std::optional<QPair<int, bool>> m_hl2LastFilter;
+    // A filter board set waiting for the rate window, newest wins, and who
+    // asked; refusal warnings already shown in this transmit state.
+    QTimer*           m_hl2SetRateTimer{nullptr};
+    std::optional<QVariantMap> m_hl2SetPending;
+    QPointer<TciClient> m_hl2SetRequester;
+    QSet<QString>     m_hl2RefusalWarned;
     // Receive gain group notices: the trxs whose range or gain line is due.
     QSet<int> m_rxGainRangeDue;
     QSet<int> m_rxGainDue;
@@ -556,6 +676,7 @@ private:
     quint64 m_routeTransitionGeneration { 0 };
     QString m_lastRouteError;
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
+    QTimer*           m_hwSensorsTimer{nullptr};  // single-shot, per-client intervals
     QTimer*           m_daxReleaseTimer{nullptr}; // debounced DAX RX teardown
     // Rate limiter for drive:/tune_drive: (#4161). A power-slider drag steps
     // the value ~40 times a second and each step is a separate radio command,
@@ -570,6 +691,32 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Extension set, TX passband notice: posted, then rate-limited.
+    std::unique_ptr<TciExtensionNotice> m_txPassbandNotice;
+    // Extension set, antenna notices: per line kind, the trx numbers pending.
+    std::array<QSet<int>, kAntennaLineKinds> m_antennaPending;
+    std::unique_ptr<TciExtensionNotice> m_antennaNotice;
+    // A refused keyed TX-antenna set warns once per keyed period; cleared on unkey.
+    bool              m_txAntennaRefusalWarned{false};
+    // The same for a refused keyed span set, where span is the sample rate.
+    bool              m_spanRefusalWarned{false};
+    // Extension set, span notice. The last values sent to enabled clients, so
+    // a notice carries what moved; a dispatched set owes its trx a line even
+    // when the radio kept the span it had.
+    std::unique_ptr<TciExtensionNotice> m_spanNotice;
+    QTimer*           m_spanAnswerTimer{nullptr};  // the nearest owed deadline
+    QHash<int, qint64> m_spanAnnounced;
+    QString           m_spanRatesAnnounced;
+    // A dispatched set, per trx: the pan it waits on, the span and centre then,
+    // and its own deadline. Only a report after the dispatch can answer it.
+    struct SpanAnswer {
+        QString panId;
+        qint64  spanHz{0};
+        double  centerMhz{0.0};
+        bool    reported{false};
+        QDeadlineTimer deadline;
+    };
+    QHash<int, SpanAnswer> m_spanAnswerOwed;
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};

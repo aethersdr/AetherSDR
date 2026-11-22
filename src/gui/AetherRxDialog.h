@@ -97,6 +97,8 @@ signals:
     // the engine because NR2 needs MainWindow's FFTW-wisdom prep first (#2275)
     // — the same reason AetherDspWidget and the chain strip both raise it.
     void nr2EnableWithWisdomRequested();
+    // Explicit method-enable intent, separate from passive engine/UI sync.
+    void dspMethodUserToggled();
 
     // A receive filter width button was pressed on the EQ page.
     void rxFilterWidthRequested(int widthHz);

@@ -8,7 +8,6 @@
 #include "models/RadioModel.h"
 
 #include <QStandardPaths>
-#include <QTimer>
 
 #include <memory>
 
@@ -31,6 +30,61 @@ bool listed(RadioModel* model, bool* container = nullptr)
 
 }  // namespace
 
+AetherGpsSettle* AetherGpsSettle::of(FlexWaveformModel& waveforms)
+{
+    if (auto* existing = waveforms.findChild<AetherGpsSettle*>(QString(), Qt::FindDirectChildrenOnly)) {
+        return existing;
+    }
+    return new AetherGpsSettle(waveforms);
+}
+
+AetherGpsSettle::AetherGpsSettle(FlexWaveformModel& waveforms)
+    : QObject(&waveforms)
+    , m_waveforms(waveforms)
+{
+    m_timer.setSingleShot(true);
+    m_timer.setInterval(30'000);
+    connect(&m_timer, &QTimer::timeout, this, &AetherGpsSettle::cancel);
+    connect(&waveforms, &FlexWaveformModel::waveformsChanged, this, [this] {
+        if ((m_state == State::Install && listed()) || (m_state == State::Removal && !listed())) {
+            cancel();
+        }
+    });
+    // A reply that will never come (the session ended) must not leave the
+    // install controls disabled.
+    connect(&waveforms, &FlexWaveformModel::cleared, this, &AetherGpsSettle::cancel);
+}
+
+void AetherGpsSettle::start(bool installing)
+{
+    if (listed() == installing) {
+        return;   // the list already agrees
+    }
+    m_state = installing ? State::Install : State::Removal;
+    m_timer.start();   // restarts: an earlier change's timer can't end this one
+    emit changed();
+}
+
+bool AetherGpsSettle::listed() const
+{
+    for (const FlexWaveformEntry& w : m_waveforms.waveforms()) {
+        if (isAetherGpsWaveform(w.name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void AetherGpsSettle::cancel()
+{
+    m_timer.stop();
+    if (m_state == State::None) {
+        return;
+    }
+    m_state = State::None;
+    emit changed();
+}
+
 AetherGpsTools::AetherGpsTools(RadioModel* model, QObject* parent)
     : QObject(parent)
     , m_model(model)
@@ -38,30 +92,19 @@ AetherGpsTools::AetherGpsTools(RadioModel* model, QObject* parent)
     if (!model) {
         return;
     }
-    m_settleTimer.setSingleShot(true);
-    m_settleTimer.setInterval(30'000);
-    connect(&m_settleTimer, &QTimer::timeout, this, [this] {
-        m_settling = Settling::None;
-        emit changed();
-    });
     FlexWaveformModel& waveforms = model->flexWaveformModel();
-    auto refresh = [this] {
-        if ((m_settling == Settling::Removal && !installed())
-            || (m_settling == Settling::Install && installed())) {
-            m_settling = Settling::None;
-            m_settleTimer.stop();
-        }
-        emit changed();
-    };
+    m_settle = AetherGpsSettle::of(waveforms);
+    auto refresh = [this] { emit changed(); };
+    connect(m_settle, &AetherGpsSettle::changed, this, refresh);
     connect(&waveforms, &FlexWaveformModel::waveformsChanged, this, refresh);
     connect(&waveforms, &FlexWaveformModel::wfpStatusChanged, this, refresh);
+    // The Waveforms window's uploads count toward busy() too.
+    connect(WaveformInstallActivity::instance(), &WaveformInstallActivity::changed, this, refresh);
     connect(model, &RadioModel::connectionStateChanged, this, [this, refresh](bool connected) {
         if (!connected) {
             // A reply that will never come (the session ended) must not
             // leave the checkbox disabled.
             m_removing = false;
-            m_settling = Settling::None;
-            m_settleTimer.stop();
         }
         refresh();
     });
@@ -81,7 +124,7 @@ bool AetherGpsTools::installed() const
 bool AetherGpsTools::busy() const
 {
     // Any upload in this process counts: the Waveforms window's too.
-    return m_removing || m_settling != Settling::None || WaveformInstaller::anyInstalling();
+    return m_removing || (m_settle && m_settle->active()) || WaveformInstaller::anyInstalling();
 }
 
 AetherGpsBlocker AetherGpsTools::blocker() const
@@ -133,14 +176,9 @@ void AetherGpsTools::install()
         emit changed();
         return;
     }
-    // The package ships inside AetherSDR; the installer wants a file.
     const bool docker = !remoteAccessUsesNativePackage(m_model->capabilities().platform);
     QString error;
-    const QString path = aethergps::writeBundledPackage(
-        docker ? AetherGpsPackage::kContainer : AetherGpsPackage::kLegacy,
-        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
-            + QStringLiteral("/waveforms/aether-gps-%1").arg(QString::fromLatin1(AetherGpsPackage::kVersion)),
-        &error);
+    const QString path = writePackage(docker, &error);
     if (path.isEmpty()) {
         emit changed();
         emit failed(error);
@@ -152,8 +190,8 @@ void AetherGpsTools::install()
                 [this](int percent, const QString&) { emit installProgress(percent); });
     }
     connect(m_installer, &WaveformInstaller::finished, this, [this](bool ok, const QString& message) {
-        if (ok) {
-            startSettling(true);   // until the radio lists it
+        if (ok && m_settle) {
+            m_settle->start(true);   // until the radio lists it
         }
         emit changed();
         if (!ok) {
@@ -189,8 +227,12 @@ void AetherGpsTools::remove()
         }
         disconnect(*conn);
         m_removing = false;
-        if (ok) {
-            startSettling(false);   // until the radio drops it
+        if (m_settle) {
+            if (ok) {
+                m_settle->start(false);   // until the radio drops it
+            } else {
+                m_settle->cancel();
+            }
         }
         emit changed();
         if (!ok) {
@@ -198,6 +240,10 @@ void AetherGpsTools::remove()
                             .arg(message.isEmpty() ? tr("it refused") : message));
         }
     });
+    // Held from the send, so the Waveforms window's row can't send another.
+    if (m_settle) {
+        m_settle->start(false);
+    }
     if (container) {
         waveforms.requestRemoveContainer(name);
     } else {
@@ -206,13 +252,33 @@ void AetherGpsTools::remove()
     emit changed();
 }
 
-void AetherGpsTools::startSettling(bool installing)
+void AetherGpsTools::awaitListing(bool installed)
 {
-    if (installed() == installing) {
-        return;   // the list already agrees
+    if (m_settle) {
+        m_settle->start(installed);
     }
-    m_settling = installing ? Settling::Install : Settling::Removal;
-    m_settleTimer.start();   // restarts: an earlier change's timer can't end this one
+}
+
+bool AetherGpsTools::awaitingRadio() const
+{
+    return m_settle && m_settle->active();
+}
+
+void AetherGpsTools::stopWaiting()
+{
+    if (m_settle) {
+        m_settle->cancel();
+    }
+}
+
+QString AetherGpsTools::writePackage(bool docker, QString* error)
+{
+    // The package ships inside AetherSDR; the installer wants a file.
+    return aethergps::writeBundledPackage(
+        docker ? AetherGpsPackage::kContainer : AetherGpsPackage::kLegacy,
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-gps-%1").arg(QString::fromLatin1(AetherGpsPackage::kVersion)),
+        error);
 }
 
 }  // namespace AetherSDR

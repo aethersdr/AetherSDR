@@ -1314,7 +1314,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
-        QStringLiteral("tx transmit rf power tune ptt mic override band settings"), [this] { return buildTxTab(); });
+        QStringLiteral("tx transmit rf power tune ptt mic override band settings time-out timeout tot"),
+        [this] { return buildTxTab(); });
     addPage(signalCategory, QStringLiteral("Phone & CW"),
         QStringLiteral("phone cw keyer break-in sidetone microphone voice"), [this] { return buildPhoneCwTab(); });
     addPage(signalCategory, QStringLiteral("Receive"),
@@ -1351,7 +1352,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // the Calibration page.
     QTreeWidgetItem* hwItem = addPage(radioCategory, QStringLiteral("HL2 Hardware"),
         QStringLiteral("hermes lite hl2 squaresdr square sdr codec ak4951 dither band volts "
-                       "speaker random filter board n2adr hpf cl1 reference clock gpsdo atu tuner"),
+                       "speaker random filter board n2adr hpf cl1 reference clock gpsdo atu tuner "
+                       "io board ioboard exttr fault firmware"),
         [this] { return buildHl2HardwareTab(); });
     m_hl2HardwarePageIndex = m_pageIndexes.value(QStringLiteral("HL2 Hardware"));
     setNavigationItemHidden(hwItem, !declaresHl2Extension());
@@ -3014,6 +3016,83 @@ QWidget* RadioSetupDialog::buildTxTab()
         connect(m_model, &RadioModel::connectionStateChanged, group,
                 applyTimingAvailability);
 
+
+        vbox->addWidget(group);
+    }
+
+    // Host transmit time-out (RFC #7021): runs on every radio. Where the radio
+    // has no timeout of its own, this is the timeout that applies; the radio's
+    // Timeout field above stays dimmed with its reason.
+    {
+        auto* group = new QGroupBox(tr("Transmit time-out (this computer)"));
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* enable = new QCheckBox(tr("Stop transmitting after"));
+        // No bare "transmit" token: the TX guard would take it for a keying
+        // control, and it only ever stops transmission.
+        enable->setAccessibleName(tr("Time-out enabled, stops transmission"));
+        grid->addWidget(enable, 0, 0);
+        auto* timeoutSpin = new QSpinBox;
+        timeoutSpin->setRange(TxTimeoutSettings::kMinimumTimeoutS, TxTimeoutSettings::kMaximumTimeoutS);
+        timeoutSpin->setSuffix(tr(" s"));
+        timeoutSpin->setAccessibleName(tr("Transmit time-out (seconds)"));
+        grid->addWidget(timeoutSpin, 0, 1);
+
+        auto* warnLbl = new QLabel(tr("Warn before (sec):"));
+        applyLabelStyle(warnLbl);
+        grid->addWidget(warnLbl, 1, 0);
+        auto* warningSpin = new QSpinBox;
+        warningSpin->setRange(0, TxTimeoutSettings::kMaximumWarningS);
+        warningSpin->setSpecialValueText(tr("Off"));
+        warningSpin->setSuffix(tr(" s"));
+        warningSpin->setAccessibleName(tr("Transmit time-out warning (seconds before)"));
+        grid->addWidget(warningSpin, 1, 1);
+        grid->setColumnStretch(2, 1);
+
+        const QString tip = tr(
+            "Stops any transmission that lasts longer than this, whatever keyed it: "
+            "MOX, PTT, footswitch, TCI, CAT, DAX, TUNE or the radio's own PTT. "
+            "After a time-out nothing transmits again until every PTT input has been "
+            "released and keyed anew.\n"
+            "Where the radio has its own Timeout above, the radio's applies too.\n"
+            "Stored on this computer, for this radio.");
+        for (QWidget* w : {static_cast<QWidget*>(enable), static_cast<QWidget*>(timeoutSpin),
+                           static_cast<QWidget*>(warningSpin)}) {
+            w->setToolTip(tip);
+            w->setAccessibleDescription(tip);
+        }
+
+        const auto refresh = [this, group, enable, timeoutSpin, warningSpin] {
+            const TxTimeoutSettings settings = m_model->txTimeoutSettings();
+            const QSignalBlocker b1(enable);
+            const QSignalBlocker b2(timeoutSpin);
+            const QSignalBlocker b3(warningSpin);
+            enable->setChecked(settings.enabled);
+            timeoutSpin->setValue(settings.timeoutS);
+            warningSpin->setValue(settings.warningS);
+            timeoutSpin->setEnabled(settings.enabled);
+            warningSpin->setEnabled(settings.enabled);
+            const bool connected = m_model->isConnected();
+            group->setEnabled(connected);
+            group->setToolTip(connected ? QString()
+                : tr("Unavailable: connect to a radio to set its transmit time-out."));
+        };
+        const auto store = [this, enable, timeoutSpin, warningSpin, refresh] {
+            TxTimeoutSettings settings;
+            settings.enabled = enable->isChecked();
+            settings.timeoutS = timeoutSpin->value();
+            settings.warningS = warningSpin->value();
+            (void)m_model->setTxTimeoutSettings(settings);
+            refresh();
+        };
+        connect(enable, &QCheckBox::toggled, this, store);
+        connect(timeoutSpin, &QSpinBox::editingFinished, this, store);
+        connect(warningSpin, &QSpinBox::editingFinished, this, store);
+        connect(m_model, &RadioModel::txTimeoutSettingsChanged, group, refresh);
+        connect(m_model, &RadioModel::connectionStateChanged, group, refresh);
+        refresh();
+
         vbox->addWidget(group);
     }
 
@@ -4238,6 +4317,37 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     return page;
 }
 
+namespace {
+
+// One line per register of the `ioboard.status` reply (docs/HERMES.md,
+// "The IO board status read"). Raw codes where the board defines no meaning.
+QString describeIoBoardStatus(const QVariantMap& m)
+{
+    QStringList inputs;
+    for (int n = 1; n <= 5; ++n) {
+        inputs << QStringLiteral("In%1 %2").arg(n).arg(
+            m.value(QStringLiteral("in%1").arg(n)).toBool() ? QStringLiteral("high")
+                                                            : QStringLiteral("low"));
+    }
+    const int atu = m.value(QStringLiteral("antennaTuner")).toInt();
+    const QString hex = QStringLiteral("0x%1").arg(atu, 2, 16, QLatin1Char('0'));
+    const QString atuText = atu == 0      ? QStringLiteral("idle or tuned (0)")
+                            : atu == 0xEE ? QStringLiteral("tuning, asks for RF (0xee)")
+                            : atu >= 0xF0 ? QStringLiteral("tune failed (%1)").arg(hex)
+                                          : hex;
+    const int fault = m.value(QStringLiteral("fault")).toInt();
+    return QStringLiteral("Firmware major: %1\nEXTTR: %2\nInputs: %3\nAntenna tuner: %4\n"
+                          "Fault: %5")
+        .arg(QString::number(m.value(QStringLiteral("firmwareMajor")).toInt()),
+             m.value(QStringLiteral("receiving")).toBool() ? QStringLiteral("high (receive)")
+                                                           : QStringLiteral("low (transmit)"),
+             inputs.join(QStringLiteral(", ")), atuText,
+             fault == 0 ? QStringLiteral("none")
+                        : QStringLiteral("code 0x%1").arg(fault, 2, 16, QLatin1Char('0')));
+}
+
+} // namespace
+
 // HL2 Hardware tab. A Hermes-Lite 2, an HL2 with the AK4951 board and a
 // SquareSDR 2 are identical on the wire (no board ID in Protocol 1) but differ
 // in hardware (the dither bit drives a band-voltage output on the bare board
@@ -4648,6 +4758,104 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     controls->append(atuChk);
     vbox->addWidget(miscGroup);
 
+    // ── IO board status (read-only) ──────────────────────────────────────────
+    // `ioboard.status` on demand only: a read flashes the board's LED and uses
+    // the radio's one control-reply slot, so opening the page sends nothing.
+    auto* ioGroup = new QGroupBox("IO Board");
+    auto* iovb = new QVBoxLayout(ioGroup);
+    iovb->setSpacing(6);
+    auto* ioIntro = new QLabel(
+        "Reads the N2ADR IO board's status over the HL2's second I2C bus. Reading "
+        "changes nothing on the board. Most HL2s have no IO board fitted.");
+    setTone(ioIntro, Tone::Hint);
+    ioIntro->setWordWrap(true);
+    iovb->addWidget(ioIntro);
+    auto* ioReadBtn = new QPushButton("Read IO Board Status");
+    ioReadBtn->setObjectName(QStringLiteral("hl2HwIoBoardRead"));
+    ioReadBtn->setAccessibleName(QStringLiteral("Read IO board status"));
+    auto* ioStatusLbl = new QLabel("Not read.");
+    ioStatusLbl->setObjectName(QStringLiteral("hl2HwIoBoardStatus"));
+    ioStatusLbl->setAccessibleName(QStringLiteral("IO board status: Not read."));
+    ioStatusLbl->setWordWrap(true);
+    ioStatusLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    setTone(ioStatusLbl, Tone::Value);
+    iovb->addWidget(ioReadBtn, 0, Qt::AlignLeft);
+    iovb->addWidget(ioStatusLbl);
+    vbox->addWidget(ioGroup);
+
+    const QPointer<QLabel> ioStatusGuard(ioStatusLbl);
+    const auto showIoStatus = [ioStatusGuard](const QString& text, Tone tone) {
+        if (!ioStatusGuard)
+            return;
+        ioStatusGuard->setText(text);
+        // A QLabel's accessible Name is its accessibleName when one is set, so
+        // the reading goes in the name or a screen reader never hears it.
+        ioStatusGuard->setAccessibleName(QStringLiteral("IO board status: %1").arg(text));
+        setTone(ioStatusGuard, tone);
+        QAccessibleEvent ev(ioStatusGuard.data(), QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&ev);
+    };
+    const QPointer<QPushButton> ioReadGuard(ioReadBtn);
+    const auto refreshIoRead = [this, ioReadGuard] {
+        if (ioReadGuard)
+            ioReadGuard->setEnabled(m_model->isConnected()
+                && m_model->backendDeclaresExtension(QStringLiteral("hl2")));
+    };
+    refreshIoRead();
+    // The pending read's handlers; deleting it disconnects them.
+    const auto ioPending = std::make_shared<QPointer<QObject>>();
+    // After a connection change the last reading, and a pending read's late
+    // answer, are not this radio's.
+    connect(m_model, &RadioModel::connectionStateChanged, ioStatusLbl,
+            [ioPending, refreshIoRead, showIoStatus] {
+        delete ioPending->data();
+        refreshIoRead();
+        showIoStatus(QStringLiteral("Not read."), Tone::Value);
+    });
+    connect(ioReadBtn, &QPushButton::clicked, ioStatusLbl,
+            [this, ioPending, ioReadGuard, showIoStatus, refreshIoRead] {
+        IRadioBackend* backend = m_model->backend();
+        if (!backend)
+            return;
+        // Each caller of extensionResult owns one top-byte decade (see
+        // BandscopeDialog's note); 0x09 is this one's.
+        constexpr quint64 kIoRequestIdBase = 0x0900000000000000ull;
+        static quint64 nextIoId = kIoRequestIdBase;
+        const quint64 requestId = nextIoId++;
+        auto* guard = new QObject(this);
+        *ioPending = guard;
+        if (ioReadGuard)
+            ioReadGuard->setEnabled(false);
+        showIoStatus(QStringLiteral("Reading…"), Tone::Value);
+        connect(backend, &IRadioBackend::extensionResult, guard,
+                [guard, requestId, showIoStatus, refreshIoRead](quint64 id,
+                                                                const QVariant& result) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+            refreshIoRead();
+            showIoStatus(describeIoBoardStatus(result.toMap()), Tone::Value);
+        });
+        connect(backend, &IRadioBackend::extensionError, guard,
+                [guard, requestId, showIoStatus, refreshIoRead](quint64 id,
+                                                               const QString& reason) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+            refreshIoRead();
+            // Hl2Backend's error when the reply is not a board's (an empty bus).
+            if (reason == QLatin1String("No IO board answered."))
+                showIoStatus(QStringLiteral("No IO board answered: none is fitted, or it is "
+                                            "not responding."), Tone::Hint);
+            else
+                showIoStatus(QStringLiteral("Not read: %1").arg(reason), Tone::Warn);
+        });
+        // Armed before the invoke: a refusal (not connected, one pending) is
+        // emitted synchronously.
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+                                        QStringLiteral("ioboard.status"), requestId);
+    });
+
     // One read path (`reseed`) and one write path (`apply`), so shown and
     // stored cannot disagree. Connections are made after the first reseed, or
     // filling the widgets would persist what was just read. QPointer guard
@@ -4680,6 +4888,22 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             codecSuggestedLbl->setVisible(false);
             filterSuggestedLbl->setVisible(false);
             return;
+        }
+
+        // A change from elsewhere (a TCI client, the bridge) is announced on
+        // extensionStatus("hl2", "hw"); re-read it so the page does not go
+        // stale. Bound once per backend: the reseed runs from that handler.
+        if (m_hl2HwStatusBackend != static_cast<QObject*>(backend)) {
+            QObject::disconnect(m_hl2HwStatusConnection);
+            m_hl2HwStatusBackend = backend;
+            m_hl2HwStatusConnection = connect(backend, &IRadioBackend::extensionStatus, this,
+                [this](const QString& ns, const QString& kind, const QVariantMap&) {
+                    if (ns == QLatin1String("hl2") && kind == QLatin1String("hw")
+                        && static_cast<QObject*>(m_model->backend()) == m_hl2HwStatusBackend
+                        && m_hl2HardwareReseed) {
+                        m_hl2HardwareReseed();
+                    }
+                });
         }
 
         // REQUEST IDS ARE NOT ALLOCATED CENTRALLY — see BandscopeDialog's note.
@@ -4736,8 +4960,12 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             // QVariant off a generic seam, and a slider given a value outside
             // its range silently takes the nearest end — which would then be
             // persisted by the next drag as if the operator had chosen it.
-            spkSlider->setValue(std::clamp(
-                m.value(QStringLiteral("speakerLevelPercent"), 100).toInt(), 0, 100));
+            // Not under the operator's drag: a reseed for a change made
+            // elsewhere would snap the handle back. The release writes it.
+            if (!spkSlider->isSliderDown()) {
+                spkSlider->setValue(std::clamp(
+                    m.value(QStringLiteral("speakerLevelPercent"), 100).toInt(), 0, 100));
+            }
             // Inside the blockers with everything else, though these three
             // only relabel and dim now — nothing here writes a control's value.
             refreshDither();

@@ -149,6 +149,7 @@ class AetherClockModel;
 class AntennaAnalyzerModel;
 class AetherLabWidget;
 class AutomationServer;
+class ShortcutTooltips;
 class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
@@ -284,6 +285,7 @@ public:
     static constexpr int ShortcutFireNoDirectHandler = 2;  // event-filter action (ptt_hold, CW keys)
     static constexpr int ShortcutFireTxBlocked       = 3;  // keysTx action, allowTx false
     static constexpr int ShortcutFireTxOk            = 4;  // keysTx handler ran
+    static constexpr int ShortcutFireTxDriveBlocked  = 5;  // setsTxDrive action, power ceiling armed
     // Fire a registered ShortcutManager action by id — the exact path a MIDI
     // controller mapping takes (see fireShortcut in MainWindow_Controllers.cpp).
     // Used by the automation bridge (#3646) to reach MIDI/shortcut-only actions
@@ -291,7 +293,7 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
-    int fireShortcutAction(const QString& id, bool allowTx,
+    int fireShortcutAction(const QString& id, bool allowTx, bool txCeilingArmed,
                             const std::shared_ptr<TxController>& controller);
     // injectKeyEventForAutomation result codes (plain ints, same reason as
     // above). Delivers a real KeyPress/KeyRelease through the application
@@ -303,8 +305,10 @@ public:
     static constexpr int KeyInjectNotConsumed = 3;  // delivered, no momentary handler claimed it
     static constexpr int KeyInjectTxOk        = 4;  // keysTx press delivered and consumed
     static constexpr int KeyInjectUnbound     = 5;  // known action id with no key binding
+    static constexpr int KeyInjectTxDriveBlocked = 6;  // ceiling armed: setsTxDrive PRESS, or a lease key on a drive slider
     Q_INVOKABLE int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx);
     int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,
+                                    bool txCeilingArmed,
                                     const std::shared_ptr<TxController>& controller);
     // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
     // disable / place, driven by the `workspace` automation verb.  Returns
@@ -391,9 +395,10 @@ protected:
     void restoreNativeClientRect(const QString& role);
     // Windows 11: colour the DWM window border to color.background.app.
     void applyWindowsFrameColor();
-    // Inset the central widget and status bar by the non-client resize band,
-    // which Qt reports as zero on Windows 11 (#7077). The band is a
-    // per-monitor device-pixel figure, so this re-runs whenever it can move.
+    // Windows 11: inset the central widget and status bar by the resize band
+    // so controls stay clear of the WM_NCHITTEST resize zone, and while
+    // maximized by Qt's excess over the native client (#7077). Both are
+    // per-monitor device-pixel figures, so this re-runs whenever they can move.
     void applyNonClientBandInsets();
     // Qt delivers DevicePixelRatioChange to event(), never to changeEvent().
     bool event(QEvent* event) override;
@@ -795,6 +800,9 @@ private:
                                                   const QString& profileId,
                                                   bool selectSlice);
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
+    // The clear above, only while the slice holds anything it undoes; for a
+    // caller that may repeat it often (a TCI RX-antenna set).
+    void clearKiwiSdrVirtualAntennaIfHeld(int sliceId);
     void prepareKiwiSdrBandRecallForPan(const QString& panId);
     bool finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
     void finishPreparedKiwiSdrBandRecallForPan(const QString& panId);
@@ -2033,6 +2041,10 @@ private:
     QWidget* m_pgxlContainer{nullptr};
     QLabel*  m_pgxlIndicator{nullptr};   // top row: "AMP"
     QLabel*  m_pgxlStateLabel{nullptr};  // bottom row: OPERATE / STANDBY
+    QLabel*  m_kpa500Separator{nullptr};
+    QWidget* m_kpa500Container{nullptr};
+    QLabel*  m_kpa500Indicator{nullptr};   // top row: "KPA"
+    QLabel*  m_kpa500StateLabel{nullptr};  // bottom row: FAULT / TX / OPERATE / STANDBY / OFF / –
     QLabel* m_txIndicator{nullptr};
     QLabel* m_gpsDateLabel{nullptr};
     QLabel* m_gpsTimeLabel{nullptr};
@@ -2343,6 +2355,7 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     ControlActionRegistry m_controlActions;
+    ShortcutTooltips* m_shortcutTooltips{nullptr};  // child; names bound keys on buttons
     int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
     QString m_lastRefusedAction;           // refusal notice de-duplication
     int m_lastBandPlanFontSize{6};         // band_plan_toggle restores this

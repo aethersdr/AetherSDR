@@ -144,6 +144,18 @@ The traffic-light / caption-chip fills retain the platform semantic values in
 both bundled themes, but still resolve through tokens so custom and future light
 themes can preserve contrast without bypassing the theme system.
 
+### Accessory status indicators
+
+The TGXL, PGXL and KPA500 status-bar labels use these foregrounds on
+`color.background.0`. STANDBY uses `color.accessory.key.standby.foreground`;
+fault and TX use `color.accent.danger`, and off or unknown uses
+`color.text.secondary`.
+
+| Token | Dark | Light |
+|---|---|---|
+| `color.accessory.indicator.operate.foreground` | `#00e060` | `#007030` |
+| `color.accessory.indicator.bypass.foreground` | `#e0a000` | `#6a3f00` |
+
 ### Meter colours (specialised — paint code only)
 
 | Token | Canonical | Refs |
@@ -166,6 +178,24 @@ DeepFist letters, by cost = 1 − the model's posterior (< 0.15 / < 0.35 / < 0.6
 | `color.cw.confidence.medium` | `#e0e040` | `#737313` |
 | `color.cw.confidence.fair` | `#ff9020` | `#ae5700` |
 | `color.cw.confidence.low` | `#ff4040` | `{color.red.500}` (`#c02020`) |
+
+### Log highlighting (specialised — paint code only)
+
+`LogSyntaxHighlighter`, shared by the Runtime Monitor and Network Diagnostics
+log viewers, colors each line part with this group (maintainer ruling on #7037).
+Every value is at least 4.5 : 1 on `color.canon.nested`, the ground both log
+panes draw on, in both bundled themes; `theme_manager_test` holds that floor.
+Debug levels share `time`. `color.canon.category.*` stays marks-only.
+
+| Token | Dark | Light | Paints |
+|---|---|---|---|
+| `color.log.time` | `#8598b4` | `{color.gray.100}` (`#506070`) | timestamps, DBG |
+| `color.log.category` | `#eaf2fb` | `{color.gray.50}` (`#1a2a3a`) | category name (bold) |
+| `color.log.info` | `#5de3ff` | `#005f85` | INF |
+| `color.log.protocol` | `#c4a1ff` | `#6a3fc8` | protocol terms |
+| `color.log.warning` | `#f0a35e` | `#914d00` | WRN |
+| `color.log.critical` | `#fca5a5` | `#aa3449` | CRT, FTL |
+| `color.log.number` | `#7bf2dc` | `#0c6b5e` | numbers |
 
 ### Spectrum / waterfall (specialised — paint code only)
 

@@ -17,13 +17,13 @@ namespace AetherSDR {
 // reproduces from the tag in its own URL, not from the tree around it: the
 // source's shimVersion runs ahead of a pin until that release is cut.
 struct TailnetShimRelease {
-    static constexpr const char* kVersion = "0.5.3";
+    static constexpr const char* kVersion = "0.5.4";
     static constexpr const char* kUrl =
         "https://github.com/aethersdr/AetherSDR/releases/download/"
-        "flex-tailnet-shim-v0.5.3/flex-tailnet-shim-0.5.3.tar.gz";
+        "flex-tailnet-shim-v0.5.4/flex-tailnet-shim-0.5.4.tar.gz";
     static constexpr const char* kSha256 =
-        "025ab56d1fbae7303608bfa96c9e87a305500360a877ff47dcdbac3c9aacadde";
-    static constexpr qint64 kSize = 8085193;
+        "28406e62b2211d93b3b63119e2693179cbcc3762aa76dcece12893ea52afea18";
+    static constexpr qint64 kSize = 8088544;
 };
 
 // Which of the two shim packages a radio takes.
@@ -37,13 +37,13 @@ enum class TailnetShimPackage {
 // containers. `tools/flex-tailnet-shim/native/build.py` at the release tag
 // rebuilds the identical file with the same toolchain.
 struct TailnetShimNativeRelease {
-    static constexpr const char* kVersion = "0.5.3-native";
+    static constexpr const char* kVersion = "0.5.4-native";
     static constexpr const char* kUrl =
         "https://github.com/aethersdr/AetherSDR/releases/download/"
-        "flex-tailnet-shim-v0.5.3/AetherTailnet-0.5.3-native.ssdr_waveform";
+        "flex-tailnet-shim-v0.5.4/AetherTailnet-0.5.4-native.ssdr_waveform";
     static constexpr const char* kSha256 =
-        "14f00925b887e0c0cec0472d8b3dfcae6eb8229fd02307e7734c17dd02697192";
-    static constexpr qint64 kSize = 9192923;
+        "fb8a3bf8d43639f6a540bde84a12a3c5a94f5b9f22948fc32615c834670e7f0f";
+    static constexpr qint64 kSize = 9194004;
 };
 
 }  // namespace AetherSDR

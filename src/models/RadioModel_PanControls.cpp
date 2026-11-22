@@ -236,6 +236,9 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
     const ReceiveDispatch result = control && control->supports(request.field) && current()
         ? m_backend->requestPanDisplay(backendPanIdFor(pan->panId()), waterfallId, guarded, completion, current)
         : ReceiveDispatch::Unsupported;
+    if (original && request.field == PanDisplayField::RfGain && result != ReceiveDispatch::Unsupported) {
+        original->noteRfGainRequest(std::get<int>(request.value));
+    }
     if (alive && controlSessionCurrent(session) && announce) {
         reportReceiveDispatch(result, QStringLiteral("pan display"));
     }

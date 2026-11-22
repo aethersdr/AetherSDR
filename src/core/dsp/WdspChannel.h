@@ -123,6 +123,9 @@ public:
         bool operator==(const AnalogReceiveDsp&) const = default;
     };
 
+    // create_rxa()'s panel gain1 (RXA.c), used when rxPanelGain is unset.
+    static constexpr double kWdspDefaultRxPanelGain = 4.0;
+
     struct Config
     {
         Direction direction = Direction::Receive;
@@ -141,8 +144,14 @@ public:
         // and leaves every other mode untouched across live mode changes (#7222).
         bool fmLimiter = false;
         // RXA output panel gain, linear, applied after the AGC. Unset keeps
-        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942).
+        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942). In FM,
+        // fmRxPanelGain overrides this when set.
         std::optional<double> rxPanelGain;
+        // RXA panel gain while the mode is FM, applied at open() and on every
+        // live mode change; other modes then get rxPanelGain or WDSP's 4.0. The
+        // panel runs after the FM limiter, so 4.0 would lift its ~0.9 bound
+        // past full scale (#7252).
+        std::optional<double> fmRxPanelGain;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
@@ -251,6 +260,11 @@ public:
         // How many times the run flags have been written. Lets a caller tell
         // "re-applied, same answer" from "never applied".
         unsigned applications = 0;
+        // Fm only: the filter half-width the threshold was compensated for and
+        // the level it was mapped from (slider level + width offset); 0 otherwise.
+        // Recorded whether or not fmRun: level 0 still writes the threshold.
+        double fmHalfWidthHz = 0.0;
+        double fmEffectiveLevel = 0.0;
     };
 
     enum class ProcessResult
@@ -404,7 +418,7 @@ public:
     // Receive squelch: the mode picks one WDSP stage, the other is forced off;
     // level 100 is tightest, and setMode() re-applies it.
     //   level 0                  nothing runs, in every mode ("0 = open")
-    //   FM                       fmsq, threshold 10^(-2 * level / 100)
+    //   FM                       fmsq, threshold fmSquelchThresholdFor(level, half-width)
     //   AM, SAM, DSB, LSB, USB   amsq, threshold -140 + 0.7 * level + offset dBFS
     //   CW, DIG, WBFM, other     none
     // amsq gates raw dBFS, so a front-end gain change moves its antenna-referred
@@ -417,7 +431,28 @@ public:
     static constexpr double kLevelSquelchBaseDbfs = -140.0;
     static constexpr double kLevelSquelchDbPerStep = 0.7;
     // The two maps above, each clamping level to 0..100, so tests can pin them.
+    // fmSquelchThresholdForLevel() is the FM map at the reference width, where
+    // the width offset is zero.
     [[nodiscard]] static double fmSquelchThresholdForLevel(int level) noexcept;
+
+    // FM squelch width compensation (#6552). fmsq gates on detector noise, and
+    // noise alone reads higher the narrower the filter, so the level is moved
+    // by the offset that puts noise-alone's 50 % point at the same slider
+    // position at every width. The fit, its range and what happens outside it:
+    // docs/architecture/fm-squelch-width-compensation.md.
+    static constexpr double kFmSquelchFitMinHalfWidthHz = 1500.0;
+    static constexpr double kFmSquelchFitMaxHalfWidthHz = 6000.0;
+    // Noise-alone 50 % level of the uncompensated map at a half-width, the
+    // half-width held to the fitted range.
+    [[nodiscard]] static double fmSquelchNoiseLevelForHalfWidth(double halfWidthHz) noexcept;
+    // Levels added at a half-width: >= 0, and 0 at and above the fit's top.
+    [[nodiscard]] static double fmSquelchWidthOffsetLevels(double halfWidthHz) noexcept;
+    // The threshold fmsq gets: level clamped to 0..100, plus the width offset.
+    [[nodiscard]] static double fmSquelchThresholdFor(int level, double halfWidthHz) noexcept;
+    // Whether fmsq's gate passed audio at the end of the last processed block;
+    // nullopt unless fmsq is running (FM mode, squelch on, level > 0). Lock-free;
+    // call it from the thread that calls processIq(), like meter().
+    [[nodiscard]] std::optional<bool> fmSquelchGateOpen() const noexcept;
     [[nodiscard]] static double levelSquelchThresholdDbfsForLevel(int level,
                                                                   double offsetDb) noexcept;
     // A snapshot by value, safe from any thread: guarded by its own mutex, not
@@ -473,6 +508,9 @@ public:
     // 0..100 in the slice model's units. Re-applied on reopen unless the
     // Config's analogReceiveDsp recipe owns NR instead. Receive channels only.
     bool setNoiseReduction(bool enabled, int level) noexcept;
+    // WDSP's ANF (LMS automatic notch) on a running receive channel; same level
+    // units, same reopen rule and the same refusal under a recipe as ANR above.
+    bool setAutoNotch(bool enabled, int level) noexcept;
 
     // Manual notches: the host-side Flex TNF equivalent, and the only notch on a
     // direct-sampling radio (HL2 has no radio-side DSP; oracle addendum 3 §B4).
@@ -621,6 +659,8 @@ private:
 
     static bool validateConfig(const Config& config, std::string* error) noexcept;
     static int wdspMode(Mode mode) noexcept;
+    // The panel gain fmRxPanelGain asks for in `mode`.
+    static double rxPanelGainFor(const Config& config, Mode mode) noexcept;
     // Pushes the NBP stage's copy of the shift. WDSP keeps the shift stage and
     // the notch database's idea of the shift as two unrelated values, so a
     // caller that sets one without the other gets notches that sit exactly one
@@ -664,6 +704,10 @@ private:
     bool m_liveNrSet = false;
     bool m_liveNrEnabled = false;
     int m_liveNrLevel = 50;
+    // setAutoNotch()'s request, held the same way.
+    bool m_liveAnfSet = false;
+    bool m_liveAnfEnabled = false;
+    int m_liveAnfLevel = 50;
     // These two coordinate the real-time processIq() against control-thread
     // operations. The handshake is Dekker-style — each side stores its own flag
     // then reads the other's — which is only correct under sequential
@@ -682,6 +726,8 @@ private:
     // always in that order); read under it alone — see appliedSquelch().
     mutable std::mutex m_appliedSquelchMutex;
     AppliedSquelch m_appliedSquelch;
+    // m_appliedSquelch.fmRun, readable without the mutex; see fmSquelchGateOpen().
+    std::atomic<bool> m_fmSquelchRunning {false};
     std::atomic<unsigned> m_refuseControlForTest {0};
 
     // ── Noise blanker state ───────────────────────────────────────────────

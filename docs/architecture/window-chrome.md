@@ -87,11 +87,15 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   taskbar minimize, Win+Up and snap-to-maximize need them. **The Snap Layouts
   hover flyout does not appear** (nothing returns `HTMAXBUTTON` on hover);
   that is tracked in #6224.
-  Qt keeps a resize-border inset on the left, right and bottom as non-client.
-  Windows 11 draws it invisibly, but Windows 10 paints it as a light strip
-  (#6266), so on Windows 10 only `MainWindow::nativeEvent` answers
-  `WM_NCCALCSIZE` with the whole window as client area (inset on all four
-  sides while maximized).
+  With the expanded frame, Qt leaves a native resize band on the left, right
+  and bottom. This can show as a light strip on Windows 10 (#6266) or a white
+  pixel inside the themed DWM border on Windows 11 (#7428). On both systems,
+  `MainWindow::nativeEvent` handles `WM_NCCALCSIZE` so the app can paint the
+  full window. When maximized, it insets all four sides to fit the work area.
+  On Windows 11, `applyNonClientBandInsets()` also keeps controls clear of the
+  resize band in a restored window. When maximized, Qt can give the widget
+  more logical pixels than fit in the native client. The layout reserves
+  that excess on the right and bottom using the actual client size and DPR.
   `MainWindow::nativeEvent` also answers `WM_NCHITTEST` itself on Windows 10
   and 11: the resize codes on a band at the window edges
   (`SM_CXSIZEFRAME` / `SM_CYSIZEFRAME` + `SM_CXPADDEDBORDER` for the

@@ -1139,7 +1139,7 @@ static QString tciRoleHint(const TciClientInfo& c)
 {
     if (c.audio) return QStringLiteral("Audio (WSJT-X / digital mode)");
     if (c.iq)    return QStringLiteral("IQ stream (panadapter / SDR client)");
-    if (c.rxSensors || c.txSensors)
+    if (c.rxSensors || c.txSensors || c.hwSensors)
                  return QStringLiteral("Telemetry / monitor");
     return QStringLiteral("Control only");
 }
@@ -1325,13 +1325,14 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciClientSummary, "QLabel { color: {{color.canon.ink}}; font-weight: bold; }");
     layout->addWidget(m_tciClientSummary);
 
-    m_tciClientTable = new QTableWidget(0, 7, this);
+    m_tciClientTable = new QTableWidget(0, 8, this);
     m_tciClientTable->setObjectName(QStringLiteral("networkDiagnosticsTciClients"));
     m_tciClientTable->setHorizontalHeaderLabels(
         {QStringLiteral("Name"), QStringLiteral("Endpoint"),
          QStringLiteral("Likely role"),
          QStringLiteral("Audio"), QStringLiteral("IQ"),
-         QStringLiteral("RX sensors"), QStringLiteral("TX sensors")});
+         QStringLiteral("RX sensors"), QStringLiteral("TX sensors"),
+         QStringLiteral("HW sensors")});
     m_tciClientTable->verticalHeader()->setVisible(false);
     // Only the Name column is editable (per-item flags set in
     // refreshTciClientTable); double-click or F2 to rename.
@@ -1344,7 +1345,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     hh->setSectionResizeMode(0, QHeaderView::Stretch);            // Name
     hh->setSectionResizeMode(1, QHeaderView::ResizeToContents);   // Endpoint
     hh->setSectionResizeMode(2, QHeaderView::Stretch);            // Likely role
-    for (int c = 3; c < 7; ++c)
+    for (int c = 3; c < 8; ++c)
         hh->setSectionResizeMode(c, QHeaderView::ResizeToContents);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciClientTable, "QTableWidget { background: {{color.canon.nested}}; color: {{color.canon.ink}}; "
         "gridline-color: {{color.canon.line}}; border: 1px solid {{color.canon.line}}; }"
@@ -1539,6 +1540,7 @@ void NetworkDiagnosticsDialog::refreshTciClientTable()
         m_tciClientTable->setItem(r, 4, readOnly(c.iq        ? QStringLiteral("Yes") : QStringLiteral("—"), true));
         m_tciClientTable->setItem(r, 5, readOnly(c.rxSensors ? QStringLiteral("Yes") : QStringLiteral("—"), true));
         m_tciClientTable->setItem(r, 6, readOnly(c.txSensors ? QStringLiteral("Yes") : QStringLiteral("—"), true));
+        m_tciClientTable->setItem(r, 7, readOnly(c.hwSensors ? QStringLiteral("Yes") : QStringLiteral("—"), true));
     }
 
     const int n = list.size();
@@ -1851,7 +1853,7 @@ QWidget* NetworkDiagnosticsDialog::buildLogsTab()
     m_logViewer->setReadOnly(true);
     m_logViewer->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_logViewer->setMaximumBlockCount(2500);
-    new LogSyntaxHighlighter(m_logViewer->document());
+    new LogSyntaxHighlighter(m_logViewer->document(), m_logViewer);
     layout->addWidget(m_logViewer, 1);
 
     connect(m_logViewer->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {

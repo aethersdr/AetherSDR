@@ -96,11 +96,17 @@ public:
     int pitchRangeHigh()  const;
     // Sets both decoder range sliders to the saved shared ranges.
     void restoreCwRanges();
+    // Sets the Sens slider and its threshold to the selected decoder's saved
+    // value, and ggmorse's threshold to ggmorse's saved value even when a neural
+    // decoder is selected.  Does nothing while the slider holds an unsaved change.
+    void restoreCwSens();
+    // Saves a Sens change that is still waiting for its debounced save.
+    void flushCwSens();
 
     // RTTY decode panel
     void  setRttyPanelVisible(bool visible);
     void  appendRttyText(const QString& text, float confidence);
-    void  setRttyStats(float markLevel, float spaceLevel, float snrDb, bool locked);
+    void  setRttyStats(float level, float snrDb, bool locked);
     void  setRttyInputHint(const QString& hint, const QString& reason);
     void  clearRttyText();
     // Show the slice's mark / shift without emitting rttyMarkHzChanged /
