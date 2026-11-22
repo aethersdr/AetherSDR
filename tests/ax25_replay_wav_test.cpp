@@ -24,12 +24,14 @@ QByteArray chunk(const char* id, const QByteArray& payload)
 }
 
 QByteArray wav(const QByteArray& payload, bool oddJunk,
-               quint16 format = 3, quint16 channels = 1, quint16 bits = 32)
+               quint16 format = 3, quint16 channels = 1, quint16 bits = 32, quint32 sampleRate = 48000)
 {
     // WAVE_FORMAT_IEEE_FLOAT, mono, 48000 Hz, 192000 bytes/s, four-byte blocks.
     QByteArray header = QByteArray::fromHex("0300010080bb000000ee020004002000");
     qToLittleEndian(format, header.data());
     qToLittleEndian(channels, header.data() + 2);
+    qToLittleEndian(sampleRate, header.data() + 4);
+    qToLittleEndian(sampleRate * 4, header.data() + 8);
     qToLittleEndian(bits, header.data() + 14);
     QByteArray body("WAVE", 4);
     body += chunk("fmt ", header);
@@ -143,6 +145,35 @@ private slots:
         QVERIFY(!AetherSDR::Ax25ReplayWav::loadWav(path, samples, sampleRate, error));
         QCOMPARE(error, QStringLiteral("expected mono float32 WAV (got fmt=%1 ch=%2 bits=%3)")
                             .arg(format).arg(channels).arg(bits));
+        QVERIFY(samples.empty());
+    }
+
+    void rejectsInvalidSampleRates_data()
+    {
+        QTest::addColumn<quint32>("rate");
+        QTest::newRow("zero") << quint32(0);
+        QTest::newRow("one") << quint32(1);
+        QTest::newRow("eight") << quint32(8);
+        QTest::newRow("nine") << quint32(9);
+    }
+
+    void rejectsInvalidSampleRates()
+    {
+        QFETCH(quint32, rate);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath(QStringLiteral("lowrate.wav"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        const QByteArray bytes = wav(QByteArray(4, '\0'), false, 3, 1, 32, rate);
+        QCOMPARE(file.write(bytes), bytes.size());
+        file.close();
+
+        std::vector<float> samples;
+        int sampleRate = 0;
+        QString error;
+        QVERIFY(!AetherSDR::Ax25ReplayWav::loadWav(path, samples, sampleRate, error));
+        QCOMPARE(error, QStringLiteral("invalid WAV sample rate: %1 Hz (minimum 10 Hz)").arg(rate));
         QVERIFY(samples.empty());
     }
 };
