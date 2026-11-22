@@ -18,6 +18,7 @@
 #include "FloatingRestorePolicy.h"
 #include "FramelessMessageBox.h"
 #include "MixerControlAvailability.h"
+#include "PcMicGain.h"
 #include "PhoneCwApplet.h"
 #include "PersistentDialog.h"
 #include "SpectrumOverlayMenu.h"
@@ -1858,8 +1859,7 @@ void MainWindow::wireRadioModel()
         if (m_radioModel.transmitModel().micSelection() == "PC") {
             // Restore PC mic gain from client-side settings (radio has no
             // hardware gain stage for PC input — client-authoritative)
-            int gain = AppSettings::instance().value("PcMicGain", 100).toInt();
-            m_audio->setPcMicGain(gain);
+            m_audio->setPcMicGain(pcMicGainPercent(m_radioModel.transmitModel()));
             if (!m_audio->isTxStreaming()) {
                 audioStartTx(m_radioModel.radioAddress(), 4991);
             }
@@ -1868,6 +1868,10 @@ void MainWindow::wireRadioModel()
         }
         qDebug() << "MainWindow: remote audio TX stream ID set to" << Qt::hex << streamId;
     });
+    // Connected ahead of the capture start/stop below: the gain is in place
+    // before capture starts.
+    bindPcMicGain(m_radioModel.transmitModel(), this,
+                  [this](int percent) { m_audio->setPcMicGain(percent); });
     // Start/stop PC audio TX when mic_selection changes
     connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
             this, [this]() {
@@ -1879,9 +1883,6 @@ void MainWindow::wireRadioModel()
         }, Qt::QueuedConnection);
 #endif
         if (m_radioModel.transmitModel().micSelection() == "PC") {
-            // Restore PC mic gain from client-side settings
-            int gain = AppSettings::instance().value("PcMicGain", 100).toInt();
-            m_audio->setPcMicGain(gain);
             // Only start if a TX stream is already assigned (avoid streamId=0).
             // Voice TX (USB/LSB/AM/FM) flows over remote_audio_tx, NOT dax_tx —
             // gating solely on txStreamId() (the dax_tx id) meant that when no
@@ -1892,8 +1893,6 @@ void MainWindow::wireRadioModel()
                 audioStartTx(m_radioModel.radioAddress(), 4991);
             }
         } else {
-            // Reset to full gain — radio handles hardware mic gain
-            m_audio->setPcMicGain(100);
             audioStopTx();
         }
         // PooDoo Audio readiness indicator — turn the chain widget's

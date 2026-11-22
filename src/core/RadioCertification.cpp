@@ -2,7 +2,6 @@
 #include "core/backends/AutoRfGainControl.h"
 
 #include "core/RadioCertificationMath.h"
-#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientQuindarTone.h"
 #include "core/LogManager.h"
@@ -538,7 +537,9 @@ void RadioCertification::stageControlEffect(const Options& o)
         return s2.value(QStringLiteral("micPeakDbfs")).toDouble(-999.0);
     };
 
-    const int restoreMic = AppSettings::instance().value("PcMicGain", 100).toInt();
+    // What the radio had, not the saved PcMicGain, which a host-modulating
+    // radio does not use.
+    const int restoreMic = m_audio->pcMicGain();
     const double micFull = keyedMicPeak(100);
     const double micHalf = keyedMicPeak(50);
     m_audio->setPcMicGain(restoreMic);
@@ -2791,9 +2792,8 @@ void RadioCertification::stageCarrierSuppression(const Options& o)
         return;
     // SSB has no carrier: keying with no audio should give ~no RF; anything
     // substantial is modulator DC offset. Mic gain goes to zero because the ALC
-    // lifts room noise into real modulation otherwise. AudioEngine has no getter,
-    // so restore from the persisted "PcMicGain" setting MainWindow applies.
-    const int restoreGain = AppSettings::instance().value("PcMicGain", 100).toInt();
+    // lifts room noise into real modulation otherwise.
+    const int restoreGain = m_audio->pcMicGain();
     if (m_audio)
         m_audio->setPcMicGain(0);
     spin(600);
