@@ -32,6 +32,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accessory.dial.face", QString("#0070c0"));
     m_tokens.insert("color.accessory.dial.needle", QString("#e6f0fa"));
     m_tokens.insert("color.accessory.dial.rim", QString("#3a4a5a"));
+    m_tokens.insert("color.accessory.indicator.bypass.foreground", QString("#e0a000"));
+    m_tokens.insert("color.accessory.indicator.operate.foreground", QString("#00e060"));
     m_tokens.insert("color.accessory.key.bypass.background", QString("#8a6000"));
     m_tokens.insert("color.accessory.key.bypass.foreground", QString("#ffd9a0"));
     m_tokens.insert("color.accessory.key.meffa.active.background", QString("#006030"));
@@ -113,6 +115,13 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.knob.foreground.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.knob.handle", QString("#c8d8e8"));
     m_tokens.insert("color.knob.handle.disabled", QString("#506070"));
+    m_tokens.insert("color.log.category", QString("#eaf2fb"));
+    m_tokens.insert("color.log.critical", QString("#fca5a5"));
+    m_tokens.insert("color.log.info", QString("#5de3ff"));
+    m_tokens.insert("color.log.number", QString("#7bf2dc"));
+    m_tokens.insert("color.log.protocol", QString("#c4a1ff"));
+    m_tokens.insert("color.log.time", QString("#8598b4"));
+    m_tokens.insert("color.log.warning", QString("#f0a35e"));
     m_tokens.insert("color.map.darkBackground", QString("#18212b"));
     m_tokens.insert("color.map.darkDetail", QString("#c8d8e8"));
     m_tokens.insert("color.meter.bar.fill", QString("#405060"));
@@ -164,6 +173,7 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.slider.background.disabled", QString("#1a2330"));
     m_tokens.insert("color.slider.foreground", QString("#00b4d8"));
     m_tokens.insert("color.slider.foreground.disabled", QString("#3a4a5a"));
+    m_tokens.insert("color.slider.foreground.gateClosed", QString("#3a4a5a"));
     m_tokens.insert("color.slider.handle", QString("#c8d8e8"));
     m_tokens.insert("color.slider.handle.disabled", QString("#506070"));
     m_tokens.insert("color.spe.lcd.background", QString("#102010"));

@@ -318,6 +318,11 @@ void testDisconnectAndReclaim()
         SliceModel* original = radio.slice(0);
         SliceModel* sibling = radio.slice(1);
         PanadapterModel* originalPan = radio.panadapter(pan);
+        SliceDelta gateClosed;
+        gateClosed.squelchGate = SquelchGateState::Closed;
+        emit backend->sliceChanged(0, gateClosed);
+        check(original->squelchGate() == SquelchGateState::Closed,
+              "the previous session reported the squelch gate closed");
         QSignalSpy added(&radio, &RadioModel::sliceAdded);
         QSignalSpy removed(&radio, &RadioModel::sliceRemoved);
         QSignalSpy failed(&radio, &RadioModel::sliceLifecycleFailed);
@@ -350,6 +355,8 @@ void testDisconnectAndReclaim()
         radio.stageSessionModelsForReconnectForTest();
         check(radio.slices().isEmpty() && radio.panadapters().isEmpty(),
               "reconnect staging withdraws prior-session models from live ownership");
+        check(original->squelchGate() == SquelchGateState::Unavailable,
+              "reconnect staging drops the previous session's squelch gate");
         if (sameRadio) {
             check(removed.isEmpty() && !originalPan->centerKnown(),
                   "same-radio staging preserves reclaim candidates but resets center authority");

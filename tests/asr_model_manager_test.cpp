@@ -43,6 +43,7 @@ QByteArray sha256Hex(const QByteArray& bytes)
 
 void writeFile(const QString& path, const QByteArray& bytes)
 {
+    QDir().mkpath(QFileInfo(path).absolutePath());
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return;
@@ -79,6 +80,41 @@ Result runEnsure(AsrModelManager& mgr, const AsrModelTier& tier)
     QTimer::singleShot(0, &mgr, [&] { mgr.ensure(tier); });
     QTimer::singleShot(15000, &loop, &QEventLoop::quit); // safety timeout
     loop.exec();
+    return r;
+}
+
+struct BundleResult : Result {
+    int finishedCount = 0;
+    int alreadyCount = 0;
+    int failedCount = 0;
+    QVector<QPair<qint64, qint64>> progress;
+};
+
+// Drives one ensureBundle() to completion, counting terminal signals and
+// recording every progress() emission. Waits a beat after the first terminal
+// signal so a stray second one would be counted.
+BundleResult runBundle(AsrModelManager& mgr, const QVector<AsrModelTier>& files)
+{
+    BundleResult r;
+    QEventLoop loop;
+    QObject::connect(&mgr, &AsrModelManager::alreadyPresent, &loop, [&](const QString& p) {
+        r.outcome = Outcome::AlreadyPresent; r.path = p; ++r.alreadyCount; });
+    QObject::connect(&mgr, &AsrModelManager::finished, &loop, [&](const QString& p) {
+        r.outcome = Outcome::Finished; r.path = p; ++r.finishedCount; });
+    QObject::connect(&mgr, &AsrModelManager::failed, &loop, [&](const QString& e) {
+        r.outcome = Outcome::Failed; r.error = e; ++r.failedCount; });
+    QObject::connect(&mgr, &AsrModelManager::progress, &loop, [&](qint64 got, qint64 total) {
+        r.progress.append({got, total}); });
+    const auto terminal = [&] {
+        QTimer::singleShot(100, &loop, &QEventLoop::quit);
+    };
+    QObject::connect(&mgr, &AsrModelManager::alreadyPresent, &loop, terminal);
+    QObject::connect(&mgr, &AsrModelManager::finished, &loop, terminal);
+    QObject::connect(&mgr, &AsrModelManager::failed, &loop, terminal);
+    QTimer::singleShot(0, &mgr, [&] { mgr.ensureBundle(files); });
+    QTimer::singleShot(15000, &loop, &QEventLoop::quit); // safety timeout
+    loop.exec();
+    QObject::disconnect(&mgr, nullptr, &loop, nullptr);
     return r;
 }
 
@@ -189,6 +225,129 @@ int main(int argc, char** argv)
                                            {fileUrl(missingSrc), fileUrl(missingSrc)});
         const Result r = runEnsure(mgr, tier);
         expect(r.outcome == Outcome::Failed, "all sources missing -> failed");
+    }
+
+    // ---- Bundles ------------------------------------------------------------
+    {
+        const QByteArray b0 = QByteArray("bundle file zero ").repeated(300);
+        const QByteArray b1 = QByteArray("bundle file one, longer ").repeated(500);
+        const QByteArray b2 = QByteArray("two ").repeated(40);
+        const qint64 sum = b0.size() + b1.size() + b2.size();
+        const QStringList names = {QStringLiteral("a.onnx"), QStringLiteral("b.onnx"),
+                                   QStringLiteral("c.txt")};
+        const QList<QByteArray> bytes = {b0, b1, b2};
+        QStringList srcs;
+        for (int i = 0; i < 3; ++i) {
+            srcs << srcRoot.filePath(QStringLiteral("bundle-%1").arg(names.at(i)));
+            writeFile(srcs.last(), bytes.at(i));
+        }
+        const auto bundleFor = [&](const QString& folder) {
+            QVector<AsrModelTier> v;
+            for (int i = 0; i < 3; ++i) {
+                v.append(makeTier(folder + QLatin1Char('/') + names.at(i), bytes.at(i),
+                                  {fileUrl(srcs.at(i))}));
+            }
+            return v;
+        };
+        const auto allPresent = [&](const QVector<AsrModelTier>& v) {
+            for (int i = 0; i < 3; ++i) {
+                QFile f(mgr.modelPath(v.at(i)));
+                if (!f.open(QIODevice::ReadOnly) || f.readAll() != bytes.at(i)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        const auto noPartFiles = [&](const QVector<AsrModelTier>& v) {
+            for (const AsrModelTier& t : v) {
+                if (QFileInfo::exists(mgr.modelPath(t) + QStringLiteral(".part"))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // a) everything fetched
+        const QVector<AsrModelTier> packA = bundleFor(QStringLiteral("pack"));
+        const BundleResult a = runBundle(mgr, packA);
+        expect(a.finishedCount == 1 && a.failedCount == 0 && a.alreadyCount == 0,
+               "bundle fetched -> finished once, no alreadyPresent/failed");
+        expect(a.path == cacheRoot.filePath(QStringLiteral("pack"))
+                   && a.path == mgr.bundlePath(packA),
+               "finished reports the absolute bundle folder");
+        expect(allPresent(packA), "all bundle files cached with the right bytes");
+        expect(noPartFiles(packA), "no .part left behind by the bundle");
+        bool totalConstant = !a.progress.isEmpty();
+        for (const auto& pr : a.progress) {
+            totalConstant = totalConstant && pr.second == sum;
+        }
+        expect(totalConstant, "bundle progress total is the sum of file sizes throughout");
+        expect(!a.progress.isEmpty() && a.progress.last() == qMakePair(sum, sum),
+               "bundle progress ends at (sum, sum)");
+        bool monotonic = true;
+        for (int i = 1; i < a.progress.size(); ++i) {
+            monotonic = monotonic && a.progress.at(i).first >= a.progress.at(i - 1).first;
+        }
+        expect(monotonic, "bundle progress never goes backwards");
+        expect(!mgr.isBusy(), "manager idle after a bundle");
+
+        // b) again, sources gone: alreadyPresent, nothing fetched
+        for (const QString& src : srcs) {
+            QFile::remove(src);
+        }
+        const BundleResult b = runBundle(mgr, packA);
+        expect(b.alreadyCount == 1 && b.finishedCount == 0 && b.failedCount == 0,
+               "cached bundle -> alreadyPresent once, no finished");
+        expect(b.path == mgr.bundlePath(packA), "alreadyPresent reports the bundle folder");
+        expect(b.progress.isEmpty(), "a cached bundle reports no download progress");
+
+        // c) one cached, two missing: finished, the cached one is not re-fetched
+        const QVector<AsrModelTier> packC = bundleFor(QStringLiteral("packc"));
+        writeFile(mgr.modelPath(packC.at(1)), b1);     // middle one cached ...
+        writeFile(srcs.at(0), b0);                     // ... its source is gone
+        writeFile(srcs.at(2), b2);
+        const BundleResult c = runBundle(mgr, packC);
+        expect(c.finishedCount == 1 && c.alreadyCount == 0 && c.failedCount == 0,
+               "partly cached bundle -> finished (not alreadyPresent)");
+        expect(allPresent(packC), "partly cached bundle ends complete");
+
+        // d) middle file serves wrong bytes: stop there
+        writeFile(srcs.at(1), badBytes.left(b1.size()).leftJustified(b1.size(), 'x'));
+        const QVector<AsrModelTier> packD = bundleFor(QStringLiteral("packd"));
+        const BundleResult d = runBundle(mgr, packD);
+        expect(d.failedCount == 1 && d.finishedCount == 0 && d.alreadyCount == 0,
+               "bad middle file -> failed once");
+        expect(QFileInfo::exists(mgr.modelPath(packD.at(0))), "first file stays cached");
+        expect(!QFileInfo::exists(mgr.modelPath(packD.at(1))), "bad file is not cached");
+        expect(!QFileInfo::exists(mgr.modelPath(packD.at(2)))
+                   && !QFileInfo::exists(mgr.modelPath(packD.at(2)) + QStringLiteral(".part")),
+               "third file was never fetched");
+        expect(noPartFiles(packD), "failed bundle leaves no .part");
+        expect(!mgr.isBusy(), "manager idle after a failed bundle");
+        const AsrModelTier after = makeTier(QStringLiteral("after-bundle.bin"), goodBytes,
+                                            {fileUrl(goodSrc)});
+        expect(runEnsure(mgr, after).outcome == Outcome::Finished,
+               "single-file ensure() works after a failed bundle");
+
+        // e) files in two folders
+        QVector<AsrModelTier> packE = bundleFor(QStringLiteral("packe"));
+        packE[2].fileName = QStringLiteral("other/") + names.at(2);
+        const BundleResult e = runBundle(mgr, packE);
+        expect(e.failedCount == 1 && e.finishedCount == 0 && e.alreadyCount == 0,
+               "files in different folders -> failed");
+        expect(!QFileInfo::exists(mgr.modelPath(packE.at(0))), "nothing fetched for split bundle");
+        expect(runBundle(mgr, {}).failedCount == 1, "empty bundle -> failed");
+
+        // f) right size, corrupt content: re-fetched
+        const QVector<AsrModelTier> packF = bundleFor(QStringLiteral("packf"));
+        writeFile(srcs.at(1), b1); // restore the good source
+        writeFile(mgr.modelPath(packF.at(0)), b0);
+        writeFile(mgr.modelPath(packF.at(1)), QByteArray(b1.size(), 'z')); // same size, wrong
+        writeFile(mgr.modelPath(packF.at(2)), b2);
+        const BundleResult f = runBundle(mgr, packF);
+        expect(f.finishedCount == 1 && f.alreadyCount == 0 && f.failedCount == 0,
+               "corrupt cached file -> re-fetched, finished");
+        expect(allPresent(packF), "corrupt file replaced with the good bytes");
     }
 
     std::printf(g_failures == 0 ? "\nASR model manager: ALL PASS\n"

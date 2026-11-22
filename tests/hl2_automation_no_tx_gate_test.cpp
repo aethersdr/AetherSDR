@@ -9,6 +9,7 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AutomationBridgeSettings.h"
+#include "core/HostTransmitPolicy.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisClient.h"
 
@@ -76,7 +77,7 @@ int main(int argc, char** argv)
         return 1;
     }
     QCoreApplication app(argc, argv);
-    Hl2Backend::setHostOffersTransmit(true);
+    AetherSDR::setHostOffersTransmit(true);
 
     // The first two automation rows are positive controls: without them a gate
     // that never opened would pass every NO_TX row below.

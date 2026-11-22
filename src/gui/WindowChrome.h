@@ -77,13 +77,18 @@ inline bool usesNativeCaption(const QWidget* window)
     return usesNativeCaption(window->windowFlags(), QGuiApplication::platformName());
 }
 
-// Windows 10 only: Qt's expanded client area leaves a resize border on the
-// left, right and bottom as non-client, which Windows 10 paints as a light
-// strip (#6266), so MainWindow::nativeEvent claims the whole window as client
-// area. Windows 11 draws that border invisibly and keeps Qt's answer.
-inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags, const QOperatingSystemVersion& os)
+// The expanded Windows frame paints through the resize band to the DWM border.
+inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags)
 {
-    return flags.testFlag(Qt::ExpandedClientAreaHint) && os < QOperatingSystemVersion::Windows11;
+    return flags.testFlag(Qt::ExpandedClientAreaHint);
+}
+
+// Windows 11 insets the frameless contents, by the resize band while restored
+// and by Qt's excess over the native client while maximized, so edge controls
+// stay clear of the WM_NCHITTEST resize zone and the screen edge (#7077).
+inline bool reservesClientInsets(Qt::WindowFlags flags, const QOperatingSystemVersion& os)
+{
+    return flags.testFlag(Qt::ExpandedClientAreaHint) && os >= QOperatingSystemVersion::Windows11;
 }
 
 // Windows expanded client area: the part of the window a point is on, for the
@@ -106,9 +111,10 @@ enum class FrameHit { Client, Caption, Left, Right, Top, Bottom, TopLeft, TopRig
 // while Qt's widget geometry — and so TitleBar::isSystemMoveAreaAt() — is in
 // logical ones.
 //
-// Anchor on the client origin: GetWindowRect includes Windows 11's
-// invisible DWM resize border, while Qt's widget geometry describes the
-// client area. Pairing the two client origins preserves control alignment.
+// Anchor on the client origin, not GetWindowRect: the maximized
+// WM_NCCALCSIZE answer insets the client from the window rect, while Qt's
+// widget geometry describes the client area. Pairing the two client
+// origins preserves control alignment.
 //
 // `physical` is the WM_NCHITTEST point; `clientOriginPhysical` is the client
 // area's top-left in screen pixels (GetClientRect + ClientToScreen);
@@ -243,14 +249,11 @@ inline QRect savedNativeClientRect(const QJsonObject& doc, const QString& role, 
     return QRect(n[0], n[1], n[2], n[3]);  // invalid when empty
 }
 
-// Windows 11 keeps the resize border non-client under ExpandedClientAreaHint
-// and reports it as zero through safeAreaMargins(), so content laid out to the
-// client rect is drawn under it and lost (#7077). The band has to be derived
-// instead. Pure in its inputs so the Windows branch is testable on any host:
-// `bandDevicePx` is SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI and
-// `dpr` the window's devicePixelRatio, because the band is in device pixels
-// and a layout margin is in logical ones. Rounds up: a margin one device pixel
-// short still clips. The top is left to the caption's own row.
+// Windows 11's native resize band is in device pixels. Round up when
+// reserving logical space for controls so a fractional scale cannot clip
+// the last pixel (#7077). The caption occupies the top edge.
+// `bandDevicePx` is SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI;
+// `dpr` is the window's devicePixelRatioF().
 inline QMargins nonClientBandInsets(int bandDevicePx, qreal dpr)
 {
     if (bandDevicePx <= 0 || dpr <= 0.0) {
@@ -258,6 +261,18 @@ inline QMargins nonClientBandInsets(int bandDevicePx, qreal dpr)
     }
     const int band = qCeil(bandDevicePx / dpr);
     return QMargins(band, 0, band, band);
+}
+
+// Qt's expanded-frame widget can be larger than the maximized HWND client.
+// Both paint from the client origin. Keep the layout's far edges inside
+// the native client, including when a logical pixel spans fractional pixels.
+inline QMargins maximizedClientInsets(QSize widget, QSize clientPixels, qreal dpr)
+{
+    if (clientPixels.isEmpty() || dpr <= 0) {
+        return {};
+    }
+    return QMargins(0, 0, qMax(0, widget.width() - qFloor(clientPixels.width() / dpr)),
+                    qMax(0, widget.height() - qFloor(clientPixels.height() / dpr)));
 }
 
 // The frameless size grip is pinned to the bottom-right corner, which under

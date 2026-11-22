@@ -8,6 +8,8 @@
 
 namespace AetherSDR {
 
+class ShortcutManager;
+
 // One declaration per operator action, published to every input surface.
 //
 // Keyboard shortcuts (ShortcutManager) and MIDI (MidiControlManager) keep
@@ -50,6 +52,10 @@ struct ControlAction {
     std::function<void(int)> stepBy;
     // Changes transmit setup: refused while keyed, and said so.
     bool txSetup{false};
+    // Sets transmit drive (RF power): the automation bridge refuses its
+    // shortcuts while the power ceiling is armed, never the operator's
+    // keyboard; TX permission does not gate them (#5851).
+    bool txDrive{false};
 
     static ControlAction trigger(QString shortcutId, QString midiId, QString name,
                                  QString category, std::function<void(float)> set)
@@ -89,6 +95,7 @@ struct ControlAction {
     ControlAction&& when(std::function<bool()> f) && { available = std::move(f); return std::move(*this); }
     ControlAction&& stepping(std::function<void(int)> f) && { stepBy = std::move(f); return std::move(*this); }
     ControlAction&& transmitSetup(bool on = true) && { txSetup = on; return std::move(*this); }
+    ControlAction&& transmitDrive() && { txDrive = true; return std::move(*this); }
 };
 
 // What publishMidi() hands the MIDI side, kept free of MIDI types so this
@@ -113,6 +120,7 @@ struct ControlActionShortcutSpec {
     QKeySequence defaultKey;
     std::function<void()> handler;
     bool autoRepeat;
+    bool txDrive{false};
 };
 
 class ControlActionRegistry {
@@ -133,6 +141,8 @@ public:
     void addKeyingMidi(const QString& midiId, const QString& name, const QString& category);
 
     void publishShortcuts(const std::function<void(const ControlActionShortcutSpec&)>& reg) const;
+    // Registers every shortcut on `manager` and marks the transmit-drive ones.
+    void publishShortcuts(ShortcutManager& manager) const;
     void publishMidi(const std::function<void(const ControlActionMidiSpec&)>& reg) const;
 
     // Shortcut ids a Level action publishes as its keyboard pair.

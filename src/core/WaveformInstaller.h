@@ -18,6 +18,22 @@ namespace AetherSDR {
 
 class RadioModel;
 
+// Tells every window that WaveformInstaller::anyInstalling() may have changed:
+// an upload started or ended in some installer. The Waveforms window and
+// AetherGPS each own an installer and gate on the other's. GUI thread only.
+class WaveformInstallActivity : public QObject {
+    Q_OBJECT
+
+public:
+    static WaveformInstallActivity* instance();
+
+signals:
+    void changed();
+
+private:
+    WaveformInstallActivity() = default;
+};
+
 // Installs radio waveform packages via the Flex file upload protocol.
 //
 // Legacy (FlexLib Radio.cs SendSSDRWaveformFile):

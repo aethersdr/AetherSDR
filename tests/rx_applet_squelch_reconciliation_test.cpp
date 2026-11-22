@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QDate>
 #include <QDateTime>
+#include <QImage>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
@@ -272,6 +273,94 @@ private slots:
         QVERIFY(!b->displayAutoSquelch()); // Reclaimed reconnect state cannot restart Auto.
         SliceModel reusedId(1);
         QVERIFY(!reusedId.displayAutoSquelch());
+    }
+
+    // #6552 option C: the SQL slider shows the gate the backend reports, in
+    // the modes it declares (RadioCapabilities::squelchGateModes) and only
+    // while SQL is on.
+    void squelchGateShownOnSliderInReportedModes()
+    {
+        RadioModel radio;
+        auto backend = std::make_unique<EngineSqlBackend>();
+        RadioCapabilities caps;
+        caps.squelchGateModes = {QStringLiteral("FM")};
+        backend->published = caps;
+        EngineSqlBackend* source = backend.get();
+        radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        const auto report = [&](std::optional<SquelchGateState> gate, const QString& mode = {}) {
+            SliceDelta delta;
+            delta.squelchGate = gate;
+            if (!mode.isEmpty()) {
+                delta.mode = mode;
+            }
+            emit source->sliceChanged(0, delta);
+            QCoreApplication::processEvents();
+        };
+        {
+            SliceDelta delta;
+            delta.panId = "0x40000000";
+            delta.mode = "FM";
+            delta.squelchOn = true;
+            delta.squelchLevel = 30;
+            emit source->sliceChanged(0, delta);
+        }
+        SliceModel* slice = radio.slice(0);
+        QVERIFY(slice);
+        RxApplet rx;
+        rx.setRadioModel(&radio);
+        rx.setSlice(slice);
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Manual, false);
+        QSlider* sql = RxAppletSquelchTestAccess::slider(rx);
+        QVERIFY(sql);
+        QCOMPARE(rx.shownSquelchGate(), SquelchGateState::Unavailable);
+        QCOMPARE(sql->property("squelchGate").toString(), QString());
+        QVERIFY(!sql->toolTip().contains(QStringLiteral("Gate ")));
+        const QString unreportedStyle = sql->styleSheet();
+        sql->resize(200, 20);
+        const QImage unreportedFill = sql->grab().toImage();
+
+        report(SquelchGateState::Closed);
+        QCOMPARE(rx.shownSquelchGate(), SquelchGateState::Closed);
+        QCOMPARE(sql->property("squelchGate").toString(), QStringLiteral("closed"));
+        QVERIFY(sql->toolTip().endsWith(QStringLiteral("\nGate closed: audio muted.")));
+        QVERIFY(sql->accessibleDescription().endsWith(QStringLiteral(" Gate closed: audio muted.")));
+        // The fill dims, by the sheet's property rule: the sheet itself is not
+        // rewritten on a gate flip.
+        QCOMPARE(sql->styleSheet(), unreportedStyle);
+        QVERIFY(sql->grab().toImage() != unreportedFill);
+
+        report(SquelchGateState::Open);
+        QCOMPARE(sql->property("squelchGate").toString(), QStringLiteral("open"));
+        QVERIFY(sql->toolTip().endsWith(QStringLiteral("\nGate open: audio passes.")));
+        QCOMPARE(sql->toolTip().count(QStringLiteral("Gate ")), 1);   // replaced, not stacked
+        QCOMPARE(sql->accessibleDescription().count(QStringLiteral("Gate ")), 1);
+        QCOMPARE(sql->styleSheet(), unreportedStyle);
+        QCOMPARE(sql->grab().toImage(), unreportedFill);
+
+        // A mode the backend does not report the gate in shows none, whatever
+        // the slice last held.
+        report(std::nullopt, QStringLiteral("USB"));
+        QCOMPARE(rx.shownSquelchGate(), SquelchGateState::Unavailable);
+        QCOMPARE(sql->property("squelchGate").toString(), QString());
+        QVERIFY(!sql->toolTip().contains(QStringLiteral("Gate ")));
+        QVERIFY(!sql->accessibleDescription().contains(QStringLiteral("Gate ")));
+
+        report(SquelchGateState::Closed, QStringLiteral("FM"));
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Manual, false);
+        QCOMPARE(rx.shownSquelchGate(), SquelchGateState::Closed);
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Off, false);
+        QCOMPARE(rx.shownSquelchGate(), SquelchGateState::Unavailable);   // SQL off shows no gate
+        QVERIFY(!sql->toolTip().contains(QStringLiteral("Gate ")));
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Manual, false);
+        QCOMPARE(rx.shownSquelchGate(), SquelchGateState::Closed);
+        QCOMPARE(sql->toolTip().count(QStringLiteral("Gate ")), 1);
+
+        // Declared by capability: the same report with no declared mode shows nothing.
+        source->published->squelchGateModes.clear();
+        emit radio.capabilitiesChanged(true, *source->published);
+        QCoreApplication::processEvents();
+        QCOMPARE(rx.shownSquelchGate(), SquelchGateState::Unavailable);
+        QCOMPARE(sql->property("squelchGate").toString(), QString());
     }
 
     void detachedBackgroundRadioOffCancelsAuto()
