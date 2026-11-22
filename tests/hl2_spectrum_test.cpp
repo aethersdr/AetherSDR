@@ -393,6 +393,68 @@ void centreBinTests()
               "gap mid-key: the keyed frames after the gap keep the transmit DC (no centre line)");
     }
 
+    // 7b · A SEQUENCE GAP at each keyed state (#7519): Armed (between MOX and
+    // the keyed IQ), Tx, and Releasing. The key still switches to transmit, and
+    // receive after the unkey stays at the floor: the gap must not let the
+    // receive estimate learn the keyed IQ.
+    enum class GapAt { Armed, Tx, Releasing };
+    for (const GapAt at : {GapAt::Armed, GapAt::Tx, GapAt::Releasing}) {
+        for (const double capFps : {0.0, 30.0}) {
+            constexpr double kHoldMs = 70.0;
+            const Signal keyedSig{12544.0, 0.5, {5e-4, -2e-4}};   // DC ~30 dB over the floor
+            Signal tail = keyedSig;
+            tail.endS = 0.03;                                    // keyed IQ outlasts the unkey
+            Hl2Spectrum spec(kStreamN, kStreamFs);
+            Noise noise;
+            std::uint64_t n = 0;
+            stream(spec, noise, n, {}, 1.0, false, capFps);
+            spec.setTransmitting(true, kHoldMs);
+            stream(spec, noise, n, {}, 0.05, false, capFps);      // MOX on, keyed IQ not yet here
+            if (at == GapAt::Armed) {
+                check(spec.dcKeyed() && !spec.dcTransmitting(), "gap at Armed: the key is armed");
+                spec.reset();
+            }
+            stream(spec, noise, n, keyedSig, 4.0, false, capFps);
+            const bool switched = spec.dcTransmitting();
+            if (at == GapAt::Tx) {
+                spec.reset();
+            }
+            const Seen keyed = stream(spec, noise, n, keyedSig, 1.0, true, capFps);
+            spec.setTransmitting(false, kHoldMs);
+            if (at == GapAt::Releasing) {
+                check(spec.dcTransmitting(), "gap at Releasing: the release hold is running");
+                spec.reset();
+            }
+            stream(spec, noise, n, tail, 0.1, false, capFps);
+            const Seen rx = stream(spec, noise, n, {}, 2.0, true, capFps);
+            const char* name = at == GapAt::Armed ? "Armed" : at == GapAt::Tx ? "Tx" : "Releasing";
+            std::fprintf(stderr, "  gap at %s, cap %.0f fps: switched %s, keyed %.1f dB (mean), "
+                         "after unkey %.1f dB (mean) %.1f dB (worst, first %.1f)\n", name, capFps,
+                         switched ? "yes" : "no", centreOverFloorDb(keyed), centreOverFloorDb(rx),
+                         maxOf(rx.centreOverFloorDb),
+                         rx.centreOverFloorDb.empty() ? 1e9 : rx.centreOverFloorDb.front());
+            check(switched, "gap at a keyed state: the key still switches to the transmit estimate");
+            check(centreOverFloorDb(keyed) < 3.0 && maxOf(keyed.centreOverFloorDb) < 12.0,
+                  "gap at a keyed state: the keyed frames have no centre line");
+            check(centreOverFloorDb(rx) < 3.0 && maxOf(rx.centreOverFloorDb) < 12.0,
+                  "gap at a keyed state: receive after the unkey stays at the floor");
+        }
+    }
+    // A gap in receive still restarts the receive estimate: a DC step across it
+    // is removed at once (growing memory), not over the 1 s time constant.
+    {
+        Hl2Spectrum spec(kStreamN, kStreamFs);
+        Noise noise;
+        std::uint64_t n = 0;
+        stream(spec, noise, n, {0.0, 0.0, {0.02, -0.01}}, 2.0, false);
+        spec.reset();
+        const Seen after = stream(spec, noise, n, {0.0, 0.0, {-0.01, 0.02}}, 0.2, true);
+        std::fprintf(stderr, "  gap in receive, DC step: centre %.1f dB (worst of %d frames)\n",
+                     maxOf(after.centreOverFloorDb), after.frames);
+        check(after.frames > 2 && maxOf(after.centreOverFloorDb) < 12.0,
+              "gap in receive: the receive estimate restarts and removes a new DC at once");
+    }
+
     // 8 · A REBUILD mid-key (Hl2RxDsp::installChannel() on a pan rate
     // crossing): the new spectrum takes the DC estimates and the T/R state from
     // the old one. Receive after the unkey stays at the floor and the next key
