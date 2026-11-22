@@ -643,6 +643,7 @@ void RadioModel::handRestoredStateToBackend()
         return;
     }
     m_backend->configureSettingsScope(settingsScope(), m_lastInfo.serialIdentity);
+    loadClientTransverters();
     m_clientStepHz = 0;   // never carry radio A's step onto radio B
     const RadioCapabilities caps = m_backend->capabilities();
     if (!RadioStateMemory::shouldEngage(caps)) {
@@ -1793,6 +1794,14 @@ void RadioModel::wireBackendReceiverState()
 {
     if (m_backend) {
         const quint64 generation = m_backendReceiverGeneration;
+        // Client transverter qualification follows the backend's capabilities:
+        // an Icom reports one receiver until it has identified itself (#6472).
+        connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
+                [this, generation] {
+            if (generation == m_backendReceiverGeneration) {
+                refreshClientTransverterQualification();
+            }
+        });
         connect(m_backend.get(), &IRadioBackend::setupStatusObserved, this,
                 [this, generation](const SetupStatusObservation& observation) {
             if (generation == m_backendReceiverGeneration) { applySetupObservation(observation); }
@@ -1884,6 +1893,11 @@ void RadioModel::wireBackendReceiverState()
         if (generation != m_backendReceiverGeneration) {
             return;
         }
+        // A centre of 0 is "not known yet" (an Icom emits 0/0 at connect);
+        // shifted, it would read as a known centre at the LO.
+        if (usesClientTransverters() && centerMhz > 0.0) {
+            centerMhz = m_clientXvtrs.shiftToDisplayMhz(centerMhz);
+        }
         // aetherd Gap B (Step 2c): remember the geometry even when no
         // PanadapterModel resolves — an HL2 session has none, and the neutral
         // waterfall rows below still need the band edges.
@@ -1970,6 +1984,12 @@ void RadioModel::wireBackendReceiverState()
         // with its own RadioConnection already uses model keys ("0x40000000"), and every
         // slice-to-pane association keys off that equality (#4671).
         SliceDelta mapped = delta;
+        if (usesClientTransverters() && mapped.frequency) {
+            const int before = m_clientXvtrs.activeIndex();
+            m_xvtrReportedRadioMhz.insert(sliceId, *mapped.frequency);
+            mapped.frequency = m_clientXvtrs.toDisplayMhz(*mapped.frequency);
+            noteClientTransverterActivation(before);
+        }
         if (!m_flexBackend && !m_connection && mapped.panId) {
             // Through the SAME allocator the geometry handler uses, so a slice
             // lands on the pane its own receiver feeds. Pinned to index 0 while
@@ -2101,6 +2121,9 @@ void RadioModel::teardownBackend()
     settlePanCreations();
     ++m_receiveControlGeneration;
     m_backendObservedTransmit = false;   // an observation dies with its backend
+    // So does client transverter qualification: the next backend (a Flex, the
+    // demo, another Icom) must not inherit this one's list or active LO (#6472).
+    clearClientTransverterState();
     m_radioPttKeyed = false;             // and so does the key that followed it
     m_radioPttInput = {};
     m_radioPttProducer = {};
@@ -2880,7 +2903,14 @@ RadioModel::RadioModel(QObject* parent)
     // VOX on hands the key to the radio, so switching it on is a key-on. It is
     // asked even during an over: refusing it rolls back nothing on the air,
     // and an admitted VOX would key on audio after the un-key.
-    m_transmitModel.setVoxAdmission([this]() { return firstKeyObjection(); });
+    // A receive-only client transverter refuses it too (#6472): VOX keying is
+    // the radio's own, but turning VOX on is this client's command.
+    m_transmitModel.setVoxAdmission([this]() {
+        if (const ClientTransverter* t = activeClientTransverter()) {
+            return clientTransverterReceiveOnlyMessage(*t);
+        }
+        return firstKeyObjection();
+    });
     connect(&m_transmitModel, &TransmitModel::voxEnableRefused, this, [this](const QString& message) {
         emitKeyObjectionNotice(message, QStringLiteral("vox-enable"));
     });
@@ -4037,7 +4067,9 @@ QString RadioModel::txFilterFrequencyLimitMessage(int lowHz, int highHz) const
     if (!s)
         return QString();
 
-    const double carrierMhz = s->frequency();
+    // The transmit RF, which a split-LO client transverter moves off the slice
+    // frequency (QO-100: judged on 13cm at 2400.040, not 3cm at 10489.540).
+    const double carrierMhz = transmitFrequencyMhz(s);
     if (carrierMhz <= 0.0)
         return QString();
 
@@ -4877,7 +4909,328 @@ void RadioModel::forceDisconnect()
 
 RadioCapabilities RadioModel::backendCapabilities() const
 {
-    return m_backend ? m_backend->capabilities() : RadioCapabilities{};
+    if (!m_backend) {
+        return RadioCapabilities{};
+    }
+    RadioCapabilities caps = m_backend->capabilities();
+    if (!usesClientTransverters()) {
+        return caps;
+    }
+    // A client transverter's RF window is tunable through the IF the radio
+    // covers: declare it as a band, widen the tuning range to reach it, and
+    // give it the IF's power ceiling. Every range check above the seam reads
+    // these, so a typed 10489.540 or a QO-100 band button is admitted.
+    for (const ClientTransverter& t : m_clientXvtrs.transverters()) {
+        if (!t.isUsable()) {
+            continue;
+        }
+        const double lowHz = t.rfLowMhz() * 1.0e6;
+        const double highHz = t.rfHighMhz() * 1.0e6;
+        caps.declaredBandRanges.append(DeclaredBandRange{t.name, lowHz, highHz});
+        caps.tuningMaxHz = std::max(caps.tuningMaxHz, highHz);
+        caps.sliceFrequencyControl.maximumHz =
+            std::max(caps.sliceFrequencyControl.maximumHz, static_cast<qint64>(highHz));
+        // The power ceiling is looked up at the TRANSMIT RF (IF + TX LO), and
+        // is the IF band's own rating: the radio's output is what drives the
+        // transverter, so no new number is invented here.
+        caps.txPowerBands.append(TxPowerBand{
+            (t.ifLowMhz + t.txLo()) * 1.0e6, (t.ifHighMhz + t.txLo()) * 1.0e6,
+            caps.txPowerMaxWattsAt(t.ifLowMhz * 1.0e6)});
+    }
+    return caps;
+}
+
+bool RadioModel::setClientTransverters(const QVector<ClientTransverter>& list)
+{
+    if (!backendQualifiesForClientTransverters()) {
+        // Not stored and not applied; the caller tells the operator. A backend
+        // that stopped qualifying also loses what it held.
+        refreshClientTransverterQualification();
+        return false;
+    }
+    m_clientXvtrsAvailable = true;
+    cacheClientTransverterNativeRange();
+    // An edit never retunes the radio: it stays on its IF, and what is shown
+    // is re-derived from that IF under the new list.
+    const int before = m_clientXvtrs.activeIndex();
+    const std::optional<ClientTransverter> previous =
+        m_clientXvtrs.active() ? std::optional<ClientTransverter>(*m_clientXvtrs.active())
+                               : std::nullopt;
+    m_clientXvtrs.setTransverters(list);
+    if (previous) {
+        // The active transverter is followed by name, not by row: removing a
+        // row above it shifts every index below. A renamed or removed one is
+        // no longer active.
+        // Two rows can carry one name (the dialog refuses that, a stored
+        // list may not), so the unchanged row wins over the first namesake.
+        const auto sameRow = [&previous](const ClientTransverter& t) {
+            return t.ifLowMhz == previous->ifLowMhz && t.ifHighMhz == previous->ifHighMhz
+                && t.rxLoMhz == previous->rxLoMhz && t.txLoMhz == previous->txLoMhz;
+        };
+        int keep = -1;
+        for (int i = 0; i < list.size(); ++i) {
+            if (list[i].name != previous->name) {
+                continue;
+            }
+            if (sameRow(list[i])) {
+                keep = i;
+                break;
+            }
+            if (keep < 0) {
+                keep = i;
+            }
+        }
+        m_clientXvtrs.setActiveIndex(keep);
+        for (SliceModel* slice : std::as_const(m_slices)) {
+            if (slice->frequency() >= previous->rfLowMhz()
+                && slice->frequency() <= previous->rfHighMhz()) {
+                SliceDelta delta;
+                delta.frequency = m_clientXvtrs.toDisplayMhz(slice->frequency() - previous->rxLoMhz);
+                slice->applyChanges(delta);
+            }
+        }
+        for (PanadapterModel* pan : std::as_const(m_panadapters)) {
+            pan->setCenterBandwidth(
+                m_clientXvtrs.shiftToDisplayMhz(pan->centerMhz() - previous->rxLoMhz), -1.0);
+        }
+    }
+    noteClientTransverterActivation(before);
+    saveClientTransverters();
+    publishCapabilities(isConnected());
+    emit infoChanged();
+    return true;
+}
+
+QString RadioModel::clientTransverterReceiveOnlyMessage(const ClientTransverter& t) const
+{
+    return tr("The %1 transverter is receive-only in AetherSDR. "
+              "Tune off the transverter band to transmit.").arg(t.name);
+}
+
+void RadioModel::clearClientTransverterState()
+{
+    m_clientXvtrs = ClientTransverterSet{};
+    m_xvtrReportedRadioMhz.clear();
+    m_clientXvtrsAvailable = false;
+}
+
+void RadioModel::refreshClientTransverterQualification()
+{
+    const bool qualified = backendQualifiesForClientTransverters();
+    if (qualified == m_clientXvtrsAvailable) {
+        cacheClientTransverterNativeRange();
+        return;
+    }
+    if (qualified) {
+        loadClientTransverters();
+    } else {
+        // The radio is still on its IF, so show that: the slices go back to
+        // what the radio last reported and the pans lose the LO shift.
+        qCDebug(lcProtocol) << "RadioModel: backend no longer qualifies for client transverters";
+        for (SliceModel* slice : std::as_const(m_slices)) {
+            const auto reported = m_xvtrReportedRadioMhz.constFind(slice->sliceId());
+            if (reported != m_xvtrReportedRadioMhz.constEnd()) {
+                SliceDelta delta;
+                delta.frequency = *reported;
+                slice->applyChanges(delta);
+            }
+        }
+        if (m_clientXvtrs.active()) {
+            for (PanadapterModel* pan : std::as_const(m_panadapters)) {
+                pan->setCenterBandwidth(m_clientXvtrs.shiftToRadioMhz(pan->centerMhz()), -1.0);
+            }
+        }
+        clearClientTransverterState();
+    }
+    publishCapabilities(isConnected());
+    updateAtuAvailability();
+    emit infoChanged();
+}
+
+void RadioModel::loadClientTransverters()
+{
+    clearClientTransverterState();
+    m_clientXvtrsAvailable = backendQualifiesForClientTransverters();
+    if (!usesClientTransverters()) {
+        return;
+    }
+    // This radio's own row only: another radio of the family has other
+    // transverters, or none, on the same IF.
+    const RadioSettingsScope scope = settingsScope();
+    if (!scope.hasRadioIdentity()) {
+        return;
+    }
+    const QJsonObject doc = scope.featureExact(QStringLiteral("ClientTransverters"));
+    QVector<ClientTransverter> list;
+    for (const QJsonValue& v : doc.value(QStringLiteral("transverters")).toArray()) {
+        list.append(ClientTransverter::fromJson(v.toObject()));
+    }
+    m_clientXvtrs.setTransverters(list);
+    m_clientXvtrs.setActiveIndex(doc.value(QStringLiteral("active")).toInt(-1));
+    cacheClientTransverterNativeRange();
+    qCDebug(lcProtocol) << "RadioModel: client transverters loaded" << list.size()
+                        << "active" << m_clientXvtrs.activeIndex();
+}
+
+void RadioModel::saveClientTransverters()
+{
+    if (!usesClientTransverters() || !settingsScope().hasRadioIdentity()) {
+        return;
+    }
+    QJsonArray arr;
+    for (const ClientTransverter& t : m_clientXvtrs.transverters()) {
+        arr.append(t.toJson());
+    }
+    settingsScope().setFeature(QStringLiteral("ClientTransverters"), 1,
+                               QJsonObject{{QStringLiteral("transverters"), arr},
+                                           {QStringLiteral("active"),
+                                            m_clientXvtrs.activeIndex()}});
+}
+
+bool RadioModel::backendQualifiesForClientTransverters() const
+{
+    if (!m_backend) {
+        return false;
+    }
+    const RadioCapabilities caps = m_backend->capabilities();
+    return caps.clientTransverters.has_value() && caps.maxSlices <= 1;
+}
+
+void RadioModel::cacheClientTransverterNativeRange()
+{
+    // The radio's own range bounds the band-edge hold. A backend that has not
+    // identified its model yet reports 0/0 (unknown) and revises it with
+    // capabilitiesChanged, which lands here again.
+    if (!m_backend) {
+        return;
+    }
+    const RadioCapabilities native = m_backend->capabilities();
+    m_clientXvtrs.setNativeRangeMhz(native.tuningMinHz / 1.0e6, native.tuningMaxHz / 1.0e6);
+}
+
+std::optional<double> RadioModel::clientTransverterRadioMhz(double requestedMhz)
+{
+    ClientTransverterSet probe;
+    const std::optional<double> radioMhz = probeClientTransverterRadioMhz(requestedMhz, probe);
+    if (radioMhz) {
+        commitClientTransverterProbe(probe);
+    }
+    return radioMhz;
+}
+
+void RadioModel::commitClientTransverterProbe(const ClientTransverterSet& probe)
+{
+    const int before = m_clientXvtrs.activeIndex();
+    m_clientXvtrs = probe;
+    noteClientTransverterActivation(before);
+}
+
+std::optional<double> RadioModel::probeClientTransverterRadioMhz(double requestedMhz,
+                                                                 ClientTransverterSet& probe)
+{
+    // Judged on a copy: a refusal here, or by the caller after it, leaves the
+    // active transverter, the stored list and the capabilities untouched.
+    probe = m_clientXvtrs;
+    const std::optional<double> radioMhz = probe.toRadioMhz(requestedMhz);
+    if (m_transmitModel.isTransmitting() || m_transmitModel.isTuning()) {
+        // Receive-only (#6472 ruling 4): the key-on refusal cannot see a tune
+        // made after key-on, and a keyed radio must not be moved onto a
+        // transverter's IF.
+        if (radioMhz && probe.active()
+            && probe.activeIndex() != m_clientXvtrs.activeIndex()) {
+            qCDebug(lcProtocol).noquote()
+                << QStringLiteral("RadioModel: tune %1 MHz refused, transmitting and %2 is "
+                                  "receive-only").arg(requestedMhz, 0, 'f', 6)
+                       .arg(probe.active()->name);
+            emitInterlockNotification(
+                tr("Unkey before tuning to the %1 transverter band; it is receive-only.")
+                    .arg(probe.active()->name),
+                QStringLiteral("xvtr-rx-only:%1").arg(probe.active()->name));
+            return std::nullopt;
+        }
+    }
+    if (!radioMhz) {
+        // backendCapabilities() widens the tuning limit to reach the RF
+        // windows, so the range between the radio's top and a window is
+        // admitted above the seam and refused here.
+        qCDebug(lcProtocol).noquote()
+            << QStringLiteral("RadioModel: tune %1 MHz refused, outside the radio and every "
+                              "transverter band").arg(requestedMhz, 0, 'f', 6);
+        emitInterlockNotification(
+            tr("%1 MHz is outside this radio's tuning range and every transverter band.")
+                .arg(requestedMhz, 0, 'f', 6),
+            QStringLiteral("xvtr-tune-range"));
+        return std::nullopt;
+    }
+    if (const ClientTransverter* t = probe.active();
+        t && (requestedMhz < t->rfLowMhz() || requestedMhz > t->rfHighMhz())) {
+        qCDebug(lcProtocol).noquote()
+            << QStringLiteral("RadioModel: %1 tune %2 MHz held at band edge, IF %3 MHz")
+                   .arg(t->name).arg(requestedMhz, 0, 'f', 6).arg(*radioMhz, 0, 'f', 6);
+    }
+    return radioMhz;
+}
+
+void RadioModel::showLastReportedSliceFrequency(SliceModel* slice)
+{
+    const auto reported = slice ? m_xvtrReportedRadioMhz.constFind(slice->sliceId())
+                                : m_xvtrReportedRadioMhz.constEnd();
+    if (reported == m_xvtrReportedRadioMhz.constEnd()) {
+        return;
+    }
+    SliceDelta delta;
+    delta.frequency = m_clientXvtrs.shiftToDisplayMhz(*reported);
+    slice->applyChanges(delta);
+}
+
+double RadioModel::transmitFrequencyMhz(const SliceModel* slice) const
+{
+    if (!slice) {
+        return 0.0;
+    }
+    const ClientTransverter* t = usesClientTransverters() ? m_clientXvtrs.active() : nullptr;
+    return t ? slice->frequency() - t->rxLoMhz + t->txLo() : slice->frequency();
+}
+
+void RadioModel::requestBackendSliceTune(int sliceId, const SliceTuneRequest& request)
+{
+    if (!m_backend) {
+        return;
+    }
+    SliceTuneRequest radio = request;
+    if (usesClientTransverters()) {
+        const std::optional<double> mhz = clientTransverterRadioMhz(request.frequencyHz / 1.0e6);
+        if (!mhz) {
+            return;
+        }
+        radio.frequencyHz = *mhz * 1.0e6;
+    }
+    m_backend->requestSliceTune(sliceId, radio);
+}
+
+void RadioModel::requestBackendPanCenter(const QString& backendPanId, double hz,
+                                         IRadioBackend::PanCenterIntent intent)
+{
+    if (!m_backend) {
+        return;
+    }
+    const double radioHz = usesClientTransverters()
+        ? m_clientXvtrs.shiftToRadioMhz(hz / 1.0e6) * 1.0e6 : hz;
+    m_backend->setPanCenter(backendPanId, radioHz, intent);
+}
+
+void RadioModel::noteClientTransverterActivation(int previousIndex)
+{
+    if (m_clientXvtrs.activeIndex() == previousIndex) {
+        return;
+    }
+    const ClientTransverter* active = m_clientXvtrs.active();
+    qCDebug(lcProtocol) << "RadioModel: client transverter"
+                        << (active ? active->name : QStringLiteral("none")) << "active";
+    saveClientTransverters();
+    // The band power ceiling and the tuner lockout follow the active transverter.
+    publishCapabilities(isConnected());
+    updateAtuAvailability();
 }
 
 bool RadioModel::setBackendSliceIqTap(int sliceId, bool on)
@@ -5239,9 +5592,12 @@ void RadioModel::updateTuneAvailability()
 void RadioModel::updateAtuAvailability()
 {
     const SliceModel* slice = txSlice();
-    // XVTA/XVTB (and the 6000-series XVTR port) bypass the internal ATU.
+    // XVTA/XVTB (and the 6000-series XVTR port) bypass the internal ATU, and
+    // so does a client transverter: the tuner would match the IF, not the antenna.
+    const bool clientXvtr = usesClientTransverters() && m_clientXvtrs.active();
     m_transmitModel.setAtuAvailable(!isConnected() || !slice
-        || !slice->txAntenna().startsWith(QLatin1String("XVT"), Qt::CaseInsensitive));
+        || (!clientXvtr
+            && !slice->txAntenna().startsWith(QLatin1String("XVT"), Qt::CaseInsensitive)));
 }
 
 void RadioModel::publishCapabilities(bool connected)
@@ -5299,7 +5655,9 @@ void RadioModel::refreshTxPowerLimit()
         return;
     }
 
-    const double frequencyHz = tx->frequency() * 1.0e6;
+    // Transmit RF, not the slice: under a split-LO client transverter the
+    // ceiling belongs to the uplink window (see backendCapabilities()).
+    const double frequencyHz = transmitFrequencyMhz(tx) * 1.0e6;
     // The common drag-rate path remains entirely below the capability lookup
     // and TransmitModel setter while the TX VFO stays inside the same RF deck.
     if (frequencyHz >= m_activeTxPowerBandLowHz
@@ -5457,6 +5815,15 @@ bool RadioModel::refuseKeyOnTransmitIncapableBackend()
 // modes (every backend but Icom).
 bool RadioModel::refuseKeyInReceiveOnlyMode()
 {
+    // A client transverter is receive-only: nothing here limits the radio's RF
+    // power to what the transverter input takes. Covers client-originated
+    // key-on only (MOX, TUNE, ATU, CW, CWX through beginTxActivity()); the
+    // radio's own PTT, VOX and front-panel key cannot be intercepted.
+    if (const ClientTransverter* t = activeClientTransverter()) {
+        return refuseKeyWithInterlock(clientTransverterReceiveOnlyMessage(*t),
+                                      QStringLiteral("xvtr-rx-only:%1").arg(t->name));
+    }
+
     SliceModel* s = txSlice();
     const QString mode = s ? s->mode() : QString();
     if (!AetherSDR::modeIsReceiveOnly(backendCapabilities(), mode))
@@ -5488,23 +5855,29 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     const quint64 atuEpoch = m_atuCommandEpoch;
     // Backend MOX is radio state, not local intent; don't echo it into the
     // signal that drives this client's audio, DAX, recorder and serial PTT.
-    if (delta.mox) {
+    TransmitDelta translated;
+    if (usesClientTransverters() && delta.transmitFreq) {
+        translated = delta;
+        translated.transmitFreq = m_clientXvtrs.toDisplayTxMhz(*delta.transmitFreq);
+    }
+    const TransmitDelta& d = translated.transmitFreq ? translated : delta;
+    if (d.mox) {
         // Remembered only for a backend whose mox also carries the radio's own
         // keying, so a host unkey cannot clear a PTT the radio still reports.
-        m_backendObservedTransmit = *delta.mox && m_backend
+        m_backendObservedTransmit = *d.mox && m_backend
             && m_backend->capabilities().radioPttObservation.has_value();
-        publishBackendTransmitEdge(*delta.mox);
+        publishBackendTransmitEdge(*d.mox);
         // The host still keys through a hold, so a false here means the radio
         // really left TX. Same reconciliation as the Flex interlock path.
-        if (!*delta.mox) {
+        if (!*d.mox) {
             m_transmitModel.expireTxOffDelayNow();
         }
     }
-    m_transmitModel.applyChanges(delta);
-    if (delta.radioPtt) {
-        followRadioPtt(*delta.radioPtt);
+    m_transmitModel.applyChanges(d);
+    if (d.radioPtt) {
+        followRadioPtt(*d.radioPtt);
     }
-    if (delta.atuStatusRaw && operation.sameOperation(m_txOperation)
+    if (d.atuStatusRaw && operation.sameOperation(m_txOperation)
         && atuEpoch == m_atuCommandEpoch
         && atuIntent.pending()) {
         const ATUStatus status = m_transmitModel.atuStatus();
@@ -6523,10 +6896,38 @@ bool RadioModel::requestConfirmedReceiveTune(int sliceId, double mhz, IRadioBack
     const auto* receiver = slice(sliceId);
     if (!receiver || receiver->isLocked() || !sliceMayBelongToUs(sliceId)
         || !receiveControlPanId(receiver->panId())) { return false; }
-    const auto control = backendCapabilities().sliceFrequencyControl;
+    // A client transverter translates FIRST and the radio's own range judges
+    // the IF, so a wheel step past either edge of the RF window is held at the
+    // edge by the translator instead of refused here against the RF bounds.
+    // The translation is judged on a copy and committed only once the tune is
+    // admitted: a refused step must not leave a transverter active that the
+    // radio never reached.
+    const bool xvtr = usesClientTransverters();
+    ClientTransverterSet probe;
+    if (xvtr) {
+        const std::optional<double> radioMhz = probeClientTransverterRadioMhz(mhz, probe);
+        if (!radioMhz) {
+            return false;
+        }
+        mhz = *radioMhz;
+    }
+    const auto control = xvtr
+        ? m_backend->capabilities().sliceFrequencyControl
+        : backendCapabilities().sliceFrequencyControl;
     if (control.authority == SliceFrequencyControl::Authority::Unknown
         || mhz * 1e6 < control.minimumHz || mhz * 1e6 > control.maximumHz) { return false; }
-    return m_backend->requestReceiveTune(sliceId, mhz * 1e6, view);
+    if (!xvtr) {
+        return m_backend->requestReceiveTune(sliceId, mhz * 1e6, view);
+    }
+    // Committed before the dispatch, so a report that arrives during it is
+    // translated under the new state; put back if the backend refuses.
+    const ClientTransverterSet prior = m_clientXvtrs;
+    commitClientTransverterProbe(probe);
+    if (m_backend->requestReceiveTune(sliceId, mhz * 1e6, view)) {
+        return true;
+    }
+    commitClientTransverterProbe(prior);
+    return false;
 }
 
 bool RadioModel::requestReceiveCaptureRecenter(const QString& panId)
@@ -11057,6 +11458,18 @@ SliceModel* RadioModel::receiveCommandSource() const
 void RadioModel::dispatchSliceTune(const SliceTuneRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
+        if (usesClientTransverters()) {
+            const std::optional<double> mhz =
+                clientTransverterRadioMhz(request.frequencyHz / 1.0e6);
+            if (!mhz) {
+                showLastReportedSliceFrequency(source);
+                return;
+            }
+            SliceTuneRequest radio = request;
+            radio.frequencyHz = *mhz * 1.0e6;
+            m_backend->requestSliceTune(source->sliceId(), radio);
+            return;
+        }
         m_backend->requestSliceTune(source->sliceId(), request);
     }
 }

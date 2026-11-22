@@ -594,6 +594,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 [this](bool, const RadioCapabilities&) {
             updateLineOutCapture();
             broadcastTxPermissions();
+            publishVfoLimits();
             announceEffectiveIqSampleRate();
             reconcileIqStreams();
             announceExtensionSet();
@@ -3294,6 +3295,28 @@ void TciServer::broadcastSliceFrequencies(SliceModel* slice)
     }
 }
 
+void TciServer::publishVfoLimits()
+{
+    if (!m_model) {
+        return;
+    }
+    const QString limits = TciProtocol::vfoLimits(m_model, TciProtocol::kInitVfoMinHz,
+                                                  TciProtocol::kInitVfoMaxHz);
+    // The first value is the baseline every init burst already carried, so a
+    // setup without client transverters never sees an extra message.
+    if (m_announcedVfoLimits.isEmpty()) {
+        m_announcedVfoLimits = TciProtocol::vfoLimits(nullptr, TciProtocol::kInitVfoMinHz,
+                                                      TciProtocol::kInitVfoMaxHz);
+    }
+    if (limits == m_announcedVfoLimits) {
+        return;
+    }
+    m_announcedVfoLimits = limits;
+    if (!m_clients.isEmpty()) {
+        broadcast(limits);
+    }
+}
+
 void TciServer::publishMainSplit()
 {
     if (!m_model) {
@@ -4911,7 +4934,7 @@ void TciServer::broadcastActualTxState(bool transmitting)
     broadcast(QStringLiteral("trx:%1,%2;").arg(trx).arg(transmitting ? "true" : "false"));
     if (transmitting && txSlice) {
         broadcast(
-            QStringLiteral("tx_frequency:%1;").arg(TciProtocol::mhzToHz(txSlice->frequency())));
+            QStringLiteral("tx_frequency:%1;").arg(TciProtocol::mhzToHz(m_model->transmitFrequencyMhz(txSlice))));
     }
 }
 

@@ -1344,6 +1344,7 @@ set(MODEL_SOURCES
     src/models/DigitalVoiceWaveformHistory.cpp
     src/models/BandSettings.cpp
     src/models/BandPlanManager.cpp
+    src/models/ClientTransverter.cpp
     src/models/XvtrPolicy.cpp
     src/models/AntennaGeniusModel.cpp
     src/models/GreenHeronModel.cpp

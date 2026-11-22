@@ -392,6 +392,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt;
     c.receivePanBandwidthControl = std::nullopt;
+    // One active transverter is model-wide state, so only a single-receiver
+    // model is qualified: a second receiver's report would clear it.
+    if (!hasDualReceivers()) {
+        c.clientTransverters = ClientTransverterSupport{};
+    }
 
     const std::span<const IcomBand> bands = bandsFor(m);
     c.declaredBandRanges.reserve(static_cast<int>(bands.size()));

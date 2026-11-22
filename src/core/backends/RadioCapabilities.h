@@ -161,6 +161,9 @@ struct BroadcastFmReceive {
     bool forceMonoControl = false;
     bool receptionDiagnostics = false;
 };
+// Engaged when the radio keeps no transverter list and the backend is qualified
+// for client-held ones. It has no fields: the support is all-or-nothing.
+struct ClientTransverterSupport {};
 struct ReceivePanRangeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     qint64 minimumHz{0};
@@ -526,6 +529,11 @@ struct RadioCapabilities {
     // radios and bands still need honest presentation even when no PA rating
     // exists.
     QVector<DeclaredBandRange> declaredBandRanges;
+
+    // The radio keeps no transverter list and this backend is qualified for
+    // client-held ones: RadioModel translates RF<->IF at the seam, so the
+    // backend only ever sees its native IF.
+    std::optional<ClientTransverterSupport> clientTransverters;
 
     // Manual notch filters (Flex TNF) the radio can hold. 0 = cannot notch, and the
     // UI omits +TNF and the panadapter's notch menu entries.

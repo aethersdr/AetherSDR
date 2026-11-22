@@ -263,8 +263,11 @@ void BandApplet::rebuildGrid()
         }
 
         // A declared set belongs to a backend that owns its band surface, so
-        // no configured XVTR rows (DeclaredBandMenuPolicy, as the overlay).
-        const int xvtrCount = configuredXvtrBandCount(hasDeclared, m_xvtrBands.size());
+        // no radio-held XVTR rows; a client-side transverter keeps its button
+        // (DeclaredBandMenuPolicy, as the overlay).
+        const int xvtrCount = configuredXvtrBandCount(
+            hasDeclared, m_xvtrBands.size(),
+            !m_xvtrBands.isEmpty() && m_xvtrBands.first().clientOwned);
         for (int i = 0; i < xvtrCount; ++i) {
             const auto& xvtr = m_xvtrBands[i];
             addButton(xvtr.name, xvtr.name, xvtr.rfFreqMhz, QStringLiteral("USB"), xvtr.stackKey);

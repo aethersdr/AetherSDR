@@ -189,7 +189,7 @@ public:
     void syncDssFloorDepth(int dB);
 
     // Populate XVTR band sub-panel
-    struct XvtrBand { QString name; double rfFreqMhz; QString stackKey; };
+    struct XvtrBand { QString name; double rfFreqMhz; QString stackKey; bool clientOwned{false}; };
     void setXvtrBands(const QVector<XvtrBand>& bands);
 
     // Surface the connected radio's built-in transverter bands (4m on
