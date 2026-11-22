@@ -218,4 +218,11 @@ QString ControlActionRegistry::shortcutIdForMidi(const QString& midiId) const
     return {};
 }
 
+QKeySequence ControlActionRegistry::boundKey(const QString& shortcutId) const
+{
+    if (!m_bindingLookup || !knownShortcutId(shortcutId))
+        return {};
+    return m_bindingLookup(shortcutId);
+}
+
 } // namespace AetherSDR

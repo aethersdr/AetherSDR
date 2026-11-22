@@ -148,6 +148,7 @@ class AetherClockModel;
 class AntennaAnalyzerModel;
 class AetherLabWidget;
 class AutomationServer;
+class ShortcutTooltips;
 class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
@@ -2352,6 +2353,7 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     ControlActionRegistry m_controlActions;
+    ShortcutTooltips* m_shortcutTooltips{nullptr};  // child; names bound keys on buttons
     int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
     QString m_lastRefusedAction;           // refusal notice de-duplication
     int m_lastBandPlanFontSize{6};         // band_plan_toggle restores this

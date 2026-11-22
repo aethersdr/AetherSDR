@@ -1376,6 +1376,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_Shortcuts.cpp
     src/gui/MainWindow_ControlActions.cpp
     src/gui/ControlActionRegistry.cpp
+    src/gui/ShortcutTooltips.cpp
     src/gui/MainWindow_DigitalModes.cpp
     src/gui/MainWindow_Spots.cpp
     src/gui/MainWindow_SwrSweep.cpp
