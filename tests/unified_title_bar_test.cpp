@@ -29,6 +29,7 @@
 // state assertion, so only the rendered bar can catch it.
 
 #include "gui/RadioTabBar.h"
+#include "gui/ExperimentalRadioSupport.h"
 #include "gui/TitleBar.h"
 #include "gui/WindowCaptionButtons.h"
 #include "gui/WindowChrome.h"
@@ -37,6 +38,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QColor>
+#include <QDir>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QImage>
@@ -56,6 +58,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSize>
 #include <QSlider>
 #include <QTest>
 #include <QWheelEvent>
@@ -136,6 +139,17 @@ int main(int argc, char** argv)
               "turning frameless off on Windows restores the system title and buttons");
         check(WindowChrome::usesNativeCaption(winOff, win),
               "Windows system decorations hide the bar's caption buttons");
+        check(WindowChrome::claimsWholeWindowAsClient(winOn),
+              "Windows frameless paints through the resize band");
+        check(!WindowChrome::claimsWholeWindowAsClient(winOff),
+              "turning frameless off leaves native client sizing to Windows");
+        using OSV = QOperatingSystemVersion;
+        check(!WindowChrome::reservesClientInsets(winOn, OSV(OSV::Windows, 10, 0, 19045)),
+              "Windows 10 frameless reserves no client insets");
+        check(WindowChrome::reservesClientInsets(winOn, OSV(OSV::Windows, 10, 0, 22000)),
+              "Windows 11's first build reserves the client insets");
+        check(!WindowChrome::reservesClientInsets(winOff, OSV(OSV::Windows, 10, 0, 22000)),
+              "turning frameless off reserves no client insets on Windows 11");
         const Qt::WindowFlags macOn = WindowChrome::chromeFlags(base, true, QStringLiteral("cocoa"));
         check(WindowChrome::usesNativeCaption(macOn, QStringLiteral("cocoa")),
               "macOS frameless keeps the native traffic lights");
@@ -145,24 +159,79 @@ int main(int argc, char** argv)
               "Linux frameless draws the bar's caption buttons");
     }
 
-    // ── Windows 10 whole-window client area (#6266) ──
     {
-        using OSV = QOperatingSystemVersion;
-        const Qt::WindowFlags expanded = WindowChrome::chromeFlags({}, true, QStringLiteral("windows"));
-        const Qt::WindowFlags system = WindowChrome::chromeFlags({}, false, QStringLiteral("windows"));
-        const OSV win10(OSV::Windows, 10, 0, 19045);
-        check(WindowChrome::claimsWholeWindowAsClient(expanded, win10),
-              "Windows 10 under the expanded chrome claims the whole window as client");
-        check(!WindowChrome::claimsWholeWindowAsClient(expanded, OSV(OSV::Windows, 10, 0, 22000)),
-              "Windows 11's first build keeps Qt's non-client border");
-        check(!WindowChrome::claimsWholeWindowAsClient(system, win10),
-              "Frameless Window off keeps the system frame on Windows 10");
         // With the whole window as client the frame is zero, so restoring a
         // client rect sets the window to exactly that rect (#6303 over #6266).
         const QRect whole(157, 44, 1115, 348);
         check(WindowChrome::windowRectForClient(QRect(300, 200, 1000, 300), whole, whole)
                   == QRect(300, 200, 1000, 300),
               "a zero frame restores the client rect as the window rect");
+    }
+
+    // ── The non-client resize band, which Qt reports as zero (#7077) ──
+    {
+        // An 8-device-pixel resize band at 100%, measured on Windows 11.
+        const QMargins at100 = WindowChrome::nonClientBandInsets(8, 1.0);
+        check(at100 == QMargins(8, 0, 8, 8),
+              "a 8 px band at dpr 1.0 insets left, right and bottom by 8");
+        check(at100.top() == 0,
+              "the top is left to the caption's own row");
+
+        // 125% display: a 9 device-px band through dpr 1.25 is 7.2 logical,
+        // which must round UP — 7 clips by a fraction, 8 does not.
+        check(WindowChrome::nonClientBandInsets(9, 1.25) == QMargins(8, 0, 8, 8),
+              "a fractional band rounds up rather than clipping by a sliver");
+
+        // The measured dpr on a 100%-scaled display here was 1.0625, not 1.0,
+        // so a hardcoded logical constant lands wrong even at 100%.
+        check(WindowChrome::nonClientBandInsets(8, 1.0625) == QMargins(8, 0, 8, 8),
+              "a non-unit dpr at nominal 100% still yields a whole-pixel inset");
+
+        // Degenerate inputs must not produce a negative or junk margin: a
+        // zero band means there is nothing to reserve.
+        check(WindowChrome::nonClientBandInsets(0, 1.0) == QMargins(),
+              "no band means no inset");
+        check(WindowChrome::nonClientBandInsets(-4, 1.0) == QMargins(),
+              "a negative band is refused rather than inverted");
+        check(WindowChrome::nonClientBandInsets(8, 0.0) == QMargins(),
+              "a zero dpr is refused rather than dividing by zero");
+    }
+
+    {
+        check(WindowChrome::maximizedClientInsets({3077, 1680}, {3840, 2100}, 1.25)
+                  == QMargins(0, 0, 5, 0), "125% maximized rail fits the native client");
+        check(WindowChrome::maximizedClientInsets({2567, 1392}, {3840, 2088}, 1.5)
+                  == QMargins(0, 0, 7, 0), "150% maximized rail fits the native client");
+        check(WindowChrome::maximizedClientInsets({1200, 800}, {1500, 999}, 1.25)
+                  == QMargins(0, 0, 0, 1), "fractional bottom edge stays inside the client");
+        check(WindowChrome::maximizedClientInsets({1000, 800}, {1600, 1200}, 1.5).isNull(),
+              "a layout inside the client needs no inset");
+    }
+
+    // ── The frameless size grip, which sits inside that band ──
+    {
+        // The grip is pinned to the bottom-right corner. Under the inset the
+        // corner it belongs in is the contents rect's, not the window's, or it
+        // is drawn over the empty strip the inset just reserved.
+        const QSize window(1200, 800);
+        const QMargins band(8, 0, 8, 8);
+
+        const QPoint inset = WindowChrome::sizeGripOrigin(window, 16, band);
+        check(inset == QPoint(1200 - 8 - 16 - 1, 800 - 8 - 16 - 1),
+              "the grip clears the band on the right and bottom");
+        check(inset.x() + 16 + 1 + band.right() == window.width(),
+              "the grip's right edge lands on the contents rect, not the window");
+
+        // With no inset the grip sits at the window corner.
+        check(WindowChrome::sizeGripOrigin(window, 16, QMargins())
+                  == QPoint(1200 - 16 - 1, 800 - 16 - 1),
+              "with no band the grip is in the window corner, as on main");
+
+        // The left and top margins are irrelevant to a bottom-right anchor;
+        // only a mistake would let them move it.
+        check(WindowChrome::sizeGripOrigin(window, 16, QMargins(40, 40, 8, 8))
+                  == inset,
+              "the left and top insets do not move a bottom-right grip");
     }
 
     // ── The main window's own WM_NCHITTEST under the expanded frame (#6272) ──
@@ -538,6 +607,35 @@ int main(int argc, char** argv)
     host.resize(1400, 200);
     host.show();
     app.processEvents();
+    for (const QString& model : {QStringLiteral("IC-7610"), QStringLiteral("IC-7760"), QStringLiteral("IC-7851")}) {
+        QWidget fixtureHost;
+        auto* previewBar = new TitleBar(&fixtureHost);
+        fixtureHost.resize(1400,100);
+        fixtureHost.show();
+        app.processEvents();
+        const auto descriptor = experimentalRadioDescriptor(QStringLiteral("icom"), model);
+        check(descriptor.has_value(), "new dual-receiver Icom retains experimental support classification");
+        RadioTabEntry receiver;
+        receiver.id = model;
+        receiver.name = model;
+        receiver.model = model;
+        receiver.status = RadioTabStatus::Connected;
+        previewBar->setRadioTabs({receiver});
+        previewBar->setActiveRadio(model);
+        previewBar->setExperimentalRadioFamily(descriptor ? descriptor->displayName : QString{});
+        auto* badge = previewBar->findChild<QLabel*>(QStringLiteral("experimentalRadioBadge"));
+        check(badge && !badge->isHidden() && badge->text() == QStringLiteral("EXPERIMENTAL")
+                  && !badge->accessibleDescription().isEmpty(),
+              "IC-7610/7760 shows the accessible EXPERIMENTAL badge in the radio-tab strip");
+        const QString screenshotDir = qEnvironmentVariable("AETHER_TEST_SCREENSHOT_DIR");
+        if (!screenshotDir.isEmpty()) {
+            QDir().mkpath(screenshotDir);
+            app.processEvents();
+            check(previewBar->grab().save(screenshotDir + QLatin1Char('/') + model.toLower()
+                                  + QStringLiteral("-experimental.png")),
+                  "offline Icom radio-tab fixture screenshot is saved");
+        }
+    }
 
 #ifdef Q_OS_MACOS
     QWidget uncreatedHost;

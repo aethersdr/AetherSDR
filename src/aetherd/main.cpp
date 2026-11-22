@@ -248,11 +248,19 @@ int main(int argc, char* argv[])
                             << remote->serverPort() << '\n';
         return remote;
     };
+    if (secureEndpoint || tailnetEndpoint) {
+        // The one writer of paired clients to the vault: pairing adds them,
+        // and the local socket lists and removes them at run time.
+        pairingIssuer = std::make_unique<AetherSDR::control::VaultPairingIssuer>(*vault, credentials);
+        if (!controlEngine.service.bindRemoteClientAdmin(pairingIssuer.get())) {
+            QTextStream(stderr) << "aetherd: cannot enable paired-client management\n";
+            return 1;
+        }
+    }
     if (secureEndpoint) {
         secureServer = openRemote(RemoteControlServer::Mode::Secure, *secureEndpoint, "wss");
         if (!secureServer) { return 1; }
         const QString fingerprint = RemoteControlServer::certificateSha256(*tlsIdentity);
-        pairingIssuer = std::make_unique<AetherSDR::control::VaultPairingIssuer>(*vault, credentials);
         if (!controlEngine.service.bindPairing(
                 {pairingIssuer.get(), fingerprint, [&pairingClock] { return pairingClock.elapsed(); }})) {
             QTextStream(stderr) << "aetherd: cannot enable remote pairing\n";

@@ -22,6 +22,7 @@ class QVBoxLayout;
 namespace AetherSDR {
 
 struct RadioControlSession;
+class AetherGpsTools;
 class RadioModel;
 class WaveformEnvironmentDialog;
 class WaveformInstaller;
@@ -43,6 +44,7 @@ private slots:
     void onInstallRemoteAccessClicked();
     // The WSPR receiver (tools/wspr-agent), bundled in AetherSDR.
     void onInstallWsprClicked();
+    void onInstallAetherGpsClicked();
     // Removes an older WSPR receiver and installs the bundled one, for
     // WsprConfigureWindow's Update, which then puts its settings back.
     // `done(false)`: the removal or the install didn't start.
@@ -73,9 +75,11 @@ private:
                              const QString& initialPath = {});
     // Everything after the file is chosen: WFP gate, installer, progress.
     // `quiet` (the radio health tools): no progress window and no result
-    // pop-up; the health bar reports the outcome instead.
+    // pop-up; the health bar reports the outcome instead. `finished`, when
+    // set, runs as the upload ends, before the result pop-up.
     void installWaveformPath(bool docker, const QString& path, RadioModel* model,
-                             const RadioControlSession& session, bool quiet = false);
+                             const RadioControlSession& session, bool quiet = false,
+                             const std::function<void(bool ok)>& finished = {});
     // Downloads, verifies and installs one remote-access package: the
     // container, or the legacy waveform for a radio without a Waveform
     // Processor.
@@ -83,6 +87,7 @@ private:
     // Writes the bundled WSPR package and installs it; false when nothing was
     // started (the reason has been shown).
     bool installWspr(bool docker);
+    bool installAetherGps(bool docker);
     // The bottom bar: "Install radio health tools" mirrors whether the radio
     // lists the agent; the readout polls it while installed.
     void updateHealthBar();
@@ -107,6 +112,10 @@ private:
     QAction*           m_installDockerAction{nullptr};
     QAction*           m_installRemoteAccessAction{nullptr};
     QAction*           m_installWsprAction{nullptr};
+    QAction*           m_installAetherGpsAction{nullptr};
+    // AetherGPS's install state, shared with the AetherGPS window.
+    AetherGpsTools*    m_gpsTools{nullptr};
+    bool               m_gpsAwaitingShown{false};   // as the AetherGPS row last drew it
     struct RowNotice {
         QString text;
         QString tone;      // "pending", "ok" or "error"

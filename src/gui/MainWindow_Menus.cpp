@@ -1008,12 +1008,6 @@ void MainWindow::buildMenuBar()
     connect(&m_radioModel, &RadioModel::tuneOutputControlChanged, this,
             syncTuneOutputOwnership);
 
-    auto* dspAction = settingsMenu->addAction("AetherRX...");
-    dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
-    connect(dspAction, &QAction::triggered, this, [this] {
-        ensureAetherRxDialog();
-    });
-
     auto* settingsBrowserAction = settingsMenu->addAction("Settings Browser...");
     settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
                                                           // title — macOS #883
@@ -1569,6 +1563,14 @@ void MainWindow::buildMenuBar()
     connect(addPanAction, &QAction::triggered,
             this, &MainWindow::showAddPanadapterDialog);
 
+    // AetherRX and AetherTX sit together (#7384). AetherRX opens a dialog and
+    // is not checkable.
+    auto* dspAction = toolsMenu->addAction("AetherRX...");
+    dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
+    connect(dspAction, &QAction::triggered, this, [this] {
+        ensureAetherRxDialog();
+    });
+
     // The three checkable panel toggles re-read their own state after the
     // handler runs: triggered() fires *after* Qt has flipped the check mark, and
     // every one of these handlers can legitimately decline (no active pan, keyer
@@ -1737,7 +1739,7 @@ void MainWindow::buildMenuBar()
         const auto shortcutText = [this](const QString& id) {
             const ShortcutManager::Action* action = m_shortcutManager.action(id);
             return action
-                ? action->currentKey.toString(QKeySequence::NativeText)
+                ? shortcutKeyText(action->currentKey, QKeySequence::NativeText)
                 : QString();
         };
         populateWindowMenu(windowMenu, this,
@@ -2159,7 +2161,7 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     // be told there is nothing to hold until they bind one.
     QString keyText;
     if (auto* act = m_shortcutManager.action(QLatin1String(kSplitMonitorActionId)))
-        keyText = act->currentKey.toString(QKeySequence::NativeText);
+        keyText = shortcutKeyText(act->currentKey, QKeySequence::NativeText);
     QAction* keyRow = monitorMenu->addAction(
         keyText.isEmpty() ? tr("Not bound — set a key in Keyboard Shortcuts")
                           : tr("Hold %1").arg(keyText));

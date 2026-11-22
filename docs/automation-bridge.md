@@ -1091,7 +1091,7 @@ cost a few integer adds per frame.
 | `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
-| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`). One key is not a rebuild: `smartMtrStrip` counts GPU frames that repainted and uploaded only the SmartMTR value-label strip, so leave it out when summing causes against `overlayRebuilds*` |
 | `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
 | `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
 | `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
@@ -1257,6 +1257,9 @@ operator setting it lowered. Where a backend withholds SWR below its own forward
 gate (the health keys `forwardPowerSwrGateCounts` and `forwardPowerSwrGateClears`), `rf`
 reports `swrResult: gate-not-reached` with the gate, the key's forward peak, the
 tone and the drive, instead of "no SWR reading".
+`meter-scale` publishes `swr` and `micPeakDbfs` only from a confirmed key and a
+fresh meter. Otherwise the value is `null` and is not judged, and `swrNote`
+says the SWR was not measurable.
 Full drive does not establish adequate stimulus: a quiet tone can still leave
 the forward reading below the gate. Check the selected tone level and
 independently measured forward power before drawing conclusions about the
@@ -1265,6 +1268,15 @@ detector or its scaling.
 The receive-only `rx-sidebands` stage judges each mode's reference tone relative
 to its own background. Silent captures and non-finite measurements do not count
 as recovered carriers, so muted audio cannot produce an `expected` pattern.
+
+The `rx-sidebands`, `sideband` and `lifecycle` stages measure through the
+automation audio capture, which needs `AETHER_AUTOMATION=1` at launch. Without
+it each of those stages reports `INCONCLUSIVE — audio capture unavailable` with
+the engine's reason, publishes no levels, and does not key. A capture that arms
+but returns no audio is reported as a missing receive-audio path, not as a
+quiet band, and `rx-sidebands` then reports `summary.pattern: no-audio`.
+`sideband` reports a refused key as INCONCLUSIVE with `keyConfirmed: false`,
+and does not key its second leg.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 
@@ -2753,6 +2765,7 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 |---|---|---|
 | `create` (alias `add`) | — | request a new panadapter through the backend's declared lifecycle control. |
 | `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. Optimistic receive controls also clamp to a declared pan-centre range, where present; confirmed receive controls retain backend validation. The low edge of the display stays at or above 0 Hz. Without a declared range, an unguarded out-of-range centre can still be stored and advertised over TCI (`dds:`) even though the radio rejects it. |
+| `range` | `<panId\|index\|active> <center MHz> <width MHz>` | request an atomic native center/width change through the normal model geometry path. Re-poll radio-reported geometry; admission is not confirmation. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | request removal of owned pan(s). Flex requests cleanup of the original paired waterfall too. A single target preserves the last pan; `all` allows requesting its removal but never overrides a native refusal or foreign ownership. |
 
 Replies describe request admission, not observed completion — re-poll `get pans`.
@@ -4466,6 +4479,56 @@ Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
 observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
 key or retune the radio.
 
+For MAIN/SUB profiles, `civ profile` includes receiver-bound `scopeFrames`,
+`scopeAgeMs`, `audioFrames` and `audioRms`. Scope counters count accepted native
+sweeps; audio frames count processed input sample frames before monitor gain
+or mute, including any transport loss-concealment silence. These are separate
+from repaint/FPS counters and do not establish exact received sample time or
+loss-free network replay.
+
+MAIN/SUB profiles also report `visible`, `scopeEdgeSlot`, `borrowedEdgeSlot`,
+`borrowedScopePresets` (original range/slot contents), `subOpening`, `subClosing`
+and `dualWatchOwned`. Use `pan create` / `pan close` through the normal model
+path to test MAIN-only connection, confirmed SUB enable and retirement. Closed
+SUB scope frames must not recreate its pane. Background drag and zoom must
+change radio-reported window edges, preserve both dial frequencies and leave
+the other receiver's window unchanged, including when both use the same band.
+
+`modulationInputs` reports separate DATA OFF/D1/D2/D3 menu numbers and
+radio-read source values/names. Missing values mean no readback yet. These
+are global menus, selected by the TX receiver's DATA variant, not local focus.
+`txReceiver` and `txFrequencyHz` expose split and actual `1C 03` readback;
+`pendingTxReceiver` is present while a VFO TX selection is unconfirmed.
+`lanOutput` is `-1` until the AF/IF menu answers, `0` for AF and `1` for IF.
+Both unknown and IF withhold PC receive audio. An unknown value lasting five
+seconds produces one configuration warning per connection; a late AF reply
+opens the receive audio path. Scope size/mode rejection logs under
+`aether.icom.pan` are limited to one warning per five seconds and include
+expected/received waveform counts or the unsupported mode.
+
+MAIN/SUB profiles also report radio-read `dualWatch` (null until known).
+`civ dualwatch on` / `civ dualwatch off` explicitly request the documented
+`07 C2` RX setting. Confirm the resulting boolean with `civ profile`; acceptance
+of the request is not readback. These commands preserve receiver frequencies,
+editing focus, split and TX routing, are unavailable in observe-only mode, and
+do not enable TX automation. Connection startup reads Dualwatch without setting it.
+
+`civ scopepreset <range> <slot>` requests a preset read; adding `<lower-Hz>
+<upper-Hz>` explicitly writes whole-kHz edges inside that range, up to 1 MHz
+wide. `civ scopeslot <receiver> <slot>` selects a physical scope's edge slot.
+Both are narrow RX/configuration actions, not arbitrary CI-V injection. Confirm
+`scopePresetValues` / receiver `scopeEdgeSlot` in `civ profile`. These actions
+support exact restore checks without enabling TX automation. `scopeRestoring`
+marks the bounded disconnect phase, which serializes saved preset/selection
+writes and waits for matching readbacks before deauthenticating.
+
+`civ session` also exposes `transport.media`: `receivedPackets`,
+`receivedFrames`, `concealedFrames`, `concealmentBlocks`, `rxChannels` and
+`sampleRateHz`. Frame counts are per channel at the negotiated source rate.
+Received frames exclude inserted silence; outer UDP idles do not add media
+frames. Compare counter deltas within one connection, and report concealment
+separately from speaker underruns or renderer FPS.
+
 **`civ session`** reports the media lease and each independent UDP stream:
 
 ```json
@@ -5227,7 +5290,7 @@ audio devices require separate hardware validation.
 | `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — demo fault injection (RFC #4288; only valid when the demo is connected) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
-| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|autorfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864); autorfgain takes on\|off, 'mode <bandscope\|ramp\|probe\|binary>' for which control law, or 'floor <dB>' for how far below the operator's own RF gain an automatic control may go |
+| `pan` | — | pan <create\|add\|remove\|close\|center\|range\|rfgain\|autorfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864); autorfgain takes on\|off, 'mode <bandscope\|ramp\|probe\|binary>' for which control law, or 'floor <dB>' for how far below the operator's own RF gain an automatic control may go |
 | `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|pan-layout\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
@@ -5243,7 +5306,7 @@ audio devices require separate hardware validation.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |

@@ -92,6 +92,7 @@ receive/transmit limits. Compiling a backend does not establish hardware support
 | `ENABLE_ASR_METAL` | ON | ASR Metal acceleration on macOS. Declared only on macOS with ASR enabled; elsewhere the switch does not exist and `-D` produces only an unused-variable warning. |
 | `ENABLE_ASR_VULKAN` | ON | ASR Vulkan acceleration when the GPU build dependencies are found. Declared only on non-macOS platforms with ASR enabled; on macOS the switch does not exist. |
 | `ENABLE_ASR_METAL_PRECOMPILE` | ON | Precompile Metal kernels on macOS. Declared only for vendored whisper builds (`USE_SYSTEM_LIBWHISPER=OFF`) with ASR enabled. Needs the offline Metal toolchain; a missing compiler warns and falls back to shader source unless `REQUIRE_ASR_GPU` is ON. |
+| `ENABLE_ASR_APPLE_LIVE_PREVIEW` | ON | Apple's on-device SpeechTranscriber as the second Copy Assist live preview recognizer (sherpa-onnx is the default), compiled with `swiftc`. Declared only on macOS with ASR enabled; it runs on macOS 26 and later, and its entry is dimmed with its reason on older systems. Needs the macOS 26 SDK (Xcode 26) to compile; configure builds the stub and reports it disabled when the SDK is older or `swiftc` cannot be found. |
 | `AETHER_GPU_SPECTRUM` | ON | QRhi spectrum/waterfall rendering. Needs Qt ShaderTools (configuration fails without it) and private QtGui headers; missing private headers select the CPU build. See [GPU spectrum rendering](docs/BUILDING.md#gpu-spectrum-rendering). |
 | `ENABLE_MQTT` | ON | MQTT client support using bundled libmosquitto or the selected system library. |
 | `MQTT_TLS` | ON | MQTT TLS support. The bundled library uses OpenSSL when found; OFF omits TLS. |
@@ -128,7 +129,7 @@ are useful for release builds that must include those capabilities.
 | `REQUIRE_KEYCHAIN` | OFF | QtKeychain is missing. |
 | `REQUIRE_ASR_ONNX` | OFF | ONNX Runtime is missing for Silero VAD, speaker labeling and the signal classifier. |
 | `REQUIRE_ASR_GPU` | OFF | No ASR GPU backend is built, system libwhisper's GPU support cannot be verified, or requested Metal precompilation cannot run. |
-| `REQUIRE_ASR_SHERPA` | OFF | sherpa-onnx is missing for the non-whisper ASR backend. |
+| `REQUIRE_ASR_SHERPA` | OFF | sherpa-onnx is missing for the non-whisper ASR backend and the default live preview recognizer. |
 
 Some capabilities are enabled by dependency detection rather than a dedicated
 enable switch: Qt SerialPort, Qt WebSockets, QtKeychain, PortAudio, USB HID

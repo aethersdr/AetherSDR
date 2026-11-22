@@ -14,11 +14,13 @@
 #include "core/backends/AutoRfGainControl.h"
 
 #include "MainWindowHelpers.h"
+#include "StatusBarLayout.h"
 #include "MixerControlAvailability.h"
 #include "WindowGeometryRestore.h"
 
 #include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
+#include "core/TxOffDelaySettings.h"
 #include "RttyDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
@@ -73,8 +75,10 @@
 #include "VfoWidget.h"
 #include "AppletPanel.h"
 #include "DemoApplet.h"
+#include "LpMeterApplet.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
+#include "BandApplet.h"
 #include "SMeterWidget.h"
 #include "TunerApplet.h"
 #include "TxApplet.h"
@@ -90,7 +94,6 @@
 #include "ClientCompEditor.h"
 #include "ClientGateApplet.h"
 #include "ClientGateEditor.h"
-#include "ClientDeEssApplet.h"
 #include "ClientTubeApplet.h"
 #include "ClientTubeEditor.h"
 #include "ClientPuduApplet.h"
@@ -102,7 +105,6 @@
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientTube.h"
 #include "core/ClientPudu.h"
 #include "core/ClientReverb.h"
@@ -161,6 +163,7 @@
 #include "ThemeEditorDialog.h"
 #include "WhatsNewDialog.h"
 #include "models/SliceModel.h"
+#include "models/DiversityPairPolicy.h"
 #include "models/MeterModel.h"
 #include "models/BandDefs.h"
 #include "models/BandPlanManager.h"
@@ -258,6 +261,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "WsjtxOverlayConfig.h"
 #include "core/AudioDevicePreferencePolicy.h"
 #include "core/NnrSettings.h"
 #include "core/AutomationServer.h"
@@ -430,12 +434,7 @@ bool setStatusBarStationText(QLabel* label, const QString& text)
         label->setText(rendered);
         changed = true;
     }
-    label->ensurePolished();
-    const int minimumWidth = label->sizeHint().width() + 2;
-    if (label->minimumWidth() != minimumWidth) {
-        label->setMinimumWidth(minimumWidth);
-        changed = true;
-    }
+    changed = AetherSDR::updateStationLabelMinimumWidth(label) || changed;
     return changed;
 }
 
@@ -570,19 +569,19 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 bool MainWindow::isSameDiversityReceivePair(const SliceModel* slice,
                                             const SliceModel* other)
 {
-    if (!slice || !other || slice == other
-        || !slice->diversity() || !other->diversity()) {
+    if (!slice || !other || slice == other)
         return false;
-    }
-
-    const bool parentChildPair =
-        (slice->isDiversityParent() && other->isDiversityChild())
-        || (slice->isDiversityChild() && other->isDiversityParent());
-    if (parentChildPair) {
-        return true;
-    }
-
-    return !slice->panId().isEmpty() && slice->panId() == other->panId();
+    auto view = [](const SliceModel* s) {
+        DiversityPairPolicy::SliceView v;
+        v.sliceId = s->sliceId();
+        v.diversity = s->diversity();
+        v.parent = s->isDiversityParent();
+        v.child = s->isDiversityChild();
+        v.diversityIndex = s->diversityIndex();
+        v.panId = s->panId();
+        return v;
+    };
+    return DiversityPairPolicy::isSamePair(view(slice), view(other));
 }
 
 // ─── Shortcut guard (file-scope for use as std::function<bool()>) ───────────
@@ -1380,6 +1379,7 @@ MainWindow::MainWindow(QWidget* parent)
         }
         return QString();
     });
+    m_radioModel.transmitModel().setTxOffDelayMs(TxOffDelaySettings::delayMs());
     // QUIN chip flash via signal hop — see TransmitModel::quindarActiveChanged.
     // Strip is created lazily; the lambda checks for existence each fire so
     // we don't need to re-connect when the strip pops up.
@@ -3147,12 +3147,6 @@ void MainWindow::onTxChainStageEnabledChanged(
     } else if (stage == AudioEngine::TxChainStage::Comp) {
         if (m_appletPanel->clientCompApplet())
             m_appletPanel->clientCompApplet()->refreshEnableFromEngine();
-    } else if (stage == AudioEngine::TxChainStage::Gate) {
-        if (m_appletPanel->clientGateApplet())
-            m_appletPanel->clientGateApplet()->refreshEnableFromEngine();
-    } else if (stage == AudioEngine::TxChainStage::DeEss) {
-        if (m_appletPanel->clientDeEssApplet())
-            m_appletPanel->clientDeEssApplet()->refreshEnableFromEngine();
     } else if (stage == AudioEngine::TxChainStage::Tube) {
         if (m_appletPanel->clientTubeApplet())
             m_appletPanel->clientTubeApplet()->refreshEnableFromEngine();
@@ -3218,17 +3212,11 @@ ClientGateEditor* MainWindow::ensureClientGateEditor()
         m_clientGateEditor = new ClientGateEditor(m_audio, this);
         setEditorFramelessMode(m_clientGateEditor, framelessWindowEnabled());
         connect(m_clientGateEditor, &ClientGateEditor::bypassToggled,
-                this, [this](ClientGateEditor::Side side, bool bypassed) {
+                this, [this](bool bypassed) {
             if (!m_appletPanel) return;
-            if (side == ClientGateEditor::Side::Tx) {
-                // TX applet visibility is independent of bypass state.
-                if (m_appletPanel->clientGateTxApplet())
-                    m_appletPanel->clientGateTxApplet()->refreshEnableFromEngine();
-            } else {
-                if (m_appletPanel->clientGateRxApplet())
-                    m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
-                m_appletPanel->setAppletVisible("GATE-RX", !bypassed);
-            }
+            if (m_appletPanel->clientGateRxApplet())
+                m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
+            m_appletPanel->setAppletVisible("GATE-RX", !bypassed);
             if (m_appletPanel->clientChainApplet())
                 m_appletPanel->clientChainApplet()->refreshFromEngine();
         });
@@ -3715,6 +3703,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     // practice — the dialog emits it for serial-port, FlexControl, Ulanzi-dial,
     // and HID-encoder edits. The Ulanzi/HID branches below run regardless of
     // HAVE_SERIALPORT because those backends exist on all platforms (#3257).
+    connect(dlg, &RadioSetupDialog::lpMeterPollIntervalChanged, this, [this](int ms) {
+        m_appletPanel->lpMeterApplet()->setPollIntervalMs(ms);
+    });
     connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
 #ifdef HAVE_SERIALPORT
         QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
@@ -3849,7 +3840,7 @@ void MainWindow::applyWindowsCaptionStyles()
     }
     const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
     const LONG_PTR desired = style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
-    // On Windows 10 this frame change is also what routes WM_NCCALCSIZE
+    // On Windows this frame change is also what routes WM_NCCALCSIZE
     // through nativeEvent() before setFramelessWindow() and the startup
     // re-apply measure the client rect; Qt answered it at creation.
     if (style != desired) {
@@ -3922,6 +3913,54 @@ void MainWindow::restoreNativeClientRect(const QString& role)
     }
 }
 
+void MainWindow::applyNonClientBandInsets()
+{
+    QMargins insets;
+    if (!isFullScreen()
+        && WindowChrome::reservesClientInsets(windowFlags(), QOperatingSystemVersion::current())) {
+        const HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (isMaximized() && IsZoomed(hwnd)) {
+            insets = WindowChrome::maximizedClientInsets(size(), nativeClientRect().size(),
+                                                         devicePixelRatioF());
+        } else if (!isMaximized() && hwnd) {
+            const UINT dpi = GetDpiForWindow(hwnd);
+            const int band = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                           + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            insets = WindowChrome::nonClientBandInsets(band, devicePixelRatioF());
+        }
+    }
+    if (contentsMargins() == insets) {
+        // The margins are already right, but the grip may not be: showing it
+        // from setFramelessWindow() changes no size and so sends no
+        // resizeEvent. Placing it is cheap and idempotent.
+        positionSizeGrip();
+        return;
+    }
+    // QMainWindow's layout honours the window's own margins, so this insets
+    // the central widget — the title bar included, since it sits in the
+    // central widget's vbox — and the status bar. The top is always left
+    // alone, for the caption's own row; maximized, only the right and bottom
+    // are inset. Nothing doubles: TitleBar::updateChromeLayout() adds
+    // contentInsets(), which is safeAreaMargins() and 0 on those edges here.
+    setContentsMargins(insets);
+    // The window's size has not changed, so no resizeEvent re-places the grip,
+    // and the minimum width has to make room for the new side insets.
+    positionSizeGrip();
+    updateStatusBarMinimumWidth();
+}
+
+bool MainWindow::event(QEvent* event)
+{
+    const bool handled = QMainWindow::event(event);
+    // Changing the current monitor's scale sends WM_DPICHANGED with no
+    // screenChanged. Qt delivers the result here and never to changeEvent(),
+    // which QWidget::event() does not forward this type to.
+    if (event && event->type() == QEvent::DevicePixelRatioChange) {
+        applyNonClientBandInsets();
+    }
+    return handled;
+}
+
 void MainWindow::applyWindowsFrameColor()
 {
     // DWMWA_BORDER_COLOR exists from Windows 11 (build 22000). Windows 10 has
@@ -3980,9 +4019,9 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
         const QRect rect(window.left, window.top,
                          window.right - window.left, window.bottom - window.top);
-        // The client area's top-left in screen pixels. GetWindowRect includes
-        // the invisible DWM resize border and Qt's geometry does not, so the
-        // caption gate anchors here instead — see logicalScreenPoint().
+        // The client area's top-left in screen pixels. Maximized, the client
+        // is inset from GetWindowRect and Qt's geometry follows the client, so
+        // the caption gate anchors here instead — see logicalScreenPoint().
         POINT clientOrigin{0, 0};
         ClientToScreen(msg->hwnd, &clientOrigin);
         // The bar's height is in logical pixels and WM_NCHITTEST is physical.
@@ -3999,11 +4038,11 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
             WindowChrome::expandedFrameHit(point, rect, borderX, borderY, captionHeight));
         return true;
     }
-    // The whole window is client area, inset only while maximized so nothing
+    // Claim the resize band so Windows cannot paint a light strip between
+    // the DWM border and the client. Inset only while maximized so nothing
     // sits past the screen edge; the WM_NCHITTEST above keeps the edges resizable.
     if (msg && result && msg->message == WM_NCCALCSIZE && msg->wParam
-        && WindowChrome::claimsWholeWindowAsClient(windowFlags(),
-                                                   QOperatingSystemVersion::current())) {
+        && WindowChrome::claimsWholeWindowAsClient(windowFlags())) {
         if (IsZoomed(msg->hwnd) && !isFullScreen()) {
             const UINT dpi = GetDpiForWindow(msg->hwnd);
             const int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
@@ -4033,6 +4072,18 @@ void MainWindow::showEvent(QShowEvent* event)
     // native window with Qt's own style set.
     applyWindowsCaptionStyles();
     applyWindowsFrameColor();
+    applyNonClientBandInsets();
+    // The band is per-monitor device pixels, so moving to a screen with
+    // different scaling changes it. windowHandle() only exists once shown,
+    // and setWindowFlags() re-creates it, so re-check the handle every show.
+    if (QWindow* handle = windowHandle(); handle && handle != m_bandInsetWindow) {
+        if (m_bandInsetWindow) {
+            disconnect(m_bandInsetWindow, nullptr, this, nullptr);
+        }
+        m_bandInsetWindow = handle;
+        connect(handle, &QWindow::screenChanged,
+                this, [this]() { applyNonClientBandInsets(); });
+    }
 #endif
 
     // AetherTX left open last session. toggleAetherialStrip() lazy-creates and
@@ -4143,44 +4194,48 @@ void MainWindow::reapplyStartupGeometryAfterShow()
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
+#ifdef Q_OS_WIN
+    // A maximize can deliver the widget size after the window-state event.
+    if (isMaximized() && event->oldSize() != event->size()) {
+        applyNonClientBandInsets();
+        return;
+    }
+#endif
+    positionSizeGrip();
+}
+
+void MainWindow::positionSizeGrip()
+{
     // Anchor the frameless-mode size grip to the bottom-right corner,
     // overlaying the status bar.  Direct child of MainWindow so the
     // grip's native dotted-texture paint isn't suppressed by the
-    // status-bar stylesheet.
+    // status-bar stylesheet.  Inside the contents margins, which hold the
+    // Windows 11 resize band while restored and Qt's excess over the native
+    // client while maximized (applyNonClientBandInsets()), and are 0
+    // everywhere else.
     if (m_sizeGrip) {
-        const int s = m_sizeGrip->width();
-        m_sizeGrip->move(width() - s - 1, height() - s - 1);
+        m_sizeGrip->move(WindowChrome::sizeGripOrigin(size(), m_sizeGrip->width(),
+                                                      contentsMargins()));
         m_sizeGrip->raise();
     }
 }
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
-        || !statusBar()->currentMessage().isEmpty()) {
-        return;
-    }
-
-    if (QLayout* layout = m_statusBarContainer->layout()) {
-        layout->activate();
-    }
-    m_statusBarContainer->updateGeometry();
-    statusBar()->updateGeometry();
-
-    const int sizeGripAllowance =
-        (m_sizeGrip && m_sizeGrip->isVisible()) ? m_sizeGrip->width() + 4 : 4;
-    const int statusMinWidth =
-        m_statusBarContainer->minimumSizeHint().width() + sizeGripAllowance;
-    const int screenWidthCap =
-        screen() ? screen()->availableGeometry().width() : statusMinWidth;
-    const int boundedMinWidth =
-        qBound(1024, statusMinWidth, qMax(1024, screenWidthCap));
-    setMinimumSize(boundedMinWidth, qMax(400, minimumHeight()));
+    updateStatusBarWindowMinimum(this, m_statusBarContainer, m_sizeGrip, m_minimalMode,
+                                screen() ? screen()->availableGeometry().width() : QWIDGETSIZE_MAX);
 }
 
 void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
+
+#ifdef Q_OS_WIN
+    // Restored and maximized windows reserve different margins.
+    if (event && event->type() == QEvent::WindowStateChange) {
+        applyNonClientBandInsets();
+    }
+#endif
 
     // Principle VI fail-safe (#3888): if a momentary keying key (PTT-hold, CW
     // straight key / paddles) is held when the window is deactivated, its
@@ -4614,6 +4669,13 @@ void MainWindow::cancelTransmitFromIndicator()
 
     m_pttHoldActive = false;
     m_cwStraightKeyActive = false;
+    // The reset swallows the paddles' own releases, so it releases them.
+    if (m_cwPaddleInputHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_cwPaddleInput, false);
+    }
+    if (m_serialCwPaddleHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_serialCwPaddleInput, false);
+    }
     m_cwLeftPaddleActive = false;
     m_cwRightPaddleActive = false;
     m_cwPaddleInputHeld = false;
@@ -4735,6 +4797,9 @@ void MainWindow::captureLocalCwPaddleInput(bool held)
             m_cwPaddleController = std::make_shared<TxController>(&m_radioModel);
         }
         m_cwPaddleInput = m_cwPaddleController->capture(TxController::Activity::CwKey).request();
+    }
+    if (held != m_cwPaddleInputHeld) {
+        m_radioModel.setProducerCwPaddleHeld(m_cwPaddleInput, held);
     }
     m_cwPaddleInputHeld = held;
 }
@@ -5965,8 +6030,11 @@ void MainWindow::buildUI()
     // Called synchronously here, before the event loop starts, so that legacy
     // float migration singleShot(0) timers posted inside AppletPanel::makeEntry()
     // cannot call saveState() and overwrite ContainerTree before we read it.
+    // "gate" and "dess" were AetherTX's gate and de-esser tiles, both retired:
+    // a layout saved before must not bring them back as empty shells.
     if (m_appletPanel && m_appletPanel->containerManager())
-        m_appletPanel->containerManager()->restoreState();
+        m_appletPanel->containerManager()->restoreState(
+            {QStringLiteral("gate"), QStringLiteral("dess")});
 
     // Set initial splitter sizes: CWX=0, DVK=0 (both hidden), center=stretch, right=310
     const int centerWidth = qMax(400, width() - 310);
@@ -6572,6 +6640,37 @@ void MainWindow::buildUI()
     }
     hbox->addWidget(m_pgxlContainer);
 
+    // KPA500 main-window indicator — RFC #7092.
+    // Passive widget (no click / no aetherStateCycle): show/hide on detectedChanged only.
+    m_kpa500Separator = addSep();
+    m_kpa500Separator->setVisible(false);
+
+    m_kpa500Container = new QWidget;
+    m_kpa500Container->setObjectName(QStringLiteral("kpa500Indicator"));
+    m_kpa500Container->setToolTip("Elecraft KPA500");
+    m_kpa500Container->setAccessibleName("KPA500: Unknown");
+    m_kpa500Container->setVisible(false);
+    {
+        auto* vbox = new QVBoxLayout(m_kpa500Container);
+        vbox->setContentsMargins(0, 0, 0, 4);
+        vbox->setSpacing(0);
+        vbox->setAlignment(Qt::AlignVCenter);
+        m_kpa500Indicator = new QLabel("KPA");
+        m_kpa500Indicator->setAlignment(Qt::AlignCenter);
+        m_kpa500StateLabel = new QLabel(QStringLiteral("–"));
+        m_kpa500StateLabel->setAlignment(Qt::AlignCenter);
+        {
+            QFont f = m_kpa500StateLabel->font();
+            f.setPixelSize(11);
+            const int minW = QFontMetrics(f).horizontalAdvance("STANDBY") + 16;
+            m_kpa500StateLabel->setMinimumWidth(minW);
+            m_kpa500Container->setMinimumWidth(minW);
+        }
+        vbox->addWidget(m_kpa500Indicator);
+        vbox->addWidget(m_kpa500StateLabel);
+    }
+    hbox->addWidget(m_kpa500Container);
+
     addSep();
 
     m_txIndicator = new QLabel("TX");
@@ -6613,7 +6712,7 @@ void MainWindow::buildUI()
     timeVbox->addWidget(m_gpsTimeLabel);
     hbox->addWidget(timeStack);
 
-    statusBar()->addWidget(m_statusBarContainer, 1);
+    statusBar()->addPermanentWidget(m_statusBarContainer, 1);
     wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
@@ -6826,9 +6925,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
     // broadcasts never reach the client by design (#3420).  Routed and
     // SmartLink/WAN sessions cannot receive local broadcasts at all, so flag
     // them as "remote" to fully quiesce discovery rather than just pausing the
-    // re-bind churn.
-    const bool remoteConnection =
-        m_radioModel.isWan() || m_radioModel.lastRadioInfo().isRouted;
+    // re-bind churn. A radio discovered at a tailnet address (the shim's
+    // forwarded announcement) does receive them; it is quiesced to free UDP
+    // 4992 for SmartSDR on the same computer (#6984 §5), which also stops the
+    // radio list's stale sweep for the session, as on a routed one.
+    const bool remoteConnection = m_radioModel.isRemoteSession();
     m_discovery.setConnected(connected, remoteConnection);
 
     if (connected) {
@@ -6977,6 +7078,17 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 applyNotchCapabilities(applet->spectrumWidget());
                 applyRadioSideDspToPanDisplay(applet->spectrumWidget());
             }
+            if (m_appletPanel && m_appletPanel->bandApplet()) {
+                auto* bandApplet = m_appletPanel->bandApplet();
+                bandApplet->setRadioCapabilities(caps);
+                bandApplet->setDeclaredBands(declaredBands, declaredBandRanges);
+                QVector<BandApplet::XvtrBand> appletXvtrBands;
+                for (const auto& x : xvtrBands) {
+                    appletXvtrBands.append({x.name, x.rfFreqMhz, x.stackKey});
+                }
+                bandApplet->setXvtrBands(appletXvtrBands);
+                applyTuningRangeToBandApplet();
+            }
         };
         QTimer::singleShot(2000, this, refreshXvtr);
         connect(&m_radioModel, &RadioModel::infoChanged, this, refreshXvtr);
@@ -7019,12 +7131,19 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!call.isEmpty() && !m_rbnClient->isConnected())
                     QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->connectToCluster(host, rPort, call); });
             }
-            // Auto-start WSJT-X listener if enabled
-            if (cs.value("WsjtxAutoStart", "False").toString() == "True") {
-                QString wAddr = cs.value("WsjtxAddress", "224.0.0.1").toString();
-                quint16 wPort = static_cast<quint16>(cs.value("WsjtxPort", 2237).toInt());
-                if (!m_wsjtxClient->isListening())
-                    QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
+            // Auto-start WSJT-X listener if enabled for spots, or if any pan has
+            // the Rx/Tx overlay enabled (#4526). Per-pan state lives in the
+            // Principle V WsjtxOverlay config object.
+            {
+                bool needListener = cs.value("WsjtxAutoStart", "False").toString() == "True";
+                if (!needListener)
+                    needListener = wsjtxOverlayAnyPanEnabled();
+                if (needListener) {
+                    QString wAddr = cs.value("WsjtxAddress", "224.0.0.1").toString();
+                    quint16 wPort = static_cast<quint16>(cs.value("WsjtxPort", 2237).toInt());
+                    if (!m_wsjtxClient->isListening())
+                        QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
+                }
             }
             // Auto-start POTA polling if enabled
             if (cs.value("PotaAutoStart", "False").toString() == "True") {
@@ -7631,6 +7750,8 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
                 m_audio, &AudioEngine::feedPcmFrame);
     }
 
+    wirePureSignalApplet(backend);
+
     // HL2 only: opening its client-side WDSP chains measures FFTW plans, ~20 s
     // without cached wisdom, so the operator needs a visible explanation. The
     // panadapter animation is hidden behind ConnectionPanel (parented
@@ -7953,6 +8074,14 @@ void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
     menu->setTuningRangeMhz(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
 }
 
+void MainWindow::applyTuningRangeToBandApplet() const
+{
+    if (!m_appletPanel || !m_appletPanel->bandApplet())
+        return;
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    m_appletPanel->bandApplet()->setTuningRange(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
+}
+
 void MainWindow::applyNotchCapabilities(SpectrumWidget* sw) const
 {
     if (!sw)
@@ -8029,6 +8158,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
             proc.label, proc.levelMaximum);
+        if (auto* band = m_appletPanel->bandApplet()) {
+            band->setRadioCapabilities(m_radioModel.capabilities());
+            applyTuningRangeToBandApplet();
+        }
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
@@ -9554,6 +9687,9 @@ void MainWindow::routeCwDecoderOutput()
         // decoder target. Hide it before dropping ownership so a later refresh
         // cannot leave an orphaned CW dock on the old pan (#4409).
         m_cwDecoderApplet->setCwPanelVisible(false);
+        // Saved now, so the target below reads it rather than the value
+        // before the debounced save.
+        m_cwDecoderApplet->flushCwSens();
 #ifdef HAVE_CW_RX_BACKENDS
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwEngineChanged,
                    this, &MainWindow::selectCwRxBackend);
@@ -9601,9 +9737,11 @@ void MainWindow::routeCwDecoderOutput()
 
     // Connect to new applet
     if (m_cwDecoderApplet) {
-        // Each pan builds its own range sliders; the decoder's ranges are one
-        // shared setting, so the target shows the saved ones before they are pushed.
+        // Each pan builds its own range sliders and Sens slider; the decoder's
+        // ranges and Sens are saved settings, so the target shows the saved
+        // ones before they are pushed or used.
         m_cwDecoderApplet->restoreCwRanges();
+        m_cwDecoderApplet->restoreCwSens();
         connect(&m_cwDecoder, &CwRxModel::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         // TX-side decoded text routes to a separate slot so the panel
@@ -10778,8 +10916,12 @@ void MainWindow::updateKeyerAvailability()
     if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable, txIsSsb || !connected);
     // The local keyer is verified on FlexRadio; on a radio with no voice keyer
     // of its own (Hermes-Lite 2, Icom, ...) it is Beta until those radios have
-    // been tested on the air. hasVoiceKeyer() is permissive while disconnected,
-    // so the word appears only once such a radio is actually connected.
+    // been tested on the air. The family's capability decides it, not
+    // hasVoiceKeyer(): a FlexRadio whose firmware has no DVK API (#7156) still
+    // transmits the local keyer the verified way. Only once a radio is
+    // connected, since a disconnected capability set says nothing.
+    const bool familyHasVoiceKeyer = !connected
+        || m_radioModel.backendCapabilities().hasVoiceKeyer;
     if (m_dvkPanel) {
         // Offline the panel says so rather than blame the radio (the
         // capabilities are then a default-constructed set), and the local
@@ -10791,7 +10933,8 @@ void MainWindow::updateKeyerAvailability()
                 m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
                 m_radioModel.dvkLicenseRefused()),
             voiceKeyerPanelSlotsEditableOffline(voiceKeyerSource(), connected));
-        m_dvkPanel->setSourceQualifier(voiceKeyerSource() == VoiceKeyerSource::Local && !hasVoiceKeyer
+        m_dvkPanel->setSourceQualifier(voiceKeyerSource() == VoiceKeyerSource::Local
+                                               && !familyHasVoiceKeyer
                                            ? QStringLiteral("Beta") : QString());
     }
 

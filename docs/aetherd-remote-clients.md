@@ -101,12 +101,27 @@ written only while a remote record exists; version-1 vaults read unchanged.
 - **Adding a credential retires no one.** A paired record joins the live
   verifier directly; a full reload would end every live session, the radio's
   own panel included.
-- **Revocation (slice 1):** offline only. `--remove-credential <id>` and
-  `--list-credentials` take the same authority reservation the serving daemon
-  holds, so the daemon is stopped, the credential removed, and the daemon
-  started again; on the G2 that briefly stops the panel's engine too. A later
-  slice adds local-socket methods to list and revoke paired clients at run
-  time, which the radio's pairing screen will use.
+- **Paired clients at run time** (new). Both are allowed only on the local
+  socket, with the `control` grant, and are offered only when a remote
+  listener is configured:
+  - `remoteClients.list` returns `{clients: [{credentialId, name, scope}]}`:
+    the remote-scope records only, never a local identity and never a digest.
+  - `remoteClients.revoke {credentialId}` removes a paired client. The record
+    is removed from the vault first (with readback) and only then retired
+    live, which closes that client's open connections and frees their budget
+    slots. So after any failure the client is never listed as gone while a
+    restart would bring it back. A malformed id is `request.invalid_params`; an
+    unknown id, or the id of a local identity (a TX client or the grant-admin),
+    is `resource.not_found`, so a local control client can never remove those;
+    a vault that refuses the write is `engine.failed` and the client keeps
+    working. The reply is deferred while the vault is written; the local
+    connection stays open.
+  - Vault writes run one at a time in arrival order (pairing and revoke share
+    one writer), so a revoke never makes a pairing whose code was already used
+    fail as busy.
+- **Offline revocation** still works with the daemon stopped:
+  `--remove-credential <id>` and `--list-credentials` take the authority
+  reservation the serving daemon holds.
 - **Rollback:** once a client has paired, the vault is version 2, and an
   aetherd that predates it refuses to load the authority (it fails closed).
   Going back to an older engine means removing the remote records first.

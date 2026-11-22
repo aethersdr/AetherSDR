@@ -60,6 +60,10 @@ public:
         // a board for more receivers than it has is a configuration the
         // gateware cannot honour, and it does not report the refusal.
         int boardMaxRx = 0;
+        // PureSignal (HL2): the wire runs at least four
+        // receivers, DDC2 and DDC3 follow the TX NCO, and the 0x0a bank carries
+        // the PS bit. effectiveNumRx() applies the floor; see setPureSignal().
+        bool pureSignal = false;
         // J16 open-collector filter selection (MetisProtocol kOc* bits). Rides
         // the config register, so it is part of the same Params the config
         // register is rebuilt from — see setSampleRate() for why a field that
@@ -185,6 +189,16 @@ public:
                                const QHostAddress& broadcast = QHostAddress::Broadcast,
                                quint16 port = kMetisPort);
 
+    // A peer on this host (hpsdrsim at 127.0.0.1) replies from the address it was
+    // sent from: from a LAN-bound socket, the LAN address, which onReadyRead()'s
+    // sender filter (m_host:m_port only) drops. So a loopback target is probed
+    // from loopback interfaces only, and an IPv4 loopback target's session binds
+    // 127.0.0.1 (::1 keeps the wildcard bind); every other target is unchanged.
+    [[nodiscard]] static bool discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                                      const QHostAddress& target);
+    [[nodiscard]] static QHostAddress sessionBindAddress(const QHostAddress& host,
+                                                         const QHostAddress& requested);
+
     // start()/stop() and every live-control setter below MUST execute on this
     // object's own thread: start() constructs the QUdpSocket, and a socket takes
     // the affinity of the thread that creates it. Hl2Backend owns an I/O thread
@@ -222,6 +236,21 @@ public:
     // keep their frequencies, new ones start on RX1's.
     Q_INVOKABLE void setReceiverCount(int count);
     Q_INVOKABLE void setLnaGainDb(int db);
+    // PureSignal on the wire. On: at least four receivers (a hard-edge restart
+    // like setReceiverCount() if that changes the count), DDC2 and DDC3 on the
+    // TX frequency, and the PS bit in every 0x0a bank. While keyed the 0x0a bank
+    // carries setPureSignalTxGainDb() instead of the receive gain, and each key
+    // edge queues the bank at once so the feedback gain switches with T/R. The
+    // caller owns availability: a board with fewer than four DDCs streams
+    // nothing on the missing ones, so Hl2Backend never asks for it there.
+    void setPureSignal(bool enabled, quint64 generation);
+    // AD9866 gain during a PureSignal transmission, dB (-12..+48). The
+    // controller works in attenuation, att = 19 - dB (Hl2PsGain).
+    Q_INVOKABLE void setPureSignalTxGainDb(int db);
+    [[nodiscard]] bool pureSignal() const noexcept { return m_params.pureSignal; }
+    [[nodiscard]] int pureSignalTxGainDb() const noexcept { return m_psTxGainDb; }
+    // The 0x0a bank as the round robin sends it right now. Public for tests.
+    [[nodiscard]] Cc currentGainBank() const noexcept;
     // Select the companion filter board's band filter (MetisProtocol kOc* bits).
     // Latched into the config register, which rides bank A of every EP2 frame, so the
     // relays follow within one frame (~2.6 ms at 48 kHz). Not also queued as a
@@ -502,7 +531,12 @@ signals:
     // gateware 74), the PTT/key jack or the internal keyer. Host MOX never raises
     // it. An observation, per edge and unthrottled; false is also emitted when the
     // stream ends or goes silent with the bit set.
-    void radioPttChanged(bool keyed);
+    //
+    // keyRequest is true only on a rising edge that follows a released level
+    // seen on the wire since the last stream restart or silence. A PTT that is
+    // already held when the stream starts or resumes is shown (keyed) but is not
+    // an operator action, so it must not key the host.
+    void radioPttChanged(bool keyed, bool keyRequest);
     // setTxRoute() refused; `actual` is the route still in force (TxRoute as int).
     void txRouteRefused(int actual);
     // One accepted bandscope block: 2048 contiguous converter samples merged from the
@@ -579,6 +613,9 @@ private:
     void onRadioPttEdge(bool keyed);
     // No stream, no observation: drop a PTT the radio last reported, with its edge.
     void clearRadioPtt();
+    // Whether this EP6 packet's ptt_resp may move the PTT: true only for a packet
+    // ahead of every one already believed (modulo 2^32). Advances the fence.
+    bool acceptPttSequence(std::uint32_t seq);
     void bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
                            std::span<const std::uint8_t> bytes);
     // Begin one arming cycle: raise wide_spectrum, clear the accumulator, arm
@@ -789,6 +826,13 @@ private:
     // array of banks rather than one bank with a varying payload.
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
+    // PureSignal feedback gain while keyed (see setPureSignalTxGainDb()). The
+    // lowest gain by default: auto-attenuate raises it from the safe side.
+    int m_psTxGainDb = -12;
+    // DDC2 and DDC3 onto the TX NCO when PureSignal is on. Idempotent.
+    void applyPureSignalNcos();
+    // setReceiverCount()'s body once the new count is in m_params.
+    void relayoutReceivers(int before);
     // Queue (or re-queue) the twenty-four VersaClock banks, and remove any
     // still waiting. Private because the ORDER and the replace-don't-append
     // rule are part of the contract and a caller outside this class cannot
@@ -1086,6 +1130,20 @@ private:
     // 384 kHz this path runs ~10 000 times a second.
     std::vector<std::vector<std::complex<float>>> m_blocks;
     Hl2Telemetry m_telemetry;                   // accumulated across RADDR cycles
+    // A frame with ptt_resp clear has been seen since start(), stop() or
+    // silence. Cleared in clearRadioPtt(), set only by a real frame: a synthetic
+    // release at link loss must not arm the next press (see radioPttChanged).
+    bool m_radioPttArmed = false;
+    // The newest EP6 sequence number whose ptt_resp was believed. A rewound or
+    // duplicate packet behind it keeps its IQ and telemetry but not its PTT level.
+    // Reset with the stream (clearRadioPtt(), a receiver-count restart).
+    std::uint32_t m_pttFenceSeq = 0;
+    bool m_havePttFence = false;
+    // Consecutive packets behind the fence. Reordering on a LAN is a few packets;
+    // this many in a row is a stream that restarted without a reset, ~0.17 s at
+    // the slowest EP6 rate (381 packets/s at 48 kHz, one receiver).
+    int m_pttStaleRun = 0;
+    static constexpr int kPttStaleRunRestart = 64;
     // Telemetry rides the C&C bytes of every EP6 frame, so it parses ~3000x/s at
     // 384 kHz. The meters only need ~10 Hz; rate-limit the cross-thread emit so
     // publishTelemetry() does not flood the GUI thread. (#4449 review)
@@ -1097,6 +1155,8 @@ private:
     // rate exists: downstream sees a ~10 Hz emit of a bit cycling up to ~190 times/s.
     int m_adcWindowSamples = 0;
     int m_adcWindowOverload = 0;
+    quint64 m_psGeneration = 0;
+    quint64 m_psAdcWindowGeneration = 0;
     // Forward-power maximum for the same window; see
     // Hl2Telemetry::forwardPowerPeakRaw for why the last value is not enough.
     ForwardPowerWindow m_fwdWindow;

@@ -2759,10 +2759,7 @@ void MainWindow::wireExternalControllers()
     connect(m_serialPort, &SerialPortController::txInputsCancelled, this, [this, serialProducer] {
         m_radioModel.abortTxProducerInputs(serialProducer, TransmitModel::PttSource::Mox);
     });
-    connect(m_serialPort, &SerialPortController::externalPttChanged,
-            this, [this](bool active, const TxCoordinator::Request& input) {
-        (void)m_radioModel.setProducerTransmit(input, active, TransmitModel::PttSource::Mox);
-    });
+    m_radioModel.connectSerialPttInput(m_serialPort);
     connect(m_serialPort, &SerialPortController::cwKeyChanged,
             this, [this](bool down, const TxCoordinator::Request& input) {
         (void)m_radioModel.requestProducerCw(input, down, false, true, {}, QStringLiteral("serial:cwkey"));
@@ -2778,6 +2775,9 @@ void MainWindow::wireExternalControllers()
             m_serialCwPaddleInput = input;
         } else if (!input.sameRequest(m_serialCwPaddleInput)) {
             return;
+        }
+        if (held != m_serialCwPaddleHeld) {
+            m_radioModel.setProducerCwPaddleHeld(input, held);
         }
         m_serialCwPaddleHeld = held;
         m_lastCwPaddleTraceId.store(0, std::memory_order_relaxed);

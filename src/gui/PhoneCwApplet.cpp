@@ -1,5 +1,6 @@
 #include "PhoneCwApplet.h"
 #include "GuardedSlider.h"
+#include "CenterMarkSlider.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "ComboStyle.h"
 #include "HGauge.h"
@@ -23,6 +24,7 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QFocusEvent>
 #include <QDir>
 #include <QStandardPaths>
 #include "core/ThemeManager.h"
@@ -640,11 +642,16 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     }
     // Changing sessions must not turn a range clamp into a radio command.
     const QSignalBlocker blocker(m_speedSlider);
+    const bool speedRangeChanged = m_speedSlider->minimum() != minWpm
+                                   || m_speedSlider->maximum() != maxWpm;
     m_speedSlider->setRange(minWpm, maxWpm);
     auto* speedValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_speedEdit->validator()));
     speedValidator->setRange(minWpm, maxWpm);
-    if (!m_speedEdit->hasFocus() || !m_speedEdit->hasAcceptableInput()) {
+    // Capability refreshes can arrive between digits. Intermediate input
+    // belongs to the active edit unless the supported range actually changes.
+    if (!m_speedEdit->hasFocus()
+        || (speedRangeChanged && !m_speedEdit->hasAcceptableInput())) {
         m_speedEdit->setText(QString::number(m_speedSlider->value()));
     }
     m_speedEdit->setAccessibleDescription(
@@ -653,6 +660,8 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     m_pitchMaxHz = maxPitchHz;
     m_pitchStepHz = pitchStepHz;
     const QSignalBlocker pitchBlocker(m_pitchSlider);
+    const bool pitchRangeChanged = m_pitchSlider->minimum() != minPitchHz
+                                   || m_pitchSlider->maximum() != maxPitchHz;
     m_pitchSlider->setRange(minPitchHz, maxPitchHz);
     if (m_model) {
         m_pitchSlider->setValue(m_model->cwPitch());
@@ -662,7 +671,10 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     auto* pitchValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_pitchEdit->validator()));
     pitchValidator->setRange(minPitchHz, maxPitchHz);
-    if (!m_pitchEdit->hasFocus() || !m_pitchEdit->hasAcceptableInput()) {
+    // Same rule as speed: a refresh with an unchanged range leaves the
+    // active pitch edit alone, even while its first digits are Intermediate.
+    if (!m_pitchEdit->hasFocus()
+        || (pitchRangeChanged && !m_pitchEdit->hasAcceptableInput())) {
         m_pitchEdit->setText(QString::number(
             m_model ? m_model->cwPitch() : m_pitchSlider->value()));
     }
@@ -776,7 +788,7 @@ void PhoneCwApplet::buildCwPanel()
         m_speedSlider = new GuardedSlider(Qt::Horizontal);
         m_speedSlider->setRange(5, 100);
         m_speedSlider->setAccessibleName("CW speed");
-        m_speedSlider->setAccessibleDescription("CW keying speed in words per minute");
+        m_speedSlider->setAccessibleDescription(tr("CW keying speed in words per minute"));
         applyPrimarySliderStyle(m_speedSlider);
         row->addWidget(m_speedSlider, 1);
 
@@ -784,8 +796,9 @@ void PhoneCwApplet::buildCwPanel()
         m_speedEdit->setFixedWidth(kValueW);
         m_speedEdit->setAlignment(Qt::AlignCenter);
         m_speedEdit->setValidator(new QIntValidator(5, 100, m_speedEdit));
-        m_speedEdit->setAccessibleName("CW speed value");
-        m_speedEdit->setAccessibleDescription("CW keying speed in words per minute, 5 to 100");
+        m_speedEdit->installEventFilter(this);   // focus-out restore, #7325
+        m_speedEdit->setAccessibleName(tr("CW speed value"));
+        m_speedEdit->setAccessibleDescription(tr("CW keying speed in words per minute, 5 to 100"));
         row->addWidget(m_speedEdit);
 
         connect(m_speedSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -822,16 +835,17 @@ void PhoneCwApplet::buildCwPanel()
         m_pitchSlider->setPageStep(m_pitchStepHz * 10);
         m_pitchSlider->setValue(600);
         m_pitchSlider->setAccessibleName("CW pitch");
-        m_pitchSlider->setAccessibleDescription("CW sidetone pitch in Hz, 100 to 6000");
+        m_pitchSlider->setAccessibleDescription(tr("CW sidetone pitch in Hz, 100 to 6000"));
         applyPrimarySliderStyle(m_pitchSlider);
         row->addWidget(m_pitchSlider, 1);
 
         m_pitchEdit = new QLineEdit("600");
         m_pitchEdit->setAlignment(Qt::AlignCenter);
         m_pitchEdit->setFixedWidth(kValueW);
-        m_pitchEdit->setAccessibleName("CW pitch frequency");
-        m_pitchEdit->setAccessibleDescription("CW sidetone pitch in Hz, 100 to 6000");
+        m_pitchEdit->setAccessibleName(tr("CW pitch frequency"));
+        m_pitchEdit->setAccessibleDescription(tr("CW sidetone pitch in Hz, 100 to 6000"));
         m_pitchEdit->setValidator(new QIntValidator(m_pitchMinHz, m_pitchMaxHz, m_pitchEdit));
+        m_pitchEdit->installEventFilter(this);   // focus-out restore, #7325
         row->addWidget(m_pitchEdit);
 
         connect(m_pitchSlider, &QSlider::valueChanged,
@@ -907,11 +921,16 @@ void PhoneCwApplet::buildCwPanel()
         lLbl->setStyleSheet(kDimLabelStyle);
         row->addWidget(lLbl);
 
-        m_cwPanSlider = new GuardedSlider(Qt::Horizontal);
+        // The same centre-out pan as the RX applet and the VFO audio tab:
+        // centre mark, double-click recentres, and the drag readout says
+        // C, L30 or R30 rather than the raw 0-100 sent as mon_pan_cw (#7260).
+        auto* cwPan = new CenterMarkSlider(50, Qt::Horizontal);
+        cwPan->setDragValueFormatter(panText);
+        m_cwPanSlider = cwPan;
         m_cwPanSlider->setRange(0, 100);
         m_cwPanSlider->setValue(50);
-        m_cwPanSlider->setAccessibleName("CW audio pan");
-        m_cwPanSlider->setAccessibleDescription("CW monitor audio pan, left to right");
+        m_cwPanSlider->setAccessibleName(tr("CW audio pan"));
+        m_cwPanSlider->setAccessibleDescription(tr("CW monitor audio pan, left to right"));
         applyPrimarySliderStyle(m_cwPanSlider);
         row->addWidget(m_cwPanSlider, 1);
 
@@ -923,8 +942,6 @@ void PhoneCwApplet::buildCwPanel()
             if (!m_updatingFromModel && m_model)
                 m_model->setMonPanCw(v);
         });
-        // Double-click recenters the pan to 50 (center).
-        m_cwPanSlider->installEventFilter(this);
 
         vbox->addLayout(row);
     }
@@ -1600,9 +1617,31 @@ void PhoneCwApplet::updateAlc(float alc)
 
 bool PhoneCwApplet::eventFilter(QObject* obj, QEvent* ev)
 {
-    if (obj == m_cwPanSlider && ev->type() == QEvent::MouseButtonDblClick) {
-        m_cwPanSlider->setValue(50);
-        return true;
+    if (ev->type() == QEvent::FocusOut
+        && (obj == m_speedEdit || obj == m_pitchEdit)) {
+        // QLineEdit emits no editingFinished for Intermediate text ("2" under
+        // a 5 WPM floor, "6" under 100 Hz, empty), so nothing commits and the
+        // field would keep showing what was typed (#7325). Put the current
+        // value back once the edit has finished its own focus-out: restoring
+        // here would make the text acceptable in time for editingFinished,
+        // and the pitch path would send a cw pitch command for no change.
+        // Leaving for the edit's own context menu, or for another window,
+        // keeps a half-typed value, as before.
+        const Qt::FocusReason reason = static_cast<QFocusEvent*>(ev)->reason();
+        if (reason != Qt::PopupFocusReason && reason != Qt::ActiveWindowFocusReason) {
+            auto* edit = static_cast<QLineEdit*>(obj);
+            QTimer::singleShot(0, edit, [this, edit] {
+                if (edit->hasFocus() || edit->hasAcceptableInput()) {
+                    return;
+                }
+                if (edit == m_speedEdit) {
+                    edit->setText(QString::number(m_speedSlider->value()));
+                } else {
+                    edit->setText(QString::number(
+                        m_model ? m_model->cwPitch() : m_pitchSlider->value()));
+                }
+            });
+        }
     }
     return QWidget::eventFilter(obj, ev);
 }

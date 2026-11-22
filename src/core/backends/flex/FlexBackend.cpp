@@ -705,6 +705,7 @@ RadioCapabilities FlexBackend::capabilities() const
         {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000}}};
     caps.receiveAudioControl = std::nullopt; // legacy wire mixer path has not migrated
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    caps.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     caps.dspParameterReset = std::nullopt;
     caps.receivePanCenterControl = std::nullopt; // unknown coverage including transverters
     caps.receivePanBandwidthControl = std::nullopt; // legacy coupled geometry path
@@ -717,7 +718,9 @@ RadioCapabilities FlexBackend::capabilities() const
         PanField::WeightedAverage, PanField::RfGain, PanField::Wnb, PanField::WnbLevel, PanField::LoopA, PanField::LoopB,
         PanField::NoiseFloorPosition, PanField::NoiseFloorEnabled, PanField::DaxIqChannel, PanField::WaterfallRate,
         PanField::WaterfallColorGain, PanField::WaterfallBlackLevel, PanField::WaterfallAutoBlack,
-        PanField::WaterfallDefaults}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+        PanField::WaterfallDefaults}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth},
+        // A repeated `display pan set <id> rfgain=N` changes nothing (#7445).
+        {PanField::RfGain}};
     caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove,
          PanLifecycleAction::RefreshInventory, PanLifecycleAction::RfGainInfo}};
@@ -740,6 +743,8 @@ RadioCapabilities FlexBackend::capabilities() const
             "https://www.flexradio.com/documentation/smartsdr-v%1-release-notes/"),
         m_publishedReleases};
     caps.model = m_modelProvider ? m_modelProvider() : QString();
+    // The model string is this family's identity; no support tier reads a board.
+    caps.boardIdentity = std::nullopt;
     caps.fmTonePresentation = FmTonePresentation::Legacy;
     caps.fmDtcsCodes = {};
     // squelch_level 0..100 is dBm above -160 on the calibrated pan axis, in
@@ -962,6 +967,8 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.cwTextControl = CwTextControl{{CwField::Send, CwField::SendMacro,
         CwField::SaveMacro, CwField::Speed, CwField::Delay, CwField::Qsk,
         CwField::Erase, CwField::Clear}, CwTextControl::Completion::RadioCharacterIndex};
+    // Carrier edges use FlexCwControls. CW text uses the radio's CWX buffer.
+    caps.hostCwKeyingControl = std::nullopt;
     caps.cwTextMinWpm = 5;
     caps.cwTextMaxWpm = 100;
     caps.cwTextMaxMessageChars = 0;

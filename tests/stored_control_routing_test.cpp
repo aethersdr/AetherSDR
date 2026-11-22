@@ -130,9 +130,17 @@ void encoders()
     MemoryRequest recall{MemoryRequest::Action::Recall, 7, {}};
     recall.sliceId = 3; recall.recall = channel();
     backend.requestMemory(recall);
-    check(backend.commands == QStringList{"memory apply 7", "slice tune 3 146.520000 autopan=0", "slice set 3 step=100",
+    check(backend.commands == QStringList{"slice set 3 active=1", "memory apply 7", "slice tune 3 146.520000 autopan=0", "slice set 3 step=100",
         "slice set 3 repeater_offset_dir=down fm_repeater_offset_freq=0.600000 tx_offset_freq=-0.600000 fm_tone_mode=ctcss_tx fm_tone_value=88.5"},
-        "recall preserves ordered retune/step/repeater correction");
+        "recall makes the target active, then preserves ordered retune/step/repeater correction");
+    // If the active write is refused (e.g. the profile-load hold drops slice
+    // writes), the recall is refused whole: memory apply would land on
+    // whatever slice the radio has active.
+    backend.commands.clear();
+    backend.refusePrefix = QStringLiteral("slice set ");
+    check(backend.requestMemory(recall) == ReceiveDispatch::Unsupported && backend.commands.isEmpty(),
+          "recall refused before memory apply when the active write cannot be sent");
+    backend.refusePrefix.clear();
     backend.commands.clear();
     update.patch.freq = std::numeric_limits<double>::infinity();
     check(backend.requestMemory(update) == ReceiveDispatch::Unsupported && backend.commands.isEmpty(), "nonfinite memory refuses before dispatch");
@@ -164,6 +172,28 @@ void encoders()
         check(!update.valid(), "out-of-envelope low filter remains refused");
         update.patch = {}; update.patch.rxFilterHigh = edge;
         check(!update.valid(), "out-of-envelope high filter remains refused");
+    }
+    // MEASURED (#7093, FLEX-8400 firmware 4.3.16.42034): `slice set` keeps a
+    // Mark of 0-4000 Hz and a Shift of 0-2000 Hz and refuses one step past each.
+    // `memory set` accepted a Mark of 0, 15, 25, 75 and 4000 and a Shift of 2000,
+    // and refused a Shift of 2005 (#7264); no memory Mark above 4000 was sent.
+    // The edges pinned here (4001, 2001) are the app's ruled range (#7093,
+    // MemoryFields::kRtty*), not radio readings.
+    for (const int mark : {0, 75, 4000}) {
+        update.patch = {}; update.patch.rttyMark = mark;
+        check(update.valid(), "RTTY mark inside 0-4000 Hz is storable");
+    }
+    for (const int mark : {-1, 4001}) {
+        update.patch = {}; update.patch.rttyMark = mark;
+        check(!update.valid(), "RTTY mark outside 0-4000 Hz remains refused");
+    }
+    for (const int shift : {0, 2000}) {
+        update.patch = {}; update.patch.rttyShift = shift;
+        check(update.valid(), "RTTY shift inside 0-2000 Hz is storable");
+    }
+    for (const int shift : {-1, 2001}) {
+        update.patch = {}; update.patch.rttyShift = shift;
+        check(!update.valid(), "RTTY shift outside 0-2000 Hz remains refused");
     }
 }
 void cwProfileState()

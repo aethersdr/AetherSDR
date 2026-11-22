@@ -27,6 +27,8 @@
 #include "core/TciServer.h"
 #include "core/LocalVoiceKeyerStore.h"
 #include "core/VoiceKeyerSettings.h"
+#include "core/TxOffDelaySettings.h"
+#include "core/AppSettings.h"
 #include "models/VoiceKeyer.h"
 #include "models/VoiceKeyerController.h"
 #ifdef HAVE_WEBSOCKETS
@@ -40,6 +42,7 @@
 #include <QEvent>
 #include <QEventLoop>
 #include <QElapsedTimer>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QTimer>
 #include <QThread>
@@ -184,6 +187,12 @@ public:
             server.m_io->dispatchText(socket.id());
         }
     }
+    // The I/O worker captures the next text's request but holds it from the
+    // model, as a busy event loop would.
+    static void holdNativeTciText(TciServer& server, TciClient& socket)
+    {
+        server.m_io->m_clients[socket.id()].textInFlight = true;
+    }
     static TxCoordinator::Request tciClientRequest(TciServer& server, TciClient& socket)
     { return server.clientStateFor(&socket)->pttRequest; }
     static TxCoordinator::Context tciMedia(const TciServer& server) { return server.m_tciTxContext; }
@@ -242,6 +251,24 @@ public:
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
     static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
     static TxCoordinator& coordinator(RadioModel& radio) { return radio.m_txCoordinator; }
+    // Host transmit time-out (RFC #7021): injected clock, hand-emitted keyed edge.
+    static void txTimeoutClock(RadioModel& radio, qint64* now)
+    { radio.m_txTimeout.setClock([now] { return *now; }); }
+    static void radioKeyedEdge(RadioModel& radio, bool on)
+    {
+        radio.m_radioTransmitting = on;
+        emit radio.radioTransmittingChanged(on);
+    }
+    static void txTimeoutTick(RadioModel& radio) { radio.onTxTimeoutTick(); }
+#ifdef HAVE_WEBSOCKETS
+    // What abortTciPtt()'s 1250 ms fail-closed barrier does when it ends with
+    // the radio idle: lift it and drain the deferred PTT input.
+    static void endTciUnkeyBarrier(TciServer& server)
+    {
+        server.m_tciPttCancelPending = false;
+        server.drainDeferredRoutingAndPtt();
+    }
+#endif
     static void stopEvidence(RadioModel& radio, const TxStopEvidence& evidence)
     {
         radio.acknowledgeIndependentTxStop(evidence);
@@ -2588,6 +2615,315 @@ void serialInputQueueLifetimes()
     check(f.commands.isEmpty(), "serial press captured before reconnect cannot acquire in replacement session");
 }
 
+void waitMs(int ms)
+{
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+void txOffDelayHoldsPhoneRelease()
+{
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+    tx.setTxOffDelayMs(100);
+
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on"}) && tx.txOffDelayPending() && tx.isTransmitting(),
+          "TX off delay keeps the radio keyed after a phone-mode release");
+    waitMs(180);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending()
+              && !tx.isTransmitting(),
+          "TX off delay unkeys exactly once when it expires");
+
+    f.commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    check(!tx.txOffDelayPending(), "re-keying inside the TX off delay drops the held unkey");
+    waitMs(180);
+    check(!f.commands.contains("mox:off") && tx.isTransmitting(),
+          "a superseded TX off delay cannot unkey the continued transmission");
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    waitMs(180);
+    check(f.commands.last() == "mox:off" && !tx.isTransmitting(),
+          "the continued transmission still gets its own delayed release");
+
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    f.radio.forceDisconnect();
+    check(!tx.txOffDelayPending(), "disconnect cancels a pending TX off delay");
+    const qsizetype afterDisconnect = f.commands.size();
+    waitMs(180);
+    check(f.commands.size() == afterDisconnect,
+          "nothing is sent for a TX off delay canceled by disconnect");
+}
+
+void txOffDelayProducerCancellation()
+{
+    // Producer PTT (what the footswitch and TCI hardware PTT use) must hold the
+    // unkey, and abort or a radio-reported TX end must not wait out the timer.
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+    tx.setTxOffDelayMs(300);
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+    const TxCoordinator::Request request = producer.request();
+
+    check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+          "producer PTT keys");
+    f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+    waitMs(60);
+    check(f.commands == QStringList({"mox:on"}) && tx.txOffDelayPending() && tx.isTransmitting(),
+          "producer PTT release is held and the radio stays keyed (TX audio keeps flowing)");
+    f.radio.abortProducerPtt(request, TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending()
+              && !tx.isTransmitting(),
+          "abort inside the hold unkeys at once and drops the timer");
+    const qsizetype afterAbort = f.commands.size();
+    waitMs(400);
+    check(f.commands.size() == afterAbort, "an aborted hold never sends a second unkey");
+
+    f.commands.clear();
+    const TxCoordinator::Producer second = f.radio.registerTxProducer();
+    const TxCoordinator::Request secondRequest = second.request();
+    check(f.radio.requestProducerPttOn(secondRequest, TransmitModel::PttSource::Mox),
+          "producer PTT keys again");
+    f.radio.requestProducerPttOff(secondRequest, TransmitModel::PttSource::Mox);
+    check(tx.txOffDelayPending(), "second release is held");
+    tx.expireTxOffDelayNow();
+    waitMs(60);
+    check(!tx.txOffDelayPending() && f.commands.last() == "mox:off",
+          "a radio-reported TX end completes the held release without waiting out the delay");
+}
+
+void useTxOffDelayMic(Fixture& f, const QString& mic)
+{
+    TransmitDelta delta;
+    delta.micSelection = mic;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, delta);
+}
+
+void txOffDelayMicWindow()
+{
+    {
+        Fixture f;
+        TransmitModel& tx = f.radio.transmitModel();
+        useTxOffDelayMic(f, QStringLiteral("BAL"));
+        tx.setTxOffDelayMs(800);
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+              "the mic window case keys through the producer path");
+        f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
+        check(tx.txOffDelayPending() && f.commands == QStringList({"mox:on"}),
+              "a radio-side mic stays keyed for the operator's delay, past the audio window");
+        check(!tx.txOffDelayMicMuted(), "a radio-side mic hold never reports a client mute");
+        waitMs(600);
+        check(!tx.txOffDelayPending() && f.commands == QStringList({"mox:on", "mox:off"}),
+              "a radio-side mic unkeys when the operator's delay ends");
+    }
+    {
+        Fixture f;
+        TransmitModel& tx = f.radio.transmitModel();
+        useTxOffDelayMic(f, QStringLiteral("PC"));
+        tx.setTxOffDelayMs(800);
+        QList<bool> edges;
+        QObject::connect(&tx, &TransmitModel::txOffDelayMicMuteChanged, &f.radio,
+                         [&](bool muted) { edges.append(muted); });
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+              "the mic window case keys through the producer path");
+        f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+        check(!tx.txOffDelayMicMuted(), "a PC mic stays live at the start of the hold");
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
+        check(tx.txOffDelayMicMuted() && tx.txOffDelayPending()
+                  && f.commands == QStringList({"mox:on"}),
+              "a PC mic is muted after the audio window while the radio stays keyed");
+        waitMs(600);
+        check(!tx.txOffDelayMicMuted() && f.commands == QStringList({"mox:on", "mox:off"})
+                  && edges == QList<bool>({true, false}),
+              "the PC mic mute clears when the held release completes");
+    }
+    {
+        Fixture f;
+        TransmitModel& tx = f.radio.transmitModel();
+        useTxOffDelayMic(f, QStringLiteral("PC"));
+        tx.setTxOffDelayMs(5000);
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+              "the mic window case keys through the producer path");
+        f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
+        check(tx.txOffDelayMicMuted(), "the PC mic is muted before the re-key");
+        const TxCoordinator::Producer second = f.radio.registerTxProducer();
+        const TxCoordinator::Request again = second.request();
+        check(f.radio.requestProducerPttOn(again, TransmitModel::PttSource::Mox),
+              "the re-key is admitted during the hold");
+        check(!tx.txOffDelayMicMuted() && !tx.txOffDelayPending()
+                  && !f.commands.contains("mox:off"),
+              "re-keying inside the hold gives the PC mic back at once");
+        f.radio.requestProducerPttOff(again, TransmitModel::PttSource::Mox);
+        TransmitDelta stopped;
+        stopped.mox = false;
+        TxOperationIntegrationTestAccess::transmitDelta(f.radio, stopped);
+        waitMs(60);
+        check(!tx.txOffDelayMicMuted() && !tx.txOffDelayPending(),
+              "a radio-reported end of TX inside the audio window leaves no mute behind");
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 100);
+        check(!tx.txOffDelayMicMuted(), "an ended hold cannot mute the PC mic later");
+    }
+    {
+        Fixture f;
+        TransmitModel& tx = f.radio.transmitModel();
+        useTxOffDelayMic(f, QStringLiteral("PC"));
+        tx.setTxOffDelayMs(TxOffDelaySettings::kAudioWindowMs - 100);
+        bool muted = false;
+        QObject::connect(&tx, &TransmitModel::txOffDelayMicMuteChanged, &f.radio,
+                         [&](bool on) { muted = muted || on; });
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+              "the mic window case keys through the producer path");
+        f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+        waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
+        check(!muted && f.commands == QStringList({"mox:on", "mox:off"}),
+              "a delay inside the audio window never mutes the PC mic");
+    }
+}
+
+void txOffDelayRadioReportedStop()
+{
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+    useTxOffDelayMic(f, QStringLiteral("PC"));
+    tx.setTxOffDelayMs(5000);
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+    const TxCoordinator::Request request = producer.request();
+    check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+          "producer PTT keys for the backend readback case");
+    f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+    check(tx.txOffDelayPending(), "the release is held before any readback");
+
+    TransmitDelta stillKeyed;
+    stillKeyed.mox = true;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, stillKeyed);
+    waitMs(30);
+    check(tx.txOffDelayPending() && f.commands == QStringList({"mox:on"}),
+          "a keyed backend readback leaves the hold running");
+
+    TransmitDelta stopped;
+    stopped.mox = false;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, stopped);
+    waitMs(60);
+    check(!tx.txOffDelayPending() && f.commands == QStringList({"mox:on", "mox:off"}),
+          "a backend RX readback completes the held release without waiting out the delay");
+}
+
+void txOffDelayScope()
+{
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+
+    tx.setTxOffDelayMs(0);
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending(),
+          "a zero TX off delay releases immediately");
+
+    tx.setTxOffDelayMs(100);
+    tx.setTxModeGetter([] { return QStringLiteral("CW"); });
+    f.commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending(),
+          "CW is not held by the TX off delay");
+
+    tx.setTxModeGetter([] { return QStringLiteral("DIGU"); });
+    f.commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Mox);
+    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending(),
+          "digital modes are not held by the TX off delay");
+
+    tx.setTxModeGetter([] { return QStringLiteral("USB"); });
+    f.commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Dax);
+    tx.requestPttOff(TransmitModel::PttSource::Dax);
+    check(f.commands == QStringList({"mox:on", "mox:off"}) && !tx.txOffDelayPending(),
+          "DAX-sourced PTT is not held even on a phone mode");
+
+    tx.setTxOffDelayMs(50000);
+    check(tx.txOffDelayMs() == 2000, "TX off delay is capped at 2000 ms");
+    tx.setTxOffDelayMs(-5);
+    check(tx.txOffDelayMs() == 0, "a negative TX off delay reads as off");
+}
+
+void txOffDelaySettingsRoundTrip()
+{
+    auto& s = AppSettings::instance();
+    s.remove(QStringLiteral("TxOffDelay"));
+    check(TxOffDelaySettings::delayMs() == 0, "an absent TX off delay setting reads as off");
+    TxOffDelaySettings::setDelayMs(250);
+    check(TxOffDelaySettings::delayMs() == 250, "TX off delay setting round-trips");
+    TxOffDelaySettings::setDelayMs(99999);
+    check(TxOffDelaySettings::delayMs() == TxOffDelaySettings::kMaxMs,
+          "writing an oversized TX off delay stores the cap");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":50000}"));
+    check(TxOffDelaySettings::delayMs() == 0,
+          "a hand-edited out-of-range TX off delay reads as off, not as a long hold");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":2001}"));
+    check(TxOffDelaySettings::delayMs() == 0,
+          "a stored TX off delay just above the 2000 ms maximum is refused on read");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":2000}"));
+    check(TxOffDelaySettings::delayMs() == 2000,
+          "a stored TX off delay at the 2000 ms maximum is accepted on read");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("not json"));
+    check(TxOffDelaySettings::delayMs() == 0, "a malformed TX off delay setting reads as off");
+    s.remove(QStringLiteral("TxOffDelay"));
+}
+
+void serialFootswitchUsesProducerPttPaths()
+{
+    Fixture f;
+    SerialPortController source;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer(&source);
+    source.setTxProducer(producer);
+    f.radio.connectSerialPttInput(&source);
+    const auto drain = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall); };
+    TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
+    drain();
+    check(f.commands == QStringList({"mox:on"}), "serial footswitch press keys");
+    TxOperationIntegrationTestAccess::serialPtt(source, false);
+    drain();
+    check(f.commands == QStringList({"mox:on", "mox:off"}), "serial footswitch release unkeys once");
+}
+
+void serialFootswitchGetsTxOffDelay()
+{
+    Fixture f;
+    f.radio.transmitModel().setTxOffDelayMs(100);
+    SerialPortController source;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer(&source);
+    source.setTxProducer(producer);
+    f.radio.connectSerialPttInput(&source);
+    const auto drain = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall); };
+    TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
+    drain();
+    check(f.commands == QStringList({"mox:on"}), "serial footswitch press keys");
+    TxOperationIntegrationTestAccess::serialPtt(source, false);
+    drain();
+    check(f.commands == QStringList({"mox:on"}) && f.radio.transmitModel().txOffDelayPending(),
+          "serial footswitch release is held by the TX off delay");
+    waitMs(180);
+    check(f.commands == QStringList({"mox:on", "mox:off"}),
+          "serial footswitch release unkeys once the TX off delay expires");
+}
+
 // Both test-injection entry points tear the old backend down, which closes
 // admission for the dying session. Neither is followed by an onConnected()
 // edge, so each has to drain the latch itself or every later TX intent in that
@@ -2615,6 +2951,263 @@ void testInjectionReopensAdmission()
               "rebuildBackendForTest reopens admission like setBackendForTest");
     }
 }
+// RFC #7021 latch through the real producers (d274): a client that keeps
+// asking to transmit after the time-out is refused every time, and only its
+// own off followed by a new on keys again. The refused key's teardown, on
+// whichever route the producer uses, is never a release.
+void txTimeoutLatchThroughProducers()
+{
+    const auto drain = [] {
+        for (int i = 0; i != 6; ++i) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        }
+    };
+    const auto expire = [&drain](Fixture& f, qint64& now) {
+        TxOperationIntegrationTestAccess::radioKeyedEdge(f.radio, true);
+        now += 180000;
+        TxOperationIntegrationTestAccess::txTimeoutTick(f.radio);
+        drain();
+        TxOperationIntegrationTestAccess::radioKeyedEdge(f.radio, false);
+        drain();
+    };
+#ifdef HAVE_WEBSOCKETS
+    {
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/TCI: the client keys through TciServer");
+        expire(f, now);
+        check(f.radio.txTimeoutLatched(), "TOT/TCI: the expiry latches while the client holds trx true");
+        bool allRefused = true;
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+            drain();
+            TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/TCI: every re-sent trx true after the expiry is refused (d274)");
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/TCI: the client's trx false releases the latch");
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/TCI: a new trx true after the release keys again");
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+        drain();
+    }
+    {
+        // d276: through the native IO path, with TciServer's real 1250 ms
+        // refusal barrier. Re-sends outpace the barrier, so one is still
+        // deferred when the off arrives; the off must release the latch and
+        // the deferred on must never key.
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        const auto send = [&](const char* text) {
+            TxOperationIntegrationTestAccess::nativeTciText(server, socket, QString::fromLatin1(text));
+            drain();
+            AetherTest::pumpFor(20);
+        };
+        send("trx:0,true;");
+        check(f.commands.contains("mox:on"), "TOT/TCI native: the client keys through the IO path");
+        expire(f, now);
+        f.commands.clear();
+        send("trx:0,true;");   // refused; arms the refusal barrier
+        send("trx:0,true;");   // deferred behind the barrier
+        AetherTest::pumpFor(400);
+        send("trx:0,true;");   // still deferred
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI native: re-sends inside the barrier are held");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(),
+              "TOT/TCI native: an off while a re-send is still deferred releases the latch (d276)");
+        AetherTest::pumpFor(1400);   // the barrier ends and drains
+        check(!f.commands.contains("mox:on"),
+              "TOT/TCI native: the deferred re-send never keys after the off");
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.commands.contains("mox:on"), "TOT/TCI native: a new trx true after the off keys");
+        send("trx:0,false;");
+        AetherTest::pumpFor(1400);
+
+        // The d276 sequence: the last re-send was refused and retired, and the
+        // barrier has ended, before the off arrives. The IO path carries no
+        // request for an off, so only the client's producer can release it.
+        send("trx:0,true;");
+        expire(f, now);
+        f.commands.clear();
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI native: each answered re-send is refused");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(),
+              "TOT/TCI native: an off after the last re-send was answered releases the latch (d276)");
+        AetherTest::pumpFor(1400);
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.commands.contains("mox:on"), "TOT/TCI native: and the next trx true keys");
+        send("trx:0,false;");
+    }
+    {
+        // oz457 on HL2 (4 of 11 expiries re-keyed): a repeat trx true captured
+        // on the I/O path just before the stop is invalidated by it, refused
+        // before admission and retired through retireTrxRequest(). That
+        // teardown is not a release, so the client's next repeat is refused.
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        const auto send = [&](const char* text) {
+            TxOperationIntegrationTestAccess::nativeTciText(server, socket, QString::fromLatin1(text));
+            drain();
+            AetherTest::pumpFor(20);
+        };
+        send("trx:0,true;");
+        check(f.commands.contains("mox:on"), "TOT/TCI captured: the client keys through the IO path");
+        TxOperationIntegrationTestAccess::holdNativeTciText(server, socket);
+        TxOperationIntegrationTestAccess::nativeTciText(server, socket, QStringLiteral("trx:0,true;"));
+        check(TxOperationIntegrationTestAccess::queuedNativeTciRequest(server, socket).valid(),
+              "TOT/TCI captured: the repeat is captured on the IO path, not yet promoted");
+        expire(f, now);
+        check(f.radio.txTimeoutLatched()
+                  && !TxOperationIntegrationTestAccess::queuedNativeTciRequest(server, socket).valid(),
+              "TOT/TCI captured: the time-out stop latches and invalidates the captured repeat");
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::releaseNativeTciText(server, socket, false);
+        drain();
+        AetherTest::pumpFor(1400);   // the refusal barrier ends and drains
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI captured: the stale repeat is refused and its retirement is not a release");
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI captured: the client's next repeated trx true is still refused");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(), "TOT/TCI captured: the client's trx false releases");
+    }
+#endif
+    {
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        RigctlProtocol cat(&f.radio);
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: the client keys through its producer");
+        expire(f, now);
+        bool allRefused = f.radio.txTimeoutLatched();
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            (void)cat.handleLine("T 1");
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/rigctl: every re-sent T 1 after the expiry is refused");
+        (void)cat.handleLine("T 0");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/rigctl: T 0 releases the latch");
+        f.commands.clear();
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: a new T 1 after the release keys again");
+        (void)cat.handleLine("T 0");
+        drain();
+        // A refused T 1 and its T 0 handled in one turn: the off still releases.
+        (void)cat.handleLine("T 1");
+        drain();
+        expire(f, now);
+        (void)cat.handleLine("T 1");
+        (void)cat.handleLine("T 0");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/rigctl: T 0 queued behind a refused T 1 releases");
+        f.commands.clear();
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: and the next T 1 keys");
+        (void)cat.handleLine("T 0");
+        drain();
+    }
+    {
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        SmartCatProtocol cat(&f.radio);
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: the client keys through its producer");
+        expire(f, now);
+        bool allRefused = f.radio.txTimeoutLatched();
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            (void)cat.processCommand("TX");
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/SmartCAT: every re-sent TX after the expiry is refused");
+        (void)cat.processCommand("RX");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/SmartCAT: RX releases the latch");
+        f.commands.clear();
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: a new TX after the release keys again");
+        (void)cat.processCommand("RX");
+        drain();
+        (void)cat.processCommand("TX");
+        drain();
+        expire(f, now);
+        (void)cat.processCommand("TX");   // refused
+        (void)cat.processCommand("RX");   // same turn, same request
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/SmartCAT: RX right after a refused TX releases");
+        f.commands.clear();
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: and the next TX keys");
+        (void)cat.processCommand("RX");
+        drain();
+    }
+    {
+        // CWX is sent text with no off: a CAT client's send_morse during an
+        // over must not hold the latch once the expiry stopped it.
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        RigctlProtocol cat(&f.radio);
+        (void)cat.handleLine("\\send_morse CQ CQ");
+        drain();
+        check(f.commands.filter(QRegularExpression(QStringLiteral("^cwx:(?!abort)"))).size() == 1,
+              "TOT/rigctl CWX: send_morse is admitted through the client's producer");
+        expire(f, now);
+        f.commands.clear();
+        const auto desktop = f.radio.localTxController()->capture(TxController::Activity::Mox);
+        const bool latched = f.radio.txTimeoutLatched();
+        check(!latched && desktop.start() && f.commands.contains("mox:on"),
+              "TOT/rigctl CWX: after the expiry, radio idle, local MOX is admitted");
+        desktop.stop();
+        drain();
+    }
+}
+
 void protocolProducerLifetimes()
 {
     const auto drain = [] {
@@ -3257,6 +3850,71 @@ void daxSelectionRecoversAfterAnOver()
         "selection becomes available once the original terminal cleanup drains");
 }
 
+void tciTxAntennaSetAfterAnOver()
+{
+    DaxTciFixture f;
+    QStringList rx;
+    f.client.textSink = [&rx](const QString& text) {
+        if (text.startsWith(QStringLiteral("aethersdr_"))) { rx << text.trimmed(); }
+        return static_cast<qint64>(text.size());
+    };
+    f.f.backend->caps.canTransmit = true;
+    SliceDelta lists;
+    lists.txAntennaList = QStringList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
+    lists.txAntenna = QStringLiteral("ANT1");
+    if (SliceModel* slice = f.f.radio.slice(0)) { slice->applyChanges(lists); }
+    f.interlock(QStringLiteral("READY"));
+    f.text(QStringLiteral("aethersdr_ext_enable:true;"));
+
+    f.text(QStringLiteral("trx:0,true,tci;"));
+    f.interlock(QStringLiteral("TRANSMITTING"));
+    f.text(QStringLiteral("trx:0,false;"));
+    f.interlock(QStringLiteral("READY"));
+    rx.clear();
+    f.text(QStringLiteral("aethersdr_tx_antenna:0,ANT2;"));
+    check(f.f.radio.slice(0) && f.f.radio.slice(0)->txAntenna() == QStringLiteral("ANT2")
+        && !rx.contains(QStringLiteral("aethersdr_tx_antenna:0,ANT1;")),
+        "a TX-antenna set is accepted after a completed over on settled RX");
+}
+
+// The once-per-keyed-period notice re-arms when a TCI over has ended on
+// settled RX, though the over's TX ownership is still unconfirmed.
+void tciTxAntennaRefusalReArmsAfterAnOver()
+{
+    DaxTciFixture f;
+    QStringList rx;
+    f.client.textSink = [&rx](const QString& text) {
+        if (text.startsWith(QStringLiteral("aethersdr_"))) { rx << text.trimmed(); }
+        return static_cast<qint64>(text.size());
+    };
+    int warnings = 0;
+    QObject::connect(&f.f.radio, &RadioModel::configurationWarning,
+                     [&warnings](const QString&) { ++warnings; });
+    f.f.backend->caps.canTransmit = true;
+    SliceDelta lists;
+    lists.txAntennaList = QStringList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
+    lists.txAntenna = QStringLiteral("ANT1");
+    if (SliceModel* slice = f.f.radio.slice(0)) { slice->applyChanges(lists); }
+    f.interlock(QStringLiteral("READY"));
+    f.text(QStringLiteral("aethersdr_ext_enable:true;"));
+
+    for (int over = 1; over <= 2; ++over) {
+        f.text(QStringLiteral("trx:0,true,tci;"));
+        f.interlock(QStringLiteral("TRANSMITTING"));
+        rx.clear();
+        f.text(QStringLiteral("aethersdr_tx_antenna:0,ANT2;"));
+        f.text(QStringLiteral("aethersdr_tx_antenna:0,ANT2;"));
+        check(f.f.radio.slice(0) && f.f.radio.slice(0)->txAntenna() == QStringLiteral("ANT1")
+            && rx.count(QStringLiteral("aethersdr_tx_antenna:0,ANT1;")) == 2 && warnings == over,
+            over == 1 ? "a TX-antenna set during a TCI over is refused and noticed once"
+                      : "the next over's refusal is noticed again after settled RX");
+        f.text(QStringLiteral("trx:0,false;"));
+        f.interlock(QStringLiteral("READY"));
+    }
+    check(f.f.radio.transmitOwnershipPending(),
+        "the notice re-armed while the over's TX ownership is still retained");
+}
+
 void tciNativeDaxInputKeepsCapturedGrant()
 {
     for (const bool beforeActivation : {false, true}) {
@@ -3759,12 +4417,21 @@ int main(int argc, char** argv)
     scopedWsprRoutes();
     cwxCallbackLifetimes();
     serialInputQueueLifetimes();
+    txOffDelayHoldsPhoneRelease();
+    txOffDelayScope();
+    txOffDelaySettingsRoundTrip();
+    serialFootswitchUsesProducerPttPaths();
+    serialFootswitchGetsTxOffDelay();
+    txOffDelayProducerCancellation();
+    txOffDelayRadioReportedStop();
+    txOffDelayMicWindow();
     testInjectionReopensAdmission();
     grantedModelBindingAndHandoff();
     grantedModelWireStopIdentity();
     grantedModelPreflightAndCancellation();
     grantedModelSessionAndActivityBoundaries();
     protocolProducerLifetimes();
+    txTimeoutLatchThroughProducers();
     producerNormalTails();
     producerTuneAndAtu();
     producerCwxQueue();
@@ -3775,6 +4442,8 @@ int main(int argc, char** argv)
     tciCreatesOnlyAnAbsentDaxStream();
     tciDaxCreationKeepsOriginalRequest();
     daxSelectionRecoversAfterAnOver();
+    tciTxAntennaSetAfterAnOver();
+    tciTxAntennaRefusalReArmsAfterAnOver();
     tciNativeDaxInputKeepsCapturedGrant();
     tciDeferredDaxInputCannotSurviveRetake();
     tciPromotingDaxInputCannotSurviveRetake();

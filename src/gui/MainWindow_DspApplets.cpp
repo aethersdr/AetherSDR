@@ -11,7 +11,6 @@
 #include "AetherialAudioStrip.h"
 #include "ClientCompApplet.h"
 #include "ClientCompEditor.h"
-#include "ClientDeEssApplet.h"
 #include "ClientEqApplet.h"
 #include "ClientEqEditor.h"
 #include "ClientGateApplet.h"
@@ -171,7 +170,6 @@ void MainWindow::updateTxAudioPathNotice()
     }
     if (warning) {
         if (m_clientEqEditor && m_clientEqEditor->isShowingTx()) m_clientEqEditor->hide();
-        if (m_clientGateEditor && m_clientGateEditor->isShowingTx()) m_clientGateEditor->hide();
         if (m_clientCompEditor && m_clientCompEditor->isShowingTx()) m_clientCompEditor->hide();
         if (m_clientTubeEditor && m_clientTubeEditor->isShowingTx()) m_clientTubeEditor->hide();
         if (m_clientPuduEditor && m_clientPuduEditor->isShowingTx()) m_clientPuduEditor->hide();
@@ -608,18 +606,10 @@ void MainWindow::wireDspApplets()
     connect(m_appletPanel->clientCompRxApplet(), &ClientCompApplet::editRequested,
             this, [this]() { ensureClientCompEditor()->showForRx(); });
 
-    // ── Client Gate applets: TX (#1661 Phase 2) + RX (Phase 7.2) ───────────
-    m_appletPanel->clientGateTxApplet()->setAudioEngine(m_audio);
+    // ── Client Gate applet: RX only (Phase 7.2); AetherTX's gate is retired.
     m_appletPanel->clientGateRxApplet()->setAudioEngine(m_audio);
-    connect(m_appletPanel->clientGateTxApplet(), &ClientGateApplet::editRequested,
-            this, [this]() {
-        if (!showTxAudioPathErrorIfBlocked()) ensureClientGateEditor()->showForTx();
-    });
     connect(m_appletPanel->clientGateRxApplet(), &ClientGateApplet::editRequested,
             this, [this]() { ensureClientGateEditor()->showForRx(); });
-
-    // ── Client De-esser applet: TX sidechain-filtered dynamics (#1661 Phase 3) ─
-    m_appletPanel->clientDeEssApplet()->setAudioEngine(m_audio);
 
     // ── Client Tube applets: TX (#1661) + RX (Phase 7.4) ───────────────────
     m_appletPanel->clientTubeTxApplet()->setAudioEngine(m_audio);

@@ -14,7 +14,9 @@
 #include <QSignalSpy>
 #include <QTimer>
 
+#include <climits>
 #include <cstdio>
+#include <utility>
 
 using AetherSDR::NoiseMixer;
 using AetherSDR::RadioCapabilities;
@@ -130,6 +132,29 @@ void testSliceIntentEchoesBack()
 
     sim.setSliceFrequency(1, 14'000'000.0);   // unknown slice id
     report("intent on an unknown slice id is ignored", sliceSpy.count() == 2);
+}
+
+void testRttyPassbandSavedAndRestored()
+{
+    SimBackend sim;
+    sim.connectRadio(RadioConnectRequest{});
+    sim.setSliceFilter(0, 200, 2400);
+    QSignalSpy sliceSpy(&sim, &SimBackend::sliceChanged);
+    auto filterOf = [&](int i) {
+        const auto d = sliceSpy.at(i).at(1).value<SliceDelta>();
+        return std::pair{d.filterLow.value_or(INT_MIN), d.filterHigh.value_or(INT_MIN)};
+    };
+
+    sim.setSliceMode(0, QStringLiteral("RTTY"));
+    report("entering RTTY reports the FLEX-8400 passband",
+           sliceSpy.count() == 1 && filterOf(0) == std::pair{-285, 115});
+    sim.setSliceMode(0, QStringLiteral("RTTY"));
+    report("re-sending RTTY does not report a passband",
+           sliceSpy.count() == 2
+               && !sliceSpy.at(1).at(1).value<SliceDelta>().filterLow.has_value());
+    sim.setSliceMode(0, QStringLiteral("USB"));
+    report("leaving RTTY restores the previous passband",
+           sliceSpy.count() == 3 && filterOf(2) == std::pair{200, 2400});
 }
 
 void testDisconnectAndReconnect()
@@ -412,6 +437,7 @@ int main(int argc, char** argv)
     testCapabilitiesAreReceiveOnly();
     testSecondConnectIsIdempotent();
     testSliceIntentEchoesBack();
+    testRttyPassbandSavedAndRestored();
     testDisconnectAndReconnect();
     testKeyingIsAlwaysInert();
     testEmitsAudioWhenConnected();

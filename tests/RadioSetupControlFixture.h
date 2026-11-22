@@ -1,6 +1,7 @@
 #pragma once
 #include "FlexSetupStatusTestSupport.h"
 
+#include "core/backends/flex/CommandParser.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 
@@ -26,6 +27,11 @@ public:
              {QStringLiteral("rf_freq"), QStringLiteral("144")},
              {QStringLiteral("if_freq"), QStringLiteral("28")}});
     }
+    static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& kvs)
+    { radio.handleStatusForTest(object, kvs); }
+    // A raw radio line through the real parser and the status ingress.
+    static void line(RadioModel& radio, const QString& raw)
+    { radio.deliverLineForTest(CommandParser::parseLine(raw)); }
     static void disconnected(RadioModel& radio) { radio.onDisconnected(); }
     static void replaceConnectionGeneration(RadioModel& radio) { ++radio.m_sessionGeneration; }
     static auto productionSetupSink(RadioModel& radio, const RadioModel::SetupCommandWriter& writer)
@@ -65,6 +71,9 @@ class RadioSetupTestBackend final : public FlexBackend {
 public:
     bool live{true};
     bool accept{true};
+    // Setup-sink commands starting with this are refused (as the profile-load
+    // hold refuses slice writes); empty refuses nothing.
+    QString refusePrefix;
     QStringList commands;
     std::vector<RadioSetupCompletion> replies;
     std::shared_ptr<bool> retired;
@@ -106,6 +115,7 @@ public:
         });
         setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& completion) {
             if (!live || !accept) { return false; }
+            if (!refusePrefix.isEmpty() && command.startsWith(refusePrefix)) { return false; }
             commands.append(command);
             if (completion) { replies.push_back(completion); }
             return true;

@@ -14,6 +14,8 @@
 #include "core/backends/sim/NoiseMixer.h"
 #include "core/backends/sim/SimSignalSource.h"
 
+#include <utility>
+
 class QThread;
 
 namespace AetherSDR {
@@ -170,10 +172,12 @@ private:
     static QString wireWfIdFor(int index);
     static int wirePanIndexOf(const QString& panId);
     void pushPanIndicesToSource();
+    void pushPanCenterToSource(double mhz);
     double m_sliceFreqMhz{14.100};   // default: 20 m, a lively demo band
     QString m_sliceMode{QStringLiteral("USB")};
     int    m_filterLowHz{100};
     int    m_filterHighHz{2900};
+    std::pair<int, int> m_preRttyFilter{100, 2900};   // restored on leaving RTTY (#7420)
     // Slice AGC (#4448 seam addition). Defaults mirror the slice model's own so
     // the first echo reports what the UI already shows.
     QString m_agcMode{QStringLiteral("med")};

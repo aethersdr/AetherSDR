@@ -49,9 +49,9 @@ SSTV and other modes.
 | Shift | 45, 50, 75, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz |
 | Baud | **45.45**, 50, 75, 100, 110, 150, 300 |
 | REV | Space above mark (LSB / inverted polarity) |
-| Sens | 0–100 display squelch (#5028): drops decoded characters below a confidence threshold (0 = show everything, the default; ~38 filters what the stats bar calls UNLOCK; 100 = near-certain only). Mapping in `src/gui/RttyDecoderSensitivity.h` |
+| Sens | 0–100 display squelch (#5028): drops decoded characters below a confidence threshold (0 = show everything, the default; 23 hides the red letters, 45 the orange ones too, 78 keeps only the green ones). Mapping in `src/gui/RttyDecoderSensitivity.h` |
 
-Stats bar updates ~2×/second: `M:xx% S:xx% SNR:xxdB  LOCKED/UNLOCK`
+Stats bar updates ~2×/second: a 15-segment level bar, then `NdB LOCKED` or `NdB UNLOCK`, all from the average character score (#7422)
 
 Baud/REV persist to AppSettings as flat key names (grandfathered —
 see bug #4 below); Mark and Shift are the slice's `rtty_mark` and `rtty_shift`
