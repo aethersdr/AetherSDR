@@ -458,6 +458,14 @@ void AetherRxDialog::setStageEnabled(Stage stage, bool on)
             // stage off turns off whichever method is running, and switching it
             // back on restores the last one AetherDspWidget saved.
             if (!on) {
+                // Only a click that turns a running method off is a manual
+                // selection, as on the chain strip's DSP tile.
+                if (m_audio->nr2Enabled() || m_audio->nr4Enabled()
+                    || m_audio->mnrEnabled() || m_audio->dfnrEnabled()
+                    || m_audio->rn2Enabled() || m_audio->nvAfxEnabled()
+                    || m_audio->nnrEnabled()) {
+                    emit dspMethodUserToggled();
+                }
                 QMetaObject::invokeMethod(m_audio, [audio = m_audio]() {
                     if (audio->nr2Enabled())    audio->setNr2Enabled(false);
                     if (audio->nr4Enabled())    audio->setNr4Enabled(false);
@@ -474,6 +482,8 @@ void AetherRxDialog::setStageEnabled(Stage stage, bool on)
             // Never been on, so there is nothing to restore; the next poll
             // puts the box back where it was.
             if (name.isEmpty()) break;
+            // Only a click that restores a method is a manual selection.
+            emit dspMethodUserToggled();
             if (name == QLatin1String("NR2")) {
                 // NR2 needs the wisdom prep before the engine builds
                 // SpectralNR — straight through the setter can crash the

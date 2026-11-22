@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 #include <functional>
 #include <memory>
@@ -15,9 +16,10 @@ class QFile;
 
 namespace AetherSDR {
 
-// Downloads and caches Whisper (ggml) weights (RFC #4333). Tries each catalog
-// source in order and accepts a file only if its SHA-256 matches the pinned
-// value; streams to `.part` and renames atomically after verification.
+// Downloads and caches ASR model files (RFC #4333): Whisper (ggml) weights, or
+// the several files of a sherpa-onnx bundle. Tries each catalog source in order
+// and accepts a file only if its SHA-256 matches the pinned value; streams to
+// `.part` and renames atomically after verification.
 // Qt Core/Network only. One download at a time; cancel removes the partial file.
 class AsrModelManager : public QObject {
     Q_OBJECT
@@ -50,13 +52,27 @@ public:
     // *error if non-null) when the file is missing, mis-sized, or mismatched.
     bool verify(const AsrModelTier& tier, QString* error = nullptr) const;
 
-    bool isBusy() const { return m_reply != nullptr || m_verifying; }
+    // Absolute folder holding a bundle's files (that of the first file).
+    QString bundlePath(const QVector<AsrModelTier>& files) const;
+
+    bool isBusy() const { return m_reply != nullptr || m_verifying || !m_bundle.isEmpty(); }
 
 public slots:
     // Ensure the tier is cached and valid. Emits alreadyPresent() immediately
     // if so; otherwise downloads with source failover + verification. A second
     // call while busy fails fast.
     void ensure(const AsrModelTier& tier);
+
+    // Ensure every file of a multi-file model is cached and valid, one after another,
+    // with the same per-file source failover and SHA-256 check as ensure(). All files
+    // must sit in the same folder under the cache (fileName "<folder>/<file>").
+    // Signals report the bundle, not the file: progress() counts bytes across the
+    // whole bundle (files already cached count as received) and is emitted only
+    // once something is being downloaded, verifying() as for a file, and on success alreadyPresent(folder) if nothing had to be fetched or
+    // finished(folder) if anything was, where folder is the absolute bundle path.
+    // failed() stops the bundle at the first file that cannot be fetched; files
+    // already verified stay cached. Fails fast if busy, like ensure().
+    void ensureBundle(const QVector<AsrModelTier>& files);
 
     // Abort an in-flight download and delete the partial file.
     void cancel();
@@ -74,6 +90,14 @@ private:
     // Hash+verify `path` on a background thread (never the UI thread — a multi-GB
     // model would freeze the app), then run `onDone(match)` back on this thread.
     void verifyInBackground(const QString& path, std::function<void(bool)> onDone);
+    // ensure() without the busy fail-fast, so a bundle can chain its files.
+    void ensureFile(const AsrModelTier& tier);
+    // A file is cached and valid (`fetched` = it was downloaded just now). Single
+    // mode: emits alreadyPresent/finished. Bundle mode: moves on to the next file,
+    // and after the last emits the bundle's terminal signal.
+    void completeFile(const QString& path, bool fetched);
+    // Terminal failure: drops any bundle state, then emits failed().
+    void fail(const QString& error);
     void beginDownload();
     void startSource(int index);
     void onReadyRead();
@@ -93,6 +117,13 @@ private:
     QStringList m_sourceErrors; // one line per failed source, for the final message
     bool m_canceled = false;
     bool m_verifying = false;   // a background verification is running
+
+    // Bundle state; m_bundle is empty outside ensureBundle().
+    QVector<AsrModelTier> m_bundle;
+    int m_bundleIndex = 0;
+    qint64 m_bundleTotalBytes = 0;
+    qint64 m_bundleDoneBytes = 0;   // bytes of the files already completed
+    bool m_bundleFetched = false;   // any file needed a download
 };
 
 } // namespace AetherSDR

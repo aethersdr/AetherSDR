@@ -1,10 +1,11 @@
 #pragma once
 
 // RTTY "Sens:" slider → confidence threshold (#5028), pure for testing.
-// RttyDecoder's confidence is max(mark,space)/(mark+space): 0.5 at worst, 1.0
-// clean, so 0..100 maps onto 0.50..0.95 and 0 means "show everything" (the
-// default, a no-op filter). 38 gives ~0.67, the decoder's 3 dB lock point
-// (snrDb == 10*log10(c/(1-c))).
+// RttyDecoder's confidence is the character's weakest data bit, scaled so 0.5 is
+// a coin flip and 1.0 a clean signal (#7422), so 0..100 maps onto 0.50..0.95 and
+// 0 means "show everything" (the default, a no-op filter). Against the pane's
+// color bands, 23 is the first value that hides every red letter, 45 every
+// orange one, and 78 leaves only green.
 namespace AetherSDR {
 
 constexpr int kRttySensitivityDefault = 0;

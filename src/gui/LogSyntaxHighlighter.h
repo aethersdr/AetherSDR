@@ -1,33 +1,30 @@
 #pragma once
 
-// Extracted verbatim from NetworkDiagnosticsDialog.cpp (#2554). The System Info
-// dialog tails the same log file and wants the same colouring; a file-private
-// class cannot be shared. Nothing about the highlighter changed in the move.
+// Shared by the Network Diagnostics and Runtime Monitor log viewers.
+
+#include "core/ThemeManager.h"
 
 #include <QColor>
 #include <QFont>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QString>
 #include <QSyntaxHighlighter>
 #include <QTextCharFormat>
 #include <QTextDocument>
+#include <QWidget>
 
 namespace AetherSDR {
 
 class LogSyntaxHighlighter : public QSyntaxHighlighter {
 public:
-    explicit LogSyntaxHighlighter(QTextDocument* parent)
+    LogSyntaxHighlighter(QTextDocument* parent, const QWidget* scope)
         : QSyntaxHighlighter(parent)
+        , m_scope(scope)
     {
-        m_timeFormat.setForeground(QColor("#8d99ad"));
-        m_debugFormat.setForeground(QColor("#8d99ad"));
-        m_infoFormat.setForeground(QColor("#77d8ff"));
-        m_warningFormat.setForeground(QColor("#e8b977"));
-        m_criticalFormat.setForeground(QColor("#ff6b6b"));
-        m_categoryFormat.setForeground(QColor("#d4deea"));
-        m_categoryFormat.setFontWeight(QFont::Bold);
-        m_numberFormat.setForeground(QColor("#80ed91"));
-        m_protocolFormat.setForeground(QColor("#d8b4ff"));
+        applyThemeColors();
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, &LogSyntaxHighlighter::applyThemeColors);
     }
 
 protected:
@@ -77,6 +74,48 @@ protected:
     }
 
 private:
+    // color.log.* is the log viewers' own text group: every value clears
+    // 4.5:1 on color.canon.nested, the ground both panes draw on, in both
+    // bundled themes. color.canon.category.* stays marks-only (#7037).
+    void applyThemeColors()
+    {
+        const auto& tm = ThemeManager::instance();
+        const QColor time     = tm.color(m_scope, "color.log.time");
+        const QColor info     = tm.color(m_scope, "color.log.info");
+        const QColor warning  = tm.color(m_scope, "color.log.warning");
+        const QColor critical = tm.color(m_scope, "color.log.critical");
+        const QColor category = tm.color(m_scope, "color.log.category");
+        const QColor number   = tm.color(m_scope, "color.log.number");
+        const QColor protocol = tm.color(m_scope, "color.log.protocol");
+
+        // themeChanged also fires on every Theme Editor token edit; only
+        // re-run the document when a log color actually moved.
+        const bool unchanged = m_timeFormat.foreground().color() == time
+            && m_infoFormat.foreground().color() == info
+            && m_warningFormat.foreground().color() == warning
+            && m_criticalFormat.foreground().color() == critical
+            && m_categoryFormat.foreground().color() == category
+            && m_numberFormat.foreground().color() == number
+            && m_protocolFormat.foreground().color() == protocol;
+        if (unchanged && m_formatsResolved) {
+            return;
+        }
+
+        m_timeFormat.setForeground(time);
+        m_debugFormat.setForeground(time);
+        m_infoFormat.setForeground(info);
+        m_warningFormat.setForeground(warning);
+        m_criticalFormat.setForeground(critical);
+        m_categoryFormat.setForeground(category);
+        m_categoryFormat.setFontWeight(QFont::Bold);
+        m_numberFormat.setForeground(number);
+        m_protocolFormat.setForeground(protocol);
+        m_formatsResolved = true;
+        rehighlight();
+    }
+
+    QPointer<const QWidget> m_scope;
+    bool m_formatsResolved = false;
     QTextCharFormat m_timeFormat;
     QTextCharFormat m_debugFormat;
     QTextCharFormat m_infoFormat;

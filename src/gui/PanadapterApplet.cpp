@@ -52,6 +52,11 @@ namespace {
 // it is hidden.  0 maps to 1.0 and 100 to 0.1.
 float cwSensCostThreshold(int sens) { return 1.0f - (sens / 100.0f) * 0.9f; }
 
+// ggmorse's saved Sens: a flat AppSettings key, read with this default.  The
+// neural decoders' Sens lives in CwDecodeSettings instead.
+constexpr auto kGgmorseSensKey = "CwDecoderSensitivity";
+constexpr auto kGgmorseSensDefault = "30";
+
 // fldigi's standard RTTY shifts and mark tones, the RTTY decoder's Shift and
 // Mark lists, in ascending order.
 constexpr int kRttyShiftPresetsHz[] = {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850};
@@ -222,7 +227,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     cwBar->addWidget(sensLabel);
     m_cwSensSlider = new GuardedSlider(Qt::Horizontal);
     m_cwSensSlider->setRange(0, 100);  // 0=show everything, 100=only high confidence
-    int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
+    int savedSens = AppSettings::instance().value(kGgmorseSensKey, kGgmorseSensDefault).toString().toInt();
     m_cwSensSlider->setValue(savedSens);
     m_cwSensSlider->setFixedWidth(60);
     m_cwSensSlider->setAccessibleName(tr("CW decode sensitivity"));
@@ -240,7 +245,8 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 #endif
             m_cwCostThreshold = cwSensCostThreshold(v);
         },
-        [this](int v) { saveCwSens(v); });
+        // A change already flushed when the decoder moved is not saved again.
+        [this](int) { flushCwSens(); });
     cwBar->addWidget(m_cwSensSlider);
 
 #ifdef HAVE_CW_RX_BACKENDS
@@ -555,8 +561,8 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "Squelch for the decoded text: drops characters the decoder is not confident\n"
         "about, so noise between transmissions stops filling the pane with gibberish.\n"
         "0 (default) shows every decoded character — exactly the behavior before this\n"
-        "control existed. Higher values drop more; ~38 filters what the stats bar\n"
-        "calls UNLOCK; 100 keeps only near-certain copy. Affects display only —\n"
+        "control existed. Higher values drop more: 23 hides the red letters, 45 the\n"
+        "orange ones too, and 78 keeps only the green ones. Affects display only —\n"
         "nothing is retuned and no audio changes."));
     m_rttySensSlider->setRange(0, 100);
     const int savedRttySens = RttyDecodeSettings::sensitivity();
@@ -888,6 +894,29 @@ QString PanadapterApplet::cwCostColor(float cost)
     return QStringLiteral("#ff4040");
 }
 
+void PanadapterApplet::restoreCwSens()
+{
+    if (m_cwSensUnsaved) { return; }
+    const bool ggmorse = m_cwSensBackend == QLatin1String("ggmorse");
+    // ggmorse's threshold also serves the TX decode, the controller feed and
+    // MQTT, so it follows the saved ggmorse value whichever decoder is selected.
+    // Clamped to the slider's span: a hand-edited key can be out of it.
+    const int ggmorseSens = std::clamp(
+        AppSettings::instance().value(kGgmorseSensKey, kGgmorseSensDefault).toString().toInt(),
+        m_cwSensSlider->minimum(), m_cwSensSlider->maximum());
+    m_cwCostThreshold = cwSensCostThreshold(ggmorseSens);
+    const QSignalBlocker blocker(m_cwSensSlider);
+    m_cwSensSlider->setValue(ggmorse ? ggmorseSens : CwDecodeSettings::sensitivity(m_cwSensBackend));
+#ifdef HAVE_CW_RX_BACKENDS
+    if (!ggmorse) { m_cwNeuralCostThreshold = cwSensCostThreshold(m_cwSensSlider->value()); }
+#endif
+}
+
+void PanadapterApplet::flushCwSens()
+{
+    if (m_cwSensUnsaved) { saveCwSens(m_cwSensSlider->value()); }
+}
+
 void PanadapterApplet::saveCwSens(int value)
 {
     m_cwSensUnsaved = false;
@@ -896,7 +925,7 @@ void PanadapterApplet::saveCwSens(int value)
         return;
     }
     auto& settings = AppSettings::instance();
-    settings.setValue("CwDecoderSensitivity", QString::number(value));
+    settings.setValue(kGgmorseSensKey, QString::number(value));
     settings.save();
 }
 
@@ -976,18 +1005,9 @@ void PanadapterApplet::showCwSensFor(const QString& backend)
     // An unsaved slider change belongs to the decoder being left.  Its
     // debounced save reads the slider when it fires, which by then holds the
     // incoming decoder's value.
-    if (m_cwSensUnsaved) { saveCwSens(m_cwSensSlider->value()); }
+    flushCwSens();
     m_cwSensBackend = backend;
-    const bool ggmorse = backend == QLatin1String("ggmorse");
-    const int sens = ggmorse
-        ? AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt()
-        : CwDecodeSettings::sensitivity(backend);
-    const QSignalBlocker blocker(m_cwSensSlider);
-    m_cwSensSlider->setValue(sens);
-    // Read back the clamped value: a hand-edited ggmorse key can be out of span.
-    const float threshold = cwSensCostThreshold(m_cwSensSlider->value());
-    if (ggmorse) { m_cwCostThreshold = threshold; }
-    else { m_cwNeuralCostThreshold = threshold; }
+    restoreCwSens();
 }
 void PanadapterApplet::appendUnscoredCwText(const QString& text)
 {
@@ -1336,11 +1356,14 @@ void PanadapterApplet::setRttyInputHint(const QString& hint, const QString& reas
     setDecoderInputHint(m_rttyInputHint, text, reason, tr("RTTY receive input: %1").arg(text));
 }
 
-void PanadapterApplet::setRttyStats(float markLevel, float /* spaceLevel */, float snrDb, bool locked)
+void PanadapterApplet::setRttyStats(float level, float snrDb, bool locked)
 {
-    const int markSegs = qBound(0, qRound(markLevel * 15.0f), 15);
+    // Level bar: the decoder's average character score on the letter colors' scale,
+    // empty with no characters, full on a clean copy. 15 segments, left to right.
+    // Not driven through MeterSmoother, by maintainer ruling (#7422): the level is a
+    // per-character average that also decides LOCKED, not display ballistics.
+    const int markSegs = qBound(0, qRound(level * 15.0f), 15);
 
-    // Mark bar: 15 segments, fills left to right
     QString markBar;
     for (int i = 0; i < 15; ++i) {
         markBar += (i < markSegs)
