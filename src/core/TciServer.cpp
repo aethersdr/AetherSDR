@@ -2569,6 +2569,12 @@ void TciServer::retireTrxRequest(TciClient* client, const TxCoordinator::Request
     state->pttDaxPermit = DaxTxAudioPermit::blocked();
     state->pttWantsAudio = false;
     if (m_model) {
+        // Not a release of the time-out latch: a trx true captured before a
+        // time-out stop is refused here and must not reopen it. Callers retire
+        // a trx true that did not key, any request of a client no longer live
+        // (an off released in handleTrxRequest()), or, in the Icom unkey
+        // settle, the holder's own repeat, held only until the next unkey.
+        m_model->noteTxKeyDownRefused(request);
         m_model->requestProducerPttOff(request, wantsAudio ? TransmitModel::PttSource::Dax
                                                         : TransmitModel::PttSource::TciHardware);
     }
@@ -2591,6 +2597,12 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         txRequest = state->pttRequest;
         daxPermit = state->pttDaxPermit;
         wantsAudio = state->pttWantsAudio;
+        if (!request.transmitting && m_model) {
+            // The client's explicit off is its release of the time-out latch,
+            // whatever became of its request: refused, retired or deferred.
+            // TciIoWorker::captureTextInputs() captures no request for an off.
+            m_model->noteTxInputReleased(state->txProducer.request());
+        }
         if (!request.transmitting) {
             state->pttRequest = {};
             state->pttDaxPermit = DaxTxAudioPermit::blocked();

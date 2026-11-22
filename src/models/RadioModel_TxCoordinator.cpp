@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QScopeGuard>
 #include <QThread>
+#include <algorithm>
 #include <functional>
 #include <optional>
 #include <utility>
@@ -159,6 +160,8 @@ bool RadioModel::requestProducerPttOn(const TxCoordinator::Request& request,
         return false;
     }
     bool engaged = false;
+    ++m_txKeyDownDepth;
+    const auto keyDown = qScopeGuard([this] { --m_txKeyDownDepth; });
     m_transmitModel.requestPttOn(source, [this, request]() -> TransmitModel::KeyingPermit {
         if (!beginTxActivity(TxActivity::Mox, &request)) {
             return {};
@@ -182,6 +185,7 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
+    noteTxTimeoutRelease(request);
     const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
     if (!bound.isActivity(TxActivity::Mox)) {
         if (!bound.pending()) {
@@ -223,6 +227,7 @@ void RadioModel::connectSerialPttInput(SerialPortController* source)
         if (active) {
             (void)requestProducerPttOn(input, TransmitModel::PttSource::Mox);
         } else {
+            noteTxInputReleased(input);
             requestProducerPttOff(input, TransmitModel::PttSource::Mox);
         }
     });
@@ -234,6 +239,9 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
+    // Abandoning a key it held is a release; noteTxTimeoutRelease() skips
+    // the teardown of a key the latch just refused.
+    noteTxTimeoutRelease(request);
     const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
     if (!bound.isActivity(TxActivity::Mox)) {
         if (!bound.pending()) {
@@ -259,6 +267,27 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
                                  bool askKeyObjection)
 {
     if (m_txInputsStopping) {
+        return false;
+    }
+    if (m_txTimeout.latched()) {
+        m_txTimeout.refreshLatch();
+        publishTxTimeoutLatch(true);
+        if (m_txTimeout.latched()) {
+            if (request) {
+                noteTxTimeoutRefused(*request);
+            }
+            emitInterlockNotification(
+                tr("Transmit is held after a time-out: release every PTT input, then key again."),
+                QStringLiteral("tx-timeout-latched"));
+            return false;
+        }
+    }
+    // Fail closed: an input whose release the latch could not track is not
+    // admitted. CWX is sent text and never holds (below).
+    if (request && activity != TxActivity::Cwx && !txTimeoutCanHold(*request)) {
+        emitInterlockNotification(
+            tr("Transmit refused: too many inputs hold a key. Release one, then key again."),
+            QStringLiteral("tx-timeout-holders-full"));
         return false;
     }
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
@@ -452,8 +481,17 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     }
     const QPointer<RadioModel> self(this);
     emit daxTxOwnershipChanged();
-    return self && !m_txSessionClosing && m_backend
+    const bool admitted = self && !m_txSessionClosing && m_backend
         && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
+    // CWX is sent text, not a held input: no producer sends an off for it,
+    // so it never holds the time-out latch.
+    if (admitted && request && activity != TxActivity::Cwx && !noteTxTimeoutHold(*request)) {
+        // The table filled while this key-down was admitted (an observer above
+        // re-entered): refuse it rather than key an input the latch cannot see.
+        endLocalTxActivity(intent);
+        return false;
+    }
+    return admitted;
 }
 
 TransmitModel::KeyingRoute RadioModel::producerKeyingRoute(const TxCoordinator::Request& request,
@@ -500,6 +538,9 @@ bool RadioModel::requestProducerTune(const TxCoordinator::Request& request, bool
     if (QThread::currentThread() != thread()) {
         return false;
     }
+    if (!on) {
+        noteTxTimeoutRelease(request);
+    }
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Tune, dispatched);
     if (on) {
@@ -518,6 +559,9 @@ bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool 
 {
     if (QThread::currentThread() != thread()) {
         return false;
+    }
+    if (!start) {
+        noteTxTimeoutRelease(request);
     }
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Atu, dispatched);
@@ -1408,6 +1452,15 @@ void RadioModel::resetTxOperations()
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    {
+        const bool latched = m_txTimeout.latched();
+        m_txTimeout.reset();
+        m_txTimeoutRefusedRequests.clear();
+        if (m_txTimeoutTimer) {
+            m_txTimeoutTimer->stop();
+        }
+        publishTxTimeoutLatch(latched);
+    }
     m_transmitServiceSession->store(false, std::memory_order_release);
     m_transmitServiceSession = std::make_shared<std::atomic_bool>(true);
     m_dvkTxRequest = 0;
@@ -1497,8 +1550,22 @@ void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, b
         m_hostCwTextEdge = wasHostEdge;
         if (!sent) {
             refused();
+        } else if (down && (hostTextGates || !producerCwPaddleHeld(request))) {
+            // Host CW text is sent text, not a held input, like CWX: its
+            // keyer owns its producer, and no element holds the time-out latch.
+            // Nor does an iambic element the keyer sends after its paddle let
+            // go (a squeezed or memorised one): only a held paddle holds.
+            noteTxInputReleased(request);
         }
     }, Qt::QueuedConnection);
+}
+
+bool RadioModel::producerCwPaddleHeld(const TxCoordinator::Request& anyRequestOfProducer) const
+{
+    return std::any_of(m_producerCwPaddleInputs.begin(), m_producerCwPaddleInputs.end(),
+        [&anyRequestOfProducer](const TxCoordinator::Request& existing) {
+            return existing.valid() && existing.producerKey() == anyRequestOfProducer.producerKey();
+        });
 }
 
 void RadioModel::setProducerCwPaddleHeld(const TxCoordinator::Request& input, bool held)
@@ -1508,6 +1575,12 @@ void RadioModel::setProducerCwPaddleHeld(const TxCoordinator::Request& input, bo
     });
     if (held && input.valid()) {
         m_producerCwPaddleInputs.push_back(input);
+        return;
+    }
+    // Every paddle of this producer up releases the time-out latch; the
+    // keyer's element key-ups (queueProducerCwKeyEdge) never do.
+    if (!held && !producerCwPaddleHeld(input)) {
+        noteTxInputReleased(input);
     }
 }
 

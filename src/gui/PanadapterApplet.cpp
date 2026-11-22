@@ -52,6 +52,11 @@ namespace {
 // it is hidden.  0 maps to 1.0 and 100 to 0.1.
 float cwSensCostThreshold(int sens) { return 1.0f - (sens / 100.0f) * 0.9f; }
 
+// ggmorse's saved Sens: a flat AppSettings key, read with this default.  The
+// neural decoders' Sens lives in CwDecodeSettings instead.
+constexpr auto kGgmorseSensKey = "CwDecoderSensitivity";
+constexpr auto kGgmorseSensDefault = "30";
+
 // fldigi's standard RTTY shifts and mark tones, the RTTY decoder's Shift and
 // Mark lists, in ascending order.
 constexpr int kRttyShiftPresetsHz[] = {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850};
@@ -222,7 +227,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     cwBar->addWidget(sensLabel);
     m_cwSensSlider = new GuardedSlider(Qt::Horizontal);
     m_cwSensSlider->setRange(0, 100);  // 0=show everything, 100=only high confidence
-    int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
+    int savedSens = AppSettings::instance().value(kGgmorseSensKey, kGgmorseSensDefault).toString().toInt();
     m_cwSensSlider->setValue(savedSens);
     m_cwSensSlider->setFixedWidth(60);
     m_cwSensSlider->setAccessibleName(tr("CW decode sensitivity"));
@@ -897,7 +902,7 @@ void PanadapterApplet::restoreCwSens()
     // MQTT, so it follows the saved ggmorse value whichever decoder is selected.
     // Clamped to the slider's span: a hand-edited key can be out of it.
     const int ggmorseSens = std::clamp(
-        AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt(),
+        AppSettings::instance().value(kGgmorseSensKey, kGgmorseSensDefault).toString().toInt(),
         m_cwSensSlider->minimum(), m_cwSensSlider->maximum());
     m_cwCostThreshold = cwSensCostThreshold(ggmorseSens);
     const QSignalBlocker blocker(m_cwSensSlider);
@@ -920,7 +925,7 @@ void PanadapterApplet::saveCwSens(int value)
         return;
     }
     auto& settings = AppSettings::instance();
-    settings.setValue("CwDecoderSensitivity", QString::number(value));
+    settings.setValue(kGgmorseSensKey, QString::number(value));
     settings.save();
 }
 
