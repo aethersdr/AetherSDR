@@ -804,6 +804,34 @@ void testRemoteKeyDoesNotTakeOver()
     pumpFor(50);
 }
 
+// Ruling on #7347: a remote key-up with no accepted remote key-down before it
+// (a stray or unparseable TCI keyer state) does not cut host text's element.
+void testBareRemoteKeyUp()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    f.radio.transmitModel().setCwSpeed(20);
+    check("bare remote key-up: A plays", a.send(QStringLiteral("T")));   // one 180 ms dah
+    check("bare remote key-up: A's dah is down",
+          pumpUntil([&] { return !f.edges.empty() && f.edges.back().down; }, 2000));
+    pumpFor(40);
+    f.radio.sendRemoteCwKey(false, QStringLiteral("tci:keyer"));
+    pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 2000);
+    pumpFor(100);
+    const double dah = f.edges.size() >= 2 ? ms(f.edges[1].at - f.edges[0].at) : 0.0;
+    std::printf("       bare remote key-up: %zu edges, dah %.1f ms (180 expected)\n", f.edges.size(), dah);
+    check("bare remote key-up: A's dah ends on time",
+          f.edges.size() == 2 && alternates(f.edges) && dah > 180.0 * 0.85 && dah < 180.0 * 1.3);
+    // With no host text playing, a remote key's own down and up still key.
+    f.radio.sendRemoteCwKey(true, QStringLiteral("tci:keyer"));
+    pumpFor(60);
+    f.radio.sendRemoteCwKey(false, QStringLiteral("tci:keyer"));
+    pumpFor(50);
+    check("bare remote key-up: a remote key keys once text is over", f.edges.size() == 4 && alternates(f.edges));
+    a.stop();
+    pumpFor(50);
+}
+
 // Ruling on #7347: host text sent while a CW key is already held, by a remote
 // client or by the operator, is refused with a notice; nothing keys under the
 // key, and the key's own release is all that reaches the radio.
@@ -1209,6 +1237,7 @@ int main(int argc, char** argv)
     testClearAll();
     testPaddleTakesOver();
     testRemoteKeyDoesNotTakeOver();
+    testBareRemoteKeyUp();
     testKeyHeldRefusesText();
     testPaddleGapRefusesText();
     testSendDuringOwnElement();

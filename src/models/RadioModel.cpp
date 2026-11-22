@@ -6073,7 +6073,15 @@ void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
     if (std::exchange(m_remoteCwKeyRefused, false) && !down) {
         return;
     }
-    sendCwKey(down, debugSource);
+    // A remote key-up with no accepted remote key-down before it (a stray or
+    // unparseable TCI keyer state) would cut host text's element: the text owns
+    // the key and keys its own key-up, so the edge is ignored.
+    if (!down && !m_remoteCwKeyDown && m_hostCwText && m_hostCwText->playing()) {
+        qCWarning(lcCw).noquote() << "CW key-up ignored: host CW text owns the key source=" << debugSource;
+        return;
+    }
+    const bool accepted = sendCwInput(down, false, true, debugSource, 0, 0, {});
+    m_remoteCwKeyDown = down && accepted;
 }
 
 void RadioModel::sendCwPaddle(bool dit, bool dah, const QString& debugSource,
@@ -8930,6 +8938,7 @@ void RadioModel::onDisconnected()
     m_txRequested = false;
     m_cwKeyActive = false;
     m_cwPaddleHeld = false;   // a paddle held across a disconnect must not keep TUNE refused (#5422)
+    m_remoteCwKeyDown = false;
     m_cwMessageOpen = false;
     m_producerCwPaddleInputs.clear();
     m_cwxActive = false;

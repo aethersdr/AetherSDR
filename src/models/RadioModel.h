@@ -1143,7 +1143,9 @@ public:
     // A remote client's key edge (TCI keyer): sendCwKey, but it never takes
     // over from host CW text, which only a local operator input does (#7347 ruling).
     // While host text plays its key-down is refused with a notice, and the
-    // matching key-up keys nothing. The other order is refused too: host text
+    // matching key-up keys nothing. A remote key-up with no accepted remote
+    // key-down before it is ignored while host text plays (logged, no notice):
+    // the text keys its own key-up. The other order is refused too: host text
     // sent while a CW key is held, remote or local, is refused with
     // cw-text-refused:key-held (admitHostCwx).
     void sendRemoteCwKey(bool down, const QString& debugSource);
@@ -2619,6 +2621,7 @@ private:
     std::unique_ptr<HostCwTextEngine> m_hostCwText;
     bool m_hostCwTextEdge{false};   // a host-text element is being dispatched, not a paddle
     bool m_remoteCwKeyRefused{false};  // a remote key-down was refused; its key-up keys nothing
+    bool m_remoteCwKeyDown{false};     // a remote key-down was accepted and is not yet released
     DvkModel         m_dvkModel;
     NavtexModel         m_navtexModel;
     UsbCableModel       m_usbCableModel;
