@@ -1851,7 +1851,7 @@ QWidget* NetworkDiagnosticsDialog::buildLogsTab()
     m_logViewer->setReadOnly(true);
     m_logViewer->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_logViewer->setMaximumBlockCount(2500);
-    new LogSyntaxHighlighter(m_logViewer->document());
+    new LogSyntaxHighlighter(m_logViewer->document(), m_logViewer);
     layout->addWidget(m_logViewer, 1);
 
     connect(m_logViewer->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {

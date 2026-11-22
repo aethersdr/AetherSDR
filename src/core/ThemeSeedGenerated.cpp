@@ -115,6 +115,13 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.knob.foreground.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.knob.handle", QString("#c8d8e8"));
     m_tokens.insert("color.knob.handle.disabled", QString("#506070"));
+    m_tokens.insert("color.log.category", QString("#eaf2fb"));
+    m_tokens.insert("color.log.critical", QString("#fca5a5"));
+    m_tokens.insert("color.log.info", QString("#5de3ff"));
+    m_tokens.insert("color.log.number", QString("#7bf2dc"));
+    m_tokens.insert("color.log.protocol", QString("#c4a1ff"));
+    m_tokens.insert("color.log.time", QString("#8598b4"));
+    m_tokens.insert("color.log.warning", QString("#f0a35e"));
     m_tokens.insert("color.map.darkBackground", QString("#18212b"));
     m_tokens.insert("color.map.darkDetail", QString("#c8d8e8"));
     m_tokens.insert("color.meter.bar.fill", QString("#405060"));
