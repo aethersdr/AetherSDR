@@ -32,6 +32,9 @@ public:
     {
         setObjectName(QStringLiteral("statusBarMessageOverlay"));
         setTextFormat(Qt::PlainText);
+        // The notice width already includes the explicit margins. A framed
+        // QLabel otherwise indents its text again and clips the final glyph.
+        setIndent(0);
         setContentsMargins(10, 5, 10, 5);
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setFocusPolicy(Qt::NoFocus);

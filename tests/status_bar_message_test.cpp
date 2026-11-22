@@ -117,6 +117,26 @@ int main(int argc, char** argv)
     check(notice.text() == QStringLiteral("Operator notice"), "app notice takes priority");
     bar->clearMessage();
     check(notice.text() == QStringLiteral("Testing tuning"), "only the latest step resumes");
+    // A styled QLabel frame enables automatic indentation by default. Compare
+    // the actual glyphs at the overlay's chosen width with an unconstrained draw.
+    notice.setStyleSheet(QStringLiteral("QLabel { color: black; background: white;"
+                                        " border: 1px solid white; font-size: 12px; }"));
+    notice.setAgentActivity(QStringLiteral("Testing meters"));
+    notice.setAgentActivity(QStringLiteral("Testing tuning"));
+    const auto inkPixels = [&notice] {
+        const QImage image = notice.grab().toImage().convertToFormat(QImage::Format_RGB32);
+        int ink = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                if (qGray(image.pixel(x, y)) < 160)
+                    ++ink;
+        return ink;
+    };
+    const int fittedInk = inkPixels();
+    notice.resize(notice.width() + 32, notice.height());
+    check(fittedInk > 0 && fittedInk == inkPixels(),
+          "the fitted status notice paints the complete final glyph");
+    notice.setStyleSheet({});
     bar->showMessage(QStringLiteral("Operator notice"));
     notice.setAgentActivity({});
     check(notice.text() == QStringLiteral("Operator notice"), "release preserves the app notice");
