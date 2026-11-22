@@ -461,8 +461,9 @@ No pair is emitted for a window in which the modulator dropped a block.
 - Supply voltage telemetry: not offered. The HL2 sets
   `hasSupplyVoltageTelemetry` to false.
 - `radioSession` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
-  meaning uncalibrated rather than zero watts. The HL2's `txPowerBands` is not
-  projected into any resource.
+  because aetherd constructs it receive only (`canTransmit` false). A host
+  that offers transmit reports the 5 W nominal rating, not a calibration.
+  The HL2's `txPowerBands` is not projected into any resource.
 
 ### Extensions
 

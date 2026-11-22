@@ -2532,7 +2532,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.radioPttObservation = RadioCapabilities::RadioPttObservation{};
     // The pre-DDC clip bit (address 0, bit 24) feeds publishFrontEndOverload().
     c.frontEndOverloadObservation = RadioCapabilities::FrontEndOverloadObservation{};
-    c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
+    // The nominal rating, not a calibration: forward-power metering stays
+    // uncalibrated (docs/HERMES.md §17.5). Follows the gate, as canTransmit does,
+    // so a receive-only host (aetherd) reports 0 as the field documents.
+    c.txPowerMaxWatts = m_txAllowed ? static_cast<double>(kHl2RatedOutputWatts) : 0.0;
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
     c.forwardPowerRequiresSmoothing = true;
