@@ -3329,7 +3329,8 @@ void MainWindow::wireExternalControllers()
             if (action != 1) return;
 
             auto* a = m_shortcutManager.action(id);
-            if (a && a->keysTx) { (void)fireShortcutAction(id, true, controller); }
+            // Operator surface, keysTx only: the power ceiling is a bridge rail.
+            if (a && a->keysTx) { (void)fireShortcutAction(id, true, false, controller); }
             else if (a && a->handler) { a->handler(); }
             else qDebug() << "Ulanzi Dial: unknown shortcut" << id;
         }

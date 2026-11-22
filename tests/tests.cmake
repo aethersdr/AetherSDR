@@ -11630,17 +11630,23 @@ set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # RF/Tune power are drive, not keying (#5851): every bridge surface sets them
-# without TX permission, and the power ceiling bounds them. Real TxApplet,
-# offscreen, no radio.
+# without TX permission, and the power ceiling bounds them. Real TxApplet and
+# TxBandDialog, offscreen, no radio.
 add_executable(automation_tx_setpoint_gate_test
     tests/automation_tx_setpoint_gate_test.cpp
     src/gui/TxApplet.cpp
+    src/gui/TxBandDialog.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/AtuPreTuneDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
     $<TARGET_OBJECTS:aether_test_drag_value_popup>
     $<TARGET_OBJECTS:aether_test_frameless_resizer>
     $<TARGET_OBJECTS:aether_test_frameless_title_bar>
 )
 target_include_directories(automation_tx_setpoint_gate_test PRIVATE src tests)
+# The source root lets it read the MainWindow key-injection wiring it cannot construct.
+target_compile_definitions(automation_tx_setpoint_gate_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(automation_tx_setpoint_gate_test PRIVATE
     aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
 )

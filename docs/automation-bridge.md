@@ -743,12 +743,15 @@ popup at a time and only while it is open; an empty combo is refused up front
 > false-blocked **RX-only** buttons like **"Tune Now"** (net/spot retune) and VOX
 > toggles, and the genuine keying TUNE/ATU buttons all carry `markTxKeying()`
 > anyway, so the marker still covers them (#3918). The **drive setpoints**
-> `RF power` and `Tune power` carry a second marker, `markTxSetpoint()`
+> `RF power`, `Tune power` and the TX Band Settings per-band RF/Tune power
+> edits carry a second marker, `markTxSetpoint()`
 > (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`). They never key, so
 > TX permission does not gate them (#5851): `invoke`, the pointer verbs and
 > `transmit rfpower|tunepower` set them without it. What bounds drive is the
-> power ceiling, `AETHER_AUTOMATION_TX_MAX_POWER`, below. Other setpoints like
-> `VOX level` or `Microphone gain` are not blocked either.
+> power ceiling, `AETHER_AUTOMATION_TX_MAX_POWER`, below. The same holds for
+> the `rf_power_up` / `rf_power_down` shortcuts, the slider keyboard-lease keys
+> and `tci send` of `drive:` / `tune_drive:`: none needs TX permission. Other
+> setpoints like `VOX level` or `Microphone gain` are not blocked either.
 >
 > **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
 > without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
@@ -767,6 +770,22 @@ popup at a time and only while it is open; an empty combo is refused up front
 > ATU cycle can have its own drive policy. Hardware-in-the-loop tests need a
 > separate authorized watt ceiling and a fresh calibrated forward-power
 > watchdog. See [`docs/automation/TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
+>
+> The ceiling holds whenever it is armed, **with TX permission too**, on every
+> `markTxSetpoint()` control (the RF/Tune power sliders and the TX Band Settings
+> per-band RF/Tune power edits), keyed on the marker rather than the name
+> (#5851). Where the bridge knows the target value it clamps (`invoke` `setValue`,
+> `setText`, `editText`, `submit`; `transmit rfpower|tunepower`); `tci send` sends
+> its payload as written, so a `drive:`/`tune_drive:` SET above the ceiling is
+> refused instead. Where it does not know the value it refuses while armed:
+> pointer input on a setpoint, `invoke … wheel`, the `rf_power_up` /
+> `rf_power_down` shortcuts through `shortcut` and `keyevent`, and a `keyevent`
+> lease key (arrows, Page, Home/End) on a focused power slider. These are
+> refused in both directions: `rf_power_down`, Down/Left, PageDown and Home
+> cannot raise drive, but the bridge does not tell steps apart, so a session
+> turns power down under an armed ceiling with `invoke setValue` or `transmit
+> rfpower|tunepower`. Clicking a per-band edit, which only focuses it, is
+> refused while armed for the same reason.
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -2558,9 +2577,10 @@ The click is **TX-guarded** like `invoke`, but stricter: the guard walks the
 **whole ancestor chain** of the widget under the point (Qt propagates an
 unaccepted press to parents, so a click on a passive child of a keying control
 must be refused too) and is refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — a
-coordinate click is never a hole around the keying gate. Clicks on the RF/Tune
-power sliders are refused while `AETHER_AUTOMATION_TX_MAX_POWER` is armed (a
-groove click can't be clamped — use `invoke … setValue`, which is). A disabled
+coordinate click is never a hole around the keying gate. Clicks on a TX setpoint
+(`markTxSetpoint()`: the RF/Tune power sliders, the per-band power edits) are
+refused while `AETHER_AUTOMATION_TX_MAX_POWER` is armed (a groove click can't be
+clamped — use `invoke … setValue`, which is). A disabled
 widget under the point is refused (`"disabled":true`), same as `invoke`.
 
 Delivery is deferred one main-loop turn (`"deferred":true`), so any popup/dialog
@@ -2738,6 +2758,13 @@ needs key **release** edges. The bridge replies with a distinct
 [`key`](#key) TX guard. The gate reads the registration flag — one source of
 truth, no bridge-side id list to drift. RX-only actions (the zoom shortcuts
 included) need no flag.
+
+Actions that set transmit drive without keying (`setsTxDrive`, declared with
+`transmitDrive()` in the control-action registry: `rf_power_up` and
+`rf_power_down`) need no TX permission (#5851). While
+`AETHER_AUTOMATION_TX_MAX_POWER` is armed they are refused, up and down alike,
+as is a `keyevent` press of their key: a step's size is unknown to the bridge.
+The operator's own keyboard is never gated.
 
 ### `midi`
 Inject one MIDI Control Change value through the same learned VFO Tune Knob
@@ -3622,6 +3649,12 @@ over loopback and offers two profiles after draining the init burst through
 Removes the external-WebSocket dependency for TCI/DAX lifecycle testing.
 Requires the TCI server to be running (toggle via `invoke tciEnable click` if
 needed).
+
+A payload that sets drive (`drive:<trx>,<value>` or `tune_drive:<trx>,<value>`)
+needs no TX permission (#5851). While `AETHER_AUTOMATION_TX_MAX_POWER` is armed,
+a SET above the ceiling (or one whose value cannot be read as `trx,power`) is
+refused; at or below it, it is sent. The read forms (`drive:0;`) stay open.
+External TCI clients are not affected.
 
 ```json
 → {"cmd":"tci","action":"start"}            // optional value = port
@@ -4951,7 +4984,7 @@ it is the power ceiling.
 
 The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
 ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
-accessible name, so a verb reaching `TransmitModel` directly would otherwise inherit
+`markTxSetpoint()` marker, so a verb reaching `TransmitModel` directly would otherwise inherit
 no bound at all — on the surface most likely to be feeding a transverter or an
 amplifier. When a request is clamped the reply says so rather than quietly honouring
 a different number than was asked for.
