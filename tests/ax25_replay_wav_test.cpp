@@ -85,16 +85,19 @@ private slots:
     {
         QTest::addColumn<int>("count");
         QTest::addColumn<bool>("oddJunk");
-        QTest::newRow("one") << 1 << false;
-        QTest::newRow("two") << 2 << false;
-        QTest::newRow("three") << 3 << false;
-        QTest::newRow("padded-junk") << 3 << true;
+        QTest::addColumn<quint32>("rate");
+        QTest::newRow("one") << 1 << false << quint32(48000);
+        QTest::newRow("two") << 2 << false << quint32(48000);
+        QTest::newRow("three") << 3 << false << quint32(48000);
+        QTest::newRow("padded-junk") << 3 << true << quint32(48000);
+        QTest::newRow("min-sample-rate") << 1 << false << quint32(10);
     }
 
     void loadsWholeSamples()
     {
         QFETCH(int, count);
         QFETCH(bool, oddJunk);
+        QFETCH(quint32, rate);
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         const QString path = dir.filePath(QStringLiteral("complete.wav"));
@@ -102,7 +105,7 @@ private slots:
         QVERIFY(file.open(QIODevice::WriteOnly));
         // Float32 encodings of 0.5, -0.25, and 1.0, in WAV's little-endian order.
         const QByteArray payload = QByteArray::fromHex("0000003f000080be0000803f").first(count * 4);
-        const QByteArray bytes = wav(payload, oddJunk);
+        const QByteArray bytes = wav(payload, oddJunk, 3, 1, 32, rate);
         QCOMPARE(file.write(bytes), bytes.size());
         file.close();
 
@@ -110,7 +113,7 @@ private slots:
         int sampleRate = 0;
         QString error;
         QVERIFY2(AetherSDR::Ax25ReplayWav::loadWav(path, samples, sampleRate, error), qPrintable(error));
-        QCOMPARE(sampleRate, 48000);
+        QCOMPARE(sampleRate, static_cast<int>(rate));
         QCOMPARE(samples.size(), static_cast<size_t>(count));
         QCOMPARE(std::memcmp(samples.data(), payload.constData(), static_cast<size_t>(payload.size())), 0);
     }
@@ -155,6 +158,7 @@ private slots:
         QTest::newRow("one") << quint32(1);
         QTest::newRow("eight") << quint32(8);
         QTest::newRow("nine") << quint32(9);
+        QTest::newRow("overflow") << quint32(0x80000000u);
     }
 
     void rejectsInvalidSampleRates()
@@ -173,7 +177,8 @@ private slots:
         int sampleRate = 0;
         QString error;
         QVERIFY(!AetherSDR::Ax25ReplayWav::loadWav(path, samples, sampleRate, error));
-        QCOMPARE(error, QStringLiteral("invalid WAV sample rate: %1 Hz (minimum 10 Hz)").arg(rate));
+        QCOMPARE(error, QStringLiteral("invalid WAV sample rate: %1 Hz (minimum 10 Hz)")
+                            .arg(static_cast<int>(rate)));
         QVERIFY(samples.empty());
     }
 };
