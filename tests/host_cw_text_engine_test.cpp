@@ -31,6 +31,23 @@
 #include <memory>
 #include <vector>
 
+namespace AetherSDR {
+// The host transmit time-out's clock and the radio's keyed edge (#7404).
+class TxTimeoutTestAccess {
+public:
+    static void setClock(RadioModel& radio, qint64* now)
+    {
+        radio.m_txTimeout.setClock([now] { return *now; });
+    }
+    static void radioKeyed(RadioModel& radio, bool on)
+    {
+        radio.m_radioTransmitting = on;
+        emit radio.radioTransmittingChanged(on);
+    }
+    static void tick(RadioModel& radio) { radio.onTxTimeoutTick(); }
+};
+} // namespace AetherSDR
+
 using namespace AetherSDR;
 using Clock = std::chrono::steady_clock;
 
@@ -947,6 +964,56 @@ void testRadioSideKeyerUnchanged()
 
 } // namespace
 
+// The host transmit time-out (#7404) bounds host CW text: the expiry ends the
+// run mid-message, key-up last. The run holds nothing, so the latch is clear
+// once the radio is idle; the ended run no longer refuses a remote key, and
+// new text keys.
+void testTimeOutEndsHostText()
+{
+    Fixture f(hl2Capabilities(true));
+    qint64 now = 5'000'000;
+    TxTimeoutTestAccess::setClock(f.radio, &now);
+    QStringList keys;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) { keys << key; });
+    int expiries = 0;
+    QObject::connect(&f.radio, &RadioModel::txTimeoutExpired, [&expiries] { ++expiries; });
+    Sender a(f.radio);
+    Sender b(f.radio);
+    f.radio.transmitModel().setCwSpeed(20);
+    check("time-out: A plays", a.send(QStringLiteral("MMMMMMMMMM")));
+    check("time-out: A's first key-down", pumpUntil([&] { return !f.edges.empty(); }, 2000));
+    TxTimeoutTestAccess::radioKeyed(f.radio, true);
+    for (qint64 t = 0; t < 180'000; t += 250) {
+        now += 250;
+        TxTimeoutTestAccess::tick(f.radio);
+    }
+    check("time-out: expired once", expiries == 1 && keys.contains(QStringLiteral("tx-timeout-expired")));
+    pumpFor(100);
+    const size_t atExpiry = f.edges.size();
+    pumpFor(600);
+    std::printf("       %zu edges for ten M before the time-out ended the run\n", atExpiry);
+    check("time-out: A keys nothing more and ends key-up",
+          f.edges.size() == atExpiry && atExpiry < 40 && !f.edges.back().down && alternates(f.edges));
+    check("time-out: A's text is over", !f.radio.producerRequestHasWork(a.request));
+    TxTimeoutTestAccess::radioKeyed(f.radio, false);
+    TxTimeoutTestAccess::tick(f.radio);
+    check("time-out: host text holds nothing, the latch is clear once idle", !f.radio.txTimeoutLatched());
+    keys.clear();
+    f.radio.sendRemoteCwKey(true, QStringLiteral("tci:keyer"));
+    pumpFor(60);
+    f.radio.sendRemoteCwKey(false, QStringLiteral("tci:keyer"));
+    pumpFor(50);
+    check("time-out: the ended run no longer refuses a remote key",
+          !keys.contains(QStringLiteral("cw-text-remote-key")) && f.edges.size() == atExpiry + 2
+              && alternates(f.edges));
+    check("time-out: B's text keys after the time-out",
+          b.send(QStringLiteral("E"))
+              && pumpUntil([&] { return f.edges.size() == atExpiry + 4; }, 2000) && alternates(f.edges));
+    b.stop();
+    pumpFor(50);
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("host-cw-text-engine"));
@@ -979,6 +1046,7 @@ int main(int argc, char** argv)
     testRefusedSendKeepsCwxSpeed();
     testRoutelessSendRefused();
     testRadioSideKeyerUnchanged();
+    testTimeOutEndsHostText();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
     return g_failed == 0 ? 0 : 1;
 }
