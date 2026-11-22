@@ -188,7 +188,8 @@ void AntennaGeniusApplet::buildUI()
             columnLayout->setContentsMargins(0, 0, 0, 0);
             columnLayout->setSpacing(1);
             heading = new QLabel(direction);
-            heading->setStyleSheet(kLabelStyle);
+            ThemeManager::instance().applyStyleSheet(
+                heading, "color: {{color.text.label}}; font-size: 10px; font-weight: bold;");
             heading->setAlignment(Qt::AlignCenter);
             columnLayout->addWidget(heading);
             grid = new QWidget;
@@ -254,7 +255,8 @@ void AntennaGeniusApplet::buildUI()
             columnLayout->setContentsMargins(0, 0, 0, 0);
             columnLayout->setSpacing(1);
             heading = new QLabel(direction);
-            heading->setStyleSheet(kLabelStyle);
+            ThemeManager::instance().applyStyleSheet(
+                heading, "color: {{color.text.label}}; font-size: 10px; font-weight: bold;");
             heading->setAlignment(Qt::AlignCenter);
             columnLayout->addWidget(heading);
             grid = new QWidget;
