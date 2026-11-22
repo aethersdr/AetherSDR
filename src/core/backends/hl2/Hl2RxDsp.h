@@ -223,6 +223,13 @@ public:
     // old-axis IQ does not ghost across the new axis. Not a transport gap, which
     // keeps the average (see Hl2Spectrum::reset()).
     Q_INVOKABLE void dropSpectrumAverage();
+    // The T/R edge, for the spectrum's DC removal (Hl2Spectrum::setTransmitting).
+    // Held here and re-applied in installChannel(), like the averaging.
+    Q_INVOKABLE void setSpectrumTransmitting(bool on, int releaseHoldMs);
+    // The NCO moved: restart the spectrum's DC estimates (Hl2Spectrum::restartDc).
+    // Separate from dropSpectrumAverage(), which a T/R edge may call too.
+    Q_INVOKABLE void restartSpectrumDc();
+    [[nodiscard]] bool spectrumTransmitting() const noexcept { return m_spectrumTransmitting; }
     // What the installed spectrum is actually running, for tests. DSP thread.
     [[nodiscard]] double spectrumAverageMsApplied() const noexcept
     {
@@ -231,6 +238,16 @@ public:
     [[nodiscard]] bool spectrumLogAverageApplied() const noexcept
     {
         return m_spectrum && m_spectrum->logAverage();
+    }
+    // The installed spectrum's T/R state: keyed (armed, transmitting or
+    // releasing), and whether its transmit DC estimate is the one in use.
+    [[nodiscard]] bool spectrumDcKeyedApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->dcKeyed();
+    }
+    [[nodiscard]] bool spectrumDcTransmittingApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->dcTransmitting();
     }
 
     // Impulse noise blankers, the HL2's only ones (no firmware DSP), so NB is
@@ -695,6 +712,7 @@ private:
     WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
+    bool m_spectrumTransmitting = false;   // see setSpectrumTransmitting()
     // The S-meter tap's gate — the settle window after the channel starts
     // being fed real IQ again, and the read cadence — see the settle note in
     // processIqBlock() and WdspSMeter.h. Armed on the mute's release edge and

@@ -251,6 +251,11 @@ void Hl2RxDsp::installChannel(RebuildResult result)
                "100 ms stop-and-flush timeout.";
     }
     m_channel = std::move(result.channel);
+    // New geometry, same converter and key: the DC estimates and the T/R state
+    // carry over (a fresh one keyed would learn the keyed DC as receive DC).
+    if (m_spectrum && result.spectrum) {
+        result.spectrum->carryDcFrom(*m_spectrum);
+    }
     m_spectrum = std::move(result.spectrum);
     // The operator's averaging, which the fresh spectrum does not know. A new
     // span is new geometry, so the average starts over (it was constructed
@@ -258,6 +263,7 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     if (m_spectrum) {
         m_spectrum->setAverageTimeMs(static_cast<double>(m_spectrumAverageMs));
         m_spectrum->setLogAverage(m_spectrumLogAverage);
+        m_spectrum->setTransmitting(m_spectrumTransmitting);
     }
 
     m_iqBuffer.clear();
@@ -645,9 +651,25 @@ void Hl2RxDsp::dropSpectrumAverage()
     if (!m_spectrum)
         return;
     // The window accumulate() holds between due frames is old-axis IQ too;
-    // keeping it would seed the fresh average with the old spectrum.
-    m_spectrum->reset();
+    // keeping it would seed the fresh average with the old spectrum. The DC
+    // estimates are kept: a T/R edge may drop the average too.
+    m_spectrum->discardPartialFrame();
     m_spectrum->dropAverage();
+}
+
+void Hl2RxDsp::restartSpectrumDc()
+{
+    if (m_spectrum) {
+        m_spectrum->restartDc();
+    }
+}
+
+void Hl2RxDsp::setSpectrumTransmitting(bool on, int releaseHoldMs)
+{
+    m_spectrumTransmitting = on;
+    if (m_spectrum) {
+        m_spectrum->setTransmitting(on, static_cast<double>(releaseHoldMs));
+    }
 }
 
 void Hl2RxDsp::setShift(double shiftHz)

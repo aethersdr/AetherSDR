@@ -209,6 +209,15 @@ struct Hl2HardwarePttTestAccess {
                                   Qt::BlockingQueuedConnection);
         return muted;
     }
+    // The T/R state the pan's DC removal was given (Hl2RxDsp::setSpectrumTransmitting).
+    static bool spectrumTransmitting(Hl2Backend& backend)
+    {
+        bool on = false;
+        Hl2RxDsp* dsp = backend.m_rx[0].dsp;
+        QMetaObject::invokeMethod(dsp, [&on, dsp] { on = dsp->spectrumTransmitting(); },
+                                  Qt::BlockingQueuedConnection);
+        return on;
+    }
     static bool mixerGateClosed(const Hl2Backend& backend) { return backend.m_rxAudioMuted; }
     static bool holdArmed(const Hl2Backend& backend)
     {
@@ -311,6 +320,7 @@ void testRadioPttWithHostIdle()
     // radio edge that keyed with it would reach the wire.
     backend.setKeying(true, tx.operation, {});
     check(Access::hostMoxOnWire(backend), "control: a host key reaches MetisClient");
+    check(Access::spectrumTransmitting(backend), "a host key moves the pan's DC removal to transmit");
     backend.submitTxAudio(microphoneAudio, 24000, TxAudioSource::Microphone, tx.context);
     Access::drainTxAudio(backend);
     check(processedAudioBlocks == 1, "control: host keying sends microphone audio through the DSP");
@@ -318,6 +328,7 @@ void testRadioPttWithHostIdle()
     pumpUntilUnmuted(backend, 10 * Access::holdMs(backend));
     check(!Access::hostMoxOnWire(backend) && !Access::mixerGateClosed(backend),
           "control: the host is unkeyed and receiving again");
+    check(!Access::spectrumTransmitting(backend), "a host unkey moves it back to receive");
     MoxEdges edges(backend);
     const AetherSDR::hl2::Cc idleDrive = Access::driveBank(backend);
     backend.setTxPower(37);
@@ -334,6 +345,7 @@ void testRadioPttWithHostIdle()
     check(edges.seen == QList<bool>{true}, "ten PTT frames publish one transmit edge");
     check(Access::mixerGateClosed(backend), "the mixer gate closes on radio PTT");
     check(Access::dspMuted(backend), "the demodulator is muted on radio PTT");
+    check(Access::spectrumTransmitting(backend), "radio PTT moves the pan's DC removal to transmit");
     check(!Access::hostMoxOnWire(backend), "the host does not assert MOX");
 
     const int blocksBeforeRadioAudio = processedAudioBlocks;
@@ -351,6 +363,8 @@ void testRadioPttWithHostIdle()
     check(Access::holdMs(backend) > 0, "the release uses the unkey hold");
     Access::radioPtt(backend, false);
     check(edges.seen == (QList<bool>{true, false}), "the falling edge publishes receive");
+    check(!Access::spectrumTransmitting(backend),
+          "the falling edge moves it back to receive (its hold runs in samples)");
     check(Access::holdArmed(backend) && Access::mixerGateClosed(backend),
           "the falling edge arms the unkey hold");
     pumpUntilUnmuted(backend, 10 * Access::holdMs(backend));
