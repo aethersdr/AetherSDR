@@ -20,6 +20,144 @@ bool IcomCivBackend::hasDualReceivers() const
     return m_model && profileFor(*m_model).dualReceiver.has_value();
 }
 
+bool IcomCivBackend::hasSelectedBandDualwatch() const
+{
+    return m_model && profileFor(*m_model).selectedBandDualwatch;
+}
+
+void IcomCivBackend::requestMainVfoEdit(std::optional<CivMode> mode, bool data, int filter)
+{
+    if (!m_session || !m_connected || m_confirmedScopeSource != 0) { return; }
+    const qint64 now = nowMs();
+    if (m_pendingMainVfoEdit && now >= m_pendingMainVfoEdit->deadlineMs) {
+        m_pendingMainVfoEdit.reset();
+    }
+    if (m_pendingMainVfoEdit) {
+        if (mode) {
+            m_pendingMainVfoEdit->mode = mode;
+            m_pendingMainVfoEdit->data = data;
+        }
+        if (filter) { m_pendingMainVfoEdit->filter = filter; }
+        return;
+    }
+    if (!m_mainModeConfirmed) { return; }
+    const CivMode nextMode = mode.value_or(m_mode);
+    const bool nextData = mode ? data : m_dataMode;
+    const int nextFilter = filter ? filter : m_filter;
+    m_mainModeConfirmed = false;
+    m_pendingMainVfoEdit = MainVfoEdit{now + IcomCivScheduler::kLateReplyGraceMs, std::nullopt};
+    sendUserCommand(cmdSetVfoMode(m_session->civAddress(), nextMode, nextData, nextFilter));
+}
+
+void IcomCivBackend::pollSelectedBandRadio()
+{
+    const std::uint8_t address = m_session->civAddress();
+    const auto read = [this, address](std::uint8_t command, std::uint8_t sub) {
+        const auto frame = buildFrameSub(address, command, sub);
+        queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Control);
+    };
+    read(cmd::kVfoControl, 0xd2);
+    read(cmd::kFunction, 0x59);
+    read(cmd::kScope, scope::kMainSub);
+    read(0x25, vfoMode::kSelected);
+    read(cmd::kVfoMode, vfoMode::kSelected);
+    if (const auto item = profileFor(*m_model).networkAfIfItem) {
+        const auto frame = cmdReadSetting(address, *item);
+        queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Control);
+    }
+}
+
+// A7894-4J pp. 6–7, 16–17: only 25/26 explicitly address MAIN's VFO.
+// Untagged DSP, filter width and meter operations follow the panel focus.
+bool IcomCivBackend::selectedBandCommandAllowed(const CivFrame& frame, bool writing) const
+{
+    if (!frame.hasSub) { return false; }
+    switch (frame.cmd) {
+    case cmd::kReadId:
+        return !writing && frame.sub == 0;
+    case cmd::kVfoControl:
+        return !writing && frame.sub == 0xd2;
+    case cmd::kFunction:
+        return frame.sub == 0x59;
+    case 0x25:
+    case cmd::kVfoMode:
+        return frame.sub == vfoMode::kSelected;
+    case cmd::kControl:
+        return !writing && frame.sub == control::kPtt;
+    case cmd::kSetting: {
+        const auto item = profileFor(*m_model).networkAfIfItem;
+        return !writing && item && frame.sub == settingSub::kMenu && frame.data.size() >= 2
+            && frame.data[0] == encodeBcdByte(*item / 100) && frame.data[1] == encodeBcdByte(*item % 100);
+    }
+    case cmd::kScope:
+        switch (frame.sub) {
+        case scope::kOnOff:
+        case scope::kDataOutput:
+        case scope::kMainSub:
+            return true;
+        case scope::kSingleDual:
+            return !writing;
+        case scope::kMode:
+        case scope::kSpan:
+        case scope::kEdgeNumber:
+        case scope::kReference:
+        case scope::kSweepSpeed:
+            return !frame.data.empty() && m_confirmedScopeSource == frame.data[0];
+        case scope::kFixedEdge:
+            return m_confirmedScopeSource == 0;
+        }
+    }
+    return false;
+}
+
+bool IcomCivBackend::validSelectedBandReply(const CivFrame& frame) const
+{
+    if (frame.isOk() || frame.isNg() || frame.cmd == cmd::kReadId) { return true; }
+    if (!frame.hasSub) { return false; }
+    switch (frame.cmd) {
+    case 0x25: {
+        const auto hz = decodeFreqExact(frame.data, kFreqBytes);
+        return frame.sub == vfoMode::kSelected && hz && supportsFrequency(*m_model, *hz);
+    }
+    case cmd::kVfoMode: {
+        const auto state = decodeVfoMode(frame.data);
+        if (frame.sub != vfoMode::kSelected || !state || state->filter == 0) { return false; }
+        const auto modes = modeListFor(*m_model);
+        return std::ranges::find(modes, modeToNeutral(state->mode, state->dataMode)) != modes.end();
+    }
+    case cmd::kSetting:
+        return frame.data.size() == 3 && frame.data[2] <= 1 && selectedBandCommandAllowed(frame, false);
+    case cmd::kVfoControl:
+    case cmd::kFunction:
+    case cmd::kControl:
+        return selectedBandCommandAllowed(frame, false) && frame.data.size() == 1 && frame.data[0] <= 1;
+    case cmd::kScope:
+        if (frame.sub == scope::kMainSub || frame.sub == scope::kOnOff || frame.sub == scope::kDataOutput) {
+            return frame.data.size() == 1 && frame.data[0] <= 1;
+        }
+        if (frame.sub == scope::kSingleDual) {
+            return frame.data.size() == 1 && frame.data[0] == 0;
+        }
+        if (frame.sub == scope::kWaveData) {
+            // A7894-4J p.29: Wi-Fi sends a full 01/01 division. The shared
+            // decoder separately validates the BCD axes and mode.
+            constexpr std::size_t headerBytes = 4 + 2 * kFreqBytes + 1;
+            if (frame.data.size() < headerBytes || m_confirmedScopeSource != frame.data[0]
+                || frame.data[1] != 1 || frame.data[2] != 1) {
+                return false;
+            }
+            if (frame.data[headerBytes - 1] == 1) {
+                return frame.data.size() == headerBytes;
+            }
+            const auto bins = std::span(frame.data).subspan(headerBytes);
+            return frame.data[headerBytes - 1] == 0 && bins.size() == static_cast<std::size_t>(m_model->scopePoints)
+                && std::ranges::all_of(bins, [this](std::uint8_t bin) { return bin <= m_model->scopeMaxAmplitude; });
+        }
+        return selectedBandCommandAllowed(frame, false);
+    }
+    return false;
+}
+
 bool IcomCivBackend::refuseDeferredSubControl(int receiver)
 {
     if (!hasDualReceivers() || receiver == 0) { return false; }

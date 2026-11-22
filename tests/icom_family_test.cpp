@@ -25,6 +25,7 @@
 
 #include <QCoreApplication>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -273,6 +274,12 @@ int main(int argc, char** argv)
         if (ic705 && ic9700) {
             icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic705);
             const RadioCapabilities ic705Caps = selectedBackend->capabilities();
+            check(wsprSeamAudioRouteReady(true, ic705Caps),
+                  "an identified IC-705 accepts an armed WSPR seam-audio route without host modulation");
+            RadioCapabilities noSeam = ic705Caps;
+            noSeam.takesTxAudioOverSeam = false;
+            check(!wsprSeamAudioRouteReady(true, noSeam),
+                  "the WSPR route fails closed if the current backend cannot take seam audio");
             check(ic705Caps.fmToneModes.contains(QStringLiteral("dtcs_txrx"))
                       && ic705Caps.fmToneModes.contains(
                           QStringLiteral("ctcss_tx_dtcs_rx"))
@@ -498,14 +505,6 @@ int main(int argc, char** argv)
                   "a different Icom serial announces one replacement UI slice");
         }
     }
-
-    RadioCapabilities transmittingIcom = caps;
-    transmittingIcom.canTransmit = true;
-    check(wsprSeamAudioRouteReady(true, transmittingIcom),
-          "an armed Icom seam-audio route is ready without host modulation");
-    transmittingIcom.takesTxAudioOverSeam = false;
-    check(!wsprSeamAudioRouteReady(true, transmittingIcom),
-          "the WSPR route fails closed if the current backend cannot take seam audio");
 
     const auto ic705Mod = icom::modulationProfileFor(
         *icom::modelForId(0xA4));
@@ -851,11 +850,9 @@ int main(int argc, char** argv)
             //     surviving count against the tokens written turns that silence
             //     into a red test.
             //
-            // (2) Every declared band lies INSIDE this row's own tuning range.
-            //     The range already disables unreachable band buttons, so a
-            //     declaration reaching past it renders a button that is drawn
-            //     and then greyed out — the row contradicting itself, in the
-            //     UI. Containment keeps the two statements one statement.
+            // (2) Each band button must tune to a frequency the radio supports.
+            //     Model-specific decks can cover a regional subset of the US
+            //     allocation used by the default band grid.
             const QString raw = QString::fromUtf8(
                 m.bands.data(), static_cast<int>(m.bands.size()));
             const QStringList declared = parseDeclaredBands(raw);
@@ -867,11 +864,18 @@ int main(int argc, char** argv)
                 for (const auto& def : kBands) {
                     if (name != QLatin1String(def.name))
                         continue;
-                    check(def.lowMhz * 1e6 >= static_cast<double>(m.tuningMinHz)
-                              && def.highMhz * 1e6
-                                     <= static_cast<double>(m.tuningMaxHz),
-                          "and lies inside the tuning range the same row "
-                          "declares");
+                    const auto decks = icom::bandsFor(m);
+                    const auto deck = std::ranges::find(decks, def.name, &icom::IcomBand::name);
+                    if (deck != decks.end()) {
+                        const auto defaultHz = static_cast<std::uint64_t>(def.defaultFreqMhz * 1e6);
+                        check(deck->lowHz <= defaultHz && defaultHz <= deck->highHz
+                                  && m.tuningMinHz <= deck->lowHz && deck->highHz <= m.tuningMaxHz,
+                              "the band button tunes inside its model-specific RF deck");
+                    } else {
+                        check(def.lowMhz * 1e6 >= static_cast<double>(m.tuningMinHz)
+                                  && def.highMhz * 1e6 <= static_cast<double>(m.tuningMaxHz),
+                              "the declared band lies inside the model's tuning range");
+                    }
                     break;
                 }
             }

@@ -109,7 +109,7 @@ void checkExperimentalIcomModels()
 {
     ConnectionPanel panel;
     auto* chooser = panel.findChild<QComboBox*>(QStringLiteral("connectionManualIcomCivCombo"));
-    for (const QString& value : {QStringLiteral("98"), QStringLiteral("B2"), QStringLiteral("8E")}) {
+    for (const QString& value : {QStringLiteral("98"), QStringLiteral("B2"), QStringLiteral("8E"), QStringLiteral("BA")}) {
         const int index = chooser ? chooser->findData(value) : -1;
         report(qPrintable(QStringLiteral("Icom %1 is labeled experimental in the CI-V chooser").arg(value)),
                chooser && index >= 0 && chooser->itemText(index).contains(QStringLiteral("experimental"), Qt::CaseInsensitive));

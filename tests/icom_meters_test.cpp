@@ -338,6 +338,16 @@ static void testModelTable()
     check(ic9700 && profileFor(*ic9700).supports(IcomFeature::VfoMode),
           "yet its measured 26 00 mode/DATA/filter shape is attested independently");
 
+    const auto* ic7110 = modelForId(0xBA);
+    check(ic7110 && supportsFrequency(*ic7110, 30'000) && supportsFrequency(*ic7110, 146'000'000)
+              && supportsFrequency(*ic7110, 430'000'000) && supportsFrequency(*ic7110, 440'000'000)
+              && !supportsFrequency(*ic7110, 146'000'001) && !supportsFrequency(*ic7110, 429'999'999)
+              && !supportsFrequency(*ic7110, 440'000'001),
+          "IC-7110 uses the Japanese model's documented receiver ranges, including their gap");
+    check(ic7110 && !bandRatedPowerWatts(*ic7110, 14'200'000)
+              && !bandRatedPowerWatts(*ic7110, 432'100'000),
+          "IC-7110 RX ranges confer no power rating for an unknown variant");
+
     // Six-byte frequencies. A codec against a hardcoded 5 misaligns by two
     // bytes and decodes a plausible-looking wrong frequency.
     const IcomModel* ic905 = modelForId(0xAC);
@@ -440,8 +450,9 @@ static void testModelTable()
     // up a command shape nobody checked on that radio. Naming each address here
     // keeps that guard: the flag cannot go true without a deliberate edit to
     // this list, and the comment beside it has to say what the evidence was.
-    static const std::array<std::uint8_t, 6> kAttestedVfoMode{
+    static const std::array<std::uint8_t, 7> kAttestedVfoMode{
         0xA4,  // IC-705     — its own CI-V Reference Guide documents 26 00
+        0xBA,  // IC-7110    — A7894-4J: selected MAIN VFO, DATA and filter
         0xB6,  // IC-7300MK2 — likewise, from its own guide
         0x98,  // IC-7610 — official absolute MAIN/SUB 26 rr
         0xB2,  // IC-7760 — official absolute MAIN/SUB 26 rr
@@ -494,8 +505,8 @@ static void testCapabilityProfiles()
           "IC-705, IC-7300MK2 and IC-9700 are the intentional bring-up profiles");
     check(std::ranges::count_if(knownModels(), [](const IcomModel& model) {
               return profileFor(model).supportedBringup;
-          }) == 6,
-          "six intentional profiles include three shared dual-receiver models");
+          }) == 7,
+          "seven intentional profiles include the receive-only IC-7110 bring-up");
 
     check(p705.setMenu.voxDelayItem == 359 && p705.setMenu.civTransceiveItem == 131,
           "IC-705 owns VOX delay 0359 and CI-V Transceive 0131");

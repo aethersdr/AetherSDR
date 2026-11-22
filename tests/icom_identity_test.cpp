@@ -225,6 +225,27 @@ int main(int argc, char** argv)
     // reaching it here would need a prepared beacon and a timer tick for a
     // 111.6 s frame, so that tag has no behavioural test yet.
 
+    // Synthetic A7894-4J identity replies: BA names the IC-7110 even when
+    // the station nickname and the configured bus address suggest a 9700.
+    for (const char* reply : {"fefee0ba1900bafd", "fefee0a21900bafd"}) {
+        IcomCivBackendTestAccess::connect(backend, "IC-9700");
+        IcomCivBackendTestAccess::inject(backend, reply);
+        const auto caps = backend.capabilities();
+        const auto address = static_cast<std::uint8_t>(QByteArray::fromHex(reply).at(3));
+        check(caps.model == QStringLiteral("IC-7110")
+                  && IcomCivBackendTestAccess::address(backend) == address,
+              "IC-7110 identity selects its profile and retains the actual CI-V destination");
+        check(caps.maxSlices == 1 && caps.maxPanadapters == 1 && !caps.canTransmit
+                  && caps.txPowerBands.empty() && !audio.hostModulation(),
+              "IC-7110 publishes one receive slice and one pan without enabling TX audio");
+    }
+    const IcomModel* ic7110 = modelForId(0xBA);
+    check(ic7110 && ic7110 == modelForName("IC-7110") && ic7110->hasWifi
+              && ic7110->receivers == 2 && ic7110->scopePoints == 475
+              && ic7110->scopeMaxAmplitude == 160
+              && preferredRxChannelsForModelHint(0xBA) == 1,
+          "IC-7110 identifies its two physical receivers and Wi-Fi waveform; audio requests mono");
+
     IcomCivBackendTestAccess::connect(backend, "Desktop");
     IcomCivBackendTestAccess::timeout(backend);
     IcomCivBackendTestAccess::inject(backend, "fefee0501900b6fd");

@@ -32,6 +32,7 @@ The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Ico
 |-------|---------|--------|
 | **IC-7300MK2** | Built-in Ethernet | **Supported**: no EXPERIMENTAL badge |
 | **IC-705** | Wi-Fi | Early (experimental); verified against its CI-V guide |
+| **IC-7110** | Wi-Fi | Experimental receive-only profile with MAIN tuning and one MAIN/SUB scope. Tested with offline fixtures. |
 | **IC-9700** | Ethernet | Early (experimental); works, with read-only memories |
 | **IC-7610, IC-7760** | Ethernet | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
 | **IC-7851** | Ethernet | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
@@ -43,7 +44,7 @@ The original IC-7300 has no network port and is not in the model list.
 
 ### On the radio
 
-Enable network (remote) control and create a network user name and password. AetherSDR uses the radio's three UDP ports, which start at 50001 by default (control, CI-V, audio). The IC-705 must be on your Wi-Fi network; the IC-7300MK2 and IC-9700 use Ethernet.
+Enable network (remote) control and create a network user name and password. AetherSDR uses the radio's three UDP ports, which start at 50001 by default (control, CI-V, audio). Connect the IC-705 or IC-7110 to your Wi-Fi network. The IC-7300MK2 and IC-9700 use Ethernet.
 
 ### Connecting
 
@@ -142,6 +143,16 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 - **WFM** (broadcast FM) is receive-only.
 - GPS location and NTP time controls. The power gauge uses a QRP scale.
 - AetherSDR warns if the radio's MOD Input is not WLAN.
+
+### IC-7110
+
+Choose **IC-7110** in the **Icom CI-V:** menu or use **Auto-detect (recommended)**. Its factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile. This first profile uses the published Japanese receive ranges of 30 kHz–146 MHz and 430–440 MHz.
+
+AetherSDR opens one slice for MAIN's selected VFO. With the scope on MAIN you can tune it and select its mode and filter preset. The front panel can remain focused on SUB. Choose the scope source on the radio, or use `civ scopesource main` or `civ scopesource sub` on the automation bridge. When you select SUB, the status bar identifies the preview and the panadapter shows SUB's spectrum and waterfall. Return the scope to MAIN to tune in the app.
+
+Dualwatch is independent of the scope source. The bridge commands `civ dualwatch on` and `civ dualwatch off` control it, and `civ profile` reports the state the radio confirmed. The radio can mute SUB when both frequencies use the same RF group. Independent SUB tuning, separate receiver audio and transmission await hardware qualification.
+
+For speaker audio, select **AF** in the radio's **Wi-Fi AF/IF Output** menu. AetherSDR waits for that setting before playing the mono station audio. The IC-7110 profile leaves per-receiver TCI audio unavailable until the Wi-Fi channel mapping is verified.
 
 ### IC-9700
 

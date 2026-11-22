@@ -182,10 +182,8 @@ txBandwidthProfileFor(const IcomModel& model);
 // still tune and listen.
 [[nodiscard]] const IcomModel& unknownModel();
 
-// One RF deck: a range this model can tune, and the PA rating inside it.
-//
-// A model needs this only when its tunable range is NOT the single continuous
-// interval [tuningMinHz, tuningMaxHz] — which, today, means the IC-9700 alone.
+// One continuous tuning range. A name identifies an amateur band only if the
+// range belongs to that band. A positive power is a documented PA rating.
 struct IcomBand {
     std::string_view name;
     std::uint64_t lowHz = 0;
@@ -282,6 +280,7 @@ enum class IcomFeature : std::uint8_t {
     GpsTimeConfiguration,
     MemoryChannels,
     AntennaTuner,
+    SelectedBandDualwatch,
 };
 
 enum class MemoryDialect : std::uint8_t {
@@ -470,6 +469,11 @@ struct IcomModelProfile {
     std::span<const AttenStep> attenuatorSteps{};
     std::span<const std::string_view> modes{};
     std::span<const std::string_view> receiveOnlyModes{};
+    // 07 D2 operating-band selection, 16 59 SUB on/off and one selectable
+    // scope. 25/26 address MAIN's selected/unselected VFOs.
+    bool selectedBandDualwatch = false;
+    // Decimal 1A 05 item used to distinguish AF speaker audio from a 12 kHz IF.
+    std::optional<int> networkAfIfItem{};
 
     [[nodiscard]] const FeatureEvidence* evidenceFor(IcomFeature feature) const noexcept;
     [[nodiscard]] bool supports(IcomFeature feature) const noexcept;
