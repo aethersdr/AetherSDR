@@ -32,7 +32,7 @@ The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Ico
 |-------|---------|--------|
 | **IC-7300MK2** | Built-in Ethernet | **Supported**: no EXPERIMENTAL badge |
 | **IC-705** | Wi-Fi | Early (experimental); verified against its CI-V guide |
-| **IC-7110** | Wi-Fi | Experimental receive-only profile with MAIN tuning and one MAIN/SUB scope. Tested with offline fixtures. |
+| **IC-7110** | Wi-Fi | Experimental receive-only profile with MAIN tuning and one MAIN/SUB scope. **Not hardware-confirmed.** |
 | **IC-9700** | Ethernet | Early (experimental); works, with read-only memories |
 | **IC-7610, IC-7760** | Ethernet | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
 | **IC-7851** | Ethernet | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
@@ -146,7 +146,15 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-7110
 
-Choose **IC-7110** in the **Icom CI-V:** menu or use **Auto-detect (recommended)**. Its factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile. This first profile uses the published Japanese receive ranges of 30 kHz–146 MHz and 430–440 MHz.
+Choose **IC-7110** in the **Icom CI-V:** menu or use **Auto-detect (recommended)**. Its factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile. Select the radio's market in **IC-7110 region** when connecting by IP. The choice is saved for that host and port and also applies on subsequent auto-detected connections.
+
+| Radio region | Receive tuning in AetherSDR |
+| --- | --- |
+| United States | 30 kHz–148 MHz and 420–450 MHz |
+| Europe | 30 kHz–146 MHz and 430–440 MHz, including a **4 m** band button for 70 MHz |
+| Japan / other / unknown (default) | 30 kHz–146 MHz and 430–440 MHz |
+
+The US and Europe profiles use conservative software limits pending regional hardware measurements. [Regional sources and qualification](https://github.com/aethersdr/AetherSDR/issues/7506#issuecomment-7073680636)
 
 AetherSDR opens one slice for MAIN's selected VFO. With the scope on MAIN you can tune it and select its mode and filter preset. The front panel can remain focused on SUB. Choose the scope source on the radio, or use `civ scopesource main` or `civ scopesource sub` on the automation bridge. When you select SUB, the status bar identifies the preview and the panadapter shows SUB's spectrum and waterfall. Return the scope to MAIN to tune in the app.
 

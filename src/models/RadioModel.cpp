@@ -721,6 +721,8 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
 
     if (family.compare(QLatin1String("icom"), Qt::CaseInsensitive) != 0)
         return;
+    req.params.insert(QStringLiteral("icom.ic7110Market"), IcomSettings::ic7110Market(
+        req.host, req.port ? req.port : IcomSettings::defaultBasePort()));
     req.params.insert(QStringLiteral("icom.username"), IcomSettings::username());
     req.params.insert(QStringLiteral("icom.password"), IcomCredentials::sessionPassword());
     req.params.insert(QStringLiteral("icom.serialPort"), IcomSettings::serialPort());

@@ -972,6 +972,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_memoryImportSource.clear();
 
     IcomSession::Params p;
+    m_ic7110Market = request.params.value(QStringLiteral("icom.ic7110Market")).toString().toStdString();
     p.host = QHostAddress(request.host);
     p.controlPort = request.port ? request.port : kControlPort;
     p.serialPort  = static_cast<quint16>(
@@ -1527,7 +1528,7 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
     if (m_civDetectTimer) {
         m_civDetectTimer->stop();
     }
-    const IcomModel* identified = modelForId(modelId);
+    const IcomModel* identified = modelForId(modelId, m_ic7110Market);
     m_model = identified ? identified : &unknownModel();
     // Cancel the identity read and any fallback snapshot before selecting the
     // destination. The new snapshot must use the resolved model's vocabulary.

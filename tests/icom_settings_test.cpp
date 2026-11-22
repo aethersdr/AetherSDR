@@ -48,6 +48,16 @@ int main(int argc, char** argv)
 
     // ---- the non-secret document round-trips ------------------------------
     IcomSettings::reset();
+    IcomSettings::setIc7110Market("Station.local", 50001, "US");
+    IcomSettings::setIc7110Market("station.local", 55110, "EU");
+    check(IcomSettings::ic7110Market("station.local", 50001) == "US"
+              && IcomSettings::ic7110Market("Station.local", 55110) == "EU"
+              && IcomSettings::ic7110Market("other.local", 50001).isEmpty(),
+          "receive market survives case differences and stays scoped to the endpoint");
+    IcomSettings::setIc7110Market("station.local", 50001, "");
+    check(IcomSettings::ic7110Market("station.local", 50001).isEmpty()
+              && IcomSettings::ic7110Market("station.local", 55110) == "EU",
+          "restoring Japanese limits leaves other stations untouched");
     check(IcomSettings::username().isEmpty(), "no username by default");
     check(IcomSettings::defaultBasePort() == icom::kControlPort,
           "the UI default is the ordinary Icom control port");

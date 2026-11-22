@@ -348,6 +348,21 @@ static void testModelTable()
               && !bandRatedPowerWatts(*ic7110, 432'100'000),
           "IC-7110 RX ranges confer no power rating for an unknown variant");
 
+    const auto* us = modelForId(0xBA, "US");
+    const auto* eu = modelForId(0xBA, "EU");
+    check(us && supportsFrequency(*us, 148'000'000) && supportsFrequency(*us, 420'000'000)
+              && supportsFrequency(*us, 450'000'000) && !supportsFrequency(*us, 450'000'001)
+              && !supportsFrequency(*us, 148'000'001) && !supportsFrequency(*us, 419'999'999)
+              && nearestSupportedFrequency(*us, 419'999'999) == 420'000'000
+              && us->tuningMaxHz == 450'000'000 && !us->hasTransmit,
+          "US IC-7110 covers both extended decks and rejects the gap");
+    check(eu && supportsFrequency(*eu, 70'500'000) && eu->bands.find(",4m,") != std::string_view::npos
+              && !supportsFrequency(*eu, 147'000'000) && !supportsFrequency(*eu, 445'000'000)
+              && eu->tuningMaxHz == 440'000'000 && !eu->hasTransmit,
+          "European IC-7110 advertises four metres with European VHF/UHF limits");
+    check(modelForId(0xBA, "unknown") == ic7110 && modelForId(0xA4, "US") == ic705,
+          "unknown regions and other model identities keep their original profiles");
+
     // Six-byte frequencies. A codec against a hardcoded 5 misaligns by two
     // bytes and decodes a plausible-looking wrong frequency.
     const IcomModel* ic905 = modelForId(0xAC);

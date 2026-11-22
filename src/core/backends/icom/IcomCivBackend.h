@@ -454,6 +454,7 @@ private:
     std::unique_ptr<IcomSession> m_session;
     std::uint64_t m_sessionGeneration = 0;
     const IcomModel* m_model = nullptr;
+    std::string m_ic7110Market;
 
     // ---- Confirmation provenance (the `stateFreshness` diagnostic) ----------
     //

@@ -121,10 +121,9 @@ supported on its own (both below); FlexRadio remains the primary target:
   The connect path asks the radio for its own CI-V address rather than assuming
   one. On the IC-7300MK2 and IC-705, and on the IC-9700, which is not yet
   verified, the panadapter runs in SCROLL-F, tuning in place and scrolling at
-  its margins as on a Flex, with Center and Fixed selectable. Only the IC-705
-  and IC-7300MK2 are verified against their own CI-V guides
-  — an unrecognised model gets no scope and no transmit rather than optimistic
-  defaults. The IC-7610, IC-7760 and IC-7851 are **experimental**, with shared
+  its margins as on a Flex, with Center and Fixed selectable. The experimental
+  IC-7110 supports receive-only MAIN tuning and one selectable MAIN/SUB scope
+  and is **not hardware-confirmed**. An unrecognised model gets no scope or transmit. The IC-7610, IC-7760 and IC-7851 are **experimental**, with shared
   dual-receiver MAIN/SUB control, scope and audio confirmed on an IC-7851;
   transmit is enabled on them but has not been qualified on hardware.
   Scope-capable models get native Band and Segment Zoom. The **IC-7300MK2 over

@@ -176,6 +176,14 @@ constexpr std::array<IcomBand, 2> kIc7110Bands{{
     {"440",  430'000'000ULL, 440'000'000ULL, 0.0},
 }};
 
+// US amateur-band extensions to the Japanese receive envelope, per RFC #7506.
+// Regional band allocations and Icom's model announcement are linked in
+// docs/icom-dual-receiver-bringup.md. No regional PA rating is implied.
+constexpr std::array<IcomBand, 2> kIc7110UsBands{{
+    {"",         30'000ULL, 148'000'000ULL, 0.0},
+    {"440", 420'000'000ULL, 450'000'000ULL, 0.0},
+}};
+
 constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
     {0x00, "MIC",     ModSourceMic},
     {0x01, "USB",     ModSourceUsb},
@@ -406,8 +414,23 @@ constexpr std::array<FeatureEvidence, 1> kTunerOnlyEvidence{{
 
 }  // namespace
 
-const IcomModel* modelForId(std::uint8_t addr)
+const IcomModel* modelForId(std::uint8_t addr, std::string_view market)
 {
+    if (addr == 0xBA && (market == "US" || market == "EU")) {
+        static const IcomModel us = [] {
+            auto m = *modelForId(0xBA);
+            m.market = "US";
+            m.tuningMaxHz = kIc7110UsBands.back().highHz;
+            return m;
+        }();
+        static const IcomModel eu = [] {
+            auto m = *modelForId(0xBA);
+            m.market = "EU";
+            m.bands = "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,4m,2m,440";
+            return m;
+        }();
+        return market == "US" ? &us : &eu;
+    }
     for (const auto& m : kModels)
         if (m.civAddress == addr)
             return &m;
@@ -804,8 +827,14 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     switch (model.civAddress) {
     case 0xA4:
         return kIc705Profile;
-    case 0xBA:
-        return kIc7110Profile;
+    case 0xBA: {
+        static const IcomModelProfile us = [] {
+            auto p = kIc7110Profile;
+            p.bands = kIc7110UsBands;
+            return p;
+        }();
+        return model.market == "US" ? us : kIc7110Profile;
+    }
     case 0xA2:
         return kIc9700Profile;
     case 0xB6:
