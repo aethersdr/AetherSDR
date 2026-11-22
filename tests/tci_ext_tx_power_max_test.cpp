@@ -365,6 +365,38 @@ void serverBehaviour()
               && ofItem(got).isEmpty(),
           "a radio that stops transmitting withdraws the item");
 
+    backend->caps.canTransmit = true;
+    emit model.capabilitiesChanged(true, backend->caps);
+    settle();
+    got = a.takeExtension();
+    check(lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
+              && ofItem(got) == one("aethersdr_tx_power_max:1,10.0;"),
+          "a radio that can transmit again restores the item with one line");
+    if (ofItem(got).size() != 1) {
+        dump("a", got);
+    }
+
+    // No TX slice: withdrawn once the TX-move settle has passed; restored the same way.
+    s1->applyChanges(tuned(7.074, false));
+    settle(700);
+    got = a.takeExtension();
+    check(model.txSlice() == nullptr && !lastAdvertisement(got).isEmpty()
+              && !lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
+              && ofItem(got).isEmpty(),
+          "with no TX slice the item is withdrawn");
+    if (!ofItem(got).isEmpty() || lastAdvertisement(got).isEmpty()) {
+        dump("a", got);
+    }
+    s1->applyChanges(tuned(7.074, true));
+    settle(700);
+    got = a.takeExtension();
+    check(lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
+              && ofItem(got) == one("aethersdr_tx_power_max:1,10.0;"),
+          "a TX slice restored brings the item back with one fresh line");
+    if (ofItem(got).size() != 1) {
+        dump("a", got);
+    }
+
     check(b.takeExtension().isEmpty(), "a client that never enabled the set heard none of it");
 }
 
