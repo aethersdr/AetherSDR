@@ -3187,6 +3187,10 @@ RadioModel::~RadioModel()
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
     m_independentTxGrants.reset(); // stop while every model member is still alive
+    // The local controls' TxController aborts its held inputs back into this
+    // model when it is destroyed, and the implicit member teardown would run
+    // that after m_slices is gone (it is declared later).
+    m_localTxController.reset();
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
@@ -3196,6 +3200,12 @@ RadioModel::~RadioModel()
         }
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Cwx)) {
             m_backend->abortCwText(m_txCoordinator.cleanupFence());
+        }
+        // Still active: a MOX held through a controller copy that outlives the
+        // model (TxApplet keeps one), or one the reset above released whose
+        // queued unkey has not completed. A second unkey is redundant, never a key.
+        if (activeTxActivities() & static_cast<unsigned>(TxActivity::Mox)) {
+            m_backend->setKeying(false, m_txCoordinator.cleanupFence());
         }
     }
     restoreTuneInhibit();
