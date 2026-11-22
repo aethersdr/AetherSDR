@@ -493,7 +493,7 @@ private:
 
     void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
-    void emitAllSliceState();
+    void emitAllSliceState(bool announceBlankers = false);
     void emitAllPanState();
     void pushInitialState();
     // Put every receiver's AGC pair where this session should come up: remembered
@@ -547,6 +547,8 @@ private:
     QString m_psUnavailableReason;
     int m_psFeedbackRateHz = 0;
     Hl2PureSignalStatus m_psStatus;
+    quint64 m_psGeneration = 0;
+    bool m_psAdcOverload = false;
     // The operator's PureSignal preferences. GUI thread; the backend owns them
     // and persists them per radio as the "PureSignal" radio_settings document
     // (one coupler, one feedback attenuation), loaded on every connect.
@@ -707,7 +709,9 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
-        // A restored blanker still to be published once (emitSliceState).
+        // A blanker whose kind changed, that was restored, whose receiver just
+        // opened, or that the connect announcement re-sends, still to be
+        // published once (emitSliceState).
         bool nbEchoPending = false;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes
@@ -828,6 +832,9 @@ private:
     // open: receiver A's extras, and the whole entry for any a numRx param opened.
     void seedOpenReceiversFromMemory();
     void seedReceiverExtras(Receiver& r, const Receiver& memory) const;
+    // The pan centre r comes up on: `ncoHz` while r listens inside its usable
+    // window at the current rate, else r's tuned frequency.
+    [[nodiscard]] double panCentreKeptOrRecentred(const Receiver& r, double ncoHz) const;
     [[nodiscard]] static QJsonObject receiverMemoryJson(const Receiver& r);
     // Nullopt for an entry with no usable frequency or mode; other bad fields drop alone.
     [[nodiscard]] std::optional<Receiver> receiverFromMemory(const QJsonObject& o) const;
@@ -960,7 +967,8 @@ private:
     static QString sliceMeterName(int uiNumber);
 
     // Meter index for a receiver's "SLC"/"LEVEL". Receiver 0 keeps index 1 (as
-    // defineMeters() declares); the rest use a band clear of the fixed 1..9.
+    // defineMeters() declares); the rest use a band starting at
+    // kSliceLevelMeterBase, clear of the fixed catalogue below it.
     static int sliceLevelMeterIndex(int uiNumber);
 
     // Mixing scratch: per-receiver samples awaiting peers, and a reused summing
@@ -1299,8 +1307,9 @@ private:
 
     // Meter ballistics: the S-meter's rate gate and EMA are SMeterSmoother's
     // (WdspSMeter.h), shared with AnanBackend (100 ms tick, attack 0.5, decay 0.15),
-    // fed ~47 readings/s at any sample rate. Indices 1..9 are defineMeters()' fixed
-    // catalogue; receivers above the first take kSliceLevelMeterBase + uiNumber.
+    // fed ~47 readings/s at any sample rate. Indices below kSliceLevelMeterBase are
+    // defineMeters()' fixed catalogue; receivers above the first take
+    // kSliceLevelMeterBase + uiNumber.
     static constexpr int kSliceLevelMeterBase = 100;
     // S-meter state is per receiver (Receiver::sMeter). PA temperature rides the
     // 10 Hz telemetry and needs only a symmetric EMA against ADC low-bit flicker.

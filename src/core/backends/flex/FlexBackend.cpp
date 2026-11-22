@@ -718,7 +718,9 @@ RadioCapabilities FlexBackend::capabilities() const
         PanField::WeightedAverage, PanField::RfGain, PanField::Wnb, PanField::WnbLevel, PanField::LoopA, PanField::LoopB,
         PanField::NoiseFloorPosition, PanField::NoiseFloorEnabled, PanField::DaxIqChannel, PanField::WaterfallRate,
         PanField::WaterfallColorGain, PanField::WaterfallBlackLevel, PanField::WaterfallAutoBlack,
-        PanField::WaterfallDefaults}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+        PanField::WaterfallDefaults}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth},
+        // A repeated `display pan set <id> rfgain=N` changes nothing (#7445).
+        {PanField::RfGain}};
     caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove,
          PanLifecycleAction::RefreshInventory, PanLifecycleAction::RfGainInfo}};
@@ -965,6 +967,8 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.cwTextControl = CwTextControl{{CwField::Send, CwField::SendMacro,
         CwField::SaveMacro, CwField::Speed, CwField::Delay, CwField::Qsk,
         CwField::Erase, CwField::Clear}, CwTextControl::Completion::RadioCharacterIndex};
+    // Carrier edges use FlexCwControls. CW text uses the radio's CWX buffer.
+    caps.hostCwKeyingControl = std::nullopt;
     caps.cwTextMinWpm = 5;
     caps.cwTextMaxWpm = 100;
     caps.cwTextMaxMessageChars = 0;

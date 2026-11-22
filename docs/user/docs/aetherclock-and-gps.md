@@ -74,7 +74,7 @@ Satellites **Tracked** and **Visible**, the tracking ratio, the GPS **Frequency 
 
 ### Installing AetherGPS on the radio
 
-On a FlexRadio, the bar at the bottom of the window has an **Install AetherGPS on the radio** checkbox. Tick it to install a small tool on the radio that reads its GPS receiver directly. AetherSDR carries the tool: a FLEX-8000 or Aurora gets a container, and a FLEX-6000 a legacy waveform. Clear the box to remove it. The checkbox is its only control, so it doesn't appear in the Waveforms list.
+On a FlexRadio, the bar at the bottom of the window has an **Install AetherGPS on the radio** checkbox. Tick it to install a small tool on the radio that reads its GPS receiver directly. AetherSDR carries the tool: a FLEX-8000 or Aurora gets a container, and a FLEX-6000 a legacy waveform. Clear the box to remove it. You can also install it from **Install… > AetherGPS** in the Waveforms window. However it was installed, it's listed under **Installed Waveforms** there.
 
 While it is installed, AetherGPS adds the **Sky View** section below.
 

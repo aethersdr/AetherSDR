@@ -340,8 +340,9 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     outer->addWidget(scroll);
 
     // ── AetherGPS on the radio: install or remove ─────────────────────────
-    // Like "Install radio health tools" in the Waveforms window, this
-    // checkbox is the waveform's only control; the Waveforms list hides it.
+    // This checkbox installs or removes AetherGPS. The Waveforms window's
+    // Install menu installs the same package, and its list shows the row
+    // however it was installed.
     m_gpsToolsBar = new QFrame(bodyWidget());
     m_gpsToolsBar->setObjectName(QStringLiteral("gpsToolsBar"));
     m_gpsToolsBar->setProperty("gpsHeader", true);

@@ -189,6 +189,16 @@ public:
                                const QHostAddress& broadcast = QHostAddress::Broadcast,
                                quint16 port = kMetisPort);
 
+    // A peer on this host (hpsdrsim at 127.0.0.1) replies from the address it was
+    // sent from: from a LAN-bound socket, the LAN address, which onReadyRead()'s
+    // sender filter (m_host:m_port only) drops. So a loopback target is probed
+    // from loopback interfaces only, and an IPv4 loopback target's session binds
+    // 127.0.0.1 (::1 keeps the wildcard bind); every other target is unchanged.
+    [[nodiscard]] static bool discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                                      const QHostAddress& target);
+    [[nodiscard]] static QHostAddress sessionBindAddress(const QHostAddress& host,
+                                                         const QHostAddress& requested);
+
     // start()/stop() and every live-control setter below MUST execute on this
     // object's own thread: start() constructs the QUdpSocket, and a socket takes
     // the affinity of the thread that creates it. Hl2Backend owns an I/O thread
@@ -233,7 +243,7 @@ public:
     // edge queues the bank at once so the feedback gain switches with T/R. The
     // caller owns availability: a board with fewer than four DDCs streams
     // nothing on the missing ones, so Hl2Backend never asks for it there.
-    Q_INVOKABLE void setPureSignal(bool enabled);
+    void setPureSignal(bool enabled, quint64 generation);
     // AD9866 gain during a PureSignal transmission, dB (-12..+48). The
     // controller works in attenuation, att = 19 - dB (Hl2PsGain).
     Q_INVOKABLE void setPureSignalTxGainDb(int db);
@@ -1145,6 +1155,8 @@ private:
     // rate exists: downstream sees a ~10 Hz emit of a bit cycling up to ~190 times/s.
     int m_adcWindowSamples = 0;
     int m_adcWindowOverload = 0;
+    quint64 m_psGeneration = 0;
+    quint64 m_psAdcWindowGeneration = 0;
     // Forward-power maximum for the same window; see
     // Hl2Telemetry::forwardPowerPeakRaw for why the last value is not enough.
     ForwardPowerWindow m_fwdWindow;

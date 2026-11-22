@@ -1,22 +1,217 @@
 #include "CopyAssistPanel.h"
 
+#include <QAbstractTextDocumentLayout>
 #include <QFont>
+#include <QFontMetricsF>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QPainter>
+#include <QPalette>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextEdit>
+#include <QTextLayout>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
+#include <memory>
+#include <vector>
 
 namespace AetherSDR {
+
+// The transcript. Its document holds committed text only, because the document
+// is what a screen reader reads, and Qt reports every change to it as text
+// inserted or removed. The live preview's provisional text changes several
+// times a second, so it is painted over the viewport instead, starting where
+// the committed text ends: on screen it reads as the end of the transcript,
+// but it never enters the document. Copy and select skip it for the same
+// reason.
+class CopyAssistTranscriptView : public QTextEdit {
+public:
+    explicit CopyAssistTranscriptView(QWidget* parent)
+        : QTextEdit(parent)
+    {
+        // QTextEdit sizes the scroll range to the document; make room below it
+        // for the provisional lines whenever it does.
+        connect(verticalScrollBar(), &QScrollBar::rangeChanged, this,
+                [this](int, int) { fitScrollRange(); });
+        connect(document(), &QTextDocument::contentsChanged, this,
+                [this] { viewport()->update(); });
+    }
+
+    // One entry per provisional block, oldest first. With ownLines each block
+    // starts on a new line, matching newline-on-silence for committed text.
+    void setDrafts(const QStringList& drafts, bool ownLines)
+    {
+        if (drafts == m_drafts && ownLines == m_ownLines) {
+            return;
+        }
+        const bool follow = atBottom();
+        m_drafts = drafts;
+        m_ownLines = ownLines;
+        fitScrollRange();
+        if (follow) {
+            scrollToBottom();
+        }
+        viewport()->update();
+    }
+
+    void setDraftColor(const QColor& color)
+    {
+        m_color = color;
+        viewport()->update();
+    }
+
+    bool atBottom() const
+    {
+        return verticalScrollBar()->value() >= verticalScrollBar()->maximum();
+    }
+
+    void scrollToBottom()
+    {
+        verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        QTextEdit::paintEvent(event);
+        const auto layouts = layoutDrafts();
+        if (layouts.empty()) {
+            return;
+        }
+        QPainter p(viewport());
+        p.translate(-horizontalScrollBar()->value(), -verticalScrollBar()->value());
+        for (const auto& layout : layouts) {
+            layout->draw(&p, QPointF(0, 0));
+        }
+    }
+
+    void resizeEvent(QResizeEvent* event) override
+    {
+        QTextEdit::resizeEvent(event);
+        fitScrollRange();
+    }
+
+private:
+    QColor draftColor() const
+    {
+        return m_color.isValid() ? m_color : palette().color(QPalette::PlaceholderText);
+    }
+
+    // The provisional text laid out in document coordinates. The first line
+    // continues the last committed line when there is room for its first word;
+    // the rest wrap at the document's width.
+    std::vector<std::unique_ptr<QTextLayout>> layoutDrafts() const
+    {
+        std::vector<std::unique_ptr<QTextLayout>> layouts;
+        if (m_drafts.isEmpty()) {
+            return layouts;
+        }
+        QFont font = this->font();
+        font.setItalic(true);
+        const QFontMetricsF metrics(font, viewport());
+        const qreal margin = document()->documentMargin();
+        const qreal left = margin;
+        const qreal right = std::max(left + metrics.averageCharWidth(),
+                                     viewport()->width() - margin);
+
+        QTextCursor end(document());
+        end.movePosition(QTextCursor::End);
+        const QRectF caret = QRectF(cursorRect(end))
+                                 .translated(horizontalScrollBar()->value(),
+                                             verticalScrollBar()->value());
+        const bool empty = document()->isEmpty();
+        qreal x = caret.left();
+        qreal y = caret.top();
+        const QStringList paragraphs =
+            m_ownLines ? m_drafts : QStringList{m_drafts.join(QLatin1Char(' '))};
+
+        QTextOption option;
+        option.setWrapMode(QTextOption::WordWrap);
+        QTextCharFormat format;
+        format.setForeground(draftColor());
+
+        for (const QString& paragraph : paragraphs) {
+            if (m_ownLines && !(empty && layouts.empty())) {
+                // A new line, as newline-on-silence gives committed text.
+                if (layouts.empty()) {
+                    y = caret.bottom();
+                }
+                x = left;
+            }
+            auto layout = std::make_unique<QTextLayout>(paragraph, font, viewport());
+            layout->setTextOption(option);
+            layout->setFormats({QTextLayout::FormatRange{0, int(paragraph.size()), format}});
+            for (bool firstTry = true;; firstTry = false) {
+                qreal lineX = x;
+                qreal lineY = y;
+                bool overflow = false;
+                layout->beginLayout();
+                for (QTextLine line = layout->createLine(); line.isValid();
+                     line = layout->createLine()) {
+                    line.setLineWidth(right - lineX);
+                    line.setPosition(QPointF(lineX, lineY));
+                    if (lineX > left && line.naturalTextWidth() > right - lineX + 0.5) {
+                        overflow = true; // the first word does not fit after the caret
+                    }
+                    lineY += line.height();
+                    lineX = left;
+                }
+                layout->endLayout();
+                if (overflow && firstTry) {
+                    x = left;
+                    y = caret.bottom();
+                    continue;
+                }
+                // The next paragraph (ownLines) starts below this one; inline,
+                // there is only one.
+                y = lineY;
+                break;
+            }
+            layouts.push_back(std::move(layout));
+        }
+        return layouts;
+    }
+
+    // The scroll range QTextEdit set for the document, extended to the bottom
+    // of the provisional text.
+    void fitScrollRange()
+    {
+        if (m_fitting) {
+            return;
+        }
+        qreal bottom = document()->documentLayout()->documentSize().height();
+        for (const auto& layout : layoutDrafts()) {
+            if (layout->lineCount() > 0) {
+                const QTextLine last = layout->lineAt(layout->lineCount() - 1);
+                bottom = std::max(bottom, last.y() + last.height()
+                                              + document()->documentMargin());
+            }
+        }
+        const int maximum =
+            std::max(0, int(std::ceil(bottom)) - viewport()->height());
+        QScrollBar* bar = verticalScrollBar();
+        if (bar->maximum() != maximum) {
+            m_fitting = true;
+            bar->setRange(0, maximum);
+            m_fitting = false;
+        }
+    }
+
+    QStringList m_drafts;
+    bool m_ownLines = false;
+    QColor m_color;
+    bool m_fitting = false;
+};
 
 CopyAssistPanel::CopyAssistPanel(QWidget* parent)
     : QWidget(parent)
@@ -113,6 +308,7 @@ CopyAssistPanel::CopyAssistPanel(QWidget* parent)
     m_newline->setAccessibleName(tr("New line on silence"));
     connect(m_newline, &QPushButton::toggled, this, [this](bool on) {
         m_newlineOnSilence = on;
+        renderPreview();
         emit newlineOnSilenceChanged(on);
     });
     controls->addWidget(m_newline);
@@ -144,10 +340,12 @@ CopyAssistPanel::CopyAssistPanel(QWidget* parent)
     root->addLayout(controls);
 
     // --- Transcript (mirrors the CW decode QTextEdit) -----------------------
-    m_text = new QTextEdit(this);
+    m_text = new CopyAssistTranscriptView(this);
     m_text->setObjectName(QStringLiteral("CopyAssistTranscript"));
     m_text->setAccessibleName(tr("Copy Assist transcript"));
     m_text->setReadOnly(true);
+    // A read-only view never offers undo; don't keep the history.
+    m_text->setUndoRedoEnabled(false);
     m_text->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_text->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_text->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
@@ -382,6 +580,88 @@ void CopyAssistPanel::appendText(const QString& text, float confidence)
                            .arg(colorForConfidence(confidence), QString::number(m_fontPx),
                                 trimmed.toHtmlEscaped()));
     m_text->moveCursor(QTextCursor::End);
+    // New committed text always scrolls into view (moveCursor did that), and
+    // so does any provisional text still drawn after it.
+    renderPreview();
+    m_text->scrollToBottom();
+}
+
+void CopyAssistPanel::markPreviewDone(quint64 segmentId)
+{
+    m_preview.erase(m_preview.begin(), m_preview.upper_bound(segmentId));
+    m_previewHighWater = m_havePreviewHighWater ? std::max(m_previewHighWater, segmentId)
+                                                : segmentId;
+    m_havePreviewHighWater = true;
+}
+
+void CopyAssistPanel::renderPreview()
+{
+    m_text->setDrafts(previewBlocks(), m_newlineOnSilence);
+}
+
+void CopyAssistPanel::setPreviewText(quint64 segmentId, const QString& text,
+                                     quint64 generation)
+{
+    if (generation != m_previewGeneration
+        || (m_havePreviewHighWater && segmentId <= m_previewHighWater)) {
+        return;
+    }
+    const QString trimmed = text.trimmed();
+    if (trimmed.isEmpty()) {
+        if (m_preview.erase(segmentId) == 0) {
+            return;
+        }
+    } else {
+        m_preview[segmentId] = trimmed;
+    }
+    renderPreview();
+}
+
+void CopyAssistPanel::setPreviewColor(const QColor& color)
+{
+    m_text->setDraftColor(color);
+}
+
+QWidget* CopyAssistPanel::transcriptView() const
+{
+    return m_text;
+}
+
+QStringList CopyAssistPanel::previewBlocks() const
+{
+    QStringList blocks;
+    for (const auto& entry : m_preview) {
+        blocks.append(entry.second);
+    }
+    return blocks;
+}
+
+void CopyAssistPanel::commitText(quint64 segmentId, const QString& text, float confidence)
+{
+    markPreviewDone(segmentId);
+    if (text.trimmed().isEmpty()) {
+        renderPreview();
+        return;
+    }
+    appendText(text, confidence);
+}
+
+void CopyAssistPanel::discardPreview(quint64 segmentId, quint64 generation)
+{
+    if (generation != m_previewGeneration) {
+        return;
+    }
+    markPreviewDone(segmentId);
+    renderPreview();
+}
+
+void CopyAssistPanel::resetPreview(quint64 generation)
+{
+    m_preview.clear();
+    m_previewGeneration = generation;
+    m_havePreviewHighWater = false;
+    m_previewHighWater = 0;
+    renderPreview();
 }
 
 void CopyAssistPanel::setNewlineOnSilence(bool on)
@@ -408,6 +688,10 @@ void CopyAssistPanel::setContextCarryAvailable(bool available)
 void CopyAssistPanel::clearText()
 {
     m_text->clear();
+    m_preview.clear();
+    m_havePreviewHighWater = false;
+    m_previewHighWater = 0;
+    renderPreview();
 }
 
 } // namespace AetherSDR

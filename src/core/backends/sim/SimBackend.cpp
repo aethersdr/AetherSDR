@@ -293,7 +293,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     caps.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     caps.dspParameterReset = std::nullopt;
-    caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
+    caps.receivePanCenterControl = std::nullopt; // no DDC: a center request only moves the display
     caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
     caps.canReboot = false;
     caps.hasRemoteOnControl = false;
@@ -398,6 +398,7 @@ RadioCapabilities SimBackend::capabilities() const
     // a simulator that cannot key has nothing to be full duplex about.
     caps.hasRadioSideCwKeyer = false;
     caps.cwTextControl = std::nullopt;
+    caps.hostCwKeyingControl = std::nullopt;
     caps.hasVoiceKeyer = false;
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;
@@ -496,6 +497,7 @@ void SimBackend::emitInitialState()
     // display observations carry only identity and dimensions.
     emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
                                    m_sliceFreqMhz, kDemoPanBandwidthMhz);
+    pushPanCenterToSource(m_sliceFreqMhz);
 
     emit panWaterfallLineDurationChanged(QStringLiteral("0x40000000"),
                                          kWaterfallRate);
@@ -535,17 +537,37 @@ void SimBackend::setSliceMode(int sliceId, const QString& mode)
     if (!m_connected || sliceId != kSliceId) {
         return;
     }
+    const bool wasRtty = m_sliceMode.toUpper() == QLatin1String("RTTY");
     m_sliceMode = mode;
-    // Lower-sideband family: LSB, DIGL, CWL. Everything else demodulates
-    // USB-style. Drives which side of the VFO the birdie is audible on.
+    // Lower-sideband family: LSB, DIGL, CWL, and RTTY, which a FLEX-8400
+    // demodulates lower sideband with the dial at the 2125 Hz mark (#7420).
+    // Everything else demodulates USB-style. Drives which side of the VFO the
+    // birdie and the RTTY station are audible on.
     const QString up = mode.toUpper();
+    const bool rtty = up == QLatin1String("RTTY");
     const bool lsb = (up == QLatin1String("LSB") || up == QLatin1String("DIGL")
-                      || up == QLatin1String("CWL"));
-    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, lsb] {
+                      || up == QLatin1String("CWL") || rtty);
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, lsb, rtty] {
         src->setLowerSideband(lsb);
+        src->setRttyMode(rtty);
     }, Qt::QueuedConnection);
     SliceDelta d;
     d.mode = m_sliceMode;
+    // The RTTY passband a FLEX-8400 reports (filter_lo=-285 filter_hi=115):
+    // around M and S, as ModeFilterPresets centers it. The previous passband
+    // comes back when RTTY is left.
+    if (rtty && !wasRtty) {
+        m_preRttyFilter = {m_filterLowHz, m_filterHighHz};
+        m_filterLowHz = -285;
+        m_filterHighHz = 115;
+    } else if (!rtty && wasRtty) {
+        m_filterLowHz = m_preRttyFilter.first;
+        m_filterHighHz = m_preRttyFilter.second;
+    }
+    if (rtty != wasRtty) {
+        d.filterLow = m_filterLowHz;
+        d.filterHigh = m_filterHighHz;
+    }
     emit sliceChanged(kSliceId, d);
 }
 
@@ -614,6 +636,16 @@ void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     }
     emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
                                    hz / 1.0e6, kDemoPanBandwidthMhz);
+    pushPanCenterToSource(hz / 1.0e6);
+}
+
+void SimBackend::pushPanCenterToSource(double mhz)
+{
+    // The spectrum rows are drawn around pan 0's center, which does not
+    // follow the dial; RF-anchored signals are placed relative to it (#7420).
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, mhz] {
+        src->setPanCenterMhz(mhz);
+    }, Qt::QueuedConnection);
 }
 
 void SimBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)

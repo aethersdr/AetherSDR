@@ -1,10 +1,13 @@
 #include "RadioModel.h"
+#include "ModeVocabulary.h"
 #include "TxController.h"
 #include "core/LogManager.h"
 #include "core/SerialPortController.h"
 
 #include <QPointer>
 #include <QScopeGuard>
+#include <QThread>
+#include <algorithm>
 #include <vector>
 
 namespace AetherSDR {
@@ -146,6 +149,8 @@ bool RadioModel::requestProducerPttOn(const TxCoordinator::Request& request,
         return false;
     }
     bool engaged = false;
+    ++m_txKeyDownDepth;
+    const auto keyDown = qScopeGuard([this] { --m_txKeyDownDepth; });
     m_transmitModel.requestPttOn(source, [this, request]() -> TransmitModel::KeyingPermit {
         if (!beginTxActivity(TxActivity::Mox, &request)) {
             return {};
@@ -169,6 +174,7 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
+    noteTxTimeoutRelease(request);
     const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
     if (!bound.isActivity(TxActivity::Mox)) {
         if (!bound.pending()) {
@@ -210,6 +216,7 @@ void RadioModel::connectSerialPttInput(SerialPortController* source)
         if (active) {
             (void)requestProducerPttOn(input, TransmitModel::PttSource::Mox);
         } else {
+            noteTxInputReleased(input);
             requestProducerPttOff(input, TransmitModel::PttSource::Mox);
         }
     });
@@ -221,6 +228,9 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
+    // Abandoning a key it held is a release; noteTxTimeoutRelease() skips
+    // the teardown of a key the latch just refused.
+    noteTxTimeoutRelease(request);
     const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
     if (!bound.isActivity(TxActivity::Mox)) {
         if (!bound.pending()) {
@@ -242,9 +252,31 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     }
 }
 
-bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request)
+bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request,
+                                 bool askKeyObjection)
 {
     if (m_txInputsStopping) {
+        return false;
+    }
+    if (m_txTimeout.latched()) {
+        m_txTimeout.refreshLatch();
+        publishTxTimeoutLatch(true);
+        if (m_txTimeout.latched()) {
+            if (request) {
+                noteTxTimeoutRefused(*request);
+            }
+            emitInterlockNotification(
+                tr("Transmit is held after a time-out: release every PTT input, then key again."),
+                QStringLiteral("tx-timeout-latched"));
+            return false;
+        }
+    }
+    // Fail closed: an input whose release the latch could not track is not
+    // admitted. CWX is sent text and never holds (below).
+    if (request && activity != TxActivity::Cwx && !txTimeoutCanHold(*request)) {
+        emitInterlockNotification(
+            tr("Transmit refused: too many inputs hold a key. Release one, then key again."),
+            QStringLiteral("tx-timeout-holders-full"));
         return false;
     }
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
@@ -324,6 +356,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         : activity == TxActivity::VoiceKeyer ? QStringLiteral("dvk")
         : activity == TxActivity::Navtex ? QStringLiteral("navtex") : QStringLiteral("cw-key");
     if (transmitStartBlockedByInhibit(gate)) {
+        return false;
+    }
+    // After the radio's own refusals, so a pan inhibit is reported ahead of it.
+    if (askKeyObjection && transmitStartBlockedByKeyObjection(gate)) {
         return false;
     }
     const bool independent = request && m_txCoordinator.isIndependentRequest(*request);
@@ -434,8 +470,17 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     }
     const QPointer<RadioModel> self(this);
     emit daxTxOwnershipChanged();
-    return self && !m_txSessionClosing && m_backend
+    const bool admitted = self && !m_txSessionClosing && m_backend
         && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
+    // CWX is sent text, not a held input: no producer sends an off for it,
+    // so it never holds the time-out latch.
+    if (admitted && request && activity != TxActivity::Cwx && !noteTxTimeoutHold(*request)) {
+        // The table filled while this key-down was admitted (an observer above
+        // re-entered): refuse it rather than key an input the latch cannot see.
+        endLocalTxActivity(intent);
+        return false;
+    }
+    return admitted;
 }
 
 TransmitModel::KeyingRoute RadioModel::producerKeyingRoute(const TxCoordinator::Request& request,
@@ -482,6 +527,9 @@ bool RadioModel::requestProducerTune(const TxCoordinator::Request& request, bool
     if (QThread::currentThread() != thread()) {
         return false;
     }
+    if (!on) {
+        noteTxTimeoutRelease(request);
+    }
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Tune, dispatched);
     if (on) {
@@ -500,6 +548,9 @@ bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool 
 {
     if (QThread::currentThread() != thread()) {
         return false;
+    }
+    if (!start) {
+        noteTxTimeoutRelease(request);
     }
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Atu, dispatched);
@@ -1141,12 +1192,76 @@ void RadioModel::emergencyTransmitStop()
     cancelLocalTransmit();
 }
 
+void RadioModel::addKeyObjection(QObject* owner, KeyObjection objection)
+{
+    if (QThread::currentThread() != thread() || owner == nullptr || !objection) {
+        return;
+    }
+    m_keyObjections.push_back({QPointer<QObject>(owner), std::move(objection)});
+}
+
+QString RadioModel::keyObjectionMessage() const
+{
+    // A request while this client already transmits is not a key-on: refusing
+    // it would roll back the state of a transmission on the air.
+    if (activeTxActivities() != 0) {
+        return QString();
+    }
+    return firstKeyObjection();
+}
+
+QString RadioModel::firstKeyObjection() const
+{
+    for (const KeyObjectionEntry& entry : m_keyObjections) {
+        if (entry.owner.isNull()) {
+            continue;
+        }
+        const QString message = entry.objection().trimmed();
+        if (!message.isEmpty()) {
+            return message;
+        }
+    }
+    return QString();
+}
+
+void RadioModel::emitKeyObjectionNotice(const QString& message, const QString& gate)
+{
+    // Keyed by gate, never by the sentence, so a changing sentence does not
+    // re-fire the notice inside its de-duplication window.
+    const QString panId = txSlice() ? txSlice()->panId() : QString();
+    emitInterlockNotification(message, QStringLiteral("key-objection:%1:%2").arg(panId, gate), panId);
+}
+
+bool RadioModel::transmitStartBlockedByKeyObjection(const QString& gate)
+{
+    const QString message = keyObjectionMessage();
+    if (message.isEmpty()) {
+        return false;
+    }
+    emitKeyObjectionNotice(message, gate);
+    m_transmitModel.setTransmitting(false);
+    if (m_txAudioGate) {
+        m_txAudioGate = false;
+        emit txAudioGateChanged(false);
+    }
+    return true;
+}
+
 void RadioModel::resetTxOperations()
 {
     // Even an idle coordinator must refuse new intent while the session dies.
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    {
+        const bool latched = m_txTimeout.latched();
+        m_txTimeout.reset();
+        m_txTimeoutRefusedRequests.clear();
+        if (m_txTimeoutTimer) {
+            m_txTimeoutTimer->stop();
+        }
+        publishTxTimeoutLatch(latched);
+    }
     m_transmitServiceSession->store(false, std::memory_order_release);
     m_transmitServiceSession = std::make_shared<std::atomic_bool>(true);
     m_dvkTxRequest = 0;
@@ -1191,14 +1306,64 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
 
 void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                        const QString& source, quint64 traceId, quint64 sourceMs,
-                                       std::chrono::steady_clock::time_point scheduledAt)
+                                       std::chrono::steady_clock::time_point scheduledAt,
+                                       bool hostTextGates, std::function<void()> onDownRefused)
 {
-    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt] {
+    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt,
+                                     hostTextGates, onDownRefused = std::move(onDownRefused)] {
+        const auto refused = [down, &onDownRefused] {
+            if (down && onDownRefused) {
+                onDownRefused();
+            }
+        };
         if (m_txSessionClosing || scheduledAt < m_cwInputNotBefore) {
+            refused();
             return;
         }
-        (void)sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request);
+        if (down && hostTextGates) {
+            SliceModel* tx = txSlice();
+            if (!tx || !isCwMode(tx->mode())) {
+                emitInterlockNotification(
+                    tr("CW text stopped: the transmit slice is not in a CW mode."),
+                    QStringLiteral("cw-text-mode:%1").arg(tx ? tx->mode() : QString()),
+                    tx ? tx->panId() : QString());
+                refused();
+                return;
+            }
+            if (!m_transmitModel.admitsCwKeyEdge(true)) {
+                emitInterlockNotification(tr("CW text stopped: TUNE is active."),
+                                          QStringLiteral("cw-text-tuning"), tx->panId());
+                refused();
+                return;
+            }
+            // Break-in turned off, or MOX/PTT released, mid-message: the
+            // backend would not raise MOX, so the element would not go out.
+            if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
+                emitInterlockNotification(
+                    tr("CW text stopped: break-in is off and transmit is not keyed."),
+                    QStringLiteral("cw-text-unkeyed"), tx->panId());
+                refused();
+                return;
+            }
+        }
+        if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
+            refused();
+        } else if (down && (hostTextGates || !producerCwPaddleHeld(request))) {
+            // Host CW text is sent text, not a held input, like CWX: its
+            // keyer owns its producer, and no element holds the time-out latch.
+            // Nor does an iambic element the keyer sends after its paddle let
+            // go (a squeezed or memorised one): only a held paddle holds.
+            noteTxInputReleased(request);
+        }
     }, Qt::QueuedConnection);
+}
+
+bool RadioModel::producerCwPaddleHeld(const TxCoordinator::Request& anyRequestOfProducer) const
+{
+    return std::any_of(m_producerCwPaddleInputs.begin(), m_producerCwPaddleInputs.end(),
+        [&anyRequestOfProducer](const TxCoordinator::Request& existing) {
+            return existing.valid() && existing.producerKey() == anyRequestOfProducer.producerKey();
+        });
 }
 
 void RadioModel::setProducerCwPaddleHeld(const TxCoordinator::Request& input, bool held)
@@ -1208,6 +1373,12 @@ void RadioModel::setProducerCwPaddleHeld(const TxCoordinator::Request& input, bo
     });
     if (held && input.valid()) {
         m_producerCwPaddleInputs.push_back(input);
+        return;
+    }
+    // Every paddle of this producer up releases the time-out latch; the
+    // keyer's element key-ups (queueProducerCwKeyEdge) never do.
+    if (!held && !producerCwPaddleHeld(input)) {
+        noteTxInputReleased(input);
     }
 }
 

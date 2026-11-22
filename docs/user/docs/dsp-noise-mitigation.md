@@ -121,7 +121,7 @@ When you recall a band-stack bookmark, saved WNB values are applied only if the 
 
 ### Where the controls are
 
-All client-side methods live in **AetherRX**, on its **AetherNR** tab. Open it with **Settings → AetherRX...** or the **AetherRX** button on the VFO flag's DSP tab. That button lights up whenever a client NR method is running.
+All client-side methods live in **AetherRX**, on its **AetherNR** tab. Open it with **Tools → AetherRX...** or the **AetherRX** button on the VFO flag's DSP tab. That button lights up whenever a client NR method is running.
 
 - The **method row** picks one of NR2, NR4, MNR, DFNR, RN2, BNR or NNR; the page below it holds that method's settings. Methods that are not available on your computer or in your build are disabled with a tooltip explaining why.
 - A status strip shows the active method and its key setting.
