@@ -13,7 +13,7 @@ platforms: ["Linux", "Windows", "macOS (Apple Silicon)"]
 
 :::
 
-Copy Assist is on-device speech-to-text for received voice. It transcribes what you are hearing on SSB, AM or FM into a live, scrolling text panel docked under the waterfall — an aid for weak or noisy copy, for accessibility, and for following nets and contests. It runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) on your own computer, is **receive-only**, and never keys the transmitter.
+Copy Assist is on-device speech-to-text for received voice. It transcribes what you are hearing on SSB, AM or FM into a live, scrolling text panel docked under the waterfall — an aid for weak or noisy copy, for accessibility, and for following nets and contests. It runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) on your own computer (and, for the [live preview](#live-preview), sherpa-onnx or Apple's on-device recognizer), is **receive-only**, and never keys the transmitter.
 
 Copy Assist is host-side, so it works with every supported radio family, including receive-only setups and sessions with TX disabled.
 
@@ -28,7 +28,7 @@ Copy Assist is host-side, so it works with every supported radio family, includi
 
 ### Models
 
-Model weights are **not bundled**. The selected model downloads the first time you enable Copy Assist — from Hugging Face, with AetherSDR's GitHub release as a fallback — and is SHA-256 verified before use. Models are cached in the app data folder (on Linux, `~/.local/share/AetherSDR/models/`).
+Model weights are **not bundled**. The selected model downloads the first time you enable Copy Assist — from Hugging Face, with AetherSDR's GitHub release as a fallback (the live preview's Kroko model comes from Hugging Face only) — and is SHA-256 verified before use. Models are cached in the app data folder (on Linux, `~/.local/share/AetherSDR/models/`).
 
 | Model | Size | Notes |
 |---|---|---|
@@ -42,6 +42,8 @@ Model weights are **not bundled**. The selected model downloads the first time y
 **Custom model…** loads any whisper `ggml-*.bin` or `.gguf` file you choose — a fine-tune or a different quantization. It loads directly, with no download or checksum, and is remembered as `Custom: <name>`.
 
 **sherpa-onnx model…** (Linux and macOS builds that include sherpa-onnx) runs a non-whisper offline model such as Zipformer, Moonshine or Paraformer. Point it at the extracted model folder. These are much faster than whisper on CPU and ARM, so they are the practical choice on a Raspberry Pi.
+
+**None (live preview only)** runs no model at all: the [live preview](#live-preview) recognizer's text is the transcript. It is the lightest choice, for a computer that cannot keep up with even the smallest whisper model, such as a Raspberry Pi. The preview turns on by itself and cannot be turned off while None is chosen. Its words are less accurate than whisper's on a noisy signal, but they come within about a second of each pause instead of waiting for a decode. Listed wherever a preview recognizer can run.
 
 ### GPU acceleration
 
@@ -80,7 +82,7 @@ Either one shows or hides the panel, which docks under the waterfall of the acti
 
 ### When it is available
 
-- **Voice modes only:** USB, LSB, AM, SAM, FM, NFM, DFM and wide FM (WFM/WBFM). In CW, DIGU/DIGL and RTTY the toggle is dimmed. Receive-only voice modes are available to Copy Assist even when they cannot use the voice keyer.
+- **Voice modes only:** USB, LSB, DSB, AM, AME, SAM, FM, NFM, FMN (RTL-SDR narrow FM) and wide FM (WFM/WBFM). In CW, DIGU/DIGL, RTTY and FM data (DFM) the toggle is dimmed. Receive-only voice modes are available to Copy Assist even when they cannot use the voice keyer.
 - The mode check follows the **slice you have selected**, not the transmit slice. The CWX and DVK indicators follow the TX slice instead, so the three can legitimately disagree — with a CW transmit slice and a USB slice selected, CWX and ASR are both live.
 - Selecting a slice that is not in a voice mode closes the panel and stops transcription. To resume, select the voice slice, reopen the panel and enable it again.
 - A band-stack recall or a disconnect does **not** close an open panel, so transcription survives a band change.
@@ -118,6 +120,25 @@ Noise-reduction artifacts can confuse the speech model more than noise does. On 
 - A real pause, **Clear**, or a retune starts fresh.
 - Context works with the whisper models only. It is grayed out on the sherpa-onnx and remote backends.
 
+### Live preview
+
+Copy Assist can show a quick first look at what is being said while the selected model is still waiting for its segment to finish. Turn on **Show a live preview while the model decodes** in Copy Assist Settings. It is off by default.
+
+- Gray italic text appears within about a second of each word being spoken.
+- When the model has decoded that stretch of audio, its text replaces the gray text and is colored by confidence as usual. A stretch is decoded when the speaker pauses (**Silence**) or when the **Buffer** fills, whichever comes first, so a shorter Buffer brings the colored text sooner.
+- The preview is less accurate than the whisper models on noisy signals, so treat it as a first look. The colored text is the transcript; only it is saved to the transcript file, and only it is read by a screen reader.
+- It works with every model, including the sherpa-onnx and remote backends.
+- The preview itself runs on your computer.
+
+**Preview recognizer** picks what draws the gray text:
+
+- **Kroko streaming, English (sherpa-onnx)** is the default, on Windows, Linux and Apple-silicon Macs. It is English only: with any other **Language** set, the status line adds "Live preview understands English only". The first time you press **Enable** with the preview on, Copy Assist downloads its model (about 71 MB, checked against a pinned SHA-256) into the models folder; the status line shows the progress. The Kroko model is Banafo's [Kroko ASR](https://huggingface.co/Banafo/Kroko-ASR) English community model, in the [sherpa-onnx conversion](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06) by the k2-fsa project, used unchanged under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). It is provided as-is, without warranties; see `THIRD_PARTY_LICENSES` for the full notice.
+- **Apple speech recognition** is available on macOS 26 and later. It follows the **Language** setting, so there is no separate preview language to set. The accent it expects comes from the Mac's region (System Settings → General → Language & Region) where Apple supports that pairing: Spanish on a Mac set to the United States uses US Spanish. It understands English, Spanish, French, German, Italian, Portuguese, Chinese (Mandarin and Cantonese), Japanese and Korean, in their main regional variants. The first use of a language may download Apple's speech model for it; the status line says so while it does. For any other language the status line says it is not supported and no gray text appears; the colored transcript is unaffected.
+
+Apple speech recognition is listed on Macs only. A listed recognizer your computer cannot run is shown dimmed, with the reason.
+
+With **None (live preview only)** as the model, the preview is the transcript. Gray italic text still shows words that may change. When the speaker pauses, or the **Buffer** fills, that stretch becomes ordinary transcript text. It is colored by the recognizer's own confidence, saved to the transcript file, and read by a screen reader, like any model's text. Kroko's confidence reads lower than whisper's for the same copy, so expect more yellow; Apple's reads about the same. Speaker labels need a model, so **Label speakers** is grayed out with None. Its setting is kept and comes back when you choose a model.
+
 ### The Queue readout
 
 The status line shows **Queue: N s** — seconds of received audio not yet transcribed. It stays near zero when the engine keeps up and climbs (amber, then red) when it cannot, for example a large model on a Raspberry Pi.
@@ -148,10 +169,12 @@ The ⚙ button opens a small modeless settings window that can stay open while y
 
 | Setting | What it does |
 |---|---|
-| **Model** | Which speech model runs (see [Models](#models)). Also **Custom model…**, **sherpa-onnx model…** and **Remote server…**. |
+| **Model** | Which speech model runs (see [Models](#models)). Also **Custom model…**, **sherpa-onnx model…**, **Remote server…** and **None (live preview only)**. |
 | **Compute** | Which device runs the model: a GPU or the CPU. Shows **Detecting…** while GPU discovery runs in the background. |
 | **Language** | The spoken language to transcribe (multilingual models only). |
 | **Save transcript to a file** | Appends each finished utterance as a timestamped line. A date is inserted before the extension, so `net.txt` writes to `net-2026-07-21.txt` and rolls over daily. A frequency marker line is written when ASR starts, on every retune, and at the top of each day's file. |
+| **Show a live preview while the model decodes** | Off by default. Shows gray provisional text while the model decodes, then replaces it with the model's text (see [Live preview](#live-preview)). Applies immediately. |
+| **Preview recognizer** | What draws the preview: **Kroko streaming, English (sherpa-onnx)** (the default; downloads about 71 MB on first use) or, on macOS 26 and later, **Apple speech recognition**. Applies immediately. |
 | **Transcribe from unprocessed audio (bypasses NR and RX effects)** | Off by default. Transcribes the receive audio before AetherSDR's noise reduction and RX effects instead of after them. What you hear is unchanged, and processing done by the radio itself still applies. On a noisy band the unprocessed audio has little level difference between speech and noise, so leave **Sens** high; Silero VAD rejects most real speech on a noisy HF signal. Switching starts the transcription over. |
 | **Use Silero VAD (ONNX)** | Replaces the built-in energy detector with the small Silero neural voice-activity model, which segments real speech far better in HF noise. Downloads on demand; **Browse…** lets you use your own `.onnx`. |
 | **Label speakers (A/B/C…)** | Tags each utterance with a speaker label (`[A] …`, `[B] …`) using a downloaded speaker-embedding model. **Match threshold** (0.00–1.00) sets how strict the matching is: higher splits voices more finely, lower merges them. Labels reset on retune or re-enable. |
@@ -165,7 +188,7 @@ Silero VAD and speaker labels need an ONNX Runtime build; the release builds inc
 
 The selected slice is not in a voice mode. Copy Assist follows the slice you have selected, not the transmit slice.
 
-1. Select a slice in USB, LSB, AM, SAM, FM, NFM, DFM or wide FM (WFM/WBFM).
+1. Select a slice in USB, LSB, DSB, AM, AME, SAM, FM, NFM, FMN or wide FM (WFM/WBFM).
 2. Reopen the panel and click **Disabled** so it reads **Enabled**.
 
 ### The panel closed and transcription stopped
@@ -181,7 +204,8 @@ The engine cannot keep up with the audio. Once the backlog reaches twice the Buf
 
 1. Choose a smaller model in **⚙ → Model**, or a sherpa-onnx model on CPU or ARM.
 2. Or use a **Remote server…** on a faster machine.
-3. Or set a longer **Buffer**.
+3. Or choose **None (live preview only)**, which has no decode to fall behind.
+4. Or set a longer **Buffer**.
 
 ### Copy Assist runs on the CPU instead of the GPU
 
@@ -212,6 +236,22 @@ The computer has no internet access, for example in an air-gapped shack.
 
 1. Copy a `ggml-*.bin` model file into the models folder by hand (on Linux, `~/.local/share/AetherSDR/models/`).
 2. Or choose **Custom model…** and point it at a whisper `ggml-*.bin` or `.gguf` file.
+
+### The live preview setting is dimmed
+
+No recognizer can run on this computer: this build has no sherpa-onnx (Intel Macs, for example) and, on a Mac, macOS is older than 26. Hover the setting, or read its description with a screen reader, for the reason. A single dimmed entry in **Preview recognizer** works the same way. Copy Assist works normally without the preview.
+
+If you built AetherSDR yourself and the reason says the build has no sherpa-onnx, it was not staged before CMake ran; Copy Assist downloads the preview model but cannot add the library. Run `scripts/setup/setup-sherpa-onnx.sh` (Windows: `scripts\setup\setup-sherpa-onnx.ps1`; on a Mac, run `scripts/setup/setup-onnxruntime.sh` first), then configure and build again. The configure output should say `sherpa-onnx found`.
+
+### The live preview shows nothing
+
+- On first use with Kroko, the status line shows the model downloading. If the download fails, it says why and turns the preview off; turn it on again to retry. With **None (live preview only)**, a failed download turns Copy Assist off instead; press **Enable** to retry.
+- With Apple's recognizer, the status line reports a language it does not support (see [Live preview](#live-preview) for the list). Pick a supported **Language** instead. Its first use of a language may also download Apple's speech model.
+- The preview only appears while Copy Assist is **Enabled** and audio is arriving.
+
+### The live preview shows nonsense
+
+Kroko understands English only, and the status line says so when **Language** is set to anything else. For another language, pick **Apple speech recognition** (macOS 26 and later), or turn the preview off.
 
 ## See also
 
