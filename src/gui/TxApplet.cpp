@@ -210,6 +210,7 @@ void TxApplet::buildUI()
         m_rfPowerSlider->setDragValueFormatter(percentText);
         applyPrimarySliderStyle(m_rfPowerSlider);
         m_rfPowerSlider->setAccessibleName("RF power");
+        markTxSetpoint(m_rfPowerSlider);
         m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 percent of maximum");
         row->addWidget(m_rfPowerSlider, 1);
 
@@ -235,6 +236,7 @@ void TxApplet::buildUI()
         m_tunePowerSlider->setDragValueFormatter(percentText);
         applyPrimarySliderStyle(m_tunePowerSlider);
         m_tunePowerSlider->setAccessibleName("Tune power");
+        markTxSetpoint(m_tunePowerSlider);
         m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 percent of maximum");
         row->addWidget(m_tunePowerSlider, 1);
 
