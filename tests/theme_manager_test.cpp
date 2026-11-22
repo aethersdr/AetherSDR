@@ -3,6 +3,7 @@
 #include "core/ThemeManager.h"
 #include "core/AppSettings.h"
 #include "gui/GuardedSlider.h"
+#include "gui/LogSyntaxHighlighter.h"
 #include "gui/Theme.h"
 
 #include <QApplication>
@@ -28,6 +29,9 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QStringList>
+#include <QTextBlock>
+#include <QTextDocument>
+#include <QTextLayout>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -1491,6 +1495,63 @@ int main(int argc, char** argv)
             }
         }
         EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+    }
+
+    // ---- the color.log.* group (#7037): every log text color resolves in
+    //      BOTH bundled themes and clears 4.5:1 on color.canon.nested, the
+    //      ground both log panes draw on; the shared highlighter repaints
+    //      lines already in the document when the theme switches ----
+    {
+        auto contrast = [](const QColor& a, const QColor& b) {
+            auto lum = [](const QColor& c) {
+                auto lin = [](double v) {
+                    return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+                };
+                return 0.2126 * lin(c.redF()) + 0.7152 * lin(c.greenF()) + 0.0722 * lin(c.blueF());
+            };
+            const double la = lum(a), lb = lum(b);
+            return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+        };
+        const QStringList logTokens = {
+            "time", "category", "info", "protocol", "warning", "critical", "number",
+        };
+        for (const QString theme : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            EXPECT_TRUE(tm.setActiveTheme(theme));
+            const QColor ground = tm.factoryColor(QStringLiteral("color.canon.nested"));
+            for (const QString& t : logTokens) {
+                const QColor c = tm.factoryColor("color.log." + t);
+                EXPECT_TRUE(c.isValid());
+                const double r = contrast(c, ground);
+                if (r < 4.5) {
+                    std::fprintf(stderr, "  %s: color.log.%s on canon.nested is %.2f:1, floor 4.5:1\n",
+                                 qPrintable(theme), qPrintable(t), r);
+                }
+                EXPECT_TRUE(r >= 4.5);
+            }
+        }
+
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        QTextDocument doc;
+        doc.setPlainText(QStringLiteral("[09:40:00.001] WRN aether.audio: underrun 12 on RX"));
+        auto* highlighter = new LogSyntaxHighlighter(&doc, nullptr);
+        Q_UNUSED(highlighter);
+        // The level token "WRN" sits at column 15.
+        auto foregroundAt = [&doc](int column) {
+            const QTextBlock block = doc.firstBlock();
+            for (const QTextLayout::FormatRange& range : block.layout()->formats()) {
+                if (column >= range.start && column < range.start + range.length) {
+                    return range.format.foreground().color();
+                }
+            }
+            return QColor();
+        };
+        EXPECT_EQ(foregroundAt(15).name(), tm.color("color.log.warning").name());
+        const QString darkWarning = foregroundAt(15).name();
+        EXPECT_TRUE(tm.setActiveTheme("Default Light"));
+        EXPECT_EQ(foregroundAt(15).name(), tm.color("color.log.warning").name());
+        EXPECT_TRUE(foregroundAt(15).name() != darkWarning);
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_EQ(foregroundAt(15).name(), darkWarning);
     }
 
     // ---- the canon scope maps the base tokens onto color.canon.* in BOTH

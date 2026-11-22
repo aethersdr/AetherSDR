@@ -220,6 +220,9 @@ public:
     bool wfmForceMono() const { return m_wfmForceMono; }
     const WfmReceptionDiagnostics& wfmReceptionDiagnostics() const { return m_wfmReceptionDiagnostics; }
     WfmStereoStatus wfmStereoStatus() const { return m_wfmStereoStatus; }
+    // The receiver's squelch gate as the backend last reported it; Unavailable
+    // until it reports one (RadioCapabilities::squelchGateModes).
+    SquelchGateState squelchGate() const { return m_squelchGate; }
     int     flexSquelchLevel() const { return m_squelchLevel; }
     int     receiveSquelchLevel() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveSquelchLevel
@@ -563,6 +566,7 @@ signals:
     void wfmForceMonoRequested(bool forceMono);
     void wfmReceptionDiagnosticsChanged(const AetherSDR::WfmReceptionDiagnostics& diagnostics);
     void wfmStereoStatusChanged(AetherSDR::WfmStereoStatus status);
+    void squelchGateChanged(AetherSDR::SquelchGateState state);
     void wfmDeemphasisRequested(int microseconds);
     void externalReceiveSquelchChanged(bool on, int level);
     void stepChanged(int hz, const QVector<int>& stepList);
@@ -788,6 +792,7 @@ private:
     bool m_wfmForceMono{false};
     WfmReceptionDiagnostics m_wfmReceptionDiagnostics;
     WfmStereoStatus m_wfmStereoStatus{WfmStereoStatus::Unavailable};
+    SquelchGateState m_squelchGate{SquelchGateState::Unavailable};
     int     m_manualSquelchLevel{20};
     bool    m_squelchEchoIsManual{true};
     int     m_stepHz{100};

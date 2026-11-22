@@ -15,6 +15,7 @@ color.slider.foreground           ← sub-page (filled portion, the value indica
 color.slider.handle               ← thumb
 color.slider.background.disabled
 color.slider.foreground.disabled
+color.slider.foreground.gateClosed ← sub-page while a squelch gate is closed (SQL slider)
 color.slider.handle.disabled
 
 color.knob.background             ← outer ring / track

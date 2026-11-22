@@ -67,6 +67,7 @@ struct TciClientInfo {
     bool    iq{false};
     bool    rxSensors{false};
     bool    txSensors{false};
+    bool    hwSensors{false};
 };
 
 // TCI WebSocket server — exposes radio state and audio over the TCI protocol.
@@ -87,7 +88,9 @@ class TciServer : public QObject {
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
     friend class TciAntennaExtensionTest;
+    friend class TciHwSensorsTestAccess;
     friend class TciExtensionSetTest;
+    friend class TciTxPassbandExtensionTest;
     friend class TciRxGainExtensionTest;
     friend class TciSpanExtensionTest;
 
@@ -229,6 +232,10 @@ private slots:
     void onTextMessage(const QString& msg);
     void onBinaryMessage(const QByteArray& data);
     void broadcastStatus();
+    // Sends hw_sensors to each enabled client whose interval is due, then
+    // re-arms m_hwSensorsTimer for the earliest next one. Parked (stopped)
+    // while the radio is disconnected; the reconnect re-arms it.
+    void serviceHwSensors();
 
 private:
     struct ClientState;
@@ -274,6 +281,14 @@ private:
     bool announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
+    // Extension group `tx_filter_band` (TciTxPassbandExtension.h).
+    void registerTxPassbandGroup();
+    TciExtensionSet::Result handleTxPassband(const QStringList& args);
+    bool txPassbandOffered() const;
+    QString txPassbandStateLine() const;
+    int extensionTxTrx() const;
+    void queueTxPassbandNotice();
+    bool broadcastTxPassband();
     // Extension groups `rx_rf_gain`, `rx_auto_rf_gain`, `rx_overload`
     // (TciRxGainExtension.h).
     void registerRxGainGroups();
@@ -436,6 +451,9 @@ private:
         quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
+        bool         hwSensorsEnabled{false};
+        int          hwSensorsIntervalMs{TciProtocol::kHwSensorsDefaultIntervalMs};
+        qint64       hwSensorsDueAtMs{-1};   // m_tciPttTelemetryClock time
         bool         extensionsEnabled{false};  // sent aethersdr_ext_enable:true
         QString      extensionsAdvertised;      // last aethersdr_ext: line sent
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
@@ -609,6 +627,7 @@ private:
     quint64 m_routeTransitionGeneration { 0 };
     QString m_lastRouteError;
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
+    QTimer*           m_hwSensorsTimer{nullptr};  // single-shot, per-client intervals
     QTimer*           m_daxReleaseTimer{nullptr}; // debounced DAX RX teardown
     // Rate limiter for drive:/tune_drive: (#4161). A power-slider drag steps
     // the value ~40 times a second and each step is a separate radio command,
@@ -623,6 +642,8 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Extension set, TX passband notice: posted, then rate-limited.
+    std::unique_ptr<TciExtensionNotice> m_txPassbandNotice;
     // Extension set, antenna notices: per line kind, the trx numbers pending.
     std::array<QSet<int>, kAntennaLineKinds> m_antennaPending;
     std::unique_ptr<TciExtensionNotice> m_antennaNotice;

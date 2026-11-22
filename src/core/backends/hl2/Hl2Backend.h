@@ -71,12 +71,6 @@ public:
     explicit Hl2Backend(QObject* parent = nullptr);
     ~Hl2Backend() override;
 
-    // Whether this process has a transmit path for the HL2. The desktop does;
-    // aetherd does not (no HL2 TX grant exists), so it sets false and the HL2
-    // declares itself receive only, which its receive controls require.
-    // Read once, at construction.
-    static void setHostOffersTransmit(bool offers);
-
     RadioCapabilities capabilities() const override;
     // Demodulates in-process (Hl2RxDsp); there is no VITA-49 stream at all.
     bool ownsRxAudio() const override { return true; }
@@ -719,6 +713,17 @@ private:
         // Hl2RxDsp::kDefaultApfLevel / kDefaultAgcOffLevel (the test pins it).
         bool apfOn = false;
         int  apfLevel = 50;
+        // The receive channel's own NR (WDSP ANR) and automatic notch (ANF),
+        // held the same way. Defaults are SliceModel's (off, level 50).
+        bool nrOn = false;
+        int  nrLevel = 50;
+        bool anfOn = false;
+        int  anfLevel = 50;
+        // NR/ANF still to be published once, like nbEchoPending: SliceModel
+        // emits nrChanged/anfChanged for every echo that carries them.
+        bool dspEchoPending = false;   // seed, restore, re-announce: both
+        bool nrEchoPending = false;    // one NR request: echo NR alone
+        bool anfEchoPending = false;   // one ANF request: echo ANF alone
         int  agcOffLevel = 10;
 
         // The operator's panadapter averaging, held for the same reason: a
@@ -854,8 +859,14 @@ private:
     // This receiver's NCO just moved: the averaged bins describe the old
     // frequency axis. Called beside pushNotchTune() at the two retune sites.
     void dropPanAverage(const Receiver& r);
+    void restartPanDc(const Receiver& r);
     // Same, for the APF (centred on the current CW pitch) and the AGC-off level.
     void pushApf(const Receiver& r);
+    // Same, for the channel's NR and ANF (Receiver::nrOn/anfOn and levels).
+    void pushChannelNoiseFilters(const Receiver& r);
+    // requestSliceDsp()'s Nr/Anf arm: the receive channel's own ANR and ANF,
+    // per receiver. Not setSliceNoiseReduction/AutoNotch, which name radio DSP.
+    void setSliceChannelNoiseFilter(int sliceId, const SliceDspRequest& request);
     void pushAgcOffLevel(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC. Never m_rx,

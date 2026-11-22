@@ -1263,6 +1263,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, updateAetherDspPolicy);
     connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
             this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::nnrEnabledChanged,
+            this, updateAetherDspPolicy);
     // Start the CW-sidetone record pump on the audio thread (#2539): queued so
     // its QTimer is created + started on m_audio's thread after the move.
     QMetaObject::invokeMethod(m_audio, [ae = m_audio]() { ae->startCwRecordPump(); },
@@ -3319,6 +3321,8 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         // the same handler the docked applet and the floating editor use.
         // The AetherNR checkbox restoring NR2: same FFTW-wisdom prep the
         // method buttons inside the page already route through (#2275).
+        connect(m_rxDialog, &AetherRxDialog::dspMethodUserToggled,
+                this, [this]() { m_aetherDspModePolicy.noteUserOverride(); });
         connect(m_rxDialog, &AetherRxDialog::nr2EnableWithWisdomRequested,
                 this, &MainWindow::enableNr2WithWisdom);
         connect(m_rxDialog, &AetherRxDialog::cutoffsDragRequested,

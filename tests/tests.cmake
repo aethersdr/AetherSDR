@@ -1984,6 +1984,13 @@ target_include_directories(hl2_rxdsp_notch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_notch_audio_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_notch_audio_test COMMAND hl2_rxdsp_notch_audio_test)
 
+# The HL2 receive channel's own NR (WDSP ANR) and auto notch (ANF), measured
+# on the audio through the real Hl2RxDsp.
+add_executable(hl2_rxdsp_channel_nr_anf_test tests/hl2_rxdsp_channel_nr_anf_test.cpp)
+target_include_directories(hl2_rxdsp_channel_nr_anf_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_channel_nr_anf_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_channel_nr_anf_test COMMAND hl2_rxdsp_channel_nr_anf_test)
+
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)
@@ -2502,6 +2509,17 @@ add_executable(slice_model_squelch_memory_test
 target_include_directories(slice_model_squelch_memory_test PRIVATE src)
 target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
+
+# #6552 option C: the squelch gate reporter's rate limit and SliceModel taking
+# SliceDelta::squelchGate. Socket-free; the WDSP readback is in wdsp_channel_test.
+add_executable(squelch_gate_test
+    tests/squelch_gate_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(squelch_gate_test PRIVATE src)
+target_link_libraries(squelch_gate_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME squelch_gate_test COMMAND squelch_gate_test)
 
 # Split audio memory (#2242) — the parsing rules for the one stored SplitAudio
 # object (the has*/value distinction, the version gate, clamping), the
@@ -7966,6 +7984,15 @@ add_executable(tci_sql_level_test tests/tci_sql_level_test.cpp)
 target_include_directories(tci_sql_level_test PRIVATE src tests)
 target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
+# TCI hw_sensors_enable / hw_sensors (TCI 2.1 §HW_SENSORS): a TciClient text
+# sink attached to the production onTextMessage(). Socket-free: nothing is
+# bound, opened or keyed.
+if(Qt6WebSockets_FOUND)
+    add_executable(tci_hw_sensors_test tests/tci_hw_sensors_test.cpp)
+    target_include_directories(tci_hw_sensors_test PRIVATE src tests)
+    target_link_libraries(tci_hw_sensors_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_hw_sensors_test COMMAND tci_hw_sensors_test)
+endif()
 # An HL2 pan centre outside receivePanCenterControl stops at the edge, in the
 # backend and in the pan model. A real, unconnected Hl2Backend behind
 # RadioModel. Socket-free.
@@ -8300,6 +8327,13 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
 
+    # The extension set's TX passband group (aethersdr_tx_filter_band).
+    add_executable(tci_ext_tx_passband_test tests/tci_ext_tx_passband_test.cpp)
+    target_include_directories(tci_ext_tx_passband_test PRIVATE src tests)
+    target_link_libraries(tci_ext_tx_passband_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_tx_passband_test COMMAND tci_ext_tx_passband_test)
+
     # The extension set's receive gain and overload groups.
     add_executable(tci_ext_rx_gain_test tests/tci_ext_rx_gain_test.cpp)
     target_include_directories(tci_ext_rx_gain_test PRIVATE src tests)
@@ -8592,6 +8626,16 @@ add_executable(wideband_converter_view_test tests/wideband_converter_view_test.c
 target_include_directories(wideband_converter_view_test PRIVATE src)
 target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
+
+# Termination signals release the radio for any family (#7163): forked children
+# report over a pipe; the HL2 is armed on a pipe fd, never fired. No sockets.
+if(NOT WIN32)
+    add_executable(fatal_signal_release_test tests/fatal_signal_release_test.cpp)
+    target_include_directories(fatal_signal_release_test PRIVATE src)
+    target_link_libraries(fatal_signal_release_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME fatal_signal_release_test COMMAND fatal_signal_release_test)
+    set_tests_properties(fatal_signal_release_test PROPERTIES TIMEOUT 60)
+endif()
 
 # HL2 emergency stop (#4581): arm/disarm/fire, and a re-arm racing a fire.
 # SOCKETS: three UDP sockets on 127.0.0.1 (kernel-chosen ports): two sinks for
@@ -10450,8 +10494,9 @@ add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
 target_include_directories(hl2_gain_restore_test PRIVATE src tests)
 target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
-# A receive-only HL2 (aetherd) builds no transmit chain on connect; the
-# transmit-capable backend still does. Same socket-free harness as above.
+# A receive-only HL2 (aetherd) builds no transmit chain on connect and declares
+# txPowerMaxWatts 0; the transmit-capable backend builds it and declares 5 W.
+# Same socket-free harness as above.
 add_executable(hl2_rx_only_tx_chain_test tests/hl2_rx_only_tx_chain_test.cpp)
 target_include_directories(hl2_rx_only_tx_chain_test PRIVATE src tests)
 target_link_libraries(hl2_rx_only_tx_chain_test PRIVATE aethercore Qt6::Core)
@@ -11313,6 +11358,15 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
     src/gui/StripTubePanel.cpp
+    src/gui/StripCompPanel.cpp
+    src/gui/ClientCompEditorCanvas.cpp
+    src/gui/ClientCompLimiterButton.cpp
+    src/gui/ClientCompMeter.cpp
+    src/gui/ClientCompThresholdFader.cpp
+    src/gui/ClientPuduApplet.cpp
+    src/gui/ClientPuduEditor.cpp
+    src/gui/StripPuduPanel.cpp
+    src/gui/PooDooLogo.cpp
     src/gui/ClientLevelMeter.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
@@ -11320,6 +11374,8 @@ target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)
 target_link_libraries(client_dsp_knob_dispatch_test PRIVATE
     aethercore Qt6::Widgets Qt6::Test)
 add_test(NAME client_dsp_knob_dispatch_test COMMAND client_dsp_knob_dispatch_test)
+set_tests_properties(client_dsp_knob_dispatch_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 set_tests_properties(nrs_level_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
@@ -11566,6 +11622,26 @@ target_link_libraries(phone_applet_vox_disarm_test PRIVATE
 set_target_properties(phone_applet_vox_disarm_test PROPERTIES AUTOMOC ON)
 add_test(NAME phone_applet_vox_disarm_test COMMAND phone_applet_vox_disarm_test)
 set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# RF/Tune power are drive, not keying (#5851): every bridge surface sets them
+# without TX permission, and the power ceiling bounds them. Real TxApplet,
+# offscreen, no radio.
+add_executable(automation_tx_setpoint_gate_test
+    tests/automation_tx_setpoint_gate_test.cpp
+    src/gui/TxApplet.cpp
+    src/gui/AtuPreTuneDialog.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+)
+target_include_directories(automation_tx_setpoint_gate_test PRIVATE src tests)
+target_link_libraries(automation_tx_setpoint_gate_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
+)
+set_target_properties(automation_tx_setpoint_gate_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_tx_setpoint_gate_test COMMAND automation_tx_setpoint_gate_test)
+set_tests_properties(automation_tx_setpoint_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # CW speed entry survives repeated capability limits between keystrokes.
@@ -11847,6 +11923,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_volume_test
     hl2_bandstack_digital_agc_test
     tci_sql_level_test
+    tci_hw_sensors_test
     hl2_pan_center_range_test
     tci_agc_gain_test
     radio_model_client_state_test
@@ -11863,6 +11940,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     tci_extension_set_test
     tci_extension_zero_traffic_test
+    tci_ext_tx_passband_test
     tci_ext_rx_gain_test
     tci_ext_antennas_test
     tci_ext_span_test
@@ -12154,6 +12232,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_connect_family_test
     automation_tx_watchdog_test
     phone_applet_vox_disarm_test
+    automation_tx_setpoint_gate_test
     automation_rn2_probe_test
     automation_nnr_probe_test
     connect_state_model_test
