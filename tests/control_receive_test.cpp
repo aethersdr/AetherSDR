@@ -1261,6 +1261,7 @@ void hl2ReceiveDspDrivesTheControlPlane()
         Hl2Fed h(hl2Caps);
         check(h.outcome(ReceiveOperation::AgcThreshold) == QStringLiteral("capability.unavailable")
                   && h.outcome(ReceiveOperation::NoiseBlanker) == QStringLiteral("capability.unavailable")
+                  && h.outcome(ReceiveOperation::NoiseReduction) == QStringLiteral("capability.unavailable")
                   && h.outcome(ReceiveOperation::Rit) == QStringLiteral("capability.unavailable")
                   && h.outcome(ReceiveOperation::PanRfGain) == QStringLiteral("capability.unavailable"),
               "negative control: before the HL2 publishes, no DSP or RF gain verb is admitted");
@@ -1284,8 +1285,9 @@ void hl2ReceiveDspDrivesTheControlPlane()
         check(h.outcome(ReceiveOperation::NoiseBlanker) == QStringLiteral("result")
                   && h.f.backend->args.value("feature").toInt() == static_cast<int>(SliceDspRequest::Feature::Nb),
               "slice.setNoiseBlanker is admitted on the HL2's own blanker readback");
-        check(h.outcome(ReceiveOperation::NoiseReduction) == QStringLiteral("capability.unavailable"),
-              "slice.setNoiseReduction is refused: the HL2 runs no NR");
+        check(h.outcome(ReceiveOperation::NoiseReduction) == QStringLiteral("result")
+                  && h.f.backend->args.value("feature").toInt() == static_cast<int>(SliceDspRequest::Feature::Nr),
+              "slice.setNoiseReduction is admitted on the HL2's own channel-NR readback");
         const int maximum = hl2Caps.receiveDspControl->maximumRitOffsetHz;
         check(h.outcome(ReceiveOperation::Rit, with(h.f.params(ReceiveOperation::Rit), "offsetHz", maximum))
                       == QStringLiteral("result")

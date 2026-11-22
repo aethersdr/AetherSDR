@@ -347,6 +347,47 @@ public:
         return m_apfOn && isCwMode(m_config.mode);
     }
 
+    // The channel's own ANR (leaky LMS NR) and ANF (LMS auto notch), at WDSP's
+    // default pre-AGC position (#5704), so every consumer of this channel's audio
+    // gets them; the client NR modules are a later, separate stage. Held through
+    // modes where they are out of circuit, like the APF: NR is out in FM/WBFM
+    // and DRM, ANF outside voice modes, where a steady tone is the signal.
+    static constexpr int kDefaultNrLevel = 50;       // SliceModel::m_nrLevel
+    static constexpr int kDefaultAnfLevel = 50;      // SliceModel::m_anfLevel
+    [[nodiscard]] static constexpr bool noiseReductionRunsIn(WdspChannel::Mode mode) noexcept
+    {
+        return mode != WdspChannel::Mode::Fm && mode != WdspChannel::Mode::Wbfm
+            && mode != WdspChannel::Mode::Drm;   // ANR would corrupt the DRM waveform
+    }
+    [[nodiscard]] static constexpr bool autoNotchRunsIn(WdspChannel::Mode mode) noexcept
+    {
+        return mode == WdspChannel::Mode::Lsb || mode == WdspChannel::Mode::Usb
+            || mode == WdspChannel::Mode::Dsb || mode == WdspChannel::Mode::Am
+            || mode == WdspChannel::Mode::Sam;
+    }
+    Q_INVOKABLE void setNoiseReduction(bool on, int level);
+    Q_INVOKABLE void setAutoNotch(bool on, int level);
+    [[nodiscard]] bool noiseReductionRequested() const noexcept { return m_nrOn; }
+    [[nodiscard]] int noiseReductionLevel() const noexcept { return m_nrLevel; }
+    [[nodiscard]] bool noiseReductionInCircuit() const noexcept
+    {
+        return m_nrOn && noiseReductionRunsIn(m_config.mode);
+    }
+    [[nodiscard]] bool autoNotchRequested() const noexcept { return m_anfOn; }
+    [[nodiscard]] int autoNotchLevel() const noexcept { return m_anfLevel; }
+    [[nodiscard]] bool autoNotchInCircuit() const noexcept
+    {
+        return m_anfOn && autoNotchRunsIn(m_config.mode);
+    }
+    // What the channel last ACCEPTED, like m_nbApplied*: whether each stage is
+    // running in WDSP. Differs from *InCircuit() only while WDSP refused a push.
+    [[nodiscard]] bool noiseReductionApplied() const noexcept { return m_nrApplied; }
+    [[nodiscard]] bool autoNotchApplied() const noexcept { return m_anfApplied; }
+    // setNoiseReduction()/setAutoNotch() calls received, for tests: each one
+    // re-sends the stage's values to WDSP, which flushes its LMS taps.
+    [[nodiscard]] int noiseReductionDeliveries() const noexcept { return m_nrDeliveries; }
+    [[nodiscard]] int autoNotchDeliveries() const noexcept { return m_anfDeliveries; }
+
     // Post-DDC half of the ADC pairing (docs/HERMES.md §13 item 16;
     // Hl2AdcPairing.h). WDSP's RXA_ADC_PK in dB re wire full scale, not
     // calibrated to the antenna. adcmeter runs first in xrxa, after the shift
@@ -555,6 +596,8 @@ private:
     // check canPushToChannel() first. Refusals are logged and the request is
     // kept, so the next install re-applies it.
     void applyApf();
+    void applyNoiseReduction();
+    void applyAutoNotch();
     void applyAgcOffLevel();
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
@@ -612,6 +655,15 @@ private:
     bool m_apfOn = false;
     int m_apfLevel = kDefaultApfLevel;
     double m_apfCenterHz = 600.0;
+    // Channel NR and ANF requests, held like the APF; see setNoiseReduction().
+    bool m_nrOn = false;
+    int m_nrLevel = kDefaultNrLevel;
+    bool m_anfOn = false;
+    int m_anfLevel = kDefaultAnfLevel;
+    bool m_nrApplied = false;    // a fresh channel opens with both stages off
+    bool m_anfApplied = false;
+    int m_nrDeliveries = 0;
+    int m_anfDeliveries = 0;
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and
     // 0 are the "never observed" sentinels, which is why neither is a value the
     // accessors can return. A steady_clock stamp rather than a QElapsedTimer
