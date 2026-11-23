@@ -212,7 +212,9 @@ void testRadiocertRestore()
 }
 
 // MainWindow is not a test target: its session wiring must use the binding and
-// must not read the saved gain for itself.
+// must not read the saved gain for itself. A tripwire on today's spelling, not
+// a behavior test: a reformat or a correct refactor of those lines fails it,
+// and then this check is updated to match.
 void testMainWindowUsesBinding()
 {
     QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Session.cpp"));

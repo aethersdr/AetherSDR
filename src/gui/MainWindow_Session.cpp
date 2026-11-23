@@ -1857,8 +1857,9 @@ void MainWindow::wireRadioModel()
         // radio owns the actual input path. Starting QAudioSource here on
         // macOS pins Bluetooth output in telephony mode.
         if (m_radioModel.transmitModel().micSelection() == "PC") {
-            // Restore PC mic gain from client-side settings (radio has no
-            // hardware gain stage for PC input — client-authoritative)
+            // Apply the client-side PC mic gain (the radio has no hardware
+            // gain stage for PC input): the saved value, or unity on a
+            // host-modulating radio (pcMicGainPercent).
             m_audio->setPcMicGain(pcMicGainPercent(m_radioModel.transmitModel()));
             if (!m_audio->isTxStreaming()) {
                 audioStartTx(m_radioModel.radioAddress(), 4991);
