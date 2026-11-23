@@ -118,7 +118,7 @@ public:
         // 39 dB is the slice model's default threshold of 65 through
         // Hl2DbReference::agcCeilingDbAtReference(), the 0..100 -> 0..90 dB map.
         int agcMode = 3;
-        double maximumAgcGainDb = 39.0;   // = slice default 65 * 0.6
+        double maximumAgcGainDb = 39.0;   // = agcCeilingDbAtReference(65), the slice default
         // false (live): processIq is non-blocking — real-time input paces WDSP's
         // async worker and audio flows with ~1 block latency. true: processIq
         // waits for each output block. That does not make a burst feed
