@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QLineEdit>
+#include <QStringList>
 #include <QSignalSpy>
 #include <QSlider>
 #include <QTest>
@@ -206,9 +207,10 @@ int main(int argc, char** argv)
     check(panText(50) == QStringLiteral("C") && panText(20) == QStringLiteral("L30")
               && panText(80) == QStringLiteral("R30"),
           "the pan readout is C, L30 or R30");
-    // The 0-based Delay and Sidetone edits can only hold an empty field as
-    // Intermediate text; leaving one empty puts the current value back too.
-    // (APF shares the same filter but is disabled with no slice bound.)
+    // Leaving Delay or Sidetone with Intermediate text (an empty field, or an
+    // over-range number such as "3000" in the 0-2000 delay) puts the current
+    // value back too. (APF shares the same filter but is disabled with no
+    // slice bound.)
     const auto findEdit = [&applet](const char* name) -> QLineEdit* {
         for (QLineEdit* candidate : applet.findChildren<QLineEdit*>()) {
             if (candidate->accessibleName() == QLatin1String(name)) {
@@ -217,10 +219,15 @@ int main(int argc, char** argv)
         }
         return nullptr;
     };
-    const auto emptyThenLeave = [&slider](QLineEdit* field) {
+    const auto typeThenLeave = [&slider, &check](QLineEdit* field, const char* text,
+                                                 const char* what) {
         field->setFocus();
         field->selectAll();
         QTest::keyClick(field, Qt::Key_Backspace);
+        QTest::keyClicks(field, QString::fromLatin1(text));
+        check(field->hasFocus() && field->text() == QLatin1String(text)
+                  && !field->hasAcceptableInput(),
+              what);
         slider->setFocus();
         QCoreApplication::processEvents();
     };
@@ -229,18 +236,26 @@ int main(int argc, char** argv)
     check(delayEdit && sidetoneEdit, "the delay and sidetone value fields exist");
     if (delayEdit && sidetoneEdit) {
         const int delayBefore = model.cwDelay();
-        emptyThenLeave(delayEdit);
+        typeThenLeave(delayEdit, "", "the delay field has focus and is empty before leaving");
         check(delayEdit->text() == QString::number(delayBefore)
                   && model.cwDelay() == delayBefore,
               "focus-out restores an empty delay field without changing the delay");
+        typeThenLeave(delayEdit, "3000",
+                      "the delay field has focus and holds an over-range 3000 before leaving");
+        check(delayEdit->text() == QString::number(delayBefore)
+                  && model.cwDelay() == delayBefore,
+              "focus-out restores an over-range delay without changing the delay");
         const int sidetoneBefore = model.monGainCw();
-        emptyThenLeave(sidetoneEdit);
+        typeThenLeave(sidetoneEdit, "",
+                      "the sidetone field has focus and is empty before leaving");
         check(sidetoneEdit->text() == QString::number(sidetoneBefore)
                   && model.monGainCw() == sidetoneBefore,
               "focus-out restores an empty sidetone field without changing the level");
     }
 
-    // A screen reader reads the pan the way the operator sees it.
+    // The accessible Value reads the pan the way the operator sees it. That is
+    // what Windows UI Automation's ValuePattern reports; macOS VoiceOver reads
+    // the number instead.
     if (pan) {
         pan->setValue(20);
         QAccessibleInterface* a11y = QAccessible::queryAccessibleInterface(pan);
@@ -254,6 +269,34 @@ int main(int argc, char** argv)
         pan->setValue(50);
         check(a11y && a11y->text(QAccessible::Value) == QStringLiteral("C"),
               "the centred pan reads C");
+
+        // A value change also posts the text, which on Windows raises UIA's
+        // Value property change rather than only its RangeValue one.
+        static QObject* s_watched = nullptr;
+        static QStringList s_valueTexts;
+        static QAccessible::UpdateHandler s_previous = nullptr;
+        s_watched = pan;
+        s_valueTexts.clear();
+        QAccessible::setActive(true);
+        s_previous = QAccessible::installUpdateHandler([](QAccessibleEvent* event) {
+            if (event->object() == s_watched && event->type() == QAccessible::ValueChanged) {
+                const QVariant value = static_cast<QAccessibleValueChangeEvent*>(event)->value();
+                if (value.typeId() == QMetaType::QString) {
+                    s_valueTexts << value.toString();
+                }
+            }
+            if (s_previous != nullptr) {
+                s_previous(event);
+            }
+        });
+        check(QAccessible::isActive(), "accessibility is active for the event check");
+        pan->setValue(20);
+        check(s_valueTexts == QStringList{QStringLiteral("L30")},
+              "a pan value change posts the text L30 to assistive tech");
+        QAccessible::installUpdateHandler(s_previous);
+        QAccessible::setActive(false);
+        s_watched = nullptr;
+        pan->setValue(50);
     }
     // Every CenterMarkSlider gets this, including the VFO pan, which never
     // set a readout of its own.

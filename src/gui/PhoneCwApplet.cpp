@@ -1623,10 +1623,10 @@ bool PhoneCwApplet::eventFilter(QObject* obj, QEvent* ev)
         && (obj == m_speedEdit || obj == m_pitchEdit || obj == m_delayEdit
             || obj == m_sidetoneEdit || obj == m_apfEdit)) {
         // QLineEdit emits no editingFinished for Intermediate text ("2" under
-        // a 5 WPM floor, "6" under 100 Hz, or an empty field, which is the
-        // only Intermediate text the 0-based delay, sidetone and APF edits
-        // can hold), so nothing commits and the field would keep showing what
-        // was typed (#7325). Put the current
+        // a 5 WPM floor, "6" under 100 Hz, an empty field, or an over-range
+        // number with no more digits than the maximum, such as "3000" in the
+        // 0-2000 delay), so nothing commits and the field would keep showing
+        // what was typed (#7325). Put the current
         // value back once the edit has finished its own focus-out: restoring
         // here would make the text acceptable in time for editingFinished,
         // and the pitch path would send a cw pitch command for no change.

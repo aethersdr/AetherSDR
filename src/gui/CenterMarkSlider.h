@@ -25,10 +25,6 @@ inline QString panText(int value)
                                 .arg(std::abs(value - 50));
 }
 
-class CenterMarkSlider;
-inline QAccessibleInterface* centerMarkSliderAccessibleFactory(const QString& key,
-                                                               QObject* object);
-
 // Slider that resets to a default value on double-click.
 // Extends GuardedSlider for controls-lock support (#745).
 class ResetSlider : public GuardedSlider {
@@ -48,29 +44,8 @@ private:
 // RX applet, the VFO audio tab and the CW sidetone pan (#7260).
 class CenterMarkSlider : public ResetSlider {
 public:
-    explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : ResetSlider(resetVal, o, parent)
-    {
-        // Every CenterMarkSlider is a 0-100 pan centred on 50, so the drag
-        // readout and the accessible value both say C, L30 or R30. Before,
-        // only the RX applet and the CW pan set this; the VFO pan read 0-100.
-        setDragValueFormatter(panText);
-
-        // A screen reader reads the accessible Value. Qt's own slider
-        // interface reports the raw number, so a pan the operator sees as
-        // L21 was announced as "29". Install a factory that hands this
-        // class its own interface, and evict one Qt may already have cached
-        // for this object (the ScrollableLabel lesson in GuardedSlider.h).
-        static bool s_factoryInstalled = false;
-        if (!s_factoryInstalled) {
-            s_factoryInstalled = true;
-            QAccessible::installFactory(centerMarkSliderAccessibleFactory);
-        }
-        if (QAccessibleInterface* cached = QAccessible::queryAccessibleInterface(this)) {
-            if (cached->text(QAccessible::Value) != accessibleValueText())
-                QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(cached));
-        }
-    }
+    // Defined after CenterMarkSliderAccessible, which it needs complete.
+    explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr);
 
     // What the slider shows while dragged, and what assistive tech reads.
     QString accessibleValueText() const { return dragValueText(); }
@@ -122,13 +97,19 @@ protected:
 
 // Accessible interface for CenterMarkSlider: role Slider, the numeric range
 // through QAccessibleValueInterface (assistive tech that wants a number still
-// gets 0-100), and the Value text from the slider's own readout, so a screen
-// reader says "L21" where the operator sees L21. Setting a value honours the
-// sidebar controls lock (#745), as wheel and mouse input do.
+// gets 0-100), and the Value text from the slider's own readout. On Windows,
+// UI Automation's ValuePattern then reads "L21" where the operator sees L21.
+// macOS does not use it: Qt's Cocoa bridge reads currentValue() for any
+// control with a value interface, so VoiceOver still gets the number. Setting
+// a value honours the sidebar controls lock (#745), as wheel and mouse input
+// do, and does nothing while the slider is disabled.
 class CenterMarkSliderAccessible : public QAccessibleWidget, public QAccessibleValueInterface {
 public:
     explicit CenterMarkSliderAccessible(QWidget* widget)
-        : QAccessibleWidget(widget, QAccessible::Slider) {}
+        : QAccessibleWidget(widget, QAccessible::Slider)
+    {
+        addControllingSignal(QStringLiteral("valueChanged(int)"));
+    }
 
     void* interface_cast(QAccessible::InterfaceType type) override
     {
@@ -147,7 +128,7 @@ public:
     QVariant currentValue() const override { return slider()->value(); }
     void setCurrentValue(const QVariant& value) override
     {
-        if (!ControlsLock::isLocked())
+        if (!ControlsLock::isLocked() && slider()->isEnabled())
             slider()->setValue(value.toInt());
     }
     QVariant maximumValue() const override { return slider()->maximum(); }
@@ -165,4 +146,43 @@ inline QAccessibleInterface* centerMarkSliderAccessibleFactory(const QString&, Q
     if (auto* slider = dynamic_cast<CenterMarkSlider*>(object))
         return new CenterMarkSliderAccessible(slider);
     return nullptr;
+}
+
+inline CenterMarkSlider::CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent)
+    : ResetSlider(resetVal, o, parent)
+{
+    // Every CenterMarkSlider is a 0-100 pan centred on 50, so the drag
+    // readout and the accessible value both say C, L30 or R30.
+    setDragValueFormatter(panText);
+
+    // Qt's own slider interface reports the raw number as the accessible
+    // Value, so a pan the operator sees as L21 read as "29". Install a
+    // factory that hands this class its own interface.
+    static bool s_factoryInstalled = false;
+    if (!s_factoryInstalled) {
+        s_factoryInstalled = true;
+        QAccessible::installFactory(centerMarkSliderAccessibleFactory);
+    }
+    // Evict an interface Qt cached for this object while the QSlider base
+    // was being built, when the factory's dynamic_cast could not match yet
+    // (the ScrollableLabel lesson in GuardedSlider.h). The query builds this
+    // class's interface now if none exists, so every pan carries one from
+    // construction, assistive tech or not; it is one small object per pan.
+    if (QAccessibleInterface* cached = QAccessible::queryAccessibleInterface(this)) {
+        if (!dynamic_cast<CenterMarkSliderAccessible*>(cached))
+            QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(cached));
+    }
+
+    // QAbstractSlider's own value-change event carries the number. On
+    // Windows a number raises only UIA's RangeValue property change; a string
+    // also raises the Value property change, the one that carries "L21". This
+    // adds that second event after Qt's; no screen reader has been checked
+    // against it. On Linux AT-SPI each event is one accessible-value signal,
+    // so a step now sends two.
+    QObject::connect(this, &QAbstractSlider::valueChanged, this, [this] {
+        if (QAccessible::isActive()) {
+            QAccessibleValueChangeEvent ev(this, accessibleValueText());
+            QAccessible::updateAccessibility(&ev);
+        }
+    });
 }
