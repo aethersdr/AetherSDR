@@ -264,7 +264,7 @@ private:
     // restarts it. Tracked because setRunning() is a control call.
     bool m_modulatorRunning = false;
     // A mode or passband change arrived during an over; m_config holds it and
-    // modulate() applies it before the next over (applyModeAndFilter()).
+    // reset() applies it, or modulate() before the next over starts.
     bool m_modeFilterHeld = false;
     // Permanent zero Q plane: audio is mono, and xpanel's inselect = 2
     // (create_txa) zeroes Q anyway (measured).

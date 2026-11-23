@@ -4,7 +4,8 @@
 // emitted IQ, socket-free, paced at real time like hl2_tx_passband_onset_test.
 //   1. USB -> DIGU keyed, as Hl2Backend::setSliceMode queues it: the over's
 //      out-of-band energy around the change stays at the unchanged over's.
-//   2. The held change is not lost: the next over transmits DIGU (a 200 Hz tone,
+//   2. The held change is not lost: it reaches the channel at unkey, and the
+//      next over transmits DIGU (a 200 Hz tone,
 //      outside USB's 300 Hz edge, passes at a fresh DIGU channel's level).
 //   3. Control: the same change made between overs applies to the next over.
 
@@ -80,7 +81,7 @@ struct Over {
 // One over on `tx`, `event` called before chunk kEvent; tx.reset() after it,
 // as the next over's new context does.
 Over runOver(Hl2TxDsp& tx, const TxCoordinator::Context& ctx, const std::vector<float>& audio,
-             const std::function<void()>& event)
+             const std::function<void()>& event, const std::function<void()>& beforeReset = {})
 {
     Over o;
     const unsigned long long faults0 = tx.modulatorFaultBlocks();
@@ -100,6 +101,9 @@ Over runOver(Hl2TxDsp& tx, const TxCoordinator::Context& ctx, const std::vector<
     QObject::disconnect(c);
     o.faults = tx.modulatorFaultBlocks() - faults0;
     o.stallDrops = tx.modulatorStallDrops() - drops0;
+    if (beforeReset) {
+        beforeReset();
+    }
     tx.reset();
     return o;
 }
@@ -235,10 +239,15 @@ int main(int argc, char** argv)
         Hl2TxDsp tx;
         if (configureTx(ctl, Mode::Usb, 300.0, 2700.0) && configureTx(tx, Mode::Usb, 300.0, 2700.0)) {
             const Over c = runOver(ctl, authority.context, t1k, {});
+            bool heldInOver = false;
             const Over e = runOver(tx, authority.context, t1k, [&tx] {
                 // Hl2Backend::setSliceMode's two queued calls, in its order.
                 tx.setMode(Mode::Digu);
                 tx.setFilter(150.0, 3000.0);
+            }, [&tx, &heldInOver] {
+                const WdspChannel::Config* c = tx.channelConfig();
+                heldInOver = c && c->mode == Mode::Usb && c->minimumPhase
+                    && tx.config().mode == Mode::Digu;
             });
             inconclusive = inconclusive || starved(c) || starved(e);
             // Worst 100 ms window from the change to 200 ms after it, 10 ms steps.
@@ -253,9 +262,11 @@ int main(int argc, char** argv)
             check(worstEv - worstCtl <= 10.0,
                   "a keyed USB -> DIGU change does not splatter (out-of-band within 10 dB of the unchanged over)");
 
-            const WdspChannel::Config* applied = tx.channelConfig();
-            check(applied && applied->mode == Mode::Usb && applied->minimumPhase,
+            check(heldInOver,
                   "the change is held while the over runs: the channel is still USB, minimum phase");
+            const WdspChannel::Config* applied = tx.channelConfig();
+            check(applied && applied->mode == Mode::Digu && !applied->minimumPhase,
+                  "the held change reaches the channel when the over ends (reset)");
 
             const Over next = runOver(tx, authority.context, t200, {});
             inconclusive = inconclusive || starved(next);

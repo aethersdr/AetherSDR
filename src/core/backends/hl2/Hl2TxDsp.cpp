@@ -187,6 +187,11 @@ void Hl2TxDsp::resetModulatorState()
     if (m_exchangeTimer) {
         m_exchangeTimer->stop();
     }
+    // The over has ended: a change held during it reaches the stopped channel
+    // now, not at the next key-up (TXASetMP's redesign would delay that over).
+    if (m_modeFilterHeld) {
+        applyModeAndFilter();
+    }
 }
 
 void Hl2TxDsp::modulate(std::span<const float> audio)
