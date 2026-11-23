@@ -103,6 +103,7 @@ private:
     // The status was read again with the token after one came back without
     // the devices; cleared when a status lists them.
     bool m_rereadForToken{false};
+    bool m_statusReadFailed{false};   // the last status read failed
     bool m_fitPending{false};
     bool m_advancedOpenedForVersion{false};
     QString m_authUrl;   // the sign-in URL the QR code shows, if any

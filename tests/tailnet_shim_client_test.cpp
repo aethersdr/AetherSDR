@@ -192,6 +192,36 @@ int main(int argc, char** argv)
                      "listed devices leave the card editable");
         ok &= expect(tailnetshim::announceDevicesBlock(hidden, false) == Block::None,
                      "without a token the card's own reason applies");
+
+        // The read with the token failed: nothing is on its way, so the card
+        // must not keep saying "Reading…" (on8st, 2026-11-20).
+        ok &= expect(tailnetshim::announceDevicesBlock(hidden, true, true) == Block::ReadFailed,
+                     "a failed read after a hidden status says the read failed");
+        ok &= expect(tailnetshim::announceDevicesBlock(refused, true, true) == Block::TokenRefused,
+                     "a refused token stays the reason after a later failure");
+        ok &= expect(tailnetshim::announceDevicesBlock(listed, true, true) == Block::None,
+                     "a failure leaves a listed card editable");
+    }
+
+    // Only: once 32 devices are ticked, the unticked boxes are disabled, so a
+    // 33rd tick can't vanish on Save; unticking one frees a slot.
+    {
+        const int max = tailnetshim::kMaxAnnounceIds;
+        ok &= expect(max == 32, "the shim's limit is 32 devices");
+        ok &= expect(tailnetshim::announceTickEnabled(false, max - 1),
+                     "below the limit an unticked box can be ticked");
+        ok &= expect(!tailnetshim::announceTickEnabled(false, max),
+                     "at the limit an unticked box is disabled");
+        ok &= expect(tailnetshim::announceTickEnabled(true, max),
+                     "at the limit a ticked box can still be unticked");
+        QStringList ids;
+        for (int i = 0; i < max + 1; ++i) {
+            ids << QStringLiteral("n%1").arg(i);
+        }
+        const QJsonArray kept = QJsonDocument::fromJson(tailnetshim::announceBody(
+            QStringLiteral("only"), ids)).object().value(QStringLiteral("announce_to")).toArray();
+        ok &= expect(kept.size() == max,
+                     "the body keeps the limit the boxes enforce, so no enabled tick is dropped");
     }
 
     // The window starts the sign-in unasked only once the keychain has

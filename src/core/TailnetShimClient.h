@@ -143,8 +143,17 @@ bool shouldRereadWithToken(const TailnetShimStatus& status, bool haveToken, bool
 // a computer that holds the token. Saving from it would send an empty ticked
 // list and erase the saved one (review of #7346). None when the devices are
 // listed, or without a token, where the card's own reason covers it.
-enum class AnnounceDevicesBlock { None, Reading, TokenRefused };
-AnnounceDevicesBlock announceDevicesBlock(const TailnetShimStatus& status, bool haveToken);
+// ReadFailed: the status read after it failed, so nothing is on its way and
+// "Reading…" would stay up for good.
+enum class AnnounceDevicesBlock { None, Reading, TokenRefused, ReadFailed };
+AnnounceDevicesBlock announceDevicesBlock(const TailnetShimStatus& status, bool haveToken,
+                                          bool lastReadFailed = false);
+// The shim announces to at most this many ticked devices (api.go
+// validAnnounce); announceBody() keeps no more.
+inline constexpr int kMaxAnnounceIds = 32;
+// Whether a device's tick box can be changed under Only: an unticked box is
+// disabled once kMaxAnnounceIds are ticked, so a tick can't vanish on Save.
+bool announceTickEnabled(bool ticked, int tickedCount);
 // The token the window keeps when the keychain answers: one it already
 // holds (issued by a sign-in meanwhile) wins over the read.
 QString tokenAfterKeychainRead(const QString& held, const QString& read);

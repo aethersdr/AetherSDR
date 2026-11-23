@@ -537,6 +537,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     connect(&m_client, &TailnetShimClient::statusReceived, this,
             [this](const TailnetShimStatus& st) {
         setBusy(false);
+        m_statusReadFailed = false;
         showStatus(st);
         maybeSignInUnasked();
         // The window opens with a status read that can go before the
@@ -899,8 +900,9 @@ void TailnetShimDialog::updateControls()
     const bool announceSupported = known && m_status->announceSupported;
     // A status that leaves the devices out shows no ticks, so Save would
     // erase the saved ones: wait for the read with the token.
-    const auto devicesBlock = known ? tailnetshim::announceDevicesBlock(*m_status, haveToken)
-                                    : tailnetshim::AnnounceDevicesBlock::None;
+    const auto devicesBlock = known
+        ? tailnetshim::announceDevicesBlock(*m_status, haveToken, m_statusReadFailed)
+        : tailnetshim::AnnounceDevicesBlock::None;
     const bool announceOk = provisioned && haveToken && !waiting && announceSupported
         && devicesBlock == tailnetshim::AnnounceDevicesBlock::None;
     QString announceReason = tr("Remote access on the radio hasn't answered yet.");
@@ -914,6 +916,9 @@ void TailnetShimDialog::updateControls()
         announceReason = tr("Not while the radio's sign-in is being completed.");
     } else if (devicesBlock == tailnetshim::AnnounceDevicesBlock::Reading) {
         announceReason = tr("Reading this radio's tailnet devices…");
+    } else if (devicesBlock == tailnetshim::AnnounceDevicesBlock::ReadFailed) {
+        announceReason = tr("Couldn't read this radio's tailnet devices. Press Refresh to try "
+                            "again.");
     } else if (devicesBlock == tailnetshim::AnnounceDevicesBlock::TokenRefused) {
         announceReason = tr("The radio didn't accept this computer's access token, so its "
                             "tailnet devices can't be shown or changed here.");
@@ -928,8 +933,19 @@ void TailnetShimDialog::updateControls()
     gate(m_announceOnly, announceOk, announceReason);
     gate(m_announceOff, announceOk, announceReason);
     gate(m_saveAnnounceButton, announceOk, announceReason);
+    // At the limit, an unticked box is disabled rather than dropped on Save.
+    int ticked = 0;
     for (QCheckBox* c : std::as_const(m_announceChecks)) {
-        gate(c, announceOk && m_announceOnly->isChecked(), tickReason);
+        ticked += c->isChecked() ? 1 : 0;
+    }
+    const QString limitReason =
+        tr("The radio is announced to at most %1 devices. Untick one to choose this one.")
+            .arg(tailnetshim::kMaxAnnounceIds);
+    for (QCheckBox* c : std::as_const(m_announceChecks)) {
+        const bool editable = announceOk && m_announceOnly->isChecked();
+        const bool underLimit = tailnetshim::announceTickEnabled(c->isChecked(), ticked);
+        gate(c, editable && underLimit, editable ? limitReason : tickReason);
+        c->setToolTip(editable && !underLimit ? limitReason : QString());
     }
     // Disconnect belongs to a radio on the tailnet; until then there is
     // only the sign-in to finish.
@@ -1139,6 +1155,13 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
                                         bool unauthorized)
 {
     setBusy(false);
+    if (operation == QLatin1String("status")) {
+        // Nothing is on its way now: say so instead of "Reading…", and let
+        // the next status read again with the token.
+        m_rereadForToken = false;
+        m_statusReadFailed = true;
+        updateControls();
+    }
     if (operation == QLatin1String("announce")) {
         // The edits are still unsaved: the refresh below must not clear them.
         disconnect(m_announceSaved);
@@ -1274,7 +1297,10 @@ void TailnetShimDialog::showAnnouncement(const TailnetShimStatus& st)
             auto* check = new QCheckBox(r.name, m_announceList);
             check->setAccessibleName(tr("Announce the radio to %1").arg(r.name));
             check->setChecked(r.ticked);
-            connect(check, &QCheckBox::toggled, this, [this] { m_announceEdited = true; });
+            connect(check, &QCheckBox::toggled, this, [this] {
+                m_announceEdited = true;
+                updateControls();   // re-gates the boxes at the device limit
+            });
             auto* status = roleLabel(QString(), "hint", m_announceList);
             status->setAccessibleName(tr("Announcement status of %1").arg(r.name));
             m_announceGrid->addWidget(check, row, 0, Qt::AlignLeft | Qt::AlignVCenter);

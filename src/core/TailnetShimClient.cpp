@@ -36,7 +36,6 @@ constexpr int kMaxField = 256;
 constexpr int kMaxMessage = 512;
 constexpr int kMaxEntries = 64;
 constexpr int kMaxAnnounceDevices = 256;
-constexpr int kMaxAnnounceIds = 32;
 
 bool isAnnounceMode(const QString& m)
 {
@@ -235,14 +234,24 @@ bool shouldRereadWithToken(const TailnetShimStatus& st, bool haveToken, bool alr
     return st.announceDevicesHidden && haveToken && !alreadyReread;
 }
 
-AnnounceDevicesBlock announceDevicesBlock(const TailnetShimStatus& st, bool haveToken)
+AnnounceDevicesBlock announceDevicesBlock(const TailnetShimStatus& st, bool haveToken,
+                                          bool lastReadFailed)
 {
     if (!st.announceDevicesHidden || !haveToken) {
         return AnnounceDevicesBlock::None;
     }
-    // Read without the token (before the keychain answered): the read with
-    // it is on its way. Read with it: the shim refused it.
-    return st.readWithToken ? AnnounceDevicesBlock::TokenRefused : AnnounceDevicesBlock::Reading;
+    // Read with the token: the shim refused it. Read without it (before the
+    // keychain answered): the read with it is on its way, unless that read
+    // failed.
+    if (st.readWithToken) {
+        return AnnounceDevicesBlock::TokenRefused;
+    }
+    return lastReadFailed ? AnnounceDevicesBlock::ReadFailed : AnnounceDevicesBlock::Reading;
+}
+
+bool announceTickEnabled(bool ticked, int tickedCount)
+{
+    return ticked || tickedCount < kMaxAnnounceIds;
 }
 
 bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,
