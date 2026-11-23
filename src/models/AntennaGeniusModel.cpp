@@ -1217,6 +1217,8 @@ void AntennaGeniusModel::onKeepAlive()
 
 void AntennaGeniusModel::selectAntenna(int portId, int antennaId)
 {
+    if (refuseSelectionWhileTransmitting(portId))
+        return;
     const auto ps = selectionState(portId);
     const int band = effectiveBand(portId);
     int txAnt = ps.txAntenna;  // keep current TX antenna by default
@@ -1236,6 +1238,8 @@ void AntennaGeniusModel::selectAntenna(int portId, int antennaId)
 
 void AntennaGeniusModel::selectRxAntenna(int portId, int antennaId)
 {
+    if (refuseSelectionWhileTransmitting(portId))
+        return;
     const int band = effectiveBand(portId);
     if (antennaId > 0 && band > 0 && !canRxOnBand(antennaId, band)) {
         qCDebug(lcTuner) << "AntennaGenius: antenna" << antennaName(antennaId)
@@ -1248,6 +1252,8 @@ void AntennaGeniusModel::selectRxAntenna(int portId, int antennaId)
 
 void AntennaGeniusModel::selectTxAntenna(int portId, int antennaId)
 {
+    if (refuseSelectionWhileTransmitting(portId))
+        return;
     const int band = effectiveBand(portId);
     if (antennaId > 0 && !canTxOnBand(antennaId, band)) {
         qCDebug(lcTuner) << "AntennaGenius: antenna" << antennaName(antennaId)
@@ -1269,10 +1275,25 @@ bool AntennaGeniusModel::antennaInUseByOtherPort(int portId, int antennaId) cons
         || requested.rxAntenna == antennaId || requested.txAntenna == antennaId;
 }
 
+bool AntennaGeniusModel::refuseSelectionWhileTransmitting(int portId)
+{
+    if (!m_connected || (portId != 1 && portId != 2))
+        return false;
+    const auto& port = portId == 1 ? m_portA : m_portB;
+    if (!port.transmitting)
+        return false;
+    const QString message = tr("Antenna can't change while transmitting.");
+    qCWarning(lcTuner) << "AntennaGenius: antenna selection refused while port"
+                       << portId << "is transmitting";
+    emit antennaSelectionRefused(message);
+    return true;
+}
+
 void AntennaGeniusModel::selectAntennaPair(int portId, int rxAntenna, int txAntenna,
                                            bool saveRx, bool saveTx, bool clearBandMemory)
 {
     if (!m_connected || (portId != 1 && portId != 2)) return;
+    if (refuseSelectionWhileTransmitting(portId)) return;
     if (m_initializingPorts) {
         qCWarning(lcTuner) << "AntennaGenius: antenna selection blocked until initial port status is available";
         return;

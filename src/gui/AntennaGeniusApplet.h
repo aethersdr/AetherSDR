@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QList>
+#include <QString>
 
 class QPushButton;
 class QLabel;
@@ -50,6 +51,8 @@ private:
     QPushButton* m_connectBtn{nullptr};
     QLabel*      m_statusLabel{nullptr};
     QLabel*      m_sourceLabel{nullptr};
+    QString      m_initializationWarning;
+    quint64      m_selectionRefusalGeneration{0};
 
     // Manual IP entry (for remote connections without UDP discovery)
     QLineEdit*   m_manualIpEdit{nullptr};

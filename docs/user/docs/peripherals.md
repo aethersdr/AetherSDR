@@ -209,6 +209,8 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
   current band are disabled. The default grid dims antennas without RX
   permission but leaves them clickable. RX and TX choices are recalled
   independently per band.
+- Antenna changes are refused while the port reports `tx=1`; the status line
+  briefly displays **Antenna can't change while transmitting.**
 - If initial antenna or port status is incomplete, the applet retries and
   skips the initial recall. It retries up to three times, five seconds apart;
   after that, the status line asks you to reconnect. Until port status arrives,

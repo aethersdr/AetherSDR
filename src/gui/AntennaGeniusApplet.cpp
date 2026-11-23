@@ -17,6 +17,7 @@
 #include <QSignalBlocker>
 #include <QHostAddress>
 #include <QDebug>
+#include <QTimer>
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 
@@ -48,6 +49,7 @@ static constexpr const char* kLabelStyle =
 
 static constexpr const char* kValueStyle =
     "color: #00b4d8; font-size: 11px; font-weight: bold;";
+static constexpr int kSelectionRefusalMessageMs = 2500;
 
 // ── AntennaGeniusApplet ─────────────────────────────────────────────────────
 
@@ -101,6 +103,7 @@ void AntennaGeniusApplet::buildUI()
 
     // Status label
     m_statusLabel = new QLabel("No device found");
+    m_statusLabel->setObjectName(QStringLiteral("agConnectionStatus"));
     m_statusLabel->setStyleSheet("color: #606878; font-size: 10px;");
     m_statusLabel->setAlignment(Qt::AlignCenter);
     vbox->addWidget(m_statusLabel);
@@ -397,6 +400,8 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
 
     // Connection state
     connect(m_model, &AntennaGeniusModel::connected, this, [this]() {
+        m_initializationWarning.clear();
+        ++m_selectionRefusalGeneration;
         setConnectionSource(!AntennaGeniusModel::isShackSwitch(m_model->connectedDevice()));
         m_connectBtn->setText("Disconnect");
         m_statusLabel->setText(QString("Connected — %1 v%2")
@@ -414,6 +419,8 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
     });
 
     connect(m_model, &AntennaGeniusModel::disconnected, this, [this]() {
+        m_initializationWarning.clear();
+        ++m_selectionRefusalGeneration;
         setConnectionSource(false);
         m_connectBtn->setText("Connect");
         m_statusLabel->setText("Disconnected");
@@ -437,6 +444,7 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
 
     connect(m_model, &AntennaGeniusModel::connectionError, this,
             [this](const QString& msg) {
+        ++m_selectionRefusalGeneration;
         setConnectionSource(false);
         m_statusLabel->setText("Error: " + msg);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "color: {{color.accent.danger}}; font-size: 10px;");
@@ -445,6 +453,8 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
     connect(m_model, &AntennaGeniusModel::initializationWarning, this,
             [this](const QString& msg) {
         if (!m_model->isConnected()) return;
+        m_initializationWarning = msg;
+        ++m_selectionRefusalGeneration;
         if (msg.isEmpty()) {
             m_statusLabel->setText(QString("Connected — %1 v%2")
                 .arg(m_model->connectedDevice().name, m_model->connectedDevice().version));
@@ -455,6 +465,31 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
             ThemeManager::instance().applyStyleSheet(
                 m_statusLabel, "color: {{color.accent.warning}}; font-size: 10px;");
         }
+    });
+
+    connect(m_model, &AntennaGeniusModel::antennaSelectionRefused, this,
+            [this](const QString& msg) {
+        if (!m_model->isConnected()) return;
+        const quint64 generation = ++m_selectionRefusalGeneration;
+        m_statusLabel->setText(msg);
+        ThemeManager::instance().applyStyleSheet(
+            m_statusLabel, "color: {{color.accent.warning}}; font-size: 10px;");
+        QTimer::singleShot(kSelectionRefusalMessageMs, this, [this, msg, generation] {
+            if (generation != m_selectionRefusalGeneration
+                || !m_model || !m_model->isConnected() || m_statusLabel->text() != msg)
+                return;
+            if (m_initializationWarning.isEmpty()) {
+                m_statusLabel->setText(QString("Connected — %1 v%2")
+                    .arg(m_model->connectedDevice().name,
+                         m_model->connectedDevice().version));
+                ThemeManager::instance().applyStyleSheet(
+                    m_statusLabel, "color: {{color.accent}}; font-size: 10px;");
+            } else {
+                m_statusLabel->setText(m_initializationWarning);
+                ThemeManager::instance().applyStyleSheet(
+                    m_statusLabel, "color: {{color.accent.warning}}; font-size: 10px;");
+            }
+        });
     });
 
     // Antenna list loaded → rebuild button grids.

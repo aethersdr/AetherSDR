@@ -156,6 +156,7 @@ signals:
     void enteredAuthCodeDiscarded();
     void connectionError(const QString& msg);
     void initializationWarning(const QString& msg);
+    void antennaSelectionRefused(const QString& msg);
     // A socket attempt has begun, from any path; carries the host it asked for.
     void attemptStarted(const QString& host);
 
@@ -218,6 +219,7 @@ private:
                            bool saveRx, bool saveTx, bool clearBandMemory = false);
     void recallBandAntennas(int portId, int bandId);
     bool antennaInUseByOtherPort(int portId, int antennaId) const;
+    bool refuseSelectionWhileTransmitting(int portId);
     AgPortStatus selectionState(int portId) const;
     void finishInitialPortStatus();
     void retryInitialStatus();

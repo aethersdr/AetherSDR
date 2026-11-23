@@ -466,6 +466,28 @@ int main(int argc, char** argv)
         CHECK(commands.isEmpty());
     }
     {
+        AntennaGeniusModel keyed;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(keyed, commands);
+        QSignalSpy refusals(&keyed, &AntennaGeniusModel::antennaSelectionRefused);
+        AntennaGeniusModelTestAccess::status(
+            keyed, QStringLiteral("port 1 band=5 rxant=1 txant=2 tx=1"));
+
+        keyed.selectAntenna(1, 2);
+        keyed.selectRxAntenna(1, 2);
+        keyed.selectTxAntenna(1, 3);
+        CHECK(commands.isEmpty());
+        CHECK(refusals.size() == 3);
+        for (const auto& refusal : refusals)
+            CHECK(refusal.at(0).toString()
+                  == QStringLiteral("Antenna can't change while transmitting."));
+
+        AntennaGeniusModelTestAccess::status(
+            keyed, QStringLiteral("port 1 band=5 rxant=1 txant=2 tx=0"));
+        keyed.selectRxAntenna(1, 2);
+        CHECK(commands.size() == 1);
+    }
+    {
         AntennaGeniusModel connection;
         QStringList commands;
         AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);

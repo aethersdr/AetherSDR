@@ -2268,11 +2268,20 @@ bool checkAgAntennaSelectionMode()
         model, QStringLiteral("port 2 auto=1 source=MANUAL band=0 rxant=0 txant=0 tx=0 inhibit=0"));
     const bool unknownBandTxBlocked = !port2TxButton->isEnabled()
         && port2TxButton->accessibleDescription().contains(QStringLiteral("known band"));
+    QLabel* connectionStatus = applet.findChild<QLabel*>(QStringLiteral("agConnectionStatus"));
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=3 txant=2 tx=1 inhibit=0"));
+    const int commandsBeforeKeyedPick = commands.size();
+    model.selectRxAntenna(1, 2);
+    const bool keyedPickRefused = connectionStatus
+        && connectionStatus->text() == QStringLiteral("Antenna can't change while transmitting.")
+        && commands.size() == commandsBeforeKeyedPick;
 
     return initializedFromModel && pendingSelectionNotShown && rxOnlyDefaultSelection
         && pendingClearNotShown && clearsByRx
         && pendingCoupledSelectionNotShown && coupled && splitEnabled
-        && splitGridLayout && pendingSplitSelectionNotShown && splitSelection && unknownBandTxBlocked;
+        && splitGridLayout && pendingSplitSelectionNotShown && splitSelection
+        && unknownBandTxBlocked && keyedPickRefused;
 }
 
 bool checkKpa500NetworkSetup()
