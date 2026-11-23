@@ -14,9 +14,8 @@
 
 #include <map>
 #include <functional>
-#include <variant>
-
 #include <optional>
+#include <variant>
 
 #include <QByteArray>
 #include <QLoggingCategory>
@@ -1143,11 +1142,11 @@ public:
         // Cumulative evidence across overs. A new session invalidates an
         // observer's baseline, including when the same transport recovers.
         struct SwrPublication {
-            quint64 connection;
-            quint64 epoch;
-            quint64 forwardWindows;
-            quint64 gateClears;
-            bool keyed;
+            quint64 connection = 0;
+            quint64 epoch = 0;
+            quint64 forwardWindows = 0;
+            quint64 gateClears = 0;
+            bool keyed = false;
         };
         QVariantMap values;
         QStringList order;
