@@ -566,6 +566,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 QTimer::singleShot(500, this, [this]() {
                     if (m_model && !m_trxMap.trxHasLiveSlice(m_model, m_lastTxTrx)) {
                         m_lastTxTrx = 0;
+                        if (m_txPowerMaxNotice) {
+                            m_txPowerMaxNotice->queue();  // its line names this trx
+                        }
                     }
                 });
             }
@@ -5284,8 +5287,8 @@ bool TciServer::broadcastSpan()
 }
 
 // ── Extension set: transmit ceiling ─────────────────────────────────────────
-// Read only. The line names the trx of the TX slice; a retune is checked
-// against the cached limits and sends nothing until the ceiling moves.
+// Read only: TransmitModel::maxPowerLevel(), the value MQTT publishes as
+// max_power_level, named for the TX trx the way tx_filter_band names it.
 void TciServer::registerTxPowerMaxGroup()
 {
     m_txPowerMaxNotice = std::make_unique<TciExtensionNotice>(
@@ -5306,18 +5309,25 @@ void TciServer::registerTxPowerMaxGroup()
     if (!m_model) {
         return;
     }
-    m_txPowerLimits = TciTxPowerExtension::limits(m_model->backendCapabilities());
     m_txPowerMaxAnnounced = currentTxPowerMax();
     connect(m_model, &RadioModel::capabilitiesChanged, this,
-            [this](bool, const RadioCapabilities& caps) {
-        m_txPowerLimits = TciTxPowerExtension::limits(caps);
-        m_txPowerMaxNotice->queue();
-    });
+            [this](bool, const RadioCapabilities&) { m_txPowerMaxNotice->queue(); });
+    // The value, and its latch: a first report equal to the default moves only
+    // the latch, and that edge is powerProvenanceChanged.
+    const TransmitModel* tx = &m_model->transmitModel();
+    connect(tx, &TransmitModel::maxPowerLevelChanged, this,
+            [this](int) { m_txPowerMaxNotice->queue(); });
+    connect(tx, &TransmitModel::powerProvenanceChanged, this,
+            [this] { m_txPowerMaxNotice->queue(); });
+    // The line names the TX trx. A reconnect's reclaim binds slices on the
+    // occupancy edge alone, without sliceAdded.
     connect(m_model, &RadioModel::sliceAdded, this, [this](SliceModel* slice) {
         wireTxPowerMaxSlice(slice);
         m_txPowerMaxNotice->queue();
     });
     connect(m_model, &RadioModel::sliceRemoved, this,
+            [this](int) { m_txPowerMaxNotice->queue(); });
+    connect(m_model, &RadioModel::slotOccupancyChanged, this,
             [this](int) { m_txPowerMaxNotice->queue(); });
     for (SliceModel* slice : m_model->slices()) {
         wireTxPowerMaxSlice(slice);
@@ -5329,42 +5339,26 @@ void TciServer::wireTxPowerMaxSlice(SliceModel* slice)
     if (!slice) {
         return;
     }
-    const QPointer<SliceModel> guard(slice);
-    connect(slice, &SliceModel::frequencyChanged, this, [this, guard](double) {
-        if (guard && guard->isTxSlice()
-            && currentTxPowerMax(&m_txPowerLimits) != m_txPowerMaxAnnounced) {
-            m_txPowerMaxNotice->queue();
-        }
-    });
     // A band change drops TX for ~340 ms; look once it has settled.
     connect(slice, &SliceModel::txSliceChanged, this, [this](bool) {
         QTimer::singleShot(kSplitSettleMs, this, [this] { m_txPowerMaxNotice->queue(); });
     });
 }
 
-TciServer::TxPowerMax TciServer::currentTxPowerMax(const RadioCapabilities* limits) const
+TciServer::TxPowerMax TciServer::currentTxPowerMax() const
 {
     TxPowerMax state;
-    if (!m_model || !m_model->isConnected()) {
+    if (!m_model) {
         return state;
     }
-    const SliceModel* tx = m_model->txSlice();
-    const int trx = tx ? m_trxMap.trxForSlice(m_model, tx) : -1;
-    const bool hasTxSlice = trx >= 0 && tx->frequency() > 0.0;
-    const double frequencyHz = hasTxSlice ? tx->frequency() * 1.0e6 : 0.0;
-    bool canTransmit = false;
-    double watts = 0.0;
-    if (limits) {
-        canTransmit = limits->canTransmit;
-        watts = TciTxPowerExtension::wattsAt(*limits, frequencyHz);
-    } else {
-        const RadioCapabilities caps = m_model->backendCapabilities();
-        canTransmit = caps.canTransmit;
-        watts = TciTxPowerExtension::wattsAt(caps, frequencyHz);
-    }
-    if (TciTxPowerExtension::offered(true, canTransmit, hasTxSlice, watts)) {
-        state.trx = trx;
-        state.tenths = TciTxPowerExtension::tenths(watts);
+    // canTransmit is read live: another group's handler on the same capability
+    // edge can announce the set before this group's handler has run.
+    const TransmitModel& tx = m_model->transmitModel();
+    if (TciTxPowerExtension::offered(m_model->isConnected(),
+                                     m_model->backendCapabilities().canTransmit,
+                                     tx.haveMaxPowerLevel(), tx.maxPowerLevel())) {
+        state.trx = extensionTxTrx();
+        state.watts = tx.maxPowerLevel();
     }
     return state;
 }
@@ -5376,7 +5370,7 @@ bool TciServer::txPowerMaxOffered() const
 
 QString TciServer::txPowerMaxLine(const TxPowerMax& state) const
 {
-    return state.trx < 0 ? QString() : TciTxPowerExtension::line(state.trx, state.tenths / 10.0);
+    return state.trx < 0 ? QString() : TciTxPowerExtension::line(state.trx, state.watts);
 }
 
 TciExtensionSet::Result TciServer::handleTxPowerMax(const QStringList& args)
@@ -5390,8 +5384,8 @@ TciExtensionSet::Result TciServer::handleTxPowerMax(const QStringList& args)
     return result;
 }
 
-// A ceiling that went to 0 W, or a TX slice that went, moves the gate; the
-// list resend then carries the new state, or its absence.
+// A gate edge (connection, canTransmit, the latch) re-announces the set, which
+// carries the state or its absence; otherwise one line when value or trx moved.
 bool TciServer::broadcastTxPowerMax()
 {
     const TxPowerMax current = currentTxPowerMax();

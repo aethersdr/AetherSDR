@@ -1,10 +1,9 @@
 // The transmit-ceiling item of the opt-in TCI extension set
-// (`aethersdr_tx_power_max`): offered while the connected radio can transmit
-// and its ceiling at the TX frequency is above 0 W, read only, one line for
-// the trx of the TX slice. Sent on enable, and again only when the value or
-// its trx moves: a retune inside one txPowerBands range sends nothing, a
-// boundary crossing, a TX move or a capability change sends the new line, and
-// a ceiling that goes away takes the item out of the list. Socket-free.
+// (`aethersdr_tx_power_max`): TransmitModel::maxPowerLevel() in whole watts,
+// offered while the connected radio can transmit and has reported a ceiling,
+// read only, one line for the TX trx. Sent on enable, and again only when the
+// value or its trx moves (a TX move, a reconnect's reclaim rebinding the trx);
+// a gate edge re-announces the set. Socket-free.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -16,9 +15,11 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/TransmitDelta.h"
 #include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -27,9 +28,11 @@
 #include <QString>
 #include <QStringList>
 #include <QTimer>
-#include <QtNumeric>
+#include <QElapsedTimer>
+#include <QList>
 
 #include <cstdio>
+#include <functional>
 #include <memory>
 
 namespace AetherSDR {
@@ -48,6 +51,15 @@ public:
     static QStringList offeredTokens(TciServer& server)
     {
         return server.m_extensions.offeredTokens();
+    }
+    // A reconnect's reclaim end state (tci_server_review_test's pattern): the
+    // map was cleared at disconnect and the slices bind again in `order`.
+    static void rebind(TciServer& server, const QList<int>& order)
+    {
+        server.m_trxMap.clear();
+        for (const int sliceId : order) {
+            server.m_trxMap.acquire(sliceId);
+        }
     }
 };
 
@@ -92,12 +104,30 @@ void check(bool ok, const char* what)
     }
 }
 
-void settle(int ms = 160)
+void settle(int ms)
 {
     QEventLoop loop;
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
 }
+
+// Spins until `done` holds or the deadline passes; a loaded runner only
+// takes longer.
+bool waitFor(const std::function<bool()>& done, int deadlineMs = 5000)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (!done()) {
+        if (clock.elapsed() > deadlineMs) {
+            return false;
+        }
+        settle(20);
+    }
+    return true;
+}
+
+// Absence cannot be polled: wait past the 100 ms notice limit and its post.
+constexpr int kQuietMs = 300;
 
 void dump(const char* who, const QStringList& got)
 {
@@ -166,13 +196,10 @@ QStringList one(const char* text)
 void wireGrammar()
 {
     using namespace TciTxPowerExtension;
-    check(line(0, 5.0) == QStringLiteral("aethersdr_tx_power_max:0,5.0;")
-              && line(1, 100.0) == QStringLiteral("aethersdr_tx_power_max:1,100.0;")
-              && line(0, 12.34) == QStringLiteral("aethersdr_tx_power_max:0,12.3;")
-              && line(0, 0.25) == QStringLiteral("aethersdr_tx_power_max:0,0.3;"),
-          "the line: <trx>,<watts>, watts with one decimal place");
-    check(tenths(5.0) == 50 && tenths(0.04) == 0 && tenths(-1.0) == 0 && tenths(qQNaN()) == 0,
-          "tenths of a watt; nothing below 0.05 W, negative or not a number");
+    check(line(0, 5) == QStringLiteral("aethersdr_tx_power_max:0,5;")
+              && line(1, 100) == QStringLiteral("aethersdr_tx_power_max:1,100;")
+              && line(0, 500) == QStringLiteral("aethersdr_tx_power_max:0,500;"),
+          "the line: <trx>,<watts>, watts an integer");
     const auto parse = [](const char* args) {
         const QString text = QString::fromLatin1(args);
         return parseRead(text.isEmpty() ? QStringList{}
@@ -186,49 +213,12 @@ void wireGrammar()
 void gate()
 {
     using namespace TciTxPowerExtension;
-    RadioCapabilities caps;
-    caps.canTransmit = true;
-    caps.txPowerMaxWatts = 100.0;
-    caps.txPowerBands = {TxPowerBand{1.8e6, 30.0e6, 100.0}, TxPowerBand{50.0e6, 54.0e6, 50.0},
-                         TxPowerBand{144.0e6, 148.0e6, 0.0}};
-    const RadioCapabilities cached = limits(caps);
-    check(wattsAt(cached, 14.074e6) == 100.0 && wattsAt(cached, 50.313e6) == 50.0
-              && wattsAt(cached, 144.3e6) == 0.0 && wattsAt(cached, 40.0e6) == 100.0,
-          "per-band ceilings: the band holding the frequency, txPowerMaxWatts outside every band");
-    check(offered(true, true, true, wattsAt(cached, 50.313e6))
-              && !offered(true, true, true, wattsAt(cached, 144.3e6)),
-          "a band whose ceiling is 0 W is not offered");
-    caps.canTransmit = false;
-    check(wattsAt(caps, 14.074e6) == 0.0 && !offered(true, false, true, 100.0),
-          "a receive-only radio is not offered, whatever its bands say");
-    check(!offered(false, true, true, 5.0) && !offered(true, true, false, 5.0),
-          "no radio, or no TX slice: not offered");
-}
-
-// The real backends as the production family switch builds them.
-void gatePerBackend()
-{
-    RadioModel hl2;
-    if (hl2.rebuildBackendForTest(QStringLiteral("hl2")) && hl2.backend()) {
-        const RadioCapabilities caps = hl2.backend()->capabilities();
-        const double watts = TciTxPowerExtension::wattsAt(caps, 7.074e6);
-        std::printf("      hl2: canTransmit=%d watts=%.2f\n", caps.canTransmit, watts);
-        check(caps.canTransmit && TciTxPowerExtension::offered(true, caps.canTransmit, true, watts)
-                  && TciTxPowerExtension::line(0, watts)
-                         == QStringLiteral("aethersdr_tx_power_max:0,5.0;"),
-              "a Hermes-Lite 2 that transmits reports 5.0 W");
-    } else {
-        check(false, "the hl2 backend builds");
-    }
-    RadioModel rtl;
-    if (rtl.rebuildBackendForTest(QStringLiteral("rtl")) && rtl.backend()) {
-        const RadioCapabilities caps = rtl.backend()->capabilities();
-        check(!TciTxPowerExtension::offered(true, caps.canTransmit, true,
-                                            TciTxPowerExtension::wattsAt(caps, 7.074e6)),
-              "RTL-SDR (receive only) is not offered");
-    } else {
-        std::printf("      rtl: not built into this tree, not checked\n");
-    }
+    check(offered(true, true, true, 5), "connected, transmits, ceiling reported: offered");
+    check(!offered(false, true, true, 5), "not connected: not offered");
+    check(!offered(true, false, true, 5), "a receive-only radio: not offered");
+    check(!offered(true, true, false, 100),
+          "no ceiling reported: the model's compiled-in 100 is not offered");
+    check(!offered(true, true, true, 0), "a 0 W ceiling: not offered");
 }
 
 SliceDelta tuned(double mhz, bool tx)
@@ -239,31 +229,94 @@ SliceDelta tuned(double mhz, bool tx)
     return d;
 }
 
-void serverBehaviour()
-{
+struct Bench {
     RadioModel model;
+    PowerBackend* backend{nullptr};
+    SliceModel* s0{nullptr};
+    SliceModel* s1{nullptr};
+};
+
+// Two fixture slices, slice 0 transmitting at 7.074 MHz, connected, with the
+// given capabilities. Not connected-edged: TransmitModel holds no ceiling yet.
+bool makeBench(Bench& bench, const RadioCapabilities& caps)
+{
     auto owner = std::make_unique<PowerBackend>();
-    PowerBackend* backend = owner.get();
-    backend->caps.txPowerMaxWatts = 100.0;
-    backend->caps.txPowerBands = {TxPowerBand{1.8e6, 30.0e6, 100.0},
-                                  TxPowerBand{50.0e6, 54.0e6, 50.0},
-                                  TxPowerBand{144.0e6, 148.0e6, 0.0}};
-    backend->connected = false;  // slice fixtures are applied while disconnected
-    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    bench.backend = owner.get();
+    bench.backend->caps = caps;
+    bench.backend->connected = false;  // slice fixtures are applied while disconnected
+    bench.model.setBackendForTest(std::move(owner), QStringLiteral("test"));
     QString error;
-    const bool fixtures = model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
-        && model.automationApplySliceFixture(1, QStringLiteral("B"), &error);
-    SliceModel* s0 = model.slice(0);
-    SliceModel* s1 = model.slice(1);
-    check(fixtures && s0 && s1, "two fixture slices");
-    if (!fixtures || !s0 || !s1) {
+    const bool fixtures = bench.model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+        && bench.model.automationApplySliceFixture(1, QStringLiteral("B"), &error);
+    bench.s0 = bench.model.slice(0);
+    bench.s1 = bench.model.slice(1);
+    if (!fixtures || !bench.s0 || !bench.s1) {
         std::printf("      fixture: %s\n", qPrintable(error));
+        return false;
+    }
+    bench.s0->applyChanges(tuned(7.074, true));
+    bench.s1->applyChanges(tuned(14.074, false));
+    bench.backend->connected = true;
+    return bench.model.isConnected() && bench.model.txSlice() == bench.s0;
+}
+
+// The real Hermes-Lite 2 capabilities, through RadioModel's own connect edge
+// (refreshTxPowerLimit), give the value: 5, whole watts. RTL is not offered.
+void hl2ThroughTheModel()
+{
+    RadioModel hl2;
+    if (!hl2.rebuildBackendForTest(QStringLiteral("hl2")) || !hl2.backend()) {
+        check(false, "the hl2 backend builds");
         return;
     }
-    s0->applyChanges(tuned(14.074, true));
-    s1->applyChanges(tuned(7.074, false));
-    backend->connected = true;
-    check(model.isConnected() && model.txSlice() == s0, "connected, slice 0 transmits");
+    Bench bench;
+    if (!makeBench(bench, hl2.backend()->capabilities())) {
+        check(false, "hl2 bench");
+        return;
+    }
+    emit bench.model.connectionStateChanged(true);
+    const TransmitModel& tx = bench.model.transmitModel();
+    std::printf("      hl2: have=%d maxPowerLevel=%d\n", tx.haveMaxPowerLevel(), tx.maxPowerLevel());
+    TciServer server(&bench.model);
+    server.wireSlice(bench.s0->sliceId(), bench.s0);
+    server.wireSlice(bench.s1->sliceId(), bench.s1);
+    Wire a;
+    TciTxPowerExtensionTest::attach(server, a.client, bench.model);
+    settle(kQuietMs);
+    a.take();
+    a.send("aethersdr_ext_enable:true;");
+    const QStringList got = a.take();
+    check(lastAdvertisement(got).contains(QLatin1String(",tx_power_max"))
+              && ofItem(got) == one("aethersdr_tx_power_max:0,5;"),
+          "a Hermes-Lite 2 that transmits reports 5, from TransmitModel::maxPowerLevel()");
+    if (ofItem(got).size() != 1) {
+        dump("a", got);
+    }
+
+    RadioModel rtl;
+    if (rtl.rebuildBackendForTest(QStringLiteral("rtl")) && rtl.backend()) {
+        check(!rtl.backend()->capabilities().canTransmit
+                  && !TciTxPowerExtension::offered(true, rtl.backend()->capabilities().canTransmit,
+                                                   true, 5),
+              "RTL-SDR (receive only) is not offered, whatever the model holds");
+    } else {
+        std::printf("      rtl: not built into this tree, not checked\n");
+    }
+}
+
+void serverBehaviour()
+{
+    RadioCapabilities caps;
+    caps.canTransmit = true;  // and no txPowerBands: a Flex-shaped radio
+    Bench bench;
+    check(makeBench(bench, caps), "two fixture slices, connected, slice 0 transmits");
+    if (!bench.s0) {
+        return;
+    }
+    RadioModel& model = bench.model;
+    SliceModel* s0 = bench.s0;
+    SliceModel* s1 = bench.s1;
+    TransmitModel& tx = model.transmitModel();
 
     TciServer server(&model);
     server.wireSlice(s0->sliceId(), s0);
@@ -272,127 +325,146 @@ void serverBehaviour()
     Wire b;  // plain
     TciTxPowerExtensionTest::attach(server, a.client, model);
     TciTxPowerExtensionTest::attach(server, b.client, model);
+    emit model.capabilitiesChanged(true, caps);
     settle(600);
     a.take();
     b.take();
 
-    check(TciTxPowerExtensionTest::offeredTokens(server).contains(QStringLiteral("tx_power_max")),
-          "offered on a connected transmitter with a ceiling at the TX frequency");
+    check(!tx.haveMaxPowerLevel()
+              && !TciTxPowerExtensionTest::offeredTokens(server)
+                      .contains(QStringLiteral("tx_power_max")),
+          "no ceiling reported yet: not offered, the default 100 is not a ceiling");
     a.send("aethersdr_ext_enable:true;");
     QStringList got = a.take();
+    check(!lastAdvertisement(got).isEmpty()
+              && !lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
+              && ofItem(got).isEmpty(),
+          "the enable does not list it");
+
+    // A first report equal to the default moves only the latch.
+    tx.setMaxPowerLevel(100);
+    check(waitFor([&] { return ofItem(a.rx).size() == 1; }), "a first report arrives");
+    got = a.takeExtension();
     check(lastAdvertisement(got).contains(QLatin1String(",tx_power_max"))
-              && ofItem(got) == one("aethersdr_tx_power_max:0,100.0;"),
-          "the enable lists tx_power_max and sends one line, for the TX slice's trx");
+              && ofItem(got) == one("aethersdr_tx_power_max:0,100;"),
+          "a first report of 100 W offers the item, with one line for the TX trx");
     if (ofItem(got).size() != 1) {
         dump("a", got);
     }
 
-    s0->applyChanges(tuned(14.250, true));
-    s0->applyChanges(tuned(21.074, true));
-    settle();
-    check(a.takeExtension().isEmpty(), "a retune inside one band sends nothing");
-
-    s0->applyChanges(tuned(50.313, true));
-    settle();
+    // Flex: the radio's max_power_level, through TransmitModel::applyChanges().
+    TransmitDelta flex;
+    flex.maxPowerLevel = 500;
+    tx.applyChanges(flex);
+    check(waitFor([&] { return !ofItem(a.rx).isEmpty(); }), "a new ceiling arrives");
     got = a.takeExtension();
-    check(got == one("aethersdr_tx_power_max:0,50.0;"),
-          "crossing into another band sends its ceiling");
+    check(got == one("aethersdr_tx_power_max:0,500;"),
+          "a new max_power_level (a Flex with an amplifier) sends one line, nothing else");
     if (got.size() != 1) {
         dump("a", got);
     }
 
-    s1->applyChanges(tuned(52.0, false));
-    settle();
-    check(a.takeExtension().isEmpty(), "a receive-only slice's retune sends nothing");
+    s0->applyChanges(tuned(7.200, true));
+    s0->applyChanges(tuned(14.074, true));
+    s1->applyChanges(tuned(21.074, false));
+    settle(kQuietMs);
+    check(a.takeExtension().isEmpty(), "a retune that leaves the ceiling alone sends nothing");
 
     a.send("aethersdr_tx_power_max;");
-    check(a.take() == one("aethersdr_tx_power_max:0,50.0;"), "a bare read answers the sender");
+    check(a.take() == one("aethersdr_tx_power_max:0,500;"), "a bare read answers the sender");
     a.send("aethersdr_tx_power_max:0;");
-    check(a.take() == one("aethersdr_tx_power_max:0,50.0;"), "a read naming the TX trx too");
+    check(a.take() == one("aethersdr_tx_power_max:0,500;"), "a read naming the TX trx too");
     a.send("aethersdr_tx_power_max:1;aethersdr_tx_power_max:0,5;");
-    settle();
+    settle(kQuietMs);
     check(a.takeExtension().isEmpty(), "a read of another trx, or a set, gets no answer");
 
-    // TX moves to slice 1 (52 MHz): same ceiling, another trx.
-    s0->applyChanges(tuned(50.313, false));
-    s1->applyChanges(tuned(52.0, true));
-    settle(700);  // past the TX-move settle
+    // TX moves to slice 1.
+    s0->applyChanges(tuned(14.074, false));
+    s1->applyChanges(tuned(21.074, true));
+    check(waitFor([&] { return !ofItem(a.rx).isEmpty(); }), "the TX move is heard");
+    settle(kQuietMs);
     got = a.takeExtension();
-    check(ofItem(got) == one("aethersdr_tx_power_max:1,50.0;"),
-          "a TX move sends the line for the new trx");
+    check(ofItem(got) == one("aethersdr_tx_power_max:1,500;"),
+          "a TX move sends one line for the new trx");
     if (ofItem(got).size() != 1) {
         dump("a", got);
     }
 
-    // A band with a 0 W ceiling takes the item out of the list.
-    s1->applyChanges(tuned(144.3, true));
-    settle();
+    // With no TX slice the line keeps naming the last TX trx, as tx_filter_band does.
+    s1->applyChanges(tuned(21.074, false));
+    settle(700);
     got = a.takeExtension();
-    check(!lastAdvertisement(got).isEmpty()
-              && !lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
-              && ofItem(got).isEmpty(),
-          "a band whose ceiling is 0 W withdraws the item");
-    a.send("aethersdr_tx_power_max;");
-    check(a.take().isEmpty(), "a read of a withdrawn item is ignored");
-    s1->applyChanges(tuned(7.074, true));
-    settle();
+    check(model.txSlice() == nullptr && ofItem(got).isEmpty() && lastAdvertisement(got).isEmpty(),
+          "no TX slice for a moment: the item stays, nothing is re-announced");
+    s1->applyChanges(tuned(21.074, true));
+    settle(700);
     got = a.takeExtension();
-    check(lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
-              && ofItem(got) == one("aethersdr_tx_power_max:1,100.0;"),
-          "back in a band with a ceiling, the item returns with its line");
-    if (ofItem(got).size() != 1) {
-        dump("a", got);
-    }
+    check(ofItem(got).isEmpty() && lastAdvertisement(got).isEmpty(),
+          "the TX slice back on the same trx sends nothing");
 
-    // A capability change: the backend's ceiling moves.
-    backend->caps.txPowerBands = {};
-    backend->caps.txPowerMaxWatts = 10.0;
-    emit model.capabilitiesChanged(true, backend->caps);
-    settle();
+    caps.canTransmit = false;
+    bench.backend->caps = caps;
+    emit model.capabilitiesChanged(true, caps);
+    check(waitFor([&] { return !lastAdvertisement(a.rx).isEmpty(); }), "the list is re-announced");
+    settle(kQuietMs);
     got = a.takeExtension();
-    check(ofItem(got) == one("aethersdr_tx_power_max:1,10.0;"),
-          "a capability change sends the new ceiling");
-    if (ofItem(got).size() != 1) {
-        dump("a", got);
+    // Every announce of this edge, not only the last: none may still list it.
+    bool listed = false;
+    for (const QString& line : got) {
+        listed = listed || (line.startsWith(QLatin1String("aethersdr_ext:"))
+                            && line.contains(QLatin1String("tx_power_max")));
     }
-
-    backend->caps.canTransmit = false;
-    emit model.capabilitiesChanged(true, backend->caps);
-    settle();
-    got = a.takeExtension();
-    check(!lastAdvertisement(got).isEmpty()
-              && !lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
-              && ofItem(got).isEmpty(),
+    check(!listed, "no announce on the capability edge lists the withdrawn item");
+    check(!lastAdvertisement(got).contains(QLatin1String("tx_power_max")) && ofItem(got).isEmpty(),
           "a radio that stops transmitting withdraws the item");
-
-    backend->caps.canTransmit = true;
-    emit model.capabilitiesChanged(true, backend->caps);
-    settle();
+    caps.canTransmit = true;
+    bench.backend->caps = caps;
+    emit model.capabilitiesChanged(true, caps);
+    check(waitFor([&] { return !ofItem(a.rx).isEmpty(); }), "the item returns");
+    settle(kQuietMs);
     got = a.takeExtension();
-    check(lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
-              && ofItem(got) == one("aethersdr_tx_power_max:1,10.0;"),
+    check(lastAdvertisement(got).contains(QLatin1String(",tx_power_max"))
+              && ofItem(got) == one("aethersdr_tx_power_max:1,500;"),
           "a radio that can transmit again restores the item with one line");
     if (ofItem(got).size() != 1) {
         dump("a", got);
     }
 
-    // No TX slice: withdrawn once the TX-move settle has passed; restored the same way.
-    s1->applyChanges(tuned(7.074, false));
-    settle(700);
+    // A reconnect: the disconnect resets the model's ceiling, the reconnect
+    // reports one again, and the reclaim rebinds the slices in the order they
+    // come back, slice 1 first, on the occupancy edge alone.
+    bench.backend->connected = false;
+    tx.resetState();
+    emit model.capabilitiesChanged(false, caps);
+    check(waitFor([&] { return !lastAdvertisement(a.rx).isEmpty(); }), "disconnect re-announces");
     got = a.takeExtension();
-    check(model.txSlice() == nullptr && !lastAdvertisement(got).isEmpty()
-              && !lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
-              && ofItem(got).isEmpty(),
-          "with no TX slice the item is withdrawn");
-    if (!ofItem(got).isEmpty() || lastAdvertisement(got).isEmpty()) {
+    check(!lastAdvertisement(got).contains(QLatin1String("tx_power_max")) && ofItem(got).isEmpty(),
+          "a disconnect withdraws the item");
+    bench.backend->connected = true;
+    emit model.capabilitiesChanged(true, caps);
+    settle(kQuietMs);
+    got = a.takeExtension();
+    check(ofItem(got).isEmpty()
+              && !TciTxPowerExtensionTest::offeredTokens(server)
+                      .contains(QStringLiteral("tx_power_max")),
+          "reconnected, no ceiling yet: still withdrawn");
+    tx.setMaxPowerLevel(500);
+    check(waitFor([&] { return !ofItem(a.rx).isEmpty(); }), "the reconnect's ceiling is heard");
+    settle(kQuietMs);
+    got = a.takeExtension();
+    check(lastAdvertisement(got).contains(QLatin1String(",tx_power_max"))
+              && ofItem(got) == one("aethersdr_tx_power_max:1,500;"),
+          "the ceiling reported after a reconnect restores the item");
+    if (ofItem(got).size() != 1) {
         dump("a", got);
     }
-    s1->applyChanges(tuned(7.074, true));
-    settle(700);
+    TciTxPowerExtensionTest::rebind(server, {1, 0});
+    emit model.slotOccupancyChanged(1);
+    check(waitFor([&] { return !ofItem(a.rx).isEmpty(); }), "the reclaim is heard");
+    settle(kQuietMs);
     got = a.takeExtension();
-    check(lastAdvertisement(got).contains(QLatin1String("tx_power_max"))
-              && ofItem(got) == one("aethersdr_tx_power_max:1,10.0;"),
-          "a TX slice restored brings the item back with one fresh line");
+    check(ofItem(got) == one("aethersdr_tx_power_max:0,500;"),
+          "a reclaim that rebinds the TX slice to trx 0 sends the line for trx 0");
     if (ofItem(got).size() != 1) {
         dump("a", got);
     }
@@ -412,7 +484,7 @@ int main(int argc, char** argv)
     check(settingsProfile.isValid(), "isolated settings profile");
     wireGrammar();
     gate();
-    gatePerBackend();
+    hl2ThroughTheModel();
     serverBehaviour();
 
     std::printf("%d failure(s)\n", g_failures);

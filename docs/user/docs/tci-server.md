@@ -382,7 +382,7 @@ aethersdr_rx_rf_gain_range:0,-12,48,1;
 aethersdr_rx_rf_gain:0,20;
 aethersdr_rx_auto_rf_gain:false;
 aethersdr_rx_overload:clean,false,0;
-aethersdr_tx_power_max:0,5.0;
+aethersdr_tx_power_max:0,5;
 ```
 
 On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
@@ -629,28 +629,34 @@ aethersdr_rx_span:1,192000;       # set it
 
 #### Transmit power ceiling: `tx_power_max`
 
-Offered while the connected radio can transmit and says how much power it can
-put out at the frequency of the transmitting receiver. Read only.
+Offered while the connected radio can transmit and has reported its maximum
+transmit power. Read only.
 
 ```
-aethersdr_tx_power_max;           # read: aethersdr_tx_power_max:0,5.0;
+aethersdr_tx_power_max;           # read: aethersdr_tx_power_max:0,5;
 aethersdr_tx_power_max:0;         # the same, naming the transmitting receiver
 ```
 
 - `aethersdr_tx_power_max:<trx>,<watts>;` is the radio's maximum transmit
-  power in watts, with one decimal place, at the frequency of `<trx>`, the
-  receiver that transmits. A Hermes-Lite 2 reports `5.0`; an Icom reports its
-  model's rated power, per band where the model has a band table. It is the
-  radio's ceiling, not the drive setting and not a measurement.
+  power in whole watts, the value that `drive:` 100 stands for, sent for
+  `<trx>`, the receiver that transmits. It is the same ceiling AetherSDR shows
+  and publishes over MQTT as `max_power_level`: on a Flex, the radio's own
+  maximum power level (higher with a Power Genius XL or an Aurora); on an Icom
+  that AetherSDR has a power table for, the model's rated power for the band of
+  the transmit frequency; on a Hermes-Lite 2, `5`.
+- It is the radio's rating, not the drive setting and not a measurement. It
+  does not say the radio will transmit at the current frequency, and on a
+  Hermes-Lite 2 it ignores the TX route: with transmit on `RF1` it still reads
+  `5`.
 - There is one line, for the receiver that transmits. A read naming another
-  receiver is ignored, and so is anything after the receiver.
+  receiver is ignored, and so is a read with anything after the receiver.
 - The line is sent again when the value or the receiver changes: tuning into
-  a band with another ceiling, moving transmit to another receiver, or the
-  radio reporting new capabilities. Tuning within a band sends nothing.
-- Where the ceiling at the frequency is 0 W, the item leaves the list, and it
-  comes back with its line when the radio tunes to where it can transmit. A
-  receive-only radio, such as an RTL-SDR, is not offered it, nor is a radio
-  that does not state its ceiling (a Flex, an ANAN, the simulator).
+  a band with another ceiling, moving transmit to another receiver, or a
+  reconnect. Tuning within a band sends nothing. While no receiver transmits,
+  the line keeps naming the last one that did.
+- A receive-only radio, such as an RTL-SDR, is not offered it, and neither is
+  a radio with no reported ceiling: one that has not reported it yet, or an
+  Icom without a power table.
 
 ## Known issues
 
