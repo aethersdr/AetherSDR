@@ -157,6 +157,7 @@
 #include "SupportDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "ShortcutDialog.h"
+#include "ShortcutTooltips.h"
 #include "MultiFlexDialog.h"
 #include "Nr2WisdomDialog.h"
 #include "HelpDialog.h"
@@ -2701,6 +2702,10 @@ MainWindow::~MainWindow()
     // a focused child and re-emits focusChanged. QObject's context auto-disconnect
     // only fires in ~QObject, which is later still. Sever it here (#4857).
     QObject::disconnect(qApp, &QApplication::focusChanged, this, nullptr);
+    // It holds m_controlActions and its lookup reads m_shortcutManager, both
+    // value members gone before deleteChildren() could send it an event.
+    delete m_shortcutTooltips;
+    m_shortcutTooltips = nullptr;
 
     preparePanadapterUiForShutdown();
 
@@ -3643,7 +3648,8 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                                     &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                                     m_kiwiSdrManager, &m_acomConn, &m_speConn,
                                     &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
+                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn,
+                                    &m_trioModel);
     });
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
@@ -4333,6 +4339,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // any request still in flight while the event loop is live, rather than
     // leaving that to member destruction.
     m_rfkitConn.disconnect();
+    // The Trio serves one session; close it with a close frame while the
+    // event loop is live, so its own web page can take it at once.
+    m_trioModel.disconnect();
     // The LP-100A is likewise independent of the radio lifecycle and may be
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.
@@ -8160,6 +8169,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
             proc.label, proc.levelMaximum);
+        if (m_shortcutTooltips) {
+            // The rewritten description sends no event: name PROC's key again.
+            m_shortcutTooltips->annotate(m_appletPanel->phoneCwApplet());
+        }
         if (auto* band = m_appletPanel->bandApplet()) {
             band->setRadioCapabilities(m_radioModel.capabilities());
             applyTuningRangeToBandApplet();

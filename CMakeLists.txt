@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.11.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -1058,6 +1058,10 @@ set(CORE_SOURCES
     src/core/TxOffDelaySettings.cpp
     src/core/Ctr2RelaySettings.cpp
     src/core/GreenHeronProtocol.cpp
+    src/core/MicrohamTrioProtocol.cpp
+    src/core/MicrohamTrioWebSocket.cpp
+    src/core/MicrohamTrioSession.cpp
+    src/core/MicrohamTrioTcpTransport.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
@@ -1323,6 +1327,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_TxTimeout.cpp
     src/models/TxTimeoutGuard.cpp
     src/models/HostCwTextKeyer.cpp
+    src/models/HostCwTextEngine.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
@@ -1354,6 +1359,7 @@ set(MODEL_SOURCES
     src/models/XvtrPolicy.cpp
     src/models/AntennaGeniusModel.cpp
     src/models/GreenHeronModel.cpp
+    src/models/MicrohamTrioModel.cpp
     src/models/AetherClockModel.cpp
     src/models/Ctr2ProxyModel.cpp
     src/models/FirmwareInstallModel.cpp
@@ -1377,6 +1383,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_Shortcuts.cpp
     src/gui/MainWindow_ControlActions.cpp
     src/gui/ControlActionRegistry.cpp
+    src/gui/ShortcutTooltips.cpp
     src/gui/MainWindow_DigitalModes.cpp
     src/gui/MainWindow_Spots.cpp
     src/gui/MainWindow_SwrSweep.cpp

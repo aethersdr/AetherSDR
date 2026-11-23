@@ -38,6 +38,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
+| **Allow TCI clients to change HL2 hardware** | Shown while a Hermes-Lite 2 is connected. Lets a client that enabled the [AetherSDR extension set](#aethersdr-extension-set) change the HL2 filter board setting. Off by default; clients can read the setting either way. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -74,6 +75,14 @@ audio_stop:0;            # stop it
 ```
 
 ## Using TCI with other programs
+
+**A client that goes silent is dropped.** After 5 s without any message from a
+client, AetherSDR sends it a WebSocket ping, which every standard WebSocket
+library answers by itself. A client that has sent nothing, not even that
+answer, for 15 s is disconnected; if it was transmitting, the radio unkeys.
+This covers a client that loses power or network without closing its
+connection, which would otherwise stay keyed until the operating system gives up
+on it, often after more than ten minutes.
 
 When a VFO-B request needs a new receiver, AetherSDR waits for its acknowledged
 identity and radio status before selecting it for TX. A delayed reply cannot
@@ -127,6 +136,10 @@ slice.
 ### CW Skimmer and SDC
 
 Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz within the connected model’s [DAX IQ limits](./dax-iq-streaming.md#limits) (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`. Requests outside an identified model’s supported `iq_samplerate` rates leave the rate unchanged and return the current rate. A valid rate negotiated before model identification is remembered without starting IQ streams; it is applied within the model’s limits once the model is known. A retained 192 kHz subscription uses 96 kHz on a model limited to 96 kHz, then returns to 192 kHz when a capable model is connected.
+
+### IQ on a Hermes-Lite 2
+
+On a Hermes-Lite 2 there is no DAX IQ: the IQ comes straight from the receiver chain in AetherSDR. `iq_samplerate` accepts 24, 48, 96 or 192 kHz, and a client that does not ask gets 48 kHz. When the HL2 runs at a higher rate, the IQ is decimated to the requested rate; when it runs lower, the IQ stays at the radio’s rate and that is the rate in the frame header. Changing `iq_samplerate` while IQ is running gives a short transient in the stream. When the network cannot keep up (a 192 kHz stream is about 1.5 MB/s), IQ frames are dropped instead of the connection being closed, so a skimmer on a slow link sees gaps rather than a disconnect.
 
 ### JTDX
 
@@ -262,7 +275,7 @@ AetherSDR implements the TCI 2.0 command set, including:
 | Audio streaming | `audio_start/stop`, `audio_samplerate`, `audio_stream_sample_type`, `audio_stream_channels`, `audio_stream_samples` |
 | IQ | `iq_start/stop`, `iq_samplerate` |
 | Spots | `spot`, `spot_delete`, `spot_clear`, `clicked_on_spot` |
-| Sensors | `rx_sensors_enable`, `tx_sensors_enable`, `rx_channel_sensors`, `tx_sensors` |
+| Sensors | `rx_sensors_enable`, `tx_sensors_enable`, `hw_sensors_enable`, `rx_channel_sensors`, `tx_sensors`, `hw_sensors` |
 | Digital | `digl_offset`, `digu_offset` |
 
 Notes:
@@ -294,7 +307,8 @@ Notes:
 
 ```
 rx_sensors_enable:true;    # S-meter updates
-tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting
+tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting or tuning
+hw_sensors_enable:true,500;  # supply voltage, current and temperature
 ```
 
 RX sensors broadcast each receiver's S-meter in dBm:
@@ -303,7 +317,26 @@ RX sensors broadcast each receiver's S-meter in dBm:
 rx_channel_sensors:0,0,-97.3;
 ```
 
-TX sensors broadcast during transmit, including ALC.
+TX sensors broadcast during transmit and tune, including ALC. They follow this
+station's own transmission only: on a multiFLEX radio, another station's
+transmission sends none.
+
+Hardware sensors go only to the client that enabled them, as
+`hw_sensors:<volts>,<amps>,<°C>;`, every 30–1000 ms (200 ms when the interval
+is left out). `hw_sensors_enable` gets no reply. A value the radio does not
+measure is sent as `NaN`, because the three fields are positional and the
+specification forbids empty arguments. No radio reports its current
+consumption, so the second field is always `NaN`. A Hermes-Lite 2 reports
+temperature only:
+
+```
+hw_sensors:NaN,NaN,42.0;
+```
+
+A FLEX reports supply voltage and temperature. An ANAN reports its supply rail
+only, `hw_sensors:<volts>,NaN,NaN;`. An Icom sends `NaN` in the first field:
+its Vd meter is the PA drain voltage, not the supply voltage the field names.
+A radio that measures none of the three sends nothing.
 
 The SWR field is the same trusted SWR the S-meter shows. A reading taken
 without measurable forward power, for example in a speech pause, does not
@@ -321,6 +354,277 @@ cw_keyer_speed:25;                # speed
 keyer:0,true;                     # key down
 keyer:0,false;                    # key up
 ```
+
+### AetherSDR extension set
+
+AetherSDR offers its own TCI commands as one opt-in set. A client that does not
+ask for it receives exactly the same traffic as without it. To turn it on for
+one connection, the client sends:
+
+```
+aethersdr_ext_enable:true;
+```
+
+The server answers with the set's version and the items this radio offers,
+then the current state of the offered items. An item sends as many state lines
+as it needs, and may send none. On a Hermes-Lite 2 with one receiver, for
+example:
+
+```
+aethersdr_ext:1,tx_filter_band,hl2,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_tx_filter_band:0,100,2900;
+aethersdr_hl2_filter_board:n2adr_rxtx,false;
+aethersdr_rx_antennas:0,ANT;
+aethersdr_rx_antenna:0,ANT;
+aethersdr_tx_antennas:0,ANT,RF1;
+aethersdr_tx_antenna:0,ANT;
+aethersdr_rx_rf_gain_range:0,-12,48,1;
+aethersdr_rx_rf_gain:0,20;
+aethersdr_rx_auto_rf_gain:false;
+aethersdr_rx_overload:clean,false,0;
+```
+
+On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
+
+- Every command of the set starts with `aethersdr_`. Before the enable, the
+  server ignores them without a reply, like any unknown command.
+- The list holds only what the connected radio can do, and an enabled client
+  gets a new `aethersdr_ext:` line, followed again by the state lines, when
+  that changes. A command for an item not in the list is ignored.
+- The enable is per connection. `aethersdr_ext_enable:false;` stops all
+  extension traffic to that client, and so does disconnecting.
+- The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
+  `rx_ctun_ex`) work without the enable, as before.
+
+#### TX passband: `tx_filter_band`
+
+Offered when the connected radio has TX low and high cut controls (the Phone
+applet's), for example a Flex or a Hermes-Lite 2. Not on the simulator, an
+RTL-SDR, or an Icom without a TX bandwidth profile.
+
+```
+aethersdr_tx_filter_band:0;             # read
+aethersdr_tx_filter_band:0,100,2900;    # set low and high cut, audio Hz
+```
+
+- `<trx>` is the transmit receiver. A read or set for another one is ignored.
+  When transmit moves to another receiver, the line is sent again; the last
+  line sent names the new `<trx>`, and an earlier one may still name the old.
+- Values are positive audio Hz, as in the Phone applet; the sideband follows the
+  mode. A negative value is taken as positive and a reversed pair is swapped.
+- The value is set the way the Phone applet sets it: 0 to 10000 Hz, at least
+  50 Hz wide. On a radio with fixed edges (an Icom) it goes to the nearest ones.
+- Every change, from any source (the Phone applet, a TX profile, CAT, another
+  client), is sent as `aethersdr_tx_filter_band:<trx>,<low>,<high>;` to every
+  client that enabled the set. That is also the answer to a set. A set that the
+  limits changed but that left the passband as it was is answered to the
+  sender only. A set that changes nothing gets no answer.
+- Allowed while transmitting, as in the Phone applet.
+- The value is the operator's setting. On a Hermes-Lite 2 it applies to USB
+  and LSB voice; CW, AM, FM and the digital modes transmit with their mode's
+  own passband.
+
+#### Hermes-Lite 2 hardware: `hl2`
+
+Offered while a Hermes-Lite 2 is connected (a radio that answers the HL2
+settings of **Radio Setup → HL2 Hardware**). Not on any other radio.
+
+```
+aethersdr_hl2_filter_board;                     # read
+aethersdr_hl2_filter_board:n2adr_txonly,true;   # set the board and its HPF
+aethersdr_hl2_ioboard_status;                   # read the IO board, once
+```
+
+- **Changes need the operator's permission.** A set is accepted only while
+  **Allow TCI clients to change HL2 hardware** is on in the
+  [TCI Server applet](#the-tci-server-applet). It is off by default. While it
+  is off, every set is refused the way the refusals below are: the client that
+  sent it gets the setting that stands, and AetherSDR shows the reason. Reads
+  always work.
+- **Filter board.** `<board>` is `none`, `n2adr_rxtx` (N2ADR, receive and
+  transmit) or `n2adr_txonly` (N2ADR, transmit only); `<hpf>` is the 3 MHz
+  high-pass, `true` or `false`. This is the HL2 Hardware page's setting and is
+  saved the same way. The high-pass applies to `n2adr_txonly` only, as on that
+  page; with another board a set leaves it as it is. A set is refused while
+  transmitting or tuning, or while the radio is still finishing a
+  transmission, because the board's relays follow the transmit
+  filter: the client that sent it gets the setting that stands, and AetherSDR
+  shows the reason. It is also refused before the radio has an identity to
+  save the setting against. Every change, from the page or another client, is
+  sent as `aethersdr_hl2_filter_board:<board>,<hpf>;` to every client that
+  enabled the set. A change made on the page wins over a client's set that
+  had not been applied yet. With the setting on, a set that changes nothing gets no
+  answer, unless it asked for an HPF the board does not use; then it gets the
+  setting that stands.
+- **IO board status.** Read from the N2ADR IO board when asked, and answered
+  only to the client that asked:
+  `aethersdr_hl2_ioboard_status:<pins>,<receiving>,<in1>,<in2>,<in3>,<in4>,<in5>,<tuner>,<fault>,<firmware>;`
+  (`<pins>` the input pin byte, `<tuner>` 238 = send RF, 0 = tuned, 240 or
+  more = failed). `aethersdr_hl2_ioboard_status:none;` when no IO board
+  answers, the radio is not connected, or another read is still pending. It is
+  never sent unasked.
+
+#### Antennas: `rx_antenna` and `tx_antenna`
+
+`rx_antenna` is offered while a receiver of the connected radio has a receive
+antenna list, `tx_antenna` while one has a transmit antenna list and the radio
+can transmit. A Flex publishes its ports (for example `ANT1`, `ANT2`, `RX_A`);
+a Hermes-Lite 2 receives on `ANT` and transmits on `ANT` or `RF1`. An RTL-SDR
+is not offered `tx_antenna`.
+
+```
+aethersdr_rx_antennas:0;          # read: aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;
+aethersdr_rx_antenna:0;           # read: aethersdr_rx_antenna:0,ANT1;
+aethersdr_rx_antenna:0,ANT2;      # set
+aethersdr_tx_antennas:0;          # read: aethersdr_tx_antennas:0,ANT,RF1;
+aethersdr_tx_antenna:0,RF1;       # set
+```
+
+- `<trx>` is the TCI receiver. A receiver without a list is ignored.
+- A set names an antenna from that receiver's list, in any case; the answer
+  uses the list's spelling. A name not in the list gets no answer. A set naming
+  the antenna already in use changes nothing and is answered with it, to the
+  sender only. A name with `:`, `,` or `;` is left out of the list.
+- The set goes the way the RX applet's antenna menus set it, so the radio's
+  own rules still apply. The answer, sent to every client that enabled the set,
+  is the antenna in use afterwards: if the radio refused, it is the old one.
+- Every change is sent the same way, whoever made it, and so is a list that
+  changes. When transmit moves to another receiver, its `aethersdr_tx_antenna`
+  line is sent again.
+- The receive antenna may change while transmitting. The transmit antenna may
+  not: while the radio transmits or tunes, a set is answered with the antenna in
+  use, to the sender only, and AetherSDR shows the reason in its status bar
+  once per transmission. On a Hermes-Lite 2, in the short tail after it stops
+  transmitting, the refusal comes from its backend instead, and the old antenna
+  is sent to every client that enabled the set. This is stricter than the RX
+  applet on a Flex. On a Hermes-Lite 2, `RF1` turns the PA off and has its own
+  drive, which the `drive:` line reports.
+- KiwiSDR receivers that the RX applet lists as antennas are not in the list.
+  While one is assigned to a receiver, `aethersdr_rx_antenna` still reports the
+  radio's port, although what you hear comes from the KiwiSDR. A
+  receive-antenna set releases the KiwiSDR receiver, as choosing a port in the
+  RX applet does, even when it names the port in use.
+
+#### Receive RF gain: `rx_rf_gain`
+
+Offered while the connected radio has an RF Gain control on the panadapter and
+has told AetherSDR its range in dB, for example a Flex or a Hermes-Lite 2. Not
+on the simulator, and not on an Icom, whose RF gain is in percent.
+
+```
+aethersdr_rx_rf_gain_range:0;      # read the range: min, max, step in dB
+aethersdr_rx_rf_gain:0;            # read the gain
+aethersdr_rx_rf_gain:0,20;         # set the gain, dB
+```
+
+- `<trx>` is the receiver. The gain belongs to the receiver's panadapter, so
+  every receiver on that panadapter reports the same value. On a Hermes-Lite 2
+  all receivers share one front end, and a change is reported for each of them.
+- A set is limited to the range and moved to the nearest step, then applied
+  the way the panadapter's RF Gain control applies it.
+- Every change, from any source (the RF Gain control, CAT, another client), is
+  sent as `aethersdr_rx_rf_gain:<trx>,<db>;` to every client that enabled the
+  set. That is also the answer to a set. A set that the limits moved onto the
+  current value is answered to the sender only. A set that changes nothing gets
+  no answer.
+- The range line is sent again when the radio reports a new range, and both
+  lines are sent again when a receiver appears or moves to another panadapter.
+- On a Hermes-Lite 2 with automatic RF gain on, the value is the gain the radio
+  is running at, which can be below the operator's setting (see
+  `aethersdr_rx_overload`). A set still writes the operator's setting, so while
+  automatic gain holds the gain down, the value reported after a set is that
+  setting minus the `aethersdr_rx_overload` offset.
+- Allowed while transmitting.
+
+#### Automatic RF gain: `rx_auto_rf_gain`
+
+Offered while the connected radio has automatic RF gain (the Hermes-Lite 2).
+There is one switch for the whole radio, so the command has no `<trx>`.
+
+```
+aethersdr_rx_auto_rf_gain;          # read
+aethersdr_rx_auto_rf_gain:true;     # turn on (false: off)
+```
+
+- The answer, and every change from any source, is
+  `aethersdr_rx_auto_rf_gain:<bool>;` to every client that enabled the set.
+- The radio can refuse to turn it on. The answer then reads `false`, and
+  AetherSDR shows the reason on the panadapter, as it does for the Auto box.
+- Asking for the state it is already in gets no answer.
+
+#### Front-end overload: `rx_overload`
+
+Offered while the connected radio watches its converter for clipping (the
+Hermes-Lite 2). Read only.
+
+```
+aethersdr_rx_overload;                  # read
+aethersdr_rx_overload:hot,true,6;       # level, automatic gain on, dB below setting
+```
+
+- The level is `unobserved` (no reading yet), `clean`, `marginal`, `hot` or
+  `at_floor` (still clipping with the automatic gain as low as it may go).
+- The second field says whether automatic RF gain is running, and the third how
+  many dB it holds the gain below the operator's setting.
+- Every change is sent to every client that enabled the set, at most one line
+  every 100 ms. After a reconnect the level starts at `unobserved`.
+
+#### Span: `rx_span`
+
+Offered when the connected radio lets the panadapter's span be changed (the
+desktop's -/+ span buttons are live), for example a Flex, a Hermes-Lite 2, an
+ANAN, an Icom with a scope or an RTL-SDR. Not on the simulator.
+
+```
+aethersdr_rx_span_rates;          # read: how span works on this radio
+aethersdr_rx_span:1;              # read the span of receiver 1, Hz
+aethersdr_rx_span:1,192000;       # set it
+```
+
+- `aethersdr_rx_span_rates:<follows_rate>,<radio_wide>[,<hz>...];` says what
+  the span is. `follows_rate` is `true` where the span is the receiver's sample
+  rate, so only the listed values exist (a Hermes-Lite 2:
+  `aethersdr_rx_span_rates:true,true,48000,96000,192000,384000;`).
+  `radio_wide` is `true` where every panadapter shares one span, so a set on
+  any receiver changes them all. The list holds the rates a set can reach now:
+  a Hermes-Lite 2 drops its wider ones as receivers open (the network link is
+  shared) and in low bandwidth mode, and the line is sent again when that
+  changes. A radio with a continuous span lists none.
+- `<trx>` is the receiver; the span is that of the panadapter it is on. A
+  receiver that does not exist is ignored.
+- A set goes where the desktop's span buttons send it. Where the span is the
+  sample rate, it is moved to the nearest listed rate; otherwise it is kept
+  inside the panadapter's limits, when the radio reports them.
+- One exception: while a panadapter shows a KiwiSDR, the desktop's span
+  buttons leave the radio's panadapter alone, but a set still changes the span
+  of the radio's panadapter behind it.
+- The answer is `aethersdr_rx_span:<trx>,<hz>;` with the span the radio
+  reports, sent to every client that enabled the set, for every receiver whose
+  span moved. A radio that keeps its span (a Hermes-Lite 2 refuses a span the
+  network link cannot carry) is answered with the span it kept; with no report
+  two seconds after the set, the span in force is sent. A set that the rounding left at
+  the current span is answered to the sender only; a set of exactly the current
+  span gets no answer.
+- Every change from any source (the desktop, a band change, another client) is
+  sent the same way. The line is also sent, unasked, when a receiver appears or
+  moves to another panadapter. This is not the TCI `iq_samplerate`, which keeps
+  its own meaning.
+- Where the span is the sample rate, a set is refused while transmitting or
+  tuning, and answered to the sender with the span in force; AetherSDR shows
+  the reason in its status bar once per transmission. After the over, a set is
+  accepted again once the radio is receiving, as for `tx_antenna`. On a
+  Hermes-Lite 2 that is as soon as the key-up has been delivered: a set in the
+  short tail after it is accepted, as the desktop's span buttons are, since the
+  rate only changes the receivers. A set made while a profile loads waits for the
+  load and is checked when it was made, not when it reaches the radio. On a
+  Hermes-Lite 2 a span change rebuilds every receiver's DSP at the new rate.
+  The connection and the stream stay up; the panadapter and the audio of every receiver may
+  glitch briefly, and the answer comes when the rebuild is done. Elsewhere a
+  set is allowed while transmitting, as the span buttons are.
+- On a Hermes-Lite 2 the TCI IQ stream is taken at the radio's rate, which is
+  the span. A span below a client's `iq_samplerate` therefore also lowers the
+  IQ rate, and `iq_samplerate:` is sent again with the rate the frames now
+  carry. It never goes above the radio's rate.
 
 ## Known issues
 

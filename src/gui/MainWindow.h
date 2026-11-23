@@ -19,6 +19,7 @@
 #include "models/RadioModel.h"
 #include "models/BandSettings.h"
 #include "models/AntennaGeniusModel.h"
+#include "models/MicrohamTrioModel.h"
 #include "models/SliceLinkPolicy.h"
 #include "core/AppSettings.h"
 #include "core/FirmwareCurrency.h"
@@ -148,6 +149,7 @@ class AetherClockModel;
 class AntennaAnalyzerModel;
 class AetherLabWidget;
 class AutomationServer;
+class ShortcutTooltips;
 class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
@@ -1454,6 +1456,7 @@ private:
     QPointer<class AtuPreTuneDialog> m_kat500PreTuneDialog;
     Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
     RfkitConnection   m_rfkitConn;       // RF-KIT amplifier, REST/JSON over HTTP (default port 8080)
+    MicrohamTrioModel m_trioModel;       // microHAM Trio antenna switch; read-only, changes nothing on it
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_CW_RX_BACKENDS
@@ -2352,6 +2355,7 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     ControlActionRegistry m_controlActions;
+    ShortcutTooltips* m_shortcutTooltips{nullptr};  // child; names bound keys on buttons
     int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
     QString m_lastRefusedAction;           // refusal notice de-duplication
     int m_lastBandPlanFontSize{6};         // band_plan_toggle restores this

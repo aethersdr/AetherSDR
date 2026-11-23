@@ -19,6 +19,7 @@
 #include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2DspSetupPolicy.h"
 #include "core/backends/hl2/Hl2GainSplit.h"
+#include "core/backends/hl2/Hl2RxGainDuringTx.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -530,6 +531,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_metis, &MetisClient::radioPttChanged, this, &Hl2Backend::onRadioPttChanged);
     connect(m_metis, &MetisClient::txRouteRefused, this, &Hl2Backend::onMetisTxRouteRefused);
     connect(m_metis, &MetisClient::linkDown, this, [this] {
+        ++m_swrPublicationEpoch;
         // No link, no observation: a PTT the radio last reported ends here, so the
         // model never stays in transmit on a radio it can no longer hear.
         onRadioPttChanged(false);
@@ -1009,10 +1011,10 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
             return;
         }
         // dBFS -> dBm through the shared reference (one AD9866 behind every
-        // DDC): derived full scale (+3 dB) minus LNA gain, so the trace holds
-        // still across gain changes. off == 0.0 fires only when the LNA gain
-        // equals the full-scale figure.
-        const double off = m_dbRef.offsetDb();
+        // DDC): derived full scale (+3 dB) minus the gain in force. The key
+        // state is the host's, so a frame or two in flight at each T/R edge get
+        // the other side's offset. off == 0.0: that gain equals full scale.
+        const double off = displayOffsetDb();
         if (off == 0.0) {
             emit spectrumFrameReady(ui, floatBytes(bins));
             return;
@@ -1070,7 +1072,7 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         }
         // Same reference as the spectrum -- a meter that moved on a gain
         // change while the trace stayed put would be its own kind of lie.
-        const double dbm = m_dbRef.toDbm(dbfs);
+        const double dbm = dbfs + displayOffsetDb();
 
         // Smooth EVERY sample, publish only on the tick -- SMeterSmoother,
         // per receiver so a strong signal on one does not drive another's
@@ -1648,6 +1650,13 @@ void Hl2Backend::publishTransmitState(std::optional<bool> radioPtt)
                     Q_ARG(bool, transmitting), Q_ARG(int, m_unkeyUnmuteHoldMs));
             }
         }
+        // The AD9866 gain changes under the averaged pan at T/R when the
+        // receive gain is above the cap (Hl2RxGainDuringTx.h).
+        if (hl2::rxGainDuringTxShortfallDb(lnaEffectiveDb(), m_psEnabled) != 0) {
+            for (const auto& r : m_rx) {
+                dropPanAverage(r);
+            }
+        }
     }
     delta.radioPtt = radioPtt;
     emit transmitChanged(delta);
@@ -1746,6 +1755,11 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
             ++contributors;
     if (contributors <= 1 && r->audioGain == 1.0f
         && r->audioPanPercent == kAudioPanCentre) {
+        // The limiter belongs to a mix, and this is not one. Deliberately a
+        // step, not the 0.1 s release: when a slice is muted or closed while
+        // the mix is being limited, the one left returns to its own level at
+        // once (by up to the attenuation in force, a few dB).
+        m_mixLimiterAtten = 0.0f;
         // The queue was empty before the insert above, so it holds exactly the
         // block we were handed: emit that directly. This is the steady state and
         // the reason the fast path exists — no remix or clamp. The PCM
@@ -1831,10 +1845,32 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
         src.erase(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(take));
     }
 
-    // Clamp rather than scale by 1/N. Dividing would make every slice quieter
-    // the moment a second one is opened, which an operator reads as the radio
-    // going deaf; clamping leaves a single slice at exactly the level it had
-    // and only costs headroom when several loud slices genuinely coincide.
+    // Limit rather than scale by 1/N (a second slice must not make the first
+    // quieter) or clamp (two AGC-levelled slices sum past full scale). A frame
+    // that would pass kMixCeiling is put at kMixLimit (stereo-linked); a sum
+    // that never passes it is bit-identical. kMixLimit is the attack target
+    // only: while the gain releases, a frame that lands between kMixLimit and
+    // kMixCeiling is not pulled back to kMixLimit, so the published peak can
+    // sit just under 0 dBFS; the clamp below stays the hard ceiling. State is
+    // 1 - gain, because a float gain released towards 1 stalls a few ulps
+    // short of it.
+    float atten = m_mixLimiterAtten;
+    for (std::size_t k = 0; k + 1 < m_mixAccum.size(); k += 2) {
+        const float peak = std::max(std::fabs(m_mixAccum[k]), std::fabs(m_mixAccum[k + 1]));
+        if (peak * (1.0f - atten) > kMixCeiling) {
+            atten = 1.0f - kMixLimit / peak;
+        }
+        if (atten != 0.0f) {
+            const float g = 1.0f - atten;
+            m_mixAccum[k] *= g;
+            m_mixAccum[k + 1] *= g;
+            atten *= kMixReleasePerFrame;
+            if (atten < kMixAttenSnap) {
+                atten = 0.0f;
+            }
+        }
+    }
+    m_mixLimiterAtten = atten;
     for (float& s : m_mixAccum)
         s = std::clamp(s, -kMixCeiling, kMixCeiling);
 
@@ -1885,6 +1921,7 @@ void Hl2Backend::releaseReceiverDsps()
     // The mix buffers describe the set that just went away.
     m_mixAccum.clear();
     m_mixPending.clear();
+    m_mixLimiterAtten = 0.0f;
     // The DSP-dependent half of the index map is no longer true. The DDC and UI
     // numbers stay, because those are ours and outlive any DSP.
     for (const auto& ids : m_ids.all()) {
@@ -2703,6 +2740,13 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.cwTextControl = std::nullopt;
     // requestCwControl(Kind::Carrier) shapes host-timed elements into IQ.
     c.hostCwKeyingControl = RadioCapabilities::HostCwKeyingControl{};
+    // The host engine's shape (HostCwTextEngine): per-segment WPM, a 511-character
+    // message, and no progress index, stored macros or live typing of its own.
+    c.cwTextMaxMessageChars = 511;
+    c.cwTextHasProgress = false;
+    c.cwTextHasStoredMacros = false;
+    c.cwTextSupportsLive = false;
+    c.cwTextSupportsSpeedModifiers = true;
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
@@ -5193,6 +5237,7 @@ void Hl2Backend::dropPanAverage(const Receiver& r)
 {
     if (!r.dsp || r.panAverage <= 0)
         return;
+    ++m_panAverageDrops;
     QMetaObject::invokeMethod(r.dsp, "dropSpectrumAverage", Qt::QueuedConnection);
 }
 
@@ -6332,6 +6377,14 @@ void Hl2Backend::finishTxTail()
     }
     m_txTailPending = false;
     applyBandFilter("unkey");
+    // The average dropped at the host's unkey edge was reseeded from tail
+    // frames still at the keyed 0x0e gain; start it again on the receive gain.
+    if (!m_radioPtt
+        && hl2::rxGainDuringTxShortfallDb(lnaEffectiveDb(), m_psEnabled) != 0) {
+        for (const auto& r : m_rx) {
+            dropPanAverage(r);
+        }
+    }
     if (m_rfDriveOwed && !m_tuning) {
         m_rfDriveOwed = false;
         applyDrive(operatorDrivePercent());
@@ -7237,6 +7290,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) const
 {
     HealthSnapshot h;
+    h.swrPublication = HealthSnapshot::SwrPublication{
+        m_connectGeneration, m_swrPublicationEpoch, m_sessionSwrForwardWindows,
+        m_sessionSwrGateClears, m_keyed};
     auto put = [&h](const char* key, const QString& label, const QVariant& v) {
         const QString k = QString::fromLatin1(key);
         h.order.append(k);
@@ -8678,6 +8734,16 @@ void Hl2Backend::applyLnaGainDb(int gainDb)
     pushEffectiveLnaGain();
 }
 
+double Hl2Backend::displayOffsetDb() const noexcept
+{
+    // While keyed the gateware runs the AD9866 at rxGainDuringTxDb(), not at
+    // the receive gain the reference holds (0x0e, Hl2RxGainDuringTx.h).
+    const bool transmitting = m_keyed || m_radioPtt;
+    const int shortfall = transmitting
+        ? hl2::rxGainDuringTxShortfallDb(lnaEffectiveDb(), m_psEnabled) : 0;
+    return m_dbRef.offsetDb() + static_cast<double>(shortfall);
+}
+
 int Hl2Backend::lnaEffectiveDb() const noexcept
 {
     return AetherSDR::hl2::effectiveLnaGain(m_lnaGainDb, m_lnaAutoOffsetDb,
@@ -9353,6 +9419,9 @@ void Hl2Backend::pushInitialState()
     }
     m_radioPtt = false;
     m_swrGate.reset();
+    ++m_swrPublicationEpoch;
+    m_sessionSwrForwardWindows = 0;
+    m_sessionSwrGateClears = 0;
     m_psAdcOverload = false;
     publishTransmitState();
     m_tuning = false;
@@ -9475,8 +9544,13 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // so the reverse conditions stay out of the count.
     const bool swrGatesPassed =
         swrFwd && *swrFwd >= kMinForwardCountsForSwr && swrModulated;
-    if (m_keyed && swrGatesPassed)
+    if (m_keyed && swrFwd) {
+        ++m_sessionSwrForwardWindows;
+    }
+    if (m_keyed && swrGatesPassed) {
         ++m_keyedSwrGateClears;
+        ++m_sessionSwrGateClears;
+    }
     if (swrGatesPassed && swrRev) {
         if (const auto swr = swrFromRaw(*swrFwd, *swrRev))
             emit meterUpdate(QStringLiteral("TX:SWR"), *swr);

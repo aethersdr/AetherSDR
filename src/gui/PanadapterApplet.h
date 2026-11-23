@@ -119,7 +119,7 @@ public:
     // Per-character confidence below which appendRttyText() drops the
     // character (#5028).  Confidence is max(mark,space)/(mark+space), so it
     // lives in [0.5, 1.0]; the slider maps 0..100 onto 0.50..0.95.
-    float rttyConfThreshold() const { return m_rttyConfThreshold; }
+    float rttyConfThreshold() const;
 
     QSize sizeHint() const override { return {800, 316}; }
 
@@ -254,7 +254,8 @@ private:
     QComboBox*    m_rttyBaudCombo{nullptr};
     QPushButton*  m_rttyRevBtn{nullptr};
     QSlider*      m_rttySensSlider{nullptr};
-    float         m_rttyConfThreshold{0.5f};   // slider default 0 = the confidence floor: never drops
+    bool          m_rttySensUnsaved{false};
+    void          flushRttySens();
 };
 
 } // namespace AetherSDR

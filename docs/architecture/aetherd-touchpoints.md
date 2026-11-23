@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 291 touchpoint headers (235 core, 56 models) — 291/291 tagged, 0/291 converted.
+**Totals:** 293 touchpoint headers (236 core, 57 models) — 293/293 tagged, 0/293 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -19,7 +19,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AetherTxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply. | unconverted |
 | `core/AgcTCalibrator.h` | 1 | universal — Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state. | unconverted |
 | `core/AppActivity.h` | 3 | ui-support — Process-lifetime activity hold (App Nap opt-out on macOS, process power-throttling opt-out on Windows; never blocks sleep) and startStreamThread(), the High-QoS thread start for stream threads; app plumbing, not radio state. | unconverted |
-| `core/AppSettings.h` | 113 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
+| `core/AppSettings.h` | 114 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
 | `core/AudioDevicePreferencePolicy.h` | 1 | ui-support — Header-only policy over PC audio device ids: whether a device-list change keeps the engine's device, falls back to the system default or returns to the saved device, and whether a selection is written to the saved id (#6040); also which enumerable ids count as present and which as arrivals. Host audio, no radio state. | unconverted |
 | `core/AudioEngine.h` | 46 | mixed(flex) — Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering | unconverted |
 | `core/AudioOutputRouter.h` | 1 | ui-support — Registry fanning the user-selected QAudioDevice to local playback sinks; OS device plumbing, no radio state | unconverted |
@@ -100,6 +100,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/MaidenheadLocator.h` | 4 | ui-support — Header-only Maidenhead grid/lat-lon/distance/bearing math; stateless shared utility, not a protocol surface | unconverted |
 | `core/MemoryCsvCompat.h` | 1 | vendor(flex) — SmartSDR memory-CSV import/export codec (exact 22-col format); Flex ecosystem interchange, not core protocol. | unconverted |
 | `core/MemoryFieldValues.h` | 3 | mixed(flex) — Canonical memory-channel value lists + sanitizers; concepts universal, wire forms mirror FlexLib protocol | unconverted |
+| `core/MicrohamTrioSettings.h` | 1 | peripheral(microhamtrio) — Where the microHAM TRIO antenna switch's configuration is kept: its address and port under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect. Peripheral accessory configuration, not radio state. | unconverted |
 | `core/MidiControlManager.h` | 3 | ui-support — RtMidi input-device manager (ports, bindings, MIDI Learn) driving client setters; control-surface plumbing | unconverted |
 | `core/MidiSettings.h` | 3 | ui-support — MIDI controller binding/profile persistence (XML files) — client input-device config, not radio state. | unconverted |
 | `core/MiniPanSettings.h` | 1 | ui-support — Client-side persistence for the mini-pan applet span; UI configuration, not radio-owned state or a daemon protocol resource. | unconverted |
@@ -153,7 +154,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SettingsHelpers.h` | 2 | ui-support — QSlider live/persist debounce wiring for AppSettings saves; pure Qt client plumbing, no radio state. | unconverted |
 | `core/SettingsPaths.h` | 2 | ui-support — Single source of truth for every path in the client settings store (RFC #4603), replacing three drifted hand-copies of the config-dir logic. Client persistence plumbing. | unconverted |
 | `core/SettingsSanitizer.h` | 2 | ui-support — Recursive secret-safe rendering of the settings store for the support bundle and `--config export` (RFC #4603). Diagnostics plumbing. | unconverted |
-| `core/ShortcutManager.h` | 6 | ui-support — Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks — client input plumbing, no radio state. | unconverted |
+| `core/ShortcutManager.h` | 7 | ui-support — Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks — client input plumbing, no radio state. | unconverted |
 | `core/ShutdownTrace.h` | 2 | ui-support — Process-local shutdown diagnostics and support-log breadcrumbs; lifecycle plumbing, not radio state. | unconverted |
 | `core/ShuttleRateIntegrator.h` | 1 | ui-support — pure shuttle-ring rate arithmetic for the desktop HID surface, no radio state | unconverted |
 | `core/SignalClassifier.h` | 1 | universal — ONNX CNN voice/carrier classifier over spectrogram patches; radio-agnostic engine DSP/analysis feature | unconverted |
@@ -276,6 +277,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/Kxpa100Types.h` | 2 | peripheral(elecraft) — Typed KXPA100 accessory state, configuration, backup and fault records; no radio-family protocol. | unconverted |
 | `models/MemoryEntry.h` | 1 | universal — POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) — canonical memories surface | unconverted |
 | `models/MeterModel.h` | 7 | mixed(flex) — Meter registry+values are core-profile; VITA-49 raw scaling, TGXL/PGXL amp routing, COMPPEAK quirks are Flex | unconverted |
+| `models/MicrohamTrioModel.h` | 2 | peripheral(microhamtrio) — microHAM TRIO client that switches nothing: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, the state it reports (radio focus, antenna, labels). Read-only: changes nothing on the device. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam. | unconverted |
 | `models/ModeVocabulary.h` | 1 | universal — Canonical mode vocabulary: which slice modes count as voice (SSB, AM/SAM, the FM family) and which as CW (CW/CWU/CWL). Radio-family-neutral state and validation data - every backend reports these spellings - split out of gui/VoiceModeGate.h so the engine can answer the question without reaching into the UI. Same precedent as core/CtcssTones.h. The panel-policy half (shouldAutoHideCopyAssist) stayed in gui. | unconverted |
 | `models/ModelCapabilities.h` | 2 | mixed(flex) — Per-model capability table mirroring FlexLib ModelInfo.cs (RadioPlatform, has2Meters/has4Meters, loop A/B). This is the universal question 'what can this radio do', answered exclusively from a vendor table — and its band-availability half is precisely the band truth RFC §4.1 assigns to the capability descriptor. Consumed above the seam by SpectrumOverlayMenu, XvtrPolicy, WaveformInstallGate and MainWindow_Wiring. | unconverted |
 | `models/NetEntry.h` | 2 | ui-support — Net scheduler entry: RRULE/timezone/reminder metadata, operator-scoped local JSON; radio state only via embedded MemoryEntry | unconverted |
@@ -292,7 +294,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/SliceModel.h` | 39 | mixed(flex) — Slice state (freq/mode/filter/DSP) is core-profile; DAX, index_letter, SmartSDR status KVs are flex ext | unconverted |
 | `models/SpotModel.h` | 1 | universal — Panadapter spot store (callsign/freq/mode/lifetime/priority) on canonical state; kv ingest is trivially generic | unconverted |
 | `models/TnfModel.h` | 1 | universal — Tracking notch filter state (freq/width/depth/permanent, global enable) — generic DSP notch surface; kv parse is transport detail | unconverted |
-| `models/TransmitModel.h` | 17 | mixed(flex) — TX state model: power/MOX/VOX/CW/filter are core-profile; ATU, DAX, APD, profiles, interlock are Flex. | unconverted |
+| `models/TransmitModel.h` | 18 | mixed(flex) — TX state model: power/MOX/VOX/CW/filter are core-profile; ATU, DAX, APD, profiles, interlock are Flex. | unconverted |
 | `models/TunerModel.h` | 4 | mixed(flex) — External-tuner state model, intended to become vendor-neutral (usable by any 3rd-party tuner). Fuses universal tuner state with Flex-specific TGXL wiring, so it's mixed — NOT peripheral (that's the transport TgxlConnection) and NOT pure vendor. Distinct from the radio's own built-in ATU (TransmitModel). | unconverted |
 | `models/TxController.h` | 8 | universal — Engine-owned producer input controller: captures original intent and routes typed TX operations through RadioModel and TxCoordinator, with no widget or vendor dependency. | unconverted |
 | `models/VoiceKeyer.h` | 1 | universal — Voice-keyer contract the DVK panel drives (RFC #4214): numbered slots, status, and record/preview/on-air-playback intent, with 1-based slot ids matching the radio DVK and F1-F12. This IS the core-profile half that models/DvkModel.h's split already names; two implementations sit behind it (the radio-hosted DVK and the client-side keyer). Vendor-neutral by construction - no protocol verbs, no vendor status parsing - same precedent as models/CwxModel.h being universal despite the Flex 'CWX' name. | unconverted |
