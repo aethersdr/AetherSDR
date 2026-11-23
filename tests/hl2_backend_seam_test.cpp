@@ -799,6 +799,10 @@ public:
         cert.stageMeterInventory();
         return cert.m_stages.last().toObject().value("measured").toObject();
     }
+    static QString concern(const RadioCertification& cert)
+    {
+        return cert.m_stages.last().toObject().value("concern").toString();
+    }
 };
 }
 
@@ -851,6 +855,16 @@ static void swrReceiptDuringCertification()
 
     Access::setKeyedFlag(*backend, false);
     Access::metisEdge(*backend, "linkDown");
+    const auto linkStillDown = Cert::inventory(cert).value("TX:SWR").toObject();
+    check(!linkStillDown.value("defined").toBool()
+          && linkStillDown.value("fedWhileKeyedThisRun").isNull()
+          && linkStillDown.value("verdict").toString() == QStringLiteral("INCONCLUSIVE"),
+          "a link that is still down at inventory time fences the earlier receipt");
+    const QString downConcern = Cert::concern(cert);
+    const auto swrAt = downConcern.indexOf(QStringLiteral("TX:SWR — INCONCLUSIVE"));
+    const auto missingAt = downConcern.indexOf(QStringLiteral("expected on this radio but not defined"));
+    check(swrAt == 0 && missingAt > swrAt,
+          "the SWR row's INCONCLUSIVE sentence comes before the negative findings");
     Access::metisEdge(*backend, "linkUp");
     Access::setKeyedFlag(*backend, true);
     Access::pastKeyOn(*backend);

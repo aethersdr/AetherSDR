@@ -132,6 +132,23 @@ static_assert([] {
     return true;
 }(), "a gatedOnForwardCounts meter must also set needsForwardPower");
 
+// The run's keyed-receipt observer and the inventory verdict both follow the
+// gated row, and the observer keeps a single flag. A second gated row would
+// read the first one's receipts, so exactly one is allowed.
+static_assert([] {
+    int gated = 0;
+    for (const MeterSpec& spec : kMeterTable)
+        gated += spec.gatedOnForwardCounts ? 1 : 0;
+    return gated == 1;
+}(), "the keyed-receipt observer follows exactly one gatedOnForwardCounts row");
+
+constexpr const MeterSpec& kGatedMeter = *[] {
+    for (const MeterSpec& spec : kMeterTable)
+        if (spec.gatedOnForwardCounts)
+            return &spec;
+    return static_cast<const MeterSpec*>(nullptr);
+}();
+
 }  // namespace
 
 RadioCertification::RadioCertification(RadioModel* radio, AudioEngine* audio,
@@ -363,7 +380,8 @@ void RadioCertification::beginSwrObservation()
         [this](int index, float) {
             if (m_keyedSwrReceived || !m_radio) { return; }
             const MeterDef* def = m_radio->meterModel().meterDef(index);
-            if (!def || def->source != QLatin1String("TX") || def->name != QLatin1String("SWR")) {
+            if (!def || def->source != QLatin1String(kGatedMeter.source)
+                || def->name != QLatin1String(kGatedMeter.name)) {
                 return;
             }
             const auto current = currentSwrPublication();
@@ -1410,6 +1428,7 @@ void RadioCertification::stageMeterInventory()
     QJsonObject m;
     QStringList definedNeverFed, expectedButMissing, unitMismatches, inconclusive;
     QString swrConcern;
+    bool swrInconclusive = false;
     const auto publication = currentSwrPublication();
     const std::optional<quint64> runClears = publication
         ? std::optional(publication->gateClears - m_swrBaseline->gateClears) : std::nullopt;
@@ -1576,6 +1595,9 @@ void RadioCertification::stageMeterInventory()
             // three characters in the report.
             {QStringLiteral("note"), QString::fromUtf8(spec.note)},
         };
+        // `|| !publication`: a link drop or a backend replacement withdraws the
+        // meter definitions, so "not defined" after a session change is the
+        // change, not a fact about the radio. It stays INCONCLUSIVE.
         if (spec.gatedOnForwardCounts && m_swrBaseline && (idx >= 0 || !publication)) {
             row[QStringLiteral("fedWhileKeyedThisRun")] = publication
                 ? QJsonValue(m_keyedSwrReceived) : QJsonValue();
@@ -1600,6 +1622,7 @@ void RadioCertification::stageMeterInventory()
                 if (!row.contains(QStringLiteral("verdict"))) {
                     row[QStringLiteral("verdict")] = QStringLiteral("INCONCLUSIVE");
                     row[QStringLiteral("inconclusiveReason")] = swrConcern;
+                    swrInconclusive = true;
                 }
                 row[QStringLiteral("reason")] = swrConcern;
                 swrConcern = key + QStringLiteral(" — ") + row.value(QStringLiteral("verdict")).toString()
@@ -1654,7 +1677,8 @@ void RadioCertification::stageMeterInventory()
         concern = QStringLiteral("expected on this radio but not defined: ")
                 + expectedButMissing.join(QStringLiteral(", "));
     }
-    if (!swrConcern.isEmpty()) {
+    // NOT DELIVERED is a negative finding and sits with the others.
+    if (!swrConcern.isEmpty() && !swrInconclusive) {
         if (!concern.isEmpty()) { concern += QStringLiteral(". "); }
         concern += swrConcern;
     }
@@ -1672,6 +1696,11 @@ void RadioCertification::stageMeterInventory()
     // must not come away with "TX:SWR is broken" from a run that never keyed
     // the PA, because the remedy the negative form recommends is deleting a
     // working meter.
+    // The gated row's own INCONCLUSIVE sentence follows the same rule; the
+    // lead below, when there is one, still goes first.
+    if (swrInconclusive) {
+        concern = concern.isEmpty() ? swrConcern : swrConcern + QStringLiteral(". ") + concern;
+    }
     if (!inconclusive.isEmpty()) {
         QString why;
         if (m_keyRefusals > 0 && !anyKeyedWindow) {

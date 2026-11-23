@@ -996,7 +996,9 @@ because a peak above the floor can still be withheld.
 The HL2 inventory also records `gateClearsThisRun` and `fedWhileKeyedThisRun`.
 A clear counts even if the reflected reading is missing. If any window cleared
 and the meter received no keyed SWR update during the run, its verdict is
-`NOT DELIVERED`. Earlier readings and unkeyed tail updates still contribute to
+`NOT DELIVERED`. One keyed SWR update anywhere in the run counts as delivered,
+so a meter path that stops later in the run still reads as delivered at
+inventory time. Earlier readings and unkeyed tail updates still contribute to
 `everFed`. A backend or link-session change makes the run-scoped fields null
 and the verdict `INCONCLUSIVE`.
 
