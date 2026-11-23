@@ -8522,6 +8522,20 @@ if(AETHER_HL2_TX_TXA)
     target_include_directories(hl2_tx_latency_test PRIVATE src)
     target_link_libraries(hl2_tx_latency_test PRIVATE aethercore Qt6::Core)
     add_test(NAME hl2_tx_latency_test COMMAND hl2_tx_latency_test)
+
+    # A mode or passband change while keyed is held until the over ends; the
+    # mid-over bandpass swap splatters. 77 = starved by machine load.
+    add_executable(hl2_tx_keyed_mode_change_test tests/hl2_tx_keyed_mode_change_test.cpp)
+    target_include_directories(hl2_tx_keyed_mode_change_test PRIVATE src tests)
+    target_link_libraries(hl2_tx_keyed_mode_change_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME hl2_tx_keyed_mode_change_test COMMAND hl2_tx_keyed_mode_change_test)
+    set_tests_properties(hl2_tx_keyed_mode_change_test PROPERTIES SKIP_RETURN_CODE 77)
+
+    # Measurement tool, not a test (no add_test): a mode or passband change
+    # while keyed, call by call. Real-time paced, minutes long.
+    add_executable(hl2_tx_keyed_mode_change_measure tests/hl2_tx_keyed_mode_change_measure.cpp)
+    target_include_directories(hl2_tx_keyed_mode_change_measure PRIVATE src tests)
+    target_link_libraries(hl2_tx_keyed_mode_change_measure PRIVATE aethercore Qt6::Core)
 endif()
 
 # radiocert's measurement primitives. Header-only by design so this needs no
