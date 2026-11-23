@@ -6620,6 +6620,38 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
     }
 }
 
+void SpectrumWidget::applyWaterfallViewFrameChange(double oldCenterMhz,
+                                                   double oldBandwidthMhz,
+                                                   double newCenterMhz,
+                                                   double newBandwidthMhz)
+{
+#ifdef AETHER_GPU_SPECTRUM
+    const bool dssMeshReady = m_dssMeshReady;
+#else
+    constexpr bool dssMeshReady = false;
+#endif
+    switch (waterfallViewFrameAction(
+                waterfallRowFramesReady(),
+                m_spectrumRenderMode == SpectrumRenderMode::Mode3D,
+                dssMeshReady, m_wfLive, m_dss.historyRowCount() > 0)) {
+    case WaterfallViewFrameAction::Reproject:
+        handleWaterfallFrequencyFrameChange(oldCenterMhz, oldBandwidthMhz,
+                                            newCenterMhz, newBandwidthMhz);
+        break;
+    case WaterfallViewFrameAction::RebuildDssHistory: {
+        // Effective (cropped) bandwidth -- see rebuildDssViewportFromHistory()'s
+        // matching comment; newBandwidthMhz is a raw target here.
+        const double effNewBw = panEdgeCropActive()
+            ? newBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
+            : newBandwidthMhz;
+        rebuildDssViewportFromHistoryForFrame(newCenterMhz, effNewBw);
+        break;
+    }
+    case WaterfallViewFrameAction::None:
+        break;
+    }
+}
+
 bool SpectrumWidget::frequencyPreviewAvailable() const
 {
 #ifdef AETHER_GPU_SPECTRUM
@@ -6711,27 +6743,8 @@ void SpectrumWidget::commitFrequencyPreview()
     m_frequencyPreviewActive = false;
     QElapsedTimer timer;
     timer.start();
-#ifdef AETHER_GPU_SPECTRUM
-    const bool rowFrequencyFrames =
-        m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
-        && m_wfFrameTexReady;
-#else
-    constexpr bool rowFrequencyFrames = false;
-#endif
-    if (!rowFrequencyFrames) {
-        handleWaterfallFrequencyFrameChange(baseCenterMhz, baseBandwidthMhz,
-                                            targetCenterMhz, targetBandwidthMhz);
-    } else if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) {
-        if (!m_wfLive && m_dss.historyRowCount() > 0) {
-            // Effective (cropped) bandwidth -- see rebuildDssViewportFromHistory()'s
-            // matching comment; this call site is its own raw target, not
-            // inherited from an already-cropped local.
-            const double effTargetBw = panEdgeCropActive()
-                ? targetBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
-                : targetBandwidthMhz;
-            rebuildDssViewportFromHistoryForFrame(targetCenterMhz, effTargetBw);
-        }
-    }
+    applyWaterfallViewFrameChange(baseCenterMhz, baseBandwidthMhz,
+                                  targetCenterMhz, targetBandwidthMhz);
     m_frequencyPreviewCommitLastNs = timer.nsecsElapsed();
     m_frequencyPreviewCommitMaxNs = std::max(
         m_frequencyPreviewCommitMaxNs, m_frequencyPreviewCommitLastNs);
@@ -7851,6 +7864,23 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
         || !m_kiwiSdrFftTrace.isEmpty();
 }
 
+double SpectrumWidget::panCenterTargetMhz() const
+{
+    const bool animating = m_panCenterAnim
+        && m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    return followReferenceCenterMhz(m_centerMhz, m_panCenterTarget, animating);
+}
+
+bool SpectrumWidget::waterfallRowFramesReady() const
+{
+#ifdef AETHER_GPU_SPECTRUM
+    return m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
+        && m_wfFrameTexReady && m_wfSupplementalGpuTex != nullptr;
+#else
+    return false;
+#endif
+}
+
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
     if (!panGeometryConfirmationRequired()) {
@@ -8097,14 +8127,14 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
         m_panCenterStart = m_centerMhz;
     }
 
-    // Scroll waterfall history to align with the new center before the visual
-    // center animation lands. During rapid edge-follow retargets the waterfall
-    // image is already in the previous target's coordinate frame, so reproject
-    // from m_panCenterTarget rather than the mid-animation visual center.
-    handleWaterfallFrequencyFrameChange(waterfallSourceCenterMhz,
-                                        m_bandwidthMhz,
-                                        centerMhz,
-                                        m_bandwidthMhz);
+    // Row-frame pipelines leave the rows alone and follow m_centerMhz as it
+    // animates, in step with the trace and scale. The legacy pipeline stores
+    // view-frame pixels, already in the previous target's frame during rapid
+    // edge-follow retargets, so it reprojects from m_panCenterTarget.
+    applyWaterfallViewFrameChange(waterfallSourceCenterMhz,
+                                  m_bandwidthMhz,
+                                  centerMhz,
+                                  m_bandwidthMhz);
 
     m_panCenterTarget = centerMhz;
 
@@ -14559,9 +14589,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
     const float waterfallTargetBandwidthMhz =
         static_cast<float>(effectiveBandwidthMhz());
     const float waterfallRowFrequencyFrames =
-        m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
-            && m_wfFrameTexReady
-            && m_wfSupplementalGpuTex != nullptr ? 1.0f : 0.0f;
+        waterfallRowFramesReady() ? 1.0f : 0.0f;
     const QRgb wfFloorRgb = waterfallFloorRgb();
     float uniforms[] = {
         rowOffset,

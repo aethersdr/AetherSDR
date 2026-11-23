@@ -425,6 +425,10 @@ public:
     void setSquelchScale(std::optional<SquelchLevelScale> scale);
     const std::optional<SquelchLevelScale>& squelchScale() const { return m_squelchScale; }
     double centerMhz()    const { return m_centerMhz; }
+    // Where the view is heading: the pan-follow animation's destination while
+    // it runs, otherwise centerMhz(). Follow steps chain from this so a step
+    // landing mid-glide does not restart from the glide's interim position.
+    double panCenterTargetMhz() const;
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
     // the right-edge dBm / waterfall-time strip that is painted on top of it.
@@ -1291,6 +1295,15 @@ private:
                                              double oldBandwidthMhz,
                                              double newCenterMhz,
                                              double newBandwidthMhz);
+    // The waterfall shader maps each row through its own frequency frame. The
+    // one predicate for both the shader flag and the view-frame decision.
+    bool waterfallRowFramesReady() const;
+    // Brings the waterfall/3D rows to a new view frame by the cheapest correct
+    // route for the active pipeline (see waterfallViewFrameAction()).
+    void applyWaterfallViewFrameChange(double oldCenterMhz,
+                                       double oldBandwidthMhz,
+                                       double newCenterMhz,
+                                       double newBandwidthMhz);
     bool updateFrequencyPreview(double oldCenterMhz, double oldBandwidthMhz,
                                 double newCenterMhz, double newBandwidthMhz);
     void scheduleFrequencyPreviewFrame();
