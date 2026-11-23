@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.11.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -1326,6 +1326,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_TxTimeout.cpp
     src/models/TxTimeoutGuard.cpp
     src/models/HostCwTextKeyer.cpp
+    src/models/HostCwTextEngine.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp

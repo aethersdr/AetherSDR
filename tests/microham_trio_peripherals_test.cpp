@@ -164,6 +164,9 @@ void testRowLifecycle()
                && PeripheralSettings::deviceInt(QStringLiteral("trio"), QStringLiteral("ManualPort"), 0)
                       == 80);
     report("and the session starts", trio.hasSession() && trio.isConnecting());
+    report("while connecting, Connect reads Cancel and the address is locked",
+           connectButton->text() == QStringLiteral("Cancel") && !address->isEnabled(),
+           connectButton->text().toStdString());
     report("held with the state", peer.connectHeld(trio, "radio2", "ant6"));
     report("the list line reads DIRECT",
            listLine(list, QStringLiteral("trio")).contains(QStringLiteral("DIRECT")),
@@ -228,11 +231,14 @@ void testRowLifecycle()
            peer.connectHeld(trio) && status->text() == QStringLiteral("Connected"));
 
     // Web UI: the session is let go first, then the Trio's page opens.
+    // An address typed since is not the session's: the held one opens.
+    address->setText(QStringLiteral("192.0.2.99"));
     UrlCatcher catcher;
     QDesktopServices::setUrlHandler(QStringLiteral("http"), &catcher, "open");
     webUi->click();
     QDesktopServices::unsetUrlHandler(QStringLiteral("http"));
-    report("Web UI opens the Trio's page", catcher.urls.size() == 1
+    address->setText(QLatin1String(kHost));
+    report("Web UI opens the held session's page, not the typed address", catcher.urls.size() == 1
                && catcher.urls.first() == QUrl(QStringLiteral("http://192.0.2.10/")),
            catcher.urls.isEmpty() ? std::string() : catcher.urls.first().toString().toStdString());
     report("after closing this app's session",

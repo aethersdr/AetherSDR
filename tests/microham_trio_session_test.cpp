@@ -540,6 +540,12 @@ void testCookie()
     report("a page without the cookie",
            Ws::parseCookie(Ws::parseHead("HTTP/1.0 200 OK\r\nSet-Cookie: SID=7\r\n\r\n")).error
                == Ws::CookieError::NoCookie);
+    report("a WID inside another cookie name is not the WID",
+           Ws::parseCookie(Ws::parseHead("HTTP/1.0 200 OK\r\nSet-Cookie: SWID=7\r\n\r\n")).error
+               == Ws::CookieError::NoCookie);
+    report("a WID after another name and \"; \" is read",
+           Ws::parseCookie(Ws::parseHead("HTTP/1.0 200 OK\r\nSet-Cookie: SWID=7; WID=8\r\n\r\n")).wid
+               == QByteArrayLiteral("8"));
     report("a cookie value that needs quoting is refused",
            Ws::parseCookie(Ws::parseHead("HTTP/1.0 200 OK\r\nSet-Cookie: WID=a b\r\n\r\n")).error
                == Ws::CookieError::UnsafeValue);

@@ -2063,13 +2063,18 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     };
 
     // The Trio serves one session: the browser takes it from this app, so the
-    // session is closed first and Connect takes it back.
+    // session is closed first and Connect takes it back. A held session
+    // opens its own address, not one typed in the field since.
     ui.openWebUi = [u, trio, refresh]() {
-        const QString host = u->addressEdit->text().trimmed();
-        if (!trio || host.isEmpty()) {
+        if (!trio) {
             return;
         }
         const bool held = trio->hasSession();
+        const QString host = held ? trio->view().host : u->addressEdit->text().trimmed();
+        const int port = held ? trio->view().port : u->portSpin->value();
+        if (host.isEmpty()) {
+            return;
+        }
         if (held) {
             trio->releaseForBrowser();
             u->state.note = RadioSetupDialog::tr("released to the Trio's web page; Connect takes it back");
@@ -2077,8 +2082,8 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         QUrl url;
         url.setScheme(QStringLiteral("http"));
         url.setHost(host);
-        if (u->portSpin->value() != 80) {
-            url.setPort(u->portSpin->value());
+        if (port != 80) {
+            url.setPort(port);
         }
         url.setPath(QStringLiteral("/"));
         QDesktopServices::openUrl(url);
@@ -3358,7 +3363,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             const bool connected = ui.isConnected();
             ui.state.source = sourceOf(ui);
             const bool connecting = effectivelyConnecting(ui);
-            const bool kpaConnecting = (ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500 || ui.kind == PeripheralDeviceUi::Kind::Kxpa100) && connecting;
+            const bool kpaConnecting = (ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500 || ui.kind == PeripheralDeviceUi::Kind::Kxpa100 || ui.kind == PeripheralDeviceUi::Kind::Trio) && connecting;
             ui.connectButton->setText(connected ? tr("Disconnect")
                 : kpaConnecting ? tr("Cancel") : tr("Connect"));
             applyStatusLabel(ui);

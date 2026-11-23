@@ -488,6 +488,43 @@ enum class WaterfallPipelineMode {
     RowFrequencyFrames,
 };
 
+// How a change of view frame reaches the stored waterfall/3D rows. With
+// row-frequency frames every row keeps its capture frame and the shaders map
+// it into the live view each frame, so rewriting rows is wasted work (a full
+// CPU rebuild and texture upload per pan-follow step) and runs ahead of an
+// animated view. Two 3D surfaces have no per-row frame and still need work:
+// a paused view drawn from its cached surface rebuilds it, and without the
+// DSS mesh the cached-image fallback stores columns in the view frame, so it
+// reprojects like the legacy pipeline.
+enum class WaterfallViewFrameAction {
+    Reproject,
+    RebuildDssHistory,
+    None,
+};
+
+inline WaterfallViewFrameAction waterfallViewFrameAction(
+    bool rowFrequencyFrames, bool mode3D, bool dssMeshReady, bool live,
+    bool hasDssHistory)
+{
+    if (!rowFrequencyFrames || (mode3D && !dssMeshReady)) {
+        return WaterfallViewFrameAction::Reproject;
+    }
+    if (mode3D && !live && hasDssHistory) {
+        return WaterfallViewFrameAction::RebuildDssHistory;
+    }
+    return WaterfallViewFrameAction::None;
+}
+
+// The center a pan-follow step works from: the follow animation's destination
+// while it runs, so steps landing mid-glide chain whole steps from where the
+// last one was headed, otherwise the visible center.
+inline double followReferenceCenterMhz(double visibleCenterMhz,
+                                       double animationTargetMhz,
+                                       bool animationRunning)
+{
+    return animationRunning ? animationTargetMhz : visibleCenterMhz;
+}
+
 struct WaterfallPaletteRecolorPlan {
     bool retainNativeFrames{false};
     FrequencyFrame primaryFrame;
@@ -952,6 +989,32 @@ inline float selectedWaterfallTimeScaleMsPerRow(
     }
     return stablePresentationValue(
         *kiwiTimeScaleAnchor, kiwiFallbackMsPerRow);
+}
+
+// Which overlay layers a slice-overlay change must repaint. Slice markers and
+// their off-screen indicators live only in the frequency-anchored layer, so a
+// pure retune repaints that layer alone. Anything else about the slice (mode,
+// filter, TX, active, RIT/XIT, diversity) stays a full rebuild, as does a
+// retune while the cursor readout is showing, because it snaps to a nearby
+// marker from the screen-space layer.
+enum class OverlayRepaint {
+    None,
+    FrequencyLayer,
+    Full,
+};
+
+inline OverlayRepaint overlayRepaintForSliceChange(bool frequencyChanged,
+                                                   bool otherFieldsChanged,
+                                                   bool cursorReadoutShowing)
+{
+    if (otherFieldsChanged) {
+        return OverlayRepaint::Full;
+    }
+    if (!frequencyChanged) {
+        return OverlayRepaint::None;
+    }
+    return cursorReadoutShowing ? OverlayRepaint::Full
+                                : OverlayRepaint::FrequencyLayer;
 }
 
 } // namespace AetherSDR

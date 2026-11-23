@@ -189,7 +189,8 @@ what the code does with the recorded bytes, not how other firmware behaves.
   band data changes a selection, the radio focus included (seen on a session
   held for an hour).
 - The text `ping` is answered with the text `pong`; the Trio also sends an
-  empty WebSocket pong about once a second.
+  empty WebSocket pong about once a second. The 5 s no-frame bound below
+  requires that pong: replies to AetherSDR's own `ping` alone do not hold it.
 - One session only: a second connection closes the first at once.
 - Selections are the controller's echo of its last selection, not relay
   position sense: the schema has no field for a relay that disagrees, and the
@@ -207,7 +208,8 @@ a session longer than an hour stays up; how fast a change is pushed.
 | An HTML error page as the first frame, or no state within 6 s of the upgrade | Retried after 1.5 s, up to three attempts, then as a failed attempt |
 | A state document with any missing, extra or mistyped group, key or field (an RX extension module included) | No partial reading: the attempt fails as unreadable and is retried as above |
 | A frame the decoder refuses (fragmented, masked, reserved bits, over 16 KiB) | The connection is dropped as a protocol error and retried as above |
-| Silence, or a `ping` unanswered, for more than 10 s (as the Trio's own page) | The session is treated as dead: a failed attempt, retried as above |
+| No frame at all for more than 5 s (the Trio sends one every second) | Reported as no heartbeat (network): a failed attempt, retried as above |
+| Frames arrive, but a `ping` goes unanswered for more than 10 s (as the Trio's own page) | The session is treated as dead: a failed attempt, retried as above |
 | The held session closed by the Trio | Taken as another client holding it: not retaken, even with **Reconnect automatically** on; **Connect** takes it back. A Trio restart that closes the connection reads the same |
 
 ## Settings
