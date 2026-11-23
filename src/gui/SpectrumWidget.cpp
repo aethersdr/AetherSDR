@@ -14909,9 +14909,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
 
             // Cursor frequency label (#726)
-            if (m_showCursorFreq && m_hoveredTnfId < 0
-                && m_cursorPos.x() >= 0
-                && m_cursorPos.y() >= 0) {
+            if (cursorReadoutShowing()) {
                 double freqMhz = xToMhz(m_cursorPos.x());
                 // Snap to the exact VFO frequency when hovering within 8 px of a slice
                 // marker so the readout exactly matches the flag value (#1369).
@@ -16215,9 +16213,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     }
 
     // ── Cursor frequency label (#456) ──────────────────────────────────────
-    if (m_showCursorFreq && m_hoveredTnfId < 0
-        && m_cursorPos.x() >= 0
-        && m_cursorPos.y() >= 0) {
+    if (cursorReadoutShowing()) {
         double freqMhz = xToMhz(m_cursorPos.x());
         // Snap to the exact VFO frequency when hovering within 8 px of a slice
         // marker so the readout exactly matches the flag value (#1369).
