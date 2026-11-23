@@ -118,12 +118,16 @@ public:
     // Releasing) both estimates and the T/R state are kept: a restart there
     // would learn the keyed IQ as receive. The cost, at Armed: a receive DC
     // step across the gap is removed over the 1 s time constant, not at once
-    // as in Rx. buildChannel() rebuilds this object on FFT size/rate change.
+    // as in Rx. The onset run (Armed) and the end-of-key run (Releasing)
+    // restart, so neither counts samples from both sides of the gap.
+    // buildChannel() rebuilds this object on FFT size/rate change.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = discardPartialFrame();
         if (m_dcState == DcState::Rx) {
             restartRxDc();
+        } else {
+            m_dcOnsetRun = 0;   // a T/R run counts contiguous samples only
         }
         return discarded;
     }

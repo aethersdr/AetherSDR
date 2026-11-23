@@ -464,6 +464,45 @@ void centreBinTests()
               atTx ? "gap at Tx: receive resumes when the keyed IQ ends, not at the 500 ms hold"
                    : "gap at Releasing: receive resumes when the keyed IQ ends, not at the 500 ms hold");
     }
+    // A gap splits a T/R run: the samples before it do not count towards the
+    // kDcOnsetRun contiguous samples the switch needs, at Armed (keyed IQ
+    // arriving) or at Releasing (receive level returning).
+    {
+        const int before = Hl2Spectrum::kDcOnsetRun - 24;
+        const int after = Hl2Spectrum::kDcOnsetRun - before;
+        const std::vector<std::complex<float>> keyedRun(static_cast<std::size_t>(before),
+                                                        {0.5f, 0.0f});
+        const std::vector<std::complex<float>> keyedRest(static_cast<std::size_t>(after),
+                                                         {0.5f, 0.0f});
+        const std::vector<std::complex<float>> quietRun(static_cast<std::size_t>(before));
+        const std::vector<std::complex<float>> quietRest(static_cast<std::size_t>(after));
+
+        Hl2Spectrum spec(kStreamN, kStreamFs);
+        Noise noise;
+        std::uint64_t n = 0;
+        stream(spec, noise, n, {}, 1.0, false);
+        spec.setTransmitting(true, 500.0);
+        spec.accumulate(keyedRun);
+        spec.reset();
+        spec.accumulate(keyedRest);
+        check(spec.dcKeyed() && !spec.dcTransmitting(),
+              "gap at Armed: an onset run split by the gap does not switch");
+        spec.accumulate(keyedRun);
+        check(spec.dcTransmitting(),
+              "gap at Armed: kDcOnsetRun contiguous keyed samples after it do switch");
+
+        const Signal keyedSig{12544.0, 0.5, {5e-4, -2e-4}};
+        stream(spec, noise, n, keyedSig, 0.5, false);
+        spec.setTransmitting(false, 500.0);
+        spec.accumulate(quietRun);
+        spec.reset();
+        spec.accumulate(quietRest);
+        check(spec.dcTransmitting(),
+              "gap at Releasing: a receive-level run split by the gap does not end the release");
+        spec.accumulate(quietRun);
+        check(!spec.dcTransmitting(),
+              "gap at Releasing: kDcOnsetRun contiguous receive-level samples after it do");
+    }
     // A gap in receive still restarts the receive estimate: a DC step across it
     // is removed at once (growing memory), not over the 1 s time constant.
     {
