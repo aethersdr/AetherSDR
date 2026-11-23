@@ -1979,6 +1979,14 @@ target_include_directories(hl2_rxdsp_agc_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_agc_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_agc_test COMMAND hl2_rxdsp_agc_test)
 
+# The multi-slice speaker mix keeps one slice bit-identical and stops two
+# AGC-levelled slices passing full scale at high AGC ceilings: real Hl2RxDsp
+# chains into Hl2Backend::mixReceiverAudio(), offline, socket-free.
+add_executable(hl2_rx_mix_headroom_test tests/hl2_rx_mix_headroom_test.cpp)
+target_include_directories(hl2_rx_mix_headroom_test PRIVATE src)
+target_link_libraries(hl2_rx_mix_headroom_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rx_mix_headroom_test COMMAND hl2_rx_mix_headroom_test)
+
 add_executable(hl2_rxdsp_notch_audio_test tests/hl2_rxdsp_notch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_notch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_notch_audio_test PRIVATE aethercore Qt6::Core)
