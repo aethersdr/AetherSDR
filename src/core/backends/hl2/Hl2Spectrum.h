@@ -116,8 +116,9 @@ public:
     // Averaging state is kept (same spectrum). In receive the receive DC
     // estimate restarts. From a key until its release ends (Armed, Tx,
     // Releasing) both estimates and the T/R state are kept: a restart there
-    // would learn the keyed IQ as receive. buildChannel() rebuilds this object
-    // on FFT size/rate change.
+    // would learn the keyed IQ as receive. The cost, at Armed: a receive DC
+    // step across the gap is removed over the 1 s time constant, not at once
+    // as in Rx. buildChannel() rebuilds this object on FFT size/rate change.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = discardPartialFrame();

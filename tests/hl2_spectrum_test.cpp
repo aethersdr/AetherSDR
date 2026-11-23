@@ -371,8 +371,8 @@ void centreBinTests()
     }
 
     // 7 · A SEQUENCE GAP mid-key (reset(), as Hl2RxDsp::onSequenceGap()
-    // calls it) restarts the receive estimate only: the keyed frames after it
-    // keep the transmit DC the key learned, with no centre line.
+    // calls it) keeps both DC estimates and the T/R state: the keyed frames
+    // after it keep the transmit DC the key learned, with no centre line.
     for (const double capFps : {0.0, 30.0}) {
         const Signal keyedSig{12544.0, 0.5, {5e-4, -2e-4}};   // DC ~30 dB over the floor
         Hl2Spectrum spec(kStreamN, kStreamFs);
@@ -439,6 +439,30 @@ void centreBinTests()
             check(centreOverFloorDb(rx) < 3.0 && maxOf(rx.centreOverFloorDb) < 12.0,
                   "gap at a keyed state: receive after the unkey stays at the floor");
         }
+    }
+    // A gap at Tx or Releasing keeps the receive level the release compares
+    // against: with a long hold, receive resumes when the keyed IQ ends.
+    for (const bool atTx : {true, false}) {
+        const Signal keyedSig{12544.0, 0.5, {5e-4, -2e-4}};
+        Signal tail = keyedSig;
+        tail.endS = 0.03;
+        Hl2Spectrum spec(kStreamN, kStreamFs);
+        Noise noise;
+        std::uint64_t n = 0;
+        stream(spec, noise, n, {}, 1.0, false);
+        spec.setTransmitting(true, 500.0);
+        stream(spec, noise, n, keyedSig, 1.0, false);
+        if (atTx) {
+            spec.reset();
+        }
+        spec.setTransmitting(false, 500.0);
+        if (!atTx) {
+            spec.reset();
+        }
+        stream(spec, noise, n, tail, 0.1, false);
+        check(!spec.dcTransmitting(),
+              atTx ? "gap at Tx: receive resumes when the keyed IQ ends, not at the 500 ms hold"
+                   : "gap at Releasing: receive resumes when the keyed IQ ends, not at the 500 ms hold");
     }
     // A gap in receive still restarts the receive estimate: a DC step across it
     // is removed at once (growing memory), not over the 1 s time constant.
