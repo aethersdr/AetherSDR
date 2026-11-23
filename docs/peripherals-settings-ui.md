@@ -135,8 +135,11 @@ of that radio: the slice's **RX ANT** and **TX ANT** menus keep the radio's
 own ports at the top (on the HL2: ANT, and RF1 for TX) and add a submenu
 **microHAM Trio (station switch)** with the Trio's six antenna ports. The
 panadapter's RX antenna list has no submenu: there the Trio is a disabled
-heading row with its ports under it. The field shows the port the Trio
-reports, never the last pick.
+heading row with its ports under it. Where the radio has one fixed port in
+that direction (on the HL2: ANT for RX) or none, the RX ANT or TX ANT field
+shows the port the Trio reports, never the last pick; where it has more (the
+HL2's TX: ANT and RF1), the field shows the radio's port and the Trio's is
+the check mark in its submenu.
 
 - Split is implied, with no button of its own: an RX pick other than the TX
   port turns the Trio's split on with that RX port; an RX pick equal to the TX

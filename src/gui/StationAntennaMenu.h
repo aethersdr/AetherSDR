@@ -2,8 +2,8 @@
 
 // Station antenna switches (models/StationAntenna.h) in the RX ANT and TX ANT
 // fields of VfoWidget and RxApplet: one submenu per device, after the radio's
-// own ports, and the same field text in both. A device owns the field only
-// when the radio publishes no port of its own.
+// own ports, and the same field text in both. A device owns the field when
+// the radio has nothing to choose there: no port of its own, or one fixed one.
 
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -100,10 +100,11 @@ inline void addStationAntennaMenus(QMenu& menu, const QVector<StationAntennaView
     }
 }
 
-inline bool radioPublishedAntennas(const RadioModel& radio, const SliceModel& slice, bool tx)
+// The radio's own ports for one direction: the slice's list, else the radio's.
+inline qsizetype radioAntennaCount(const RadioModel& radio, const SliceModel& slice, bool tx)
 {
-    return !(tx ? slice.txAntennaList() : slice.rxAntennaList()).isEmpty()
-           || !radio.antennaList().isEmpty();
+    const QStringList own = tx ? slice.txAntennaList() : slice.rxAntennaList();
+    return own.isEmpty() ? radio.antennaList().size() : own.size();
 }
 
 // Whether the RX ANT / TX ANT buttons are enabled, for the availability
@@ -131,11 +132,14 @@ struct StationAntennaField {
 };
 
 // What the field shows while a device owns it, or nothing: the first device
-// that reports a position for this radio, as the device reports it.
+// that reports a position for this radio, as the device reports it. A device
+// owns the field when the radio has at most one port in that direction (the
+// HL2's RX "ANT", an RTL's "RX"): that port is always the one in use, so the
+// switch's position is the only thing the field can tell.
 inline std::optional<StationAntennaField> stationAntennaField(const RadioModel* radio,
                                                               const SliceModel* slice, bool tx)
 {
-    if (radio == nullptr || slice == nullptr || radioPublishedAntennas(*radio, *slice, tx)) {
+    if (radio == nullptr || slice == nullptr || radioAntennaCount(*radio, *slice, tx) > 1) {
         return std::nullopt;
     }
     const QVector<StationAntennaView> views = radio->stationAntennaViews();

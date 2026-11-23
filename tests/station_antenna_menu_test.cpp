@@ -290,6 +290,53 @@ void testFieldText()
            !stationAntennaField(&radio, slice, false) && stationAntennaField(&radio, slice, true));
 }
 
+// A radio with one fixed input (the HL2's RX "ANT", an RTL's "RX"): that port
+// is always the one in use, so the field shows the switch's port (the ruling
+// on #7416). A direction with two radio ports (the HL2's TX: ANT, RF1) keeps
+// the radio's own.
+void testFieldOnOneFixedPort()
+{
+    RadioModel radio;
+    if (!radio.automationApplySliceFixture(0, QStringLiteral("A")) || !radio.slice(0)) {
+        report("fixture: a slice", false);
+        return;
+    }
+    SliceModel* slice = radio.slice(0);
+    SliceDelta hl2;
+    hl2.rxAntennaList = QStringList{QStringLiteral("ANT")};
+    hl2.txAntennaList = QStringList{QStringLiteral("ANT"), QStringLiteral("RF1")};
+    slice->applyChanges(hl2);
+    report("one RX port, no source: the field is the radio's",
+           !stationAntennaField(&radio, slice, false));
+
+    QObject owner;
+    StationAntennaView view = trioView();
+    radio.addStationAntennaSource(&owner, QStringLiteral("trio"), [&view]() { return view; },
+                                  [](const QString&, bool) { return QString(); });
+    const auto rx = stationAntennaField(&radio, slice, false);
+    report("one fixed RX port and a bound switch: the RX field shows the switch's port",
+           rx && rx->text == QStringLiteral("Fan Dipole")
+               && shownTip(rx->toolTip) == QStringLiteral("Receive antenna: Fan Dipole, on the Trio (station switch)"),
+           rx ? rx->toolTip.toStdString() : std::string());
+    report("two TX ports (ANT, RF1): the TX field stays the radio's",
+           !stationAntennaField(&radio, slice, true));
+
+    SliceDelta oneTx;
+    oneTx.txAntennaList = QStringList{QStringLiteral("ANT")};
+    slice->applyChanges(oneTx);
+    const auto tx = stationAntennaField(&radio, slice, true);
+    report("one fixed TX port: the TX field shows the switch's port too",
+           tx && tx->text == QStringLiteral("EFHW"));
+
+    view.unavailable = QStringLiteral("The Trio's focus is on FT710, not on this radio.");
+    view.rxCurrent.clear();
+    view.rxLabel = QStringLiteral("Trio: FT710");
+    const auto elsewhere = stationAntennaField(&radio, slice, false);
+    report("focus elsewhere: the field says so, as with no radio port",
+           elsewhere && elsewhere->text == QStringLiteral("Trio: FT710")
+               && shownTip(elsewhere->toolTip).endsWith(view.unavailable));
+}
+
 // The RX ANT / TX ANT restriction in VfoWidget and RxApplet. An HL2 launched
 // receive-only (canTransmit false) has one RX port, "ANT": without a switch
 // there is nothing to choose; with the Trio bound, its ports are, and
@@ -338,6 +385,7 @@ int main(int argc, char** argv)
     testDeviceTextIsPlain();
     testSharedSentences();
     testFieldText();
+    testFieldOnOneFixedPort();
     testFieldAvailability();
 
     std::printf("\n%s (%d failed)\n", g_failed == 0 ? "ALL PASSED" : "FAILURES", g_failed);
