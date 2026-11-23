@@ -1946,6 +1946,35 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     auto* notOnTrio = new QRadioButton(tr("This AetherSDR is on none of them"), radioGroup);
     notOnTrio->setObjectName(QStringLiteral("peripheralTrioNotOnTrio"));
     thisRadio->addButton(notOnTrio);
+    // A marker the model could not store stays unchecked; the row's status
+    // line (announced, applyStatusLabel) says why, until a store succeeds.
+    auto bindingNoteFor = [](MicrohamTrioModel::BindResult result) {
+        switch (result) {
+        case MicrohamTrioModel::BindResult::Ok:
+            return QString();
+        case MicrohamTrioModel::BindResult::NoTrio:
+            return RadioSetupDialog::tr("this radio's Trio port was not stored: no Trio is set up");
+        case MicrohamTrioModel::BindResult::NoRadioIdentity:
+            return RadioSetupDialog::tr("this radio's Trio port was not stored: the radio has no identity yet");
+        case MicrohamTrioModel::BindResult::NoState:
+            return RadioSetupDialog::tr("this radio's Trio port was not stored: the Trio has not been read yet");
+        case MicrohamTrioModel::BindResult::NoSuchPort:
+            return RadioSetupDialog::tr("this radio's Trio port was not stored: the Trio no longer has that port");
+        case MicrohamTrioModel::BindResult::WriteFailed:
+            break;
+        }
+        return RadioSetupDialog::tr("this radio's Trio port could not be saved; nothing was changed");
+    };
+    auto applyBindingResult = [u, bindingNoteFor](MicrohamTrioModel::BindResult result) {
+        static const QString kPrefix = RadioSetupDialog::tr("this radio's Trio port");
+        if (result == MicrohamTrioModel::BindResult::Ok) {
+            if (u->state.note.startsWith(kPrefix)) {
+                u->state.note.clear();
+            }
+            return;
+        }
+        u->state.note = bindingNoteFor(result);
+    };
 
     ui.refreshExtra = [=]() {
         if (!trio) {
@@ -1996,9 +2025,10 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
                 marker->setAccessibleName(RadioSetupDialog::tr("This AetherSDR is on Trio %1")
                                               .arg(button.name));
                 thisRadio->addButton(marker);
-                QObject::connect(marker, &QRadioButton::clicked, marker, [trio, key = button.key, refresh]() {
+                QObject::connect(marker, &QRadioButton::clicked, marker,
+                                 [trio, key = button.key, refresh, applyBindingResult]() {
                     if (trio) {
-                        trio->bindRadioSlot(key);
+                        applyBindingResult(trio->bindRadioSlot(key));
                     }
                     refresh();
                 });
@@ -2051,9 +2081,9 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         radioGroup->setEnabled(view.snapshot.has_value());
         antennaGroup->setEnabled(view.snapshot.has_value());
     };
-    QObject::connect(notOnTrio, &QRadioButton::clicked, notOnTrio, [trio, refresh]() {
+    QObject::connect(notOnTrio, &QRadioButton::clicked, notOnTrio, [trio, refresh, applyBindingResult]() {
         if (trio) {
-            trio->setNotOnTrio();
+            applyBindingResult(trio->setNotOnTrio());
         }
         refresh();
     });

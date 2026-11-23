@@ -9,6 +9,7 @@
 //
 // Run:  QT_QPA_PLATFORM=offscreen ./build/microham_trio_peripherals_test
 
+#include <QJsonObject>
 #include <QList>
 #include <QObject>
 #include <QUrl>
@@ -409,6 +410,46 @@ void testRadioMarkerFollowsTheBinding()
     MicrohamTrioSettings::remove();
 }
 
+// A marker the model could not store says so on the row's status line (#7416
+// review): a newer TrioBinding schema in the radio's settings is not replaced.
+void testBindingWriteFailureIsShown()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    const RadioSettingsScope hl2(QStringLiteral("hl2"), QStringLiteral("trio-page-radio-b"));
+    MicrohamTrioBinding::remove(hl2);
+    TrioPage page;
+    page.trio.loadSettings(false);
+    if (!page.open()) {
+        report("write failure: the Trio row connects", false);
+        return;
+    }
+    page.trio.setRadio(hl2);
+    auto* radio2This = page.dialog.findChild<QRadioButton*>(QStringLiteral("peripheralTrioThis_radio2"));
+    auto* notOnTrio = page.dialog.findChild<QRadioButton*>(QStringLiteral("peripheralTrioNotOnTrio"));
+    auto* status = page.dialog.findChild<QLabel*>(QStringLiteral("peripheralStatus_trio"));
+    if (!radio2This || !notOnTrio || !status) {
+        report("write failure: the markers and the status line exist", false);
+        return;
+    }
+    hl2.setFeature(QLatin1String(MicrohamTrioBinding::kFeature),
+                   MicrohamTrioBinding::kSchemaVersion + 1, QJsonObject{});
+    radio2This->click();
+    report("write failure: the marker stays unchecked and the status line says why",
+           !radio2This->isChecked() && status->text().contains(QStringLiteral("could not be saved")),
+           status->text().toStdString());
+    notOnTrio->click();
+    report("write failure: \"on none of them\" too",
+           !notOnTrio->isChecked() && status->text().contains(QStringLiteral("could not be saved")),
+           status->text().toStdString());
+    hl2.removeFeature(QLatin1String(MicrohamTrioBinding::kFeature));
+    radio2This->click();
+    report("write failure: a store that succeeds clears the note",
+           radio2This->isChecked() && !status->text().contains(QStringLiteral("Trio port")),
+           status->text().toStdString());
+    MicrohamTrioBinding::remove(hl2);
+    MicrohamTrioSettings::remove();
+}
+
 // An address cleared on the page and Setup closed forgets the Trio through the
 // model, so the model holds no address the store has lost.
 void testClearedAddressGoesThroughTheModel()
@@ -470,6 +511,7 @@ int main(int argc, char** argv)
     testDeviceTextIsPlain();
     testConfiguredRowIsListed();
     testRadioMarkerFollowsTheBinding();
+    testBindingWriteFailureIsShown();
     testClearedAddressGoesThroughTheModel();
 
     std::printf("\n%s (%d failed)\n", g_failed == 0 ? "ALL PASSED" : "FAILURES", g_failed);
