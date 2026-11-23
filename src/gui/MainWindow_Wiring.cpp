@@ -3318,6 +3318,21 @@ void MainWindow::scheduleClientFftFpsSave(int panIndex, int fps)
         });
 }
 
+// Per-pan spot marker visibility. Always client-owned — no backend ever
+// publishes or controls this preference (#5711).
+void MainWindow::scheduleClientSpotMarkersOnPanSave(int panIndex, bool on)
+{
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    m_pendingDisplayWrites.schedule(
+        ClientDisplaySettings::pendingWriteKey(scope, panIndex, "spotMarkers"),
+        [scope, panIndex, on] {
+            ClientDisplaySettings::saveSpotMarkersOnPan(scope, panIndex, on);
+        });
+}
+
 // May the client store and restore this pan's dBm range? Only where the
 // backend declares it (RadioCapabilities::clientPersistsDbmRange). Read by the
 // adopt-and-save and by the restore, so the two cannot disagree.
@@ -3494,6 +3509,17 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         m_radioModel.requestPanAverage(panId, sw->fftAverage());
         m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());
     }
+
+    // Per-pan spot marker visibility. Outside the shapesDisplayRatesLocally()
+    // block — this preference is backend-agnostic and should restore on any
+    // radio, not only those that shape display rates. value_or(true) makes the
+    // restore total: a pan with no stored row (new install, reclaimed slot)
+    // gets the default "on" rather than inheriting a previous radio's "off".
+    // loadSpotMarkersOnPan() seeds the member directly without emitting
+    // spotMarkersOnPanChanged, so no redundant write is scheduled. (#5711)
+    sw->loadSpotMarkersOnPan(
+        ClientDisplaySettings::spotMarkersOnPan(
+            m_radioModel.settingsScope(), sw->panIndex()).value_or(true));
 
     // Reclaimed pans already hold their latest status and do not necessarily
     // emit a new report after reconnect. Seed the view immediately.
@@ -5367,6 +5393,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         QMetaObject::invokeMethod(m_wsjtxClient, [=, this] {
             m_wsjtxClient->startListening(addr, port);
         });
+    });
+
+    // ── Per-pan spot marker visibility persistence (#5711) ───────────────────
+    connect(sw, &SpectrumWidget::spotMarkersOnPanChanged,
+            this, [this, sw](bool on) {
+        scheduleClientSpotMarkersOnPanSave(sw->panIndex(), on);
     });
 
     // ── Edge auto-pan step during slice drag (user-reported) ─────────────────

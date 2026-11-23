@@ -79,6 +79,8 @@ Right-click the spectrum or waterfall:
 | **Link Slice ▸** | Links two slices so tuning one retunes the other. See [Multi-Slice Operation](./multi-slice-operation.md). |
 | **Waterfall Time Markers ▸** | Off, 15 seconds, 30 seconds, 1, 5, 10 or 15 minutes (below). |
 | **Show Tune Guides** | Checkable display option. |
+| **Show WSJT-X Rx/Tx Frequency** | Shows or hides the live Rx/Tx bracket markers for this pan's WSJT-X instance. Per pan; does not affect other panadapters. |
+| **Show Spot Markers** | Shows or hides spot labels (DX cluster, decoded stations, Signal History and QRM History) on this panadapter. Per pan; for DX cluster and decoded-station labels the global Spots setting must also be on. |
 | **Extended Frequency Line** | Extends each slice's frequency line down through the waterfall. |
 | **Extended Passband** | Extends each slice's passband shading down through the waterfall. |
 | **Extended TNF** | Extends each notch down through the waterfall. |

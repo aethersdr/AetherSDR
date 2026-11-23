@@ -4484,6 +4484,44 @@ void SpectrumWidget::propagateGlobalDisplayToggle(
     }
 }
 
+// Shared body for setSpotMarkersOnPan() and loadSpotMarkersOnPan(). Returns
+// true when the value changed and the caller should proceed with its own
+// post-step (emit or nothing). (#5711)
+bool SpectrumWidget::applySpotMarkersOnPan(bool on)
+{
+    if (m_spotMarkersOnPan == on)
+        return false;
+    m_spotMarkersOnPan = on;
+    if (!on) {
+        // Clear all hover/hit state. The queued tooltip refresh at the bottom
+        // of drawSpotMarkers() reads m_spotClickRects and m_hoveredSpotKey
+        // regardless of the draw gate, so stale state produces tooltips for
+        // labels that are no longer painted.
+        m_hoveredSpotKey.clear();
+        m_lastTooltipRect = {};
+        m_spotClickRects.clear();
+        m_spotClusters.clear();
+    }
+    markOverlayDirty();
+    return true;
+}
+
+void SpectrumWidget::loadSpotMarkersOnPan(bool on)
+{
+    // wirePanDisplayStatus() restore path: applies all side effects but no
+    // signal, so no redundant write is scheduled for the value just read. (#5711)
+    applySpotMarkersOnPan(on);
+}
+
+void SpectrumWidget::setSpotMarkersOnPan(bool on)
+{
+    // Per-pan, NOT propagated to siblings — a multi-band setup where spot
+    // labels are useful on one pan and distracting on another is the expected
+    // case. Persisted via ClientDisplaySettings through MainWindow (#5711).
+    if (applySpotMarkersOnPan(on))
+        emit spotMarkersOnPanChanged(on);
+}
+
 void SpectrumWidget::setShowWsjtxFreq(bool on) {
     // Deliberately per-pan, NOT propagated to siblings (unlike
     // setShowTuneGuides/setExtendedFrequencyLine above) — see the header
@@ -10050,7 +10088,7 @@ bool SpectrumWidget::spectrumDefaultsToCrosshairAt(const QPoint& localPos) const
         return false;
     }
 
-    if (m_showSpots) {
+    if (m_showSpots && m_spotMarkersOnPan) {
         for (const auto& hitRect : m_spotClickRects) {
             if (hitRect.rect.contains(localPos)) {
                 return false;
@@ -10135,7 +10173,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     }
 
     // Click on a spot label → tune to that frequency
-    if (m_showSpots && ev->button() == Qt::LeftButton) {
+    if (m_showSpots && m_spotMarkersOnPan && ev->button() == Qt::LeftButton) {
         const QPoint pos(static_cast<int>(ev->position().x()), y);
         for (const auto& hr : m_spotClickRects) {
             if (hr.rect.contains(pos)) {
@@ -10773,6 +10811,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             wsjtxFreqAction->setCheckable(true);
             wsjtxFreqAction->setChecked(m_showWsjtxFreq);
             connect(wsjtxFreqAction, &QAction::toggled, this, &SpectrumWidget::setShowWsjtxFreq);
+
+            // #5711: per-pan spot marker visibility. Sits beside the WSJT-X
+            // Rx/Tx overlay — both are per-pan display preferences. NOT
+            // propagated to siblings. Gates the entire drawSpotMarkers()
+            // overlay (DX cluster, WSJT-X decoded stations, S-History, QRM).
+            QAction* spotMarkersAction = menu.addAction(tr("Show Spot Markers"));
+            spotMarkersAction->setCheckable(true);
+            spotMarkersAction->setChecked(m_spotMarkersOnPan);
+            connect(spotMarkersAction, &QAction::toggled,
+                    this, &SpectrumWidget::setSpotMarkersOnPan);
 
             QAction* extendedLineAction = menu.addAction("Extended Frequency Line");
             extendedLineAction->setCheckable(true);
@@ -11608,7 +11656,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                         foundCursor = true;
                     }
                 }
-                if (!foundCursor && m_showSpots) {
+                if (!foundCursor && m_showSpots && m_spotMarkersOnPan) {
                     bool spotHover = false;
                     for (const auto& hr : m_spotClickRects) {
                         if (hr.rect.contains(pos)) {
@@ -15002,7 +15050,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 drawBandPlan(frequencyPainter, specRect);
             }
             drawTnfMarkers(frequencyPainter, specRect, wfRect);
-            if (m_showSpots || m_showSHistory) {
+            if ((m_showSpots || m_showSHistory || m_showSHistoryQrm) && m_spotMarkersOnPan) {
                 drawSpotMarkers(frequencyPainter, specRect);
             }
             drawSwrSweep(frequencyPainter, specRect);
@@ -16073,7 +16121,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             p, buildDssDepthGeometry(specRect, dssFrameFloorDbm));
     }
     drawTnfMarkers(p, specRect, wfRect);
-    if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
+    if ((m_showSpots || m_showSHistory || m_showSHistoryQrm) && m_spotMarkersOnPan) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
     drawSliceMarkers(p, specRect, wfRect);
     drawWsjtxMarkers(p, specRect, wfRect);  // CPU path: GPU path adds this in renderGpuFrame()

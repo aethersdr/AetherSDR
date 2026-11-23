@@ -360,6 +360,94 @@ int main(int argc, char** argv)
               "and the later of two FPS edits is the one stored");
     }
 
+    // 7b. Per-pan spot marker visibility (#5711). Always client-owned;
+    //     three ruling tests: round-trip + per-pan isolation, missing/non-bool
+    //     reads as nullopt (default is applied by the caller via value_or), and
+    //     coexistence with the other tables in the same document.
+    {
+        const RadioSettingsScope sp0(QStringLiteral("flex"), QStringLiteral("SPOTS-0"));
+        const RadioSettingsScope sp1(QStringLiteral("flex"), QStringLiteral("SPOTS-1"));
+
+        // Missing entry → nullopt.
+        check(!CDS::spotMarkersOnPan(sp0, 0),
+              "spot markers: missing entry reads as nullopt");
+        check(!CDS::spotMarkersOnPan(sp0, 1),
+              "spot markers: missing pan-1 entry reads as nullopt");
+
+        // Round-trip false and true.
+        CDS::saveSpotMarkersOnPan(sp0, 0, false);
+        check(CDS::spotMarkersOnPan(sp0, 0) == false,
+              "spot markers: false round-trips");
+        CDS::saveSpotMarkersOnPan(sp0, 0, true);
+        check(CDS::spotMarkersOnPan(sp0, 0) == true,
+              "spot markers: true round-trips");
+
+        // Per-pan isolation: writing pan 0 does not touch pan 1.
+        CDS::saveSpotMarkersOnPan(sp0, 0, false);
+        check(!CDS::spotMarkersOnPan(sp0, 1),
+              "spot markers: pan 0 write does not touch pan 1");
+        CDS::saveSpotMarkersOnPan(sp0, 1, true);
+        check(CDS::spotMarkersOnPan(sp0, 0) == false
+                  && CDS::spotMarkersOnPan(sp0, 1) == true,
+              "spot markers: pan 0 and pan 1 are isolated");
+
+        // Per-radio isolation.
+        check(!CDS::spotMarkersOnPan(sp1, 0),
+              "spot markers: radio identities are isolated");
+
+        // Non-bool stored value → nullopt (hand-edited or future format).
+        {
+            QJsonObject doc = sp0.featureExact(feature);
+            QJsonObject markers = doc.value(QStringLiteral("spotMarkers")).toObject();
+            markers.insert(QStringLiteral("2"), 42);    // number, not bool
+            markers.insert(QStringLiteral("3"), QStringLiteral("true"));  // string
+            doc.insert(QStringLiteral("spotMarkers"), markers);
+            check(sp0.setFeature(feature, 1, doc), "non-bool spot-markers fixture stored");
+            check(!CDS::spotMarkersOnPan(sp0, 2),
+                  "spot markers: a stored number is rejected");
+            check(!CDS::spotMarkersOnPan(sp0, 3),
+                  "spot markers: a stored string is rejected");
+        }
+
+        // Schema ≠ 1 → nullopt.
+        {
+            const QJsonObject future{{QStringLiteral("spotMarkers"),
+                                      QJsonObject{{QStringLiteral("0"), false}}}};
+            check(sp1.setFeature(feature, 2, future), "future spot-markers fixture stored");
+            check(!CDS::spotMarkersOnPan(sp1, 0),
+                  "spot markers: future schema reads as nullopt");
+            check(sp1.featureExact(feature) == future,
+                  "spot markers: future schema not overwritten");
+            CDS::saveSpotMarkersOnPan(sp1, 0, true);
+            check(sp1.featureExact(feature) == future,
+                  "spot markers: future schema refuses our write");
+            check(sp1.removeFeature(feature), "future spot-markers fixture removed");
+        }
+
+        // Coexistence: writing spotMarkers does not drop fftFps, and vice versa.
+        {
+            const RadioSettingsScope co(QStringLiteral("flex"), QStringLiteral("COEX"));
+            CDS::saveFftFps(co, 0, true, 30);
+            CDS::saveSpotMarkersOnPan(co, 0, false);
+            check(CDS::fftFps(co, 0, true) == 30,
+                  "spot markers: writing spotMarkers preserves fftFps in the same document");
+            check(CDS::spotMarkersOnPan(co, 0) == false,
+                  "spot markers: spotMarkers survives fftFps being present");
+            CDS::saveFftFps(co, 0, true, 25);
+            check(CDS::spotMarkersOnPan(co, 0) == false,
+                  "spot markers: writing fftFps preserves spotMarkers");
+            check(co.removeFeature(feature), "coexistence fixture removed");
+        }
+
+        // pendingWriteKey is unique across fields and pans.
+        check(CDS::pendingWriteKey(sp0, 0, "spotMarkers")
+                  != CDS::pendingWriteKey(sp0, 0, "fftFps"),
+              "spot markers: pendingWriteKey differs from fftFps key");
+        check(CDS::pendingWriteKey(sp0, 0, "spotMarkers")
+                  != CDS::pendingWriteKey(sp0, 1, "spotMarkers"),
+              "spot markers: pendingWriteKey differs across pan slots");
+    }
+
     // The shared plausibility predicate, at the edges the store relies on.
     check(dbmRangeLooksPlausible(-130.0f, -40.0f), "the pan model's default is plausible");
     check(!dbmRangeLooksPlausible(-202.0f, -112.0f), "past -180 dBm is not");
@@ -502,6 +590,60 @@ int main(int argc, char** argv)
                   && precedes(wiring, "const bool localOnly = profileLoadHeld || autoFloorChange;",
                               "adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);"),
               "a 2D auto-floor move returns before the adopt");
+
+        // Spot markers (#5711). Three ruling checks (widget declared above).
+        //
+        // 1. Two-gate truth table: both draw sites carry the full pan flag;
+        //    the three mouse paths each carry it too. The draw gate includes
+        //    S-History; the mouse paths do not (S-History labels have no click
+        //    rects). The anchored strings verify the complete expression at
+        //    each site so removing the flag from any one site turns a check red.
+        // The frequencyPainter draw gate spans two lines on Windows (CRLF), so
+        // we use followsWithin instead of an \n-containing string literal.
+        check(widget.count(QStringLiteral(
+                  "(m_showSpots || m_showSHistory || m_showSHistoryQrm) && m_spotMarkersOnPan) {")) == 1
+                  && followsWithin(widget,
+                                   "(m_showSpots || m_showSHistory || m_showSHistoryQrm) && m_spotMarkersOnPan) {",
+                                   "drawSpotMarkers(frequencyPainter, specRect);", 100)
+                  && widget.count(QStringLiteral(
+                         "(m_showSpots || m_showSHistory || m_showSHistoryQrm) && m_spotMarkersOnPan) "
+                         "drawSpotMarkers(p, specRect);")) == 1
+                  && widget.count(QStringLiteral("drawSpotMarkers(frequencyPainter, specRect);"))
+                         + widget.count(QStringLiteral("drawSpotMarkers(p, specRect);")) == 2,
+              "spot markers: both draw sites, and only they, carry the pan flag");
+        check(widget.count(QStringLiteral("if (m_showSpots && m_spotMarkersOnPan) {")) == 1
+                  && widget.count(QStringLiteral(
+                         "if (m_showSpots && m_spotMarkersOnPan && ev->button() == Qt::LeftButton) {")) == 1
+                  && widget.count(QStringLiteral(
+                         "if (!foundCursor && m_showSpots && m_spotMarkersOnPan) {")) == 1,
+              "spot markers: the crosshair, click-to-tune and hover gates carry the pan flag");
+
+        // 2. Per-pan isolation: the setter emits a signal and the wiring
+        //    connects it to the per-pan save, not a broadcast.
+        check(widget.contains(QStringLiteral(
+                  "emit spotMarkersOnPanChanged(on);")),
+              "spot markers: setter emits spotMarkersOnPanChanged");
+        check(wiring.contains(QStringLiteral(
+                  "connect(sw, &SpectrumWidget::spotMarkersOnPanChanged")),
+              "spot markers: wiring connects spotMarkersOnPanChanged");
+        check(wiring.contains(QStringLiteral(
+                  "scheduleClientSpotMarkersOnPanSave(sw->panIndex(), on);")),
+              "spot markers: save carries the pan index, not a broadcast");
+
+        // 3. Persistence: the restore uses loadSpotMarkersOnPan, is outside
+        //    the shapesDisplayRatesLocally() block (backend-agnostic), and
+        //    applies value_or(true) so the default is on.
+        // Restore spans three lines; use followsWithin to stay CRLF-safe.
+        check(wiring.contains(QStringLiteral("sw->loadSpotMarkersOnPan("))
+                  && followsWithin(wiring, "sw->loadSpotMarkersOnPan(",
+                                   "sw->panIndex()).value_or(true));", 150),
+              "spot markers: restore uses loadSpotMarkersOnPan with value_or(true)");
+        // The rate-shaping block's last request must precede the restore, so
+        // the restore cannot slip back inside that block undetected.
+        check(precedes(wiring,
+                       "m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());",
+                       "sw->loadSpotMarkersOnPan("),
+              "spot markers: restore is outside the shapesDisplayRatesLocally() block");
     }
 
     if (g_failed) {

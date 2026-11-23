@@ -944,6 +944,8 @@ private:
     // waterfall rate, only where the backend declares the client the owner.
     bool clientPersistsFftFps() const;
     void scheduleClientFftFpsSave(int panIndex, int fps);
+    // Per-pan spot marker visibility (#5711). Always client-owned.
+    void scheduleClientSpotMarkersOnPanSave(int panIndex, bool on);
     bool clientOwnsPanDbmRange() const;
     void adoptClientOwnedDbmRange(const QString& panId, int panIndex,
                                   float minDbm, float maxDbm);

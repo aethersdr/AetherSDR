@@ -191,6 +191,26 @@ public:
         writeEntry(scope, panIndex, clientOwned, QStringLiteral("fftFps"), fps);
     }
 
+    // Per-pan spot marker visibility (#5711). Always client-owned: no
+    // capability flag is needed because the radio never publishes or
+    // overrides this preference. Missing or non-bool reads as nullopt,
+    // which the restore site treats as the default (on).
+    static std::optional<bool> spotMarkersOnPan(const RadioSettingsScope& scope,
+                                                int panIndex)
+    {
+        const QJsonValue value = readEntry(scope, panIndex, /*clientOwned=*/true,
+                                           QStringLiteral("spotMarkers"));
+        if (!value.isBool()) { return std::nullopt; }
+        return value.toBool();
+    }
+
+    static void saveSpotMarkersOnPan(const RadioSettingsScope& scope,
+                                     int panIndex, bool on)
+    {
+        writeEntry(scope, panIndex, /*clientOwned=*/true,
+                   QStringLiteral("spotMarkers"), on);
+    }
+
     // `clientOwned` is the backend's declaration
     // (RadioCapabilities::clientPersistsDbmRange()).
     static std::optional<DbmRange> dbmRange(const RadioSettingsScope& scope,
