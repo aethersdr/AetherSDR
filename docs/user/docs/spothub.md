@@ -12,7 +12,7 @@ applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (early; IC-7300MK2 su
 
 :::
 
-SpotHub is AetherSDR's spot manager. It gathers spots from DX clusters, the Reverse Beacon Network, WSJT-X, POTA, N1MM+/DXLog, the EiBi shortwave schedule, FreeDV Reporter and the WSPR receiver on your radio, and draws them on the panadapter as color-coded callsign labels. It also has a sortable spot list with band filters, and a Display tab that controls how spots look. The **Kiwi DX** overlay and the panadapter-driven **Signal History** markers are switched on from the same Display tab.
+SpotHub is AetherSDR's spot manager. It gathers spots from DX clusters, the Reverse Beacon Network, WSJT-X, POTA, N1MM+/DXLog, the EiBi shortwave schedule, FreeDV Reporter and the WSPR and FT8 receivers on your radio, and draws them on the panadapter as color-coded callsign labels. It also has a sortable spot list with band filters, and a Display tab that controls how spots look. The **Kiwi DX** overlay and the panadapter-driven **Signal History** markers are switched on from the same Display tab.
 
 All spot sources run on a worker thread, and spots are forwarded to the radio in batches once a second.
 
@@ -26,7 +26,7 @@ Open SpotHub from **Settings → SpotHub...**
 
 The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it.
 
-SpotHub has eleven tabs: **Cluster**, **RBN**, **WSJT-X**, **SpotCollector**, **POTA**, **EiBi**, **N1MM**, **WSPR**, **FreeDV**, **Spot List** and **Display**. The FreeDV tab is only present in builds with Qt WebSockets.
+SpotHub has twelve tabs: **Cluster**, **RBN**, **WSJT-X**, **SpotCollector**, **POTA**, **EiBi**, **N1MM**, **WSPR**, **FT8**, **FreeDV**, **Spot List** and **Display**. The FreeDV tab is only present in builds with Qt WebSockets.
 
 Every source tab except **SpotCollector** has an **Auto-Start** (or **Auto-Connect**) toggle that starts it when the radio connects, a **Start / Stop** (or **Connect**) button, a status line and a console. Each console has a **Clear** button, which clears the console and deletes its stored log.
 
@@ -137,6 +137,17 @@ Spots from the [WSPR receiver](./wspr-receiver.md) running on your radio, read o
 - **Start / Stop** — start or stop reading. The receiver keeps decoding on the radio either way
 - **WSPR Decodes** — each decode with its time, band, call, grid, SNR, power and distance. A hashed callsign the decoder couldn't resolve yet is listed as `<hashed>`, and gets no panadapter label
 - **Spot Color** — default violet
+
+### FT8
+
+Spots from the [FT8 receiver](./ft8-receiver.md) running on a FLEX-6000, read over the radio's local network. Install the receiver first, from **Tools → Waveforms... → Install → FT8 Receiver**.
+
+- **Lifetime** — how long an FT8 spot stays on the panadapter (default 30 minutes)
+- **Auto-Start** — start reading when a radio that has the receiver connects
+- **Configure...** — the receiver's own settings: callsign, grid, band, antenna and DAX channel
+- **Start / Stop** — start or stop reading. The receiver keeps decoding on the radio either way
+- **FT8 Decodes** — each decode with its time, band, frequency, score and message. The score is the decoder's own measure of signal strength, not an SNR in dB
+- **Spot Color** — default teal
 
 ### FreeDV (FreeDV Reporter)
 

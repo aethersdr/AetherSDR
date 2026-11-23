@@ -79,7 +79,7 @@ See [Profile Management](./profile-management.md).
 | **FreeDV Reporter...** | FreeDV Reporter station list. |
 | **Net Scheduler...** | See [Net Scheduler](./net-scheduler.md). |
 | **Memory...** | See [Memory Channels](./memory-channels.md). |
-| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only), and edit a Docker container's [environment](./waveform-environment.md). **Install** adds the [WSPR receiver](./wspr-receiver.md). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
+| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only), and edit a Docker container's [environment](./waveform-environment.md). **Install** adds the [WSPR receiver](./wspr-receiver.md) and, on a FLEX-6000, the [FT8 receiver](./ft8-receiver.md). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
 | **Wideband Bandscope...** | The radio's converter view before tuning; dimmed on radios without one. See [Hermes-Lite 2](./hermes-lite-2.md). |
 | **Radio Health...** | The health and status registers the radio reports, refreshed every 500 ms, with **Copy** for a bug report. A Hermes-Lite 2 shows reachability, other clients holding it and PA temperature even before you connect. See [Runtime Monitor](./runtime-monitor.md#using-radio-health). |
 | **AetherGPS...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |
