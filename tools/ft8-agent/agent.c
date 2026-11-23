@@ -70,7 +70,7 @@
 #include "ft8_lib/common/monitor.h"
 #include "ft8_lib/common/wave.h"
 
-#define AGENT_VERSION "0.1.5"
+#define AGENT_VERSION "0.1.6"
 #define STATUS_PORT 48997   /* 48994 radio health, 48995 WSPR, 48997 here */
 #define AUDIO_RATE 24000
 /* ft8_lib works at 12 kHz, which is the WSJT-X convention and what its own
@@ -885,16 +885,21 @@ static int g_max_candidates = 100;
  */
 #define HASH_SLOTS 256
 static struct { uint32_t h10, h12, h22; char call[12]; } g_hash[HASH_SLOTS];
-static int g_hash_n;
+static int g_hash_n;     /* filled slots, at most HASH_SLOTS */
+static int g_hash_next;  /* next slot to write: the oldest once the table is full */
 
 /* The library hands us a callsign and its 22-bit hash; the 12 and 10-bit
- * codes are the top bits of it, which is how WSJT-X defines them. */
+ * codes are the top bits of it, which is how WSJT-X defines them.
+ *
+ * The table is a ring. The fill count and the write cursor are separate so
+ * that a full table stays fully searchable while the oldest entry is replaced. */
 static void hash_save(const char *call, uint32_t n22)
 {
     for (int i = 0; i < g_hash_n; i++)
         if (!strcmp(g_hash[i].call, call)) return;
-    if (g_hash_n >= HASH_SLOTS) g_hash_n = 0;   /* ring: the oldest is replaced */
-    int i = g_hash_n++;
+    int i = g_hash_next;
+    g_hash_next = (g_hash_next + 1) % HASH_SLOTS;
+    if (g_hash_n < HASH_SLOTS) g_hash_n++;
     snprintf(g_hash[i].call, sizeof g_hash[i].call, "%s", call);
     g_hash[i].h22 = n22;
     g_hash[i].h12 = n22 >> 10;
@@ -1044,8 +1049,10 @@ static void run_decode(decode_t *dc, const float *audio, int nsamples)
         if (nseen < MAX_CYCLE_SPOTS) seen[nseen++] = msg;
 
         /* Candidate offsets are in oversampled bins; the monitor's symbol
-         * period converts them to Hz and seconds. */
-        float freq_hz = (cand[i].freq_offset + (float)cand[i].freq_sub / FT8_FREQ_OSR)
+         * period converts them to Hz and seconds. The waterfall's bin 0 is
+         * f_min, not 0 Hz, so the frequency counts from mon.min_bin. */
+        float freq_hz = (mon.min_bin + cand[i].freq_offset
+                         + (float)cand[i].freq_sub / FT8_FREQ_OSR)
                         / mon.symbol_period;
         float dt = (cand[i].time_offset + (float)cand[i].time_sub / FT8_TIME_OSR)
                    * mon.symbol_period;
@@ -3220,10 +3227,108 @@ static int selftest_slice_file(void)
     return 0;
 }
 
+/* The callsign table keeps resolving after it wraps.
+ *
+ * 300 distinct calls go into a 256-slot ring, so the first 44 are replaced and
+ * the other 256 must all still be found. The table is emptied afterwards so
+ * the made-up calls cannot resolve a hash in a later test.
+ */
+static int selftest_hash_wrap(void)
+{
+    enum { SAVED = 300 };
+    char call[12], got[14];
+    int rc = 0;
+    memset(g_hash, 0, sizeof g_hash);
+    g_hash_n = g_hash_next = 0;
+    for (int i = 0; i < SAVED; i++) {
+        snprintf(call, sizeof call, "T%03dAA", i);
+        hash_save(call, 0x100000u + (uint32_t)i);
+    }
+    int first_kept = SAVED - HASH_SLOTS;
+    for (int i = 0; i < SAVED && !rc; i++) {
+        snprintf(call, sizeof call, "T%03dAA", i);
+        bool found = hash_lookup(FTX_CALLSIGN_HASH_22_BITS, 0x100000u + (uint32_t)i, got);
+        if (i < first_kept && found) {
+            printf("selftest FAIL: hash table still holds call %d of %d, which should have been replaced\n", i + 1, SAVED);
+            rc = 1;
+        } else if (i >= first_kept && (!found || strcmp(got, call))) {
+            printf("selftest FAIL: hash table lost call %d of %d after wrapping (%d slots)\n", i + 1, SAVED, HASH_SLOTS);
+            rc = 1;
+        }
+    }
+    /* A call already in a full table is not stored a second time. */
+    if (!rc) {
+        snprintf(call, sizeof call, "T%03dAA", first_kept);
+        hash_save(call, 0x100000u + (uint32_t)first_kept);
+        hash_save("T999ZZ", 0x200000u);
+        if (!hash_lookup(FTX_CALLSIGN_HASH_22_BITS, 0x100000u + (uint32_t)first_kept + 1, got)) {
+            printf("selftest FAIL: saving a call the table already held replaced another one\n");
+            rc = 1;
+        }
+    }
+    if (!rc && g_hash_n != HASH_SLOTS) {
+        printf("selftest FAIL: hash table holds %d entries, expected %d\n", g_hash_n, HASH_SLOTS);
+        rc = 1;
+    }
+    memset(g_hash, 0, sizeof g_hash);
+    g_hash_n = g_hash_next = 0;
+    return rc;
+}
+
+/* Compare each spot's audio frequency with ft8_lib's reference decode of the
+ * same recording. Messages are matched by text; a message sent twice in the
+ * recording passes on either reference line. Returns the number of spots
+ * compared, or -1 after printing a failure.
+ */
+static int check_reference_frequencies(const decode_t *dc, const char *ref_path)
+{
+    enum { MAX_REF = 64, TOLERANCE_HZ = 5 };
+    static struct { int hz; char msg[40]; } ref[MAX_REF];
+    int nref = 0;
+    FILE *f = fopen(ref_path, "r");
+    if (!f) {
+        printf("selftest FAIL: cannot read %s\n", ref_path);
+        return -1;
+    }
+    char line[160];
+    while (nref < MAX_REF && fgets(line, sizeof line, f)) {
+        int hz;
+        char msg[40];
+        if (sscanf(line, "%*s %*d %*f %d ~ %39[^\r\n]", &hz, msg) != 2) continue;
+        size_t l = strlen(msg);
+        while (l && msg[l - 1] == ' ') msg[--l] = 0;
+        ref[nref].hz = hz;
+        snprintf(ref[nref].msg, sizeof ref[nref].msg, "%s", msg);
+        nref++;
+    }
+    fclose(f);
+
+    int compared = 0;
+    for (int i = 0; i < dc->nspots; i++) {
+        long long got = dc->spots[i].hz - dc->dial_hz;
+        int named = 0, close = 0, nearest = 0;
+        for (int r = 0; r < nref; r++) {
+            if (strcmp(ref[r].msg, dc->spots[i].msg)) continue;
+            if (!named || llabs(got - ref[r].hz) < llabs(got - nearest)) nearest = ref[r].hz;
+            named = 1;
+            if (llabs(got - ref[r].hz) <= TOLERANCE_HZ) close = 1;
+        }
+        if (!named) continue;
+        compared++;
+        if (!close) {
+            printf("selftest FAIL: \"%s\" decoded at %lld Hz, the reference says %d Hz\n",
+                   dc->spots[i].msg, got, nearest);
+            return -1;
+        }
+    }
+    return compared;
+}
+
 static const char *BAD_GRIDS[] = {"ZZ99", "AA00zz", "D18P", "DN1", "DN18p", "1234", "DN18-g"};
 
 static int selftest(void)
 {
+    if (selftest_hash_wrap()) return 1;
     if (selftest_dax_fallback() || selftest_rr73_both_encodings()) return 1;
     if (selftest_persistence() || selftest_spots() || selftest_budget_flagged()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()
@@ -3367,6 +3472,18 @@ static int selftest(void)
                     return 1;
                 }
             }
+
+            /* Every spot the reference also names must sit on the reference's
+             * frequency. A decode count cannot see a constant offset: the
+             * messages are all still found, only reported in the wrong place. */
+            int compared = check_reference_frequencies(&dc, "ft8_lib/test/wav/websdr_test6.txt");
+            if (compared < 0) return 1;
+            if (compared < 15) {
+                printf("selftest FAIL: only %d of %d spots matched a reference message, so the frequency check proves little\n",
+                       compared, dc.nspots);
+                return 1;
+            }
+            printf("selftest: %d spot frequencies agree with the reference\n", compared);
         }
     }
 
