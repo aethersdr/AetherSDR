@@ -488,6 +488,31 @@ enum class WaterfallPipelineMode {
     RowFrequencyFrames,
 };
 
+// How a change of view frame reaches the stored waterfall/3D rows. With
+// row-frequency frames every row keeps its capture frame and the shaders map
+// it into the live view each frame, so rewriting rows is wasted work (a full
+// CPU rebuild and texture upload per pan-follow step) and runs ahead of an
+// animated view. Only a paused 3D view, drawn from a cached surface, needs a
+// rebuild. The legacy pipeline stores pixels in the view frame and must
+// reproject.
+enum class WaterfallViewFrameAction {
+    Reproject,
+    RebuildDssHistory,
+    None,
+};
+
+inline WaterfallViewFrameAction waterfallViewFrameAction(
+    bool rowFrequencyFrames, bool mode3D, bool live, bool hasDssHistory)
+{
+    if (!rowFrequencyFrames) {
+        return WaterfallViewFrameAction::Reproject;
+    }
+    if (mode3D && !live && hasDssHistory) {
+        return WaterfallViewFrameAction::RebuildDssHistory;
+    }
+    return WaterfallViewFrameAction::None;
+}
+
 struct WaterfallPaletteRecolorPlan {
     bool retainNativeFrames{false};
     FrequencyFrame primaryFrame;

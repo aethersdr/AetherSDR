@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 #include <vector>
 
@@ -529,6 +530,46 @@ int testWaterfallPipelineSelection()
             return fail("any row-frame failure must select the legacy pipeline");
         }
         *stage = true;
+    }
+    return 0;
+}
+
+int testWaterfallViewFrameAction()
+{
+    using namespace AetherSDR;
+    // Legacy pixels live in the view frame: every pipeline/mode/state combo
+    // without row frames must reproject.
+    for (const bool mode3D : {false, true}) {
+        for (const bool live : {false, true}) {
+            for (const bool history : {false, true}) {
+                if (waterfallViewFrameAction(false, mode3D, live, history)
+                    != WaterfallViewFrameAction::Reproject) {
+                    return fail("the legacy pipeline must reproject on a view move");
+                }
+            }
+        }
+    }
+    // Row frames: the shaders remap each row into the live view, so a 2D
+    // pan-follow step must not rewrite (and re-upload) the waterfall.
+    for (const bool live : {false, true}) {
+        for (const bool history : {false, true}) {
+            if (waterfallViewFrameAction(true, false, live, history)
+                != WaterfallViewFrameAction::None) {
+                return fail("row-frame 2D must leave the rows to the shader");
+            }
+        }
+    }
+    if (waterfallViewFrameAction(true, true, true, true)
+        != WaterfallViewFrameAction::None) {
+        return fail("live row-frame 3D must leave the rows to the shader");
+    }
+    if (waterfallViewFrameAction(true, true, false, true)
+        != WaterfallViewFrameAction::RebuildDssHistory) {
+        return fail("paused row-frame 3D must rebuild its cached surface");
+    }
+    if (waterfallViewFrameAction(true, true, false, false)
+        != WaterfallViewFrameAction::None) {
+        return fail("paused 3D with no history has nothing to rebuild");
     }
     return 0;
 }
@@ -1275,6 +1316,9 @@ int main()
         return result;
     }
     if (const int result = testWaterfallPipelineSelection(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallViewFrameAction(); result != 0) {
         return result;
     }
     if (const int result = testWaterfallPaletteRecolorPlan(); result != 0) {

@@ -5887,8 +5887,11 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
 
     // Prefer the visible spectrum state when available so reveal/follow stays
     // aligned with recent manual pan/zoom gestures even if the model echo lags.
+    // Its target, not the mid-glide center: fast wheel steps land inside the
+    // follow animation, and each must move the pan by whole steps from where
+    // the last one was headed (#7529).
     auto* sw = spectrumForSlice(slice);
-    result.oldCenterMhz = sw ? sw->centerMhz() : pan->centerMhz();
+    result.oldCenterMhz = sw ? sw->panCenterTargetMhz() : pan->centerMhz();
     result.newCenterMhz = result.oldCenterMhz;
     result.bandwidthMhz = sw ? sw->bandwidthMhz() : pan->bandwidthMhz();
 
