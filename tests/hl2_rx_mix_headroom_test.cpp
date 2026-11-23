@@ -14,12 +14,13 @@
 //      bit for bit.
 //   3. POSITIVE CONTROL: at 70 and 90 dB the plain sum of the two slices DOES
 //      pass full scale, on many samples, so check 4 is not vacuous.
-//   4. NO SAMPLE OF THE PUBLISHED MIX REACHES FULL SCALE at 70 and 90 dB,
-//      settled or during the AGC's attack, and
-//      the mix keeps its level (RMS within 3 dB of the plain sum; scaling by
-//      1/2 would cost 6.02 dB).
+//   4. NO SAMPLE OF THE PUBLISHED MIX REACHES FULL SCALE at 70 dB and at 90 dB
+//      (AGC-T 100 through Hl2DbReference), settled or during the AGC's
+//      attack, and the mix keeps its level (RMS within 3 dB of the plain sum;
+//      scaling by 1/2 would cost 6.02 dB).
 
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"   // kEp6BlockSamples
 
@@ -264,7 +265,10 @@ int main(int argc, char** argv)
     oneSliceUntouched();
     twoSlices(60.0, false);
     twoSlices(70.0, true);
-    twoSlices(90.0, true);
+    // The top of the AGC-T map at the reference LNA gain is the 90 dB case.
+    const double top = Hl2DbReference{}.agcCeilingDb(100);
+    check(top == 90.0, "AGC-T 100 maps to a 90 dB ceiling at the reference LNA gain");
+    twoSlices(top, true);
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) FAILED\n", g_failures);
         return 1;

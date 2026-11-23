@@ -3920,9 +3920,10 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
         return;
     const QString m = mode.trimmed().toLower();
 
-    // AGC threshold: the slice's 0..100 maps to 0..60 dB of WDSP max gain, so
-    // the default 65 lands at 39 dB. Measured on WWV 10 MHz USB: clean through
-    // 40 dB, clipping hard by 50 dB.
+    // AGC threshold: the slice's 0..100 maps to 0..90 dB of WDSP max gain
+    // (Hl2DbReference::agcCeilingDbAtReference), the default 65 at 39 dB. One
+    // slice stays under full scale up to 90 dB; several are limited in
+    // mixReceiverAudio().
     // Validated on the way in so capture only stores what restore accepts; an
     // unknown mode string leaves the mode unchanged.
     if (!m.isEmpty() && isKnownAgcModeString(m)) {

@@ -139,6 +139,9 @@ The panadapter SQL line and **Auto** squelch use the HL2's own scale.
 ### AGC and APF
 
 - AGC mode and threshold are remembered across restarts.
+- **AGC on:** the **AGC-T** slider sets the most gain the AGC may apply: 0.6 dB per step up to 65 (39 dB, the default), then faster, to 90 dB at 100. The higher it is, the louder weak signals come up, and with them the band noise between signals.
+
+> **Upgrading from an older version:** **AGC-T** above 65 gives more gain than before (at 100, 90 dB instead of 60 dB). A threshold or band-stack bookmark saved above 65 comes back louder; lower **AGC-T** if the noise between signals is too loud.
 - **AGC off:** the **AGC-T** slider sets a fixed gain, 4–64 dB (10 dB by default). The AGC-off level is remembered per receiver.
 - Selecting **DIGU** or **DIGL** turns AGC off on that receiver. Raise the AGC-off level if data audio is too quiet. A band-stack bookmark recalled into DIGU or DIGL also keeps AGC off, whatever AGC mode it stored.
 - **APF**, the CW audio peaking filter, is centered on your CW pitch. Its toggle and level are in the P/CW pane.

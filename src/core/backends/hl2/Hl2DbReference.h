@@ -24,10 +24,23 @@ public:
     // Matches Hl2Backend/MetisClient's default LNA setting.
     static constexpr double kDefaultLnaGainDb = kLnaDefaultGainDb;
 
-    // AGC-T units (0..100) -> WDSP max-gain ceiling: 0.6 spans 0..60 dB, putting
-    // the default of 65 at 39 dB, measured clean on hardware (see
-    // Hl2Backend::setSliceAgc).
+    // AGC-T units (0..100) -> WDSP max-gain ceiling at the reference LNA gain,
+    // two straight pieces meeting at the default: 0.6 dB/unit up to 65 (39 dB),
+    // then 51/35 dB/unit up to 90 dB at 100 (#6865). agcCeilingDbAtReference()
+    // is the map; agcCeilingDb() refers it to the LNA.
     static constexpr double kAgcCeilingDbPerUnit = 0.6;
+    static constexpr int kAgcCeilingKneeUnits = 65;
+    static constexpr double kAgcCeilingTopDb = 90.0;
+
+    static constexpr double agcCeilingDbAtReference(int thresholdUnits) noexcept
+    {
+        constexpr double knee = kAgcCeilingKneeUnits * kAgcCeilingDbPerUnit;
+        if (thresholdUnits <= kAgcCeilingKneeUnits) {
+            return static_cast<double>(thresholdUnits) * kAgcCeilingDbPerUnit;
+        }
+        return knee + static_cast<double>(thresholdUnits - kAgcCeilingKneeUnits)
+                          * (kAgcCeilingTopDb - knee) / (100 - kAgcCeilingKneeUnits);
+    }
 
     // 0 dBFS at the antenna with 0 dB LNA gain, derived (not averaged):
     //   full scale at RxPGA = 48 dB (datasheet)      8.0 mVpp
@@ -42,7 +55,7 @@ public:
     static constexpr double kFullScaleDbmAtZeroGain = 3.0;
 
     // Upper bound on the referred ceiling. Referring may exceed the slider's
-    // nominal 60 dB (cutting the LNA 12 dB asks for 12 dB more AGC gain); it
+    // nominal 90 dB (cutting the LNA 12 dB asks for 12 dB more AGC gain); it
     // must not run away or go negative (a negative ceiling would attenuate).
     static constexpr double kAgcCeilingDbMax = 120.0;
 
@@ -71,7 +84,7 @@ public:
 
     // The gain the AGC ceiling is referred to: the shipped LNA default, a
     // constant on purpose. Only lnaOffsetDb() reads it. A fixed reference keeps
-    // AGC-T at 0.6*T + (default - stored) for every stored gain (pinned by
+    // AGC-T at map(T) + (default - stored) for every stored gain (pinned by
     // hl2_dbref_test); a moving one would shift heard AGC-T on unrelated events.
     static constexpr double kReferenceLnaGainDb = kDefaultLnaGainDb;
 
@@ -93,7 +106,7 @@ public:
 
     // The LNA term alone, relative to kReferenceLnaGainDb. Only the AGC uses it:
     // its invariant is a difference (constant heard level across a gain change,
-    // and the plain 0.6-per-unit map at the reference gain), so an absolute form
+    // and the plain map at the reference gain), so an absolute form
     // would shift every operator's AGC-T on connect.
     double lnaOffsetDb() const noexcept
     {
@@ -114,13 +127,11 @@ public:
     // The operator's AGC-T, referred to this reference. Same invariant as the
     // display: a constant antenna signal keeps a constant heard level across a
     // gain change, because the ceiling moves down by exactly what the LNA moved
-    // up. At the reference gain this is the plain 0.6-per-unit map, so an
-    // operator who never touches RF gain sees no change from before this term
-    // existed.
+    // up. At the reference gain this is agcCeilingDbAtReference() unchanged.
     double agcCeilingDb(int thresholdUnits) const noexcept
     {
-        const double base = static_cast<double>(thresholdUnits) * kAgcCeilingDbPerUnit;
-        return std::clamp(base + lnaOffsetDb(), 0.0, kAgcCeilingDbMax);
+        return std::clamp(agcCeilingDbAtReference(thresholdUnits) + lnaOffsetDb(), 0.0,
+                          kAgcCeilingDbMax);
     }
 
 private:

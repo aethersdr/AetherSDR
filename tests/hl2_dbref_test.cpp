@@ -171,13 +171,25 @@ int main()
     Hl2DbReference agc;
     constexpr int kDefaultThresholdUnits = 65;   // Hl2Backend::Receiver's default
 
-    // No change for an operator who never touches RF gain: at the reference
-    // gain this is the plain 0.6-per-unit map, the same number the backend
-    // derived before this term existed.
+    // At the reference gain this is the plain map: 0.6 dB/unit up to the
+    // default 65 (39 dB), then straight up to 90 dB at 100 (#6865).
     check(near(agc.agcCeilingDb(kDefaultThresholdUnits), 39.0),
           "at the reference gain the default AGC-T is still 39 dB");
     check(near(agc.agcCeilingDb(0), 0.0), "AGC-T 0 is still 0 dB");
-    check(near(agc.agcCeilingDb(100), 60.0), "AGC-T 100 is still 60 dB");
+    check(near(agc.agcCeilingDb(50), 30.0), "AGC-T 50 is still 30 dB (0.6 dB/unit below 65)");
+    check(near(agc.agcCeilingDb(100), 90.0), "AGC-T 100 is 90 dB");
+    check(near(agc.agcCeilingDb(66), 39.0 + 51.0 / 35.0),
+          "above 65 the map rises 51/35 dB per unit");
+    check(near(agc.agcCeilingDb(80), 39.0 + 15.0 * 51.0 / 35.0), "AGC-T 80 is 60.86 dB");
+    {
+        bool rising = true;
+        for (int u = 1; u <= 100; ++u) {
+            rising = rising && agc.agcCeilingDb(u) > agc.agcCeilingDb(u - 1);
+        }
+        check(rising, "the map rises at every unit from 0 to 100, through the knee");
+    }
+    static_assert(Hl2DbReference::agcCeilingDbAtReference(65) == 39.0,
+                  "the two pieces meet at the default");
 
     // A gain change moves the ceiling by exactly minus the gain change, so a
     // constant antenna signal keeps a constant heard level.
@@ -213,12 +225,14 @@ int main()
     check(near(agc.agcCeilingDb(0), 0.0),
           "AGC-T 0 at full LNA gain clamps at zero rather than going negative");
 
-    // Referring UPWARD past the slider's nominal 60 dB top is correct, not an
+    // Referring UPWARD past the slider's nominal 90 dB top is correct, not an
     // overrun: an operator 12 dB down on the LNA needs 12 dB more AGC gain to
     // hear the same signal at the same level.
     agc.setLnaGainDb(-12.0);                            // the AD9866 floor, real
-    check(near(agc.agcCeilingDb(100), 60.0 + 32.0),
-          "a 32 dB LNA cut refers AGC-T 100 above the slider's nominal top");
+    check(near(agc.agcCeilingDb(65), 39.0 + 32.0),
+          "a 32 dB LNA cut refers AGC-T 65 32 dB up");
+    check(near(agc.agcCeilingDb(100), Hl2DbReference::kAgcCeilingDbMax),
+          "a 32 dB LNA cut refers AGC-T 100 (90 + 32) onto WDSP's own maximum");
     check(agc.agcCeilingDb(100) <= Hl2DbReference::kAgcCeilingDbMax,
           "the referred ceiling stays inside WDSP's own maximum");
 

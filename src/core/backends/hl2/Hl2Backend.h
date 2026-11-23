@@ -1391,8 +1391,8 @@ private:
     double m_alcTargetPeak = 0.85;
 
     // The AGC threshold -> WDSP gain ceiling map is
-    // Hl2DbReference::kAgcCeilingDbPerUnit via m_dbRef.agcCeilingDb(), so the
-    // ceiling is referred to LNA gain like the displayed dBm.
+    // Hl2DbReference::agcCeilingDbAtReference() via m_dbRef.agcCeilingDb(), so
+    // the ceiling is referred to LNA gain like the displayed dBm.
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
