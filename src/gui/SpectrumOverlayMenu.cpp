@@ -631,9 +631,7 @@ void SpectrumOverlayMenu::buildAntPanel()
                         emit flexRxAntennaSelected(target->sliceId());
                     }
                 } else {
-                    QToolTip::showText(m_rxAntCmb->mapToGlobal(QPoint(0, 0)),
-                                       stationAntennaToolTip(refusal),
-                                       m_rxAntCmb);
+                    showStationAntennaRefusal(m_rxAntCmb, refusal);
                 }
             }
             // The switch's echo, not the pick, decides what the combo shows.

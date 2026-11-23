@@ -400,9 +400,7 @@ void RxApplet::buildUI()
                     if (refusal.isEmpty()) {
                         emit flexRxAntennaSelected(slice->sliceId());
                     } else {
-                        QToolTip::showText(m_rxAntBtn->mapToGlobal(QPoint(0, 0)),
-                                           stationAntennaToolTip(refusal),
-                                           m_rxAntBtn);
+                        showStationAntennaRefusal(m_rxAntBtn, refusal);
                     }
                     return;
                 }
@@ -473,9 +471,7 @@ void RxApplet::buildUI()
                     ? self->m_radioModel->selectStationAntenna(pick->id, pick->token, true)
                     : QString();
                 if (!refusal.isEmpty()) {
-                    QToolTip::showText(button->mapToGlobal(QPoint(0, 0)),
-                                       stationAntennaToolTip(refusal),
-                                       button);
+                    showStationAntennaRefusal(button, refusal);
                 }
                 return;
             }

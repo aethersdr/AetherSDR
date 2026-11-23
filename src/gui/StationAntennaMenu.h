@@ -9,12 +9,16 @@
 #include "models/SliceModel.h"
 #include "models/StationAntenna.h"
 
+#include <QAccessible>
 #include <QAction>
 #include <QCoreApplication>
 #include <QMenu>
 #include <QString>
+#include <QPoint>
 #include <QStringList>
 #include <QTextDocument>
+#include <QToolTip>
+#include <QWidget>
 #include <QVariant>
 
 #include <algorithm>
@@ -48,6 +52,22 @@ inline std::optional<StationAntennaPick> stationAntennaPickFrom(const QVariant& 
 inline QString stationAntennaToolTip(const QString& text)
 {
     return text.isEmpty() ? QString() : Qt::convertFromPlainText(text, Qt::WhiteSpaceNormal);
+}
+
+// A refused pick, said at the control: a tooltip for the eye and an
+// announcement for a screen reader (docs/a11y.md: a tooltip alone is not
+// enough). Polite, so it queues behind what the reader is saying.
+inline void showStationAntennaRefusal(QWidget* anchor, const QString& refusal)
+{
+    if (anchor == nullptr || refusal.isEmpty()) {
+        return;
+    }
+    QToolTip::showText(anchor->mapToGlobal(QPoint(0, 0)), stationAntennaToolTip(refusal), anchor);
+    if (QAccessible::isActive()) {
+        QAccessibleAnnouncementEvent event(anchor, refusal);
+        event.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+        QAccessible::updateAccessibility(&event);
+    }
 }
 
 // QAction text with '&' shown as typed, not taken as a mnemonic.

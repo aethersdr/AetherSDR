@@ -13,6 +13,7 @@
 #include "models/SliceModel.h"
 #include "models/StationAntenna.h"
 
+#include <QAccessible>
 #include <QAction>
 #include <QApplication>
 #include <QKeySequence>
@@ -21,6 +22,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTextDocument>
+#include <QWidget>
 
 #include <cstdio>
 #include <string>
@@ -228,6 +230,34 @@ void testDeviceTextIsPlain()
                && literal(offSub->menu()->actions().at(1)->toolTip(), trio.unavailable));
 }
 
+QStringList g_announcements;
+void recordAnnouncement(QAccessibleEvent* event)
+{
+    if (event->type() == QAccessible::Announcement) {
+        g_announcements.append(static_cast<QAccessibleAnnouncementEvent*>(event)->message());
+    }
+}
+
+// A refused pick is said to a screen reader too, not only in a tooltip
+// (docs/a11y.md); VfoWidget, RxApplet and the panadapter combo all use this.
+void testRefusalIsAnnounced()
+{
+    const auto previous = QAccessible::installUpdateHandler(recordAnnouncement);
+    QAccessible::setActive(true);
+    QWidget anchor;
+    anchor.show();
+    g_announcements.clear();
+    showStationAntennaRefusal(&anchor, stationAntennaTransmitRefusal());
+    report("a refused pick is announced, in the shared sentence",
+           g_announcements == QStringList{stationAntennaTransmitRefusal()},
+           g_announcements.join(QLatin1Char('|')).toStdString());
+    g_announcements.clear();
+    showStationAntennaRefusal(&anchor, QString());
+    report("a pick that was taken announces nothing", g_announcements.isEmpty());
+    QAccessible::setActive(false);
+    QAccessible::installUpdateHandler(previous);
+}
+
 // One sentence for every antenna-switch refusal while transmitting, and the
 // one #6237's key objection reuses (the ruling on RFC #7238, Q3).
 void testSharedSentences()
@@ -384,6 +414,7 @@ int main(int argc, char** argv)
     testUnavailableDevice();
     testDeviceTextIsPlain();
     testSharedSentences();
+    testRefusalIsAnnounced();
     testFieldText();
     testFieldOnOneFixedPort();
     testFieldAvailability();
