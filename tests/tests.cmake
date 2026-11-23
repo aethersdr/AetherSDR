@@ -9172,6 +9172,17 @@ set_target_properties(radiocert_unmeasured_test PROPERTIES AUTOMOC ON)
 add_test(NAME radiocert_unmeasured_test COMMAND radiocert_unmeasured_test)
 set_tests_properties(radiocert_unmeasured_test PROPERTIES TIMEOUT 90)
 
+# The saved PC mic gain never attenuates a host-modulating radio and comes back
+# on a family that uses it. Socket-free, never keys; radiocert's two gain stages
+# spin for a few seconds.
+add_executable(pc_mic_gain_host_modulation_test tests/pc_mic_gain_host_modulation_test.cpp)
+target_include_directories(pc_mic_gain_host_modulation_test PRIVATE src tests)
+target_compile_definitions(pc_mic_gain_host_modulation_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pc_mic_gain_host_modulation_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pc_mic_gain_host_modulation_test COMMAND pc_mic_gain_host_modulation_test)
+set_tests_properties(pc_mic_gain_host_modulation_test PROPERTIES TIMEOUT 90)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
