@@ -123,6 +123,14 @@ bool RadioModel::txProducerHasWork(const TxCoordinator::Producer& producer) cons
     });
 }
 
+bool RadioModel::txProducerInputPending(const TxCoordinator::Producer& producer) const
+{
+    const auto requests = m_txCoordinator.producerRequests(producer);
+    return std::any_of(requests.begin(), requests.end(), [this](const auto& request) {
+        return m_txCoordinator.requestIntent(request).pending();
+    });
+}
+
 void RadioModel::abortTxProducerInputs(const TxCoordinator::Producer& producer,
                                       TransmitModel::PttSource source)
 {

@@ -1107,6 +1107,9 @@ public:
                                 std::function<void()> onDownRefused = {},
                                 std::chrono::steady_clock::time_point releaseAt = {});
     bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
+    // An admitted input of `producer` has not finished: its backend still holds
+    // its completion (an HL2 key-up stays held until it is on EP2, #7245).
+    bool txProducerInputPending(const TxCoordinator::Producer& producer) const;
     void abortTxProducerInputs(const TxCoordinator::Producer& producer,
                                TransmitModel::PttSource source);
     // Best-effort stop of this captured compatibility operation only. This is

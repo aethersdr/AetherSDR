@@ -29,6 +29,11 @@ public:
     // (src/fifo.h). kMaxPendingChars covers the playing and the waiting text.
     static constexpr int kMaxMessageChars = 511;
     static constexpr int kMaxPendingChars = 1024;
+    // A backend may hold the last key-up until it is on the wire: the HL2 at
+    // most its 100 ms lead, its 250 ms shift bound and a 5 ms fall (#7245).
+    // The wait counts polls, so a stalled thread only lengthens it.
+    static constexpr int kDrainPollMs = 5;
+    static constexpr int kDrainWaitMs = 500;
 
     struct Waiting {
         TxCoordinator::Request sender;
@@ -72,7 +77,9 @@ public:
 
 private:
     void endRun();
-    void drained(const std::weak_ptr<char>& run);
+    // A natural drain ends the run once the last element's input is finished,
+    // checked every kDrainPollMs; past kDrainWaitMs it ends the run anyway.
+    void drained(const std::weak_ptr<char>& run, int waitedMs = 0);
     void refused(const std::weak_ptr<char>& run);
 
     QPointer<RadioModel> m_model;

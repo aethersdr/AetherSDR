@@ -5,6 +5,7 @@
 #include "models/TransmitModel.h"
 
 #include <QMetaObject>
+#include <QTimer>
 
 #include <algorithm>
 #include <chrono>
@@ -159,9 +160,19 @@ void HostCwTextEngine::endRun()
     done.clear();   // the sender's Cwx deliveries finish now
 }
 
-void HostCwTextEngine::drained(const std::weak_ptr<char>& run)
+void HostCwTextEngine::drained(const std::weak_ptr<char>& run, int waitedMs)
 {
     if (!run.lock() || !m_keyer || m_keyer->pendingChars() > 0) {
+        return;
+    }
+    // endRun() fences the producer, which would cut an element still on its
+    // way to the wire. stop(), refused() and close() keep the immediate cut.
+    if (m_model && waitedMs < kDrainWaitMs && m_model->txProducerInputPending(m_producer)) {
+        QTimer::singleShot(kDrainPollMs, m_model.data(), [this, run, waitedMs] {
+            if (!run.expired()) {
+                drained(run, waitedMs + kDrainPollMs);
+            }
+        });
         return;
     }
     const TxCoordinator::Request sender = m_sender;

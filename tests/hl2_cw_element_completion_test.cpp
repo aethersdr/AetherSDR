@@ -11,15 +11,19 @@
 // a straight key released during a paddle element ends with that element;
 // a straight key's suppressed up after the last release ends its hold;
 // a revoked producer's element is not keyed, or stops, at the EP2 writer;
-// a host-text element's fall is whole when the next down is already queued.
+// a host-text element's fall is whole when the next down is already queued;
+// HostCwTextEngine's natural end leaves its last element whole on EP2 (the
+// one wall-clock case: its real keyer times the text, frames follow 5 ms behind).
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/TxCoordinator.h"
+#include "core/backends/SliceDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Settings.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
+#include "models/HostCwTextEngine.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -73,6 +77,16 @@ struct Hl2TxGateTestAccess {
         return packet;
     }
     static bool keyed(const Hl2Backend& backend) { return backend.m_keyed; }
+    // The EP2 writer's fail-safe counters: shifted downs, late ups, refused downs.
+    static std::string counters(Hl2Backend& backend)
+    {
+        std::string text;
+        QMetaObject::invokeMethod(backend.m_metis, [&text, metis = backend.m_metis] {
+            text = "shifted " + std::to_string(metis->cwShiftedElements()) + ", late ups "
+                + std::to_string(metis->cwLateKeyUps()) + ", refused " + std::to_string(metis->cwRefusedDowns());
+        }, Qt::BlockingQueuedConnection);
+        return text;
+    }
     static std::size_t pending(Hl2Backend& backend)
     {
         std::size_t n = 0;
@@ -419,6 +433,66 @@ static void testHostTextFallSurvivesTheNextDown()
           "host text: both elements are on EP2, 60 ms apart (" + runsText(runs) + ")");
 }
 
+// Review 4, blocker 1: the real HostCwTextEngine and its CwxLocalKeyer play
+// "EE". The keyer drains at the last key-up's instant, a lead before that
+// key-up is on EP2; the run must not end, and fence its producer, until it is.
+// Frames are built 5 ms behind the wall clock, as the I/O thread builds them.
+static void testHostTextEngineLastElementIsWhole(int wpm, bool breakIn)
+{
+    const std::string name = "host text engine, " + std::to_string(wpm) + " WPM, "
+        + (breakIn ? "break-in" : "manual MOX") + ": ";
+    Rig rig(breakIn);
+    SliceDelta slice;   // the host-text gates key only with a CW TX slice
+    slice.frequency = 7.020;
+    slice.mode = QStringLiteral("CW");
+    slice.panId = QStringLiteral("0x40000000");
+    slice.txSlice = true;
+    rig.model.emitBackendSliceChangedForTest(0, slice);
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(true);
+        Rig::settle();
+    }
+    const TxCoordinator::Producer client = rig.model.registerTxProducer();
+    bool ended = false;
+    bool refused = false;
+    std::size_t builtAtEnd = 0;
+    HostCwTextEngine engine(&rig.model, [&](const TxCoordinator::Request&, bool wasRefused) {
+        ended = true;
+        refused = wasRefused;
+        builtAtEnd = rig.iTrace.size();
+    });
+    check(engine.play(client.request(), QStringLiteral("EE"), wpm, {}), name + "the engine plays");
+    QElapsedTimer wall;
+    wall.start();
+    std::int64_t endedMs = -1;
+    while (wall.elapsed() < 3000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+        const std::int64_t ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - rig.t0).count() - 5;
+        rig.buildTo(ms);
+        if (ended && endedMs < 0) {
+            endedMs = ms;
+        }
+        if (endedMs >= 0 && ms > endedMs + 200) {
+            break;
+        }
+    }
+    const std::int64_t unit = 1200 / wpm;
+    const auto runs = carriers(rig.iTrace);
+    check(runs.size() == 2 && within(runs[0].length, samplesOfMs(unit), 2)
+              && within(runs[1].length, samplesOfMs(unit), 2),
+          name + "both dits are whole on EP2 (" + runsText(runs) + "; "
+              + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
+    const std::int64_t lastEnd = runs.empty() ? 0 : runs.back().start + runs.back().length;
+    check(ended && !refused && static_cast<std::int64_t>(builtAtEnd) >= lastEnd,
+          name + "the run ends, unrefused, after its last element is on EP2 (ended at sample "
+              + std::to_string(builtAtEnd) + ", last carrier ends at " + std::to_string(lastEnd) + ")");
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(false);
+        Rig::settle();
+    }
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-cw-element-completion"));
@@ -434,6 +508,9 @@ int main(int argc, char** argv)
     testSuppressedStraightUpAfterTheLastRelease();
     testRevokedProducerAtTheWriter();
     testHostTextFallSurvivesTheNextDown();
+    testHostTextEngineLastElementIsWhole(20, true);
+    testHostTextEngineLastElementIsWhole(40, true);
+    testHostTextEngineLastElementIsWhole(20, false);
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
