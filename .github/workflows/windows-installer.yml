@@ -177,7 +177,7 @@ jobs:
         id: cache-rtl
         with:
           path: third_party/rtl-deps
-          key: rtl-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-rtl-deps.ps1', 'scripts/setup/rtl-dependencies.json') }}
+          key: rtl-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-rtl-deps.ps1', 'scripts/setup/rtl-dependencies.json', 'scripts/setup/apply-rtl-patches.py') }}
 
       - name: Setup RTL-SDR and libusb
         if: steps.cache-rtl.outputs.cache-hit != 'true'

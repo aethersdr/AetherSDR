@@ -3520,13 +3520,14 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             return automationModemCommand(verb, action, value, controller, input);
         });
     m_automation->setShortcutAutomationHandler(
-        [this](const QString& id, bool allowTx, const std::shared_ptr<TxController>& controller) {
-            return fireShortcutAction(id, allowTx, controller);
+        [this](const QString& id, bool allowTx, bool txCeilingArmed,
+               const std::shared_ptr<TxController>& controller) {
+            return fireShortcutAction(id, allowTx, txCeilingArmed, controller);
         });
     m_automation->setKeyEventAutomationHandler(
-        [this](const QString& spec, bool press, bool allowTx,
+        [this](const QString& spec, bool press, bool allowTx, bool txCeilingArmed,
                const std::shared_ptr<TxController>& controller) {
-            return injectKeyEventForAutomation(spec, press, allowTx, controller);
+            return injectKeyEventForAutomation(spec, press, allowTx, txCeilingArmed, controller);
         });
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });

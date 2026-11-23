@@ -226,6 +226,11 @@ commands. Create a new instance to restart discovery.
   `staleAfterMs` (2000), and `limited`. The latter stays true until meter clear
   or connection reset after an invalid/over-capacity definition is excluded.
 - `identity`: `name`, `model`, `serial`, `version`, `manufacturer`.
+- `transmitTimeout`: the host transmit time-out (RFC #7021), read-only:
+  `enabled`, `timeoutS` (15–1800), `warningS` (0 = no warning) and `latched`,
+  true after an expiry until every keying input has released and the radio is
+  idle. The radio's own interlock timeout, where it has one, may end an over
+  sooner. Observation only; it grants and keys nothing.
 - `capabilities`:
   - `maxSlices`, `maxPanadapters`, `sampleRatesHz`;
   - `tuningRangeHz` with `minimum` and `maximum`;
@@ -456,8 +461,12 @@ No pair is emitted for a window in which the modulator dropped a block.
 - Supply voltage telemetry: not offered. The HL2 sets
   `hasSupplyVoltageTelemetry` to false.
 - `radioSession` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
-  meaning uncalibrated rather than zero watts. The HL2's `txPowerBands` is not
-  projected into any resource.
+  because aetherd constructs it receive only (`canTransmit` false). A host
+  whose transmit gate is open reports the 5 W nominal rating, not a
+  calibration. The gate is the host's offer of transmit, and under the
+  automation bridge also the bridge's launch answer, so an automation run
+  without transmit reports `0.0` too.
+  The HL2's `txPowerBands` is not projected into any resource.
 
 ### Extensions
 

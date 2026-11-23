@@ -7,8 +7,10 @@
 #include "core/TxKeyingMarker.h"
 #include "TxInputKeyEvent.h"
 #include "TxKeyActivationGuard.h"
+#include "SliderLeaseTxGate.h"
 #include "PttHoldKeyStep.h"
 #include "ShortcutRefusalNotice.h"
+#include "ShortcutTooltips.h"
 #include "TwoToneTuneGate.h"
 #include "core/IambicKeyer.h"
 
@@ -989,6 +991,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 
         // A clicked slider gets a short keyboard lease so arrow nudges adjust
         // the slider, then global operating shortcuts automatically resume.
+        // The bridge gates these keys by its own copy of the list,
+        // bridgeKeyMovesTxSetpoint() in SliderLeaseTxGate.h: change both together.
         if (event->type() == QEvent::KeyPress) {
             auto* slider = qobject_cast<QAbstractSlider*>(QApplication::focusWidget());
             if (slider && m_sliderShortcutLease.data() == slider && s_sliderShortcutLeaseActive) {
@@ -1700,6 +1704,7 @@ void MainWindow::registerShortcutActions()
         });
     m_shortcutManager.registerAction("nr2_toggle", "NR2 Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             if (m_audio->nr2Enabled()) {
                 QMetaObject::invokeMethod(m_audio, [this]() {
                     m_audio->setNr2Enabled(false);
@@ -1710,18 +1715,21 @@ void MainWindow::registerShortcutActions()
         });
     m_shortcutManager.registerAction("rn2_toggle", "RN2 (RNNoise) Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setRn2Enabled(!m_audio->rn2Enabled());
             });
         });
     m_shortcutManager.registerAction("nr4_toggle", "NR4 Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setNr4Enabled(!m_audio->nr4Enabled());
             });
         });
     m_shortcutManager.registerAction("dfnr_toggle", "DFNR Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setDfnrEnabled(!m_audio->dfnrEnabled());
             });
@@ -1738,6 +1746,15 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() {
             auto* s = activeSlice();
             if (!s) return;
+            // Every step but off → NR changes a client method. That one only
+            // turns on the radio's own NR, so it leaves a remembered client
+            // method for the automatic restore.
+            const bool stepsClientMethod = m_audio->dfnrEnabled()
+                || m_audio->nr4Enabled() || m_audio->nr2Enabled() || s->nrOn()
+                || !m_radioModel.radioSideNoiseReductionAvailable();
+            if (stepsClientMethod) {
+                m_aetherDspModePolicy.noteUserOverride();
+            }
             if (m_audio->dfnrEnabled()) {
                 // DFNR → off
                 QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setDfnrEnabled(false); });
@@ -1952,16 +1969,25 @@ void MainWindow::registerShortcutActions()
     // ── Registry-declared actions (keyboard side; MIDI side publishes in
     // registerMidiParams). Before loadBindings so their saved keys load. ──
     registerControlActions();
-    m_controlActions.publishShortcuts([this](const ControlActionShortcutSpec& spec) {
-        m_shortcutManager.registerAction(spec.id, spec.name, spec.category, spec.defaultKey,
-                                         spec.handler, spec.autoRepeat);
-    });
+    m_controlActions.publishShortcuts(m_shortcutManager);
 
     // ── Load user bindings and create QShortcuts ────────────────────────
     m_shortcutManager.loadBindings();
     s_keyboardShortcutsEnabled = m_keyboardShortcutsEnabled;
     syncOperatingShortcutsEnabled();
     m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
+
+    // Buttons name their bound key; the registry reads it live from here, so a
+    // remap shows on the next hover and bindingsChanged rewrites the rest.
+    m_controlActions.setBindingLookup([this](const QString& id) {
+        const ShortcutManager::Action* a = m_shortcutManager.action(id);
+        return a ? a->currentKey : QKeySequence();
+    });
+    m_shortcutTooltips = new ShortcutTooltips(m_controlActions, this);
+    m_shortcutTooltips->setShortcutsEnabled(m_keyboardShortcutsEnabled);
+    m_shortcutTooltips->refresh();
+    connect(&m_shortcutManager, &ShortcutManager::bindingsChanged,
+            m_shortcutTooltips, &ShortcutTooltips::refresh);
 
     m_sliderShortcutLeaseTimer.setSingleShot(true);
     connect(&m_sliderShortcutLeaseTimer, &QTimer::timeout, this,
@@ -1982,10 +2008,11 @@ void MainWindow::registerShortcutActions()
 
 int MainWindow::fireShortcutAction(const QString& id, bool allowTx)
 {
-    return fireShortcutAction(id, allowTx, {});
+    // The meta-object entry does not know the bridge's power ceiling: assume armed.
+    return fireShortcutAction(id, allowTx, /*txCeilingArmed=*/true, {});
 }
 
-int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
+int MainWindow::fireShortcutAction(const QString& id, bool allowTx, bool txCeilingArmed,
                                    const std::shared_ptr<TxController>& controller)
 {
     // Mirrors the MIDI dispatch path (fireShortcut in MainWindow_Controllers.cpp):
@@ -2003,6 +2030,9 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
     }
     if (a->keysTx && !allowTx) {
         return ShortcutFireTxBlocked;
+    }
+    if (ShortcutManager::bridgeRefusesTxDrive(*a, txCeilingArmed)) {
+        return ShortcutFireTxDriveBlocked;
     }
     if (!a->handler && !a->txHandler) {
         return ShortcutFireNoDirectHandler;
@@ -2033,10 +2063,11 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
 {
     Q_UNUSED(allowTx);
     // The meta-object compatibility entry has no trusted producer identity.
-    return injectKeyEventForAutomation(spec, press, false, {});
+    return injectKeyEventForAutomation(spec, press, false, /*txCeilingArmed=*/true, {});
 }
 
 int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,
+                                           bool txCeilingArmed,
                                            const std::shared_ptr<TxController>& controller)
 {
     // Resolve an action id to its CURRENT binding first, so a rebind moves the
@@ -2073,10 +2104,20 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
     const bool keysTx = a && a->keysTx;
     if (press && keysTx && (!allowTx || !controller || !controller->valid()))
         return KeyInjectTxBlocked;
+    // Drive (RF power) under the ceiling gates the press only; a release moves nothing.
+    if (press && a && ShortcutManager::bridgeRefusesTxDrive(*a, txCeilingArmed))
+        return KeyInjectTxDriveBlocked;
+    // Any key the slider lease would apply to a focused drive slider, bound or not.
+    QWidget* focus = QApplication::focusWidget();
+    const bool leased = qobject_cast<QAbstractSlider*>(focus)
+        && m_sliderShortcutLease.data() == focus && s_sliderShortcutLeaseActive;
+    if (press && bridgeKeyMovesTxSetpoint(leased ? focus : nullptr, seq[0].key(),
+                                          txCeilingArmed))
+        return KeyInjectTxDriveBlocked;
 
     if (keysTx && a->handler) {
         if (!press) { return KeyInjectOk; }
-        const int result = fireShortcutAction(a->id, allowTx, controller);
+        const int result = fireShortcutAction(a->id, allowTx, txCeilingArmed, controller);
         return result == ShortcutFireTxOk ? KeyInjectTxOk : KeyInjectTxBlocked;
     }
 

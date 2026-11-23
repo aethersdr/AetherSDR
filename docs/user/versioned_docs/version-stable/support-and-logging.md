@@ -186,7 +186,7 @@ For anything else, prefer the checkboxes in **Help → Support & Diagnostics...*
 
 ## Known issues
 
-- With WNB on, a FLEX-8600 fills the default-on Connection / Commands log category with a `wnb_updating` status line every few seconds ([#6069](https://github.com/aethersdr/AetherSDR/issues/6069)).
+None currently documented.
 
 ## Troubleshooting
 

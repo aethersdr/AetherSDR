@@ -17,6 +17,7 @@
 #include "core/DbmRangePlausibility.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include "core/backends/SquelchLevelScale.h"
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QStatusBar>
@@ -129,6 +130,11 @@ void MainWindow::wireStatusBarMessages()
                 statusBar()->showMessage(
                     tr("ATU Tune Failed - %1").arg(detail), 5000);
             });
+    // The transmit time-out's warning (RFC #7021): the model raises the
+    // panadapter notice; this is its short audible cue on this computer.
+    connect(&m_radioModel, &RadioModel::txTimeoutWarning, this, [](int) {
+        QApplication::beep();
+    });
 }
 
 
