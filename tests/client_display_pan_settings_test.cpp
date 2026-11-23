@@ -400,16 +400,16 @@ int main(int argc, char** argv)
         // the definition, a comment naming the function and a further call site
         // leave these alone; removing one of the three fails its own check.
         check(wiring.contains(QStringLiteral(
-                  "scheduleClientFftFpsSave(sw->panIndex(), v);")),
-              "the FPS slider saves the operator's value");
+                  "scheduleClientFftFpsSave(tsw->panIndex(), v);")),
+              "the FPS slider saves the operator's value on each pan it sets");
         check(wiring.contains(QStringLiteral(
                   "scheduleClientFftFpsSave(dst->panIndex(), src->fftFps());")),
               "Clone to all Pans saves each pan's FFT FPS");
         check(wiring.contains(QStringLiteral(
                   "scheduleClientFftFpsSave(sw->panIndex(), 25);")),
               "Reset to Defaults saves the default FFT FPS");
-        check(precedes(wiring, "scheduleClientFftFpsSave(sw->panIndex(), v);",
-                       "if (m_adaptiveThrottleActive)\n            return;"),
+        check(precedes(wiring, "scheduleClientFftFpsSave(tsw->panIndex(), v);",
+                       "if (m_adaptiveThrottleActive) {\n                continue;"),
               "the slider saves before the adaptive-throttle return, so the cap cannot drop it");
 
         // The dBm range: both operator gestures adopt, both primes restore.
