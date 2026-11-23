@@ -2017,8 +2017,8 @@ void MainWindow::buildMenuBar()
             footer->setText(QStringLiteral(
                 "<div style='text-align:center;'>"
                 "<p style='margin:0 0 6px 0;'>&copy; 2026 AetherSDR Contributors &middot; Licensed under "
-                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1; text-decoration:none;'>GPLv3</a></p>"
-                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1; text-decoration:none;'>"
+                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1;'>GPLv3</a></p>"
+                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1;'>"
                 "github.com/aethersdr/AetherSDR</a></p>"
                 "<p style='font-size:10px; margin:0;'>SmartSDR protocol &copy; FlexRadio Systems<br>"
                 "D-STAR is a registered trademark of Icom Inc.<br>"

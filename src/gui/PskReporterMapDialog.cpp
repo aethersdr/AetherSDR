@@ -1025,6 +1025,26 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     mapCredits->setWordWrap(true);
     radarInfoLayout->addWidget(mapCredits);
     radarInfoLayout->addWidget(m_radarProductLabel);
+    // Rich text takes a link's colour from the application palette when the
+    // text is parsed, which on Linux is a dark blue that can't be read on the
+    // dark panel. Colour each link from the theme token the About footer's
+    // links use, and re-colour on every theme change.
+    const QList<QLabel*> creditLabels{radarCredits, globalCredits, regionalCredits, mapCredits};
+    const auto applyLinkColor = [creditLabels] {
+        for (QLabel* label : creditLabels) {
+            QString html = label->property("creditHtml").toString();
+            if (html.isEmpty()) {
+                html = label->text();
+                label->setProperty("creditHtml", html);
+            }
+            const QString color = ThemeManager::instance()
+                .color(label, QStringLiteral("color.canon.cyan")).name();
+            label->setText(html.replace(QStringLiteral("<a href="),
+                QStringLiteral("<a style=\"color:%1;\" href=").arg(color)));
+        }
+    };
+    applyLinkColor();
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, radarInfo, applyLinkColor);
     radarInfo->hide();
     connect(radarInfoButton, &QToolButton::toggled, radarInfo,
         [radarInfoButton, radarInfo](bool expanded) {
