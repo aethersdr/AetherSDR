@@ -1884,11 +1884,15 @@ keeps both workflows consistent:
   key-down is forced up after a 5 WPM dah plus the default lead. Admission of each
   element stays on the engine-owning thread. A scheduled key-up carries the
   element's completion, and `MetisClient` holds it until that key-up (or the
-  element's own release) is written to EP2, so the model ends the element's
-  intent only once it is on the wire; a flush drops it. A key-up written while
+  element's own release) is written to EP2 and its 5 ms fall has ended, so
+  the model ends the element's intent only once it is on the wire; a flush
+  drops it. A key-up written while
   a later edge is pending keeps the held CW operation the next key-down
   entered with, so a host-text element's 5 ms fall is never cut by its own
-  completion. Edges without an instant (straight key, TCI `keyer:`) take
+  completion. Host CW text (`HostCwTextEngine`) ends a run that drained by
+  itself only once no element of it is pending, so its last element, still a
+  lead away from EP2 when the keyer drains, goes out whole; a stop or refusal
+  ends the run at once. Edges without an instant (straight key, TCI `keyer:`) take
   effect on the next frame built: an unscheduled key-down flushes pending
   scheduled edges and is a hold of its own, kept while its own operation
   permits dispatch, so a paddle's release clears only the paddle's
