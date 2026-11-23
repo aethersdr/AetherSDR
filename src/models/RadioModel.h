@@ -959,7 +959,8 @@ public:
     // the radio may still radiate (keyed, tuning, or in its transmit tail):
     // the switch would move under RF. Nothing here gates keying.
     QString selectStationAntenna(const QString& id, const QString& token, bool tx);
-    // Keyed, tuning, MOX, CW key down, the radio's interlock, or the backend's
+    // Keyed, tuning, MOX, CW key down, the radio's interlock in any state but
+    // a settled receive one (radioReceivingForTransmitDax()), or the backend's
     // own tail (transmitPathBusy()).
     bool stationAntennaSwitchBlocked() const;
     void notifyStationAntennasChanged() { emit stationAntennasChanged(); }

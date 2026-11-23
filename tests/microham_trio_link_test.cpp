@@ -423,6 +423,77 @@ void testRadioModelRefusesOnItsOwn()
            !radio.selectStationAntenna(QStringLiteral("sw"), QStringLiteral("SW:2"), true).isEmpty() && picks == 1);
 }
 
+// A Flex reports its transmitter through interlock state=. Only a settled
+// receive state lets a switch move: PTT_REQUESTED is on its way into TX (the
+// amplifier and tuner relays settle), UNKEY_REQUESTED is still on its way out,
+// and the fault states have not settled (#6593's rule for DAX).
+void testRefusedInEveryInterlockStateButIdle()
+{
+    struct State {
+        const char* state;
+        bool idle;
+    };
+    const State states[] = {
+        {"PTT_REQUESTED", false},  {"TRANSMITTING", false}, {"UNKEY_REQUESTED", false},
+        {"TX_FAULT", false},       {"TIMEOUT", false},      {"STUCK_INPUT", false},
+        {"READY", true},           {"RECEIVE", true},       {"NOT_READY", true},
+    };
+    for (const State& s : states) {
+        const QString state = QString::fromLatin1(s.state);
+        // A source that accepts everything: only RadioModel can refuse.
+        RadioModel radio;
+        auto owned = std::make_unique<QuietBackend>();
+        owned->caps.family = QStringLiteral("icom");
+        owned->caps.canTransmit = true;
+        radio.setBackendForTest(std::move(owned), QStringLiteral("icom"));
+        QObject owner;
+        int asked = 0;
+        radio.addStationAntennaSource(&owner, QStringLiteral("sw"), []() {
+            StationAntennaView view;
+            view.active = true;
+            view.heading = QStringLiteral("Test switch");
+            StationAntennaChoice choice;
+            choice.token = QStringLiteral("SW:1");
+            choice.label = QStringLiteral("One");
+            choice.enabled = true;
+            view.rx.append(choice);
+            view.tx.append(choice);
+            view.txLabel = view.rxLabel = QStringLiteral("One");
+            return view;
+        }, [&asked](const QString&, bool) { ++asked; return QString(); });
+        radio.handleStatusForTest(QStringLiteral("interlock"), {{QStringLiteral("state"), state}});
+        const QString txRefusal = radio.selectStationAntenna(QStringLiteral("sw"), QStringLiteral("SW:1"), true);
+        const QString rxRefusal = radio.selectStationAntenna(QStringLiteral("sw"), QStringLiteral("SW:1"), false);
+        if (s.idle) {
+            report((std::string("interlock ") + s.state + ": TX and RX picks reach the source").c_str(),
+                   txRefusal.isEmpty() && rxRefusal.isEmpty() && asked == 2,
+                   "asked=" + std::to_string(asked));
+        } else {
+            report((std::string("interlock ") + s.state
+                    + ": TX and RX picks refused in the shared sentence, source not asked").c_str(),
+                   txRefusal == stationAntennaTransmitRefusal()
+                       && rxRefusal == stationAntennaTransmitRefusal() && asked == 0,
+                   "asked=" + std::to_string(asked) + " " + txRefusal.toStdString());
+            radio.handleStatusForTest(QStringLiteral("interlock"),
+                                      {{QStringLiteral("state"), QStringLiteral("READY")}});
+            report((std::string("interlock ") + s.state + " then READY: allowed again").c_str(),
+                   radio.selectStationAntenna(QStringLiteral("sw"), QStringLiteral("SW:1"), true).isEmpty()
+                       && asked == 1);
+        }
+    }
+    // The Trio's own ports follow the same rule: disabled with the reason, no command.
+    for (const char* state : {"PTT_REQUESTED", "UNKEY_REQUESTED"}) {
+        Rig rig;
+        rig.radio.handleStatusForTest(QStringLiteral("interlock"),
+                                      {{QStringLiteral("state"), QString::fromLatin1(state)}});
+        report((std::string("interlock ") + state + ": the Trio's ports disabled, no command").c_str(),
+               allEnabled(trioViewOf(rig.radio), false)
+                   && trioViewOf(rig.radio).tx.at(0).reason == stationAntennaTransmitRefusal()
+                   && !rig.link->selectAntenna(QStringLiteral("TRIO:ant6"), true).isEmpty()
+                   && rig.commands() == 0);
+    }
+}
+
 void testRefusals()
 {
     {
@@ -499,6 +570,7 @@ int main(int argc, char** argv)
     testImplicitSplit();
     testRefusedWhileTransmitting();
     testRadioModelRefusesOnItsOwn();
+    testRefusedInEveryInterlockStateButIdle();
     testRegistry();
     testRefusals();
 

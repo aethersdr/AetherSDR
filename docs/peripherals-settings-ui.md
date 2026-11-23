@@ -148,7 +148,9 @@ reports, never the last pick.
   confirmed by its reply. A pick the Trio does not take, or does not answer
   within two seconds, stops and says so, and the state is read again.
 - Every pick is refused while the radio may still radiate: keyed, MOX, tuning,
-  CW key down, the radio's interlock, or its transmit tail after un-key. It is
+  CW key down, the radio's interlock in any state but a settled receive one
+  (on a Flex: PTT requested, transmitting, un-key requested and the fault
+  states all refuse), or its transmit tail after un-key. It is
   asked again before every command of a pick. The sentence is the one every
   station switch uses: *Antenna can't change while transmitting.* Nothing here
   refuses a key-on.

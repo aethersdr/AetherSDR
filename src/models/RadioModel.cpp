@@ -3927,8 +3927,10 @@ bool RadioModel::hasStationAntennas() const
 
 bool RadioModel::stationAntennaSwitchBlocked() const
 {
+    // Only a settled receive interlock lets a switch move: PTT_REQUESTED is on
+    // its way into TX and UNKEY_REQUESTED still on its way out (#6593).
     return m_transmitModel.isTransmitting() || m_transmitModel.isMox()
-           || m_transmitModel.isTuning() || m_radioTransmitting || m_cwKeyActive
+           || m_transmitModel.isTuning() || !radioReceivingForTransmitDax() || m_cwKeyActive
            || (m_backend && m_backend->transmitPathBusy());
 }
 
