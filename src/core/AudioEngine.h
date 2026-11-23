@@ -305,6 +305,7 @@ public:
 
     // Client-side PC mic gain (0-100 → 0.0-1.0, applied before Opus encoding)
     void setPcMicGain(int level) { m_pcMicGain.store(qBound(0, level, 100) / 100.0f); }
+    int pcMicGain() const { return qRound(m_pcMicGain.load() * 100.0f); }
 
     // Opus TX encoding for SmartLink compressed audio
     void setOpusTxEnabled(bool on) { m_opusTxEnabled.store(on); }

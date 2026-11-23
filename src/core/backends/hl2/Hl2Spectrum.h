@@ -57,7 +57,8 @@ public:
     static constexpr int kDcOnsetRun = 64;
 
     // Restart both DC estimates: for an NCO move. reset() (a gap) restarts the
-    // receive one only. Not part of dropAverage(), which a T/R edge may call too.
+    // receive one only, and only in receive. Not part of dropAverage(), which a
+    // T/R edge may call too.
     void restartDc() noexcept;
     // A rebuild (span or rate change) keeps the DC estimates and the T/R state:
     // the converter and the key are the same, only the geometry changed.
@@ -112,13 +113,22 @@ public:
 
     // Drop the partial frame on a transport sequence gap, returning samples
     // discarded (0 = none): discard, not zero-fill, which renders as a transient.
-    // Averaging state is kept (same spectrum); the receive DC estimate restarts,
-    // while the transmit estimate and the T/R state carry through a gap mid-key.
+    // Averaging state is kept (same spectrum). In receive the receive DC
+    // estimate restarts. From a key until its release ends (Armed, Tx,
+    // Releasing) both estimates and the T/R state are kept: a restart there
+    // would learn the keyed IQ as receive. The cost, at Armed: a receive DC
+    // step across the gap is removed over the 1 s time constant, not at once
+    // as in Rx. The onset run (Armed) and the end-of-key run (Releasing)
+    // restart, so neither counts samples from both sides of the gap.
     // buildChannel() rebuilds this object on FFT size/rate change.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = discardPartialFrame();
-        restartRxDc();
+        if (m_dcState == DcState::Rx) {
+            restartRxDc();
+        } else {
+            m_dcOnsetRun = 0;   // a T/R run counts contiguous samples only
+        }
         return discarded;
     }
     // The partial frame alone, for a retune: the DC estimates are kept.
@@ -162,9 +172,9 @@ private:
     // time averaging is switched on or the geometry changes, so the first
     // frame after a drop is TAKEN rather than blended into silence.
     bool m_haveAverage = false;
-    // Running DC estimates (trackDc()), one per T/R state. reset() (a gap)
-    // restarts the receive one, restartDc() (a retune) both; dropAverage() and
-    // T/R edges leave them.
+    // Running DC estimates (trackDc()), one per T/R state. reset() (a gap in
+    // receive) restarts the receive one, restartDc() (a retune) both;
+    // dropAverage() and T/R edges leave them.
     struct Dc {
         double re = 0.0;
         double im = 0.0;

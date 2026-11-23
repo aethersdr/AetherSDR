@@ -1363,6 +1363,9 @@ private:
     // a real defect (#7063). Per-over: reset on key-down by setKeying(), not on
     // key-up, since a diagnostic samples the snapshot after unkeying as well.
     int m_keyedSwrGateClears = 0;
+    quint64 m_swrPublicationEpoch = 0;
+    quint64 m_sessionSwrForwardWindows = 0;
+    quint64 m_sessionSwrGateClears = 0;
 
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.
@@ -1401,8 +1404,10 @@ private:
     // here, so N loud slices can sum past full scale where one never could.
     static constexpr float kMixCeiling = 1.0f;
     // Where the mix limiter puts a peak that would have passed kMixCeiling
-    // (-0.1 dBFS), and how fast its gain returns to unity (first order, per
-    // 24 kHz stereo frame). Below kMixAttenSnap the gain is snapped to exactly 1.
+    // (-0.1 dBFS, the attack target rather than a held ceiling: while the gain
+    // releases, a frame that lands between it and kMixCeiling is left there),
+    // and how fast its gain returns to unity (first order, per 24 kHz stereo
+    // frame). Below kMixAttenSnap the gain is snapped to exactly 1.
     static constexpr float kMixLimit = 0.98855f;
     static constexpr float kMixReleaseSeconds = 0.1f;
     static constexpr float kMixReleasePerFrame = 1.0f - 1.0f / (kMixReleaseSeconds * 24000.0f);
