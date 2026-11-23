@@ -939,6 +939,14 @@ private:
     // The waterfall rate, only where the backend declares the client the owner.
     bool clientPersistsWaterfallRate() const;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
+    // "Link display rates across pans" (#6799): while on, an operator move of
+    // FFT FPS or the waterfall rate on one pan goes to every open pan. One flag
+    // per radio in the ClientDisplay document; the cache is reloaded on each
+    // connection edge and pushed to every pan's Display panel.
+    bool m_linkPanDisplayRates{false};
+    void reloadLinkPanDisplayRates();
+    void setLinkPanDisplayRates(bool on);
+    QList<PanadapterApplet*> displayRateTargets(PanadapterApplet* source) const;
     // FFT FPS and the dBm scale, which a Flex stores for a pan and a radio
     // with no display engine does not. Same store and deferral as the
     // waterfall rate, only where the backend declares the client the owner.

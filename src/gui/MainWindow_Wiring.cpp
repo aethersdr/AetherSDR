@@ -3295,6 +3295,54 @@ void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
     });
 }
 
+void MainWindow::reloadLinkPanDisplayRates()
+{
+    m_linkPanDisplayRates =
+        ClientDisplaySettings::linkPanDisplayRates(m_radioModel.settingsScope());
+    if (!m_panStack) {
+        return;
+    }
+    for (auto* applet : m_panStack->allApplets()) {
+        auto* sw = applet ? applet->spectrumWidget() : nullptr;
+        if (sw && sw->overlayMenu()) {
+            sw->overlayMenu()->syncLinkPanDisplayRates(m_linkPanDisplayRates);
+        }
+    }
+}
+
+// The operator's toggle. Saved per radio and shown in every pan's panel; it
+// sends nothing to the radio and changes no rate.
+void MainWindow::setLinkPanDisplayRates(bool on)
+{
+    m_linkPanDisplayRates = on;
+    ClientDisplaySettings::saveLinkPanDisplayRates(m_radioModel.settingsScope(), on);
+    if (!m_panStack) {
+        return;
+    }
+    for (auto* applet : m_panStack->allApplets()) {
+        auto* sw = applet ? applet->spectrumWidget() : nullptr;
+        if (sw && sw->overlayMenu()) {
+            sw->overlayMenu()->syncLinkPanDisplayRates(on);
+        }
+    }
+}
+
+// The pans an operator's FFT FPS or waterfall-rate move applies to: the source
+// alone, or with the link on, every open pan with the source first.
+QList<PanadapterApplet*> MainWindow::displayRateTargets(PanadapterApplet* source) const
+{
+    QList<PanadapterApplet*> targets{source};
+    if (!m_linkPanDisplayRates || !m_panStack) {
+        return targets;
+    }
+    for (auto* applet : m_panStack->allApplets()) {
+        if (applet && applet != source) {
+            targets.append(applet);
+        }
+    }
+    return targets;
+}
+
 // May the client store and restore FFT FPS for this radio? Only where the
 // engine paces the frames and the backend declares the client the owner
 // (RadioCapabilities::clientPersistsPanFrameRate). Read by the save and by the
@@ -4875,19 +4923,32 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
-            this, [this, applet, sw](int v) {
-        sw->setFftFps(v);  // always update restore target for when throttle lifts
-        // The operator's value, saved before the throttle test: the adaptive
-        // cap is transient and must not decide what is remembered.
-        scheduleClientFftFpsSave(sw->panIndex(), v);
-        if (m_adaptiveThrottleActive)
-            return;
-        // Through the model, not a raw sendCommand: on a backend that streams
-        // raw spectra this is the engine's own shaping target, and the Flex wire
-        // text it used to send reached nothing there — the slider moved the
-        // widget's render cap while frames kept arriving at the IQ sample rate.
-        m_radioModel.requestPanDisplayRates(applet->panId(), v, /*wfMs=*/0);
+            this, [this, applet](int v) {
+        // This pan, or every open pan while the link is on (#6799). The other
+        // pans' sliders update with their signals blocked, so each operator
+        // move is one request per pan and never fans out again.
+        for (auto* target : displayRateTargets(applet)) {
+            auto* tsw = target->spectrumWidget();
+            if (!tsw) {
+                continue;
+            }
+            tsw->setFftFps(v);  // always update restore target for when throttle lifts
+            // The operator's value, saved before the throttle test: the adaptive
+            // cap is transient and must not decide what is remembered.
+            scheduleClientFftFpsSave(tsw->panIndex(), v);
+            if (m_adaptiveThrottleActive) {
+                continue;
+            }
+            // Through the model, not a raw sendCommand: on a backend that streams
+            // raw spectra this is the engine's own shaping target, and the Flex wire
+            // text it used to send reached nothing there — the slider moved the
+            // widget's render cap while frames kept arriving at the IQ sample rate.
+            m_radioModel.requestPanDisplayRates(target->panId(), v, /*wfMs=*/0);
+        }
     });
+    connect(menu, &SpectrumOverlayMenu::linkPanDisplayRatesChanged,
+            this, &MainWindow::setLinkPanDisplayRates, Qt::UniqueConnection);
+    menu->syncLinkPanDisplayRates(m_linkPanDisplayRates);
     connect(menu, &SpectrumOverlayMenu::fftWeightedAverageChanged,
             this, [this, applet, sw](bool on) {
         sw->setFftWeightedAvg(on);
@@ -4987,11 +5048,26 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             }
             return;
         }
-        sw->setWfLineDuration(clampedRate);
-        scheduleClientWaterfallRateSave(sw->panIndex(), clampedRate);
-        // Same reason as the FPS slider above: on a raw-spectrum backend this is
-        // the engine's waterfall shaping target, not a radio setting.
-        m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedRate);
+        // This pan, or every open pan while the link is on (#6799); the slider
+        // and the time-scale drag are both the operator's move. A pan showing a
+        // Kiwi waterfall is skipped: its rate drives the Kiwi profile, not the
+        // radio.
+        for (auto* target : displayRateTargets(applet)) {
+            auto* tsw = target->spectrumWidget();
+            if (!tsw || (target != applet && kiwiSdrPanDisplaysKiwi(target->panId()))) {
+                continue;
+            }
+            tsw->setWfLineDuration(clampedRate);
+            scheduleClientWaterfallRateSave(tsw->panIndex(), clampedRate);
+            // While the adaptive throttle caps the pans, the widget value is the
+            // restore target and the cap stays on the wire, as for FFT FPS.
+            if (m_adaptiveThrottleActive) {
+                continue;
+            }
+            // Same reason as the FPS slider above: on a raw-spectrum backend this
+            // is the engine's waterfall shaping target, not a radio setting.
+            m_radioModel.requestPanDisplayRates(target->panId(), /*fps=*/0, clampedRate);
+        }
     };
     connect(menu, &SpectrumOverlayMenu::wfLineDurationChanged,
             this, applyWaterfallLineDuration);

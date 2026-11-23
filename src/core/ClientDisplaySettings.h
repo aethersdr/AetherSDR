@@ -149,6 +149,45 @@ public:
         }
     }
 
+    // "Link display rates across pans" (#6799), one flag per radio. The flag is
+    // the client's own preference on every backend, so no ownership gate: a
+    // Flex, which keeps FPS and waterfall rate itself, still remembers it.
+    // Absent or malformed reads as off.
+    static bool linkPanDisplayRates(const RadioSettingsScope& scope)
+    {
+        if (!scope.hasRadioIdentity()) {
+            return false;
+        }
+        int version = 0;
+        const QJsonObject doc = scope.featureExact(QStringLiteral("ClientDisplay"), &version);
+        if (version != 1) {
+            return false;
+        }
+        const QJsonValue value = doc.value(QStringLiteral("linkPanDisplayRates"));
+        return value.isBool() && value.toBool();
+    }
+
+    static bool saveLinkPanDisplayRates(const RadioSettingsScope& scope, bool on)
+    {
+        if (!scope.hasRadioIdentity()) {
+            return false;
+        }
+        int version = 0;
+        AppSettings::FeatureReadStatus status;
+        QJsonObject doc = scope.featureExact(QStringLiteral("ClientDisplay"), &version, &status);
+        if (version > 1 || status == AppSettings::FeatureReadStatus::Corrupt
+            || status == AppSettings::FeatureReadStatus::Unavailable) {
+            qWarning() << "ClientDisplay: refusing to replace unreadable or newer settings";
+            return false;
+        }
+        doc.insert(QStringLiteral("linkPanDisplayRates"), on);
+        if (!scope.setFeature(QStringLiteral("ClientDisplay"), 1, doc)) {
+            qWarning() << "ClientDisplay: settings write did not persist";
+            return false;
+        }
+        return true;
+    }
+
     static void saveWaterfallRate(const RadioSettingsScope& scope, int panIndex,
                                   bool shapedLocally, int rate)
     {

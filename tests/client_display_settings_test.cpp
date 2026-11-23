@@ -68,5 +68,32 @@ int main(int argc, char** argv)
             && !ClientDisplaySettings::saveFftAverage(other,0,true,{42,false})
             && other.featureExact("ClientDisplay")==malformed, "malformed average is neither coerced nor overwritten");
     }
+    // "Link display rates across pans" (#6799): the client's own flag on every
+    // backend, so it saves on a Flex, where FPS and waterfall rate are the radio's.
+    const RadioSettingsScope linkFlex(QStringLiteral("flex"), QStringLiteral("link-A"));
+    const RadioSettingsScope linkOther(QStringLiteral("flex"), QStringLiteral("link-B"));
+    check(!ClientDisplaySettings::linkPanDisplayRates(linkFlex), "absent link flag reads off");
+    check(ClientDisplaySettings::saveLinkPanDisplayRates(linkFlex, true)
+        && ClientDisplaySettings::linkPanDisplayRates(linkFlex), "link flag saves on a Flex-shaped scope");
+    check(!ClientDisplaySettings::linkPanDisplayRates(linkOther), "link flag is per radio");
+    ClientDisplaySettings::saveWaterfallRate(linkFlex, 0, true, 40);
+    check(ClientDisplaySettings::linkPanDisplayRates(linkFlex)
+        && ClientDisplaySettings::waterfallRate(linkFlex, 0, true) == 40,
+          "link flag and rate tables preserve each other");
+    check(ClientDisplaySettings::saveLinkPanDisplayRates(linkFlex, false)
+        && !ClientDisplaySettings::linkPanDisplayRates(linkFlex), "link flag turns back off");
+    check(!ClientDisplaySettings::saveLinkPanDisplayRates(unknown, true)
+        && unknown.featureExact(QStringLiteral("ClientDisplay")).isEmpty()
+        && !ClientDisplaySettings::linkPanDisplayRates(unknown),
+          "unknown identity never writes a family-wide link flag");
+    const QJsonObject linkFuture{{QStringLiteral("linkPanDisplayRates"), true}};
+    check(linkOther.setFeature(QStringLiteral("ClientDisplay"), 2, linkFuture), "future link fixture stored");
+    check(!ClientDisplaySettings::linkPanDisplayRates(linkOther)
+        && !ClientDisplaySettings::saveLinkPanDisplayRates(linkOther, false)
+        && linkOther.featureExact(QStringLiteral("ClientDisplay")) == linkFuture,
+          "newer document is neither read nor overwritten");
+    const QJsonObject linkMalformed{{QStringLiteral("linkPanDisplayRates"), QStringLiteral("true")}};
+    check(linkOther.setFeature(QStringLiteral("ClientDisplay"), 1, linkMalformed), "malformed link fixture stored");
+    check(!ClientDisplaySettings::linkPanDisplayRates(linkOther), "a non-boolean link flag reads off");
     return failed ? 1 : 0;
 }

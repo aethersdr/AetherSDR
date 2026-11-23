@@ -6891,6 +6891,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
+    // The link flag is per radio: reread it for the session's radio on each edge.
+    reloadLinkPanDisplayRates();
 
     // Band/segment zoom reads the backend's declared control contract. Native
     // span zoom also waits for radio-reported pan limits before enabling.
