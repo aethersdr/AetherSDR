@@ -80,7 +80,7 @@ LibreWXR is the primary source. Each regional backup has its own checkbox and is
 
 Expand **Sources & licenses** under **Weather precipitation** for the LibreWXR contributors and licenses, regional radar providers, and map credits. NOAA/NWS supplies the US backup radar and US radar station locations. EUMETNET OPERA supplies European radar station locations.
 
-<img src="/img/screens/aethermap-source-credits.png" width="262" alt="Expanded Sources &amp; licenses panel with LibreWXR, its upstream weather providers, NOAA/NWS regional radar, and NASA/GSFC city lights from 2016." />
+<img src="/img/screens/aethermap-source-credits.png" width="262" alt="Expanded Sources &amp; licenses panel with LibreWXR, its upstream weather providers, NOAA/NWS regional radar, and NASA/GSFC city lights from 2016 via NASA GIBS." />
 
 *AetherMap lists the weather contributors, regional backups, map sources and licenses.*
 

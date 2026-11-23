@@ -238,7 +238,7 @@ In **Minimal Mode** the bar shrinks to the active radio tab and status badges; t
 - a **build details** card (Qt version, compile date, and the spectrum renderer in use). The text is selectable, so you can paste it into a bug report;
 - a **Contributor Logbook ↗** button that opens [contributors.aethersdr.com](https://contributors.aethersdr.com/#all-time).
 
-The footer links to the propagation and AetherMap data providers. In the HF Propagation Dashboard, HamQSL/N0NBH supplies HF and VHF band conditions. NOAA SWPC supplies indices, forecasts and GOES X-ray data. NASA SDO supplies solar images, and NASA SVS supplies lunar phase and illumination data.
+The footer links to the propagation and AetherMap data providers. In the HF Propagation Dashboard, HamQSL/N0NBH supplies HF and VHF band conditions and an X-ray class. NOAA SWPC supplies indices, forecasts and GOES X-ray flux. NASA SDO supplies solar images, and NASA SVS supplies lunar phase and illumination data.
 
 Drag anywhere in the window to move it. **Esc** or **Ctrl+W** (Cmd+W) closes it, and choosing About again raises the open window. Its animations stop when the operating system asks for reduced motion.
 

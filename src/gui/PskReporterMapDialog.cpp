@@ -1016,7 +1016,9 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     radarInfoLayout->addWidget(regionalCredits);
     auto* mapCredits = new QLabel(tr(
         "Map: © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors (ODbL)</a>. "
-        "City lights: NASA/GSFC, 2016. Radar sites: NOAA/NWS and EUMETNET OPERA; "
+        "City lights: NASA/GSFC, 2016, via "
+        "<a href=\"https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api\">NASA GIBS</a>. "
+        "Radar sites: NOAA/NWS and EUMETNET OPERA; "
         "shading shows nominal range, not current availability."), radarInfo);
     mapCredits->setObjectName(QStringLiteral("pskReporterMapCredits"));
     mapCredits->setOpenExternalLinks(true);

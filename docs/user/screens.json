@@ -3855,7 +3855,7 @@
         "pad": 5
       },
       "caption": "AetherMap lists the weather contributors, regional backups, map sources and licenses.",
-      "alt": "Expanded Sources & licenses panel with LibreWXR, its upstream weather providers, NOAA/NWS regional radar, and NASA/GSFC city lights from 2016."
+      "alt": "Expanded Sources & licenses panel with LibreWXR, its upstream weather providers, NOAA/NWS regional radar, and NASA/GSFC city lights from 2016 via NASA GIBS."
     },
     {
       "id": "psk-reporter-sidebar",

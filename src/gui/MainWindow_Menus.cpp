@@ -2042,6 +2042,9 @@ void MainWindow::buildMenuBar()
         connect(&tm, &AetherSDR::ThemeManager::themeChanged, footer, setFooterText);
         footer->setAlignment(Qt::AlignCenter);
         footer->setOpenExternalLinks(true);
+        // Tab reaches the links and Enter opens one; mouse access is unchanged.
+        footer->setTextInteractionFlags(Qt::LinksAccessibleByMouse
+                                        | Qt::LinksAccessibleByKeyboard);
         footer->setWordWrap(true);
         tm.applyStyleSheet(footer, "QLabel { color: {{color.canon.muted}}; font-size: 11px; background: transparent; }");
         // A wrapped rich-text label under-reports its height in a fixed-width
