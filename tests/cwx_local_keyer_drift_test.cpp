@@ -134,8 +134,13 @@ void testCumulativeTargetsAtExactCadence()
     }
 
     const auto waitCountBeforeDrain = static_cast<qint64>(f.keyer.waits.size());
+    const std::chrono::steady_clock::time_point epoch = f.keyer.epoch();
     f.keyer.setElapsed(300);
     f.keyer.tick();
+    // The drain's key-up is the last dit's grid instant, not the wake (#7245).
+    report("exact: natural drain stamps the last key-up at its grid instant",
+           !f.states.empty() && f.states.back() == 0 && !f.whens.empty()
+               && f.whens.back() == epoch + std::chrono::milliseconds(300));
 
     report("exact: natural drain leaves keyer idle", f.keyer.isIdle());
     expectEq("exact: natural drain resets target", f.keyer.nextEdgeMs(), 0);
