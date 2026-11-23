@@ -706,8 +706,11 @@ int main(int argc, char** argv)
             check(usbDb > 0.0,
                   "mode change: a fresh USB modulator puts energy on the LOWER wire bin");
 
-            // THE CHANGE ITSELF, on the open channel.
+            // THE CHANGE ITSELF, on the open channel, made during the over.
+            // It is held until the over ends (hl2_tx_keyed_mode_change_test),
+            // so the next over is the one that must move.
             tx.setMode(WdspChannel::Mode::Lsb);
+            tx.reset();
             cap.clear();
             run(1.0);
             const double lsbDb = sidebandDb();
@@ -715,8 +718,8 @@ int main(int argc, char** argv)
                                  "(lower-over-upper)%s\n",
                          lsbDb, floorMark(std::fabs(lsbDb)));
             check(lsbDb < 0.0,
-                  "mode change: setMode(Lsb) on a RUNNING modulator moves the "
-                  "sideband to the UPPER wire bin");
+                  "mode change: setMode(Lsb) made during an over moves the "
+                  "sideband to the UPPER wire bin from the next over");
             check(std::fabs(lsbDb - usbDb) > 20.0,
                   "mode change: and it actually moves -- the two sidebands are "
                   "not the same measurement");
