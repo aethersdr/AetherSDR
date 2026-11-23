@@ -1754,7 +1754,11 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
             ++contributors;
     if (contributors <= 1 && r->audioGain == 1.0f
         && r->audioPanPercent == kAudioPanCentre) {
-        m_mixLimiterAtten = 0.0f;   // the limiter belongs to a mix, and this is not one
+        // The limiter belongs to a mix, and this is not one. Deliberately a
+        // step, not the 0.1 s release: when a slice is muted or closed while
+        // the mix is being limited, the one left returns to its own level at
+        // once (by up to the attenuation in force, a few dB).
+        m_mixLimiterAtten = 0.0f;
         // The queue was empty before the insert above, so it holds exactly the
         // block we were handed: emit that directly. This is the steady state and
         // the reason the fast path exists — no remix or clamp. The PCM
@@ -1843,8 +1847,12 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
     // Limit rather than scale by 1/N (a second slice must not make the first
     // quieter) or clamp (two AGC-levelled slices sum past full scale). A frame
     // that would pass kMixCeiling is put at kMixLimit (stereo-linked); a sum
-    // that never passes it is bit-identical. State is 1 - gain, because a
-    // float gain released towards 1 stalls a few ulps short of it.
+    // that never passes it is bit-identical. kMixLimit is the attack target
+    // only: while the gain releases, a frame that lands between kMixLimit and
+    // kMixCeiling is not pulled back to kMixLimit, so the published peak can
+    // sit just under 0 dBFS; the clamp below stays the hard ceiling. State is
+    // 1 - gain, because a float gain released towards 1 stalls a few ulps
+    // short of it.
     float atten = m_mixLimiterAtten;
     for (std::size_t k = 0; k + 1 < m_mixAccum.size(); k += 2) {
         const float peak = std::max(std::fabs(m_mixAccum[k]), std::fabs(m_mixAccum[k + 1]));
