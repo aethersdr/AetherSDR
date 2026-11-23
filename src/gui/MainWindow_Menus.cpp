@@ -2011,7 +2011,7 @@ void MainWindow::buildMenuBar()
 
         // Rich-text link colours are baked into the HTML, so the footer is
         // rewritten when the theme changes while the window is open.
-        auto* footer = new QLabel;
+        auto* footer = new QLabel(dlg->bodyWidget());
         auto setFooterText = [footer] {
             auto& tm = AetherSDR::ThemeManager::instance();
             footer->setText(QStringLiteral(
@@ -2022,9 +2022,20 @@ void MainWindow::buildMenuBar()
                 "github.com/aethersdr/AetherSDR</a></p>"
                 "<p style='font-size:10px; margin:0;'>SmartSDR protocol &copy; FlexRadio Systems<br>"
                 "D-STAR is a registered trademark of Icom Inc.<br>"
-                "AetherSDR is not affiliated with or endorsed by Icom Inc.<br>"
-                "HF propagation forecasts provided by "
-                "<a href='https://www.hamqsl.com/' style='color:%1; text-decoration:none;'>hamqsl.com</a></p>"
+                "AetherSDR is not affiliated with or endorsed by Icom Inc.</p>"
+                "<p style='margin:6px 0;'><a href='https://www.hamqsl.com/solar.html' "
+                "style='color:%1;'>HamQSL/N0NBH</a> supplies HF/VHF band conditions.<br>"
+                "<a href='https://www.swpc.noaa.gov/' style='color:%1;'>NOAA SWPC</a> supplies K/A/SFI, "
+                "forecasts, solar indices and GOES X-ray data.<br>"
+                "Solar images from <a href='https://sdo.gsfc.nasa.gov/' style='color:%1;'>NASA&nbsp;SDO</a> "
+                "and lunar data from <a href='https://svs.gsfc.nasa.gov/gallery/moonphase/' "
+                "style='color:%1;'>NASA&nbsp;SVS</a>.</p>"
+                "<p style='margin:0;'>AetherMap city lights: 2016 composite from "
+                "<a href='https://science.nasa.gov/earth/earth-observatory/earth-at-night/maps/' "
+                "style='color:%1;'>NASA/GSFC</a>.<br>"
+                "US backup radar and station locations from "
+                "<a href='https://radar.weather.gov/' style='color:%1;'>NOAA/NWS</a>.<br>"
+                "See Sources &amp; licenses in AetherMap for more credits.</p>"
                 "</div>").arg(tm.color(footer, QStringLiteral("color.canon.cyan")).name()));
         };
         setFooterText();
