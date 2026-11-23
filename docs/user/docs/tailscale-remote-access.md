@@ -314,7 +314,9 @@ Access** chooses which devices get it:
 - **Only the devices ticked below**
 - **Off**
 
-Click **Save Announcement** to apply a change. Each device in the list shows
+Click **Save Announcement** to apply a change. Signing the radio in again
+(Part 7) starts it back at **Every device away from the station**, so choose
+again afterwards if you had picked another. Each device in the list shows
 what happens to it:
 
 | Status | Meaning |

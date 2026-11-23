@@ -274,7 +274,7 @@ class Stop(Exception):
 def test_tailnet_only():
     """The helper connects to the shim only at a tailnet address: one given
     outside the tailnet ranges stops it at the start, and a name that looks
-    up to none is never dialled."""
+    up to none is never dialed."""
     h = discovery_helper
     for addr, want in [("100.64.0.1", True), ("100.127.255.254", True), ("100.128.0.1", False),
                        ("192.168.0.20", False), ("127.0.0.1", False), ("fd7a:115c:a1e0::5", True),
@@ -301,12 +301,12 @@ def test_tailnet_only():
 
     # serve(): never dials a name that looks up only outside the tailnet,
     # and dials the tailnet address of one that has both.
-    dialled = []
+    dialed = []
     captured = Captured()
     saved = (h.tailnet_addresses, socket.create_connection, h.time.sleep)
 
     def no_dial(addr, timeout=None):
-        dialled.append(addr)
+        dialed.append(addr)
         raise OSError("refused")
 
     def stop(_):
@@ -319,7 +319,7 @@ def test_tailnet_only():
             h.serve("radio.lan", None, ("127.0.0.1", 0))
         except Stop:
             pass
-        check(dialled == [], f"dialled {dialled} for a name outside the tailnet")
+        check(dialed == [], f"dialed {dialed} for a name outside the tailnet")
         check(any("not a tailnet address" in line for line in captured.lines),
               f"no reason logged: {captured.lines}")
         h.tailnet_addresses = lambda shim: (["100.64.0.5"], ["192.168.0.20"])
@@ -327,7 +327,7 @@ def test_tailnet_only():
             h.serve("flex-radio", None, ("127.0.0.1", 0))
         except Stop:
             pass
-        check(dialled == [("100.64.0.5", h.FEED_PORT)], f"dialled {dialled}")
+        check(dialed == [("100.64.0.5", h.FEED_PORT)], f"dialed {dialed}")
     finally:
         h.tailnet_addresses, socket.create_connection, h.time.sleep = saved
         h.log.removeHandler(captured)
