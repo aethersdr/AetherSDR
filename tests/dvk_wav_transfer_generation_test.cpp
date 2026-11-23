@@ -20,6 +20,7 @@
 #include <QtEndian>
 
 #include "core/DvkWavTransfer.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "gui/DvkAvailabilityGate.h"
 #include "models/DvkModel.h"
 
@@ -43,14 +44,22 @@ public:
     {
         const quint64 requestId = transfer.nextAsyncId();
         transfer.m_portRequestId = requestId;
-        return transfer.makeUploadPortCallback(transfer.m_operationGeneration, requestId);
+        const FileTransferCompletion callback = transfer.makeUploadPortCallback(transfer.m_operationGeneration, requestId);
+        return [callback](int code, const QString& body) {
+            callback({{code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                       code, body}, static_cast<quint16>(body.isEmpty() ? 42607 : body.toUShort())});
+        };
     }
 
     static std::function<void(int, const QString&)> armDownloadPortReply(DvkWavTransfer& transfer)
     {
         const quint64 requestId = transfer.nextAsyncId();
         transfer.m_portRequestId = requestId;
-        return transfer.makeDownloadPortCallback(transfer.m_operationGeneration, requestId);
+        const FileTransferCompletion callback = transfer.makeDownloadPortCallback(transfer.m_operationGeneration, requestId);
+        return [callback](int code, const QString& body) {
+            callback({{code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                       code, body}, static_cast<quint16>(body.isEmpty() ? 42607 : body.toUShort())});
+        };
     }
 
     static std::function<void()> makeUploadConnectCallback(DvkWavTransfer& transfer,
@@ -70,14 +79,21 @@ public:
     static void recordCommands(DvkWavTransfer& transfer, QStringList& sent,
                                std::vector<Reply>& replies)
     {
-        transfer.m_commandSender = [&sent, &replies](const QString& command, Reply reply) {
+        auto* backend = new FlexBackend(&transfer);
+        backend->setModelProvider([] { return QStringLiteral("FLEX-6700"); });
+        backend->setTransferCommandSink([&sent, &replies](const QString& command,
+            const FileTransferGuard&, const RadioControlCompletion& completion) {
             sent << command;
-            replies.push_back(std::move(reply));
-        };
-        // RadioModel::requestFileUploadPort() encodes this leg; record what it would send.
-        transfer.m_uploadPortRequester = [&sent, &replies](qint64 size, Reply reply) {
-            sent << QStringLiteral("file upload %1 dvk_recording").arg(size);
-            replies.push_back(std::move(reply));
+            replies.push_back([completion](int code, const QString& body) {
+                completion({code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                            code, body});
+            });
+            return true;
+        });
+        transfer.m_transferRequester = [&transfer, backend](const FileTransferRequest& request,
+                                                            FileTransferCompletion completion) {
+            backend->requestFileTransfer(request, completion, FileTransferGuard(30000),
+                                         [&transfer] { return transfer.isTransferring(); });
         };
     }
 
@@ -526,9 +542,9 @@ int main(int argc, char* argv[])
         ok &= expect(!AetherSDR::DvkWavTransfer::isRadioPeer(
                          QHostAddress(QStringLiteral("192.168.50.77")), radio),
                      "another LAN host is rejected");
-        ok &= expect(AetherSDR::DvkWavTransfer::isRadioPeer(
+        ok &= expect(!AetherSDR::DvkWavTransfer::isRadioPeer(
                          QHostAddress(QStringLiteral("192.168.50.77")), QHostAddress()),
-                     "an unknown radio address accepts (not connected)");
+                     "an unknown radio address refuses every peer");
     }
 
     {

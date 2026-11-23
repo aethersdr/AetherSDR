@@ -1,4 +1,6 @@
 // Socket-free typed keyer, real Flex encoder and callback-lifetime regressions.
+#include "core/backends/flex/FlexCwxStatus.h"
+#include "core/CwxMacroTemplateSettings.h"
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
 #include "models/CwxModel.h"
@@ -6,6 +8,7 @@
 #include "core/backends/flex/FlexCwxControls.h"
 
 #include <QCoreApplication>
+#include <QMap>
 #include <QPointer>
 #include <QStringList>
 #include <cstdio>
@@ -176,7 +179,7 @@ void modelIntentAndEchoFences()
     echo.send("+CQ");
     check(refusedBatches == 1 && falseDispatches == 0,
           "a refused transient cancels the admitted batch without claiming text handoff");
-    echo.applyStatus({{"wpm", "23"}});
+    echo.applyStatusDelta(flexCwxStatus({{"wpm", "23"}}));
     check(echo.speed() == 23, "a refused transient speed request cannot swallow later radio state");
 
     CwxModel edits;
@@ -212,7 +215,7 @@ void modelIntentAndEchoFences()
     CwxModel session;
     session.send("+CQ");
     session.resetDrainWatch();
-    session.applyStatus({{"wpm", "23"}});
+    session.applyStatusDelta(flexCwxStatus({{"wpm", "23"}}));
     check(session.speed() == 23, "old-session speed echoes cannot suppress replacement-session readback");
 
     CwxModel refused;
@@ -276,11 +279,11 @@ void operatorSpeedEchoOrdering()
             if (!editInSender && request.value == 31) { model.setSpeed(35); }
         });
         model.setSpeed(31);
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(writes.size() == 2 && !writes.front()() && writes.back()() && model.speed() == 35,
               "reentrant replacement preserves an accepted older echo without retiring the new write");
-        model.applyStatus({{"wpm", "35"}});
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31 && !writes.back()(),
               "settled operator tickets cannot suppress a later independent radio change");
     }
@@ -289,13 +292,13 @@ void operatorSpeedEchoOrdering()
         CwxModel::TransmissionPermit latest;
         model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit current) {
             latest = std::move(current);
-            model.applyStatus({{"wpm", QString::number(request.value)}});
+            model.applyStatusDelta(flexCwxStatus({{"wpm", QString::number(request.value)}}));
             return ReceiveDispatch::Dispatched;
         });
         model.setSpeed(31);
         model.setSpeed(35);
         check(model.speed() == 35 && latest(), "synchronous WPM echoes cannot revoke their own write");
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31 && !latest(), "synchronous receipts leave no phantom operator echo");
     }
     {
@@ -307,11 +310,11 @@ void operatorSpeedEchoOrdering()
         });
         model.send("+CQ");
         model.setSpeed(35);
-        model.applyStatus({{"wpm", "23"}});
-        model.applyStatus({{"wpm", "20"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "23"}}));
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "20"}}));
         check(model.speed() == 35 && latest(), "old transient and restore echoes preserve a newer operator edit");
-        model.applyStatus({{"wpm", "35"}});
-        model.applyStatus({{"wpm", "37"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "37"}}));
         check(model.speed() == 37 && !latest(), "uncorrelated radio state still retires queued speed writes");
     }
     {
@@ -321,20 +324,20 @@ void operatorSpeedEchoOrdering()
         });
         model.setSpeed(31);
         model.setSpeed(35);
-        model.applyStatus({{"wpm", "35"}});
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31, "a newer echo retires skipped superseded tickets before later readback");
         model.setSpeed(35);
         model.setSpeed(31);
         model.setSpeed(35);
         for (const int echo : {35, 31, 35}) {
-            model.applyStatus({{"wpm", QString::number(echo)}});
+            model.applyStatusDelta(flexCwxStatus({{"wpm", QString::number(echo)}}));
             check(model.speed() == 35, "repeated WPM values preserve the latest selection at every echo");
         }
         model.setSpeed(31);
         model.resetDrainWatch();
         model.setSpeed(35);
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31, "session reset discards operator as well as transient echo history");
     }
     for (const ReceiveDispatch refused : {ReceiveDispatch::Unsupported, ReceiveDispatch::LocalOnly}) {
@@ -347,7 +350,7 @@ void operatorSpeedEchoOrdering()
         });
         model.setSpeed(31);
         model.setSpeed(35);
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31 && !latest(), "refused or local-only speed edits leave no phantom radio echo");
     }
     {
@@ -367,7 +370,7 @@ void operatorSpeedEchoOrdering()
         model.setSpeed(31);
         check(writes == 256 && warnings == 1 && cancelled == 0 && model.speed() == 35 && latest(),
               "operator echo bound refuses new edits without discarding history or cancelling existing work");
-        model.applyStatus({{"wpm", "35"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
         model.setSpeed(31);
         check(writes == 257 && warnings == 1 && model.speed() == 31 && latest(),
               "speed editing resumes after radio echoes free correlation capacity");
@@ -413,8 +416,8 @@ void boundedEchoTrackingAndInvalidText()
               && firstSpeed && !firstSpeed() && firstText && !firstText(),
           "echo-bound overflow cancels every queued speed/text write instead of dropping correlation");
     model.send("+CQ");
-    model.applyStatus({{"wpm", "23"}});
-    model.applyStatus({{"wpm", "20"}});
+    model.applyStatusDelta(flexCwxStatus({{"wpm", "23"}}));
+    model.applyStatusDelta(flexCwxStatus({{"wpm", "20"}}));
     check(dispatched == 1 && model.speed() == 20,
           "a fresh batch after overflow retains its speed echo correlation");
 
@@ -430,6 +433,175 @@ void boundedEchoTrackingAndInvalidText()
     check(invalidWarnings == 1 && textWrites == 0,
           "invalid pasted control text reports a refusal without reaching a keying writer");
 }
+
+void dxCallPlaceholder()
+{
+    // CONSTRUCTED callsigns and macro text: they exercise the substitution
+    // and the refusal only.
+    CwxModel model;
+    QStringList keyed;
+    QStringList saved;
+    QStringList refusals;
+    int radioSideMacros = 0;
+    int admissions = 0;
+    int changes = 0;
+    model.setTransmissionAdmission([&] {
+        ++admissions;
+        return CwxModel::TransmissionPermit([] { return true; });
+    });
+    model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit) {
+        if (request.field == CwTextRequest::Field::Send) { keyed.append(request.text); }
+        if (request.field == CwTextRequest::Field::SaveMacro) { saved.append(request.text); }
+        if (request.field == CwTextRequest::Field::SendMacro) { ++radioSideMacros; }
+        return ReceiveDispatch::Dispatched;
+    });
+    QObject::connect(&model, &CwxModel::requestRejected, &model, [&](const QString& reason) { refusals.append(reason); });
+    QObject::connect(&model, &CwxModel::dxCallChanged, &model, [&](const QString&) { ++changes; });
+
+    model.saveMacro(0, QStringLiteral("{CALL} 5NN"));
+    check(saved == QStringList{QStringLiteral("5NN")} && model.macro(0) == QLatin1String("{CALL} 5NN"),
+          "the radio's slot gets a {CALL} macro without the placeholder; the app keeps it as typed");
+
+    model.sendMacro(1);
+    check(keyed.isEmpty() && radioSideMacros == 0 && admissions == 0 && refusals.size() == 1,
+          "a {CALL} macro with no DX call is refused before admission and keys nothing");
+
+    model.setDxCall(QStringLiteral(" k1abc/p\n"));
+    check(model.dxCall() == QLatin1String("K1ABC/P") && changes == 1,
+          "the DX call is kept as capitals, digits and '/'");
+    model.setDxCall(QStringLiteral("K1ABC/P"));
+    check(changes == 1, "setting the same DX call again is not a change");
+
+    model.sendMacro(1);
+    check(keyed == QStringList{QStringLiteral("K1ABC/P 5NN")} && admissions == 1 && refusals.size() == 1,
+          "a {CALL} macro is keyed with the DX call in place of the placeholder");
+
+    keyed.clear();
+    model.saveMacro(1, QStringLiteral("+{call} TU"));
+    model.sendMacro(2);
+    check(keyed == QStringList{QStringLiteral("K1ABC/P"), QStringLiteral(" TU")},
+          "the placeholder is filled before speed prefixes are read, in any letter case");
+
+    QString reason;
+    check(model.resolvePlaceholders(QStringLiteral("{CALL} DE {Call}"))
+              == QStringLiteral("K1ABC/P DE K1ABC/P"),
+          "every occurrence is filled");
+    check(model.resolvePlaceholders(QStringLiteral("{MYCALL} TU {CALL}"), &reason)
+              == QStringLiteral("{MYCALL} TU K1ABC/P") && reason.isEmpty(),
+          "any other name in braces is text, returned as typed");
+    check(model.resolvePlaceholders(QStringLiteral("CQ TEST")) == QStringLiteral("CQ TEST")
+              && model.resolvePlaceholders(QStringLiteral("CQ {")) == QStringLiteral("CQ {"),
+          "text without a placeholder pair is unchanged");
+
+    keyed.clear();
+    model.saveMacro(2, QStringLiteral("{MYCALL} TU"));
+    model.sendMacro(3);
+    check(keyed == QStringList{QStringLiteral("{MYCALL} TU")} && refusals.size() == 1,
+          "a macro with another name in braces is keyed as typed");
+    keyed.clear();
+
+    model.send(QStringLiteral("{CALL} TEST"));
+    check(keyed == QStringList{QStringLiteral("{CALL} TEST")},
+          "send() keys text as received: another program's text is not interpreted");
+
+    model.setDxCall(QString());
+    check(model.dxCall().isEmpty() && changes == 2, "the DX call can be cleared");
+}
+
+void callMacrosAreKeptByTheApp()
+{
+    // CONSTRUCTED macro text, callsign and radio identity: they exercise the
+    // portable form, the saved copy and the match against a reported slot only.
+    check(CwxModel::withoutCallPlaceholder(QStringLiteral("{CALL} DE W1AW K")) == QLatin1String("DE W1AW K")
+              && CwxModel::withoutCallPlaceholder(QStringLiteral("TU {call} 73")) == QLatin1String("TU 73")
+              && CwxModel::withoutCallPlaceholder(QStringLiteral("TU {CALL}")) == QLatin1String("TU")
+              && CwxModel::withoutCallPlaceholder(QStringLiteral("R{CALL}K")) == QLatin1String("RK")
+              && CwxModel::withoutCallPlaceholder(QStringLiteral("{CALL}")).isEmpty(),
+          "removing {CALL} takes one adjoining space where two would meet or one would lead or trail");
+    check(CwxModel::withoutCallPlaceholder(QStringLiteral("CQ  TEST {NAME}")) == QLatin1String("CQ  TEST {NAME}"),
+          "text without {CALL} is unchanged, doubled spaces and other braces included");
+
+    CwxModel model;
+    QMap<int, QString> store;
+    int removals = 0;
+    QStringList saved;
+    QStringList shown;
+    model.setMacroTemplateStore({
+        [&](int idx) { return store.value(idx); },
+        [&](int idx, const QString& typed) {
+            if (typed.isEmpty()) { removals += store.remove(idx); }
+            else { store.insert(idx, typed); }
+        },
+    });
+    model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit) {
+        if (request.field == CwTextRequest::Field::SaveMacro) { saved.append(request.text); }
+        return ReceiveDispatch::Dispatched;
+    });
+    QObject::connect(&model, &CwxModel::macroChanged, &model,
+                     [&](int idx, const QString& text) { shown.append(QString::number(idx) + QLatin1Char('=') + text); });
+
+    model.saveMacro(0, QStringLiteral("+{CALL} DE W1AW K"));
+    check(saved == QStringList{QStringLiteral("DE W1AW K")}
+              && store.value(0) == QLatin1String("+{CALL} DE W1AW K"),
+          "saving a {CALL} macro sends the portable text and stores the typed text");
+
+    model.saveMacro(1, QStringLiteral("+CQ TEST"));
+    check(saved.last() == QLatin1String("CQ TEST") && !store.contains(1),
+          "a macro without {CALL} is not stored");
+
+    model.applyStatusDelta(flexCwxStatus({{"macro1", QStringLiteral("\"DE") + QChar(0x7f) + QStringLiteral("W1AW") + QChar(0x7f) + QStringLiteral("K\"")}}));
+    check(model.macro(0) == QLatin1String("+{CALL} DE W1AW K")
+              && shown == QStringList{QStringLiteral("0=+{CALL} DE W1AW K")} && removals == 0,
+          "a reported slot that equals the portable form keeps the stored typed text");
+
+    shown.clear();
+    model.applyStatusDelta(flexCwxStatus({{"macro1", QStringLiteral("\"CQ") + QChar(0x7f) + QStringLiteral("TEST\"")}}));
+    check(model.macro(0) == QLatin1String("CQ TEST") && shown == QStringList{QStringLiteral("0=CQ TEST")}
+              && store.value(0) == QLatin1String("+{CALL} DE W1AW K") && removals == 0,
+          "a slot that differs shows the radio's text and the stored copy stays");
+    model.applyStatusDelta(flexCwxStatus({{"macro1", QStringLiteral("\"DE") + QChar(0x7f) + QStringLiteral("W1AW") + QChar(0x7f) + QStringLiteral("K\"")}}));
+    check(model.macro(0) == QLatin1String("+{CALL} DE W1AW K") && removals == 0,
+          "the stored typed text is shown again once the slot equals its portable form");
+
+    model.saveMacro(0, QStringLiteral("CQ") + QChar(0x7f) + QStringLiteral("TEST"));
+    check(store.value(0) == QLatin1String("+{CALL} DE W1AW K") && removals == 0,
+          "a rejected macro edit leaves the stored template intact");
+
+    model.saveMacro(0, QStringLiteral("{CALL} 5NN"));
+    model.saveMacro(0, QStringLiteral("5NN TU"));
+    check(!store.contains(0) && removals == 1, "editing {CALL} out of a macro removes its stored copy");
+
+    // MEASURED (FLEX-8400 fw 4.3.16, 2026-11-15, PR #7213 round): the radio returned these slots
+    // byte for byte as saved; the status decoder then reads '*' as '='.
+    model.saveMacro(2, QStringLiteral("{CALL} tu \"5nn\" = * k"));
+    model.applyStatusDelta(flexCwxStatus({{"macro3", QStringLiteral("\"tu") + QChar(0x7f) + QChar(0x1e) + QStringLiteral("5nn")
+                                                         + QChar(0x1e) + QChar(0x7f) + QStringLiteral("=") + QChar(0x7f)
+                                                         + QStringLiteral("*") + QChar(0x7f) + QStringLiteral("k\"")}}));
+    check(model.macro(2) == QLatin1String("{CALL} tu \"5nn\" = * k"),
+          "a {CALL} macro holding '*' keeps its typed text when the slot is reported");
+    model.saveMacro(3, QStringLiteral("{CALL} DE KM6LFY {X}"));
+    model.applyStatusDelta(flexCwxStatus({{"macro4", QStringLiteral("\"DE") + QChar(0x7f) + QStringLiteral("KM6LFY") + QChar(0x7f)
+                                                         + QStringLiteral("{X}\"")}}));
+    check(saved.last() == QLatin1String("DE KM6LFY {X}") && model.macro(3) == QLatin1String("{CALL} DE KM6LFY {X}"),
+          "a {CALL} macro holding other braces keeps its typed text when the slot is reported");
+
+    AppSettings::instance().load();
+    const RadioSettingsScope radio(QStringLiteral("flex"), QStringLiteral("0000-0000-0000-0001"));
+    const RadioSettingsScope otherRadio(QStringLiteral("flex"), QStringLiteral("0000-0000-0000-0002"));
+    check(CwxMacroTemplateSettings::load(radio, 11).isEmpty()
+              && CwxMacroTemplateSettings::save(radio, 11, QStringLiteral("{CALL} TU"))
+              && CwxMacroTemplateSettings::load(radio, 11) == QLatin1String("{CALL} TU")
+              && CwxMacroTemplateSettings::load(radio, 10).isEmpty()
+              && CwxMacroTemplateSettings::load(otherRadio, 11).isEmpty(),
+          "the settings document keeps a macro per radio and per slot");
+    check(CwxMacroTemplateSettings::save(radio, 11, QString())
+              && CwxMacroTemplateSettings::load(radio, 11).isEmpty()
+              && radio.featureExact(CwxMacroTemplateSettings::featureName()).isEmpty(),
+          "removing the last stored macro removes the document");
+    check(!CwxMacroTemplateSettings::save(RadioSettingsScope(QStringLiteral("flex"), QString()), 0,
+                                          QStringLiteral("{CALL}")),
+          "nothing is written while the radio's identity is unknown");
+}
 }
 
 int main(int argc, char** argv)
@@ -442,5 +614,7 @@ int main(int argc, char** argv)
     modelIntentAndEchoFences();
     operatorSpeedEchoOrdering();
     receiverDestruction();
+    dxCallPlaceholder();
+    callMacrosAreKeptByTheApp();
     return failures == 0 ? 0 : 1;
 }

@@ -123,6 +123,9 @@ bool RxPlaybackTransmitter::start(const QByteArray& pcm, SliceModel* slice,
 
     m_generation = nextSessionToken();
     m_request = input;
+    if (!bypassesDax()) {
+        m_radio->noteDaxTxInput(m_request);
+    }
     m_pcm = pcm;
     m_offset = 0;
     m_audioStartArmed = false;
@@ -228,7 +231,7 @@ void RxPlaybackTransmitter::beginWhenReady()
             finish(true, tr("PTT request was refused"));
             return;
         }
-        m_context = m_radio->captureTxMedia(request);
+        m_context = m_radio->captureDaxTxMedia(request);
         if (!m_active) return;
         if (waitsForRadioPtt) {
             if (m_radio->isRadioTransmitting()) {

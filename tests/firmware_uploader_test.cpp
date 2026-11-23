@@ -1,3 +1,4 @@
+#include "core/backends/flex/FlexStatusIngress.h"
 #include "core/FirmwareUploader.h"
 
 #include <QCoreApplication>
@@ -62,14 +63,18 @@ public:
                        const QString& object,
                        const QMap<QString, QString>& kvs)
     {
-        uploader.onRadioStatus(generation, object, kvs);
+        // The decode the status ingress runs on a "file update" line.
+        if (const auto update = FlexStatusIngress::fileUpdateStatus(object, kvs)) {
+            uploader.onUpdateStatus(generation, *update);
+        }
     }
 
     static void reject(FirmwareUploader& uploader,
                        FirmwareUploader::Generation generation,
                        int code)
     {
-        uploader.onUploadPortReceived(generation, code, {});
+        uploader.onUploadPortReceived(generation,
+            {{RadioControlReply::Kind::Failed, code, {}}, 0});
     }
 
     static void expire(FirmwareUploader& uploader,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/ReceiveData.h"
+
 #include <QObject>
 #include <QMap>
 #include <QJsonArray>
@@ -50,6 +52,7 @@ public:
     // Process a batch of raw meter values from a VITA-49 packet.
     // ids[i] is the meter index, vals[i] is the raw int16 value.
     void updateValues(const QVector<quint16>& ids, const QVector<qint16>& vals);
+    void updateReceivedValues(const ReceiveMeterBatch& batch);
 
     // Set one meter from an ALREADY-CONVERTED value, addressed by source+name.
     //
@@ -177,7 +180,7 @@ public:
     // that has never published FWDPWR (the HL2 — uncalibrated counts, its
     // SWR stream is already power-gated at the source) is judged on the SWR
     // sample alone, by construction rather than by exception.
-    bool swrSampleLive(qint64 nowMs, qint64 swrMaxAgeMs) const;
+    bool swrSampleLive(qint64 swrMaxAgeMs) const;
     float tgxlSwr() const { return m_tgxlSwr; }
 
     // Timestamp of the last TX meter sample (milliseconds since epoch).
@@ -185,9 +188,6 @@ public:
     qint64 fwdPowerUpdatedAtMs() const { return m_lastFwdPowerUpdateMs; }
     qint64 reflectedPowerUpdatedAtMs() const { return m_lastReflectedPowerUpdateMs; }
     qint64 swrUpdatedAtMs() const { return m_lastSwrUpdateMs; }
-    // Receipt sequence survives clear(); unlike a timestamp it distinguishes
-    // updates in the same millisecond from FWDPWR-only notifications.
-    quint64 swrUpdateSequence() const { return m_swrUpdateSequence; }
     qint64 tgxlFwdPowerUpdatedAtMs() const { return m_lastTgxlFwdPowerUpdateMs; }
     qint64 tgxlSwrUpdatedAtMs() const { return m_lastTgxlSwrUpdateMs; }
     bool hasRecentTxMeters(qint64 maxAgeMs) const;
@@ -195,11 +195,11 @@ public:
 
     // Test seam: age the TX-meter timestamp so staleness behaviour can be
     // exercised without sleeping through the real window.
-    void setLastTxMeterUpdateMsForTest(qint64 ms) { m_lastTxMeterUpdateMs = ms; }
+    void setLastTxMeterUpdateMsForTest(qint64 ms);
     // SWR is gated on ITS OWN timestamp (#4536), so staleness tests must age
     // this one; ageing only the aggregate stamp exercises nothing the SWR
     // gate reads.
-    void setLastSwrUpdateMsForTest(qint64 ms) { m_lastSwrUpdateMs = ms; }
+    void setLastSwrUpdateMsForTest(qint64 ms);
 
     // Convenience: mic peak level (dBFS) and radio-provided compression (dB).
     float micPeak()  const { return m_micPeak; }
@@ -409,7 +409,9 @@ signals:
 private:
     float convertRaw(const MeterDef& def, qint16 raw) const;
     template<typename Value>
-    void applyValues(const QVector<quint16>& ids, const QVector<Value>& vals);
+    void applyValues(const QVector<quint16>& ids, const QVector<Value>& vals,
+                     ReceiveReceipt receipt = ReceiveReceipt::now(), ReceiveDataLease session = {},
+                     const QVector<ReceiveDataLease>& definitions = {});
     void clearCompressionState();
     void recomputeSourceIndexMins();
     // Re-route existing AMP meter definitions after a handle changes.
@@ -443,8 +445,11 @@ private:
     void logCompressionMeterMap(const MeterDef& def) const;
     void logCompressionSummary(const char* reason, bool force = false);
 
+    quint64 m_definitionRevision = 0; // reentrant definition changes end the current batch
     QMap<int, MeterDef> m_defs;        // meter index → definition
     QMap<int, float>    m_values;      // meter index → last converted value
+    QMap<int, qint64>   m_valueReceivedNs; // monotonic receipt time, never delivery time
+    qint64 m_lastTxMeterReceivedNs = 0;
     QMap<int, qint64>   m_valueUpdatedMs; // meter index → epoch ms of last value
                                           // update. Lets consumers reject stale
                                           // reads (e.g. PACURRENT, which the
@@ -518,7 +523,6 @@ private:
     qint64 m_lastFwdPowerUpdateMs{0};
     qint64 m_lastReflectedPowerUpdateMs{0};
     qint64 m_lastSwrUpdateMs{0};
-    quint64 m_swrUpdateSequence{0};
     float m_micPeak{-50.0f};
     float m_compressionMaximumDb{25.0f};
     float m_compPeak{0.0f};       // radio-provided compression amount in dB

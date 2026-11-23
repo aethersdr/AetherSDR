@@ -4,9 +4,12 @@
 // panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
+#include "core/ThemeManager.h"
 #include "ControlAvailabilityRegistry.h"
 #include "HGauge.h"
+#include "Kpa500IndicatorState.h"
 #include "StatusIndicator.h"
+#include "StatusBarMessageOverlay.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
@@ -14,6 +17,7 @@
 #include "core/DbmRangePlausibility.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include "core/backends/SquelchLevelScale.h"
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QStatusBar>
@@ -40,6 +44,8 @@
 #include "ModeFilterPresets.h"
 #include "DisplaySquelchRouting.h"
 #include "WfmApplet.h"
+#include "PureSignalApplet.h"
+#include "BandApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
 #include "SpeApplet.h"
@@ -80,6 +86,7 @@
 #include "core/WaterfallRate.h"
 #include "core/SpotModeResolver.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
@@ -110,33 +117,22 @@ namespace AetherSDR {
 
 void MainWindow::wireStatusBarMessages()
 {
-    QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(m_statusBarContainer->layout());
-    const int stationIndex = layout->indexOf(m_stationNickLabel);
-    connect(statusBar(), &QStatusBar::messageChanged, this,
-            [this, layout, stationIndex](const QString& message) {
-        if (!message.isEmpty() && m_stationNickLabel->parentWidget() == m_statusBarContainer) {
-            // Only the existing Connect control is permanent while a message
-            // is shown. Making the full-width bar permanent hides Qt's text.
-            layout->removeWidget(m_stationNickLabel);
-            statusBar()->addPermanentWidget(m_stationNickLabel);
-            m_stationNickLabel->show();
-            // addPermanentWidget reformats the bar and can re-show normal
-            // children; explicitly leave Qt's temporary-message area clear.
-            m_statusBarContainer->hide();
-        } else if (message.isEmpty()
-                   && m_stationNickLabel->parentWidget() != m_statusBarContainer) {
-            statusBar()->removeWidget(m_stationNickLabel);
-            layout->insertWidget(stationIndex, m_stationNickLabel);
-            m_stationNickLabel->show();
-            m_statusBarContainer->show();
-            updateStatusBarMinimumWidth();
-        }
-    });
+    auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_panStack);
+    ThemeManager::instance().applyStyleSheet(
+        messageOverlay,
+        QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"
+                       " background: {{color.background.1}}; font-size: 12px;"
+                       " border: 1px solid {{color.background.2}}; border-radius: 4px; }"));
     connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
             this, [this](ATUStatus, const QString& detail) {
                 statusBar()->showMessage(
                     tr("ATU Tune Failed - %1").arg(detail), 5000);
             });
+    // The transmit time-out's warning (RFC #7021): the model raises the
+    // panadapter notice; this is its short audible cue on this computer.
+    connect(&m_radioModel, &RadioModel::txTimeoutWarning, this, [](int) {
+        QApplication::beep();
+    });
 }
 
 
@@ -1927,7 +1923,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // report "skipping" for the overwhelmingly common case of no key at
         // all, which is noise in exactly the captures this logging exists for.
         const bool radioHasDax = m_radioModel.backendCapabilities().hasDaxStreams;
-        if (m_daxRestore.shouldRestore(savedDax, radioHasDax)) {
+        if (m_radioModel.daxChannelReserved(savedDax)) {
+            // A program on the radio (the WSPR receiver) holds that channel;
+            // putting it on our slice would take it from theirs (#7139).
+            qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
+                           << key << "=" << savedDax << "for slice" << s->sliceId()
+                           << ": a reserved slot holds that channel";
+        } else if (m_daxRestore.shouldRestore(savedDax, radioHasDax)) {
             // QPointer guards against a dangling slice: a raw SliceModel*
             // stays non-null after the slice is destroyed, so the `s &&`
             // check below is only meaningful if the capture auto-nulls.
@@ -1935,7 +1937,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
             // add/remove) would otherwise dereference freed memory. (#3646)
             QPointer<SliceModel> sp(s);
             QTimer::singleShot(300, this, [this, sp, savedDax, key]() {
-                if (sp && !profileLoadRadioStateWritesHeld()) {
+                if (sp && !profileLoadRadioStateWritesHeld()
+                    && !m_radioModel.daxChannelReserved(savedDax)) {
                     // The send path below (SliceModel::controlRequested) has no
                     // logging of its own; without this line the restore is
                     // invisible in any capture (#4558).
@@ -2217,19 +2220,21 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_antennaGenius.setRadioFrequency(s->frequency());
 
     connect(s, &SliceModel::filterChanged, this, [this, s](int lo, int hi) {
+        // The TX mask is separate state on every spectrum, so it follows every
+        // filter change; only the dragged overlay waits out a drag (#764).
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
         auto* sw = spectrumForSlice(s);
         if (!sw) return;
-        // Skip overlay update while user is dragging a filter edge — the radio's
-        // status echo would overwrite the drag position, causing snap-to-zero (#764)
-        if (sw->isDraggingFilter()) return;
+        // Skip this slice's overlay while its filter edge is being dragged — the
+        // radio's echo would overwrite the drag position, causing snap-to-zero (#764)
+        if (sw->isDraggingFilterOf(s->sliceId())) return;
         sw->setSliceOverlay(s->sliceId(), s->frequency(),
             lo, hi, s->isTxSlice(), s->sliceId() == m_activeSliceId,
             s->mode(), s->rttyMark(), s->rttyShift(),
             s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq(),
             s->diversity(), s->isDiversityParent(),
             s->isDiversityChild(), s->diversityIndex());
-        if (s->isTxSlice())
-            syncTxWaterfallSliceToSpectrums();
     });
     // Each pan renders its own slice's accepted threshold, including updates
     // to background Auto receivers.
@@ -2378,7 +2383,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     });
 
     // Update RTTY mark/space lines on spectrum when mark/shift changes;
-    // also push new params to the decoder when Auto mark is selected.
+    // the active slice's new mark and shift also go to the decoder and its combos.
     connect(s, &SliceModel::rttyMarkChanged, this, [this, s](int) {
         pushSliceOverlay(s);
         if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
@@ -4026,12 +4031,20 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
-    // This connection belongs to the pane's wiring, not decoder routing:
+    // These connections belong to the pane's wiring, not decoder routing:
     // routeRttyDecoderOutput() may already have selected this same applet,
     // and its unchanged-target fast path cannot restore a connection removed
-    // by the bulk disconnect above. Every close must persist dismissal (#5353).
+    // by the bulk disconnect above. Every close must persist dismissal (#5353),
+    // and every Mark and Shift choice must reach the slice (#7094, #6968).
     connect(applet, &PanadapterApplet::rttyPanelCloseRequested,
             this, &MainWindow::onRttyPanelCloseRequested);
+    connect(applet, &PanadapterApplet::rttyMarkHzChanged,
+            this, &MainWindow::onRttyDecoderMarkChosen);
+    connect(applet, &PanadapterApplet::rttyShiftHzChanged,
+            this, &MainWindow::onRttyDecoderShiftChosen);
+    // A callsign picked in the CW text becomes the DX call for CWX macros.
+    connect(applet, &PanadapterApplet::cwCallsignPicked, this,
+            [this](const QString& call) { m_radioModel.cwxModel().setDxCall(call); });
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
     connect(this, &MainWindow::bandStackRestoreStarting,
             sw, [applet, pendingDbm, reconcileDbmRangeFromModel]
@@ -4184,6 +4197,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // connect — the local radio's limit clamping a zoom the Kiwi can fill.
         // (#4470)
         applyPanBandwidthLimitsToWidget(panId, sw, minMhz, maxMhz);
+        refreshPanZoomControls();
     });
 
     // Set panId on the overlay menu so +RX routes to the correct pan
@@ -4689,6 +4703,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
     }
 
+    // ── WSJT-X Rx/Tx frequency overlay (#4526) ──────────────────────────────
+    // A pan created after WSJT-X is already reporting Status (e.g. a new
+    // panadapter opened mid-session) gets today's marker state immediately,
+    // rather than waiting for the next Status message before it appears.
+    rebuildWsjtxMarkers();
+
     // ── S History Markers ─────────────────────────────────────────────────
     sw->setShowSHistory(m_sHistoryEnabled);
     sw->setShowSHistoryQrm(m_sHistoryQrmEnabled);
@@ -4816,9 +4836,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, applet](int channel) {
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (!pan) return;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 daxiq_channel=%2")
-                .arg(applet->panId()).arg(channel));
+        m_radioModel.requestPanIqBinding(pan, channel);
     });
 
     // WFM software-demod toggle from the DAX panel. Acts on the menu's slice;
@@ -5332,6 +5350,23 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
         // Empty pan + wheel scroll → no-op. A stray scroll gesture shouldn't
         // conjure a slice; click is the explicit "create here" affordance.
+    });
+
+    // ── WSJT-X overlay mid-session listener start (#4526) ────────────────────
+    // The auto-start block in onConnectionStateChanged only runs at radio-
+    // connect time. If the operator enables the overlay after connecting,
+    // nothing would start the listener until the next reconnect. This signal
+    // fires from setShowWsjtxFreq(true) so we can close that gap.
+    connect(sw, &SpectrumWidget::wsjtxListenerNeeded,
+            this, [this] {
+        if (!m_radioModel.isConnected() || m_wsjtxClient->isListening())
+            return;
+        auto& s = AppSettings::instance();
+        const QString addr = s.value("WsjtxAddress", "224.0.0.1").toString();
+        const quint16 port = static_cast<quint16>(s.value("WsjtxPort", 2237).toInt());
+        QMetaObject::invokeMethod(m_wsjtxClient, [=, this] {
+            m_wsjtxClient->startListening(addr, port);
+        });
     });
 
     // ── Edge auto-pan step during slice drag (user-reported) ─────────────────
@@ -5852,8 +5887,11 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
 
     // Prefer the visible spectrum state when available so reveal/follow stays
     // aligned with recent manual pan/zoom gestures even if the model echo lags.
+    // Its target, not the mid-glide center: fast wheel steps land inside the
+    // follow animation, and each must move the pan by whole steps from where
+    // the last one was headed (#7529).
     auto* sw = spectrumForSlice(slice);
-    result.oldCenterMhz = sw ? sw->centerMhz() : pan->centerMhz();
+    result.oldCenterMhz = sw ? sw->panCenterTargetMhz() : pan->centerMhz();
     result.newCenterMhz = result.oldCenterMhz;
     result.bandwidthMhz = sw ? sw->bandwidthMhz() : pan->bandwidthMhz();
 
@@ -6820,16 +6858,17 @@ void MainWindow::wireMeters()
             }
         }, Qt::QueuedConnection);
     }
-    // OPERATE / STANDBY / BYPASS on a TGXL reached by manual IP only: no radio
-    // relays them, nothing was sent. Every surface (applet keys, the status-bar
+    // OPERATE / STANDBY / BYPASS need a ready direct link or a radio relay.
+    // Without either, nothing was sent. Every surface (applet keys, the status-bar
     // cycle, the SWR sweep's bypass) funnels through TunerModel, so one
     // connection announces them all.
     connect(&m_radioModel.tunerModel(), &TunerModel::relayedCommandRefused,
             this, [this](const QString& command) {
         qCWarning(lcDevices) << "TGXL" << command
-                             << "refused: operate/standby/bypass need a Flex radio"
-                             << "to relay them; this tuner is reached by IP only";
-        showUnsupportedControlNotice();
+                             << "refused: no ready direct connection and no FlexRadio relay;"
+                             << "nothing was sent";
+        showUnsupportedControlNotice(
+            tr("TGXL command not sent: no ready direct connection or FlexRadio relay is available."));
     });
     // Same for the PGXL: the per-port block, the state word and the alert
     // channel live in the model rather than being decoded into the applet
@@ -7489,12 +7528,82 @@ void MainWindow::wireMeters()
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
-    // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────
+    // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
     // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
     // wiring first, the auto-connect trigger LAST. connectSerial() can call
     // onTransportUp() synchronously, so anything wired after the trigger
     // misses the first connected().
+    // Radio mode: the meter on the radio's own USB port. The connection
+    // stays free of radio types; these hooks and the cable model's signals
+    // are its only route to the radio.
+    {
+        const auto snapshotOf = [this](const QString& serial) {
+            AetherSDR::LpMeter::CableSnapshot snap;
+            const auto& cables = m_radioModel.usbCableModel().cables();
+            const auto it = cables.constFind(serial);
+            if (it == cables.constEnd()) { return snap; }
+            snap.known = true;
+            snap.pluggedIn = it->present;
+            snap.type = it->type;
+            snap.speed = it->speed;
+            snap.dataBits = it->dataBits;
+            snap.parity = it->parity;
+            snap.stopBits = it->stopBits;
+            snap.flowControl = it->flowControl;
+            return snap;
+        };
+        LpMeterConnection::RadioCableHooks hooks;
+        hooks.snapshot = snapshotOf;
+        hooks.configure = [this](const QString& serial, const AetherSDR::LpMeter::CableChange& change) {
+            using Setting = AetherSDR::LpMeter::CableChange::Setting;
+            using Field = UsbCableRequest::Field;
+            UsbCableRequest request{serial, -1, Field::Type, change.text};
+            switch (change.setting) {
+                case Setting::Type:        request.field = Field::Type; break;
+                case Setting::Speed:       request.field = Field::SerialSpeed; request.value = change.number; break;
+                case Setting::DataBits:    request.field = Field::DataBits; request.value = change.number; break;
+                case Setting::Parity:      request.field = Field::Parity; break;
+                case Setting::StopBits:    request.field = Field::StopBits; request.value = change.number; break;
+                case Setting::FlowControl: request.field = Field::FlowControl; break;
+            }
+            if (m_radioModel.requestUsbCable(request) != ReceiveDispatch::Dispatched) {
+                return false;
+            }
+            // The radio pushes a status for a type change but not for the serial
+            // settings (measured on a FLEX-8600, 4.3.16), so ask it to resend the
+            // cable status; the connection waits for that, not for R|0|.
+            if (change.setting != Setting::Type) {
+                m_radioModel.requestUsbCableStatus();
+            }
+            return true;
+        };
+        hooks.write = [this](const QString& serial, const QByteArray& bytes) {
+            return m_radioModel.requestUsbCableWrite(serial, bytes) == ReceiveDispatch::Dispatched;
+        };
+        m_lpMeterConn.setRadioCableHooks(std::move(hooks));
+        auto& cables = m_radioModel.usbCableModel();
+        const auto forward = [this, snapshotOf](const QString& serial) {
+            m_lpMeterConn.onRadioCableStatus(serial, snapshotOf(serial));
+        };
+        connect(&cables, &UsbCableModel::cableAdded, this, forward);
+        connect(&cables, &UsbCableModel::cableChanged, this, forward);
+        // A type change re-creates the cable (cableRemoved, then cableAdded in
+        // the same call). Read it a turn later so only a real removal or a
+        // radio disconnect looks like an unplug; a cable another client
+        // re-typed must not look like a replug the connection may configure.
+        connect(&cables, &UsbCableModel::cableRemoved, this, [this, forward](const QString& serial) {
+            QTimer::singleShot(0, this, [forward, serial] { forward(serial); });
+        });
+        connect(&cables, &UsbCableModel::passthroughDataReceived, this,
+                [this](const QString& serial, const QByteArray& bytes) {
+            m_lpMeterConn.onRadioCableData(serial, bytes);
+        });
+        const int pollMs = PeripheralSettings::deviceInt("Lp100a", "PollIntervalMs",
+            static_cast<int>(AetherSDR::LpMeter::PollGate::kSoloPollIntervalMs));
+        m_lpMeterConn.setPollIntervalMs(pollMs);
+        m_appletPanel->lpMeterApplet()->setPollIntervalMs(m_lpMeterConn.pollIntervalMs());
+    }
     connect(&m_lpMeterConn, &LpMeterConnection::connected, this, [this]() {
         auto* lp = m_appletPanel->lpMeterApplet();
         // Derived from the LIVE transport, never the persisted setting — the
@@ -7577,6 +7686,12 @@ void MainWindow::wireMeters()
             const int port = PeripheralSettings::deviceInt("Lp100a", "ManualPort", 2000);
             if (!ip.isEmpty())
                 m_lpMeterConn.connectNetwork(ip, static_cast<quint16>(port));
+        } else if (mode == "Radio") {
+            // Waits for the radio to report the cable; no radio is needed yet.
+            const QString cable = PeripheralSettings::deviceString("Lp100a", "RadioCable");
+            if (!cable.isEmpty())
+                m_lpMeterConn.connectRadioCable(
+                    cable, AetherSDR::LpMeterConnection::RadioCableIntent::Saved);
         }
 #ifdef HAVE_SERIALPORT
         else {
@@ -7767,8 +7882,6 @@ void MainWindow::wireMeters()
         const bool integratedAmp = m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
-        m_appletPanel->tunerApplet()->setPowerScale(tunerMaxWatts(radioMaxWatts, selection),
-                                                   selection.highPowerAmplifier);
         m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
         m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };
@@ -7802,44 +7915,52 @@ void MainWindow::wireMeters()
 
     connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
-    // TGXL indicator: two-line rich text — label on top, state smaller below.
-    // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)
-    auto setIndicatorHtml = [](QLabel* nameLbl, QLabel* stateLbl,
-                               const QString& state, const QString& color) {
-        nameLbl->setStyleSheet(
-            QString("QLabel { color: %1; font-size:18px; font-weight:bold; }").arg(color));
-        stateLbl->setStyleSheet(
-            QString("QLabel { color: %1; font-size:11px; }").arg(color));
+    // TGXL/PGXL indicator: two-line — label on top, state smaller below.
+    // OPERATE green, BYPASS amber, STANDBY the standby key's amber (RFC #6816),
+    // each from its own token so a theme can separate them.
+    auto setIndicatorStyle = [](QLabel* nameLbl, QLabel* stateLbl,
+                                const QString& state, const QString& colorToken) {
+        ThemeManager::instance().applyStyleSheet(nameLbl,
+            QStringLiteral("QLabel { color: {{%1}}; font-size:18px; font-weight:bold; }")
+                .arg(colorToken));
+        ThemeManager::instance().applyStyleSheet(stateLbl,
+            QStringLiteral("QLabel { color: {{%1}}; font-size:11px; }").arg(colorToken));
         stateLbl->setText(state);
         // The TUN/AMP container is the keyboard target; its description leads
-        // with the state, which the colour alone otherwise carries.
+        // with the state, which the color alone otherwise carries.
         if (QWidget* container = stateLbl->parentWidget()) {
             const QString cycle = container->property("aetherStateCycle").toString();
-            const QString described = cycle.isEmpty() ? state
-                                                      : QStringLiteral("%1. %2").arg(state, cycle);
-            if (container->accessibleDescription() != described) {
-                container->setAccessibleDescription(described);
+            if (!cycle.isEmpty()) {
+                const QString described = QStringLiteral("%1. %2").arg(state, cycle);
+                if (container->accessibleDescription() != described) {
+                    container->setAccessibleDescription(described);
+                }
             }
         }
     };
 
-    auto updateTgxlStyle = [this, setIndicatorHtml]() {
+    auto updateTgxlStyle = [this, setIndicatorStyle]() {
         auto& t = m_radioModel.tunerModel();
         if (t.isOperate() && !t.isBypass())
-            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "OPERATE", "#00e060");
+            setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "OPERATE",
+                              QStringLiteral("color.accessory.indicator.operate.foreground"));
         else if (t.isOperate() && t.isBypass())
-            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "BYPASS", "#e0a000");
+            setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "BYPASS",
+                              QStringLiteral("color.accessory.indicator.bypass.foreground"));
         else
-            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "STANDBY", "#404858");
+            setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "STANDBY",
+                              QStringLiteral("color.accessory.key.standby.foreground"));
     };
     connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, updateTgxlStyle);
 
-    // PGXL indicator: OPERATE (green) or STANDBY (grey) — no bypass for PGXL
-    auto updatePgxlStyle = [this, setIndicatorHtml]() {
+    // PGXL indicator: OPERATE (green) or STANDBY (amber) — no bypass for PGXL
+    auto updatePgxlStyle = [this, setIndicatorStyle]() {
         if (m_radioModel.amplifier().operate())
-            setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "OPERATE", "#00e060");
+            setIndicatorStyle(m_pgxlIndicator, m_pgxlStateLabel, "OPERATE",
+                              QStringLiteral("color.accessory.indicator.operate.foreground"));
         else
-            setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY", "#404858");
+            setIndicatorStyle(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY",
+                              QStringLiteral("color.accessory.key.standby.foreground"));
     };
     // The applet is NOT seeded from operate() here. That flag is derived from
     // the state word and cannot say TRANSMIT_A or FAULT, so writing it back
@@ -7856,6 +7977,37 @@ void MainWindow::wireMeters()
         updateStatusBarMinimumWidth();
         if (present) updatePgxlStyle();
     });
+
+    // KPA500 main-window indicator — RFC #7092.
+    // Six states in priority order: FAULT > TX > OPERATE > STANDBY > OFF > "–".
+    // Passive widget; show/hide on detectedChanged only (not on radio-disconnect teardown).
+    auto updateKpa500Style = [this, setIndicatorStyle](bool force) {
+        const bool live = m_kpa500Conn.isConnected() && m_kpa500Conn.isResponding();
+        const auto [label, token] = kpa500IndicatorState(
+            m_kpa500Conn.lastStatus(), live, m_kpa500Conn.hasLiveTxMeters());
+        if (!force && m_kpa500StateLabel->text() == label) {
+            return;
+        }
+        setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, label, token);
+        // Accessibility: state word in the name, not just color (docs/a11y.md).
+        m_kpa500Container->setAccessibleName(
+            QStringLiteral("KPA500: %1").arg(
+                label == QStringLiteral("–") ? QStringLiteral("Unknown") : label));
+    };
+    updateKpa500Style(true);
+    connect(&m_kpa500Conn, &Kpa500Connection::detectedChanged, this, [this, updateKpa500Style](bool detected) {
+        m_kpa500Container->setVisible(detected);
+        m_kpa500Separator->setVisible(detected);
+        updateStatusBarMinimumWidth();
+        if (detected) {
+            updateKpa500Style(false);
+        }
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::statusUpdated, this,
+            [updateKpa500Style](const AetherSDR::Kpa500::Status&) { updateKpa500Style(false); });
+    connect(&m_kpa500Conn, &Kpa500Connection::respondingChanged, this,
+            [updateKpa500Style]() { updateKpa500Style(false); });
+
     // Drain current and PA heatsink temperature, relayed by the radio as the
     // PGXL's ID and TEMP meters. The applet prefers these while they are
     // fresh and falls back to the PGXL's own values; see
@@ -7960,6 +8112,32 @@ void MainWindow::wireMeters()
             m_radioModel.transmitModel().apdConfigurable());
     });
 
+    if (m_appletPanel && m_appletPanel->bandApplet()) {
+        // Same band-plan lookup as the overlay's Band panel, so the two
+        // highlights agree under every regional plan.
+        m_appletPanel->bandApplet()->setBandPlanManager(m_bandPlanMgr);
+        connect(m_appletPanel->bandApplet(), &BandApplet::bandSelected,
+                this, [this](const QString& bandName, double freqMhz, const QString& mode,
+                             const QString& stackKeyHint) {
+            PanadapterApplet* pan = nullptr;
+            if (SliceModel* s = activeSlice()) {
+                pan = m_panStack ? m_panStack->panadapter(s->panId()) : nullptr;
+            }
+            if (!pan && m_panStack) {
+                pan = m_panStack->activeApplet();
+                if (!pan && !m_panStack->allApplets().isEmpty())
+                    pan = m_panStack->allApplets().first();
+            }
+            if (pan && pan->spectrumWidget() && pan->spectrumWidget()->overlayMenu()) {
+                emit pan->spectrumWidget()->overlayMenu()->bandSelected(
+                    bandName, freqMhz, mode, stackKeyHint);
+            }
+        });
+        connect(m_appletPanel->bandApplet(), &BandApplet::xvtrSetupRequested,
+                this, [this]() {
+            openRadioSetupPage(QStringLiteral("XVTR"));
+        });
+    }
 }
 
 // Adaptive RX filter (RFC #3878): per FFT frame, drive the fit engine for every
@@ -8296,6 +8474,15 @@ void MainWindow::announceAntennaChoiceRefused(bool tx)
                          << "antenna choice refused: this radio publishes no"
                          << "antenna port to choose";
     showUnsupportedControlNotice();
+}
+
+
+void MainWindow::wirePureSignalApplet(IRadioBackend* backend)
+{
+    // The applet binds only to an advertised extension and otherwise unbinds.
+    if (m_appletPanel && m_appletPanel->pureSignalApplet()) {
+        m_appletPanel->pureSignalApplet()->setBackend(backend);
+    }
 }
 
 } // namespace AetherSDR

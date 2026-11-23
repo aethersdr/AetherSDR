@@ -5,6 +5,7 @@
 #include "FramelessResizer.h"
 
 #include "core/ThemeManager.h"
+#include "core/TxKeyingMarker.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -188,8 +189,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
                 rebuildTable();
             }
         });
-        // The model relays each status line before applying it, so the
-        // refresh runs once the burst has been applied.
+        // One refresh per burst of band status.
         m_refreshTimer.setSingleShot(true);
         m_refreshTimer.setInterval(0);
         connect(&m_refreshTimer, &QTimer::timeout, this, &TxBandDialog::refreshValues);
@@ -198,7 +198,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
                 m_refreshTimer.start();
             }
         };
-        connect(m_model, &RadioModel::statusReceived, this, refreshSoon);
+        connect(m_model, &RadioModel::txBandSettingsChanged, this, refreshSoon);
         connect(m_model, &RadioModel::connectionStateChanged, this, refreshSoon);
     }
     buildTable();
@@ -291,6 +291,8 @@ void TxBandDialog::buildTable()
 
         auto* rfEdit = new QLineEdit(QString::number(b.rfPower));
         rfEdit->setAccessibleName(tr("RF power percent, band %1").arg(b.bandName));
+        // The radio loads a band's RF power on QSY into that band: drive (#5851).
+        markTxSetpoint(rfEdit);
         rfEdit->setFixedWidth(50);
         rfEdit->setAlignment(Qt::AlignCenter);
         int bandId = id;
@@ -312,6 +314,7 @@ void TxBandDialog::buildTable()
 
         auto* tuneEdit = new QLineEdit(QString::number(b.tunePower));
         tuneEdit->setAccessibleName(tr("Tune power percent, band %1").arg(b.bandName));
+        markTxSetpoint(tuneEdit);
         tuneEdit->setFixedWidth(50);
         tuneEdit->setAlignment(Qt::AlignCenter);
         connect(tuneEdit, &QLineEdit::editingFinished, this, [this, tuneEdit, bandId, session] {

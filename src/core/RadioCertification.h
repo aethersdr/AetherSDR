@@ -2,15 +2,17 @@
 
 #include "models/MeterModel.h"   // kMinForwardWattsForSwr — the keyed-RF floor
 #include "TxCoordinator.h"
+#include "core/backends/IRadioBackend.h"
 #include "models/TxController.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QMetaObject>
-#include <QPointer>
 #include <QObject>
+#include <QPointer>
 #include <QString>
-#include <QVariantMap>
+#include <QStringList>
 
 #include <functional>
 #include <optional>
@@ -19,7 +21,6 @@ namespace AetherSDR {
 
 class RadioModel;
 class AudioEngine;
-class IRadioBackend;
 
 // Transmit bring-up instrument: drives the whole TX chain against one radio
 // (no simulator, no second receiver) and reports what every stage did.
@@ -40,18 +41,18 @@ public:
     // marked meterDependent.
     enum class Phase { Tune, Rx, Tx, Meters, All };
 
+    // The rf stimulus range the bridge accepts. The ceiling leaves headroom
+    // below full scale so the tone itself cannot clip the modulator.
+    static constexpr double kDefaultRfStimulusDbfs = -20.0;
+    static constexpr double kMinRfStimulusDbfs = -60.0;
+    static constexpr double kMaxRfStimulusDbfs = -3.0;
+
     struct Options {
         Phase phase = Phase::All;
         double frequencyMhz = 14.200;   // mid-band: both sidebands stay in band
         QString mode = QStringLiteral("USB");
         int settleMs = 2500;            // per keyed measurement
         bool includeAudioProbe = true;  // the demodulated-sideband stage
-
-        // The automation power ceiling (AETHER_AUTOMATION_TX_MAX_POWER), or -1
-        // for none. This verb keys repeatedly across several stages, so it is
-        // the last one that should sit outside the ceiling that exists to stop
-        // automation transmitting at the operator's full power.
-        int maxPowerPercent = -1;
 
         // A known off-air carrier for the receive stages. WWV is the default
         // because it is free, always on, on an exactly known frequency, and
@@ -69,6 +70,16 @@ public:
         // verb that keys repeatedly and unattended. The ceiling exists precisely
         // so automation cannot do that.
         int maxRfPowerPercent = -1;
+
+        // Level of the 1 kHz tone the rf and meter-scale stages key with, in
+        // dBFS. These are the two stages whose verdict needs a derived RF
+        // meter (SWR), and a backend may withhold one below its own forward
+        // gate: on the Hermes-Lite 2 a -20 dBFS tone at 40 % drive peaked at
+        // 113 of the 320 counts it needs. The level is the operator's choice,
+        // never raised by this tool, and every other keyed stage keeps -20
+        // because its known answer (a 6.02 dB mic-gain step, the sideband
+        // stage's recovery floor) was measured at that level. Bridge: tone=.
+        double rfStimulusDbfs = kDefaultRfStimulusDbfs;
 
         // A steady carrier for stage-squelch-scale, or 0 for referenceCarrierMhz.
         // Choose one below S9: above it the IC-7300MK2's gate sits 6-10 dB off
@@ -157,6 +168,53 @@ private:
     bool keyViaOperatorPath(bool on);
     bool keyedNow() const;
 
+    // The backend's own SWR gate as its health snapshot publishes it right now
+    // (#7063): the forward counts it requires, how many windows of the current
+    // over cleared it, and the current window peak. -1 for each key the
+    // backend does not publish, which is NOT a cleared gate.
+    struct SwrGateReading {
+        int gateCounts = -1;
+        int clearsThisOver = -1;
+        int peakCounts = -1;
+    };
+    SwrGateReading readSwrGate() const;
+    using SwrPublication = IRadioBackend::HealthSnapshot::SwrPublication;
+    void beginSwrObservation();
+    std::optional<SwrPublication> currentSwrPublication() const;
+    QPointer<IRadioBackend> m_swrBackend;
+    std::optional<SwrPublication> m_swrBaseline;
+    bool m_keyedSwrReceived = false;
+    QObject m_swrObserver;
+    QMetaObject::Connection m_swrConnection;
+
+    // What the rf stage concludes about SWR from one keyed window. Separate so
+    // the decision is testable without a transmitter. `result` is one of
+    // "reading", "gate-not-reached", "gate-withheld", "no-reading".
+    struct SwrAtKey {
+        QString result;
+        QString concern;
+    };
+    static SwrAtKey classifySwrAtKey(bool haveSwr, const SwrGateReading& gate,
+                                     int drivePercent, double toneDbfs);
+
+    // Arms the automation audio capture. False, with the engine's reason in
+    // *why, when it refused: a refused capture records nothing, so a stage
+    // that carried on would report silence as a measurement (#7083).
+    bool armCapture(int durationMs, const QStringList& points, QString* why);
+    static QString captureUnavailableConcern(const QString& why);
+
+    // What meter-scale concludes from one keyed snapshot. A reading counts only
+    // if the key was confirmed and the meter is fresh; otherwise its value is
+    // null, never the leftover (#7084). Separate so it is testable unkeyed.
+    struct MeterScaleReading {
+        QJsonValue micPeakDbfs;
+        QJsonValue swr;
+        QString swrNote;
+        QStringList problems;
+    };
+    static MeterScaleReading judgeMeterScale(bool keyedOk, const QJsonObject& keyed,
+                                             double toneDbfs);
+
     // Drive used for the sideband probe only. Enough to measure, low enough
     // that the receiver listening to its own transmitter is not driven into
     // clipping — at full power it saturates and the measurement is worthless.
@@ -186,14 +244,6 @@ private:
     // every transmit-meter verdict and cannot be answered from the meter whose
     // silence is being judged (CERTIFICATION.md 1.37).
     void observeKeyedRf();
-    void beginMeterObservation();
-    QJsonObject swrPublicationEvidence() const;
-    QPointer<IRadioBackend> m_meterBackend;
-    QVariantMap m_swrPublicationBaseline;
-    QObject m_meterObservationContext;
-    QMetaObject::Connection m_meterObservationConnection;
-    quint64 m_swrSeenSequence = 0;
-    quint64 m_swrKeyedDelivered = 0;
 
     // Was a transmission ever CONFIRMED to have produced RF during this run?
     //
@@ -205,9 +255,13 @@ private:
 
     // The floor forward power must clear for a keyed window to count as RF.
     //
-    // This is only a consumer-side RF presence floor. Gated meters also need
-    // their producer's publication evidence; this floor cannot establish that
-    // an SWR measurement was eligible for publication.
+    // Deliberately MeterModel's own SWR-qualifying floor rather than a number
+    // chosen here. The finding this precondition exists to suppress is "TX:SWR
+    // defined but never fed", and SWR is fed exactly when forward power clears
+    // that floor — so any other constant would make the precondition answer a
+    // slightly different question from the gate it is reasoning about, which is
+    // §1.1 one level up. Zero drive on the HL2 reads 0.001 W; a real key at
+    // 50 % read 2.0 W.
     static constexpr double kKeyedRfFloorWatts = MeterModel::kMinForwardWattsForSwr;
 
     // QPointer, not raw: run() holds these across nested event loops for minutes
@@ -230,6 +284,31 @@ private:
     double m_keyedFwdWattsMax = -1.0;
     int m_keyedRfSamples = 0;        // fresh forward-power reads inside a key
     int m_keyedWindows = 0;          // keyed windows that reached a measurement
+
+    // The BACKEND's own gate on a derived meter, and the highest raw reading
+    // seen against it (#7063). The keyed-RF precondition above answers "did
+    // this run radiate" with MeterModel's consumer floor, which is a different
+    // and much lower threshold than a producer may apply before it publishes a
+    // derived value at all — on the Hermes-Lite 2, 1.1 mW against 320 counts
+    // (~74 mW). Between the two, a run radiates, the precondition passes, and
+    // a correctly suppressed meter is reported as DEFINED BUT NEVER FED with
+    // no mention of the gate that silenced it.
+    //
+    // Negative means "the backend declares no such gate", which is NOT the
+    // same as a gate that was cleared, and must not collapse into it.
+    int m_swrGateCounts = -1;        // declared by the backend; -1 = none declared
+    // How many of the backend's publish windows cleared that gate while keyed,
+    // judged by the backend on the value it gates. THIS is what the verdict
+    // turns on, because it is exact in both directions. -1 = not declared.
+    int m_swrGateClears = -1;
+    // Highest window peak seen while keyed, for the REPORT ONLY — it says how
+    // far below a gate a run sat. It is NOT the quantity the gate is applied
+    // to, so no verdict may be derived from it — deriving one would be the
+    // §1.37 error one level in (#7063).
+    int m_keyedFwdCountsMax = -1;
+    // Highest RF drive observed while keyed, 0..100. Shapes the REMEDY only:
+    // "raise drive" cannot be the advice at full drive. -1 = never sampled.
+    int m_keyedDrivePercentMax = -1;
     bool m_fwdPowerMeterDefined = false;
 
     // The consumer-side reading taken while the radio was actually keyed.

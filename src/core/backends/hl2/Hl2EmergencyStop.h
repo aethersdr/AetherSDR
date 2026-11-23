@@ -17,9 +17,10 @@ namespace AetherSDR::hl2 {
 // arm() precomputes fd, sockaddr and the 64-byte stop datagram so fire() is
 // async-signal-safe. SIGKILL cannot be caught.
 
-// Publish the parameters needed to stop the radio. Called by MetisClient once
-// its socket is bound and the destination is known. Passing an invalid fd
-// disarms.
+// Publish the parameters needed to stop the radio, and register
+// fireEmergencyStop() with core/FatalSignalRelease.h, whose handlers fire it.
+// Called by MetisClient once its socket is bound and the destination is known.
+// Passing an invalid fd disarms.
 void armEmergencyStop(qintptr fd, const QHostAddress& host, quint16 port,
                       const std::array<std::uint8_t, 64>& stopPacket) noexcept;
 
@@ -33,11 +34,5 @@ void disarmEmergencyStop() noexcept;
 // Sends the datagram a few times: this is UDP, the packet is 64 bytes, and the
 // cost of a lost one is a radio the operator has to walk over to and unplug.
 void fireEmergencyStop() noexcept;
-
-// Install handlers for SIGTERM/SIGINT/SIGHUP/SIGQUIT that fire the stop, restore
-// the default disposition and re-raise (exit status unchanged). An inherited
-// SIG_IGN stays ignored; crash signals are left to crash reporting. Call once,
-// early in main(); safe with no radio connected.
-void installEmergencyStopSignalHandlers() noexcept;
 
 }  // namespace AetherSDR::hl2

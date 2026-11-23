@@ -2,19 +2,19 @@
 title: "Hermes-Lite 2"
 slug: "/hermes-lite-2"
 description: "AetherSDR can operate a Hermes-Lite 2 (HL2) over openHPSDR Protocol 1."
-status: "Experimental"
+status: "Supported"
 applies_to: ["Hermes-Lite 2"]
 ---
 
 :::info[Status]
 
-**Status:** Experimental · **Applies to:** Hermes-Lite 2
+**Status:** Supported · **Applies to:** Hermes-Lite 2
 
 :::
 
-AetherSDR can operate a **Hermes-Lite 2** (HL2) over openHPSDR Protocol 1. Support is **experimental**: the radio receives and transmits, but FlexRadio remains AetherSDR's supported target (see [Supported Radios](./supported-radios.md)). An **EXPERIMENTAL** badge shows in the title bar while an HL2 is connected.
+AetherSDR can operate a **Hermes-Lite 2** (HL2) over openHPSDR Protocol 1. The HL2 is **supported** in the desktop application: board id 6 over Ethernet, with gateware 74 ([#7257](https://github.com/aethersdr/AetherSDR/issues/7257)). **Windows is not yet certified**: no Windows `radiocert` run has been posted yet ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)). Other gateware, other boards, the wider Hermes-Lite family and aetherd remain experimental (see [Supported Radios](./supported-radios.md)). An HL2 on gateware 74 shows no EXPERIMENTAL badge. Other gateware, or a board that names itself in its gateware version (such as **SQUARE SDR 2 gateware**), shows the **EXPERIMENTAL** badge in the title bar and an "Experimental radio support" notice when you connect.
 
-The HL2 has no on-board DSP, so AetherSDR does the demodulation, filtering, AGC, noise blanking and transmit modulation on your computer, using WDSP.
+The HL2 has no on-board DSP, so AetherSDR does the demodulation, filtering, AGC, noise blanking, noise reduction and transmit modulation on your computer, using WDSP.
 
 ## Where to go next
 
@@ -30,14 +30,14 @@ The HL2 has no on-board DSP, so AetherSDR does the demodulation, filtering, AGC,
 
 ### Connecting
 
-The HL2 is found automatically on your LAN: open **File → Connect to Radio...** → **On This Network**, select it and click **Connect Selected Radio**. AetherSDR probes from every active IPv4 interface, so a computer with several network adapters finds the HL2 on the one it is connected to, and keeps using that interface for the session and its reconnects.
+The HL2 is found automatically on your LAN: open **File → Connect to Radio...** → **Nearby radios**, select it and click **Connect Selected Radio**. AetherSDR probes from every active IPv4 interface, so a computer with several network adapters finds the HL2 on the one it is connected to, and keeps using that interface for the session and its reconnects.
 
 Across a VPN or another subnet, use **Connect by IP** with **Radio type:** set to **Hermes-Lite 2** (see [Manual Connection](./manual-connection.md)).
 
 - **Connect to last radio on start up** works with the HL2.
 - **Nickname:** right-click the radio in the list → **Set Nickname…** / **Clear Nickname** (no need to connect), or **Settings → Radio Setup... → Radio → Nickname:** while connected. HL2 nicknames are stored on this computer, keyed by the radio's MAC address.
 - The very first connect on a computer spends a while planning its DSP filters; the app stays responsive while it does. The result is saved, so later connects are quick.
-- The status bar shows the gateware version as major.minor, such as **74.3** for stock Hermes-Lite 2 gateware. Boards built on the HL2 can report their own minor version: a SQUARE SDR 2 reads **xx.52**.
+- The status bar shows the gateware version as major.minor, such as **Gateware 74.3** for stock Hermes-Lite 2 gateware. A SQUARE SDR 2 (minor version 52) and a SQUARE 3 (53) are named: **SQUARE SDR 2 gateware 75.52**. A first-generation SQUARE SDR runs stock HL2 gateware and shows as a Hermes-Lite 2.
 
 On Linux and macOS, the WDSP filter-planning cache uses `XDG_CACHE_HOME` when
 nonempty, otherwise `$HOME/.cache`. If both variables are unset or empty,
@@ -51,10 +51,11 @@ with the same temporary-directory fallback. The cache file is
 
 | Group | Controls |
 |-------|----------|
-| **Local Audio** | **Codec:** **None — plain Hermes-Lite 2**, **AK4951 — HL2+ companion board**, or **SquareSDR 2 — codec on the mainboard**. A board with a codec can play receive audio on the radio's own speaker; **Speaker level:** sets it. |
+| **Local Audio** | **Codec:** **None — plain Hermes-Lite 2**, **AK4951 — HL2+ companion board**, or **SquareSDR 2 — codec on the mainboard**. A board with a codec can play receive audio on the radio's own speaker; **Speaker level:** sets it. A SQUARE SDR 2 with no codec chosen yet starts with **SquareSDR 2** selected and **Detected: SQUARE SDR 2 — suggested, not saved** beside it; choosing a codec, the selected one included, stores it, and any choice you have made, **None** included, is kept. |
 | **Dither Bit** | **Dither bit** and **Random bit**. On some variants the first box is relabeled to what that board uses the line for (internal loudspeaker or band-voltage output). |
-| **Companion Filter Board** | **Board:** **None — nothing on J16**, **N2ADR — receive and transmit**, or **N2ADR — transmit only**. **Receive through the N2ADR 3 MHz high-pass** adds the AM-broadcast high-pass on receive (80 m to 10 m). Choose **None** only when nothing is fitted, because then nothing filters the transmitter's harmonics. |
+| **Companion Filter Board** | **Board:** **None — nothing on J16**, **N2ADR — receive and transmit**, or **N2ADR — transmit only**. **Receive through the N2ADR 3 MHz high-pass** adds the AM-broadcast high-pass on receive (80 m to 10 m). Choose **None** only when nothing is fitted, because then nothing filters the transmitter's harmonics. A SQUARE SDR 2 with no board chosen yet starts with **N2ADR — transmit only**, its own arrangement, selected and **Detected: SQUARE SDR 2 — suggested, not saved** beside it; as with the codec, choosing a board, the selected one included, stores it, and any choice you have made is kept. |
 | **Reference Clock and Tuner** | **External 10 MHz reference at CL1** locks the radio to a reference such as a GPSDO instead of its crystal. CL1 expects a 3.3 V logic-level clock: pad a typical 5 V GPSDO output with at least 6 dB of 50 Ω attenuation. Lock is not read back. **Antenna tuner driven by the HL2 gateware** raises the tune request during TUNE for an AH-4-protocol ATU; leave it off for a tuner on the N2ADR IO board. |
+| **IO Board** | **Read IO Board Status** reads the N2ADR IO board once: firmware major version, EXTTR (high on receive), inputs In1 to In5, the antenna tuner register and the fault code. Nothing is read until you press it, and reading changes nothing on the board. With no board fitted it says **No IO board answered**. |
 
 The HL2 IO board's amplifier control follows the band.
 
@@ -72,8 +73,9 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 ## Receivers and Panadapters
 
 - **Up to four receivers** (A–D), each with its own slice, panadapter, audio and S-meter. Add one with **Tools → Add Panadapter...**; close its pane to remove it.
-- The receivers share one converter, so the **span (sample rate), LNA gain, band and antenna are radio-wide**. Mode, passband, AGC and frequency are per receiver.
-- **After a restart** the receivers you had open come back, each with its own frequency, mode, passband, noise blanker, APF, squelch, RIT/XIT, audio gain and pan, and transmit returns to the receiver that had it. If the span allows fewer receivers than you had, the others are kept and come back on a later connect with room for them, unless you add or close a receiver first.
+- The receivers share one converter, so the **span (sample rate), LNA gain, band and antenna are radio-wide**. Mode, passband, AGC and frequency are per receiver. The RX antenna menu offers **ANT**, the one receive input; KiwiSDR receivers, when configured, are listed beside it.
+- **After a restart** the receivers you had open come back, each with its own frequency, mode, passband, noise blanker, NR, ANF, APF, squelch, RIT/XIT, audio gain and pan, and transmit returns to the receiver that had it. If the span allows fewer receivers than you had, the others are kept and come back on a later connect with room for them, unless you add or close a receiver first.
+- After disconnecting and reconnecting to the same HL2, transmit returns to the receiver that held it and uses that receiver’s mode and transmit passband. Each panadapter keeps its centre, as after a restart, unless its slice no longer fits in the middle 80 % of the span; then it is centred on the slice. Reconnecting does not key the radio.
 - **Span** snaps to 48, 96, 192 or 384 kHz. Four receivers run up to 192 kHz, three at 384 kHz. **Use low bandwidth mode** caps the span at 96 kHz. Only the pane holding the TX slice (otherwise the first docked pane) has live span buttons; the others are dimmed with the reason.
 - **Band buttons** switch the hardware filters and preamp as well as the frequency.
 - **Spots** from the DX cluster, RBN, WSJT-X, POTA and manual entry are drawn on the panadapter. Right-click a spot → **Remove Spot**.
@@ -87,6 +89,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 - Dragging the dBm scale or clicking its strip adjusts the display locally without an unsupported-command notice. The automatic noise-floor adjustment remains available.
 - **Auto RF gain** adjusts the LNA from the measured wideband headroom, in 6 dB steps, across the full range. If it cannot arm, the reason appears on the checkbox and in a notice.
 - CAT `L RF` / `l RF` (rigctl) drive the panadapter RF gain across the same range; 0.5 is +18 dB.
+- **While you transmit**, the HL2 holds its LNA at no more than **+8 dB**, so its own transmitter does not overdrive the receiver and draw a forest of false lines on the panadapter. The radio switches it at the transmit/receive edge and returns your RF gain on unkey. A gain already at or below +8 dB is not changed. With PureSignal on, PureSignal sets the gain while you transmit instead. Without PureSignal, the dBm scale follows the +8 dB cap. There is no setting for this.
 
 > **Upgrading from an older version:**
 > - A band you have not visited comes up at **+20 dB** LNA on every profile. A profile that carried a stuck lower value comes up hotter (26 dB in the reported case) on unvisited bands. Visited bands keep their gain.
@@ -101,9 +104,10 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 - After you unkey, receive stays muted through the transmit/receive turnaround, so you don't hear the PA's own carrier.
 - **S-meter** reads WDSP's average level. It holds steady across key-down and unkey.
 - **AM and SAM** audio is DC-blocked and clean.
+- **FM** audio passes through WDSP's FM limiter, so it stays below full scale, open-squelch noise included. A 1 kHz tone at the full 5 kHz deviation plays at 0.43 of full scale.
 - **CW:** the passband is centered on the signal marker (a real BFO at your CW pitch).
 
-> **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up.
+> **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up. FM plays about 8 dB quieter again (a full-deviation 1 kHz tone, 1.08 → 0.43 of full scale); raise the slice's AF gain or your listening level if it is too quiet.
 
 ### Receive filters
 
@@ -125,7 +129,7 @@ ranges are skipped; if none fit, the normal CW presets appear.
 
 The **SQL** button works per mode family:
 
-- **FM:** FM squelch.
+- **FM:** a noise squelch, not a level gate. It opens when a signal quiets the receiver's noise, so the level at which a station opens it depends on how strong it is and on how hard it modulates. The threshold follows the receive filter width, so with no signal the closing point moves far less with width than it would otherwise: from level 15 noise alone keeps it closed at least half the time at every width from ±1500 to ±6000 Hz, and a narrower filter still needs a few more levels than a wide one to close it fully. Above ±6000 Hz (the FM default is ±8000) noise alone already keeps it closed from level 1. Below ±1500 Hz noise needs a higher setting to close it. A strongly modulated station closes the squelch at a lower setting than an unmodulated carrier of the same strength, and the width compensation does not change that. The **SQL** slider shows whether the gate is open: its fill dims while the squelch is closed, and its tooltip says **Gate open** or **Gate closed**.
 - **AM, SAM, DSB, LSB, USB:** a level squelch with a threshold map measured on the HL2. It tracks RF gain dB for dB.
 - **CW and data modes:** no squelch.
 
@@ -146,40 +150,81 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 - **Manual notches:** right-click the panadapter → **Add TNF at X MHz**. Drag a notch sideways to move it and up or down to change its width; right-click it to remove it. Notches keep tracking as you tune, and are remembered across restarts. See [TNF (Tracking Notch Filters)](./tnf-tracking-notch-filters.md).
 - **NB** cycles Off → **NB** → **NB2** → Off. Both run WDSP impulse blankers on the raw IQ, ahead of the demodulator, and both are held during transmit. **NB** silences each impulse; **NB2** reconstructs the blanked window from the samples either side, which sounds better when an impulse lands on a signal and worse when the noise is dense. While NB2 runs, an **NB2** fill selector appears under the DSP controls: **Zero**, **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**. Neither blanker is offered in FM.
-- Client-side noise reduction works as on any radio; see [DSP Noise Mitigation](./dsp-noise-mitigation.md).
+- **NR** and **ANF** are on the VFO flag's **DSP** tab. They run WDSP's noise reduction (ANR) and auto notch (ANF) inside the receiver's own channel, ahead of the AGC, so TCI programs, decoders and aetherd get the processed audio as well as your speakers. Each receiver keeps its own setting and level, and both are remembered across restarts. NR is not offered in FM; ANF only in USB, LSB, DSB, AM and SAM, because in CW and the data modes the steady tone it removes is the signal. A setting you made in another mode comes back when you return to one where it runs.
+- The **AetherRX** noise reduction methods (NR2, RN2 and the others) are a separate stage. They run later, on the audio your computer plays, and do not reach TCI programs or decoders. Both can run at once; see [DSP Noise Mitigation](./dsp-noise-mitigation.md).
 
 ## Transmit
 
 - **SSB voice** uses WDSP's TXA modulator. The EQ, PROC, TX low/high cut, eSSB, ALC and compression gauges act on the HL2.
-- **Transmit timing:** voice and data audio wait for a three-block IQ queue at the start of an over. Its two-block margin absorbs up to about 43 ms of accumulated delivery lateness; larger delays can still cause gaps. USB and LSB use a minimum-phase transmit filter; data modes keep linear phase. CW and TUNE bypass the queue hold.
-- **TX filter-loss notice:** when transmitting from receiver A, AetherSDR can warn if the transmit audio is strongly attenuated through the modulator. The check uses a 40 dB threshold, so a narrow passband can still reduce audio without triggering a notice. It does not detect this loss in FM or while transmitting from another receiver.
+- **Transmit timing:** at the start of an over, voice and data audio wait until one block (about 11 ms) plus about 43 ms of IQ is queued. That margin absorbs up to about 43 ms of accumulated delivery lateness; larger delays can still cause gaps. USB and LSB use a minimum-phase transmit filter; data modes keep linear phase. CW and TUNE bypass the queue hold.
+- **TX filter-loss notice:** when transmitting from receiver A, AetherSDR can warn if the transmit audio is strongly attenuated through the modulator. The check uses a 40 dB threshold, so a narrow passband can still reduce audio without triggering a notice. It does not detect this loss in FM or AM, or while transmitting from another receiver.
 - **The Mic Level slider is the transmit level.** The ALC only ever reduces. The Phone panel shows the **ALC Gain** the radio reports.
 - **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
 - **CW** is keyed with host-timed edges, with sidetone, at the same carrier level as TUNE. CW settings are restored after a restart.
-- **A key or PTT on the radio's own jack** shows as transmit and mutes the receiver for as long as the radio reports it. AetherSDR does not key or modulate because of it.
+- **CW text from a logger:** rigctld `send_morse` is keyed by AetherSDR when the transmit slice is in CW, at the CW speed and break-in setting in AetherSDR, without local sidetone. With break-in off, the logger must key PTT first, or the text is refused. TCI and FlexCAT CW text are not keyed. See [CAT Control](./cat-control.md).
+- **A key or PTT on the radio's own jack** shows as transmit and mutes the receiver for as long as the radio reports it. In a voice mode AetherSDR then keys its own modulator the way MOX does, so your microphone audio is transmitted, and releases it when the radio's PTT is released. The same refusals as MOX apply (receive-only mode, transmit inhibit, no transmit slice), and in DIGU or DIGL it is refused with "You cannot transmit voice in DIGU/DIGL mode": digital programs key through the [TCI Server](./tci-server.md). An EP6 stream gap longer than 2 s releases the followed host key, including when the first recovery attempt succeeds. A PTT that is already held when AetherSDR connects, or when the stream recovers after a dropout, is shown as transmit but keys nothing; release it and press again. A receiver-count change also requires a released level on the new stream before a new press can key; a transmission already following the radio PTT keeps its key until release. Delayed packets from the old stream can delay PTT changes for about 0.17 s at 48 kHz with one receiver; if the held PTT shows transmit without microphone audio after recovery, release it and press again. If you were already transmitting with MOX, TCI or TUNE, that transmission keeps its own release. If it ends while the radio PTT is still held, the radio stays in transmit without microphone audio until you release the PTT and press again. In CW the radio's own keyer drives it, and AetherSDR does not key.
 - **TUNE** keys at **Tune Power**, and moving Tune Power during a tune changes the carrier. Tune Power is remembered per band.
 - **Session safety:** MOX, CW PTT and TUNE requests are refused while the radio session is stopped. Stopping the session clears a held software key; reconnecting requires a fresh transmit request.
 - **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
-- **SWR while transmitting** is the ratio of the highest forward and the highest reflected reading in each 0.1 s telemetry window, so it reads the load rather than the speech envelope. It appears about 0.2 s after keying and holds its last reading through pauses in speech. Unkeyed, and in **Tools → Radio Health...**, SWR is the ratio of the latest pair of readings.
+- **SWR while transmitting** is the ratio of the highest forward and the highest reflected reading in each 0.1 s telemetry window, so it reads the load rather than the speech envelope. It appears about 0.2 s after keying and holds its last reading through short pauses in speech; when the carrier drops to a lower level and stays there, it also holds for a moment before following. This applies to overs AetherSDR keys (MOX, PTT from a client, tune); an over keyed on the radio's own PTT input still shows the latest pair. Unkeyed, and in **Tools → Radio Health...**, SWR is the ratio of the latest pair of readings.
+- In the certification meter inventory, **NOT DELIVERED** means a keyed window cleared the SWR gate during this run and the meter received no keyed reading. A missing reflected sample can cause this. A link drop makes the result **INCONCLUSIVE**. Start a fresh run after the link recovers.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
+- **DSB carrier:** DSB suppresses the carrier. On one HL2 into a dummy load, on a build of main from 2026-10-31 (`adc4e4a9f`), the remaining carrier measured 47 dB below the sidebands.
+- **FM deviation** is set to 5 kHz, and no control changes it. Pre-emphasis raises the deviation with audio frequency and the ALC limits the input, so a steady tone stays under 5 kHz: a full-scale 1 kHz tone deviates about 1.4 kHz, and a 2 kHz tone at −6 dBFS about 1.7 kHz. Audio above the TX high cut is filtered out. Speech deviation has not been measured.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
+- **TX output, ANT or RF1:** the slice's TX antenna button chooses where transmit leaves the board. **ANT**, the default, uses the onboard PA. **RF1** is the low-power output with the PA off. The choice is remembered per radio and comes back on the next connect; RF1's drive starts at 0 % each time. The choice cannot change while the radio transmits.
+- **RF power on RF1** is a separate setting. It starts at 0 % each time you select RF1 and is not remembered per band; your ANT drive for each band is kept and returns when you select ANT. TUNE on RF1 runs at the RF1 setting, and Tune Power has no effect there.
+- **On RF1 the TX applet's power and SWR gauges are dimmed and say "not measured on RF1".** The HL2 has no power detector on RF1, so they cannot show what RF1 sends; a reading near 0 is expected, not a fault. Screen readers announce the same reason. An amplifier keyed from EXTTR still keys on RF1, the IO board still receives the TX frequency, and the gateware tuner request is not raised. A CAT program's antenna command (`set_ant`) changes only the receive antenna, and recalling a band-stack entry leaves the TX output where it is.
 - **MON** and its volume slider, and **VOX** and its level slider, are disabled because these controls are unavailable on the HL2. Their tooltips and accessible descriptions explain why.
 
 > **Upgrading from an older version:** CW keys at the same carrier level as TUNE, about 6 dB (four times the power) above earlier versions at the same RF power setting. Check your RF power before you key CW into an amplifier or a low-power load.
 
 > **Upgrading from an older version:** the transmit queue adds about 43 ms of audio delay and can discard about 43 ms more audio when you release PTT. The shorter voice filter partly offsets the start delay: one HL2 tone measurement showed about 12 ms more leading silence overall. Allow the audio to finish before releasing PTT; external digital-mode timing must accommodate the queue delay.
 
+## PureSignal
+
+PureSignal corrects the transmitter's distortion with adaptive pre-distortion. The HL2 measures its own transmitted signal on a feedback receiver. The **PS** applet appears in the applet panel when an HL2 is connected.
+
+**What it needs.** PureSignal uses DDC 2 and 3 for the feedback and the transmit reference, so it needs:
+
+- gateware that offers four receivers;
+- a span narrow enough for four receivers to fit the link;
+- at most two receivers open. While PureSignal is on, you cannot open a third.
+
+When one of these is missing, the PureSignal button is dimmed, and the line under it says why.
+
+**Controls.** Hover over any control in the applet for a short explanation.
+
+- **PureSignal** turns it on and off. You can turn it on or off only while you are not transmitting. If you left it on, it comes back on when you connect again, including when the link recovers from a watchdog interruption. If the HL2 cannot run it at that moment, for example because three receivers are open, it stays off and the line under the button says why. Its remembered preference stays on; to change it, first restore a configuration where PureSignal is available.
+- **Auto** calibrates again and again while you transmit. Unticking **Auto** stops new calibrations and keeps the last good correction, until you press **Reset** or turn PureSignal off.
+- **Single** calibrates once, on your next transmission, then holds that correction. It stays lit from the press until that calibration is done. If the calibration fails, Single starts it again, three tries in all, and then turns off.
+- **FB** is the feedback level. A calibration needs it inside the marked window (128–181).
+- The line under the meter shows the attenuation, the number of calibrations and the engine state. The state line says what PureSignal is doing, for example "Armed — key into a load to calibrate".
+
+PureSignal never keys the radio. It calibrates on transmissions you make yourself: key into your antenna or a dummy load.
+
+**Settings** (under **▸ Settings**):
+
+- **Auto-attenuate feedback** moves the receive attenuation while keyed, so the feedback level stays in the window. Turn it off to set **TX att** by hand (−28 to 31 dB).
+- If the attenuation reaches its maximum (31 dB) and the feedback is still above the window, the state line says "Feedback too strong to calibrate at 31 dB". PureSignal cannot calibrate until the level comes down. This happens with an external amplifier's RF sampler at high power. Put a fixed attenuator (for example an SMA attenuator) in the feedback line until the level settles inside the window.
+- If the HL2 itself reports ADC overload while you transmit with PureSignal on, the state line turns red: "WARNING: ADC overload while transmitting — the feedback overdrives the receive input". The feedback is then too strong for the receive converter, and no calibration done at that level can be trusted. Add the attenuator before you transmit at that power again. The warning stays after you unkey. It clears when the radio reports a clean measurement window during a transmission or when you turn PureSignal off. At the other end, "Feedback too weak at full gain" means the coupler or sampler gives too little signal.
+- **Reset** drops the correction.
+- **Save…** writes the current correction to a file. **Restore…** loads one. The file path must be shorter than 256 bytes. WDSP file errors appear in the state line, taking priority over the ready indication. WDSP latches these errors until its transmit channel is rebuilt.
+
+**Single, Reset and Restore switch Auto off,** because each one replaces continuous calibration with a correction you chose. Press **Auto** again to go back to continuous calibration.
+
+AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedback** and a manual **TX att** for each HL2. A mode or filter change that rebuilds the transmit channel also clears a held Single or restored correction; calibrate again or restore it. A correction is not remembered: after a restart, PureSignal calibrates again, or you load one with **Restore…**. The attenuation that auto-attenuate reaches is not remembered: each session finds it again on the first calibration.
+
 ## Other Features
 
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware and the transmit voice chain. Its **SWR meter publication** section shows the selected forward/reflected counts, the minimum forward count, the latest publication decision, and keyed-window counters. These describe the meter's actual input; the separate raw SWR row remains the latest-pair diagnostic.
-- **Certification reports:** `radiocert meters` reports **SUPPRESSED** when this run's SWR windows were withheld for low forward power, key-on settling, or speech pauses. **INCONCLUSIVE** means publication evidence is missing or the radio session changed, including recovery after an interrupted telemetry stream. **NOT DELIVERED** means the backend had eligible keyed windows but no new keyed SWR update reached the meter. A reading retained from an earlier run, or received while unkeyed, does not count as keyed delivery in this run.
+- **Tools → Radio Health...** shows link, temperature, PA current (in amps, and the raw count), gateware, the TX output and the transmit voice chain.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference
@@ -187,17 +232,43 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 ### Not available on the HL2
 
 - DAX, SmartLink or Multi-Flex.
-- The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex.
+- The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex. rigctld CW text is keyed by AetherSDR instead.
 - FM repeater duplex and CTCSS encode.
 - Line out and headphone controls: the **Line Out:** and **Headphone:** rows under **Settings → Radio Setup... → Audio → Radio Audio Outputs** are dimmed. A codec board's speaker level is under **HL2 Hardware**.
-- Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied."
+- Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied." The transmit time-out that applies is **Transmit time-out (this computer)** on the same page; see [Transmit time-out](./tx-controls.md#transmit-time-out).
 - Controls the HL2 cannot honor are dimmed with their reason, or refuse with a notice.
 
 ## Known issues
 
-- Only one Hermes-Lite 2 (gateware 74) on macOS, transmitting into a dummy load, has been tested for this page. Linux, Windows and other HL2 boards have not. If you run an HL2 there, reports of what works and what does not are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)).
-- Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
-- Each over starts with about 100 ms of keyed silence before your audio is transmitted ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
+- RF1's output level against the RF power slider, and its harmonics, have not been measured ([#4954](https://github.com/aethersdr/AetherSDR/issues/4954)). Start low and use a fixed attenuator before any receiver or analyzer.
+- Each over starts with keyed silence before your audio is transmitted: about 125 ms from the microphone and 175 to 195 ms from a TCI client, longer when the client's audio arrives unevenly ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
+- One user reported spill beside the SSB signal while transmitting, and a busy ALC gauge. The distorted audio in the same report was clean from v26.10.1. A later side-by-side on that station, with a 300 to 2700 Hz transmit filter, showed the same output from AetherSDR as from deskHPSDR; no retest since then is on record ([#5198](https://github.com/aethersdr/AetherSDR/issues/5198)).
+- With no audio input device on the computer, a voice transmit still keys the HL2 but sends no RF. The AetherTX notice says so, and the first voice transmission in that state also shows the notice on the panadapter; CW, TUNE and TCI audio are not affected. See [Aetherial Audio](./aetherial-audio.md#requirements) ([#7078](https://github.com/aethersdr/AetherSDR/issues/7078)).
+- A CW key on the HL2's own key jack gives no sidetone in AetherSDR: the radio makes the CW itself, the receiver is muted while it does, and the client sidetone follows only AetherSDR's own keyer ([#5909](https://github.com/aethersdr/AetherSDR/issues/5909)).
+- Paddle CW timing can vary with load: each dit and dah edge from AetherSDR's keyer waits in the app's main event queue before it reaches the radio, so a busy computer can stretch or shorten elements ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
+- One user reports a row of evenly spaced peaks on the 10 m panadapter while transmitting FT8 at 28.074 MHz. It is not confirmed: a receive-only check of 10 m on another HL2 found none on a dummy load ([#6577](https://github.com/aethersdr/AetherSDR/issues/6577)).
+- One user reports that a transmission keyed over TCI on v26.11.2 drops out every few seconds. It is not reproduced: in 31 TCI overs into a dummy load on another HL2, on v26.11.2 and on main of 2026-11-12 (`50ed5fff2`), transmit and audio held for the whole over ([#7188](https://github.com/aethersdr/AetherSDR/issues/7188)).
+
+### What has not been tested
+
+This page was checked with one Hermes-Lite 2 (gateware 74) at one station. `radiocert` `tune`, `rx`, `tx`, `meters`, `persist` and `all` ran on macOS and on Linux; on Linux without a desktop and with null audio devices. Reports from other setups are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)).
+
+Field time continues after the Supported label: at least 20 hours on the air with a released build, from at least two stations (one of them not ON8ST's), over at least two weeks, with no open bug against the supported HL2 in that time. Each station posts its hours, modes, OS, version, gateware and board on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678).
+
+Not yet tested:
+
+- Windows: not yet certified. That waits for a Windows `radiocert` run posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Boards built on the HL2 are not tested either.
+- Transmitting into an antenna: every transmit test went into a dummy load.
+- Calibrated power: the forward power and SWR readings are not checked against a calibrated meter, so they are not calibrated watts.
+- Transmit linearity: intermodulation (IMD) has not been measured with a calibrated instrument.
+- CW sent with a key on the radio's own jack.
+- What the radio does when AetherSDR disconnects, hangs or crashes while transmitting. Refusing to transmit while the session is stopped is checked by automated tests only, not on a radio.
+- Receive audio in each mode, end to end on a radio. AGC, a manual notch, squelch, NR and ANF are checked by automated tests without a radio, in USB only (NR and ANF also in CW for the mode rule).
+- Receive on 10 m free of spurs from the radio itself.
+- A change made from a CAT or TCI program reaching both the on-screen control and the radio.
+- Modes, filters and bands coming back after a restart are checked by automated tests without a radio; saved filter presets are not covered.
+- Two HL2s used from one computer.
+- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. Its AGC threshold, noise blanker, noise reduction, RIT and RF gain controls are checked by automated tests only. aetherd does not transmit with an HL2.
 
 ## Troubleshooting
 

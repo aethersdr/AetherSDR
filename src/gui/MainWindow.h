@@ -76,6 +76,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #ifdef HAVE_MIDI
@@ -86,6 +87,7 @@
 #include "core/ShuttleRateIntegrator.h"
 #endif
 #include "core/ShortcutManager.h"
+#include "ControlActionRegistry.h"
 #include "core/SpectrogramBuffer.h"
 #include "core/SignalClassifier.h"
 #include "core/TgxlConnection.h"
@@ -125,6 +127,7 @@ class QAbstractSlider;
 class QMediaDevices;
 class QPushButton;
 class QShowEvent;
+class QWindow;
 class QSystemTrayIcon;
 
 #include "gui/ClientEqApplet.h"   // ClientEqApplet::Path enum used in
@@ -145,6 +148,7 @@ class AetherClockModel;
 class AntennaAnalyzerModel;
 class AetherLabWidget;
 class AutomationServer;
+class ShortcutTooltips;
 class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
@@ -153,7 +157,6 @@ class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
 class SpectrumWidget;
-class StatusBarNoticeLabel;
 class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
@@ -172,6 +175,7 @@ class UiTickLagMeter;
 class WhatsNewDialog;
 class Nr2WisdomDialog;
 class ProfileManagerDialog;
+class RadioHealthDialog;
 class HelpDialog;
 class SupportDialog;
 class SettingsBrowserDialog;
@@ -280,6 +284,7 @@ public:
     static constexpr int ShortcutFireNoDirectHandler = 2;  // event-filter action (ptt_hold, CW keys)
     static constexpr int ShortcutFireTxBlocked       = 3;  // keysTx action, allowTx false
     static constexpr int ShortcutFireTxOk            = 4;  // keysTx handler ran
+    static constexpr int ShortcutFireTxDriveBlocked  = 5;  // setsTxDrive action, power ceiling armed
     // Fire a registered ShortcutManager action by id — the exact path a MIDI
     // controller mapping takes (see fireShortcut in MainWindow_Controllers.cpp).
     // Used by the automation bridge (#3646) to reach MIDI/shortcut-only actions
@@ -287,7 +292,7 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
-    int fireShortcutAction(const QString& id, bool allowTx,
+    int fireShortcutAction(const QString& id, bool allowTx, bool txCeilingArmed,
                             const std::shared_ptr<TxController>& controller);
     // injectKeyEventForAutomation result codes (plain ints, same reason as
     // above). Delivers a real KeyPress/KeyRelease through the application
@@ -299,8 +304,10 @@ public:
     static constexpr int KeyInjectNotConsumed = 3;  // delivered, no momentary handler claimed it
     static constexpr int KeyInjectTxOk        = 4;  // keysTx press delivered and consumed
     static constexpr int KeyInjectUnbound     = 5;  // known action id with no key binding
+    static constexpr int KeyInjectTxDriveBlocked = 6;  // ceiling armed: setsTxDrive PRESS, or a lease key on a drive slider
     Q_INVOKABLE int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx);
     int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,
+                                    bool txCeilingArmed,
                                     const std::shared_ptr<TxController>& controller);
     // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
     // disable / place, driven by the `workspace` automation verb.  Returns
@@ -387,6 +394,16 @@ protected:
     void restoreNativeClientRect(const QString& role);
     // Windows 11: colour the DWM window border to color.background.app.
     void applyWindowsFrameColor();
+    // Windows 11: inset the central widget and status bar by the resize band
+    // so controls stay clear of the WM_NCHITTEST resize zone, and while
+    // maximized by Qt's excess over the native client (#7077). Both are
+    // per-monitor device-pixel figures, so this re-runs whenever they can move.
+    void applyNonClientBandInsets();
+    // Qt delivers DevicePixelRatioChange to event(), never to changeEvent().
+    bool event(QEvent* event) override;
+    // The QWindow applyNonClientBandInsets() is connected to; setWindowFlags()
+    // re-creates the handle, so the connection is re-made per show.
+    QPointer<QWindow> m_bandInsetWindow;
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 #endif
     void closeEvent(QCloseEvent* event) override;
@@ -431,6 +448,13 @@ private slots:
     void applyOperatorTuningStep(int stepHz);
 
 private:
+    void refreshPanZoomControls();
+    // Why a native-span B/S cannot act on this pan right now, or nullopt.
+    // The B/S enable and every command path ask this one question.
+    std::optional<QString> nativePanZoomBlockedReason(const PanadapterModel* pan) const;
+    // The active band plan's zoom region (low, high MHz) at a frequency.
+    std::optional<std::pair<double, double>> bandPlanZoomRegion(double frequencyMhz,
+                                                                bool segment) const;
     enum class TuneIntent {
         IncrementalTune,
         AbsoluteJump,
@@ -466,6 +490,9 @@ private:
     void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
     void updateStatusBarMinimumWidth();
+    // Pin the frameless size grip to the bottom-right corner inside the
+    // window's contents margins, so it clears the non-client band.
+    void positionSizeGrip();
 
     // Audio thread helpers — invoke AudioEngine methods on the worker thread (#502)
     void audioStartRx();
@@ -494,6 +521,7 @@ private:
     // than tuning it somewhere it hears nothing. A backend that reports no
     // range leaves every band enabled (the Flex behaviour).
     void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+    void applyTuningRangeToBandApplet() const;
     // Push RadioCapabilities' notch fields into one panadapter: the +TNF
     // button's visibility, the right-click add/remove entries, the depth and
     // permanence submenus, and the width clamps on drag-resize.
@@ -652,7 +680,7 @@ private:
     // One status-bar notice per connect session for a control this radio
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
-    void showUnsupportedControlNotice();
+    void showUnsupportedControlNotice(const QString& message = {});
     // An antenna button or combo refused a pick because the radio published no
     // port to choose (AntennaChoiceGate.h). Log it and say so, once a session.
     void announceAntennaChoiceRefused(bool tx);
@@ -710,6 +738,10 @@ private:
     QString txAudioPathBlockMessage(TxAudioPathBlock block) const;
     bool showTxAudioPathErrorIfBlocked(); // MainWindow_DspApplets.cpp
     void updateTxAudioPathNotice(); // MainWindow_DspApplets.cpp
+    bool txMicChainReady() const;   // MainWindow_DspApplets.cpp
+    void refreshTxMicReadyIndicators(); // MainWindow_DspApplets.cpp
+    void noticeVoiceKeyWithoutInput(); // MainWindow_DspApplets.cpp
+    NoInputVoiceKeyNotice m_noInputVoiceKeyNotice;
     // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to
     // the client-side compressor on a backend that modulates on this host, and
     // publishes that compressor's gain reduction as the TX:COMPPEAK meter.
@@ -767,6 +799,9 @@ private:
                                                   const QString& profileId,
                                                   bool selectSlice);
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
+    // The clear above, only while the slice holds anything it undoes; for a
+    // caller that may repeat it often (a TCI RX-antenna set).
+    void clearKiwiSdrVirtualAntennaIfHeld(int sliceId);
     void prepareKiwiSdrBandRecallForPan(const QString& panId);
     bool finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
     void finishPreparedKiwiSdrBandRecallForPan(const QString& panId);
@@ -892,6 +927,7 @@ private:
     // connection when either endpoint dies, and the old backend is destroyed before
     // the new one is built, so no duplicates. Guarded anyway - see the body.
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
+    void wirePureSignalApplet(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
     // Display panel → "Clone to all Pans". Copies every Display setting from
@@ -943,6 +979,8 @@ private:
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     void refreshRttyInputStatus();
+    void onRttyDecoderMarkChosen(int hz);
+    void onRttyDecoderShiftChosen(int hz);
     // The RTTY pane's ✕: persist "operator does not want this window" and
     // re-run the refresh, which stops the decoder (#5353).
     void onRttyPanelCloseRequested();
@@ -955,6 +993,33 @@ private:
     void enableNr2WithWisdom();  // Wisdom-gated NR2 enable (shared by VFO + overlay)
     void updateNr2Availability(); // Disable NR2 when Opus is active (#1597)
     void registerShortcutActions();
+    // Actions declared once and published to keyboard + MIDI
+    // (ControlActionRegistry; MainWindow_ControlActions.cpp).
+    void registerControlActions();
+    void showShortcutNotice(const QString& text, int durationMs);
+    // Logged and announced once while its notice is up.
+    void refuseControlAction(const QString& name, bool transmitSetup = false);
+    QAction* findMenuAction(const QStringList& path) const;
+    void fireCwxMacro(int index, const TxController::Input& input);  // F1..F12 = 0..11
+    // F<id> on the voice keyer for an outside input, started under that
+    // input's request; false when the slot cannot play now.
+    bool fireVoiceKeyerSlot(int id, const TxController::Input& input);
+    // Band stack stepping and the band-plan strip toggle (registry actions).
+    bool hasBandStackEntries() const;
+    // Pan ids as the operator sees them: the workspace canvas order when it
+    // is on, else the main window's layout order, then any floating pans.
+    QStringList panIdsInScreenOrder() const;
+    void stepBandStack(int direction);
+    void toggleBandPlanStrip();
+    // CW decoder RX on/off, the Radio Setup "Decode: RX" switch.
+    bool cwDecodeRxEnabled() const;
+    void setCwDecodeRxEnabled(bool on);
+    // RTTY decoder on/off, the Radio Setup RTTY decode switch.
+    bool rttyDecodeEnabled() const;
+    void setRttyDecodeEnabled(bool on);
+    void nudgeActiveSliceSteps(int steps);
+    void cycleBandAction(int direction);
+    void cycleModeAction(int direction);
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
@@ -999,7 +1064,7 @@ private:
     // propagate the frameless toggle without an explicit qobject_cast branch.
     //
     // Slot must be typed QPointer<ConcreteDialog> so the ctor args match.
-    // Example: showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
+    // Example: showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
     template <class T, class... Args>
     void showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs);
 
@@ -1114,10 +1179,8 @@ private:
     void wireLocalVoiceKeyer();
     VoiceKeyerSource voiceKeyerSource() const;
     void applyVoiceKeyerSource();
+    // The keyer-source chooser behind the DVK panel's settings button.
     void showVoiceKeyerSourceMenu(const QPoint& globalPos);
-    // Where to pop the chooser when it is opened from the keyboard: under the
-    // DVK indicator when that is on screen, otherwise the window's centre.
-    QPoint voiceKeyerSourceMenuAnchor() const;
     void showNr2ParamPopup(const QPoint& globalPos);
     void showNr4ParamPopup(const QPoint& globalPos);
     void showDfnrParamPopup(const QPoint& globalPos);
@@ -1259,6 +1322,11 @@ private:
     void pushCwPaddleState(const QString& source = {},
                            quint64 traceId = 0, quint64 sourceMs = 0);
     bool handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // The CW, PTT-hold and Monitor-hold handlers, in that order.
+    bool dispatchMomentaryKey(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // A sided Ctrl/Shift/Alt event as per-side edges through
+    // dispatchMomentaryKey(); nullopt when the side is unknown (#7354).
+    std::optional<bool> handleSidedModifierEvent(QKeyEvent* keyEvent, QEvent::Type eventType);
     bool handleScopedCwMomentaryShortcut(const QString& action, bool press,
                                          const std::shared_ptr<TxController>& controller,
                                          bool keyboard = true);
@@ -1435,6 +1503,12 @@ private:
     // The WSPR receiver on the radio (tools/wspr-agent): its spots for
     // SpotHub and the panadapter. Main thread; it only polls HTTP.
     WsprSpotFeed*        m_wsprFeed{nullptr};
+    // Reserves the WSPR receiver's slice in RadioModel when the receiver
+    // at `radio` names one, then calls `done`. Waits at most
+    // kWsprSliceReadMs: a radio without the receiver refuses at once.
+    void readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done);
+    static constexpr int kWsprSliceReadMs = 1000;
+    static constexpr int kWsprSliceRecheckMs = 500;
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
@@ -1510,6 +1584,17 @@ private:
     // spot id, so an "add" for a callsign already on this band updates the
     // existing spot instead of minting a duplicate (#2906).
     QHash<QString, int> m_n1mmSpotIdByKey;
+
+    // WSJT-X Rx/Tx frequency overlay (#4526). One live entry per WSJT-X
+    // instance id — a second instance on another slice/band gets its own
+    // marker, same per-instance keying #3595 established for spot placement.
+    // Swept by the existing passiveSpotExpiryTimer (MainWindow_Spots.cpp):
+    // an instance that stops reporting Status (exited without a clean Close,
+    // network dropped) has its marker cleared rather than sitting on a stale
+    // frequency forever.
+    QHash<QString, WsjtxStatus> m_wsjtxInstances;
+    QHash<QString, qint64> m_wsjtxInstanceLastSeenMs;
+    void rebuildWsjtxMarkers();
     // External controllers run on a dedicated worker thread (#502)
     QThread*             m_extCtrlThread{nullptr};
 #ifdef HAVE_SERIALPORT
@@ -1527,6 +1612,8 @@ private:
     void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
     void setPanZoomMode(bool segmentZoom, bool enable);
     void zoomActivePanadapter(double factor);
+    // Absolute span centered on the active slice, clamped to the pan's limits.
+    bool setActivePanSpan(double bandwidthMhz);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -1782,6 +1869,7 @@ private:
     // invokes the verb that record names.
     QPointer<BandscopeDialog> m_bandscopeDialog;
     QPointer<MemoryDialog> m_memoryDialog;
+    QPointer<RadioHealthDialog> m_radioHealthDialog;
     QPointer<NetSchedulerDialog> m_netSchedulerDialog;
     NetScheduler* m_netScheduler{nullptr};
     NetReminderBanner* m_netReminderBanner{nullptr};
@@ -1847,6 +1935,7 @@ private:
     QAction*         m_aetherialAction{nullptr};
     QAction*         m_cwKeyerAction{nullptr};
     QAction*         m_copyAssistAction{nullptr};
+    QAction*         m_voiceKeyerAction{nullptr};
     QAction*         m_gpsDashboardAction{nullptr};
     QAction*         m_agcTCalibrationMenuAction{nullptr};
     // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
@@ -1950,6 +2039,10 @@ private:
     QWidget* m_pgxlContainer{nullptr};
     QLabel*  m_pgxlIndicator{nullptr};   // top row: "AMP"
     QLabel*  m_pgxlStateLabel{nullptr};  // bottom row: OPERATE / STANDBY
+    QLabel*  m_kpa500Separator{nullptr};
+    QWidget* m_kpa500Container{nullptr};
+    QLabel*  m_kpa500Indicator{nullptr};   // top row: "KPA"
+    QLabel*  m_kpa500StateLabel{nullptr};  // bottom row: FAULT / TX / OPERATE / STANDBY / OFF / –
     QLabel* m_txIndicator{nullptr};
     QLabel* m_gpsDateLabel{nullptr};
     QLabel* m_gpsTimeLabel{nullptr};
@@ -2020,6 +2113,27 @@ private:
     bool m_paCurrentStatusPreferred{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    bool m_startupConnectSuperseded{false};
+    quint64 m_radioChoiceGeneration{0};
+    bool m_radioDisconnectPending{false};
+    quint64 m_radioTeardownToken{0};
+    std::function<void()> m_afterRadioDisconnect;
+    void connectSelectedRadio(const RadioInfo& info);
+    void armRadioSwitchTimeout();
+    QJsonObject m_activeRadioTarget;
+    QJsonObject m_pendingRadioTarget;
+    QJsonObject m_previousRadioTarget;
+    QJsonObject m_failedRadioTarget;
+    QString m_radioSwitchPhase;
+    QPointer<QDialog> m_radioSwitchPrompt;
+    QPointer<QDialog> m_radioSwitchFailurePrompt;
+    void beginExplicitRadioChoice();
+    void requestRadioTarget(const QJsonObject& target);
+    void performRadioSwitch(const QJsonObject& target);
+    void continueRadioSwitch(quint64 generation);
+    void awaitRadioTeardown();
+    void failRadioSwitch(const QString& reason);
+    void handleRadioTabAction(const QString& id, const QString& action);
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
     // Slice lifecycle refusals already shown this connect session, keyed
     // "<operation>\n<reason>": one notice per distinct refusal, so a control
@@ -2041,11 +2155,6 @@ private:
     // Last SmartLink radio list, cached because the title bar has to redraw the
     // tabs on LAN discovery events too and SmartLink only pushes on change.
     QList<WanRadioInfo> m_smartLinkRadios;
-    // The last session's radio, as its tab read while connected.  It keeps a
-    // visible tab after an unexpected drop, so the "Link lost" alarm always has
-    // somewhere to show; cleared when the operator disconnects on purpose or
-    // removes that tab.
-    RadioTabEntry m_lastSessionTab;
     static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QString m_terminalConnectionError; // preserved until the next explicit connect
@@ -2142,7 +2251,6 @@ private:
     bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (Settings menu)
     bool m_pttHoldActive{false};           // true while the PTT-hold key is held (#3879)
     ShortcutRefusalNotice m_shortcutRefusalNotice; // once per session (#5483)
-    StatusBarNoticeLabel* m_shortcutNoticeLabel{nullptr}; // owned by the status bar
     TxController::Input m_pttHoldInput;
     bool m_cwStraightKeyActive{false};
     TxController::Input m_cwStraightKeyInput;
@@ -2154,6 +2262,7 @@ private:
     bool m_serialCwPaddleHeld{false};
     void captureLocalCwPaddleInput(bool held);
     bool m_cwRightPaddleActive{false};
+    ShortcutSidedModifierTracker m_sidedModifiers;
     QPointer<QWidget> m_sliderShortcutLease;
     QTimer m_sliderShortcutLeaseTimer;
     struct SwrSweepSample {
@@ -2208,7 +2317,8 @@ private:
     SwrSweepState m_swrSweep;
     QTimer m_swrSweepTimer;
     // Polls the shared client compressor for the TX:COMPPEAK meter and mirrors
-    // its enable state back onto PROC. ClientComp has no change notification.
+    // its enable state back onto PROC, and the shared ClientEq enables back onto
+    // the graphic EQ. Neither has a change notification.
     QTimer m_hostVoiceChainTimer;
     // Last PROC state pushed onto that compressor, so the NOR/DX/DX+ presets are
     // only written when the operator actually changed the level (they overwrite
@@ -2242,6 +2352,11 @@ private:
     bool m_waitingForFirstPanadapterFrame{false};
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
+    ControlActionRegistry m_controlActions;
+    ShortcutTooltips* m_shortcutTooltips{nullptr};  // child; names bound keys on buttons
+    int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
+    QString m_lastRefusedAction;           // refusal notice de-duplication
+    int m_lastBandPlanFontSize{6};         // band_plan_toggle restores this
     UpdateChecker* m_updateChecker{nullptr};
     // Install update in place (RFC #5304): outlives the Updates window, so
     // a staged release installs on quit (closeEvent).
@@ -2404,6 +2519,8 @@ private:
 #if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
+    RadioControlSession m_daxMicOverrideSession{};
+    quint64 m_daxMicOverrideRevision{0};
     bool startDax();
     void stopDax();
     // #2895: react to per-slice DAX channel (re)assignment while the bridge is

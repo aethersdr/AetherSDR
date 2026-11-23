@@ -6,7 +6,9 @@
 #include "HGauge.h"
 #include "Theme.h"
 #include "TwoToneTuneGate.h"
+#include "TxOutputMetering.h"
 #include "core/TxKeyingMarker.h"
+#include "ShortcutActionMarker.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
@@ -22,6 +24,7 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <cmath>
+#include <utility>
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -98,6 +101,39 @@ static QString percentText(int value)
 
 // ── TxApplet ────────────────────────────────────────────────────────────────
 
+namespace {
+// The gauges' own texts, restored when the TX output is metered again.
+const QString kFwdGaugeLabel = QStringLiteral("RF Pwr");
+const QString kFwdGaugeName = QStringLiteral("Forward power gauge");
+const QString kFwdGaugeDescription = QStringLiteral("RF forward power in watts");
+const QString kSwrGaugeLabel = QStringLiteral("SWR");
+const QString kSwrGaugeName = QStringLiteral("SWR gauge");
+const QString kSwrGaugeDescription = QStringLiteral("Standing wave ratio");
+
+// Unavailable state of one gauge (theme-style-guide "Three-state controls"):
+// dimmed, the reason in the bar, the tooltip and accessibleDescription. The
+// gauge keeps drawing what the meter sends.
+void presentGaugeMetering(HGauge* gauge, bool metered, const QString& output,
+                          const QString& label, const QString& name,
+                          const QString& description)
+{
+    if (metered) {
+        gauge->setLabel(label);
+        gauge->setAccessibleName(name);
+        gauge->setAccessibleDescription(description);
+        gauge->setToolTip(QString());
+        gauge->setEnabled(true);
+        return;
+    }
+    const QString reason = txOutputNotMeteredReason(output);
+    gauge->setLabel(txOutputNotMeteredLabel(label, output));
+    gauge->setAccessibleName(QStringLiteral("%1, not measured on %2").arg(name, output));
+    gauge->setAccessibleDescription(reason);
+    gauge->setToolTip(reason);
+    gauge->setEnabled(false);
+}
+} // namespace
+
 TxApplet::TxApplet(QWidget* parent)
     : QWidget(parent)
 {
@@ -128,27 +164,34 @@ void TxApplet::buildUI()
     vbox->setSpacing(2);
 
     // ── Forward Power gauge (0–120 W, red > 100 W) ─────────────────────────
-    m_fwdGauge = new HGauge(0.0f, 120.0f, 100.0f, "RF Pwr", "W",
+    m_fwdGauge = new HGauge(0.0f, 120.0f, 100.0f, kFwdGaugeLabel, "W",
         {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}},
         this, 80.0f);
-    m_fwdGauge->setAccessibleName("Forward power gauge");
-    m_fwdGauge->setAccessibleDescription("RF forward power in watts");
+    m_fwdGauge->setAccessibleName(kFwdGaugeName);
+    m_fwdGauge->setAccessibleDescription(kFwdGaugeDescription);
     // Mouse-over readout: exact watts, so the operator isn't left estimating
-    // between the 40 W tick marks while transmitting. (#3936)
-    static_cast<HGauge*>(m_fwdGauge)->setHoverValueFormatter([](float v) {
+    // between the 40 W tick marks while transmitting. (#3936) Not a reading on
+    // an output the radio cannot meter (#4954).
+    static_cast<HGauge*>(m_fwdGauge)->setHoverValueFormatter([this](float v) {
+        if (!m_txOutputMetered) {
+            return QStringLiteral("Not measured on %1").arg(m_unmeteredTxOutput);
+        }
         return QStringLiteral("%1 W").arg(QString::number(std::lround(v)));
     });
     static_cast<HGauge*>(m_fwdGauge)->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_fwdGauge);
 
     // ── SWR gauge (1.0–3.0, red > 2.5) ─────────────────────────────────────
-    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "SWR", "",
+    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, kSwrGaugeLabel, "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
         this, 2.0f);
-    m_swrGauge->setAccessibleName("SWR gauge");
-    m_swrGauge->setAccessibleDescription("Standing wave ratio");
+    m_swrGauge->setAccessibleName(kSwrGaugeName);
+    m_swrGauge->setAccessibleDescription(kSwrGaugeDescription);
     // Mouse-over readout: exact ratio in the conventional N.N:1 form.
-    static_cast<HGauge*>(m_swrGauge)->setHoverValueFormatter([](float v) {
+    static_cast<HGauge*>(m_swrGauge)->setHoverValueFormatter([this](float v) {
+        if (!m_txOutputMetered) {
+            return QStringLiteral("Not measured on %1").arg(m_unmeteredTxOutput);
+        }
         return QStringLiteral("%1:1").arg(QString::number(v, 'f', 2));
     });
     static_cast<HGauge*>(m_swrGauge)->setHoverValuePopupEnabled(true);
@@ -168,6 +211,7 @@ void TxApplet::buildUI()
         m_rfPowerSlider->setDragValueFormatter(percentText);
         applyPrimarySliderStyle(m_rfPowerSlider);
         m_rfPowerSlider->setAccessibleName("RF power");
+        markTxSetpoint(m_rfPowerSlider);
         m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 percent of maximum");
         row->addWidget(m_rfPowerSlider, 1);
 
@@ -193,6 +237,7 @@ void TxApplet::buildUI()
         m_tunePowerSlider->setDragValueFormatter(percentText);
         applyPrimarySliderStyle(m_tunePowerSlider);
         m_tunePowerSlider->setAccessibleName("Tune power");
+        markTxSetpoint(m_tunePowerSlider);
         m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 percent of maximum");
         row->addWidget(m_tunePowerSlider, 1);
 
@@ -242,11 +287,12 @@ void TxApplet::buildUI()
             "border: 1px solid #2a3040; }";
         m_tuneBtn = new QPushButton("TUNE");
         markTxKeying(m_tuneBtn);   // emits a tune carrier — keys TX (#3646)
+        markShortcutAction(m_tuneBtn, "tune_toggle");
         m_tuneBtn->setStyleSheet(btnStyle);
         m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_tuneBtn->setFixedHeight(22);
         m_tuneBtn->setAccessibleName("Tune");
-        m_tuneBtn->setAccessibleDescription("Start or stop tune carrier");
+        m_tuneBtn->setAccessibleDescription(tr("Start or stop tune carrier"));
         // Right-click picks the carrier shape (Mono Tone / Two Tone) for
         // the next tune cycle.  Transient one-shot — no AppSettings write.
         m_tuneBtn->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -256,6 +302,7 @@ void TxApplet::buildUI()
 
         m_moxBtn = new QPushButton("MOX");
         markTxKeying(m_moxBtn);    // manual transmit (PTT) — keys TX (#3646)
+        markShortcutAction(m_moxBtn, "mox_toggle");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_moxBtn, kMoxIdleStyle);
         m_moxBtn->setCheckable(true);
         m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -266,11 +313,12 @@ void TxApplet::buildUI()
 
         m_atuBtn = new QPushButton("ATU");
         markTxKeying(m_atuBtn);    // starts ATU tune — keys TX (#3646)
+        markShortcutAction(m_atuBtn, "atu_start");
         m_atuBtn->setStyleSheet(btnStyle);
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_atuBtn->setFixedHeight(22);
         m_atuBtn->setAccessibleName("ATU tune");
-        m_atuBtn->setAccessibleDescription("Start automatic antenna tuner");
+        m_atuBtn->setAccessibleDescription(tr("Start automatic antenna tuner"));
         // Right-click on the ATU button exposes the pre-tune sweep and
         // Clear ATU Memories actions. Matches SmartSDR Windows's hidden
         // right-click menu on this button. (#2624)
@@ -285,7 +333,7 @@ void TxApplet::buildUI()
         m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_memBtn->setFixedHeight(22);
         m_memBtn->setAccessibleName("ATU memories");
-        m_memBtn->setAccessibleDescription("Toggle ATU memory recall");
+        m_memBtn->setAccessibleDescription(tr("Toggle ATU memory recall"));
         row->addWidget(m_memBtn);
 
         vbox->addLayout(row);
@@ -552,6 +600,7 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         m_tuneBtn->setEnabled(available);
         m_tuneBtn->setToolTip(available ? tr("Start or stop tune carrier")
             : tr("Tune carrier is unavailable in this mode through the current radio backend"));
+        m_tuneBtn->setAccessibleDescription(m_tuneBtn->toolTip());
     };
     connect(m_model, &TransmitModel::tuneAvailabilityChanged, this, updateTuneAvailability);
     connect(m_model, &TransmitModel::tuneChanged, this, updateTuneAvailability);
@@ -667,22 +716,22 @@ void TxApplet::updateAtuAvailability()
     // fundamental one: with no ATU fitted, what the TGXL is doing is beside the
     // point, and "Disabled — TGXL is in OPERATE mode" would send the operator
     // looking at the wrong box.
-    QString tip;
+    QString reason;
     if (!m_radioHasTuner) {
-        tip = tr("Antenna tuner controls are unavailable for this radio");
+        reason = tr("Antenna tuner controls are unavailable for this radio");
     } else if (m_tgxlOperate) {
-        tip = tr("Disabled — TGXL is in OPERATE mode");
+        reason = tr("Disabled — TGXL is in OPERATE mode");
     } else if (!pathAvailable) {
-        tip = tr("Disabled — the internal ATU is not in the transverter TX path");
+        reason = tr("Disabled — the internal ATU is not in the transverter TX path");
     }
-    m_atuBtn->setToolTip(tip);
-    m_atuBtn->setAccessibleDescription(tip);
-    if (!m_radioHasTunerMemories) {
-        m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
-    } else {
-        m_memBtn->setToolTip(tip);
-    }
-    m_memBtn->setAccessibleDescription(m_memBtn->toolTip());
+    const QString atuTip = reason.isEmpty() ? tr("Start automatic antenna tuner") : reason;
+    m_atuBtn->setToolTip(atuTip);
+    m_atuBtn->setAccessibleDescription(atuTip);
+    const QString memTip = !m_radioHasTunerMemories
+        ? tr("ATU memory controls are unavailable for this radio")
+        : reason.isEmpty() ? tr("Toggle ATU memory recall") : reason;
+    m_memBtn->setToolTip(memTip);
+    m_memBtn->setAccessibleDescription(memTip);
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)
@@ -849,6 +898,10 @@ void TxApplet::setRadioModel(RadioModel* radio)
         disconnect(m_capabilitiesConnection);
         m_capabilitiesConnection = {};
     }
+    for (const QMetaObject::Connection& c : std::as_const(m_txOutputConnections)) {
+        disconnect(c);
+    }
+    m_txOutputConnections.clear();
     m_txController.reset();
     m_radioModel = radio;
     m_forwardPowerRequiresSmoothing = !radio || !radio->isConnected()
@@ -872,8 +925,57 @@ void TxApplet::setRadioModel(RadioModel* radio)
                         setPowerScale(maxWatts, hasAmplifier);
                     }
                 }
+                refreshTxOutputMetering(connected, caps);
             });
+        m_txOutputConnections << connect(radio, &RadioModel::sliceAdded, this,
+            [this](SliceModel* slice) {
+                watchSliceTxOutput(slice);
+                refreshTxOutputMeteringFromModel();
+            });
+        m_txOutputConnections << connect(radio, &RadioModel::sliceRemoved, this,
+            [this](int) { refreshTxOutputMeteringFromModel(); });
+        for (SliceModel* slice : radio->slices()) {
+            watchSliceTxOutput(slice);
+        }
     }
+    refreshTxOutputMeteringFromModel();
+}
+
+void TxApplet::watchSliceTxOutput(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+    m_txOutputConnections << connect(slice, &SliceModel::txSliceChanged, this,
+        [this](bool) { refreshTxOutputMeteringFromModel(); });
+    m_txOutputConnections << connect(slice, &SliceModel::txAntennaChanged, this,
+        [this](const QString&) { refreshTxOutputMeteringFromModel(); });
+}
+
+void TxApplet::refreshTxOutputMeteringFromModel()
+{
+    if (!m_radioModel) {
+        refreshTxOutputMetering(false, RadioCapabilities{});
+        return;
+    }
+    refreshTxOutputMetering(m_radioModel->isConnected(),
+                            m_radioModel->backendCapabilities());
+}
+
+void TxApplet::refreshTxOutputMetering(bool connected, const RadioCapabilities& caps)
+{
+    const SliceModel* tx = m_radioModel ? m_radioModel->txSlice() : nullptr;
+    const QString output = tx ? tx->txAntenna() : QString();
+    const bool metered = txOutputIsMetered(connected, caps, output);
+    if (metered == m_txOutputMetered && (metered || output == m_unmeteredTxOutput)) {
+        return;
+    }
+    m_txOutputMetered = metered;
+    m_unmeteredTxOutput = metered ? QString() : output;
+    presentGaugeMetering(static_cast<HGauge*>(m_fwdGauge), metered, output,
+                         kFwdGaugeLabel, kFwdGaugeName, kFwdGaugeDescription);
+    presentGaugeMetering(static_cast<HGauge*>(m_swrGauge), metered, output,
+                         kSwrGaugeLabel, kSwrGaugeName, kSwrGaugeDescription);
 }
 
 void TxApplet::setBandPlanManager(BandPlanManager* bandPlan)

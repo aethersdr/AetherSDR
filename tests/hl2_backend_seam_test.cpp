@@ -4,17 +4,18 @@
 // the drive register is read both from the health rows and from the EP2
 // packet MetisClient would send.
 
+#include "core/backends/MeterDef.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2Settings.h"
+#include "core/backends/hl2/Hl2TelemetryService.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 #include "gui/ClientFftSmoothingGate.h"
 #include "core/AppSettings.h"
 #include "core/RadioCertification.h"
 #include "models/RadioModel.h"
-#include <QJsonArray>
-#include <QJsonObject>
 
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
@@ -24,11 +25,12 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QSet>
 #include <QSignalSpy>
-#include <QTest>
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -94,6 +96,9 @@ struct Hl2TxGateTestAccess {
     static bool panWeighted(const Hl2Backend& b) { return b.m_rx[0].panWeightedAverage; }
     static int receiverCeiling(const Hl2Backend& b) { return b.receiverCeiling(); }
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
+    // The set the next DSP build arms its tap from (openReceiverDsp) and the
+    // iqReady guard reads: what a slice's IQ tap is, as far as the session goes.
+    static bool iqTapHeld(const Hl2Backend& b, int ui) { return b.m_iqTapUis.contains(ui); }
     static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
     // A new over whose key-on windows have passed, with an empty envelope.
     static void pastKeyOn(Hl2Backend& b)
@@ -102,9 +107,34 @@ struct Hl2TxGateTestAccess {
         for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
             b.m_swrGate.accept(0);
     }
-    static void changeSession(Hl2Backend& b) { ++b.m_connectGeneration; }
-    static void defineMeters(Hl2Backend& b) { b.defineMeters(); }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
+    static void defineMeters(Hl2Backend& b) { b.defineMeters(); }
+    static void updatePollState(Hl2Backend& b) { b.updateTelemetryPollState(); }
+    static int sliceLevelMeterBase() { return Hl2Backend::kSliceLevelMeterBase; }
+    static quint64 setPureSignal(Hl2Backend& b, bool on)
+    {
+        return b.setPureSignalEnabled(on) ? b.m_psGeneration : 0;
+    }
+    static QVariantMap pureSignalFields(const Hl2Backend& b) { return b.pureSignalFields(); }
+    static void deliverPureSignalStatus(Hl2Backend& b, const Hl2PureSignalStatus& status)
+    {
+        QMetaObject::invokeMethod(b.m_pureSignal, [controller = b.m_pureSignal, status] {
+            emit controller->statusChanged(status);
+        }, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
+    }
+    // Streaming as telemetryLinkState() judges it, with no socket: connected, and
+    // the EP6 counter "just advanced" (hl2LinkStateFor() consults only those two
+    // while connected; the held-by-other branch needs disconnected). Nothing in
+    // production widens for this — it is the test's own friend struct.
+    static void fakeStreamingLink(Hl2Backend& b, bool on)
+    {
+        b.m_connected = on;
+        if (on)
+            b.m_rxAdvanceClock.start();
+        else
+            b.m_rxAdvanceClock.invalidate();
+    }
     static double fwdPeakReleaseAlpha() { return Hl2Backend::kFwdPeakReleaseAlpha; }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
     // Stops the timer first, so this proves what the callback decides, not
@@ -146,6 +176,36 @@ struct Hl2TxGateTestAccess {
     {
         b.m_txTailTimer->stop();
         b.finishTxTail();
+    }
+    // What connectRadio() hands the modulator before linkUp, done by hand: the
+    // TX receiver's mode and effectiveTxPassband() for it. Socket-free rules
+    // out connectRadio() itself, whose DSP opens start the wire. The mode is
+    // written as Usb because modeFromString() has internal linkage in
+    // Hl2Backend.cpp; the caller checks the returned mode is "USB".
+    static QString seedConnectTxConfig(Hl2Backend& b)
+    {
+        const QString mode = b.rx(b.m_txDdc)->mode;
+        const auto [lo, hi] = b.effectiveTxPassband(mode);
+        b.m_txPassbandSentLowHz = lo;
+        b.m_txPassbandSentHighHz = hi;
+        QMetaObject::invokeMethod(b.m_txDsp, [dsp = b.m_txDsp, lo, hi] {
+            dsp->setMode(WdspChannel::Mode::Usb);
+            dsp->setFilter(lo, hi);
+        }, Qt::BlockingQueuedConnection);
+        return mode;
+    }
+    // The TX receiver's mode changed without any push to the modulator.
+    static void setTxReceiverModeWithoutPush(Hl2Backend& b, const QString& mode)
+    {
+        b.rx(b.m_txDdc)->mode = mode;
+    }
+    // The modulator's Config after every call queued to it has landed.
+    static hl2::Hl2TxDsp::Config txDspConfig(Hl2Backend& b)
+    {
+        hl2::Hl2TxDsp::Config c;
+        QMetaObject::invokeMethod(b.m_txDsp, [&c, dsp = b.m_txDsp] { c = dsp->config(); },
+                                  Qt::BlockingQueuedConnection);
+        return c;
     }
     // The last drive level carried by the EP2 packets MetisClient would send
     // next, after every queued call has landed; -1 when none carries one.
@@ -214,6 +274,85 @@ static void capabilitiesSeam()
     Access::metisEdge(b, "linkDown");
 }
 
+// PA current: not declared calibrated, defined as RAD:PACURRENT in amps, and converted by the
+// schematic's chain (0.04 ohm, x50, 270/1k divider, 3.26 V over 4096 counts).
+static void paCurrentMeter()
+{
+    Hl2Backend b;
+    check(!b.capabilities().hasPaCurrentTelemetry,
+          "does not declare calibrated PA current before an ammeter run");
+    check(hl2::hl2PaCurrentAmps(0) == 0.0, "0 counts is 0 A");
+    check(std::abs(hl2::hl2PaCurrentAmps(1000) - 0.5053955078125) < 1e-9,
+          "1000 counts is 0.5054 A, the divider included (0.3979 A without it)");
+    check(std::abs(hl2::hl2PaCurrentAmps(4095) - 2.0695946044921874) < 1e-9,
+          "full scale, 4095 counts, is 2.07 A");
+
+    QSignalSpy defs(&b, &IRadioBackend::meterDefined);
+    Access::defineMeters(b);
+    bool defined = false;
+    for (const auto& args : defs) {
+        const auto d = args.at(0).value<MeterDef>();
+        if (d.source == QStringLiteral("RAD") && d.name == QStringLiteral("PACURRENT"))
+            defined = d.unit == QStringLiteral("Amps") && d.low == 0.0
+                && std::abs(d.high - 2.0695946044921874) < 1e-9;
+    }
+    check(defined, "RAD:PACURRENT is defined in Amps, 0 to full scale");
+    // The fixed catalogue stays below the per-receiver band (#7324): a fixed
+    // index at or above kSliceLevelMeterBase would collide with SLC:LEVEL of a
+    // receiver, silently.
+    QList<int> fixedIndices;
+    for (const auto& args : defs)
+        fixedIndices.append(args.at(0).value<MeterDef>().index);
+    const bool belowBand = std::all_of(fixedIndices.cbegin(), fixedIndices.cend(),
+        [](int i) { return i >= 1 && i < Access::sliceLevelMeterBase(); });
+    check(!fixedIndices.isEmpty() && belowBand
+              && QSet<int>(fixedIndices.cbegin(), fixedIndices.cend()).size()
+                     == fixedIndices.size(),
+          "defineMeters' fixed indices are unique and below kSliceLevelMeterBase");
+
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    hl2::Hl2Telemetry t;
+    t.biasCurrentRaw = 1000;
+    Access::publish(b, t);
+    double amps = std::nan("");
+    for (const auto& args : meters) {
+        if (args.at(0).toString() == QStringLiteral("RAD:PACURRENT"))
+            amps = args.at(1).toDouble();
+    }
+    check(amps == hl2::hl2PaCurrentAmps(1000), "publishTelemetry emits RAD:PACURRENT in amps");
+    meters.clear();
+    Access::publish(b, hl2::Hl2Telemetry{});
+    bool emptyEmitted = false;
+    for (const auto& args : meters)
+        emptyEmitted |= args.at(0).toString() == QStringLiteral("RAD:PACURRENT");
+    check(!emptyEmitted, "no reading, no PACURRENT sample (never a 0 A)");
+
+    // Not streaming: the stream-free poller's reading drives the meter, as it
+    // does RAD:PATEMP, so the needle cannot hold a pre-stall value.
+    hl2::Hl2TelemetryService svc;
+    hl2::DiscoveryReply reply;
+    reply.biasCurrentRaw = 10;
+    hl2::Hl2TelemetryServiceTestAccess::placeReply(svc, reply);
+    b.setTelemetryService(&svc);
+    meters.clear();
+    Access::updatePollState(b);
+    double polled = std::nan("");
+    for (const auto& args : meters) {
+        if (args.at(0).toString() == QStringLiteral("RAD:PACURRENT"))
+            polled = args.at(1).toDouble();
+    }
+    check(polled == hl2::hl2PaCurrentAmps(10),
+          "not streaming: RAD:PACURRENT follows the stream-free reading");
+    meters.clear();
+    hl2::Hl2TelemetryServiceTestAccess::placeReply(svc, hl2::DiscoveryReply{});
+    Access::updatePollState(b);
+    bool polledEmpty = false;
+    for (const auto& args : meters)
+        polledEmpty |= args.at(0).toString() == QStringLiteral("RAD:PACURRENT");
+    check(!polledEmpty, "stream-free reply with no reading: no PACURRENT sample");
+    b.setTelemetryService(nullptr);
+}
+
 static void linkLifecycle()
 {
     Hl2Backend b;
@@ -258,6 +397,30 @@ static void linkLifecycle()
     b.disconnectRadio();
     Access::drainIo(b);
     check(disconnectedSpy.count() == 1, "a link already down never reports disconnected() twice");
+}
+
+// #6859: IQ taps belong to the session. A tap held when the link drops must
+// not be armed by the next session's DSP build: its subscriber may have left
+// during the outage, and a subscriber that stayed re-arms it through
+// TciServer. TciHostIqTest covers TciServer's half with a fake backend; this
+// pins the real backend's half.
+static void iqTapEndsWithTheSession()
+{
+    Hl2Backend b;
+    Access::metisEdge(b, "linkUp");
+    check(b.setSliceIqTap(0, true) && Access::iqTapHeld(b, 0),
+          "#6859: a slice's IQ tap is held while the link is up");
+    check(!b.setSliceIqTap(7, true) && !Access::iqTapHeld(b, 7),
+          "#6859: a tap for a receiver that is not running is refused");
+    Access::metisEdge(b, "linkDown");
+    check(!Access::iqTapHeld(b, 0),
+          "#6859: link loss releases the tap, so the next DSP build does not arm it");
+    Access::metisEdge(b, "linkUp");
+    check(!Access::iqTapHeld(b, 0),
+          "#6859: the next session starts with no tap until a subscriber asks again");
+    check(b.setSliceIqTap(0, true) && Access::iqTapHeld(b, 0),
+          "#6859: control: a fresh request in the new session holds the tap");
+    Access::metisEdge(b, "linkDown");
 }
 
 static void connectWithoutEp6()
@@ -539,13 +702,51 @@ static void swrFromWindowPairWhileKeyed()
           "SWR keyed without a reverse maximum: falls back to the last pair");
     Access::pastKeyOn(b);
     check(std::isnan(swrOf(true, 3000, 150, 200, 10)),
-          "SWR keyed: the gate applies to the forward maximum");
+          "SWR keyed: the forward-count threshold reads the forward maximum");
     Access::pastKeyOn(b);
     check(swrOf(true, 400, 150, 3000, 150) == matched,
           "SWR keyed: past the key-on windows, a fresh over publishes");
     check(std::isnan(swrOf(true, 3000, 150, 1000, 50)),
           "SWR keyed: a speech-pause window well below the envelope publishes none");
     Access::setKeyedFlag(b, false);
+}
+
+// The key-on drop holds for every over, not only a session's first: each key
+// through applyKeying() restarts the gate. Keyed through the real seam.
+static void swrKeyOnWindowsEveryOver()
+{
+    TxTestAuthority authority;
+    Hl2Backend b;
+    Access::startSession(b);
+    Access::parkTxTail(b);
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    auto publishesSwr = [&](int fwd, int rev) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = fwd;
+        t.reversePowerRaw = rev;
+        t.forwardPowerPeakRaw = fwd;
+        t.reversePowerPeakRaw = rev;
+        meters.clear();
+        Access::publish(b, t);
+        for (const auto& args : meters) {
+            if (args.at(0).toString() == QStringLiteral("TX:SWR"))
+                return true;
+        }
+        return false;
+    };
+    for (int over = 1; over <= 2; ++over) {
+        b.setKeying(true, authority.operation);
+        check(Access::keyed(b), "the over keys");
+        // 2900 reverse stands in for a key-on junk word: a very high SWR if let through.
+        for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+            check(!publishesSwr(3000, 2900),
+                  over == 1 ? "first over: a key-on window publishes no SWR"
+                            : "second over: a key-on window publishes no SWR");
+        check(publishesSwr(3000, 150), "past its key-on windows, the over publishes SWR");
+        b.setKeying(false, authority.operation);
+        Access::expireTxTail(b);
+        check(!Access::keyed(b), "the over unkeys");
+    }
 }
 
 // The Radio Health row for responses the peak window skipped: a session total,
@@ -586,6 +787,250 @@ static void forwardPowerSkippedHealthRow()
     publish(dead, 0, 19);
     check(health(dead, kRow).isValid() && health(dead, kRow).toULongLong() == 19,
           "skipped row: reported when every response so far was skipped");
+}
+
+namespace AetherSDR {
+class RadioCertificationTestAccess {
+public:
+    static void begin(RadioCertification& cert) { cert.beginSwrObservation(); }
+    static QJsonObject inventory(RadioCertification& cert)
+    {
+        cert.observeKeyedRf();
+        cert.stageMeterInventory();
+        return cert.m_stages.last().toObject().value("measured").toObject();
+    }
+};
+}
+
+static void swrReceiptDuringCertification()
+{
+    RadioModel radio;
+    check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "install offline HL2 for SWR inventory");
+    auto* backend = static_cast<Hl2Backend*>(radio.backend());
+    Access::metisEdge(*backend, "linkUp");
+    Access::fakeStreamingLink(*backend, true);
+    auto feed = [&](std::optional<int> forward, std::optional<int> reverse) {
+        hl2::Hl2Telemetry window;
+        window.forwardPowerRaw = window.forwardPowerPeakRaw = forward;
+        window.reversePowerRaw = window.reversePowerPeakRaw = reverse;
+        Access::publish(*backend, window);
+    };
+    using Cert = RadioCertificationTestAccess;
+    RadioCertification cert(&radio, nullptr);
+    Access::setKeyedFlag(*backend, true);
+    Access::pastKeyOn(*backend);
+    feed(2000, 11); // Receipt before the run.
+    Cert::begin(cert);
+    feed(2000, std::nullopt);
+    Access::setKeyedFlag(*backend, false);
+    feed(2000, 11); // A tail reading is a real receipt, outside the keyed window.
+    const auto missed = Cert::inventory(cert);
+    const auto missingRow = missed.value("TX:SWR").toObject();
+    check(missingRow.value("everFed").toBool() && !missingRow.value("fedWhileKeyedThisRun").toBool()
+          && missingRow.value("gateClearsThisRun").toInt() == 1
+          && missingRow.value("verdict").toString() == QStringLiteral("NOT DELIVERED"),
+          "missing reverse after a gate clear remains a finding despite earlier and tail receipts");
+
+    Cert::begin(cert);
+    Access::setKeyedFlag(*backend, true);
+    feed(76, 11);
+    const auto low = Cert::inventory(cert);
+    const auto lowRow = low.value("TX:SWR").toObject();
+    check(lowRow.value("gateClearsThisRun").toInt(-1) == 0
+          && lowRow.value("verdict").toString() == QStringLiteral("INCONCLUSIVE"),
+          "a suppressed run cannot inherit a prior gate clear or receipt");
+    check(low.value("keyedRf").toObject().value("backendSwrGateCounts").toInt() == 320
+          && lowRow.value("inconclusiveReason").toString().contains(QStringLiteral("320"))
+          && low.value("keyedRf").toObject().value("maxDrivePercentWhileKeyed").isDouble(),
+          "the run-local gate verdict retains the mainline threshold and keyed drive evidence");
+
+    feed(2000, 11);
+    const auto delivered = Cert::inventory(cert).value("TX:SWR").toObject();
+    check(delivered.value("fedWhileKeyedThisRun").toBool() && !delivered.contains("verdict"),
+          "an eligible keyed SWR reaches the real MeterModel");
+
+    Access::setKeyedFlag(*backend, false);
+    Access::metisEdge(*backend, "linkDown");
+    Access::metisEdge(*backend, "linkUp");
+    Access::setKeyedFlag(*backend, true);
+    Access::pastKeyOn(*backend);
+    feed(2000, 11);
+    const auto recovered = Cert::inventory(cert).value("TX:SWR").toObject();
+    check(recovered.value("fedWhileKeyedThisRun").isNull()
+          && recovered.value("gateClearsThisRun").isNull()
+          && recovered.value("verdict").toString() == QStringLiteral("INCONCLUSIVE"),
+          "link recovery fences both the earlier receipt and later telemetry");
+
+    Cert::begin(cert);
+    feed(2000, 11);
+    check(Cert::inventory(cert).value("TX:SWR").toObject().value("fedWhileKeyedThisRun").toBool(),
+          "a fresh run after recovery observes keyed delivery");
+
+    Cert::begin(cert);
+    feed(std::nullopt, std::nullopt);
+    check(Cert::inventory(cert).value("TX:SWR").toObject().value("inconclusiveReason")
+              .toString().contains(QStringLiteral("no keyed forward sample")),
+          "a run without forward telemetry has insufficient gate evidence");
+
+    Cert::begin(cert);
+    QObject::disconnect(backend, &IRadioBackend::meterUpdate, &radio, nullptr);
+    feed(2000, 11);
+    const auto dropped = Cert::inventory(cert).value("TX:SWR").toObject();
+    check(dropped.value("verdict").toString() == QStringLiteral("NOT DELIVERED"),
+          "a producer emission alone cannot satisfy the receipt check");
+    Access::setKeyedFlag(*backend, false);
+    Access::metisEdge(*backend, "linkDown");
+    check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "replace the offline HL2 fixture");
+    check(Cert::inventory(cert).value("TX:SWR").toObject().value("verdict")
+              == QStringLiteral("INCONCLUSIVE"),
+          "a replacement backend cannot inherit an earlier observation");
+}
+
+
+// #7063: the three SWR-gate health rows, and the two properties a diagnostic
+// reading them depends on.
+//
+// 1. ALL THREE KEY ON forwardPowerPeakRaw, so they are present or absent
+//    together. forwardPowerRaw would look equivalent and is not: apply() takes
+//    that from every RADDR-1 response while the peak window skips the
+//    non-measurement ones, so a unit whose temperature word reads 0 has
+//    forwardPowerRaw and no peak (MetisProtocol.h:515-517). The gate would then
+//    be published beside an absent reading, radiocert's sentinel would never
+//    clear, its gate branch could never fire, and TX:SWR would be reported
+//    DEFINED BUT NEVER FED on that unit class — the verdict #7063 removes.
+//
+// 2. THE CLEARS COUNT IS COUNTED ON THE GATED VALUE, not on the peak and not
+//    on whether SWR was published. That is what makes it exact in both
+//    directions, which is the whole basis of radiocert's verdict.
+//
+// Checked ON-STREAM via Access::fakeStreamingLink(), which is load-bearing: these
+// rows sit behind the directional block's `inBandLive`, so off-stream they are
+// absent whichever optional they key on and no check here can tell them apart.
+// The consumer half is in radiocert_gated_meter_test, which stubs the snapshot;
+// this is the producer half.
+static void swrGateHealthRows()
+{
+    using HS = IRadioBackend::HealthSnapshot;
+    static const char* const kGate = HS::kSwrGateCounts;
+    static const char* const kClears = HS::kSwrGateClearsWhileKeyed;
+    static const char* const kPeak = HS::kForwardWindowPeakRaw;
+
+    Hl2Backend b;
+    const QStringList order = b.healthSnapshot().order;
+    check(order.contains(QString::fromLatin1(kGate))
+              && order.contains(QString::fromLatin1(kClears))
+              && order.contains(QString::fromLatin1(kPeak)),
+          "swr gate: all three rows are declared");
+
+    // DECLARED ADJACENTLY, which is the structural half of "published together".
+    // A later edit that moves one row out of the directional block — the shape
+    // that would let the gate publish while the reading does not — separates
+    // them here.
+    check(order.indexOf(QString::fromLatin1(kClears))
+              == order.indexOf(QString::fromLatin1(kGate)) + 1
+          && order.indexOf(QString::fromLatin1(kPeak))
+              == order.indexOf(QString::fromLatin1(kGate)) + 2,
+          "swr gate: the clears count and the reading follow their gate");
+
+    // ON-STREAM, because off-stream proves nothing. All three rows sit behind
+    // the directional block's `inBandLive`, so without a Streaming link they
+    // are absent whichever optional they are keyed on — an off-stream check
+    // passes for the right reason and the wrong one alike. fakeStreamingLink()
+    // reaches Streaming with no socket, which is what makes the rest testable.
+    Access::fakeStreamingLink(b, true);
+
+    // THE ZERO-TEMPERATURE UNIT CLASS, which is the regression this pins.
+    // Hl2Telemetry::apply() takes forwardPowerRaw from every RADDR-1 response
+    // while the peak window skips the non-measurement ones, so this unit has
+    // the raw value and no peak (MetisProtocol.h:515-517). Keying the gate row
+    // on forwardPowerRaw would publish a known threshold beside an absent
+    // reading here, and radiocert would report TX:SWR DEFINED BUT NEVER FED on
+    // that unit — the exact verdict #7063 removes.
+    hl2::Hl2Telemetry noPeak;
+    noPeak.forwardPowerRaw = 76;
+    Access::publish(b, noPeak);
+    check(!health(b, kGate).isValid() && !health(b, kClears).isValid()
+              && !health(b, kPeak).isValid(),
+          "swr gate: on-stream, forwardPowerRaw alone reports none of the rows");
+
+    hl2::Hl2Telemetry withPeak;
+    withPeak.forwardPowerRaw = 76;
+    withPeak.forwardPowerPeakRaw = 76;
+    Access::publish(b, withPeak);
+    check(health(b, kGate).toInt() == hl2::kMinForwardCountsForSwr
+              && health(b, kPeak).toInt() == 76
+              && health(b, kClears).isValid(),
+          "swr gate: a peak publishes the gate, the clears count and the peak");
+
+    // THE COUNT IS "WINDOWS WHERE SWR WAS DUE": every gate publishTelemetry()
+    // applies to TX:SWR except the reverse reading. Keyed, with both peaks, the
+    // forward value is the window peak, and m_swrGate withholds the key-on and
+    // speech-pause windows even above the floor. The count must not move for a
+    // withheld window, or radiocert would call a correctly suppressed meter a
+    // defect (#7063).
+    const auto publishSwr = [](Hl2Backend& backend, const hl2::Hl2Telemetry& t) {
+        QSignalSpy spy(&backend, &IRadioBackend::meterUpdate);
+        Access::publish(backend, t);
+        for (const QList<QVariant>& args : spy) {
+            if (args.at(0).toString() == QStringLiteral("TX:SWR"))
+                return true;
+        }
+        return false;
+    };
+    const auto keyedPair = [](int fwd, int rev) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = fwd;
+        t.forwardPowerPeakRaw = fwd;
+        t.reversePowerRaw = rev;
+        t.reversePowerPeakRaw = rev;
+        return t;
+    };
+    Access::setKeyedFlag(b, true);
+    const hl2::Hl2Telemetry loud = keyedPair(1000, 10);
+    bool keyOnFed = false;
+    for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+        keyOnFed = publishSwr(b, loud) || keyOnFed;
+    check(health(b, kClears).toInt() == 0 && health(b, kPeak).toInt() == 1000 && !keyOnFed,
+          "swr gate: key-on windows above the floor are withheld by m_swrGate and "
+          "count nothing");
+
+    check(publishSwr(b, loud) && health(b, kClears).toInt() == 1,
+          "swr gate: the first window past key-on counts and feeds TX:SWR");
+
+    // A speech pause above the floor: 400 counts is under 0.7 of the envelope
+    // the 1000-count windows left, so m_swrGate withholds it.
+    check(!publishSwr(b, keyedPair(400, 5)) && health(b, kClears).toInt() == 1,
+          "swr gate: a window m_swrGate rejects above the floor does not count");
+
+    // BELOW THE FLOOR, on an over whose envelope m_swrGate would accept: only
+    // the floor withholds it.
+    Access::pastKeyOn(b);
+    check(!publishSwr(b, keyedPair(hl2::kMinForwardCountsForSwr - 20, 3))
+              && health(b, kClears).toInt() == 1,
+          "swr gate: a window below the forward floor does not count");
+
+    // COUNTED ON THE GATES, NOT ON THE RATIO. A window with no reverse reading
+    // publishes no SWR and must still count: that is the fault a diagnostic has
+    // to stay free to call. With no reverse peak the pair falls back to the
+    // last values, which m_swrGate does not judge.
+    hl2::Hl2Telemetry noReverse;
+    noReverse.forwardPowerRaw = hl2::kMinForwardCountsForSwr + 50;
+    noReverse.forwardPowerPeakRaw = 500;
+    check(!publishSwr(b, noReverse) && health(b, kClears).toInt() == 2,
+          "swr gate: a window that passed the gates with no reverse reading still counts");
+
+    // UNKEYED WINDOWS DO NOT COUNT. The count answers "did this transmission
+    // reach the level where SWR is due", and the idle ADC artefact must not be
+    // able to answer it yes.
+    Access::setKeyedFlag(b, false);
+    Access::publish(b, keyedPair(1000, 10));
+    check(health(b, kClears).toInt() == 2,
+          "swr gate: an unkeyed window above the floor does not count");
+
+    Access::fakeStreamingLink(b, false);
+    check(!health(b, kGate).isValid() && !health(b, kClears).isValid()
+              && !health(b, kPeak).isValid(),
+          "swr gate: off-stream reports none of the rows");
 }
 
 // What one key-on replay published, window by window.
@@ -671,6 +1116,112 @@ static KeyOnReplay replayKeyOn(std::span<const Hl2KeyOnRaddr1> rows, int phaseMs
     out.skippedShown = skipped.toULongLong();
     return out;
 }
+
+#if AETHER_HL2_TX_TXA
+static void pureSignalOverloadAcrossQueuedDelivery()
+{
+    using MetisAccess = hl2::MetisClientTestAccess;
+    Hl2Backend backend;
+    Access::fakeStreamingLink(backend, true);
+    const quint64 generation = Access::setPureSignal(backend, true);
+    const auto feedbackLimit = [&] {
+        return Access::pureSignalFields(backend).value(QStringLiteral("feedbackLimit")).toInt();
+    };
+    hl2::MetisClient metis;
+    metis.enableTransmit(true);
+    MetisAccess::setStreaming(metis);
+    metis.setPureSignal(true, generation);
+    hl2::Hl2Telemetry window;
+    QObject::connect(&metis, &hl2::MetisClient::telemetryUpdated,
+                     [&](const hl2::Hl2Telemetry& t) { window = t; });
+    std::uint8_t sequence = 0;
+    const auto sample = [&](bool overload, bool closeWindow) {
+        std::array<std::uint8_t, hl2::kUsbPacketSize> packet{};
+        packet[0] = 0xEF; packet[1] = 0xFE; packet[2] = 0x01; packet[3] = 0x06;
+        packet[7] = sequence++;
+        packet[8] = packet[9] = packet[10] = 0x7F;
+        packet[12] = overload ? 0x03 : 0x02; // TX permitted, ADC overload in bit 24
+        if (closeWindow) {
+            MetisAccess::dueEmit(metis);
+        } else {
+            MetisAccess::holdEmit(metis);
+        }
+        MetisAccess::feedDatagram(metis, packet);
+    };
+    const TxTestAuthority tx;
+
+    sample(true, false); // still receiving
+    metis.setMox(true, tx.operation);
+    Access::setKeyedFlag(backend, true);
+    sample(false, true); // first window straddles key-down
+    check(window.adcOverloadSamples == 1 && window.psAdcGeneration == 0,
+          "PureSignal: a pre-key overload is counted but cannot be attributed to feedback");
+    Access::publish(backend, window);
+    check(feedbackLimit() == 0, "PureSignal: delivery after key-down cannot turn RX overload red");
+
+    sample(true, true);
+    const hl2::Hl2Telemetry keyedOverload = window;
+    check(keyedOverload.psAdcGeneration == generation,
+          "PureSignal: a whole keyed ADC window carries the enable cycle");
+    metis.setMox(false, tx.operation);
+    Access::setKeyedFlag(backend, false);
+    Access::publish(backend, keyedOverload);
+    check(feedbackLimit() == 2, "PureSignal: overload acquired while keyed can arrive after unkey");
+
+    sample(false, true);
+    Access::publish(backend, window);
+    check(feedbackLimit() == 2, "PureSignal: a receive window does not clear the warning");
+    Access::setPureSignal(backend, false);
+    const quint64 enabledAgain = Access::setPureSignal(backend, true);
+    check(feedbackLimit() == 0, "PureSignal: off/on clears overload before the next telemetry tick");
+    Access::publish(backend, keyedOverload);
+    check(feedbackLimit() == 0, "PureSignal: a queued window from before off/on stays retired");
+
+    metis.setPureSignal(true, enabledAgain);
+    metis.setMox(true, tx.operation);
+    sample(false, true);
+    sample(true, true);
+    Access::publish(backend, window);
+    check(feedbackLimit() == 2, "PureSignal: the new enable cycle can report overload");
+    sample(false, true);
+    check(window.adcSamples > 0 && window.adcOverloadSamples == 0,
+          "PureSignal: a clean window contains fresh ADC observations");
+    Access::publish(backend, window);
+    check(feedbackLimit() == 0, "PureSignal: a clean keyed window clears the warning");
+}
+
+static void pureSignalAttenuationReply()
+{
+    Hl2Backend backend;
+    Access::fakeStreamingLink(backend, true);
+    const quint64 generation = Access::setPureSignal(backend, true);
+    hl2::Hl2PureSignalStatus measured;
+    measured.generation = generation;
+    measured.enabled = true;
+    measured.attenuationDb = 31;
+    measured.feedbackLimit = 1;
+    Access::deliverPureSignalStatus(backend, measured);
+
+    QSignalSpy replies(&backend, &IRadioBackend::extensionResult);
+    const auto request = [&](const char* name, const QVariant& argument = {}) {
+        backend.invokeExtension(QStringLiteral("hl2"), QString::fromLatin1(name), 1, argument);
+        return replies.takeLast().at(1).toMap();
+    };
+    const auto limit = [](const QVariantMap& fields) {
+        return fields.value(QStringLiteral("feedbackLimit")).toInt();
+    };
+    check(limit(request("puresignal.autoatt", false)) == 1,
+          "PureSignal: a measurement at the same attenuation can remain visible");
+    const QVariantMap moved = request("puresignal.att", 30);
+    check(moved.value(QStringLiteral("attenuationDb")).toInt() == 30 && limit(moved) == 0,
+          "PureSignal: manual attenuation reply cannot carry the previous setting's limit");
+    Access::setPureSignal(backend, false);
+    Access::setPureSignal(backend, true);
+    Access::deliverPureSignalStatus(backend, measured);
+    check(limit(request("puresignal.att", 31)) == 0,
+          "PureSignal: queued calibration work from an earlier enable cycle stays retired");
+}
+#endif
 
 // TX:FWDPWR at key-on, replayed from recorded RADDR-1 words (Hl2KeyOnRaddr1Fixture.h)
 // at ten phases of the publish window. No transmitter, no radio: replayKeyOn
@@ -797,218 +1348,51 @@ static void panAveragingSeam()
           "an unknown pan id changes nothing");
 }
 
-namespace AetherSDR {
-class RadioCertificationTestAccess {
-public:
-    static void restartObservation(RadioCertification& cert) { cert.beginMeterObservation(); }
-    static QJsonObject inventory(RadioCertification& cert)
-    {
-        cert.observeKeyedRf();
-        cert.stageMeterInventory();
-        return cert.m_stages.last().toObject();
-    }
-};
-}
-
-// Exercise the actual producer, model wiring and certification report together.
-// No keying verb is invoked; only the backend's cached keyed flag is injected.
-static void suppressedSwrCertification()
+// #7091: an app restart that restores into DIGU must not run the modulator on
+// the operator's SSB voice cut. connectRadio() opens it on the constructed
+// receiver's USB, so the restore on linkUp has to send DIGU's passband too.
+static void restoredDiguTxPassband()
 {
-    AetherSDR::RadioModel radio;
-    check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "HL2 offline fixture installs");
-    auto* backend = static_cast<Hl2Backend*>(radio.backend());
-    Access::defineMeters(*backend);
-    Access::setKeyedFlag(*backend, true);
-    auto feed = [&](std::optional<int> last, std::optional<int> peak,
-                    std::optional<int> reversePeak = 11) {
-        hl2::Hl2Telemetry t;
-        t.forwardPowerRaw = last;
-        t.reversePowerRaw = 11;
-        t.forwardPowerPeakRaw = peak;
-        t.reversePowerPeakRaw = reversePeak;
-        Access::publish(*backend, t);
-    };
-    auto inventory = [&](AetherSDR::RadioCertification& cert) {
-        return AetherSDR::RadioCertificationTestAccess::inventory(cert);
-    };
-    auto swrRow = [](const QJsonObject& stage) {
-        return stage.value(QStringLiteral("measured")).toObject()
-            .value(QStringLiteral("TX:SWR")).toObject();
-    };
-    auto verdict = [&](AetherSDR::RadioCertification& cert) {
-        return swrRow(inventory(cert)).value(QStringLiteral("verdict")).toString();
-    };
+    RestoredRadioState saved;
     {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        for (int i = 0; i < 3; ++i) { feed(76, 76); }
-        const QJsonObject stage = inventory(cert);
-        const QJsonObject measured = stage.value(QStringLiteral("measured")).toObject();
-        check(measured.value(QStringLiteral("keyedRf")).toObject()
-                  .value(QStringLiteral("confirmed")).toBool(),
-              "control: FWDPWR clears certification's RF floor");
-        check(swrRow(stage).value(QStringLiteral("defined")).toBool()
-                  && !swrRow(stage).value(QStringLiteral("everFed")).toBool(),
-              "control: the real SWR meter is defined and withheld");
-        check(swrRow(stage).value(QStringLiteral("verdict")).toString() == QStringLiteral("SUPPRESSED"),
-              "certification names intentional SWR suppression instead of a broken meter");
-        check(stage.value(QStringLiteral("concern")).toString().contains(QStringLiteral("TX:SWR — SUPPRESSED")),
-              "suppressed SWR has an actionable concern");
-        const QJsonObject evidence = swrRow(stage).value(QStringLiteral("publicationEvidence")).toObject();
-        check(evidence.value(QStringLiteral("swrKeyedLowPower")).toInteger() == 1
-                  && evidence.value(QStringLiteral("swrKeyedSettling")).toInteger() == 2,
-              "counts include all producer windows, not only the final certification poll");
+        Hl2Backend before;
+        before.setTxFilter(300, 2650);
+        before.setSliceMode(0, QStringLiteral("DIGU"));
+        saved = before.currentOperatingState();
     }
-    {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        Access::setKeyedFlag(*backend, false);
-        feed(2000, 2000);
-        Access::setKeyedFlag(*backend, true);
-        feed(76, 76);
-        check(verdict(cert) == QStringLiteral("SUPPRESSED"),
-              "an unkeyed update cannot hide intentional suppression in keyed windows");
-    }
-    {
-        Access::pastKeyOn(*backend);
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        feed(76, 2000);
-        const QJsonObject stage = inventory(cert);
-        check(swrRow(stage).value(QStringLiteral("fedWhileKeyedThisRun")).toBool()
-                  && swrRow(stage).value(QStringLiteral("verdict")).toString().isEmpty(),
-              "a qualifying peak publishes despite a last sample below the gate");
-        check(swrRow(stage).value(QStringLiteral("keyedUpdatesReceived")).toInteger() == 1,
-              "forward-power notifications do not duplicate an SWR receipt");
-        check(backend->healthSnapshot().values.value(QStringLiteral("swrMeterInput")).toString()
-                  == QStringLiteral("window peaks")
-                  && backend->healthSnapshot().values.value(QStringLiteral("swrMeterForwardRaw")).toInt() == 2000,
-              "health identifies the actual SWR input rather than the last raw reading");
-    }
-    {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        feed(400, 400);
-        check(verdict(cert) == QStringLiteral("SUPPRESSED"),
-              "speech-pause windows suppress even above the minimum forward threshold");
-        const QJsonObject row = swrRow(inventory(cert));
-        check(row.value(QStringLiteral("everFed")).toBool()
-                  && !row.value(QStringLiteral("fedWhileKeyedThisRun")).toBool(),
-              "a reading from an earlier run is not current-run delivery evidence");
-        AetherSDR::RadioCertificationTestAccess::restartObservation(cert);
-        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
-              "reusing a diagnostic clears prior run publication evidence");
-    }
-    {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        feed(std::nullopt, std::nullopt);
-        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
-              "missing telemetry is not evidence of deliberate suppression");
-    }
-    {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        Access::changeSession(*backend);
-        feed(76, 76);
-        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
-              "session changes invalidate certification's publication baseline");
-    }
-    {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        QTest::qWait(2);
-        Access::setKeyedFlag(*backend, false);
-        feed(2000, 2000);
-        Access::setKeyedFlag(*backend, true);
-        QObject::disconnect(backend, &AetherSDR::IRadioBackend::meterUpdate, &radio, nullptr);
-        // With a missing maximum, the real producer falls back to the last pair.
-        feed(2000, 76, std::nullopt);
-        check(verdict(cert) == QStringLiteral("NOT DELIVERED"),
-              "an eligible fallback sample with disconnected delivery remains a failure");
-        check(backend->healthSnapshot().values.value(QStringLiteral("swrMeterInput")).toString()
-                  == QStringLiteral("last pair"),
-              "missing-peak fallback is reported as the last pair");
-    }
-    {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        Access::setKeyedFlag(*backend, false);
-        feed(2000, 2000);
-        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
-              "unkeyed producer eligibility cannot certify a keyed window");
-    }
-    {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "offline backend replacement succeeds");
-        backend = static_cast<Hl2Backend*>(radio.backend());
-        Access::defineMeters(*backend);
-        Access::setKeyedFlag(*backend, true);
-        feed(76, 76);
-        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
-              "backend replacement cannot borrow the previous backend's baseline");
-    }
-    {
-        AetherSDR::RadioCertification cert(&radio, nullptr);
-        feed(2000, 2000);
-        check(verdict(cert) == QStringLiteral("SUPPRESSED"),
-              "a high-power window still settling after key-on is intentionally suppressed");
-        const QJsonObject evidence = swrRow(inventory(cert))
-            .value(QStringLiteral("publicationEvidence")).toObject();
-        check(evidence.value(QStringLiteral("swrKeyedSettling")).toInteger() == 1
-                  && evidence.value(QStringLiteral("swrKeyedLowPower")).toInteger() == 0,
-              "key-on suppression is reported separately from the power threshold");
-    }
-    Access::setKeyedFlag(*backend, false);
-}
+    check(saved.mode == QStringLiteral("DIGU"), "#7091: the saved session is DIGU");
 
+    Hl2Backend b;
+    b.applyRestoredState(saved);
+    check(Access::seedConnectTxConfig(b) == QStringLiteral("USB"),
+          "#7091 control: before linkUp the TX receiver is still the constructed USB");
+    const hl2::Hl2TxDsp::Config opened = Access::txDspConfig(b);
+    check(opened.filterLowHz == 300.0 && opened.filterHighHz == 2650.0,
+          "#7091 control: the modulator opens on USB's operator cut 300..2650");
+    check(health(b, "txPassbandHz").toString() == QStringLiteral("300 .. 2650"),
+          "#7091 control: the health row reports that cut before linkUp");
 
-// A watchdog recovery reuses the backend and connect generation. Drive its
-// actual link edges so the counter reset cannot borrow an earlier receipt.
-static void swrCertificationLinkRecovery()
-{
-    RadioModel radio;
-    check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "SWR recovery fixture installs");
-    auto* backend = static_cast<Hl2Backend*>(radio.backend());
-    Access::metisEdge(*backend, "linkUp");
-    auto feed = [&](int forward) {
-        hl2::Hl2Telemetry t;
-        t.forwardPowerRaw = t.forwardPowerPeakRaw = forward;
-        t.reversePowerRaw = t.reversePowerPeakRaw = 11;
-        Access::publish(*backend, t);
-    };
-    auto row = [](RadioCertification& cert) {
-        return RadioCertificationTestAccess::inventory(cert)
-            .value(QStringLiteral("measured")).toObject()
-            .value(QStringLiteral("TX:SWR")).toObject();
-    };
-    RadioCertification prior(&radio, nullptr);
-    Access::setKeyedFlag(*backend, true);
-    Access::pastKeyOn(*backend);
-    feed(2000);
-    check(row(prior).value(QStringLiteral("keyedUpdatesReceived")).toInteger() == 1,
-          "recovery control: initial session has one keyed receipt");
-    const QVariant firstSession = health(*backend, "swrMeterSession");
-    Access::setKeyedFlag(*backend, false);
-    Access::metisEdge(*backend, "linkDown");
-    Access::metisEdge(*backend, "linkUp");
-    const QVariant recoveredSession = health(*backend, "swrMeterSession");
-    check(recoveredSession != firstSession,
-          "watchdog recovery advances the publication session when counters reset");
-    Access::setKeyedFlag(*backend, true);
-    for (int i = 0; i < 3; ++i) { feed(76); }
-    const QJsonObject stale = row(prior);
-    check(!stale.value(QStringLiteral("fedWhileKeyedThisRun")).toBool()
-              && !stale.value(QStringLiteral("publicationEvidence")).toObject()
-                      .value(QStringLiteral("available")).toBool()
-              && stale.value(QStringLiteral("verdict")).toString() == QStringLiteral("INCONCLUSIVE"),
-          "watchdog recovery cannot reuse pre-drop receipts or publication counters");
-    RadioCertification fresh(&radio, nullptr);
-    feed(76);
-    check(row(fresh).value(QStringLiteral("verdict")).toString() == QStringLiteral("SUPPRESSED"),
-          "a fresh observation after recovery measures suppression in the new session");
-    check(health(*backend, "swrMeterSession") == recoveredSession,
-          "ordinary telemetry leaves the publication session stable");
-    Access::pastKeyOn(*backend);
-    feed(2000);
-    check(row(prior).value(QStringLiteral("verdict")).toString() == QStringLiteral("INCONCLUSIVE"),
-          "later eligible receipts cannot rehabilitate an observation from the retired session");
-    check(row(fresh).value(QStringLiteral("fedWhileKeyedThisRun")).toBool(),
-          "a fresh observation counts eligible receipts in the recovered session");
-    Access::setKeyedFlag(*backend, false);
-    Access::metisEdge(*backend, "linkDown");
+    QSignalSpy txSpy(&b, &IRadioBackend::transmitChanged);
+    Access::metisEdge(b, "linkUp");
+    const hl2::Hl2TxDsp::Config live = Access::txDspConfig(b);
+    check(live.mode == WdspChannel::Mode::Digu, "#7091: the restore puts the modulator in DIGU");
+    check(live.filterLowHz == 150.0 && live.filterHighHz == 3000.0,
+          "#7091: and on DIGU's 150..3000, not the operator's SSB cut");
+    std::optional<std::pair<int, int>> echoed;
+    for (const QList<QVariant>& args : txSpy) {
+        const auto d = args.at(0).value<TransmitDelta>();
+        if (d.txFilterLow && d.txFilterHigh)
+            echoed = std::pair{*d.txFilterLow, *d.txFilterHigh};
+    }
+    check(echoed == std::pair{150, 3000},
+          "#7091: the Phone applet is echoed 150..3000");
+    check(health(b, "txPassbandHz").toString() == QStringLiteral("150 .. 3000"),
+          "#7091: the health row reports the passband the modulator was sent");
+    Access::setTxReceiverModeWithoutPush(b, QStringLiteral("LSB"));
+    check(health(b, "txPassbandHz").toString() == QStringLiteral("150 .. 3000"),
+          "#7091: the health row is the pair sent, not one recomputed from the mode");
+    Access::setTxReceiverModeWithoutPush(b, QStringLiteral("DIGU"));
+    Access::metisEdge(b, "linkDown");
 }
 
 int main(int argc, char** argv)
@@ -1023,10 +1407,13 @@ int main(int argc, char** argv)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<NotchDelta>();
+    qRegisterMetaType<MeterDef>();
     check(Hl2Settings::spanMhz() == 0.0, "isolated profile starts with no remembered span");
 
     capabilitiesSeam();
+    paCurrentMeter();
     linkLifecycle();
+    iqTapEndsWithTheSession();
     connectWithoutEp6();
     spanPolicy();
     manualMoxCancelsCwHang();
@@ -1035,11 +1422,17 @@ int main(int argc, char** argv)
     notchIdsAreNeverReused();
     forwardPowerWindowPeakWhileKeyed();
     swrFromWindowPairWhileKeyed();
-    suppressedSwrCertification();
-    swrCertificationLinkRecovery();
+    swrKeyOnWindowsEveryOver();
     forwardPowerSkippedHealthRow();
+    swrGateHealthRows();
+    swrReceiptDuringCertification();
+#if AETHER_HL2_TX_TXA
+    pureSignalOverloadAcrossQueuedDelivery();
+    pureSignalAttenuationReply();
+#endif
     forwardPowerKeyOnReplay();
     panAveragingSeam();
+    restoredDiguTxPassband();
 
     std::fprintf(stderr, "hl2_backend_seam_test: %s\n",
                  g_failures == 0 ? "all checks passed" : "FAILED");

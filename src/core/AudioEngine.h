@@ -1,9 +1,11 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/DaxTxAudioPermit.h"
 
 #include <QObject>
 #include "RxChainRunner.h"
+#include "TxChainLayout.h"
 
 #include <QAudioSink>
 #include <QAudioSource>
@@ -62,7 +64,6 @@ class TxVoiceProcessor;
 class ClientEq;
 class ClientComp;
 class ClientGate;
-class ClientDeEss;
 class ClientTube;
 class ClientPudu;
 class ClientPuduMonitor;
@@ -148,7 +149,8 @@ public:
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")
-    void setTxStreamId(quint32 id) { m_txStreamId = id; }
+    void setTxStreamId(quint32 id) { m_txStreamId.store(id); }
+    void setDaxTxAudioRoute(quint32 streamId, const AetherSDR::DaxTxAudioPermit& permit);
     quint32 txStreamId() const { return m_txStreamId; }
     // Set the remote audio TX stream ID (for voice TX and VOX monitoring)
     void setRemoteTxStreamId(quint32 id) { m_remoteTxStreamId = id; }
@@ -194,6 +196,7 @@ public:
     int  rxPan() const { return m_rxPan.load(); }
     void  setRxBufferCapMs(int ms) { m_rxBufferCapMs.store(qBound(50, ms, 1000)); }
     int   rxBufferCapMs() const { return m_rxBufferCapMs.load(); }
+    void setReceiveJitterBuffer(int prefillMs, int bufferCapMs);
     void setReceivePresentationDelays(
         int flexDelayMs,
         int kiwiDelayMs,
@@ -206,6 +209,9 @@ public:
     void setMuted(bool m);
     bool isRxStreaming() const { return m_audioSink != nullptr; }
     bool isTxStreaming() const { return m_audioSource != nullptr; }
+    // The last TX capture start found no audio input device at all (#7078).
+    // Refreshed by every startTxStream(); a format failure leaves it false.
+    bool txInputDeviceMissing() const { return m_txInputDeviceMissing.load(); }
     // Which producer currently owns the QSO recorder's TX slot (#2539,
     // #4281). Both the mic monitor tap and the CW record pump reach
     // QsoRecorder::feedTxAudio, so both ends ask this one question rather
@@ -325,6 +331,9 @@ public:
     void setDaxTxUseRadioRoute(bool on);
     bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute.load(); }
     void setTransmitting(bool tx);
+    // Silences the mic ahead of the TX chain while still keyed (TX off delay
+    // past its audio window). Quindar is generated later, so it still airs.
+    void setTxMicHeld(bool held) { m_txMicHeld.store(held, std::memory_order_release); }
     // Raw interlock state plus its tx_client_handle attribution, delivered as
     // one snapshot (the parse stores ownership before emitting the signal).
     void setRadioTransmitting(bool tx, bool ownedByUs);
@@ -437,17 +446,16 @@ public:
     ClientComp* clientCompTx() { return m_clientCompTx.get(); }
     ClientComp* clientCompRx() { return m_clientCompRx.get(); }
 
-    // Client-side TX downward expander / noise gate (#1661 Phase 2).
+    // Client-side RX downward expander / noise gate (#1661 Phase 2); the TX
+    // side is retired (RN2 replaces it).
     // Single DSP module with an Expander ↔ Gate mode toggle that
     // snaps ratio + floor to known-good presets.
-    ClientGate* clientGateTx() { return m_clientGateTx.get(); }
     ClientGate* clientGateRx() { return m_clientGateRx.get(); }
 
     // Client-side TX de-esser (#1661 Phase 3).  Sidechain-filtered
     // dynamics: a user-tunable bandpass feeds the envelope detector,
     // broadband attenuation (capped at amountDb) is applied when
     // sibilant energy crosses threshold.
-    ClientDeEss* clientDeEssTx() { return m_clientDeEssTx.get(); }
 
     // Client-side TX dynamic tube saturator (#1661 Phase 4).  Three
     // selectable curves, bipolar envelope-driven drive, tilt tone
@@ -504,19 +512,27 @@ public:
     void setTxPostDspMonitor(ClientPuduMonitor* m) noexcept;
 
     // Generalised TX DSP chain — each stage is a separate float processing
-    // block run in order by TxVoiceProcessor at 48 kHz. Numeric values are
-    // persisted in the packed atomic and therefore form a stable contract.
+    // block run in order by TxVoiceProcessor at 48 kHz. The values are shared
+    // with TxVoiceProcessor::Stage and must fit one 4-bit slot of the packed
+    // order (TxChainLayout): 1..15, with None ending the list.
     enum class TxChainStage : uint8_t {
         None   = 0,   // sentinel / end-of-list marker
-        Gate   = 1,
+        Gate   = 1,   // retired: AetherTX has no gate (RN2 replaced it); kept so
+                      // orders saved before still decode, and dropped on load
         Eq     = 2,
-        DeEss  = 3,
+        DeEss  = 3,   // retired, as Gate: AetherTX has no de-esser
         Comp   = 4,
         Tube   = 5,
         Enh    = 6,   // PUDU slot
         Reverb = 7,
     };
-    static constexpr int kMaxTxChainStages = 8;  // packs into uint64_t
+    static constexpr int kMaxTxChainStages = TxChainLayout::kSlots;
+
+    // The packed order the audio thread loads each block. Tests only.
+    uint64_t txChainPackedForTest() const noexcept
+    {
+        return m_txChainPacked.load(std::memory_order_acquire);
+    }
 
     // RX chain — same packed-atomic dispatcher pattern as TX, applied
     // to playback audio after the radio's NR has run.  Phase 0 ships
@@ -552,9 +568,17 @@ public:
 
     // Set the ordered list of stages.  UI thread API; commits an
     // atomic snapshot that the audio thread picks up on its next block.
-    // Order may contain any subset of stages; unlisted stages are
-    // bypassed entirely.  Persists via AppSettings.
+    // Repeats are dropped and every canonical stage the order lacks is
+    // appended, as on load, so a stage is bypassed by its processor's
+    // enable flag, never by leaving it out.  Persists what was packed.
     void setTxChainStages(const QVector<TxChainStage>& stages);
+    // A chain order from stage names, as the settings file and profiles store
+    // it. The retired "Gate" and "DeEss" are dropped; unknown names are
+    // skipped. An order that names a retired stage and is otherwise the old
+    // default (Eq, Comp, Tube, Enh, Reverb) is a pre-retirement default the
+    // operator never changed, so it becomes today's default. Empty when no
+    // name parses.
+    static QVector<TxChainStage> txChainFromNames(const QStringList& names);
     QVector<TxChainStage> txChainStages() const;
 
     // ── Master TX bypass ─────────────────────────────────────────
@@ -598,15 +622,14 @@ public:
     void saveClientCompRxSettings() const;
     void saveClientCompSettings() const;
 
-    // Client-side TX gate — persistence mirrors the compressor.
-    void loadClientGateSettings();
+    // Client-side RX gate — persistence mirrors the compressor. AetherTX
+    // has no gate (RN2 replaces it) and no de-esser; migrateRetiredTxStages()
+    // carries an enabled TX gate over to RN2 once, and
+    // dropRetiredSettingsKeys() removes both stages' other keys.
     void loadClientGateRxSettings();
     void saveClientGateRxSettings() const;
-    void saveClientGateSettings() const;
+    void migrateRetiredTxStages();
 
-    // Client-side TX de-esser — persistence.
-    void loadClientDeEssSettings();
-    void saveClientDeEssSettings() const;
     // RX-side counterpart (#2425).
 
     // Client-side TX dynamic tube — persistence.
@@ -817,7 +840,8 @@ signals:
     // recorder opens its TX gate for CW the same way moxChanged does for voice.
     // Ownership-correct: driven by our local keyer, not any-owner interlock.
     void cwRecordingActiveChanged(bool active);
-    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context);
+    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context,
+                       const AetherSDR::DaxTxAudioPermit& ownership = {});
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection
     // (which becomes queued across threads) so feedAudio() lands on the
@@ -859,6 +883,7 @@ signals:
                                              int sampleRate);
 
     void pcMicLevelChanged(float peakDbfs, float avgDbfs);  // client-side PC mic metering
+    void txInputDeviceMissingChanged(bool missing);
     void scopeSamplesReady(const QByteArray& monoFloat32Pcm, int sampleRate, bool tx);
     // Emitted on the local TX audio that will feed the radio. For PC mic
     // voice this is after the strip, PC mic gain, and final limiter; for
@@ -961,6 +986,7 @@ private:
     float computeRMS(const QByteArray& pcm) const;
     QByteArray applyBoost(const QByteArray& pcm, float gain) const;
     QByteArray buildVitaTxPacket(const float* samples, int numStereoSamples);
+    void emitDaxTxPacket(const QByteArray& packet, const TxCoordinator::Context& context);
     void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId, const TxCoordinator::Context& context);
     void emitScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate, bool tx);
@@ -973,6 +999,7 @@ private:
                               ExternalRxAudioSourceState* externalSource = nullptr);
     void processRxAudioData(const QByteArray& pcm, bool emitTncTap,
                             RxAudioBuffer targetBuffer = RxAudioBuffer::Main);
+    void trimMainRxBuffers(qsizetype targetRawBytes);
     void processMixedRxAudioData(const QByteArray& pcm,
                                  RxDspSource source = RxDspSource::Main,
                                  ExternalRxAudioSourceState* externalSource = nullptr);
@@ -1133,7 +1160,8 @@ private:
 #endif
     QHostAddress  m_txAddress;
     quint16       m_txPort{0};
-    quint32       m_txStreamId{0};         // DAX TX stream
+    std::atomic<quint32> m_txStreamId{0};  // confirmed DAX TX route
+    DaxTxAudioPermit m_daxTxAudioPermit{DaxTxAudioPermit::blocked()};
     quint32       m_remoteTxStreamId{0};  // remote_audio_tx (voice/VOX)
     // Host-modulating backend (HL2): no Flex stream id will ever be assigned,
     // so the TX gate keys off this instead. setHostModulation() is the single
@@ -1148,6 +1176,7 @@ private:
     std::atomic<float> m_pcMicGain{1.0f};     // client-side PC mic gain (0.0-1.0)
     std::atomic<bool>  m_daxTxMode{false};    // DAX TX mode: VirtualAudioBridge handles TX
     QElapsedTimer      m_txSourceStartTime;
+    std::atomic<bool>  m_txInputDeviceMissing{false};
     quint64            m_txLifecycleGeneration{0};
     QElapsedTimer      m_txCaptureHealthClock;
     TxCaptureHealthTracker m_txCaptureHealth;
@@ -1180,6 +1209,7 @@ private:
 #endif
     std::atomic<bool>  m_daxTxUseRadioRoute{false}; // false = low-latency route (dax=0)
     std::atomic<bool>  m_transmitting{false}; // true when radio is in TX AND we own TX
+    std::atomic<bool>  m_txMicHeld{false};
     std::atomic<bool>  m_radioTransmitting{false}; // true when radio is in TX (any owner)
     std::atomic<bool>  m_opusTxEnabled{false}; // Opus TX encoding for SmartLink
     std::unique_ptr<class OpusCodec> m_opusTxCodec; // lazy-init on first TX with Opus
@@ -1318,6 +1348,7 @@ private:
     std::unique_ptr<Resampler> m_txResampler;  // RADE e.g. 48k -> 24k (lazy init)
 
     friend class AudioEngineRatesTestAccess;
+    friend class AudioEngineTxInputMissingTestAccess;  // #7078
     void captureLineOutAudio(const QByteArray& pcm, int sampleRate);
     void resetLineOutCapture();
     PcmProducer m_lineOutProducer;
@@ -1328,6 +1359,7 @@ private:
     std::unique_ptr<Resampler> m_lineOutLeftResampler;
     std::unique_ptr<Resampler> m_lineOutRightResampler;
     void drainRxAudio(qsizetype freeBytes);
+    void drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedBytes);
     bool retireInvalidPcmSources();
     void queueLegacyKiwiAudioData(const QByteArray& pcm24kStereoFloat);
     void queueKiwiAudioData(const QString& sourceId, const QByteArray& pcm24kStereoFloat);
@@ -1421,10 +1453,8 @@ private:
     std::unique_ptr<ClientComp> m_clientCompTx;
     std::unique_ptr<ClientComp> m_clientCompRx;
     // Client-side TX downward expander / noise gate.
-    std::unique_ptr<ClientGate> m_clientGateTx;
     std::unique_ptr<ClientGate> m_clientGateRx;
     // Client-side TX de-esser.
-    std::unique_ptr<ClientDeEss> m_clientDeEssTx;
     // Client-side TX tube saturator.
     std::unique_ptr<ClientTube> m_clientTubeTx;
     std::unique_ptr<ClientTube> m_clientTubeRx;
@@ -1448,11 +1478,10 @@ private:
     // Post-DSP TX monitor — owned by MainWindow; we just hold a
     // pointer the audio thread can load lock-free per block.
     std::atomic<ClientPuduMonitor*> m_txPostDspMonitor{nullptr};
-    // Generalised TX DSP chain — stages packed one-byte-per-slot into
-    // a uint64_t so the audio thread can load the full order in a
-    // single atomic read per block.  TxChainStage::None terminates the
-    // list; unused slots are zero.  Default canonical order:
-    // [Gate, Eq, DeEss, Comp, Tube, Enh, Reverb].
+    // Generalised TX DSP chain, packed by TxChainLayout (4 bits per slot)
+    // so the audio thread loads the full order in a single atomic read per
+    // block. TxChainStage::None terminates the list; unused slots are zero.
+    // Default canonical order: [Tube, Eq, Comp, Enh, Reverb].
     std::atomic<uint64_t> m_txChainPacked{0};
     // Master-bypass snapshot — the stages that were enabled at the
     // moment setTxBypassed(true) was called.  Used solely to restore
@@ -1573,6 +1602,9 @@ private:
     QString           m_externalKiwiReceivePresentationDelaySourceId;
     int               m_externalKiwiReceivePresentationDelayMs{0};
     std::atomic<bool> m_rxPresentationPrebuffering{false};
+    std::atomic<int> m_rxJitterPrefillMs{0};
+    std::atomic<int> m_rxJitterCapMs{0};
+    std::atomic<bool> m_rxJitterPrebuffering{false};
     std::atomic<bool> m_kiwiSdrPrebuffering{false};
     std::vector<std::unique_ptr<ExternalRxAudioSourceState>> m_externalKiwiSources;
     std::atomic<qsizetype> m_rxBufferBytes{0};

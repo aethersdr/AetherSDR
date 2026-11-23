@@ -62,6 +62,7 @@ AetherSDR exposes this as a manual choice because overlay networks such as ZeroT
 When enabled, AetherSDR automatically lowers the FFT and waterfall frame rate when network quality degrades, reducing the chance of a disconnect on a congested link. It applies to every connection type.
 
 - Toggling it while connected takes effect at the next quality update. To lift a cap that has already been applied, reconnect.
+- While it is on, an **AT** chip follows the connected radio's name in the title bar, and the tab's dot shows the network quality color. The chip fills with color while a cap is in force; hover the tab to see the frame rate. See [Menu Reference](./menu-reference.md#radio-tabs).
 - The cap is not meant to be saved as your setting. When you disconnect, close AetherSDR, close a panadapter or pick a band from AetherSDR's band menu while a cap is in force, AetherSDR first puts back your own FFT FPS and waterfall rate, so the radio keeps those. After a band change the cap goes back on once the radio has switched bands.
 - Some changes still leave the radio holding the capped rate for a band: the connection dropping or timing out, and a band change AetherSDR didn't make (tuning or dragging the panadapter across a band edge, CAT, or another client). If a band comes back at a low rate with the throttle off, set **FFT FPS** and **WtrFall Rate** again while on it.
 - The **Stream Rates** page of **Tools → Network Diagnostics...** charts the frame-rate cap — see [Runtime Monitor](./runtime-monitor.md).
@@ -158,7 +159,6 @@ EF marking can help on a congested network that honors DSCP. Switches, routers, 
 
 ## Known issues
 
-- On a remote link, receive audio can drop out briefly several times a minute when packets arrive out of order, although none are lost ([#6051](https://github.com/aethersdr/AetherSDR/issues/6051)).
 - The network-quality indicator in the status bar is averaged, so it can stay green while the link is bad; use **Tools → Network Diagnostics...** for live conditions ([#2825](https://github.com/aethersdr/AetherSDR/issues/2825)).
 
 ## Troubleshooting
@@ -188,7 +188,11 @@ Network jitter or lost packets are reaching the audio buffer.
 
 ### Audio drops out or the waterfall has gaps
 
-Packets from the radio are lost, or arrive out of order, on the way to the computer. Wi-Fi, a busy switch or a VPN are the usual causes. The log then shows `PanadapterStream: VITA-49 sequence errors on <stream> stream`, at most once every 10 seconds for each stream.
+Packets from the radio can be lost or arrive out of order on the way to the computer. Receive audio waits up to 30 ms for a missing packet before decoding its queued successors. Packets arriving within that wait are restored to order without packet-loss concealment; a gap that remains triggers concealment when **Smooth packet loss** is enabled. Ordered audio has no added wait. FFT, waterfall and meter accounting also allows this reorder wait.
+
+**Tools → Network Diagnostics...** reports these missing packets separately from reordered arrivals. The **Session missing packets / DAX breaks** total counts individual absent audio, FFT, waterfall and meter packets, plus DAX sequence breaks. Its network-quality score retains one event per resolved gap, so a burst of several missing packets is one scoring event. Per-stream loss percentages in Network Diagnostics, the status tooltip and performance logs use received plus missing packets as the denominator. DAX remains in arrival order and reports sequence breaks. The log shows `PanadapterStream: VITA-49 sequence errors on <stream> stream`, at most once every 10 seconds per stream.
+
+The 4-bit counter cannot uniquely identify arbitrary long loss or reordering. A PCM count reused within 30 ms of its last delivery or expiry is indistinguishable from a late copy; losses spanning a complete counter cycle are also ambiguous. Opus timestamps and display frame positions provide additional ordering information. Opus reception resumes after a backward timestamp jump greater than 60 seconds; display loss accounting resumes after a counter restart beyond its eight-frame late-packet window.
 
 1. Open **Tools → Network Diagnostics...** to see which streams lose packets.
 2. Connect the computer to the network by cable instead of Wi-Fi.

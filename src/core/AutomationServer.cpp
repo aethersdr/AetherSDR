@@ -3,6 +3,7 @@
 #include "core/backends/AutoRfGainControl.h"
 #include "AetherBuildIdentity.h"   // generated at build time; see cmake/AetherBuildIdentity.cmake
 #include "core/CtcssTones.h"
+#include "core/SettingsSanitizer.h"
 #include "core/RadioCertification.h"
 #include "LogManager.h"
 #include "SettingsPaths.h"
@@ -476,6 +477,8 @@ QJsonObject describeWidget(const QWidget* w)
     // will refuse before trying them (#3646).
     if (w->property(kTxKeyingProperty).toBool())
         o[QStringLiteral("keying")] = true;
+    if (isTxSetpointControl(w))
+        o[QStringLiteral("txSetpoint")] = true;
     {
         const QVariant sliceId = w->property("sliceId");
         if (sliceId.isValid()) {
@@ -1465,6 +1468,77 @@ bool hasTransmitControlInChain(const QWidget* widget)
         }
     }
     return false;
+}
+
+const QWidget* txSetpointInChain(const QWidget* widget)
+{
+    for (const QWidget* current = widget; current; current = current->parentWidget()) {
+        if (isTxSetpointControl(current)) {
+            return current;
+        }
+    }
+    return nullptr;
+}
+
+#ifdef HAVE_WEBSOCKETS
+// The first `drive:` / `tune_drive:` SET (two or more arguments, TCI's set
+// convention) in a `tci send` payload, or empty. A read (`drive:0;`) is not one.
+QString tciDriveSetCommand(const QString& payload)
+{
+    for (const QString& part : payload.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const int colon = part.indexOf(QLatin1Char(':'));
+        if (colon < 0) {
+            continue;
+        }
+        const QString name = part.left(colon).trimmed().toLower();
+        if ((name == QLatin1String("drive") || name == QLatin1String("tune_drive"))
+            && part.mid(colon + 1).split(QLatin1Char(','), Qt::KeepEmptyParts).size() >= 2) {
+            return part.trimmed();
+        }
+    }
+    return {};
+}
+
+// The first `drive:` / `tune_drive:` SET in `payload` whose power is above
+// `ceiling`, or that is not a plain `trx,power` pair the ceiling can be checked
+// against (TciProtocol::cmdDrive sets only on exactly two arguments), or empty.
+QString tciDriveSetAboveCeiling(const QString& payload, int ceiling)
+{
+    for (const QString& part : payload.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        if (tciDriveSetCommand(part).isEmpty()) {
+            continue;
+        }
+        const QStringList args = part.mid(part.indexOf(QLatin1Char(':')) + 1)
+                                     .split(QLatin1Char(','), Qt::KeepEmptyParts);
+        bool okPower = false;
+        const int power = args.size() == 2 ? args.at(1).trimmed().toInt(&okPower) : 0;
+        if (!okPower || power > ceiling) {
+            return part.trimmed();
+        }
+    }
+    return {};
+}
+#endif
+
+// A route that sets transmit drive by an amount the bridge cannot bound, or
+// above the bound, while AETHER_AUTOMATION_TX_MAX_POWER is armed (#5851).
+// `clampedRoute` names the route that does the same within the ceiling.
+QString txCeilingBlockedError(const QString& target, int ceiling, const QString& clampedRoute)
+{
+    return QStringLiteral("blocked: '") + target
+        + QStringLiteral("' would set transmit drive past the power ceiling "
+                         "(AETHER_AUTOMATION_TX_MAX_POWER=%1). Use %2.")
+              .arg(ceiling)
+              .arg(clampedRoute);
+}
+
+// A drive-blocked result from a host with no automation handler: the fallback
+// cannot be handed the power ceiling, so it refuses drive as if it were armed.
+QString txDriveNoHandlerError(const QString& target)
+{
+    return QStringLiteral("blocked: '") + target
+        + QStringLiteral("' sets transmit drive, and this host cannot pass the "
+                         "power ceiling to it (no automation handler is installed).");
 }
 
 bool hasOwnTransmitMarker(const QObject* object)
@@ -2787,6 +2861,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
         return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status")
             || normalizedAction == QLatin1String("devices") || normalizedAction == QLatin1String("stop");
     }
+    if (name == QLatin1String("connect") && normalizedAction == QLatin1String("profiles")) {
+        return true;
+    }
     // The probe constructs only an isolated TransmitModel and touches no session.
     if (name == QLatin1String("interlock") && action == QLatin1String("probe")) {
         return true;
@@ -2814,6 +2891,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     if (name == QLatin1String("gesture")) {
         return normalizedAction == QLatin1String("status");
     }
+    if (name == QLatin1String("daxTx")) {
+        return normalizedAction == QLatin1String("status");
+    }
     // `modem`/`link` mix introspection with actions that key the radio
     // (link connect transmits a SABM), so only the status reads are safe here.
     if (name == QLatin1String("modem") || name == QLatin1String("link")) {
@@ -2834,6 +2914,7 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
     if (name == QLatin1String("civ")) {
         return normalizedAction == QLatin1String("trace")
+            || normalizedAction == QLatin1String("profile")
             || normalizedAction == QLatin1String("session")
             || normalizedAction == QLatin1String("scheduler");
     }
@@ -2864,10 +2945,11 @@ const QStringList& getModelNames()
         QStringLiteral("slices"),     QStringLiteral("pan"),
         QStringLiteral("pans"),       QStringLiteral("panstats"),
         QStringLiteral("gps"),        QStringLiteral("clock"),
-        QStringLiteral("renderstats"),
+        QStringLiteral("renderstats"), QStringLiteral("repaintstats"),
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
         QStringLiteral("display"),
         QStringLiteral("waveforms"),
+        QStringLiteral("daxtx"),
         QStringLiteral("ntp"),
         QStringLiteral("kiwi"),
     };
@@ -3007,6 +3089,26 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("dumpTree", {}, "serialize the full widget tree as JSON",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doDumpTree(); });
+
+        add("repaintScheduling", {}, "repaintScheduling <on|off> — compare display-paced window repaint delivery; does not change radio state",
+            parseValueOnly,
+            [](AutomationServer&, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.value != QLatin1String("on") && a.value != QLatin1String("off")) {
+                    return err(QStringLiteral("expected on or off"));
+                }
+                int count = 0;
+                const bool enabled = a.value == QLatin1String("on");
+                for (QWidget* window : QApplication::topLevelWidgets()) {
+                    for (QObject* scheduler : window->findChildren<QObject*>(
+                             QStringLiteral("windowRepaintScheduler"), Qt::FindDirectChildrenOnly)) {
+                        if (QMetaObject::invokeMethod(scheduler, "setEnabledForProcess", Qt::DirectConnection,
+                                                     Q_ARG(bool, enabled))) { ++count; }
+                    }
+                }
+                if (!count) { return err(QStringLiteral("no active window repaint schedulers")); }
+                return QJsonObject{{QStringLiteral("ok"), true},
+                    {QStringLiteral("enabled"), enabled}, {QStringLiteral("count"), count}};
+            });
 
         add("floors", {}, "per-pan measured noise + display floor (dBm)",
             parseTargetPath,
@@ -3280,8 +3382,15 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("get", {}, "get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
                 a.model = vtok(p, 1);
-                a.selector = vtok(p, 2);
-                a.property = vtok(p, 3);
+                if (a.model == QLatin1String("daxtx")) {
+                    if (p.size() > 3) {
+                        return err(QStringLiteral("get daxtx accepts only one optional property"));
+                    }
+                    a.property = vtok(p, 2);
+                } else {
+                    a.selector = vtok(p, 2);
+                    a.property = vtok(p, 3);
+                }
                 return {};
             },
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
@@ -3292,13 +3401,26 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doGet(a.model, a.selector, a.property);
             });
 
+        add("daxTx", {QStringLiteral("daxtx")},
+            "daxTx <take|release|status> — this client's DAX TX stream ownership; never keys TX",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                if (p.size() != 2) {
+                    return err(QStringLiteral("daxTx requires exactly one action (take|release|status)"));
+                }
+                a.action = vtok(p, 1);
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doDaxTx(a.action);
+            });
+
         add("meterwindow", {}, "meterwindow <start [duration_ms]|status|stop> — bounded meter ages and unrounded peaks; never keys TX",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doMeterWindow(a.action, a.value);
             });
 
-        add("connect", {}, "connect <list|show|hide|local|ip|wait> [args]",
+        add("connect", {}, "connect <list|profiles|profile stations|operators <id>|show|hide|local|ip|wait> [args]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket* sock) -> QJsonObject {
                 if (a.action.isEmpty()) {
@@ -3464,7 +3586,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         // rfgain branch already splits the joined value and handles both shapes,
         // so the handler was right and only the parser choice was wrong.
         add("pan", {},
-            "pan <create|add|remove|close|center|rfgain|autorfgain|float|dock> [value] — "
+            "pan <create|add|remove|close|center|range|rfgain|autorfgain|float|dock> [value] — "
             "float/dock drive PanadapterStack's real reparent path (#4864); "
             "autorfgain takes on|off, 'mode <bandscope|ramp|probe|binary>' for which "
             "control law, or 'floor <dB>' for how far below the "
@@ -3474,7 +3596,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
                         "pan requires an action "
-                        "(create|add|remove|close|center|rfgain|autorfgain|float|dock)"));
+                        "(create|add|remove|close|center|range|rfgain|autorfgain|float|dock)"));
                 return s.doPan(a.action, a.value);
             });
 
@@ -3692,8 +3814,8 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|session|scheduler|incident> — CI-V "
-            "inject, frame trace, lease/scheduler health, or last incident "
+            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|scopepreset <range> <slot> [lower-Hz upper-Hz]|scopeslot <receiver> <slot>|session|scheduler|incident> — CI-V "
+            "inject, frame trace, receiver profile, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
@@ -3711,7 +3833,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("radiocert", {},
-            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
+            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
             // Rest, not Value: Value keeps one token and drops the rest, which
             // lost `sql=` after a frequency in the line form.
             parseActionRest,
@@ -3720,7 +3842,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("transmit", {},
-            "transmit <rfpower|tunepower> <0..100> — transmit drive (TX-gated)",
+            "transmit <rfpower|tunepower> <0..100> — transmit drive (bounded by the power ceiling)",
             parseActionValueExact,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
@@ -3765,7 +3887,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("titlebar", {},
-            "titlebar <selectRadio <id>|showDiscovery|minimize|maximize|close> "
+            "titlebar <selectRadio <id>|showRadioMenu <id>|showDiscovery|minimize|maximize|close> "
             "— drive the unified title bar's own controls",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
                 a.action = vtok(p, 1);
@@ -3904,6 +4026,17 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("invalid JSON: ") + perr.errorString());
         const QJsonObject obj = doc.object();
         cmd        = obj.value(QStringLiteral("cmd")).toString();
+        if (cmd == QLatin1String("daxTx") || cmd == QLatin1String("daxtx")) {
+            for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+                if (it.key() != QLatin1String("cmd") && it.key() != QLatin1String("action")
+                    && it.key() != QLatin1String("args") && it.key() != QLatin1String("token")) {
+                    return err(QStringLiteral("daxTx accepts only an action; stream identity is fixed to this client"));
+                }
+            }
+            if (obj.contains(QStringLiteral("args")) && obj.contains(QStringLiteral("action"))) {
+                return err(QStringLiteral("daxTx accepts either action or positional args, not both"));
+            }
+        }
         a.target   = obj.value(QStringLiteral("target")).toString();
         a.path     = obj.value(QStringLiteral("path")).toString();
         a.action   = obj.value(QStringLiteral("action")).toString();
@@ -4561,19 +4694,31 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         return invokeTxAction(w, target, action, value);
     }
 
-    // Power-ceiling rail (#3646): clamp RF/Tune power setpoints to the
-    // configured max (AETHER_AUTOMATION_TX_MAX_POWER) so automation can't
-    // command more power than the connected load can take.
+    // Power-ceiling rail (#3646): clamp every TX setpoint (RF/Tune power, the
+    // per-band power edits) to AETHER_AUTOMATION_TX_MAX_POWER so automation
+    // can't command more power than the connected load can take. Keyed off the
+    // marker, not the name, so a renamed or translated setpoint stays bounded
+    // (#5851). A wheel notch has no target value to clamp: refused while armed.
     QString effValue = value;
-    if (m_txMaxPower >= 0 && action == QLatin1String("setValue")) {
-        const QString an = w->accessibleName();
-        if (an == QLatin1String("RF power") || an == QLatin1String("Tune power")) {
+    if (m_txMaxPower >= 0 && isTxSetpointControl(w)) {
+        if (action == QLatin1String("wheel")) {
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED wheel on TX setpoint" << target << "— power ceiling armed";
+            return err(txCeilingBlockedError(
+                target, m_txMaxPower,
+                QStringLiteral("`invoke '") + target
+                    + (qobject_cast<QAbstractSlider*>(w) ? QStringLiteral("' setValue <n>`")
+                                                         : QStringLiteral("' setText <n>`"))
+                    + QStringLiteral(", which clamps")));
+        }
+        if (action == QLatin1String("setValue") || action == QLatin1String("setText")
+            || action == QLatin1String("editText") || action == QLatin1String("submit")) {
             bool okN = false;
             const int n = value.toInt(&okN);
             if (okN && n > m_txMaxPower) {
                 effValue = QString::number(m_txMaxPower);
                 qCWarning(lcAutomation).noquote()
-                    << "power ceiling: clamped" << an << n << "->" << m_txMaxPower;
+                    << "power ceiling: clamped" << target << n << "->" << m_txMaxPower;
             }
         }
     }
@@ -4640,7 +4785,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         QCoreApplication::sendEvent(w, &ev);
         done = true;
     } else if (action == QLatin1String("setText")) {
-        if (auto* le = qobject_cast<QLineEdit*>(w)) { le->setText(value); done = true; }
+        if (auto* le = qobject_cast<QLineEdit*>(w)) { le->setText(effValue); done = true; }
     } else if (action == QLatin1String("editText") || action == QLatin1String("commit")) {
         auto* le = qobject_cast<QLineEdit*>(w);
         if (!le || !le->property("aetherAutomationEditCommit").toBool()) {
@@ -4652,11 +4797,11 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         if (action == QLatin1String("editText")) {
             // setText resets modified; only an actual edit arms the owner's
             // editingFinished handler. Empty text is a supported edit.
-            if (le->text() != value) {
+            if (le->text() != effValue) {
                 const QPointer<QLineEdit> edit(le);
                 const QString previous = le->text();
                 const bool modified = le->isModified();
-                le->setText(value);
+                le->setText(effValue);
                 if (!edit) {
                     return err(QStringLiteral("field was destroyed during edit"));
                 }
@@ -4693,7 +4838,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         // cluster command) attach irreversible actions to returnPressed; commit
         // must be an explicit, opt-in verb. (#3646 fidelity — item 6)
         if (auto* le = qobject_cast<QLineEdit*>(w)) {
-            if (!value.isEmpty()) le->setText(value);
+            if (!value.isEmpty()) le->setText(effValue);
             emit le->returnPressed();
             done = true;
         }
@@ -5668,6 +5813,22 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("waveforms"), data}};
     }
+    if (model == QLatin1String("repaintstats")) {
+        const bool reset = selector == QLatin1String("reset") || property == QLatin1String("reset");
+        QJsonArray windows;
+        for (QWidget* window : QApplication::topLevelWidgets()) {
+            for (QObject* scheduler : window->findChildren<QObject*>(
+                     QStringLiteral("windowRepaintScheduler"), Qt::FindDirectChildrenOnly)) {
+                QVariantMap snap;
+                if (QMetaObject::invokeMethod(scheduler, "statsSnapshot", Qt::DirectConnection,
+                        Q_RETURN_ARG(QVariantMap, snap), Q_ARG(bool, reset))) {
+                    snap[QStringLiteral("windowTitle")] = window->windowTitle();
+                    windows.append(QJsonObject::fromVariantMap(snap));
+                }
+            }
+        }
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("windows"), windows}};
+    }
     if (model == QLatin1String("eqstats")) {
         // Per Client-EQ paint/cache counters. This keeps the bridge
         // GUI-header-free: widgets are located by class name and expose the
@@ -6015,6 +6176,13 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         // and Kiwi 2D/3D display sources deterministically.
         bool selectorIsIndex = false;
         const int wantIndex = selector.toInt(&selectorIsIndex);
+        // `bins`: one pan's trace bins themselves (#5806), so a client can
+        // measure rather than read four statistics. One pan only, to bound
+        // the reply.
+        const bool wantBins = property == QLatin1String("bins");
+        if (wantBins && selector.isEmpty()) {
+            return err(QStringLiteral("tracedebug bins needs one pan: a pan index or objectName"));
+        }
         QJsonArray pans;
         QSet<QWidget*> seen;
         const QList<QWidget*> widgets =
@@ -6030,7 +6198,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             }
 
             QVariantMap snap;
-            if (!QMetaObject::invokeMethod(w, "traceDebugSnapshot",
+            if (!QMetaObject::invokeMethod(w, wantBins ? "traceBinsSnapshot" : "traceDebugSnapshot",
                                            Qt::DirectConnection,
                                            Q_RETURN_ARG(QVariantMap, snap))) {
                 continue;
@@ -6039,7 +6207,22 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                 && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
                 continue;
             }
+            if (wantBins) {
+                // The widget refuses while the frame's geometry is not settled.
+                const QString refusal = snap.value(QStringLiteral("refusal")).toString();
+                if (!refusal.isEmpty()) {
+                    return err(QStringLiteral("tracedebug bins: ") + refusal);
+                }
+                return QJsonObject{{QStringLiteral("ok"), true},
+                                   {QStringLiteral("model"), model},
+                                   {QStringLiteral("property"), property},
+                                   {QStringLiteral("pan"), QJsonObject::fromVariantMap(snap)}};
+            }
             pans.append(QJsonObject::fromVariantMap(snap));
+        }
+        if (wantBins) {
+            return err(QStringLiteral("tracedebug bins: no pan matches '") + selector
+                       + QStringLiteral("'"));
         }
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("model"), model},
@@ -6213,6 +6396,11 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = radioSnapshot(radio);
     } else if (model == QLatin1String("gps")) {
         data = gpsSnapshot(radio);
+    } else if (model == QLatin1String("daxtx")) {
+        if (!selector.isEmpty()) {
+            return err(QStringLiteral("get daxtx takes no selector; stream identity is fixed to this client"));
+        }
+        data = radio->daxTxOwnershipSnapshot();
     } else if (model == QLatin1String("ntp")) {
         // The radio's own NTP time sources as it last reported them (#6953).
         const std::optional<RadioCapabilities::NtpSourceControl> control =
@@ -6341,7 +6529,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|hostnb|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|display|clients|kiwi|wavestats|clock)"));
+                   + QStringLiteral(" (use audio|dsp|hostnb|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|display|clients|daxtx|kiwi|wavestats|clock)"));
     }
 
     if (!property.isEmpty()) {
@@ -6360,6 +6548,46 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         {QStringLiteral("model"), model},
         {model, data},   // keyed by model name: "radio" / "slice" / "pan"
     };
+}
+
+QJsonObject AutomationServer::doDaxTx(const QString& action)
+{
+    const QString normalizedAction = action.trimmed().toLower();
+    if (normalizedAction != QLatin1String("take")
+        && normalizedAction != QLatin1String("release")
+        && normalizedAction != QLatin1String("status")) {
+        return err(QStringLiteral("daxTx requires an action (take|release|status)"));
+    }
+    const QPointer<RadioModel> radio = m_radioModel;
+    if (!radio) {
+        return err(QStringLiteral("no radio model available"));
+    }
+
+    bool admitted = true;
+    QString refusal;
+    if (normalizedAction != QLatin1String("status")) {
+        const bool take = normalizedAction == QLatin1String("take");
+        refusal = radio->daxTxOwnershipUnavailableReason(take);
+        admitted = radio->requestDaxTxOwnership(take);
+        if (!radio || m_radioModel != radio) {
+            return err(QStringLiteral("radio model changed during the DAX TX ownership request"));
+        }
+    }
+    const QJsonObject snapshot = radio->daxTxOwnershipSnapshot();
+    QJsonObject reply{
+        {QStringLiteral("ok"), admitted},
+        {QStringLiteral("action"), normalizedAction},
+        {QStringLiteral("pending"), snapshot.value(QStringLiteral("pending")).toBool()},
+        {QStringLiteral("daxtx"), snapshot},
+    };
+    if (!admitted) {
+        if (refusal.isEmpty()) {
+            refusal = snapshot.value(QStringLiteral("error")).toString();
+        }
+        reply[QStringLiteral("error")] = refusal.isEmpty()
+            ? QStringLiteral("DAX TX ownership request was refused") : refusal;
+    }
+    return reply;
 }
 
 QJsonObject AutomationServer::doWaveform(const QString& action,
@@ -6551,6 +6779,24 @@ QJsonObject AutomationServer::doConnect(const QString& action,
         };
     }
 
+    if (a == QLatin1String("profiles")) {
+        QJsonObject profiles = conn->automationConnectionProfiles();
+        if (m_readOnly) {
+            // Observe-only clients see the workspace shape, not account identities.
+            profiles = SettingsSanitizer::maskPersonalFields(profiles).toObject();
+        }
+        return QJsonObject{{"ok", true}, {"profiles", profiles}};
+    }
+    if (a == QLatin1String("profile")) {
+        const QStringList parts = arg.simplified().split(' ');
+        if (parts.size() != 2 || (parts[0] != QLatin1String("stations") && parts[0] != QLatin1String("operators"))) {
+            return err(QStringLiteral("connect profile requires stations|operators <id>"));
+        }
+        QString error;
+        if (!conn->automationSelectConnectionProfile(parts[0], parts[1], &error)) { return err(error); }
+        return QJsonObject{{"ok", true}};
+    }
+
     if (m_radioModel && m_radioModel->isConnected()) {
         return err(QStringLiteral("already connected to a radio"));
     }
@@ -6722,7 +6968,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     return err(QStringLiteral("unknown connect action: ") + action
-               + QStringLiteral(" (use list|show|hide|local|ip|wait)"));
+               + QStringLiteral(" (use list|profiles|profile|show|hide|local|ip|wait)"));
 }
 
 QJsonObject AutomationServer::doConnectDialog(const QString& action)
@@ -8926,11 +9172,15 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
             {QStringLiteral("status"), QStringLiteral("wake requested; identity not yet verified")}};
     }
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
+                        && a != QLatin1String("dualwatch")
+                        && a != QLatin1String("scopepreset")
+                        && a != QLatin1String("scopeslot")
                         && a != QLatin1String("session")
+                        && a != QLatin1String("profile")
                         && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
         return err(QStringLiteral(
-            "civ requires an action (send|trace|session|scheduler|incident)"));
+            "civ requires an action (send|trace|profile|dualwatch|scopepreset|scopeslot|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -8963,6 +9213,10 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
     }, Qt::DirectConnection);
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
+                       : a == QLatin1String("dualwatch") ? QStringLiteral("receiver.dualwatch")
+                       : a == QLatin1String("scopepreset") ? QStringLiteral("scope.preset")
+                       : a == QLatin1String("scopeslot") ? QStringLiteral("scope.slot")
+                       : a == QLatin1String("profile") ? QStringLiteral("profile.show")
                        : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
                        : a == QLatin1String("incident") ? QStringLiteral("civ.incident")
                        : a == QLatin1String("scheduler")
@@ -9153,12 +9407,30 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             "blocked: this phase keys the transmitter — enable TX automation "
             "(or set AETHER_AUTOMATION_ALLOW_TX=1), or run 'radiocert tune' / 'radiocert rx'"));
 
-    // [freqMhz] [sql=<MHz>]: the keyed stages' dial, and the steady carrier
-    // stage-squelch-scale measures the radio's gate on. Both are dial targets,
-    // so both take tune's validation: QString::toDouble() accepts nan and inf.
+    // [freqMhz] [sql=<MHz>] [tone=<dBFS>]: the keyed stages' dial, the steady
+    // carrier stage-squelch-scale measures the radio's gate on, and the level
+    // of the tone the rf and meter-scale stages key with. The two dial targets
+    // take tune's validation: QString::toDouble() accepts nan and inf.
     static const QRegularExpression certArgSep(QStringLiteral("\\s+"));
     for (const QString& token : freqArg.trimmed().split(certArgSep, Qt::SkipEmptyParts)) {
         double mhz = 0.0;
+        if (token.startsWith(QLatin1String("tone="), Qt::CaseInsensitive)) {
+            // A level, not a power: the RF ceiling below still clamps drive, and
+            // the default stays -20 dBFS. Refused outside the range rather than
+            // clamped, so a typo cannot key a louder tone than was asked for.
+            bool ok = false;
+            const double dbfs = token.mid(5).toDouble(&ok);
+            if (!ok || !std::isfinite(dbfs)
+                || dbfs < RadioCertification::kMinRfStimulusDbfs
+                || dbfs > RadioCertification::kMaxRfStimulusDbfs)
+                return err(QStringLiteral(
+                    "radiocert tone=: '%1' is not a level in dBFS between %2 and %3")
+                    .arg(token.mid(5))
+                    .arg(RadioCertification::kMinRfStimulusDbfs)
+                    .arg(RadioCertification::kMaxRfStimulusDbfs));
+            opts.rfStimulusDbfs = dbfs;
+            continue;
+        }
         if (token.startsWith(QLatin1String("sql="), Qt::CaseInsensitive)) {
             if (auto refusal = refuseUntunableMhz(QStringLiteral("radiocert sql="),
                                                   token.mid(4), mhz))
@@ -9235,14 +9507,8 @@ QJsonObject AutomationServer::doTransmit(const QString& action, const QString& a
     const QString a = action.trimmed().toLower();
 
     if (a == QLatin1String("rfpower") || a == QLatin1String("tunepower")) {
-        // TX-gated for the same reason `key` is: these set how hard the radio
-        // will drive whatever is downstream of it — a transverter or an
-        // amplifier — so a session that may not transmit may not change them
-        // either. Reading them stays ungated via `get transmit`.
-        if (!m_txAllowed)
-            return err(QStringLiteral("blocked: transmit ") + a
-                       + QStringLiteral(" sets transmit drive — set "
-                                        "AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        // Drive, not keying: TX permission gates keying only, and the power
+        // ceiling (AETHER_AUTOMATION_TX_MAX_POWER) bounds drive (#5851).
         const QString v = arg.trimmed();
         if (v.isEmpty())
             return err(QStringLiteral("transmit ") + a
@@ -9254,11 +9520,12 @@ QJsonObject AutomationServer::doTransmit(const QString& action, const QString& a
                        + QStringLiteral(" must be an integer 0..100"));
 
         // The power-ceiling rail is WIDGET-scoped: it lives in invoke()'s
-        // setValue path and keys off accessibleName, so a verb that reaches the
-        // model directly does not inherit it. `radiocert` already had to pass
-        // m_txMaxPower down its own path for the same reason. Clamp explicitly —
-        // otherwise AETHER_AUTOMATION_TX_MAX_POWER silently stops bounding the
-        // one surface most likely to be driving a transverter or an amplifier.
+        // setValue path and keys off the markTxSetpoint() marker, so a verb
+        // that reaches the model directly does not inherit it. `radiocert`
+        // already had to pass m_txMaxPower down its own path for the same
+        // reason. Clamp explicitly — otherwise AETHER_AUTOMATION_TX_MAX_POWER
+        // silently stops bounding the one surface most likely to be driving a
+        // transverter or an amplifier.
         int applied = pct;
         if (m_txMaxPower >= 0 && applied > m_txMaxPower) {
             qCWarning(lcAutomation).noquote()
@@ -9272,7 +9539,7 @@ QJsonObject AutomationServer::doTransmit(const QString& action, const QString& a
             tx.setTunePower(applied);
 
         qCInfo(lcAutomation).noquote()
-            << "transmit" << a << applied << "(ALLOW_TX)";
+            << "transmit" << a << applied << "(drive; no TX permission needed)";
         QJsonObject reply{{QStringLiteral("ok"), true},
                           {QStringLiteral("transmit"), a},
                           {QStringLiteral("rfPower"), tx.rfPower()},
@@ -9564,7 +9831,7 @@ QJsonObject AutomationServer::doTitleBar(const QString& action, const QString& t
 {
     if (action.trimmed().isEmpty()) {
         return err(QStringLiteral("titlebar needs an action "
-                                  "(selectRadio|showDiscovery|minimize|maximize|close)"));
+                                  "(selectRadio|showRadioMenu|showDiscovery|minimize|maximize|close)"));
     }
     if (!m_titleBarActionHandler) {
         return err(QStringLiteral("title bar actions unavailable"));
@@ -9669,10 +9936,18 @@ QJsonObject AutomationServer::doWindow(const QString& action, const QString& tar
     else if (st & Qt::WindowFullScreen) ws = "fullscreen";
     else if (st & Qt::WindowMaximized)  ws = "maximized";
     qCInfo(lcAutomation).noquote() << "window" << a << "->" << ws;
+    const QScreen* screen = win->screen();
+    const QRect available = screen ? screen->availableGeometry() : QRect{};
     return QJsonObject{
         {QStringLiteral("ok"), true},
         {QStringLiteral("action"), a},
         {QStringLiteral("windowState"), QLatin1String(ws)},
+        {QStringLiteral("screenName"), screen ? screen->name() : QString{}},
+        {QStringLiteral("screenDpr"), screen ? screen->devicePixelRatio() : 1.0},
+        {QStringLiteral("screenRefreshRate"), screen ? screen->refreshRate() : 0.0},
+        {QStringLiteral("screenAvailableGeometry"), QJsonObject{
+            {QStringLiteral("x"), available.x()}, {QStringLiteral("y"), available.y()},
+            {QStringLiteral("w"), available.width()}, {QStringLiteral("h"), available.height()}}},
         {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("w"), win->width()},
                                                  {QStringLiteral("h"), win->height()}}},
     };
@@ -9696,11 +9971,13 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
     }
 
     const bool allowTx = m_txAllowed;
+    const bool txCeilingArmed = m_txMaxPower >= 0;
     int result = -1;
     bool invoked = false;
+    const bool viaHandler = static_cast<bool>(m_shortcutAutomationHandler);
     if (m_shortcutAutomationHandler) {
         const auto handler = m_shortcutAutomationHandler;
-        result = handler(id, allowTx, txController());
+        result = handler(id, allowTx, txCeilingArmed, txController());
         invoked = true;
     } else {
         // An unconfigured host can still expose non-TX diagnostic shortcuts,
@@ -9732,6 +10009,14 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
         return err(QStringLiteral("blocked: '") + id
                    + QStringLiteral("' keys the transmitter (TX-safety guard). "
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    case 5:  // ShortcutFireTxDriveBlocked
+        qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint shortcut" << id;
+        if (!viaHandler) {
+            return err(txDriveNoHandlerError(id));
+        }
+        return err(txCeilingBlockedError(id, m_txMaxPower,
+                                         QStringLiteral("`invoke 'RF power' setValue <n>` "
+                                                        "or `transmit rfpower <n>`, which clamp")));
     default:
         return err(QStringLiteral("unexpected fireShortcutAction result for '")
                    + id + QStringLiteral("'"));
@@ -9785,9 +10070,10 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
 
     int result = -1;
     bool invoked = false;
+    const bool viaHandler = static_cast<bool>(m_keyEventAutomationHandler);
     if (m_keyEventAutomationHandler) {
         const auto handler = m_keyEventAutomationHandler;
-        result = handler(spec, press, m_txAllowed, txController());
+        result = handler(spec, press, m_txAllowed, m_txMaxPower >= 0, txController());
         invoked = true;
     } else {
         invoked = QMetaObject::invokeMethod(
@@ -9822,6 +10108,15 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
         return err(QStringLiteral("blocked: '") + spec
                    + QStringLiteral("' keys the transmitter (TX-safety guard). "
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    case 6:  // KeyInjectTxDriveBlocked
+        qCWarning(lcAutomation).noquote() << "BLOCKED transmit-setpoint key press" << spec;
+        if (!viaHandler) {
+            return err(txDriveNoHandlerError(spec));
+        }
+        return err(txCeilingBlockedError(spec, m_txMaxPower,
+                                         QStringLiteral("`invoke '<slider>' setValue <n>`, "
+                                                        "`transmit rfpower <n>` or "
+                                                        "`transmit tunepower <n>`, which clamp")));
     case 3:  // KeyInjectNotConsumed — delivered, but the momentary handler's own
              // gates (shortcuts disabled, text entry focused, radio disconnected)
              // declined it. A real result, not an error: report it.
@@ -10109,12 +10404,8 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
     }
 
     if (m_txMaxPower >= 0) {
-        for (const QWidget* parent = widget; parent; parent = parent->parentWidget()) {
-            const QString accessibleName = parent->accessibleName();
-            if (accessibleName != QLatin1String("RF power")
-                && accessibleName != QLatin1String("Tune power")) {
-                continue;
-            }
+        if (const QWidget* setpoint = txSetpointInChain(widget)) {
+            const QString accessibleName = setpoint->accessibleName();
             qCWarning(lcAutomation).noquote()
                 << "BLOCKED" << verb << "on power slider" << accessibleName
                 << "— power ceiling" << m_txMaxPower << "is armed";
@@ -11261,20 +11552,17 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     // the rail is armed, refuse the click and point at the clamped path instead
     // of letting a coordinate click walk power past the configured ceiling.
     if (m_txMaxPower >= 0) {
-        for (const QWidget* p = w; p; p = p->parentWidget()) {
-            const QString an = p->accessibleName();
-            if (an == QLatin1String("RF power")
-                || an == QLatin1String("Tune power")) {
-                qCWarning(lcAutomation).noquote()
-                    << "BLOCKED clickAt on power slider" << an
-                    << "— power ceiling" << m_txMaxPower
-                    << "is armed; use invoke setValue (clamped)";
-                return err(QStringLiteral("blocked: '") + an
-                           + QStringLiteral("' click would bypass the power "
-                                            "ceiling (AETHER_AUTOMATION_TX_MAX_"
-                                            "POWER). Use `invoke '") + an
-                           + QStringLiteral("' setValue <n>`, which clamps."));
-            }
+        if (const QWidget* setpoint = txSetpointInChain(w)) {
+            const QString an = setpoint->accessibleName();
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED clickAt on TX setpoint" << an
+                << "— power ceiling" << m_txMaxPower
+                << "is armed; use invoke setValue (clamped)";
+            return err(QStringLiteral("blocked: '") + an
+                       + QStringLiteral("' click would bypass the power "
+                                        "ceiling (AETHER_AUTOMATION_TX_MAX_"
+                                        "POWER). Use `invoke '") + an
+                       + QStringLiteral("' setValue <n>`, which clamps."));
         }
     }
 
@@ -11366,6 +11654,43 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                            {QStringLiteral("requested"), true}, {QStringLiteral("priorCount"), have}};
     }
 
+    if (action == QLatin1String("range")) {
+        const QStringList parts = arg.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.size() != 3) {
+            return err(QStringLiteral("pan range requires <panId|index|active> <center MHz> <width MHz>"));
+        }
+        PanadapterModel* pan = nullptr;
+        if (parts[0] == QLatin1String("active")) {
+            pan = radio->activePanadapter();
+        } else if (parts[0].startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+            pan = radio->panadapter(parts[0]);
+        } else {
+            bool valid = false;
+            const int index = parts[0].toInt(&valid);
+            if (valid && index >= 0 && index < radio->panadapters().size()) {
+                pan = radio->panadapters().at(index);
+            }
+        }
+        bool centerValid = false;
+        bool widthValid = false;
+        const double center = parts[1].toDouble(&centerValid);
+        const double width = parts[2].toDouble(&widthValid);
+        if (!pan || !radio->isConnected() || !pan->ownedByClient(radio->ourClientHandle())
+            || !centerValid || !widthValid || !std::isfinite(center) || !std::isfinite(width)
+            || width <= 0 || center < width / 2.0) {
+            return err(QStringLiteral("pan range requires an owned live pan and finite positive geometry"));
+        }
+        const auto control = radio->backendCapabilities().panDisplayControl;
+        if (!control || !control->supports(PanDisplayField::Geometry)
+            || !control->geometry.contains(PanGeometryComponent::Center)
+            || !control->geometry.contains(PanGeometryComponent::Bandwidth)) {
+            return err(QStringLiteral("this backend does not accept pan center and width"));
+        }
+        const QString id = pan->panId();
+        radio->requestPanCenter(id, center, width);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("range")},
+                           {QStringLiteral("panId"), id}, {QStringLiteral("requested"), true}};
+    }
     if (action == QLatin1String("center")) {
         // Same contract as `tune` — see refuseUntunableMhz(). It matters more
         // here: optimistic receive controls clamp the LOW edge and any declared
@@ -12274,6 +12599,22 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
     if (normalizedAction == QLatin1String("send")) {
         QString command = value;
         const QString simId = takeSimId(command);
+        // Before the simulator lookup: a refused SET is refused whether or not
+        // a simulator is connected. Drive is bounded by the ceiling, not by TX
+        // permission; the payload is sent as written, so a SET above the armed
+        // ceiling is refused rather than rewritten (#5851).
+        if (m_txMaxPower >= 0) {
+            if (const QString set = tciDriveSetAboveCeiling(command, m_txMaxPower);
+                !set.isEmpty()) {
+                qCWarning(lcAutomation).noquote()
+                    << "BLOCKED tci send" << set << "— power ceiling" << m_txMaxPower;
+                const bool tune = set.trimmed().toLower().startsWith(QLatin1String("tune_drive"));
+                return err(txCeilingBlockedError(
+                    QStringLiteral("tci send ") + set, m_txMaxPower,
+                    tune ? QStringLiteral("`transmit tunepower <n>`, which clamps")
+                         : QStringLiteral("`transmit rfpower <n>`, which clamps")));
+            }
+        }
         TciSimClient* sim = tciSimById(simId);
         if (!sim || !sim->socket
             || sim->socket->state() != QAbstractSocket::ConnectedState) {

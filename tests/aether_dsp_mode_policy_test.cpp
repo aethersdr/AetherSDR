@@ -26,17 +26,95 @@ int main()
          {QStringLiteral("DIGU"), QStringLiteral("DIGL"),
           QStringLiteral("RTTY"), QStringLiteral("CW"),
           QStringLiteral("CWU"), QStringLiteral("CWL"), QStringLiteral("CWR"),
-          QStringLiteral("NT")}) {
+          QStringLiteral("NT"), QStringLiteral("DSTR"),
+          QStringLiteral("FDV"), QStringLiteral("FDVU"),
+          QStringLiteral("FDVL"), QStringLiteral("DRM"),
+          QStringLiteral("DFM"), QStringLiteral("FUTURE-WAVEFORM")}) {
         expect(qPrintable(mode + QStringLiteral(" disables AetherDSP")),
                aetherDspModeRequiresDisable(mode));
     }
 
     for (const QString& mode :
          {QStringLiteral("LSB"), QStringLiteral("USB"),
-          QStringLiteral("AM"), QStringLiteral("SAM"),
-          QStringLiteral("FM"), QStringLiteral("NFM")}) {
+          QStringLiteral("AM"), QStringLiteral("AME"), QStringLiteral("SAM"),
+          QStringLiteral("FM"), QStringLiteral("NFM"), QStringLiteral("FMN"),
+          QStringLiteral("DSB"),
+          QStringLiteral("WFM"), QStringLiteral("WBFM"), QString()}) {
         expect(qPrintable(mode + QStringLiteral(" allows AetherDSP")),
                !aetherDspModeRequiresDisable(mode));
+    }
+
+    for (const QString& method :
+         {QStringLiteral("NR2"), QStringLiteral("NR4"), QStringLiteral("MNR"),
+          QStringLiteral("DFNR"), QStringLiteral("RN2"), QStringLiteral("BNR"),
+          QStringLiteral("NNR")}) {
+        AetherDspModePolicy fmnPolicy;
+        const bool fmnRestricted = aetherDspMixRequiresDisable({
+            {QStringLiteral("FMN"), false, 50.0f},
+        });
+        expect(qPrintable(method + QStringLiteral(" remains enabled in audible FMN")),
+               fmnPolicy.update(fmnRestricted, method).kind
+                   == AetherDspModePolicy::ActionKind::None && !fmnRestricted);
+        fmnPolicy.update(true, method);
+        const AetherDspModePolicy::Action restored = fmnPolicy.update(fmnRestricted, {});
+        expect(qPrintable(method + QStringLiteral(" restores when returning to FMN")),
+               restored.kind == AetherDspModePolicy::ActionKind::Enable
+                   && restored.method == method);
+
+        fmnPolicy.noteUserOverride();
+        fmnPolicy.update(false, {});
+        expect(qPrintable(method + QStringLiteral(" manual off clears pending recall")),
+               fmnPolicy.methodForPersistence({}).isEmpty());
+        fmnPolicy.update(true, {});
+        expect(qPrintable(method + QStringLiteral(" manual off survives a mode round trip")),
+               fmnPolicy.update(false, {}).kind == AetherDspModePolicy::ActionKind::None);
+    }
+
+    expect("unpopulated audible slice does not interrupt voice NR",
+           !aetherDspMixRequiresDisable({
+               {QStringLiteral("USB"), false, 50.0f},
+               {QString(), false, 50.0f},
+           }));
+
+    for (const QString& mode :
+         {QStringLiteral("DSTR"), QStringLiteral("FDV"),
+          QStringLiteral("FDVU"), QStringLiteral("FDVL"),
+          QStringLiteral("DRM"), QStringLiteral("FUTURE-WAVEFORM")}) {
+        const auto mix = [&mode](bool muted, float gain, bool receiving) {
+            return aetherDspMixRequiresDisable({
+                {QStringLiteral("USB"), false, 50.0f},
+                {mode, muted, gain, receiving},
+            });
+        };
+        expect(qPrintable(mode + QStringLiteral(" audible restricts mix")),
+               mix(false, 50.0f, true));
+        expect(qPrintable(mode + QStringLiteral(" muted permits mix")),
+               !mix(true, 50.0f, true));
+        expect(qPrintable(mode + QStringLiteral(" zero gain permits mix")),
+               !mix(false, 0.0f, true));
+        expect(qPrintable(mode + QStringLiteral(" parked permits mix")),
+               !mix(false, 50.0f, false));
+
+        for (const QString& method :
+             {QStringLiteral("NR2"), QStringLiteral("NR4"),
+              QStringLiteral("MNR"), QStringLiteral("DFNR"),
+              QStringLiteral("RN2"), QStringLiteral("BNR"),
+              QStringLiteral("NNR")}) {
+            AetherDspModePolicy modePolicy;
+            modePolicy.update(false, method);
+            AetherDspModePolicy::Action a = modePolicy.update(mix(false, 50.0f, true), method);
+            expect(qPrintable(mode + u' ' + method + QStringLiteral(" auto-disables")),
+                   a.kind == AetherDspModePolicy::ActionKind::Disable && a.method == method);
+            a = modePolicy.update(mix(true, 50.0f, true), {});
+            expect(qPrintable(mode + u' ' + method + QStringLiteral(" restores when inaudible")),
+                   a.kind == AetherDspModePolicy::ActionKind::Enable && a.method == method);
+            modePolicy.update(false, method);
+            modePolicy.update(true, method);
+            modePolicy.noteUserOverride();
+            a = modePolicy.update(true, method);
+            expect(qPrintable(mode + u' ' + method + QStringLiteral(" honors explicit override")),
+                   a.kind == AetherDspModePolicy::ActionKind::None);
+        }
     }
 
     expect("audible CW slice restricts mixed stream",
@@ -134,6 +212,25 @@ int main()
     expect("user override is not replaced when restriction clears",
            action.kind == AetherDspModePolicy::ActionKind::None);
 
+    // A restored method can be replaced before another policy update observes
+    // its enable. The new selection must own the next restriction and recall.
+    AetherDspModePolicy selectionPolicy;
+    selectionPolicy.update(true, QStringLiteral("NNR"));
+    selectionPolicy.update(false, {});
+    selectionPolicy.noteUserOverride();
+    selectionPolicy.update(false, QStringLiteral("DFNR"));
+    expect("voice-mode user selection replaces pending restore memory",
+           selectionPolicy.methodForPersistence(QStringLiteral("DFNR"))
+               == QStringLiteral("DFNR"));
+    action = selectionPolicy.update(true, QStringLiteral("DFNR"));
+    expect("next restriction disables the newly selected method",
+           action.kind == AetherDspModePolicy::ActionKind::Disable
+               && action.method == QStringLiteral("DFNR"));
+    action = selectionPolicy.update(false, {});
+    expect("return to voice restores the new selection",
+           action.kind == AetherDspModePolicy::ActionKind::Enable
+               && action.method == QStringLiteral("DFNR"));
+
     // Restore, then a restriction that recurs BEFORE the engine confirms the
     // enable (rapid mode churn). The restored method is still remembered, but a
     // fresh restriction must re-disable it rather than silently skip and leave
@@ -148,6 +245,36 @@ int main()
     expect("race: re-restriction before engine confirm re-disables",
            action.kind == AetherDspModePolicy::ActionKind::Disable
                && action.method == QStringLiteral("NR2"));
+
+    // A pending restore replaced by a method switched on without a user
+    // gesture (an AetherRX profile or preset load): the method now running in
+    // a compatible mode owns the memory, so the next restriction disables it
+    // instead of skipping it while the stale NNR is still remembered.
+    AetherDspModePolicy profilePolicy;
+    profilePolicy.update(true, QStringLiteral("NNR"));   // disable, remembers NNR
+    profilePolicy.update(false, {});                      // restore -> Enable NNR
+    action = profilePolicy.update(false, QStringLiteral("RN2"));  // profile load
+    expect("profile: another compatible method replaces the pending restore",
+           action.kind == AetherDspModePolicy::ActionKind::None
+               && profilePolicy.methodForPersistence(QStringLiteral("RN2"))
+                      == QStringLiteral("RN2"));
+    action = profilePolicy.update(true, QStringLiteral("RN2"));
+    expect("profile: next restriction disables the loaded method",
+           action.kind == AetherDspModePolicy::ActionKind::Disable
+               && action.method == QStringLiteral("RN2"));
+
+    // The same load while still restricted: NNR is remembered from the CW
+    // disable, then a profile switches RN2 on in CW. RN2 must come off too.
+    AetherDspModePolicy restrictedLoad;
+    restrictedLoad.update(true, QStringLiteral("NNR"));   // disable, remembers NNR
+    action = restrictedLoad.update(true, QStringLiteral("RN2"));
+    expect("profile in CW: a loaded method is disabled under restriction",
+           action.kind == AetherDspModePolicy::ActionKind::Disable
+               && action.method == QStringLiteral("RN2"));
+    action = restrictedLoad.update(false, {});
+    expect("profile in CW: the loaded method is the one restored",
+           action.kind == AetherDspModePolicy::ActionKind::Enable
+               && action.method == QStringLiteral("RN2"));
 
     return failures == 0 ? 0 : 1;
 }

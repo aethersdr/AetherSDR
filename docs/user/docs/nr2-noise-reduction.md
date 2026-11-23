@@ -29,7 +29,7 @@ NR2 processes the demodulated receive audio on your CPU. It estimates the noise 
 
 ### Turning NR2 on
 
-- **AetherRX:** open **Settings → AetherRX...** (or the **AetherRX** button on the VFO flag's DSP tab), go to the **AetherNR** tab and select **NR2** in the method row. NR2's settings appear below it.
+- **AetherRX:** open **Tools → AetherRX...** (or the **AetherRX** button on the VFO flag's DSP tab), go to the **AetherNR** tab and select **NR2** in the method row. NR2's settings appear below it.
 - **Shortcut:** bind **NR Cycle (Off/NR/NR2/NR4/DFNR)** under **Settings → Configure Shortcuts...**, or to a MIDI control.
 
 NR2 is a voice method: it switches itself off in CW, CWL, RTTY and DIGU/DIGL.

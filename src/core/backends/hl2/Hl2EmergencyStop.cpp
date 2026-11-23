@@ -1,9 +1,11 @@
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 
+#include "core/FatalSignalRelease.h"
+#include "core/LogManager.h"
+
 #include <QHostAddress>
 
 #include <atomic>
-#include <csignal>
 #include <cstring>
 
 #ifdef Q_OS_WIN
@@ -53,17 +55,6 @@ using socket_t = int;
 using socket_t = SOCKET;
 #endif
 
-extern "C" void terminatingSignalHandler(int sig)
-{
-    fireEmergencyStop();
-
-    // Restore the default disposition and re-raise, so the process dies exactly
-    // as it would have without us: same exit status, same core dump, same
-    // crash reporter. Swallowing the signal here would turn a kill into a hang.
-    std::signal(sig, SIG_DFL);
-    std::raise(sig);
-}
-
 }  // namespace
 
 void armEmergencyStop(qintptr fd, const QHostAddress& host, quint16 port,
@@ -86,6 +77,12 @@ void armEmergencyStop(qintptr fd, const QHostAddress& host, quint16 port,
     slot.addr.sin_addr.s_addr = htonl(v4);
     std::memcpy(slot.packet, stopPacket.data(), sizeof(slot.packet));
     slot.fd = fd;
+    if (!registerFatalSignalRelease(fireEmergencyStop)) {
+        // Not in a handler here. A full table leaves this HL2 armed with no
+        // signal release behind it.
+        qCWarning(lcHl2) << "HL2 emergency stop: the fatal-signal release table is full;"
+                            " a termination signal will not send the stop datagram";
+    }
 
     // Publish last, as one store, so fd never becomes visible ahead of its address.
     g_armed.store(&slot, std::memory_order_release);
@@ -117,26 +114,6 @@ void fireEmergencyStop() noexcept
                        sizeof(target->packet), 0,
                        reinterpret_cast<const sockaddr*>(&target->addr),
                        sizeof(target->addr));
-    }
-}
-
-void installEmergencyStopSignalHandlers() noexcept
-{
-    // Termination signals only. SIGSEGV/SIGABRT/SIGBUS belong to the platform
-    // crash reporting (Mach exception ports on macOS; MacStartupAbortGuard owns
-    // SIGABRT during startup).
-    static const int kSignals[] = {
-        SIGTERM, SIGINT,
-#ifndef Q_OS_WIN
-        SIGHUP, SIGQUIT,
-#endif
-    };
-    for (const int sig : kSignals) {
-        // Never override an inherited SIG_IGN (POSIX): nohup ignores SIGHUP,
-        // and a handler here would make it fatal again.
-        const auto previous = std::signal(sig, terminatingSignalHandler);
-        if (previous == SIG_IGN)
-            std::signal(sig, SIG_IGN);
     }
 }
 

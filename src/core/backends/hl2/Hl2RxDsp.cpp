@@ -37,6 +37,7 @@ Hl2RxDsp::Hl2RxDsp(QObject* parent) : QObject(parent)
     // thread; without this the Mode argument has no metatype and Qt drops the
     // call with only a warning.
     qRegisterMetaType<WdspChannel::Mode>("WdspChannel::Mode");
+    qRegisterMetaType<AetherSDR::SquelchGateState>("AetherSDR::SquelchGateState");
 }
 
 Hl2RxDsp::~Hl2RxDsp()
@@ -164,6 +165,9 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(
     // process-global FFTW lock.
     wc.minimumPhase = rxMinimumPhaseFor(config.mode);
     wc.rxPanelGain = kRxPanelGain;
+    // FM bypasses the AGC; the limiter bounds it in every build, since setMode()
+    // enters FM live without a rebuild (#7222).
+    wc.fmLimiter = true;
 
     auto channel = WdspChannel::create(wc, &result.error);
     if (!channel)
@@ -248,6 +252,11 @@ void Hl2RxDsp::installChannel(RebuildResult result)
                "100 ms stop-and-flush timeout.";
     }
     m_channel = std::move(result.channel);
+    // New geometry, same converter and key: the DC estimates and the T/R state
+    // carry over (a fresh one keyed would learn the keyed DC as receive DC).
+    if (m_spectrum && result.spectrum) {
+        result.spectrum->carryDcFrom(*m_spectrum);
+    }
     m_spectrum = std::move(result.spectrum);
     // The operator's averaging, which the fresh spectrum does not know. A new
     // span is new geometry, so the average starts over (it was constructed
@@ -255,6 +264,7 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     if (m_spectrum) {
         m_spectrum->setAverageTimeMs(static_cast<double>(m_spectrumAverageMs));
         m_spectrum->setLogAverage(m_spectrumLogAverage);
+        m_spectrum->setTransmitting(m_spectrumTransmitting);
     }
 
     m_iqBuffer.clear();
@@ -293,6 +303,9 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     // Held outside Config, so re-applied after the mode (the APF depends on it).
     applyAgcOffLevel();
     applyApf();
+    m_nrApplied = m_anfApplied = false;   // the fresh channel runs neither yet
+    applyNoiseReduction();
+    applyAutoNotch();
     // A rebuild (rate change) creates a fresh channel; restore the operator's
     // current slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
@@ -437,6 +450,9 @@ void Hl2RxDsp::setMode(WdspChannel::Mode mode)
         // Entering or leaving CW switches the APF in or out of circuit; the
         // operator's request itself is untouched.
         applyApf();
+        // Likewise channel NR (out in FM) and ANF (voice modes only).
+        applyNoiseReduction();
+        applyAutoNotch();
     }
 }
 
@@ -479,6 +495,50 @@ void Hl2RxDsp::applyApf()
                               << "refused by the channel; held and re-applied on"
                                  " the next configure()";
     }
+}
+
+void Hl2RxDsp::setNoiseReduction(bool on, int level)
+{
+    ++m_nrDeliveries;
+    m_nrOn = on;
+    m_nrLevel = std::clamp(level, 0, 100);
+    if (canPushToChannel()) {
+        applyNoiseReduction();
+    }
+}
+
+void Hl2RxDsp::applyNoiseReduction()
+{
+    const bool run = noiseReductionInCircuit();
+    if (!m_channel->setNoiseReduction(run, m_nrLevel)) {
+        qCWarning(lcHl2RxDsp) << "channel NR" << (run ? "on" : "off") << "level" << m_nrLevel
+                              << "refused by the channel; held and re-applied on"
+                                 " the next configure()";
+        return;
+    }
+    m_nrApplied = run;
+}
+
+void Hl2RxDsp::setAutoNotch(bool on, int level)
+{
+    ++m_anfDeliveries;
+    m_anfOn = on;
+    m_anfLevel = std::clamp(level, 0, 100);
+    if (canPushToChannel()) {
+        applyAutoNotch();
+    }
+}
+
+void Hl2RxDsp::applyAutoNotch()
+{
+    const bool run = autoNotchInCircuit();
+    if (!m_channel->setAutoNotch(run, m_anfLevel)) {
+        qCWarning(lcHl2RxDsp) << "channel ANF" << (run ? "on" : "off") << "level" << m_anfLevel
+                              << "refused by the channel; held and re-applied on"
+                                 " the next configure()";
+        return;
+    }
+    m_anfApplied = run;
 }
 
 bool Hl2RxDsp::applyFilterTaps(int notchCount, int hysteresisFromTaps)
@@ -592,9 +652,25 @@ void Hl2RxDsp::dropSpectrumAverage()
     if (!m_spectrum)
         return;
     // The window accumulate() holds between due frames is old-axis IQ too;
-    // keeping it would seed the fresh average with the old spectrum.
-    m_spectrum->reset();
+    // keeping it would seed the fresh average with the old spectrum. The DC
+    // estimates are kept: a T/R edge may drop the average too.
+    m_spectrum->discardPartialFrame();
     m_spectrum->dropAverage();
+}
+
+void Hl2RxDsp::restartSpectrumDc()
+{
+    if (m_spectrum) {
+        m_spectrum->restartDc();
+    }
+}
+
+void Hl2RxDsp::setSpectrumTransmitting(bool on, int releaseHoldMs)
+{
+    m_spectrumTransmitting = on;
+    if (m_spectrum) {
+        m_spectrum->setTransmitting(on, static_cast<double>(releaseHoldMs));
+    }
 }
 
 void Hl2RxDsp::setShift(double shiftHz)
@@ -780,6 +856,23 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         m_spectrum->accumulate(m_conjugated);
     }
 
+    // The TCI IQ stream takes the spectrum's handedness: a client's FFT must
+    // put a signal above the NCO on the right, as the pan does.
+    if (m_iqTap.load(std::memory_order_relaxed)) {
+        if (m_iqTapOut.capacity() < 2 * kIqTapPairs)
+            m_iqTapOut.reserve(2 * kIqTapPairs + 2 * m_conjugated.size());
+        for (const auto& c : m_conjugated) {
+            m_iqTapOut.push_back(c.real());
+            m_iqTapOut.push_back(c.imag());
+        }
+        if (m_iqTapOut.size() >= 2 * kIqTapPairs) {
+            emit iqReady(m_iqTapOut);
+            m_iqTapOut.clear();
+        }
+    } else if (!m_iqTapOut.empty()) {
+        m_iqTapOut.clear();   // a later start must not begin with stale samples
+    }
+
     // Audio: the raw wire; see the handedness note above.
     m_iqBuffer.insert(m_iqBuffer.end(), iq.begin(), iq.end());
     const std::size_t block = static_cast<std::size_t>(m_config.dspBlockSize);
@@ -834,6 +927,11 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             m_stereo[2 * k + 1] = m_dcBlockR.process(m_right[k]);
         }
         emit audioReady(m_stereo);
+        if (const auto gate = m_gateReporter.feed(
+                m_audioMuted ? std::nullopt : m_channel->fmSquelchGateOpen(),
+                static_cast<double>(block) / m_config.inputSampleRateHz)) {
+            emit squelchGateChanged(*gate);
+        }
         // S-meter from WDSP's average signal meter (xmeter `avg`, an EMA of
         // I*I + Q*Q, the RMS quantity S9 is defined in); the peak-hold reads band
         // noise ~11-14 dB high. Not read while muted or during the settle after

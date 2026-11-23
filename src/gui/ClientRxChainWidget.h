@@ -41,6 +41,8 @@ signals:
     // persisted LastClientNr — MainWindow runs FFTW wisdom prep before
     // flipping the engine on (#2275).
     void nr2EnableWithWisdomRequested();
+    // Explicit method-enable intent, separate from passive engine/UI sync.
+    void dspMethodUserToggled();
     // Emitted when the user single-clicks an implemented stage tile —
     // toggles the stage's enabled state.  ClientChainApplet listens so
     // it can refresh BYPASS button visuals.

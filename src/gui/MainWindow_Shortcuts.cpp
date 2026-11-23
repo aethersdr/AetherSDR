@@ -7,9 +7,10 @@
 #include "core/TxKeyingMarker.h"
 #include "TxInputKeyEvent.h"
 #include "TxKeyActivationGuard.h"
+#include "SliderLeaseTxGate.h"
 #include "PttHoldKeyStep.h"
 #include "ShortcutRefusalNotice.h"
-#include "StatusBarNotice.h"
+#include "ShortcutTooltips.h"
 #include "TwoToneTuneGate.h"
 #include "core/IambicKeyer.h"
 
@@ -65,8 +66,11 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <iterator>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -376,20 +380,42 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
     }
 
     qCInfo(lcGui).noquote() << "Keyboard shortcuts are off:" << refused->displayName
-                            << "(" + refused->currentKey.toString() + ") not run;"
+                            << "(" + shortcutKeyText(refused->currentKey) + ") not run;"
                             << "Settings > Keyboard Shortcuts turns them on";
-    if (!m_shortcutNoticeLabel) {
-        m_shortcutNoticeLabel = new StatusBarNoticeLabel(statusBar());
-        // The right margin clears the resize grip that overlays the bar.
-        m_shortcutNoticeLabel->setContentsMargins(6, 0, 20, 0);
-        ThemeManager::instance().applyStyleSheet(
-            m_shortcutNoticeLabel,
-            QStringLiteral("QLabel#statusBarNoticeLabel { color: {{color.text.primary}};"
-                           " font-size: 14px; background: transparent; }"));
+    showShortcutNotice(tr("Keyboard shortcuts are off"), 10000);
+}
+
+bool MainWindow::fireVoiceKeyerSlot(int id, const TxController::Input& input)
+{
+    if (!m_dvkPanel || !m_dvkPanel->keyer()) return false;
+    if (m_dvkPanel->stopSlotIfPlaying(id)) return true;
+    if (!m_dvkPanel->slotStartable(id)) return false;
+    m_dvkPanel->markSelected(id);
+    m_dvkPanel->keyer()->playbackStartFrom(id, input.request());
+    return true;
+}
+
+void MainWindow::refuseControlAction(const QString& name, bool transmitSetup)
+{
+    // Only actions that change transmit setup use the keyed refusal wording.
+    const bool keyed = transmitSetup && m_radioModel.transmitModel().isTransmitting();
+    const QString message = keyed ? tr("%1 is not available while transmitting").arg(name)
+                                  : tr("%1 is not available right now").arg(name);
+    // A held key or a spinning encoder refuses many times a second: say it
+    // once while the notice is up, not once per step (docs/a11y.md).
+    // The message stays current while the bar is hidden in minimal mode.
+    if (name == m_lastRefusedAction && statusBar()->currentMessage() == message) {
+        return;
     }
-    m_shortcutNoticeLabel->showNotice(
-        tr("Keyboard shortcuts are off"),
-        10000);
+    m_lastRefusedAction = name;
+    qCInfo(lcGui).noquote() << "Control action not available:" << name;
+    showShortcutNotice(message, 5000);
+}
+
+// Shortcut and controller refusals share the stationary status-message overlay.
+void MainWindow::showShortcutNotice(const QString& text, int durationMs)
+{
+    statusBar()->showMessage(text, durationMs);
 }
 
 
@@ -549,9 +575,82 @@ bool MainWindow::keyEventMatchesActionBaseKey(const char* actionId,
     // currentKey[0] is the (modifiers | key) combination; compare the key half
     // only, so a combo binding matches on release regardless of which
     // modifiers are still down.
-    return static_cast<int>(a->currentKey[0].key()) == ev->key();
+    const int bound = static_cast<int>(a->currentKey[0].key());
+    if (bound == ev->key())
+        return true;
+    // A sided modifier binding (#7354) matches its own side; a release whose
+    // side cannot be read still matches the generic key, so it fails safe to
+    // RX rather than leaving the paddle keyed.
+    if (isShortcutSidedKey(bound)) {
+        const Qt::Key side = shortcutSidedKeyFromEvent(ev);
+        if (side != Qt::Key_unknown)
+            return side == bound;
+        return ev->key() == shortcutSidedKeyGeneric(bound);
+    }
+    return false;
 }
 
+
+bool MainWindow::dispatchMomentaryKey(QKeyEvent* keyEvent, QEvent::Type eventType)
+{
+    if (handleCwMomentaryShortcut(keyEvent, eventType))
+        return true;
+    // PTT (Hold) — resolves its (rebindable) key through ShortcutManager
+    // rather than a hardcoded Space, so reassigning it actually moves the
+    // transmit key (#3879).
+    if (handlePttHoldShortcut(keyEvent, eventType))
+        return true;
+    // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
+    // same missing-released-signal reason.
+    return handleSplitMonitorShortcut(keyEvent, eventType);
+}
+
+std::optional<bool> MainWindow::handleSidedModifierEvent(QKeyEvent* keyEvent,
+                                                         QEvent::Type eventType)
+{
+    if (!keyEvent || keyEvent->isAutoRepeat() || !isShortcutModifierKey(keyEvent->key())
+        || isShortcutSidedKey(keyEvent->key())
+        || dynamic_cast<const TxInputKeyEvent*>(keyEvent))
+        return std::nullopt;
+    if (eventType != QEvent::KeyPress && eventType != QEvent::KeyRelease)
+        return std::nullopt;
+    const bool press = eventType == QEvent::KeyPress;
+    const Qt::Key side = shortcutSidedKeyFromEvent(keyEvent);
+    const std::optional<quint8> osDown = shortcutPollSidedModifierState();
+    // The native fields and the OS key state are what a tester has to
+    // confirm, so log them for every modifier event, decoded or not.
+    qCDebug(lcCw).noquote().nospace()
+        << "Modifier key " << (press ? "press" : "release")
+        << " key=0x" << QString::number(keyEvent->key(), 16)
+        << " scan=0x" << QString::number(keyEvent->nativeScanCode(), 16)
+        << " vk=0x" << QString::number(keyEvent->nativeVirtualKey(), 16)
+        << " side=" << (side == Qt::Key_unknown ? QStringLiteral("unknown")
+                                                : shortcutKeyText(QKeySequence(side)))
+        << (osDown ? " os=0x" + QString::number(*osDown, 16) : QString());
+    if (side == Qt::Key_unknown)
+        return std::nullopt;   // no native side: the generic key path
+
+    if (!m_sidedModifiers.acceptDelivery(keyEvent->timestamp(), side, press))
+        return false;
+
+    const QList<ShortcutSidedEdge> edges = osDown
+        ? m_sidedModifiers.sync(side, press, *osDown)
+        : m_sidedModifiers.observe(side, press);
+    if (lcCw().isDebugEnabled()) {
+        QStringList edgeText;
+        for (const auto& e : edges)
+            edgeText << QString::fromLatin1(e.press ? "+" : "-")
+                            + shortcutKeyText(QKeySequence(e.key));
+        qCDebug(lcCw).noquote() << "Modifier edges:" << edgeText.join(QLatin1Char(' '));
+    }
+
+    bool consumed = false;
+    for (const auto& e : edges) {
+        QKeyEvent edge(e.press ? QEvent::KeyPress : QEvent::KeyRelease, e.key, Qt::NoModifier);
+        consumed |= dispatchMomentaryKey(&edge, edge.type());
+    }
+    return consumed;
+}
 
 void MainWindow::failSafeMomentaryKeyingToRx(const char* reason)
 {
@@ -561,6 +660,8 @@ void MainWindow::failSafeMomentaryKeyingToRx(const char* reason)
     // every deactivation: bail out unless something is actually keyed.
     // Whoever was holding it, the fail-safe owns the release from here.
     m_dialPttHoldActive = false;
+    // A release that never arrives leaves its side marked down; forget it.
+    m_sidedModifiers.reset();
 
     const bool anyActive = m_pttHoldActive || m_cwStraightKeyActive
         || m_cwLeftPaddleActive || m_cwRightPaddleActive;
@@ -854,19 +955,14 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             return true;
         }
 
-        if (handleCwMomentaryShortcut(ke, event->type()))
+        // A Ctrl/Shift/Alt whose side is known reaches the hold handlers as
+        // one edge per physical side instead (#7354).
+        if (const auto sided = handleSidedModifierEvent(ke, event->type())) {
+            if (*sided)
+                return true;
+        } else if (dispatchMomentaryKey(ke, event->type())) {
             return true;
-
-        // PTT (Hold) — resolves its (rebindable) key through ShortcutManager
-        // rather than a hardcoded Space, so reassigning it actually moves the
-        // transmit key (#3879).
-        if (handlePttHoldShortcut(ke, event->type()))
-            return true;
-
-        // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
-        // same missing-released-signal reason.
-        if (handleSplitMonitorShortcut(ke, event->type()))
-            return true;
+        }
 
         // After every hold handler, so a hold's release always ends it. With
         // shortcuts off a bound key reaches the focused widget, but never a
@@ -895,6 +991,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 
         // A clicked slider gets a short keyboard lease so arrow nudges adjust
         // the slider, then global operating shortcuts automatically resume.
+        // The bridge gates these keys by its own copy of the list,
+        // bridgeKeyMovesTxSetpoint() in SliderLeaseTxGate.h: change both together.
         if (event->type() == QEvent::KeyPress) {
             auto* slider = qobject_cast<QAbstractSlider*>(QApplication::focusWidget());
             if (slider && m_sliderShortcutLease.data() == slider && s_sliderShortcutLeaseActive) {
@@ -981,32 +1079,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         toggleConnectionDialog();
         return true;
     }
-    // The context-menu key and Shift+F10 open the keyer-source chooser on the
-    // DVK indicator, so the choice is reachable without a mouse there too, not
-    // only from Settings.
-    if (obj == m_dvkIndicator && event->type() == QEvent::KeyPress) {
-        auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_Menu
-            || (key->key() == Qt::Key_F10 && key->modifiers().testFlag(Qt::ShiftModifier))) {
-            showVoiceKeyerSourceMenu(voiceKeyerSourceMenuAnchor());
-            return true;
-        }
-    }
     // Status-bar indicators: a press and the keyboard (StatusIndicator's
     // Return/Enter/Space and the accessible Press action) run one action.
     if (event->type() == QEvent::MouseButtonPress && isStatusIndicator(obj)) {
-        // Right-click on the DVK indicator chooses the keyer (radio DVK or
-        // local recordings). It is handled here, not in
-        // activateStatusIndicator(), because that path is shared with the
-        // keyboard and cannot see which button was pressed; and it runs ahead
-        // of the enabled check because a dimmed indicator on an unlicensed
-        // radio is exactly where an operator needs to reach "Local".
-        if (obj == m_dvkIndicator
-            && static_cast<QMouseEvent*>(event)->button() == Qt::RightButton) {
-            showVoiceKeyerSourceMenu(
-                static_cast<QMouseEvent*>(event)->globalPosition().toPoint());
-            return true;
-        }
         // Left button only for these two: TX must not key from a stray
         // right-click, and the firmware row must not open a browser out from
         // under a context menu.
@@ -1166,11 +1241,15 @@ void MainWindow::showAddPanadapterDialog()
 // disabled state too — the old inline copy could only express two of three.
 void MainWindow::toggleVoiceKeyerPanel()
 {
-    if (!m_dvkPanel || !m_dvkIndicator || !m_dvkIndicator->isEnabled()) {
+    if (!m_dvkPanel) {
         return;
     }
-
+    // Opening follows the indicator's gate; closing an open panel is always
+    // allowed, so Tools never offers a tick that cannot be cleared.
     const bool show = !m_dvkPanel->isVisible();
+    if (show && (!m_dvkIndicator || !m_dvkIndicator->isEnabled())) {
+        return;
+    }
     if (show && m_cwxPanel && m_cwxPanel->isVisible()) {
         m_cwxPanel->hide();
     }
@@ -1221,23 +1300,23 @@ void MainWindow::toggleCwKeyerPanel()
 }
 
 
+void MainWindow::cycleModeAction(int direction)
+{
+    auto* s = activeSlice();
+    const QString next = nextCycledMode(modeActionModes(), s ? s->mode() : QString(),
+                                        direction, s ? s->modeList() : QStringList());
+    if (next.isEmpty())
+        return;
+    if (auto* a = m_shortcutManager.action(QStringLiteral("mode_%1").arg(next.toLower())))
+        if (a->handler) a->handler();
+}
+
 void MainWindow::registerShortcutActions()
 {
     // Helper: nudge active slice frequency by N steps.
     // Share the incremental tune policy with wheel/knob/VFO tuning so pan
     // follow uses the same trigger + settle margins everywhere.
-    auto nudgeFreq = [this](int steps) {
-        if (!m_radioModel.isConnected()) return;
-        auto* s = activeSlice();
-        if (!s) return;
-        if (s->isLocked()) {
-            s->notifyTuneBlockedByLock();
-            return;
-        }
-        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        double newMhz = s->frequency() + steps * stepHz / 1e6;
-        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "keyboard-step");
-    };
+    auto nudgeFreq = [this](int steps) { nudgeActiveSliceSteps(steps); };
 
     // Step cycle helper
     auto cycleStep = [this](int dir) {
@@ -1625,6 +1704,7 @@ void MainWindow::registerShortcutActions()
         });
     m_shortcutManager.registerAction("nr2_toggle", "NR2 Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             if (m_audio->nr2Enabled()) {
                 QMetaObject::invokeMethod(m_audio, [this]() {
                     m_audio->setNr2Enabled(false);
@@ -1635,18 +1715,21 @@ void MainWindow::registerShortcutActions()
         });
     m_shortcutManager.registerAction("rn2_toggle", "RN2 (RNNoise) Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setRn2Enabled(!m_audio->rn2Enabled());
             });
         });
     m_shortcutManager.registerAction("nr4_toggle", "NR4 Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setNr4Enabled(!m_audio->nr4Enabled());
             });
         });
     m_shortcutManager.registerAction("dfnr_toggle", "DFNR Toggle", "DSP",
         QKeySequence(), [this]() {
+            m_aetherDspModePolicy.noteUserOverride();
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->setDfnrEnabled(!m_audio->dfnrEnabled());
             });
@@ -1663,6 +1746,15 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() {
             auto* s = activeSlice();
             if (!s) return;
+            // Every step but off → NR changes a client method. That one only
+            // turns on the radio's own NR, so it leaves a remembered client
+            // method for the automatic restore.
+            const bool stepsClientMethod = m_audio->dfnrEnabled()
+                || m_audio->nr4Enabled() || m_audio->nr2Enabled() || s->nrOn()
+                || !m_radioModel.radioSideNoiseReductionAvailable();
+            if (stepsClientMethod) {
+                m_aetherDspModePolicy.noteUserOverride();
+            }
             if (m_audio->dfnrEnabled()) {
                 // DFNR → off
                 QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setDfnrEnabled(false); });
@@ -1802,6 +1894,11 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), nullptr, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction(kCwRightPaddleActionId, kCwRightPaddleActionName, "CW",
         QKeySequence(), nullptr, /*autoRepeat=*/false, /*keysTx=*/true);
+    // The momentary handlers drive these press/release; they are the only
+    // actions a left/right modifier key can trigger (#7354).
+    for (const char* id : {kPttHoldActionId, kSplitMonitorActionId, kCwStraightKeyActionId,
+                           kCwLeftPaddleActionId, kCwRightPaddleActionId})
+        m_shortcutManager.markHoldKeyAction(QLatin1String(id));
 
     // ── EQ ──────────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("tx_eq_toggle", "TX EQ Toggle", "EQ",
@@ -1869,11 +1966,28 @@ void MainWindow::registerShortcutActions()
             if (s) s->setXit(!s->xitOn(), s->xitFreq());
         });
 
+    // ── Registry-declared actions (keyboard side; MIDI side publishes in
+    // registerMidiParams). Before loadBindings so their saved keys load. ──
+    registerControlActions();
+    m_controlActions.publishShortcuts(m_shortcutManager);
+
     // ── Load user bindings and create QShortcuts ────────────────────────
     m_shortcutManager.loadBindings();
     s_keyboardShortcutsEnabled = m_keyboardShortcutsEnabled;
     syncOperatingShortcutsEnabled();
     m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
+
+    // Buttons name their bound key; the registry reads it live from here, so a
+    // remap shows on the next hover and bindingsChanged rewrites the rest.
+    m_controlActions.setBindingLookup([this](const QString& id) {
+        const ShortcutManager::Action* a = m_shortcutManager.action(id);
+        return a ? a->currentKey : QKeySequence();
+    });
+    m_shortcutTooltips = new ShortcutTooltips(m_controlActions, this);
+    m_shortcutTooltips->setShortcutsEnabled(m_keyboardShortcutsEnabled);
+    m_shortcutTooltips->refresh();
+    connect(&m_shortcutManager, &ShortcutManager::bindingsChanged,
+            m_shortcutTooltips, &ShortcutTooltips::refresh);
 
     m_sliderShortcutLeaseTimer.setSingleShot(true);
     connect(&m_sliderShortcutLeaseTimer, &QTimer::timeout, this,
@@ -1894,10 +2008,11 @@ void MainWindow::registerShortcutActions()
 
 int MainWindow::fireShortcutAction(const QString& id, bool allowTx)
 {
-    return fireShortcutAction(id, allowTx, {});
+    // The meta-object entry does not know the bridge's power ceiling: assume armed.
+    return fireShortcutAction(id, allowTx, /*txCeilingArmed=*/true, {});
 }
 
-int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
+int MainWindow::fireShortcutAction(const QString& id, bool allowTx, bool txCeilingArmed,
                                    const std::shared_ptr<TxController>& controller)
 {
     // Mirrors the MIDI dispatch path (fireShortcut in MainWindow_Controllers.cpp):
@@ -1915,6 +2030,9 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
     }
     if (a->keysTx && !allowTx) {
         return ShortcutFireTxBlocked;
+    }
+    if (ShortcutManager::bridgeRefusesTxDrive(*a, txCeilingArmed)) {
+        return ShortcutFireTxDriveBlocked;
     }
     if (!a->handler && !a->txHandler) {
         return ShortcutFireNoDirectHandler;
@@ -1945,10 +2063,11 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
 {
     Q_UNUSED(allowTx);
     // The meta-object compatibility entry has no trusted producer identity.
-    return injectKeyEventForAutomation(spec, press, false, {});
+    return injectKeyEventForAutomation(spec, press, false, /*txCeilingArmed=*/true, {});
 }
 
 int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,
+                                           bool txCeilingArmed,
                                            const std::shared_ptr<TxController>& controller)
 {
     // Resolve an action id to its CURRENT binding first, so a rebind moves the
@@ -1964,7 +2083,7 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
         // unbound): say so, rather than "not a known action id".
         return KeyInjectUnbound;
     } else {
-        seq = QKeySequence::fromString(spec, QKeySequence::PortableText);
+        seq = shortcutKeyFromText(spec, QKeySequence::PortableText);
         // fromString() parses unrecognised text into a non-empty sequence whose
         // key is Qt::Key_unknown, so isEmpty() alone would let garbage through.
         if (seq.isEmpty() || seq[0].key() == Qt::Key_unknown)
@@ -1985,10 +2104,20 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
     const bool keysTx = a && a->keysTx;
     if (press && keysTx && (!allowTx || !controller || !controller->valid()))
         return KeyInjectTxBlocked;
+    // Drive (RF power) under the ceiling gates the press only; a release moves nothing.
+    if (press && a && ShortcutManager::bridgeRefusesTxDrive(*a, txCeilingArmed))
+        return KeyInjectTxDriveBlocked;
+    // Any key the slider lease would apply to a focused drive slider, bound or not.
+    QWidget* focus = QApplication::focusWidget();
+    const bool leased = qobject_cast<QAbstractSlider*>(focus)
+        && m_sliderShortcutLease.data() == focus && s_sliderShortcutLeaseActive;
+    if (press && bridgeKeyMovesTxSetpoint(leased ? focus : nullptr, seq[0].key(),
+                                          txCeilingArmed))
+        return KeyInjectTxDriveBlocked;
 
     if (keysTx && a->handler) {
         if (!press) { return KeyInjectOk; }
-        const int result = fireShortcutAction(a->id, allowTx, controller);
+        const int result = fireShortcutAction(a->id, allowTx, txCeilingArmed, controller);
         return result == ShortcutFireTxOk ? KeyInjectTxOk : KeyInjectTxBlocked;
     }
 
@@ -2009,17 +2138,13 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
 
 void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
 {
-    // Radio-authoritative toggle (#4057): band_zoom/segment_zoom are per-pan
-    // radio flags in pan status (FlexLib Panadapter.cs), so read the model, not
-    // a client bool; the radio clears them on manual pan/zoom and enforces
-    // mutual exclusion. Every entry point honours the same capability gate as
-    // the B/S buttons (PanZoomModeGate.h). A capability refusal warns and calls
-    // showUnsupportedControlNotice() (sendCmd never runs); NotConnected/NoPan
-    // stay silent.
+    // Both native span zoom and radio-owned mode flags share the declaration
+    // gate used by the B/S buttons and the controller actions.
     auto* pan = panId.isEmpty() ? nullptr : m_radioModel.panadapter(panId);
+    const auto zoom = m_radioModel.backendCapabilities().panZoomModes;
     const auto refusal = panZoomModeRefusal(
         m_radioModel.isConnected(),
-        m_radioModel.backendCapabilities().panZoomModes.has_value(),
+        zoom.has_value(),
         /*panKnown=*/pan != nullptr);
     if (refusal == PanZoomModeRefusal::NotDeclared) {
         qCWarning(lcDevices)
@@ -2031,6 +2156,67 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
     if (refusal != PanZoomModeRefusal::None) {
         return;
     }
+    if (zoom->control == RadioCapabilities::PanZoomModes::Control::NativeScopeSpan) {
+        // Past the gate the button is enabled, so every refusal below is
+        // announced: a press that does nothing silently is the failure
+        // PanZoomModeGate.h exists to prevent.
+        const char* what = segmentZoom ? "segment zoom" : "band zoom";
+        if (const auto blocked = nativePanZoomBlockedReason(pan)) {
+            qCWarning(lcDevices).noquote() << what << "refused:" << *blocked;
+            statusBar()->showMessage(*blocked, 5000);
+            return;
+        }
+        if (!m_bandPlanMgr || zoom->nativeWidthsHz.isEmpty()) {
+            qCWarning(lcDevices) << what << "refused: no band plan or declared scope widths";
+            showUnsupportedControlNotice();
+            return;
+        }
+        SliceModel* slice = preferredMemorySlice(panId);
+        if (!slice) {
+            qCWarning(lcDevices) << what << "refused: no receiver on this panadapter";
+            statusBar()->showMessage(tr("No receiver on this panadapter to zoom around."), 5000);
+            return;
+        }
+        const auto region = bandPlanZoomRegion(slice->frequency(), segmentZoom);
+        if (!region) {
+            // Reachable: the IARU plans stop at 6 m, and no shipped plan has 23 cm.
+            qCWarning(lcDevices) << what << "refused: the active band plan has no"
+                                 << (segmentZoom ? "segment" : "band") << "at"
+                                 << slice->frequency() << "MHz";
+            statusBar()->showMessage(
+                tr("The active band plan has no %1 at %2 MHz.")
+                    .arg(segmentZoom ? tr("segment") : tr("band"))
+                    .arg(slice->frequency(), 0, 'f', 3),
+                6000);
+            return;
+        }
+        const auto request = nativePanZoomRequest(
+            pan->zoomPlacement() == PanZoomPlacement::CenterAllocation,
+            pan->centerMhz(), slice->frequency(), pan->maxBandwidthMhz(),
+            region->first, region->second,
+            {zoom->nativeWidthsHz.constData(),
+             static_cast<std::size_t>(zoom->nativeWidthsHz.size())});
+        if (!request) {
+            qCWarning(lcDevices) << what << "refused: no native scope window fits"
+                                 << region->first << "-" << region->second << "MHz";
+            showUnsupportedControlNotice();
+            return;
+        }
+        const bool widthSame = qFuzzyCompare(pan->bandwidthMhz(), request->widthMhz);
+        if (request->centerMhz) {
+            if (widthSame
+                && std::llround(pan->centerMhz() * 1.0e6)
+                       == std::llround(*request->centerMhz * 1.0e6)) {
+                return;
+            }
+            m_radioModel.requestPanCenter(panId, *request->centerMhz, request->widthMhz);
+        } else if (!widthSame) {
+            m_radioModel.requestPanBandwidth(panId, request->widthMhz);
+        }
+        return;
+    }
+    // Flex keeps its zoom flags in radio status, so a manual pan/zoom clears
+    // the model flag before the next toggle. The backend handles exclusion.
     const bool on = segmentZoom ? !pan->segmentZoomOn() : !pan->bandZoomOn();
     m_radioModel.requestPanControl(pan, {
         segmentZoom ? PanControlField::SegmentZoom : PanControlField::BandZoom, on});
@@ -2079,12 +2265,28 @@ void MainWindow::zoomActivePanadapter(double factor)
     applyPanRangeRequest(s->panId(), newCenter, newBw, "pan-zoom");
 }
 
+bool MainWindow::setActivePanSpan(double bandwidthMhz)
+{
+    if (!m_radioModel.isConnected()) return false;
+    auto* s = activeSlice();
+    if (!s || s->panId().isEmpty()) return false;
+    auto* sw = spectrumForSlice(s);
+    if (!sw) return false;
+    if (panSpanFixedByBackend() && !kiwiSdrPanDisplaysKiwi(s->panId())) return false;
+    const double bw = std::clamp(bandwidthMhz,
+                                 m_radioModel.panMinBandwidthMhz(s->panId()),
+                                 m_radioModel.panMaxBandwidthMhz(s->panId()));
+    const double center = std::max(s->frequency(), bw / 2.0);
+    sw->setFrequencyRange(center, bw);
+    applyPanRangeRequest(s->panId(), center, bw, "pan-span-preset");
+    return true;
+}
+
 void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
 {
-    // THE CAPABILITY RUNG FIRST, ahead of the slice and pan lookup. Whether
-    // this radio takes band_zoom=/segment_zoom= at all is a property of the
-    // RADIO, not of which pan the write would land on, so it is asked with the
-    // pan taken as present -- the same question, and the same call shape, that
+    // The capability rung comes first, ahead of the slice and pan lookup.
+    // Whether this radio accepts zoom at all is a property of the radio, so
+    // ask with the pan taken as present -- the same question and call shape that
     // bandSegmentZoomAvailable() asks for the B/S buttons. Asking it here also
     // means the refusal is announced even when no slice happens to be active,
     // rather than disappearing into the `!s` return below.
@@ -2107,15 +2309,23 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
         ? s->panId()
         : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
     // The remaining rungs, through the same predicate as
-    // togglePanZoomModeForPan above -- and it must be the same one: this is
-    // the explicit-state form of the identical wire text, reached from the
-    // FlexControl and RC28 wheel handlers. It checked isConnected() and a pan
+    // togglePanZoomModeForPan above. This explicit-state form is reached from
+    // the FlexControl and RC28 wheel handlers. It checked isConnected() and a pan
     // id and never the capability. NotDeclared is already handled at the top
     // of this function, so what is left here is NotConnected and NoPan, both
     // of which were silent early returns before this PR and stay silent.
     auto* pan = panId.isEmpty() ? nullptr : m_radioModel.panadapter(panId);
     if (!panZoomModeWritable(m_radioModel.isConnected(), panZoomDeclared,
                              /*panKnown=*/pan != nullptr)) {
+        return;
+    }
+    const auto zoom = m_radioModel.backendCapabilities().panZoomModes;
+    if (zoom->control == RadioCapabilities::PanZoomModes::Control::NativeScopeSpan) {
+        // Native span has no mode to clear, so "off" is a no-op here: a
+        // FlexControl or RC28 wheel zooms one way on these radios, by design.
+        if (enable) {
+            togglePanZoomModeForPan(panId, segmentZoom);
+        }
         return;
     }
     const bool current = segmentZoom ? pan->segmentZoomOn() : pan->bandZoomOn();

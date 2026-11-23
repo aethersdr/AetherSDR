@@ -190,8 +190,13 @@ int runGrantAdmin(const QCommandLineParser& parser)
     if (!done || secret.size() != control::ControlCredentials::kSecretBytes) {
         return fail();
     }
-    const QString endpoint = control::LocalControlServer::clientEndpoint(parser.value(QStringLiteral("socket")));
+    QString pathError;
+    const QString endpoint = control::LocalControlServer::clientEndpoint(parser.value(QStringLiteral("socket")),
+                                                                         &pathError);
     if (endpoint.isEmpty()) {
+        if (!pathError.isEmpty()) {
+            QTextStream(stderr) << "aetherd: " << pathError << '\n';
+        }
         return fail();
     }
     QLocalSocket socket;

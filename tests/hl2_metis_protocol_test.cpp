@@ -294,6 +294,62 @@ int main()
         const auto cut = parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x15));
         check(cut && !cut->gatewareMinor && gatewareVersionText(*cut) == "74",
               "a reply ending before 0x15 shows the major version alone");
+        reply[0x15] = 52;
+        check(gatewareVersionLabel(*parseDiscoveryReply(reply)) == "SQUARE SDR 2 gateware",
+              "minor 52 labels the version with the board's name");
+        reply[0x15] = 3;
+        check(gatewareVersionLabel(*parseDiscoveryReply(reply)) == "Gateware",
+              "stock minor 3 keeps the plain label");
+        check(gatewareVersionLabel(*cut) == "Gateware", "no minor keeps the plain label");
+        // The connect path recovers the minor from the version text.
+        check(gatewareMinorFromVersionText("75.52") == std::optional<std::uint8_t>(52),
+              "\"75.52\" -> minor 52");
+        check(!gatewareMinorFromVersionText("74"), "\"74\" -> no minor");
+        check(!gatewareMinorFromVersionText(""), "empty version -> no minor");
+        check(!gatewareMinorFromVersionText("74.256"), "minor above 255 rejected");
+        check(!gatewareMinorFromVersionText("74."), "empty minor rejected");
+        check(!gatewareMinorFromVersionText("74.5x"), "non-digit minor rejected");
+        check(!gatewareMinorFromVersionText("4.2.20.41343"), "a Flex version is not a minor");
+        bool roundTrips = true;
+        for (int m = 0; m <= 0xFF; ++m) {
+            reply[0x15] = static_cast<std::uint8_t>(m);
+            const auto parsed = parseDiscoveryReply(reply);
+            roundTrips = roundTrips
+                && gatewareMinorFromVersionText(gatewareVersionText(*parsed)) == parsed->gatewareMinor;
+        }
+        check(roundTrips, "every minor 0..255 round-trips through the version text");
+        // The support tier's inputs (#7311): the major and a stable board id,
+        // neither of which is the display label.
+        check(gatewareMajorFromVersionText("74.3") == std::optional<std::uint8_t>(74),
+              "\"74.3\" -> major 74");
+        check(gatewareMajorFromVersionText("74") == std::optional<std::uint8_t>(74),
+              "\"74\" -> major 74");
+        check(gatewareMajorFromVersionText("75.52") == std::optional<std::uint8_t>(75),
+              "\"75.52\" -> major 75");
+        check(!gatewareMajorFromVersionText(""), "empty version -> no major");
+        check(!gatewareMajorFromVersionText("256.3"), "major above 255 rejected");
+        check(!gatewareMajorFromVersionText("74x"), "non-digit major rejected");
+        check(!gatewareMajorFromVersionText("74.5x"), "malformed minor rejects the major too");
+        check(!gatewareMajorFromVersionText("4.2.20.41343"), "a Flex version is not a major");
+        bool majorsRoundTrip = true;
+        for (int v = 0; v <= 0xFF; ++v) {
+            reply[0x09] = static_cast<std::uint8_t>(v);
+            const auto parsed = parseDiscoveryReply(reply);
+            majorsRoundTrip = majorsRoundTrip
+                && gatewareMajorFromVersionText(gatewareVersionText(*parsed))
+                       == std::optional<std::uint8_t>(parsed->gatewareVersion);
+        }
+        reply[0x09] = 74;
+        check(majorsRoundTrip, "every major 0..255 round-trips through the version text");
+        check(std::string(boardIdFor(GatewareBoard::Unknown)) == "hl2",
+              "a board that does not name itself is \"hl2\"");
+        check(std::string(boardIdFor(GatewareBoard::SquareSdr2)) == "square-sdr-2",
+              "SQUARE SDR 2 is \"square-sdr-2\"");
+        check(std::string(boardIdFor(GatewareBoard::Square3)) == "square-3",
+              "SQUARE 3 is \"square-3\"");
+        check(std::string(boardIdFor(boardForGatewareMinor(3))) == "hl2"
+                  && std::string(boardIdFor(boardForGatewareMinor(std::nullopt))) == "hl2",
+              "stock minor 3 and no minor both map to \"hl2\"");
         std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
     }

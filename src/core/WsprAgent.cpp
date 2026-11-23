@@ -202,6 +202,8 @@ std::optional<WsprStatus> parseStatus(const QByteArray& json)
     st.hopPeriod = boundedString(o.value(QLatin1String("hop_period")), 16);
     st.depth = o.value(QLatin1String("depth")).toString();
     st.slice = o.value(QLatin1String("slice")).toBool();
+    st.sliceIndex = st.slice && inRange(o.value(QLatin1String("slice_index")), 0, 63)
+        ? o.value(QLatin1String("slice_index")).toInt(-1) : -1;
     st.audio = o.value(QLatin1String("audio")).toBool();
     if (!validBand(st.band)
         || (!st.depth.isEmpty() && !depths().contains(st.depth))) {
@@ -422,6 +424,24 @@ QString writeBundledPackage(const WsprPackage::Pin& pin, const QString& dir, QSt
         return {};
     }
     return target;
+}
+
+bool updateAvailable(const QString& installed)
+{
+    static const QRegularExpression re(QStringLiteral("^(\\d{1,6})\\.(\\d{1,6})\\.(\\d{1,6})"));
+    const QRegularExpressionMatch have = re.match(installed);
+    const QRegularExpressionMatch bundled = re.match(QString::fromLatin1(WsprPackage::kVersion));
+    if (!have.hasMatch() || !bundled.hasMatch()) {
+        return false;
+    }
+    for (int i = 1; i <= 3; ++i) {
+        const int a = have.captured(i).toInt();
+        const int b = bundled.captured(i).toInt();
+        if (a != b) {
+            return a < b;
+        }
+    }
+    return false;
 }
 
 }  // namespace wspr

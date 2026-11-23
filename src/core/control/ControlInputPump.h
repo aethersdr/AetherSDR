@@ -30,9 +30,12 @@ public:
     // destruction may remain deferred without extending authority lifetime.
     void finish();
     [[nodiscard]] bool isFinished() const { return m_finished; }
+    // A deferred reply is owed (ServiceReply::deferred): input waits for it.
+    [[nodiscard]] bool awaitingReply() const { return m_awaitingDeferred && !m_finished; }
 
 private:
     void schedule();
+    void resumeWithReply(const ServiceReply& reply);
     [[nodiscard]] bool deliver(const ServiceReply& reply);
     void oversizedFrame();
 
@@ -45,6 +48,7 @@ private:
     bool m_reading{false};
     bool m_scheduled{false};
     bool m_finished{false};
+    bool m_awaitingDeferred{false};   // a deferred reply is owed; input waits
 };
 
 } // namespace AetherSDR::control

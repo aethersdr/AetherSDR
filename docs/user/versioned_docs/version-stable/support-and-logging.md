@@ -19,6 +19,8 @@ chain is separate from the selected mode; a waveform slice can have mode `FDVU`
 and chain `DIGU`. The reported IARU region does not select your client band plan
 or grant transmit permission. Select your display plan under **View → Band Plan**.
 
+In diagnostic JSON, `network.packet_drop_count` counts individual missing audio, FFT, waterfall and meter packets after the reorder wait, plus DAX sequence breaks. It matches **Session missing packets / DAX breaks** in **Tools → Network Diagnostics...**. A burst of three absent audio packets adds three to this count; the network-quality score still treats the burst as one gap.
+
 Before you file a report, drop your log or support bundle on the [Log Analyzer](/log-analyzer). It checks for known problems and links the fix for each one it finds. It runs in your browser; the file is never uploaded. **Help → Log Analyzer** and the **Log Analyzer** button in **Help → Support & Diagnostics...** open it.
 
 The Help menu starts with **AetherSDR Documentation** (this site), **Printable Manual (PDF)** and **Log Analyzer**, which open in your browser. It also has **Getting Started...**, **AetherSDR Help...**, **What's New...**, three how-to guides (**Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...**), **AetherSDR Website**, **Donate to AetherSDR**, **Contributing to AetherSDR...**, **Check for Updates...**, **Check for Updates Automatically** and **About AetherSDR**. On Windows and Linux the menus are behind the **☰** button at the left of the title bar; on macOS they are in the system menu bar.
@@ -27,13 +29,15 @@ The Help menu starts with **AetherSDR Documentation** (this site), **Printable M
 
 **Help → Support & Diagnostics...** has two parts, followed by two buttons that open these docs in your browser: **Troubleshooting Guide** opens [Troubleshooting](./troubleshooting.md) and **Log Analyzer** opens the [Log Analyzer](/log-analyzer).
 
+Choosing **Support & Diagnostics...** while it is open brings the window to the front. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). The log path can be selected and copied into a report.
+
 <img src="/img/screens/support-diagnostics-dialog.png" width="680" alt="Support &amp; Diagnostics window. Diagnostic Logging lists modules in three columns with checkboxes, Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info ticked. Below are the log file path (blacked out) and size, a log tail, Refresh, Clear Log and Open Log Folder buttons, and four numbered steps for reporting an issue." />
 
 *Support & Diagnostics: per-module diagnostic logging and the log file. The log path is blacked out.*
 
 ### Diagnostic Logging
 
-A grid of checkboxes, one per log category. Hover a box for what it covers. Turn on the categories relevant to your problem, then reproduce it. The dialog advises restarting AetherSDR after changing categories so the new settings are in effect from startup.
+A grid of checkboxes, one per log category. The three columns stay fully visible at the window’s minimum width; scroll vertically to reach the remaining categories. Hover a box for what it covers. Turn on the categories relevant to your problem, then reproduce it. The dialog advises restarting AetherSDR after changing categories so the new settings are in effect from startup.
 
 **Enable All** / **Disable All** toggle every category at once. The categories, and which are on by default, are listed under [Log categories](#log-categories).
 
@@ -51,6 +55,8 @@ Below the grid, the dialog shows the path of the current log file, its size, and
 2. **Copies an AI prompt** to your clipboard, pre-filled with your AetherSDR version, Qt version, OS and radio, and opens a dialog with buttons for **Claude**, **ChatGPT**, **Gemini**, **Grok** and **Perplexity**. Paste the prompt into the AI, describe what went wrong, and it writes a structured bug report.
 3. **Submit Bug Report** opens GitHub's bug-report form, pre-filled with your system and radio details and a redacted tail of the recent log. If the log tail is too long for the link, it is put on your clipboard instead.
 4. Drag the support bundle into the GitHub form.
+
+When connected to a Hermes-Lite 2, the pre-filled form also includes a **Hermes-Lite 2** section: gateware, the configured board variant, IQ sample rate, receiver count, TX modulator, open-slice modes, packet-loss and DSP counters, and the TX pacing fault state. Values the backend has not reported are omitted. The board variant is your configured hardware choice; it is not detected from the radio. These extra details appear in the issue form; the support-email bundle uses its existing fields.
 
 ### Reporting a crash
 
@@ -99,7 +105,7 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 | **Protocol / Status** | `aether.protocol` | Parsed SmartSDR protocol handling and status updates |
 | **Audio** | `aether.audio` | RX/TX audio, device negotiation, volume |
 | **Audio Summary** | `aether.audio.summary` | Audio routing and device summaries for support logs |
-| **VITA-49** | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX. Lost or out-of-order packets are logged as `VITA-49 sequence errors`, at most once every 10 seconds per stream. |
+| **VITA-49** | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX. Missing audio, FFT, waterfall and meter packets are logged as `VITA-49 sequence errors` after the short reorder wait; DAX logs arrival-order breaks. Each stream logs at most once every 10 seconds. |
 | **DSP** | `aether.dsp` | Client noise reduction and CW decoder processing |
 | **RADE** | `aether.rade` | FreeDV RADE digital voice |
 | **SmartLink** | `aether.smartlink` | SmartLink sign-in, TLS tunnel, WAN streaming |
@@ -149,7 +155,7 @@ or **Open Log Folder** to find the current file. Windows can keep older files
 from an installer or portable build in the original location. **File an
 Issue** opens the folder that holds the support bundle it just saved.
 
-- Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it; on Windows it is a `.lnk` shortcut.
+- Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it. Windows keeps only the timestamped files; **Help → Support & Diagnostics...** shows the current log.
 - A log that grows past 100 MB is rotated to a new file.
 - Old logs are pruned at startup after 7 days or once they total more than 500 MB; the two most recent are always kept.
 - Logging is buffered and written in the background, so it does not slow the app down.
@@ -180,7 +186,7 @@ For anything else, prefer the checkboxes in **Help → Support & Diagnostics...*
 
 ## Known issues
 
-- With WNB on, a FLEX-8600 fills the default-on Connection / Commands log category with a `wnb_updating` status line every few seconds ([#6069](https://github.com/aethersdr/AetherSDR/issues/6069)).
+None currently documented.
 
 ## Troubleshooting
 

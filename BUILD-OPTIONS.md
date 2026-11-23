@@ -84,6 +84,7 @@ receive/transmit limits. Compiling a backend does not establish hardware support
 |---|---|---|
 | `ENABLE_RADE` | ON | RADE digital voice using the vendored RADE/Opus sources. |
 | `ENABLE_DSTAR` | ON | Local D-STAR waveform helper using vendored smartsdr-dsp/ThumbDV support. |
+| `ENABLE_DATA2G` | ON | Vendored Data2G HF data modem core (`third_party/data2g`, RFC #7159) and AetherModem's receive-only **HF Data** tab. OFF builds without the core and hides the tab. |
 | `ENABLE_SPECBLEACH` | ON | NR4 spectral noise reduction. MSVC builds also need `clang-cl`; otherwise CMake disables it. |
 | `ENABLE_DFNR` | ON | DFNR DeepFilterNet3 noise reduction. Run `scripts/setup/setup-deepfilter.sh` (Windows: `setup-deepfilter.ps1`) before configuring. A missing library disables it. |
 | `ENABLE_NVIDIA_AFX` | ON | BNR NVIDIA Maxine AFX GPU denoiser wrapper on x86-64 Linux/Windows. Operation needs a compatible NVIDIA GPU and the runtime/model pack, downloaded on demand. |
@@ -91,6 +92,7 @@ receive/transmit limits. Compiling a backend does not establish hardware support
 | `ENABLE_ASR_METAL` | ON | ASR Metal acceleration on macOS. Declared only on macOS with ASR enabled; elsewhere the switch does not exist and `-D` produces only an unused-variable warning. |
 | `ENABLE_ASR_VULKAN` | ON | ASR Vulkan acceleration when the GPU build dependencies are found. Declared only on non-macOS platforms with ASR enabled; on macOS the switch does not exist. |
 | `ENABLE_ASR_METAL_PRECOMPILE` | ON | Precompile Metal kernels on macOS. Declared only for vendored whisper builds (`USE_SYSTEM_LIBWHISPER=OFF`) with ASR enabled. Needs the offline Metal toolchain; a missing compiler warns and falls back to shader source unless `REQUIRE_ASR_GPU` is ON. |
+| `ENABLE_ASR_APPLE_LIVE_PREVIEW` | ON | Apple's on-device SpeechTranscriber as the second Copy Assist live preview recognizer (sherpa-onnx is the default), compiled with `swiftc`. Declared only on macOS with ASR enabled; it runs on macOS 26 and later, and its entry is dimmed with its reason on older systems. Needs the macOS 26 SDK (Xcode 26) to compile; configure builds the stub and reports it disabled when the SDK is older or `swiftc` cannot be found. |
 | `AETHER_GPU_SPECTRUM` | ON | QRhi spectrum/waterfall rendering. Needs Qt ShaderTools (configuration fails without it) and private QtGui headers; missing private headers select the CPU build. See [GPU spectrum rendering](docs/BUILDING.md#gpu-spectrum-rendering). |
 | `ENABLE_MQTT` | ON | MQTT client support using bundled libmosquitto or the selected system library. |
 | `MQTT_TLS` | ON | MQTT TLS support. The bundled library uses OpenSSL when found; OFF omits TLS. |
@@ -127,7 +129,7 @@ are useful for release builds that must include those capabilities.
 | `REQUIRE_KEYCHAIN` | OFF | QtKeychain is missing. |
 | `REQUIRE_ASR_ONNX` | OFF | ONNX Runtime is missing for Silero VAD, speaker labeling and the signal classifier. |
 | `REQUIRE_ASR_GPU` | OFF | No ASR GPU backend is built, system libwhisper's GPU support cannot be verified, or requested Metal precompilation cannot run. |
-| `REQUIRE_ASR_SHERPA` | OFF | sherpa-onnx is missing for the non-whisper ASR backend. |
+| `REQUIRE_ASR_SHERPA` | OFF | sherpa-onnx is missing for the non-whisper ASR backend and the default live preview recognizer. |
 
 Some capabilities are enabled by dependency detection rather than a dedicated
 enable switch: Qt SerialPort, Qt WebSockets, QtKeychain, PortAudio, USB HID
@@ -171,7 +173,7 @@ These options are for development and qualification.
 | `AETHER_ENABLE_HL2_TX_LOOPBACK_TEST` | OFF | Build/register HL2 transmit-loopback and DSP-readback tests against an external `hpsdrsim` peer. The loopback test keys the simulated transmitter; a missing simulator produces a skip. |
 | `AETHER_ENABLE_HL2_SIGNAL_STOP_TEST` | OFF | Build the HL2 signal-stop child process. The loopback-UDP process test is registered on non-Windows hosts with Python 3. |
 | `AETHER_ENABLE_RADAR_GL_TEST` | OFF | Build/register the native-GPU weather-radar texture test. Needs a real OpenGL 3.2 context. |
-| `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen, and `spectrum_pan_pixels_retina_test`, the same binary at a Retina scale factor pinning the Flex pan `xpixels` cap. |
+| `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen, and `spectrum_pan_pixels_retina_test`, the same binary at a Retina scale factor pinning the Flex pan `xpixels` cap, and `tx_waterfall_mask_filter_drag_test`, which pins the TX waterfall mask and the filter-drag guard against a real `MainWindow` (it binds the app's discovery listener, UDP 4992). |
 | `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the test binaries fit on a hosted runner. For the sanitizer lanes, the Linux `ci.yml` and `full-suite.yml` builds, and local review builds (`/pr-review` step 7); never for releases; configuration fails on Windows. |
 | `AETHER_FIRMWARE_DEV_OVERRIDES` | OFF | Honor the `AETHER_FIRMWARE_CATALOG` (another firmware catalog URL) and `AETHER_FIRMWARE_TRUST_KEYS` (extra Ed25519 firmware-signing keys, hex, comma-separated) environment variables, for testing a firmware publisher's own builds. Each override is logged when used. Never for releases: a release build installs only firmware listed at aethersdr.com and signed by a key built into it. |
 | `AETHER_UPDATE_DEV_OVERRIDES` | OFF | Honor four environment variables of the in-app updater, for trying an update end to end before there is a release to update to: `AETHER_UPDATE_MANIFEST_URL` (another signed manifest), `AETHER_UPDATE_TRUST_KEYS` (extra Ed25519 update-signing keys, hex, comma-separated), `AETHER_UPDATE_DOWNLOAD_BASE` (fetch release files from `<base>/<tag>/<asset>`; the URLs the manifest signs are still checked) and `AETHER_UPDATE_PRETEND_VERSION` (run as an older version; never passed on to the self-test or a restart). Each override is logged when used. `windows-installer.yml`'s `dev_overrides` dispatch input builds one, refused on a tag or with the Store flight. Never for releases. |

@@ -19,14 +19,23 @@
 #include "TestSettingsProfile.h"
 
 #include <QApplication>
+#include <QByteArray>
 #include <QCheckBox>
 #include <QColor>
+#include <QDebug>
 #include <QImage>
+#include <QLineEdit>
 #include <QRadioButton>
+#include <QPushButton>
+#include <QPalette>
+#include <QWidget>
+#include <cmath>
 #include <QStyle>
 #include <QStyleOptionButton>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QString>
+#include <QTableWidget>
 #include <QtTest>
 
 #include <cstdio>
@@ -44,6 +53,9 @@ private slots:
     void compactIsSmallerButNotADifferentPalette();
     void everyThemeTokenInTheSheetResolves();
     void checkedLosesToDisabled();
+    void canonDisabledButtonsReadWeakerInBothThemes();
+    void canonSelectionIsReadable_data();
+    void canonSelectionIsReadable();
     void canonLookPaintsItsIndicators();
     void canonSheetLeavesNoRuleFragments();
     void canonIndicatorsRenderTheirImages();
@@ -272,6 +284,115 @@ void ModemChromeTest::checkedLosesToDisabled()
     }
 }
 
+void ModemChromeTest::canonDisabledButtonsReadWeakerInBothThemes()
+{
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    const auto luminance = [](const QColor& color) {
+        const auto channel = [](double value) {
+            return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF())
+             + 0.0722 * channel(color.blueF());
+    };
+    const auto contrast = [&](const QColor& first, const QColor& second) {
+        const double a = luminance(first);
+        const double b = luminance(second);
+        return (qMax(a, b) + 0.05) / (qMin(a, b) + 0.05);
+    };
+    for (const char* themeName : {"Default Dark", "Default Light"}) {
+        QVERIFY(tm.setActiveTheme(QLatin1String(themeName)));
+        for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
+            QWidget surface;
+            theme::setContainer(&surface, QStringLiteral("canon/disabledButtonTest"));
+            tm.applyStyleSheet(&surface, ModemChrome::styleSheet(scale, ModemChrome::Look::Canon));
+            QPushButton enabled(QStringLiteral("Action"), &surface);
+            QPushButton disabled(QStringLiteral("Action"), &surface);
+            disabled.setEnabled(false);
+            enabled.resize(160, 40);
+            disabled.resize(160, 40);
+            enabled.ensurePolished();
+            disabled.ensurePolished();
+            const QImage enabledImage = enabled.grab().toImage();
+            const QImage disabledImage = disabled.grab().toImage();
+            const int x = qRound(8 * enabledImage.devicePixelRatio());
+            const QColor enabledFill = enabledImage.pixelColor(x, enabledImage.height() / 2);
+            const QColor disabledFill = disabledImage.pixelColor(x, disabledImage.height() / 2);
+            QCOMPARE(disabledFill, enabledFill);
+            const QColor enabledInk = enabled.palette().color(QPalette::Active, QPalette::ButtonText);
+            const QColor disabledInk = disabled.palette().color(QPalette::Disabled, QPalette::ButtonText);
+            QVERIFY2(contrast(disabledInk, disabledFill) < contrast(enabledInk, enabledFill),
+                     "disabled canon buttons must have weaker ink than enabled buttons");
+        }
+    }
+    tm.setActiveTheme(before);
+}
+
+void ModemChromeTest::canonSelectionIsReadable_data()
+{
+    QTest::addColumn<QString>("themeName");
+    QTest::addColumn<bool>("compact");
+    QTest::addColumn<bool>("table");
+    for (const char* name : {"Default Light", "Default Dark"}) {
+        for (bool compact : {false, true}) {
+            for (bool table : {false, true}) {
+                const QByteArray row = QStringLiteral("%1-%2-%3")
+                    .arg(QLatin1String(name), compact ? "compact" : "dialog",
+                         table ? "table" : "line-edit").toUtf8();
+                QTest::newRow(row.constData()) << QString::fromLatin1(name) << compact << table;
+            }
+        }
+    }
+}
+
+void ModemChromeTest::canonSelectionIsReadable()
+{
+    QFETCH(QString, themeName);
+    QFETCH(bool, compact);
+    QFETCH(bool, table);
+    auto& tm = ThemeManager::instance();
+    // Put the theme back however the row ends: a failed check returns early,
+    // and the tests after this one expect main()'s Default Dark.
+    const auto restoreTheme = qScopeGuard([&tm, before = tm.activeTheme()] {
+        tm.setActiveTheme(before);
+    });
+    QVERIFY(tm.setActiveTheme(themeName));
+    QWidget surface;
+    theme::setContainer(&surface, QStringLiteral("canon/selectionTest"));
+    applyCanonSheet(&surface, [compact] {
+        return ModemChrome::styleSheet(
+            compact ? ModemChrome::Scale::Compact : ModemChrome::Scale::Dialog,
+            ModemChrome::Look::Canon);
+    });
+    QLineEdit edit(&surface);
+    QTableWidget view(1, 1, &surface);
+    edit.setText(QStringLiteral("Selected host"));
+    edit.selectAll();
+    view.setItem(0, 0, new QTableWidgetItem(QStringLiteral("Selected net")));
+    view.selectRow(0);
+    QWidget* widget = table ? static_cast<QWidget*>(&view) : &edit;
+    widget->ensurePolished();
+    const auto luminance = [](const QColor& color) {
+        const auto channel = [](double value) {
+            return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF())
+             + 0.0722 * channel(color.blueF());
+    };
+    for (const auto group : {QPalette::Active, QPalette::Inactive}) {
+        const QColor ink = widget->palette().color(group, QPalette::HighlightedText);
+        const QColor fill = widget->palette().color(group, QPalette::Highlight);
+        const double a = luminance(ink);
+        const double b = luminance(fill);
+        const double ratio = (qMax(a, b) + 0.05) / (qMin(a, b) + 0.05);
+        qInfo().noquote() << themeName << widget->metaObject()->className() << group
+                         << ink.name() << "on" << fill.name() << "contrast" << ratio;
+        QVERIFY2(ratio >= 4.5, "selected text must meet the normal-text contrast floor");
+        QCOMPARE(ink, tm.color(&surface, QStringLiteral("color.canon.ink")));
+        QCOMPARE(fill, tm.color(&surface, QStringLiteral("color.canon.nested")));
+    }
+}
+
 // Not QTEST_MAIN: ThemeManager is a singleton that reads ActiveTheme from
 // AppSettings on construction and writes it back (ThemeManager.cpp:367 and
 // :669-670). Without an isolated profile the run would mutate the real
@@ -290,6 +411,7 @@ int main(int argc, char** argv)
         return 1;
     }
     QApplication app(argc, argv);
+    app.setStyle(QStringLiteral("Fusion"));
     // Pin the baseline explicitly rather than relying on the empty profile
     // falling back to it, so the tokens are checked against a theme this test
     // names.

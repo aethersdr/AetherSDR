@@ -167,7 +167,7 @@ void loadWisdomOnce()
 }
 
 // Write the wisdom cache now, at the end of open() under g_setupMutex. Eager
-// because at-exit hooks don't run on Hl2EmergencyStop's re-raised signal,
+// because at-exit hooks don't run on FatalSignalRelease's re-raised signal,
 // crashes or force-quit. Per-open cost is ~10-50 KB on the I/O thread.
 // Write-then-rename because other processes (other instances, ctest -j8)
 // share the file: fftw_export_wisdom_to_filename truncates first and FFTW
@@ -321,6 +321,13 @@ void applyRxAgc(int channel, int mode, double topDb, int slopeDb, double fixedDb
     default:  // off — only the fixed gain matters
         break;
     }
+}
+
+// WDSP LMS adaptation strength for a 0..100 level; the midpoint is RXA.c's
+// default. Shared by ANR and ANF, recipe and live paths alike.
+double lmsGainForLevel(int level)
+{
+    return 0.00001 * std::pow(100.0, std::clamp(level, 0, 100) / 100.0);
 }
 
 }  // namespace
@@ -703,7 +710,16 @@ bool WdspChannel::setMode(Mode mode) noexcept
     {
         const std::scoped_lock setupLock(g_setupMutex);
         if (m_config.direction == Direction::Receive) {
+            // Lower the panel before FM starts and raise it after FM stops, so
+            // WDSP's thread never runs an FM block at the non-FM gain.
+            const bool movePanel = m_config.fmRxPanelGain.has_value();
+            if (movePanel && mode == Mode::Fm) {
+                SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, mode));
+            }
             SetRXAMode(m_channelId, wdspMode(mode));
+            if (movePanel && mode != Mode::Fm) {
+                SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, mode));
+            }
             // The squelch belongs to a mode family, so a mode change moves it
             // to the new family's stage and stops the old one — see
             // setSquelch() in the header.
@@ -742,9 +758,14 @@ bool WdspChannel::setFilter(double lowHz, double highHz) noexcept
         } else {
             SetTXABandpassFreqs(m_channelId, lowHz, highHz);
         }
+        m_config.filterLowHz = lowHz;
+        m_config.filterHighHz = highHz;
+        // fmsq's threshold follows the filter width; see fmSquelchThresholdFor().
+        if (m_config.direction == Direction::Receive
+            && squelchStageFor(m_config.mode) == SquelchStage::Fm) {
+            applySquelchLocked(m_config.mode);
+        }
     }
-    m_config.filterLowHz = lowHz;
-    m_config.filterHighHz = highHz;
     endControlOperation();
     return true;
 }
@@ -842,6 +863,44 @@ double WdspChannel::fmSquelchThresholdForLevel(int level) noexcept
     return std::pow(10.0, -2.0 * clamped / 100.0);
 }
 
+double WdspChannel::fmSquelchNoiseLevelForHalfWidth(double halfWidthHz) noexcept
+{
+    // Quadratic in u = log10(W / 3000 Hz), fitted to the noise-alone 50 % duty
+    // level over 1500..6000 Hz (max residual 1.1 levels). Outside that range
+    // the half-width is held at the nearer end, not extrapolated.
+    const double held = std::isfinite(halfWidthHz)
+        ? std::clamp(halfWidthHz, kFmSquelchFitMinHalfWidthHz, kFmSquelchFitMaxHalfWidthHz)
+        : kFmSquelchFitMaxHalfWidthHz;
+    const double u = std::log10(held / 3000.0);
+    return 22.59 - 98.64 * u + 75.02 * u * u;
+}
+
+double WdspChannel::fmSquelchWidthOffsetLevels(double halfWidthHz) noexcept
+{
+    // Referenced to the fit's widest point, so the offset is never negative and
+    // a filter at or above it (the HL2's FM default, ±8000) keeps the old map.
+    return fmSquelchNoiseLevelForHalfWidth(halfWidthHz)
+           - fmSquelchNoiseLevelForHalfWidth(kFmSquelchFitMaxHalfWidthHz);
+}
+
+double WdspChannel::fmSquelchThresholdFor(int level, double halfWidthHz) noexcept
+{
+    // Not clamped to 100 after the offset: a narrow filter keeps the slider's
+    // whole travel above its noise point.
+    const double effective = std::clamp(static_cast<double>(level), 0.0, 100.0)
+                             + fmSquelchWidthOffsetLevels(halfWidthHz);
+    return std::pow(10.0, -2.0 * effective / 100.0);
+}
+
+std::optional<bool> WdspChannel::fmSquelchGateOpen() const noexcept
+{
+    if (m_config.direction != Direction::Receive
+        || !m_fmSquelchRunning.load(std::memory_order_acquire)) {
+        return std::nullopt;
+    }
+    return GetRXAFMSQGateOpen(m_channelId) != 0;
+}
+
 double WdspChannel::levelSquelchThresholdDbfsForLevel(int level, double offsetDb) noexcept
 {
     // Fitted to HL2 measurements at the offset-0 gain (#5982, #6092): level 50
@@ -868,7 +927,10 @@ void WdspChannel::applySquelchLocked(Mode mode) noexcept
     const int level = m_config.squelchLevel;
     switch (applied.stage) {
     case SquelchStage::Fm:
-        applied.threshold = fmSquelchThresholdForLevel(level);
+        applied.fmHalfWidthHz = 0.5 * (m_config.filterHighHz - m_config.filterLowHz);
+        applied.fmEffectiveLevel = std::clamp(level, 0, 100)
+                                   + fmSquelchWidthOffsetLevels(applied.fmHalfWidthHz);
+        applied.threshold = fmSquelchThresholdFor(level, applied.fmHalfWidthHz);
         SetRXAFMSQThreshold(m_channelId, applied.threshold);
         applied.fmRun = run;
         break;
@@ -883,6 +945,7 @@ void WdspChannel::applySquelchLocked(Mode mode) noexcept
     }
     SetRXAFMSQRun(m_channelId, applied.fmRun ? 1 : 0);
     SetRXAAMSQRun(m_channelId, applied.amRun ? 1 : 0);
+    m_fmSquelchRunning.store(applied.fmRun, std::memory_order_release);
     const std::scoped_lock recordLock(m_appliedSquelchMutex);
     m_appliedSquelch = applied;
 }
@@ -1047,6 +1110,42 @@ bool WdspChannel::setMinimumPhase(bool on) noexcept
         }
     }
     m_config.minimumPhase = on;
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::setNoiseReduction(bool enabled, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive || m_config.analogReceiveDsp
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        m_liveNrSet = true;
+        m_liveNrEnabled = enabled;
+        m_liveNrLevel = std::clamp(level, 0, 100);
+        SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
+        SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::setAutoNotch(bool enabled, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive || m_config.analogReceiveDsp
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        m_liveAnfSet = true;
+        m_liveAnfEnabled = enabled;
+        m_liveAnfLevel = std::clamp(level, 0, 100);
+        SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(m_liveAnfLevel), 0.1);
+        SetRXAANFRun(m_channelId, m_liveAnfEnabled ? 1 : 0);
+    }
     endControlOperation();
     return true;
 }
@@ -1309,6 +1408,90 @@ void WdspChannel::synchronizeWorkerForTest() const noexcept
     SynchronizeChannelWorkerForTest(m_channelId);
 }
 
+bool WdspChannel::pureSignalFeed(int size, double* tx, double* rx) noexcept
+{
+    if (m_config.direction != Direction::Transmit || size <= 0 || !tx || !rx)
+        return false;
+    pscc(m_channelId, size, tx, rx);
+    return true;
+}
+
+bool WdspChannel::pureSignalControl(bool reset, bool mancal, bool automode,
+                                    bool turnon) noexcept
+{
+    if (m_config.direction != Direction::Transmit)
+        return false;
+    SetPSControl(m_channelId, reset ? 1 : 0, mancal ? 1 : 0, automode ? 1 : 0,
+                 turnon ? 1 : 0);
+    return true;
+}
+
+bool WdspChannel::pureSignalMox(bool mox) noexcept
+{
+    if (m_config.direction != Direction::Transmit)
+        return false;
+    SetPSMox(m_channelId, mox ? 1 : 0);
+    return true;
+}
+
+bool WdspChannel::pureSignalRunCal(bool run) noexcept
+{
+    if (m_config.direction != Direction::Transmit)
+        return false;
+    SetPSRunCal(m_channelId, run ? 1 : 0);
+    return true;
+}
+
+bool WdspChannel::pureSignalConfigure(double hwPeak, int feedbackRateHz, double moxDelaySec,
+                                      double loopDelaySec, double txDelaySec) noexcept
+{
+    if (m_config.direction != Direction::Transmit || feedbackRateHz <= 0)
+        return false;
+    // Rate first: SetPSFeedbackRate rebuilds both delay lines from the stored
+    // tx delay and recomputes the sample counts of the two delays below.
+    SetPSFeedbackRate(m_channelId, feedbackRateHz);
+    SetPSHWPeak(m_channelId, hwPeak);
+    SetPSMoxDelay(m_channelId, moxDelaySec);
+    SetPSLoopDelay(m_channelId, loopDelaySec);
+    (void)SetPSTXDelay(m_channelId, txDelaySec);
+    return true;
+}
+
+bool WdspChannel::pureSignalInfo(PureSignalInfo* out) const noexcept
+{
+    if (m_config.direction != Direction::Transmit || !out)
+        return false;
+    int info[16] = {};
+    GetPSInfo(m_channelId, info);
+    double maxTx = 0.0;
+    GetPSMaxTX(m_channelId, &maxTx);
+    out->feedbackLevel = info[4];
+    out->feedbackFresh = (info[0] & 1) == 0;
+    out->calibrationCount = info[5];
+    out->attempts = info[7];
+    out->fileError = info[12];
+    out->correcting = info[14] != 0;
+    out->state = info[15];
+    out->maxTx = maxTx;
+    return true;
+}
+
+bool WdspChannel::pureSignalSave(const char* path) noexcept
+{
+    if (m_config.direction != Direction::Transmit || !path)
+        return false;
+    PSSaveCorr(m_channelId, const_cast<char*>(path));
+    return true;
+}
+
+bool WdspChannel::pureSignalRestore(const char* path) noexcept
+{
+    if (m_config.direction != Direction::Transmit || !path)
+        return false;
+    PSRestoreCorr(m_channelId, const_cast<char*>(path));
+    return true;
+}
+
 void WdspChannel::restorePureSignalCorrectionForTest(const char* path) const noexcept
 {
     // PSRestoreCorr only copies the name; WDSP's signature is just not const.
@@ -1459,12 +1642,26 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
             return false;
         }
     }
-    if (config.rxPanelGain && (config.direction != Direction::Receive
-        || !std::isfinite(*config.rxPanelGain) || *config.rxPanelGain < 0.0)) {
-        setError(error, "WDSP RX panel gain must be finite, non-negative and receive-only");
-        return false;
+    const std::pair<const std::optional<double>&, const char*> panelGains[] = {
+        {config.rxPanelGain, "WDSP rxPanelGain must be finite, non-negative and receive-only"},
+        {config.fmRxPanelGain, "WDSP fmRxPanelGain must be finite, non-negative and receive-only"},
+    };
+    for (const auto& [gain, message] : panelGains) {
+        if (gain && (config.direction != Direction::Receive
+            || !std::isfinite(*gain) || *gain < 0.0)) {
+            setError(error, message);
+            return false;
+        }
     }
     return true;
+}
+
+double WdspChannel::rxPanelGainFor(const Config& config, Mode mode) noexcept
+{
+    if (mode == Mode::Fm && config.fmRxPanelGain) {
+        return *config.fmRxPanelGain;
+    }
+    return config.rxPanelGain.value_or(kWdspDefaultRxPanelGain);
 }
 
 int WdspChannel::wdspMode(Mode mode) noexcept
@@ -1610,11 +1807,19 @@ bool WdspChannel::open() noexcept
             // unity monitor gain. Normalize inside the FM chain, including
             // pre-monitor taps. FM bypasses the main RX AGC.
             SetRXAPanelGain1(m_channelId, 1.0);
+        }
+        if (m_config.fmReceive || m_config.fmLimiter) {
+            // close() frees the fmd stage, so the limiter is pushed on every open.
             SetRXAFMLimGain(m_channelId, 0.0);
             SetRXAFMLimRun(m_channelId, 1);
         }
-        if (m_config.rxPanelGain) {  // a set field wins over the FM value above
+        // A set rxPanelGain wins over the FmReceive value above; in FM, a set
+        // fmRxPanelGain wins over both.
+        if (m_config.rxPanelGain) {
             SetRXAPanelGain1(m_channelId, *m_config.rxPanelGain);
+        }
+        if (m_config.fmRxPanelGain) {
+            SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, m_config.mode));
         }
         if (m_config.wbfmReceive) {
             m_wbfm = std::make_unique<WbfmState>(m_config);
@@ -1663,10 +1868,8 @@ bool WdspChannel::open() noexcept
         SetRXASPCWRun(m_channelId, m_config.apfEnabled ? 1 : 0);
         if (m_config.analogReceiveDsp) {
             const auto& receive = *m_config.analogReceiveDsp;
-            // Bounded adaptation strength; the midpoint is RXA.c's default.
-            const auto gain = [](int level) { return 0.00001 * std::pow(100.0, level / 100.0); };
-            SetRXAANRVals(m_channelId, 64, 16, gain(receive.nrLevel), 0.1);
-            SetRXAANFVals(m_channelId, 64, 16, gain(receive.anfLevel), 0.1);
+            SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(receive.nrLevel), 0.1);
+            SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(receive.anfLevel), 0.1);
             SetRXAANRRun(m_channelId, receive.nrEnabled ? 1 : 0);
             SetRXAANFRun(m_channelId, receive.anfEnabled ? 1 : 0);
             RXANBPSetTuneFrequency(m_channelId, 0.0);
@@ -1694,6 +1897,16 @@ bool WdspChannel::open() noexcept
             }
             RXANBPSetNotchesRun(m_channelId,
                 receive.manualNotchEnabled || !receive.trackingNotches.empty() ? 1 : 0);
+        } else {
+            // close() frees the ANR and ANF stages; restore a live caller's requests.
+            if (m_liveNrSet) {
+                SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
+                SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
+            }
+            if (m_liveAnfSet) {
+                SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(m_liveAnfLevel), 0.1);
+                SetRXAANFRun(m_channelId, m_liveAnfEnabled ? 1 : 0);
+            }
         }
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));

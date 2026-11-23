@@ -6,6 +6,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <numbers>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -1764,7 +1766,7 @@ bool runLifecycleTest()
 // The wisdom cache must be on disk when open() RETURNS — not at process exit.
 //
 // What this pins: export used to be a std::atexit handler alone, and the app's
-// own signal path (Hl2EmergencyStop restores SIG_DFL and re-raises) turns every
+// own signal path (FatalSignalRelease restores SIG_DFL and re-raises) turns every
 // SIGTERM, crash and Force Quit into an exit that never runs one. The plans were
 // measured and then thrown away, so the next launch paid full first-run cost
 // again — for anyone who had ever force-quit, on every run.
@@ -3590,6 +3592,10 @@ bool runSquelchRoutingTest()
     expect(Stage::Level, true, -105.0, "USB squelch on did not run amsq alone");
     ok = require(channel->setMode(WdspChannel::Mode::Am), "setMode(AM) refused") && ok;
     expect(Stage::Level, true, -105.0, "AM did not keep the squelch on amsq");
+    // FM at its default width, where the width offset is 0 (see
+    // runFmSquelchWidthTest); amsq's thresholds do not depend on the filter.
+    ok = require(channel->setFilter(-8000.0, 8000.0), "setFilter(+-8000) refused") && ok;
+    expect(Stage::Level, true, -105.0, "a filter change moved amsq's threshold");
     ok = require(channel->setMode(WdspChannel::Mode::Fm), "setMode(FM) refused") && ok;
     expect(Stage::Fm, true, 0.1, "FM did not move the squelch to fmsq");
     ok = require(channel->setMode(WdspChannel::Mode::Cwu), "setMode(CWU) refused") && ok;
@@ -3801,6 +3807,285 @@ bool runSquelchGateTest()
     return ok;
 }
 
+// FM squelch width compensation (#6552), against the offline fit in
+// docs/architecture/fm-squelch-width-compensation.md. The CURVE half pins the
+// numbers: the fit against the medians it was fitted to, the offsets, and that
+// the half-width is held, not extrapolated, outside 1500..6000 Hz. The CHANNEL
+// half pins that setFilter() in FM re-applies it, and that real fmsq then mutes
+// noise at one slider position across widths where the plain map does not.
+bool runFmSquelchWidthCurveTest()
+{
+    bool ok = true;
+    // Noise-alone 50 % duty level of the plain map, median of 8 seeds
+    // (6381-data/filterwidth2/RESULT.md, Q1). The fit claims 1.1 levels.
+    const std::pair<double, double> medians[] = {
+        {1500, 60.2}, {1750, 48.8}, {2000, 41.7}, {2500, 30.5}, {3000, 23.0}, {3500, 16.5},
+        {4000, 11.5}, {4500, 8.2},  {5000, 4.7},  {5500, 1.4},  {6000, -0.7},
+    };
+    double worst = 0.0;
+    for (const auto& [halfWidth, level] : medians) {
+        worst = std::max(worst,
+            std::abs(WdspChannel::fmSquelchNoiseLevelForHalfWidth(halfWidth) - level));
+    }
+    std::cout << "FM squelch fit: max residual " << worst << " levels over 1500..6000 Hz\n";
+    ok = require(worst <= 1.15, "the FM squelch fit is not within 1.1 levels of the "
+                                "measured noise-alone 50 % points over 1500..6000 Hz") && ok;
+
+    using C = WdspChannel;
+    ok = require(nearly(C::fmSquelchWidthOffsetLevels(6000.0), 0.0) &&
+                 nearly(C::fmSquelchWidthOffsetLevels(5000.0), 4.70, 0.01) &&
+                 nearly(C::fmSquelchWidthOffsetLevels(2500.0), 31.18, 0.01) &&
+                 nearly(C::fmSquelchWidthOffsetLevels(1500.0), 59.39, 0.01),
+                 "the FM squelch width offsets are not 0 / 4.7 / 31.2 / 59.4 at "
+                 "+-6000 / 5000 / 2500 / 1500 Hz") && ok;
+    // Held at the ends, never extrapolated: the fit would go negative above
+    // 6000 Hz and keep rising below 1500 Hz.
+    ok = require(C::fmSquelchWidthOffsetLevels(8000.0) == 0.0 &&
+                 C::fmSquelchWidthOffsetLevels(24000.0) == 0.0 &&
+                 C::fmSquelchWidthOffsetLevels(6001.0) == 0.0,
+                 "above +-6000 Hz the FM squelch offset is not held at 0") && ok;
+    ok = require(C::fmSquelchWidthOffsetLevels(1000.0) == C::fmSquelchWidthOffsetLevels(1500.0) &&
+                 C::fmSquelchWidthOffsetLevels(1.0) == C::fmSquelchWidthOffsetLevels(1500.0) &&
+                 C::fmSquelchWidthOffsetLevels(0.0) == C::fmSquelchWidthOffsetLevels(1500.0),
+                 "below +-1500 Hz the FM squelch offset is not held at the +-1500 value") && ok;
+    ok = require(C::fmSquelchWidthOffsetLevels(std::nan("")) == 0.0 &&
+                 C::fmSquelchWidthOffsetLevels(std::numeric_limits<double>::infinity()) == 0.0,
+                 "a non-finite half-width does not fall back to the plain map") && ok;
+    bool monotone = true;
+    for (double w = 500.0; w < 9000.0; w += 25.0) {
+        const double here = C::fmSquelchWidthOffsetLevels(w);
+        monotone = monotone && here >= 0.0 && here >= C::fmSquelchWidthOffsetLevels(w + 25.0);
+    }
+    ok = require(monotone, "the FM squelch offset is negative or rises with width") && ok;
+
+    // The threshold: the plain map at and above the fit's top; level clamped to
+    // 0..100 BEFORE the offset, and the sum not clamped.
+    bool plainAtTop = true;
+    for (int level = 0; level <= 100; ++level) {
+        plainAtTop = plainAtTop
+            && nearly(C::fmSquelchThresholdFor(level, 8000.0), C::fmSquelchThresholdForLevel(level))
+            && nearly(C::fmSquelchThresholdFor(level, 6000.0), C::fmSquelchThresholdForLevel(level));
+    }
+    ok = require(plainAtTop, "the FM threshold at +-6000/+-8000 Hz is not the plain map") && ok;
+    const double off2500 = C::fmSquelchWidthOffsetLevels(2500.0);
+    ok = require(nearly(C::fmSquelchThresholdFor(50, 2500.0), std::pow(10.0, -2.0 * (50 + off2500) / 100.0)) &&
+                 nearly(C::fmSquelchThresholdFor(250, 2500.0), std::pow(10.0, -2.0 * (100 + off2500) / 100.0)) &&
+                 nearly(C::fmSquelchThresholdFor(-7, 2500.0), std::pow(10.0, -2.0 * off2500 / 100.0)),
+                 "the FM threshold is not 10^(-2 * (clamp(level) + offset) / 100)") && ok;
+    return ok;
+}
+
+// splitmix64 + Box-Muller: the same noise on every standard library, which
+// std::normal_distribution does not promise.
+struct PortableNoise {
+    std::uint64_t state;
+    double uniform()
+    {
+        std::uint64_t z = (state += 0x9E3779B97F4A7C15ull);
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        z ^= z >> 31;
+        return (static_cast<double>(z >> 11) + 0.5) / 9007199254740992.0;
+    }
+    std::pair<double, double> complexGauss()
+    {
+        const double r = std::sqrt(-std::log(uniform()));
+        const double a = 2.0 * std::numbers::pi * uniform();
+        return {r * std::cos(a), r * std::sin(a)};
+    }
+};
+
+bool runFmSquelchWidthChannelTest()
+{
+    using Stage = WdspChannel::SquelchStage;
+    bool ok = true;
+    constexpr std::size_t kBlock = 256;
+
+    // Routing: the threshold follows setFilter() in FM, is recorded, and a
+    // filter change outside FM leaves amsq alone.
+    {
+        WdspChannel::Config config;
+        config.inputBlockSize = kBlock;
+        config.dspBlockSize = kBlock;
+        config.mode = WdspChannel::Mode::Fm;
+        config.filterLowHz = -8000.0;
+        config.filterHighHz = 8000.0;
+        config.squelchEnabled = true;
+        config.squelchLevel = 40;
+        std::string error;
+        auto ch = WdspChannel::create(config, &error);
+        if (!require(ch != nullptr, "FM width test failed to open a channel")) {
+            return false;
+        }
+        const auto expectFm = [&](double halfWidth, const char* what) {
+            const auto a = ch->appliedSquelch();
+            const bool shape = a.stage == Stage::Fm && a.fmRun && nearly(a.fmHalfWidthHz, halfWidth) &&
+                nearly(a.fmEffectiveLevel, 40.0 + WdspChannel::fmSquelchWidthOffsetLevels(halfWidth)) &&
+                nearly(a.threshold, WdspChannel::fmSquelchThresholdFor(40, halfWidth));
+            if (!shape) {
+                std::cerr << "  fm applied: half-width " << a.fmHalfWidthHz << " effective "
+                          << a.fmEffectiveLevel << " threshold " << a.threshold << '\n';
+            }
+            ok = require(shape, what) && ok;
+        };
+        expectFm(8000.0, "a fresh FM channel at +-8000 Hz is not on the plain map");
+        ok = require(nearly(ch->appliedSquelch().threshold, std::pow(10.0, -0.8)),
+                     "FM/40 at +-8000 Hz is not 10^-0.8") && ok;
+        ok = require(ch->setFilter(-2500.0, 2500.0), "setFilter(+-2500) refused") && ok;
+        expectFm(2500.0, "setFilter(+-2500) in FM did not compensate the threshold");
+        ok = require(ch->setFilter(-1000.0, 4000.0), "setFilter(-1000..4000) refused") && ok;
+        expectFm(2500.0, "the half-width is not (high - low) / 2");
+        ok = require(ch->setFilter(-5000.0, 5000.0), "setFilter(+-5000) refused") && ok;
+        expectFm(5000.0, "setFilter(+-5000) in FM did not compensate the threshold");
+        ok = require(ch->setMode(WdspChannel::Mode::Usb) && ch->setFilter(100.0, 2900.0),
+                     "USB with a 2.8 kHz filter refused") && ok;
+        ok = require(ch->appliedSquelch().stage == Stage::Level &&
+                     nearly(ch->appliedSquelch().threshold, -140.0 + 0.7 * 40) &&
+                     ch->appliedSquelch().fmHalfWidthHz == 0.0,
+                     "a filter change in USB moved amsq or recorded an FM width") && ok;
+        ok = require(ch->setMode(WdspChannel::Mode::Fm), "back to FM refused") && ok;
+        expectFm(1400.0, "a mode change into FM did not compensate for the filter in force");
+        ok = require(ch->setFilter(-2500.0, 2500.0), "setFilter(+-2500) refused") && ok;
+        WdspChannel::Config rebuilt = ch->config();
+        rebuilt.inputBlockSize = 512;
+        rebuilt.dspBlockSize = 512;
+        ok = require(ch->reconfigure(rebuilt, &error), "FM width channel failed to reconfigure") && ok;
+        expectFm(2500.0, "reconfigure() lost the width compensation");
+    }
+
+    // Behaviour, real fmsq, noise alone: at slider 40 the gate stays muted at
+    // every width from +-1500 to +-8000 Hz. The plain map opens at +-1500 Hz
+    // (its open edge is level 44..48) and chatters at +-2500 (37..46). A
+    // squelch-off channel at the same width is the control that noise is there.
+    struct Run { double energy = -1.0; std::optional<bool> gate; };
+    const auto run = [&](double halfWidth, bool squelchOn, int level, double carrier,
+                         std::uint64_t seed) -> Run {
+        WdspChannel::Config config;
+        config.inputBlockSize = kBlock;
+        config.dspBlockSize = kBlock;
+        config.mode = WdspChannel::Mode::Fm;
+        config.filterLowHz = -halfWidth;
+        config.filterHighHz = halfWidth;
+        config.agcMode = 3;
+        config.maximumAgcGainDb = 39.0;
+        config.blockForOutput = true;
+        config.squelchEnabled = squelchOn;
+        config.squelchLevel = level;
+        std::string error;
+        auto ch = WdspChannel::create(config, &error);
+        Run r;
+        if (!ch) {
+            return r;
+        }
+        PortableNoise noise{seed};
+        std::vector<float> i(kBlock), q(kBlock), left(ch->outputBlockSize()),
+            right(ch->outputBlockSize());
+        constexpr std::size_t kBlocks = 3 * 48000 / kBlock;   // 3 s
+        constexpr std::size_t kFrom = 48000 / 2 / kBlock;     // after 0.5 s
+        double energy = 0.0;
+        for (std::size_t block = 0; block < kBlocks; ++block) {
+            for (std::size_t n = 0; n < kBlock; ++n) {
+                const auto [gi, gq] = noise.complexGauss();
+                i[n] = static_cast<float>(carrier + 0.01 * gi);
+                q[n] = static_cast<float>(0.01 * gq);
+            }
+            if (ch->processIq(i, q, left, right) != WdspChannel::ProcessResult::Ok) {
+                return r;
+            }
+            if (block >= kFrom) {
+                energy += rms(left);
+            }
+        }
+        r.energy = energy;
+        r.gate = ch->fmSquelchGateOpen();
+        return r;
+    };
+    for (const double halfWidth : {1500.0, 2500.0, 4000.0, 6000.0, 8000.0}) {
+        const std::uint64_t seed = 0x6552u + static_cast<std::uint64_t>(halfWidth);
+        const Run off = run(halfWidth, false, 40, 0.0, seed);
+        const Run on = run(halfWidth, true, 40, 0.0, seed);
+        std::cout << "FM squelch 40 at +-" << halfWidth << " Hz, noise alone: off " << off.energy
+                  << ", on " << on.energy << ", gate "
+                  << (on.gate ? (*on.gate ? "open" : "closed") : "none") << '\n';
+        ok = require(off.energy > 1.0e-4, "noise with FM squelch off was not audible -- "
+                                          "the muted reading proves nothing") && ok;
+        ok = require(on.energy == 0.0, "noise alone was not muted at FM squelch 40 at one "
+                                       "of +-1500..8000 Hz") && ok;
+        ok = require(on.gate == std::optional<bool>(false),
+                     "the FM squelch gate did not read closed on muted noise") && ok;
+        ok = require(!off.gate.has_value(), "a gate was read with FM squelch off") && ok;
+    }
+    // Low in the travel, where the docs' "same slider position" is tested:
+    // noise alone, the gate open at most half the blocks at level 15 at every
+    // width from +-1500 to +-6000 Hz, so each width's 50 % point is at or below
+    // 15 (+-6000 Hz: below 1). On the plain map +-1500 Hz opens up to ~60.
+    // Fraction of 256-sample blocks whose gate reads open, from 0.5 s to 4 s.
+    const auto openFraction = [&](double halfWidth, int level, std::uint64_t seed) {
+        WdspChannel::Config config;
+        config.inputBlockSize = kBlock;
+        config.dspBlockSize = kBlock;
+        config.mode = WdspChannel::Mode::Fm;
+        config.filterLowHz = -halfWidth;
+        config.filterHighHz = halfWidth;
+        config.agcMode = 3;
+        config.maximumAgcGainDb = 39.0;
+        config.blockForOutput = true;
+        config.squelchEnabled = true;
+        config.squelchLevel = level;
+        std::string error;
+        auto ch = WdspChannel::create(config, &error);
+        if (!ch) {
+            return -1.0;
+        }
+        PortableNoise noise{seed};
+        std::vector<float> i(kBlock), q(kBlock), left(ch->outputBlockSize()),
+            right(ch->outputBlockSize());
+        constexpr std::size_t kBlocks = 4 * 48000 / kBlock;
+        constexpr std::size_t kFrom = 48000 / 2 / kBlock;
+        std::size_t open = 0;
+        for (std::size_t block = 0; block < kBlocks; ++block) {
+            for (std::size_t n = 0; n < kBlock; ++n) {
+                const auto [gi, gq] = noise.complexGauss();
+                i[n] = static_cast<float>(0.01 * gi);
+                q[n] = static_cast<float>(0.01 * gq);
+            }
+            if (ch->processIq(i, q, left, right) != WdspChannel::ProcessResult::Ok) {
+                return -1.0;
+            }
+            if (block >= kFrom && ch->fmSquelchGateOpen().value_or(false)) {
+                ++open;
+            }
+        }
+        return static_cast<double>(open) / static_cast<double>(kBlocks - kFrom);
+    };
+    constexpr int kLowLevel = 15;
+    constexpr double kMaxOpen = 0.5;
+    for (const double halfWidth : {1500.0, 2000.0, 2500.0, 3000.0, 4000.0, 5000.0, 6000.0}) {
+        double worst = 0.0;
+        for (const std::uint64_t seed : {0x6552u, 0x6553u}) {
+            const double f = openFraction(halfWidth, kLowLevel, seed + static_cast<std::uint64_t>(halfWidth));
+            worst = f < 0.0 ? 1.0 : std::max(worst, f);
+        }
+        std::cout << "FM squelch " << kLowLevel << " at +-" << halfWidth
+                  << " Hz, noise alone: gate open in " << 100.0 * worst << " % of blocks\n";
+        ok = require(worst <= kMaxOpen, "noise alone opened the FM gate in more than half the "
+                                        "blocks at level 15 at one of +-1500..6000 Hz") && ok;
+    }
+
+    // A quieting carrier opens it at the same slider position, narrow filter.
+    const Run carrier = run(2500.0, true, 40, 0.5, 0x6552u);
+    const Run carrierOff = run(2500.0, false, 40, 0.5, 0x6552u);
+    std::cout << "FM squelch 40 at +-2500 Hz, carrier: off " << carrierOff.energy << ", on "
+              << carrier.energy << '\n';
+    ok = require(carrier.gate == std::optional<bool>(true),
+                 "the FM squelch gate did not read open on a quieting carrier") && ok;
+    ok = require(carrier.energy > 0.9 * carrierOff.energy,
+                 "a quieting carrier did not open the compensated FM squelch") && ok;
+    const Run levelZero = run(2500.0, true, 0, 0.0, 0x6552u);
+    ok = require(!levelZero.gate.has_value(), "a gate was read at FM squelch level 0") && ok;
+    return ok;
+}
+
 // amsq opens on a carrier's MAGNITUDE: an AM carrier whose mean magnitude
 // sits 2 dB above the level map's threshold opens it, 2 dB below does not, at
 // two offsets. This is the amsq side of the pan line's +6.02 dB carrier term
@@ -3961,6 +4246,8 @@ int main()
     check(runLeakChecked("squelch routing test", runSquelchRoutingTest));
     check(runLeakChecked("squelch gate test", runSquelchGateTest));
     check(runLeakChecked("squelch carrier threshold test", runSquelchCarrierThresholdTest));
+    check(runLeakChecked("FM squelch width curve test", runFmSquelchWidthCurveTest));
+    check(runLeakChecked("FM squelch width channel test", runFmSquelchWidthChannelTest));
     // LAST, and deliberately so: see the ordering note above. Anything added
     // later belongs ABOVE this line, not below it.
     check(runLeakChecked("close-after-stopped-clocking test",

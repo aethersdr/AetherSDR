@@ -450,6 +450,15 @@ void PollGate::reset()
     m_ridingAlong = false;
 }
 
+void PollGate::setSoloIntervalMs(qint64 ms)
+{
+    m_soloIntervalMs = clampSoloIntervalMs(ms);
+    // A slower interval holds fewer slots; drop the oldest beyond the new cap.
+    while (static_cast<int>(m_outstandingPolls.size()) > maxOutstandingPolls()) {
+        m_outstandingPolls.pop_front();
+    }
+}
+
 void PollGate::forgetForeign()
 {
     m_lastForeignMs = -1;
@@ -522,7 +531,7 @@ bool PollGate::shouldPoll(qint64 nowMs)
     }
     m_ridingAlong = false;
     expireOutstanding(nowMs);
-    if (static_cast<int>(m_outstandingPolls.size()) >= kMaxOutstandingPolls) {
+    if (static_cast<int>(m_outstandingPolls.size()) >= maxOutstandingPolls()) {
         m_outstandingPolls.pop_front();
     }
     m_outstandingPolls.push_back(nowMs);
@@ -630,6 +639,47 @@ void RangeTracker::onReading(int reportedRange, double watts, qint64 nowMs)
     } else {
         m_overCeilingRun = 0;
     }
+}
+
+// ---- Radio USB passthrough cable -----------------------------------------
+
+namespace {
+constexpr int kCableSpeed = 115200;
+constexpr int kCableDataBits = 8;
+constexpr int kCableStopBits = 1;
+}  // namespace
+
+bool cableReady(const CableSnapshot& cable)
+{
+    return cable.known && cable.pluggedIn && !nextCableChange(cable).has_value();
+}
+
+std::optional<CableChange> nextCableChange(const CableSnapshot& cable)
+{
+    using Setting = CableChange::Setting;
+    if (!cable.known || !cable.pluggedIn) {
+        return std::nullopt;
+    }
+    // Type first: changing it resets the speed, so anything set before it is lost.
+    if (cable.type != QLatin1String("passthrough")) {
+        return CableChange{Setting::Type, QStringLiteral("passthrough"), 0};
+    }
+    if (cable.speed != kCableSpeed) {
+        return CableChange{Setting::Speed, {}, kCableSpeed};
+    }
+    if (cable.dataBits != kCableDataBits) {
+        return CableChange{Setting::DataBits, {}, kCableDataBits};
+    }
+    if (cable.parity != QLatin1String("none")) {
+        return CableChange{Setting::Parity, QStringLiteral("none"), 0};
+    }
+    if (cable.stopBits != kCableStopBits) {
+        return CableChange{Setting::StopBits, {}, kCableStopBits};
+    }
+    if (cable.flowControl != QLatin1String("none")) {
+        return CableChange{Setting::FlowControl, QStringLiteral("none"), 0};
+    }
+    return std::nullopt;
 }
 
 }  // namespace LpMeter

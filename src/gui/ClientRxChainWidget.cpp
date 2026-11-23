@@ -3,7 +3,6 @@
 #include "InteractionSettings.h"
 #include "core/AppSettings.h"
 #include "core/ClientComp.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
 #include "core/ClientPudu.h"
@@ -247,6 +246,7 @@ void ClientRxChainWidget::toggleStageBypass(int boxIdx)
                         || m_audio->rn2Enabled()  || m_audio->nvAfxEnabled()
                         || m_audio->nnrEnabled();
         if (anyOn) {
+            emit dspMethodUserToggled();
             QMetaObject::invokeMethod(m_audio, [audio = m_audio]() {
                 if (audio->nr2Enabled())  audio->setNr2Enabled(false);
                 if (audio->nr4Enabled())  audio->setNr4Enabled(false);
@@ -260,6 +260,8 @@ void ClientRxChainWidget::toggleStageBypass(int boxIdx)
             const QString name = AppSettings::instance()
                 .value("LastClientNr", "").toString();
             if (name.isEmpty()) return;
+            // Only a click that restores a method is a manual selection.
+            emit dspMethodUserToggled();
             // NR2 enable goes through MainWindow's wisdom prep path —
             // plain audio-thread setter can crash on bad FFTW plans.
             if (name == "NR2") {

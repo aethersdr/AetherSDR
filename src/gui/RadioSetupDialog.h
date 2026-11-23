@@ -91,6 +91,8 @@ public:
 signals:
     void txBandSettingsRequested();
     void serialSettingsChanged();
+    // The LP-100A poll interval the connection now uses, for the applet tooltip.
+    void lpMeterPollIntervalChanged(int ms);
     // Fired when the user toggles SliceLetterDisplay mode in the Themes
     // tab so MainWindow can push a refresh through all slice-letter
     // widgets (the AppSettings value is what's actually consulted at
@@ -388,6 +390,9 @@ private:
     // drives the same lambda so the pane also updates while it is open.
     std::function<void()>     m_audioDeviceReseed;
     QMetaObject::Connection   m_droopStatusConnection;
+    // The HL2 Hardware page's reseed on extensionStatus("hl2", "hw").
+    QMetaObject::Connection   m_hl2HwStatusConnection;
+    QPointer<QObject>         m_hl2HwStatusBackend;   // the backend it is bound to
     QHash<QString, QComboBox*> m_apdSamplerCombos;
 
     // Peripherals tab — savers run on dialog close to persist field edits
