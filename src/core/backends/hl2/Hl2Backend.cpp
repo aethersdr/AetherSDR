@@ -531,6 +531,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_metis, &MetisClient::radioPttChanged, this, &Hl2Backend::onRadioPttChanged);
     connect(m_metis, &MetisClient::txRouteRefused, this, &Hl2Backend::onMetisTxRouteRefused);
     connect(m_metis, &MetisClient::linkDown, this, [this] {
+        ++m_swrPublicationEpoch;
         // No link, no observation: a PTT the radio last reported ends here, so the
         // model never stays in transmit on a radio it can no longer hear.
         onRadioPttChanged(false);
@@ -7289,6 +7290,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) const
 {
     HealthSnapshot h;
+    h.swrPublication = HealthSnapshot::SwrPublication{
+        m_connectGeneration, m_swrPublicationEpoch, m_sessionSwrForwardWindows,
+        m_sessionSwrGateClears, m_keyed};
     auto put = [&h](const char* key, const QString& label, const QVariant& v) {
         const QString k = QString::fromLatin1(key);
         h.order.append(k);
@@ -9415,6 +9419,9 @@ void Hl2Backend::pushInitialState()
     }
     m_radioPtt = false;
     m_swrGate.reset();
+    ++m_swrPublicationEpoch;
+    m_sessionSwrForwardWindows = 0;
+    m_sessionSwrGateClears = 0;
     m_psAdcOverload = false;
     publishTransmitState();
     m_tuning = false;
@@ -9537,8 +9544,13 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // so the reverse conditions stay out of the count.
     const bool swrGatesPassed =
         swrFwd && *swrFwd >= kMinForwardCountsForSwr && swrModulated;
-    if (m_keyed && swrGatesPassed)
+    if (m_keyed && swrFwd) {
+        ++m_sessionSwrForwardWindows;
+    }
+    if (m_keyed && swrGatesPassed) {
         ++m_keyedSwrGateClears;
+        ++m_sessionSwrGateClears;
+    }
     if (swrGatesPassed && swrRev) {
         if (const auto swr = swrFromRaw(*swrFwd, *swrRev))
             emit meterUpdate(QStringLiteral("TX:SWR"), *swr);

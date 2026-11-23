@@ -1363,6 +1363,9 @@ private:
     // a real defect (#7063). Per-over: reset on key-down by setKeying(), not on
     // key-up, since a diagnostic samples the snapshot after unkeying as well.
     int m_keyedSwrGateClears = 0;
+    quint64 m_swrPublicationEpoch = 0;
+    quint64 m_sessionSwrForwardWindows = 0;
+    quint64 m_sessionSwrGateClears = 0;
 
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.
