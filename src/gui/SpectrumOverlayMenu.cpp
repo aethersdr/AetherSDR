@@ -39,6 +39,7 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <QEvent>
+#include <QScopedValueRollback>
 #include <QFrame>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -602,7 +603,10 @@ void SpectrumOverlayMenu::buildAntPanel()
     antLabel->setFixedWidth(kLabelW);
     antRow->addWidget(antLabel);
     m_rxAntCmb = new GuardedComboBox;
+    m_rxAntCmb->setObjectName(QStringLiteral("panRxAntennaCombo"));
     AetherSDR::applyComboStyle(m_rxAntCmb);
+    // A refresh skipped while the list is open is replayed when it closes.
+    m_rxAntCmb->view()->installEventFilter(this);
     antRow->addWidget(m_rxAntCmb, 1);
     vbox->addLayout(antRow);
 
@@ -613,8 +617,13 @@ void SpectrumOverlayMenu::buildAntPanel()
         if (const auto pick = stationAntennaPickFrom(
                 m_rxAntCmb->itemData(index, kStationAntennaRole))) {
             if (m_radioModel) {
-                const QString refusal =
-                    m_radioModel->selectStationAntenna(pick->id, pick->token, false);
+                // The pick re-enters refreshAntennaCombo() through
+                // stationAntennasChanged, inside this combo's own index
+                // signal: held off here, it runs queued below.
+                const QString refusal = [this, &pick] {
+                    const QScopedValueRollback<bool> inPick(m_rxAntennaPickInProgress, true);
+                    return m_radioModel->selectStationAntenna(pick->id, pick->token, false);
+                }();
                 // Only a pick that was taken ends the slice's Kiwi receiver.
                 if (refusal.isEmpty()) {
                     if (SliceModel* target =
@@ -1279,9 +1288,16 @@ QString SpectrumOverlayMenu::currentRxAntennaToken() const
 
 void SpectrumOverlayMenu::refreshAntennaCombo()
 {
-    // Not under an open list: the switch's state changes often.
-    if (!m_rxAntCmb || (m_rxAntCmb->view() && m_rxAntCmb->view()->isVisible()))
+    if (!m_rxAntCmb)
         return;
+    // Not under an open list (the switch's state changes often), nor inside
+    // the combo's own index signal: remembered, and replayed when the list
+    // closes (eventFilter) or by the pick's queued refresh.
+    if (m_rxAntennaPickInProgress || (m_rxAntCmb->view() && m_rxAntCmb->view()->isVisible())) {
+        m_antennaComboRefreshPending = true;
+        return;
+    }
+    m_antennaComboRefreshPending = false;
     QString cur = currentRxAntennaToken();
     QStringList options;
     auto append = [&options](const QString& token) {
@@ -3982,6 +3998,15 @@ void SpectrumOverlayMenu::updateActiveBandHighlight()
 
 bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
 {
+    if (m_rxAntCmb && obj == m_rxAntCmb->view() && event->type() == QEvent::Hide
+        && m_antennaComboRefreshPending) {
+        // Queued: the list may close inside the combo's own index signal.
+        QMetaObject::invokeMethod(this, [this] {
+            if (m_antennaComboRefreshPending) {
+                refreshAntennaCombo();
+            }
+        }, Qt::QueuedConnection);
+    }
     if (obj == parentWidget() && event->type() == QEvent::Resize) {
         if (m_displayPanelVisible) {
             layoutDisplayPanel();

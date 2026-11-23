@@ -569,6 +569,8 @@ private:
     QPointer<KiwiSdrManager> m_kiwiSdrManager;
     QPointer<SliceModel> m_slice;
     bool         m_updatingFromModel{false};
+    bool         m_antennaComboRefreshPending{false};  // skipped under an open list or a pick
+    bool         m_rxAntennaPickInProgress{false};     // inside the RX ANT combo's station pick
     int          m_lastEmittedRfGain{INT_MIN};  // dedupe rfgain emits across drag snap ticks (#1498)
 };
 

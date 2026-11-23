@@ -7518,6 +7518,43 @@ add_test(NAME station_antenna_menu_test COMMAND station_antenna_menu_test)
 set_tests_properties(station_antenna_menu_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The panadapter's RX ANT combo with a station switch: a refresh skipped under
+# the open list is replayed when it closes, and a station pick does not rebuild
+# the combo inside its own index signal. Widget only, offscreen, no socket.
+add_executable(spectrum_overlay_station_antenna_test
+    tests/spectrum_overlay_station_antenna_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_station_antenna_test PRIVATE src)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_station_antenna_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_station_antenna_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_station_antenna_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_station_antenna_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_station_antenna_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_station_antenna_test
+         COMMAND spectrum_overlay_station_antenna_test)
+set_tests_properties(spectrum_overlay_station_antenna_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # aethersdr/radio/state payload shape + the drive-publish timing contract
 # (#5518). Links the real TransmitModel because the have-status latch and the
 # coalesce debounce are half the contract; MqttRadioState.cpp itself is pure.
