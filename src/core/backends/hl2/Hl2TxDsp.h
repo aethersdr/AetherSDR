@@ -83,6 +83,8 @@ public:
     };
 
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
+    // TXA build: during an over both are recorded in config() and reach the
+    // channel when the over ends (a mid-over bandpass swap splatters).
     Q_INVOKABLE void setMode(WdspChannel::Mode mode);
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     // Linear gain applied to the audio before modulation. 1.0 = unity.
@@ -261,6 +263,9 @@ private:
     // Whether the TXA channel is started; reset() stops it and the next block
     // restarts it. Tracked because setRunning() is a control call.
     bool m_modulatorRunning = false;
+    // A mode or passband change arrived during an over; m_config holds it and
+    // modulate() applies it before the next over (applyModeAndFilter()).
+    bool m_modeFilterHeld = false;
     // Permanent zero Q plane: audio is mono, and xpanel's inselect = 2
     // (create_txa) zeroes Q anyway (measured).
     std::vector<float> m_zeroQ;
