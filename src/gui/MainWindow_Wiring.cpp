@@ -5887,8 +5887,11 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
 
     // Prefer the visible spectrum state when available so reveal/follow stays
     // aligned with recent manual pan/zoom gestures even if the model echo lags.
+    // Its target, not the mid-glide center: fast wheel steps land inside the
+    // follow animation, and each must move the pan by whole steps from where
+    // the last one was headed (#7529).
     auto* sw = spectrumForSlice(slice);
-    result.oldCenterMhz = sw ? sw->centerMhz() : pan->centerMhz();
+    result.oldCenterMhz = sw ? sw->panCenterTargetMhz() : pan->centerMhz();
     result.newCenterMhz = result.oldCenterMhz;
     result.bandwidthMhz = sw ? sw->bandwidthMhz() : pan->bandwidthMhz();
 
@@ -6712,6 +6715,7 @@ void MainWindow::wireMeters()
         m_vkampConn.setAutoReconnect(ar);
         m_kpa1500Conn.setAutoReconnect(ar);
         m_rfkitConn.setAutoReconnect(ar);
+        m_trioModel.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
         m_kpa500Conn.setAutoReconnect(
             ar && PeripheralSettings::autoConnect(QStringLiteral("kpa500")));
@@ -7524,6 +7528,13 @@ void MainWindow::wireMeters()
         if (!ip.isEmpty())
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
+
+    // ── microHAM Trio antenna switch — read-only, switches nothing ────────
+    // The Peripherals page shows its state and labels; nothing here changes
+    // anything on it. Its session is taken at startup only with "Connect
+    // automatically" on, like the KPA500/KAT500 rows.
+    m_trioModel.loadSettings(PeripheralSettings::autoConnect(
+        QLatin1String(MicrohamTrioSettings::kPeripheralId)));
 
     // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
