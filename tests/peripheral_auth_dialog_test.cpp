@@ -30,6 +30,7 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QLabel>
+#include <QGridLayout>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QLineEdit>
@@ -95,6 +96,10 @@ struct AntennaGeniusModelTestAccess {
         model.m_bands = {{5, QStringLiteral("40m"), 7.0, 7.3}};
         model.m_portA = {1, true, QStringLiteral("MANUAL"), 5, 1, 1, false, false};
         model.m_portB = {2, true, QStringLiteral("MANUAL"), 5, 0, 0, false, false};
+    }
+    static void processStatus(AntennaGeniusModel& model, const QString& status)
+    {
+        model.processStatus(status);
     }
 };
 }
@@ -2172,36 +2177,102 @@ bool checkAgAntennaStatusLabel()
 
 bool checkAgAntennaSelectionMode()
 {
+    AppSettings::instance().remove(QStringLiteral("AntennaGenius"));
     AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
+    const auto cleanup = qScopeGuard([] {
+        AppSettings::instance().remove(QStringLiteral("AntennaGenius"));
+        AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
+    });
     AntennaGeniusModel model;
     QStringList commands;
     AntennaGeniusModelTestAccess::prepareSelectionMode(model, commands);
+    model.setSplitRxTxMode(true);
     AntennaGeniusApplet applet;
     applet.setModel(&model);
     emit model.antennasChanged();
 
     QCheckBox* split = applet.findChild<QCheckBox*>(QStringLiteral("agSplitRxTxMode"));
+    const bool initializedFromModel = split && split->isChecked();
+    if (split)
+        split->setChecked(false);
     QPushButton* bothButton = applet.findChild<QPushButton*>(QStringLiteral("agPort1RxAntenna2"));
     QPushButton* rxOnlyButton = applet.findChild<QPushButton*>(QStringLiteral("agPort1RxAntenna3"));
-    if (!split || split->isChecked() || !bothButton || !rxOnlyButton
-        || rxOnlyButton->isEnabled()) {
-        AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
+    QPushButton* txBothButton = applet.findChild<QPushButton*>(QStringLiteral("agPort1TxAntenna2"));
+    QPushButton* port2Button = applet.findChild<QPushButton*>(QStringLiteral("agPort2RxAntenna2"));
+    QPushButton* port2TxButton = applet.findChild<QPushButton*>(QStringLiteral("agPort2TxAntenna1"));
+    auto* rxGrid = rxOnlyButton
+        ? qobject_cast<QGridLayout*>(rxOnlyButton->parentWidget()->layout()) : nullptr;
+    if (!split || split->isChecked() || !bothButton || !rxOnlyButton || !txBothButton
+        || !port2Button || !port2TxButton
+        || !rxOnlyButton->isEnabled() || !rxGrid
+        || rxOnlyButton->accessibleName() != QStringLiteral("Port 1 receive antenna Receive-only")
+        || txBothButton->accessibleName() != QStringLiteral("Port 1 transmit antenna Both")
+        || port2Button->accessibleName() != QStringLiteral("Port 2 receive antenna Both")
+        || !txBothButton->parentWidget()->parentWidget()->isHidden()) {
         return false;
     }
 
-    bothButton->click();
-    const bool coupled = commands.size() == 1
-        && commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=2"))
-        && model.portA().rxAntenna == 2 && model.portA().txAntenna == 2;
-    split->setChecked(true);
-    const bool splitEnabled = rxOnlyButton->isEnabled();
-    rxOnlyButton->click();
-    const bool splitSelection = commands.size() == 2
-        && commands.constLast().contains(QStringLiteral("port set 1 rxant=3 txant=2"))
-        && model.portA().rxAntenna == 3 && model.portA().txAntenna == 2;
+    int row = -1;
+    int column = -1;
+    int rowSpan = 0;
+    int columnSpan = 0;
+    rxGrid->getItemPosition(rxGrid->indexOf(rxOnlyButton), &row, &column, &rowSpan, &columnSpan);
+    if (column != 2 || !bothButton->isEnabled()) {
+        return false;
+    }
 
-    AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
-    return coupled && splitEnabled && splitSelection;
+    rxOnlyButton->click();
+    const bool pendingSelectionNotShown = !rxOnlyButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=3 txant=1 tx=0 inhibit=0"));
+    const bool rxOnlyDefaultSelection = commands.size() == 1
+        && commands.constLast().contains(QStringLiteral("port set 1 rxant=3 txant=1"))
+        && model.portA().rxAntenna == 3 && model.portA().txAntenna == 1
+        && rxOnlyButton->isChecked();
+    rxOnlyButton->click();
+    const bool pendingClearNotShown = rxOnlyButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=0 txant=0 tx=0 inhibit=0"));
+    const bool clearsByRx = commands.size() == 2
+        && model.portA().rxAntenna == 0 && !rxOnlyButton->isChecked();
+
+    bothButton->click();
+    const bool pendingCoupledSelectionNotShown = !bothButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=2 txant=2 tx=0 inhibit=0"));
+    const bool coupled = commands.size() == 3
+        && commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=2"))
+        && model.portA().rxAntenna == 2 && model.portA().txAntenna == 2
+        && bothButton->isChecked();
+    split->setChecked(true);
+    const bool splitEnabled = model.splitRxTxMode() && rxOnlyButton->isEnabled()
+        && !txBothButton->parentWidget()->parentWidget()->isHidden();
+    rxGrid->getItemPosition(rxGrid->indexOf(rxOnlyButton), &row, &column, &rowSpan, &columnSpan);
+    auto* txGrid = qobject_cast<QGridLayout*>(txBothButton->parentWidget()->layout());
+    int txRow = -1;
+    int txColumn = -1;
+    if (txGrid)
+        txGrid->getItemPosition(txGrid->indexOf(txBothButton), &txRow, &txColumn,
+                                &rowSpan, &columnSpan);
+    const bool splitGridLayout = column == 0 && row == 1 && txGrid
+        && txRow == 0 && txColumn == 1;
+    rxOnlyButton->click();
+    const bool pendingSplitSelectionNotShown = !rxOnlyButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=3 txant=2 tx=0 inhibit=0"));
+    const bool splitSelection = commands.size() == 4
+        && commands.constLast().contains(QStringLiteral("port set 1 rxant=3 txant=2"))
+        && model.portA().rxAntenna == 3 && model.portA().txAntenna == 2
+        && rxOnlyButton->isChecked() && txBothButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 2 auto=1 source=MANUAL band=0 rxant=0 txant=0 tx=0 inhibit=0"));
+    const bool unknownBandTxBlocked = !port2TxButton->isEnabled()
+        && port2TxButton->accessibleDescription().contains(QStringLiteral("known band"));
+
+    return initializedFromModel && pendingSelectionNotShown && rxOnlyDefaultSelection
+        && pendingClearNotShown && clearsByRx
+        && pendingCoupledSelectionNotShown && coupled && splitEnabled
+        && splitGridLayout && pendingSplitSelectionNotShown && splitSelection && unknownBandTxBlocked;
 }
 
 bool checkKpa500NetworkSetup()

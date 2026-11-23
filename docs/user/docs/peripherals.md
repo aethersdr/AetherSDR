@@ -190,13 +190,16 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 - An **IP address** field and **Connect** reach a device that discovery cannot
   see (remote, VPN). Remote devices usually need an access code; see
   [Access codes](#access-codes-auth).
-- By default, one antenna grid is shown per port; clicking an antenna selects
-  it for both RX and TX. Antennas must have permission for both directions on
-  the current band.
-- Turn on **Split RX/TX** to show separate antenna grids. This lets a
-  receive-only antenna stay selected while transmission uses a different,
+- By default, one four-column antenna grid is shown per port. It tracks the
+  RX selection and permits receive-only antennas; selecting an antenna also
+  updates TX when it has TX permission on the current band.
+- Turn on **Split RX/TX** to add separate two-column RX and TX grids. This lets
+  a receive-only antenna stay selected while transmission uses a different,
   transmit-permitted antenna. Click a selected antenna again to deselect only
   that direction. Port B is hidden on a single-port device.
+- A new TX antenna can be selected only when the port's band is known and the
+  antenna is permitted for TX on that band. If the band is unknown, the
+  default grid changes RX without changing the current TX antenna.
 - An antenna held by the other radio port is dimmed and cannot be selected.
   Antennas that are not permitted for the relevant direction on the current
   band are disabled. RX and TX choices are recalled independently per band.

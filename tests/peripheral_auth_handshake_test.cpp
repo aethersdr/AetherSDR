@@ -59,6 +59,25 @@ struct AntennaGeniusModelTestAccess {
     {
         model.recallBandAntennas(portId, bandId);
     }
+    static void status(AntennaGeniusModel& model, int portId, int band, int rx, int tx)
+    {
+        model.processStatus(QStringLiteral("port %1 band=%2 rxant=%3 txant=%4")
+                                .arg(portId).arg(band).arg(rx).arg(tx));
+    }
+    static void response(AntennaGeniusModel& model, int seq, int code, const QString& body)
+    {
+        model.processResponse(seq, code, body);
+    }
+    static void beginInit(AntennaGeniusModel& model) { model.runInitSequence(); }
+    static void setBand(AntennaGeniusModel& model, int portId, int band)
+    {
+        (portId == 1 ? model.m_portA : model.m_portB).band = band;
+    }
+    static void setOtherPort(AntennaGeniusModel& model, int rx, int tx)
+    {
+        model.m_portB.rxAntenna = rx;
+        model.m_portB.txAntenna = tx;
+    }
 };
 
 // Inject only the command writer and the connected flag, never a live peer.
@@ -329,6 +348,7 @@ int main(int argc, char** argv)
         return 1;
     }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     CHECK(peripheralAuthCommand(PeripheralAuthProtocol::Tgxl, QStringLiteral("sample"))
           == QByteArray("C1|auth sample\n")); // captured TGXL form
     CHECK(peripheralAuthCommand(PeripheralAuthProtocol::Pgxl, QStringLiteral("sample"))
@@ -338,15 +358,18 @@ int main(int argc, char** argv)
     {
         auto& settings = AppSettings::instance();
         const QString legacyKey = QStringLiteral("AG_Port1_Band5");
-        const QString rxKey = QStringLiteral("AG_Port1_Band5_RX");
-        const QString txKey = QStringLiteral("AG_Port1_Band5_TX");
-        settings.remove(legacyKey);
-        settings.remove(rxKey);
-        settings.remove(txKey);
+        const QString rootKey = QStringLiteral("AntennaGenius");
+        settings.remove(rootKey);
+        settings.setValue(legacyKey, QStringLiteral("1"));
 
         AntennaGeniusModel connection;
         QStringList commands;
         AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        CHECK(!settings.contains(legacyKey));
+        AntennaGeniusModelTestAccess::recallBand(connection, 1, 5);
+        CHECK(commands.size() == 1);
+        CHECK(commands.constLast().contains(QStringLiteral("port set 1 rxant=1 txant=2")));
+        commands.clear();
 
         connection.selectRxAntenna(1, 3);
         CHECK(commands.isEmpty()); // TX-only antennas cannot be selected for RX.
@@ -357,36 +380,106 @@ int main(int argc, char** argv)
         connection.selectTxAntenna(1, 3);
         CHECK(commands.size() == 2);
         CHECK(commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=3")));
+        CHECK(connection.portA().rxAntenna == 1); // Wait for device status.
+        CHECK(connection.portA().txAntenna == 2);
+        AntennaGeniusModelTestAccess::status(connection, 1, 5, 2, 3);
         CHECK(connection.portA().rxAntenna == 2);
         CHECK(connection.portA().txAntenna == 3);
-        CHECK(settings.value(rxKey).toInt() == 2);
-        CHECK(settings.value(txKey).toInt() == 3);
-        CHECK(settings.value(legacyKey).toInt() == 2);
+        QString stored;
+        CHECK(settings.readAppRowFromDisk(rootKey, stored));
+        CHECK(stored.contains(QStringLiteral("\"tx\":3")));
 
-        // A split pair is restored in one command and explicit zero selections
-        // are distinguished from missing settings.
-        settings.setValue(rxKey, QStringLiteral("0"));
-        settings.setValue(txKey, QStringLiteral("3"));
+        // A confirmed split pair is restored in one command.
+        AntennaGeniusModel reloaded;
+        QStringList reloadCommands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(reloaded, reloadCommands);
+        AntennaGeniusModelTestAccess::recallBand(reloaded, 1, 5);
+        CHECK(reloadCommands.size() == 1);
+        CHECK(reloadCommands.constLast().contains(QStringLiteral("rxant=2 txant=3")));
+        reloaded.selectRxAntenna(1, 0);
+        AntennaGeniusModelTestAccess::status(reloaded, 1, 5, 0, 3);
+        AntennaGeniusModel zeroReloaded;
+        reloadCommands.clear();
+        AntennaGeniusModelTestAccess::captureAntennaCommands(zeroReloaded, reloadCommands);
+        AntennaGeniusModelTestAccess::recallBand(zeroReloaded, 1, 5);
+        CHECK(reloadCommands.constLast().contains(QStringLiteral("rxant=0 txant=3")));
         commands.clear();
         AntennaGeniusModelTestAccess::recallBand(connection, 1, 5);
         CHECK(commands.size() == 1);
         CHECK(commands.constFirst().contains(
-            QStringLiteral("port set 1 rxant=0 txant=3")));
+            QStringLiteral("port set 1 rxant=2 txant=3")));
 
-        // Existing installations with one shared key migrate to both directions
-        // when the antenna has permission for both.
-        settings.remove(rxKey);
-        settings.remove(txKey);
-        settings.setValue(legacyKey, QStringLiteral("2"));
+        // A refused pick neither changes the displayed state nor the memory.
+        connection.selectTxAntenna(1, 2);
+        const int rejectedSeq = commands.constLast().section('|', 0, 0).mid(1).toInt();
+        AntennaGeniusModelTestAccess::response(connection, rejectedSeq, 1, QStringLiteral("denied"));
+        CHECK(connection.portA().txAntenna == 3);
         commands.clear();
         AntennaGeniusModelTestAccess::recallBand(connection, 1, 5);
-        CHECK(commands.size() == 1);
-        CHECK(commands.constFirst().contains(
-            QStringLiteral("port set 1 rxant=2 txant=2")));
+        CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=3")));
 
+        AntennaGeniusModelTestAccess::setBand(connection, 2, 0);
+        commands.clear();
+        connection.selectAntenna(2, 1);
+        CHECK(commands.constLast().contains(QStringLiteral("port set 2 rxant=1 txant=0")));
+        const int before = commands.size();
+        connection.selectTxAntenna(2, 2);
+        CHECK(commands.size() == before);
+
+        // A conflicting unchanged half must not block clearing or changing the other.
+        AntennaGeniusModelTestAccess::setOtherPort(connection, 2, 0);
+        commands.clear();
+        connection.selectTxAntenna(1, 0);
+        CHECK(commands.size() == 1);
+        CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=0")));
+
+        settings.remove(rootKey);
         settings.remove(legacyKey);
-        settings.remove(rxKey);
-        settings.remove(txKey);
+    }
+    {
+        auto& settings = AppSettings::instance();
+        settings.remove(QStringLiteral("AntennaGenius"));
+        settings.setValue(QStringLiteral("AG_Port1_Band5"), QStringLiteral("0"));
+        AntennaGeniusModel connection;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        AntennaGeniusModelTestAccess::recallBand(connection, 1, 5);
+        CHECK(commands.isEmpty());
+        settings.remove(QStringLiteral("AntennaGenius"));
+        settings.setValue(QStringLiteral("AG_Port1_Band5"), QStringLiteral("2"));
+        AntennaGeniusModel migrated;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(migrated, commands);
+        AntennaGeniusModelTestAccess::recallBand(migrated, 1, 5);
+        CHECK(commands.size() == 1);
+        CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=2")));
+        settings.remove(QStringLiteral("AntennaGenius"));
+    }
+    {
+        auto& settings = AppSettings::instance();
+        settings.remove(QStringLiteral("AntennaGenius"));
+        settings.setValue(QStringLiteral("AG_Port1_Band5"), QStringLiteral("2"));
+        AntennaGeniusModel connection;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        AntennaGeniusModelTestAccess::beginInit(connection);
+        CHECK(commands.size() == 6);
+        const int antSeq = commands.at(0).section('|', 0, 0).mid(1).toInt();
+        const int portASeq = commands.at(2).section('|', 0, 0).mid(1).toInt();
+        const int portBSeq = commands.at(3).section('|', 0, 0).mid(1).toInt();
+        AntennaGeniusModelTestAccess::response(connection, antSeq, 0,
+            QStringLiteral("antenna 2 name=Both tx=0020 rx=0020"));
+        AntennaGeniusModelTestAccess::response(connection, antSeq, 0, QString());
+        AntennaGeniusModelTestAccess::response(connection, portASeq, 0,
+            QStringLiteral("port 1 band=5 rxant=1 txant=1"));
+        AntennaGeniusModelTestAccess::response(connection, portASeq, 0, QString());
+        CHECK(commands.size() == 6);
+        connection.selectAntenna(1, 2);
+        CHECK(commands.size() == 6);
+        AntennaGeniusModelTestAccess::response(connection, portBSeq, 0,
+            QStringLiteral("port 2 band=5 rxant=0 txant=2"));
+        AntennaGeniusModelTestAccess::response(connection, portBSeq, 0, QString());
+        CHECK(commands.size() == 6); // Port B's TX antenna prevents the recall.
+        settings.remove(QStringLiteral("AntennaGenius"));
     }
     checkReconnectSuppression<TgxlConnection>(QStringLiteral("tgxlReconnectTimer"),
         "V1.2.17 AUTH", "R1|0|Unauthorized", 9010);

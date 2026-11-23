@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QByteArray>
 #include <QList>
+#include <QJsonObject>
 #include <functional>
 #include <optional>
 
@@ -121,6 +122,8 @@ public:
     // distinguish TX/RX. The RX selection is retained while TX follows it
     // only when the antenna is transmit-capable on the current band.
     void selectAntenna(int portId, int antennaId);
+    bool splitRxTxMode() const;
+    void setSplitRxTxMode(bool split);
 
     // Set auto-mode for a port.
     void setAutoMode(int portId, bool on);
@@ -199,8 +202,10 @@ private:
     static QMap<QString, QString> parseKeyValues(const QString& text);
     AgPortStatus parsePortStatus(const QString& text) const;
 
-    // Band-specific TX/RX antenna memory. New keys are direction-specific;
-    // legacy shared keys remain readable and receive new RX selections.
+    void loadAntennaSettings();
+    void saveAntennaSettings();
+    QJsonObject bandSettings(int portId, int bandId) const;
+    void setBandSettings(int portId, int bandId, std::optional<int> rx, std::optional<int> tx);
     void saveBandRxAntenna(int portId, int bandId, int antennaId);
     void saveBandTxAntenna(int portId, int bandId, int antennaId);
     std::optional<int> recallBandRxAntenna(int portId, int bandId) const;
@@ -210,6 +215,8 @@ private:
                            bool saveRx, bool saveTx);
     void recallBandAntennas(int portId, int bandId);
     bool antennaInUseByOtherPort(int portId, int antennaId) const;
+    AgPortStatus selectionState(int portId) const;
+    void finishInitialPortStatus();
 
     // Initialization sequence after TCP connect.
     void runInitSequence();
@@ -255,6 +262,24 @@ private:
     QList<AgBandInfo>    m_bands;
     AgPortStatus         m_portA;
     AgPortStatus         m_portB;
+    struct PendingSelection {
+        int sequence;
+        quint64 generation;
+        int rxAntenna;
+        int txAntenna;
+        int band;
+        bool saveRx;
+        bool saveTx;
+    };
+    std::optional<PendingSelection> m_pendingSelectionA;
+    std::optional<PendingSelection> m_pendingSelectionB;
+    quint64 m_selectionGeneration{0};
+    QJsonObject m_antennaSettings;
+    bool m_antennaSettingsWritable{true};
+    bool m_initializingPorts{false};
+    bool m_initialPortAReady{false};
+    bool m_initialPortBReady{false};
+    bool m_initialAntennasReady{false};
 
     // Previous band per port (for detecting band changes)
     int m_prevBandA{-1};
