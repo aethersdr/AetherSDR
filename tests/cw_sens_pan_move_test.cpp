@@ -134,5 +134,16 @@ int main(int argc, char** argv)
     outgoingPan.setRttyPanelVisible(true);
     check(firstSens->value() == 20, "An already saved RTTY Sens edit follows the decoder back");
 
+    // An edit made on a hidden pane (no UI path, but setValue can) is shown
+    // and saved, not replaced by the setting and then written back.
+    outgoingPan.setRttyPanelVisible(false);
+    secondSens->setValue(65);
+    incomingPan.setRttyPanelVisible(true);
+    check(secondSens->value() == 65 && RttyDecodeSettings::sensitivity() == 65,
+          "An edit made while hidden survives the pane being shown");
+    QTimer::singleShot(800, &debounceWindow, &QEventLoop::quit);
+    debounceWindow.exec();
+    check(RttyDecodeSettings::sensitivity() == 65, "The hidden edit's debounce writes the same value");
+
     return failures == 0 ? 0 : 1;
 }

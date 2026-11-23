@@ -1291,6 +1291,9 @@ void PanadapterApplet::setRttyPanelVisible(bool visible)
     const bool wasVisible = !m_rttyPanel->isHidden();
     if (visible == wasVisible) { return; }
     if (visible) {
+        // A programmatic edit made while hidden is saved before the reload,
+        // so it is shown rather than replaced and then written back.
+        flushRttySens();
         const QSignalBlocker blocker(m_rttySensSlider);
         m_rttySensSlider->setValue(RttyDecodeSettings::sensitivity());
     } else {
