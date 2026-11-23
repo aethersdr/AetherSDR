@@ -102,7 +102,7 @@ See [Profile Management](./profile-management.md).
 | **Reset Applet Order** | Restores the default applet order. |
 | **Minimal Mode** | Ctrl+Shift+M. Collapses the window to a narrow applet strip. See [Keyboard Shortcuts](./keyboard-shortcuts.md). |
 | **Frameless Window** | Ctrl+Shift+F. On by default. On Windows, the frameless main window uses the app theme up to its border. On Windows 11, when maximized, the right-hand applet rail stays inside the Windows work area. Turn it off to return the main window to the operating system's own title bar and borders. |
-| **Propagation Conditions** | Shows the propagation forecast on the panadapters. Off by default. |
+| **Propagation Conditions** | Shows K, A and solar flux indices from NOAA SWPC on the panadapters. Off by default. |
 | **Smart Spot Filtering** | Dims SSB spots with no detected voice signal nearby. Off by default; needs SpotHub Signal History. |
 | **Show live CW contacts** | Shows station information for callsigns the CW decoder hears in a separate **Live CW contacts** window, so it never covers decoded text. Off by default; closing the window turns it off. See [Callsign Lookup](./callsign-lookup.md). |
 | **FPS Meters** | Ctrl+F. Shows spectrum and waterfall frame rates on each pan. Off by default. |
@@ -230,13 +230,15 @@ In **Minimal Mode** the bar shrinks to the active radio tab and status badges; t
 
 **Help → About AetherSDR** opens a rounded, borderless window showing:
 
-<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 license, the GitHub link, trademark notices and an OK button follow." />
+<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR with build details, the Contributor Logbook button, and links to HamQSL/N0NBH, NOAA SWPC, NASA SDO, NASA SVS, NASA/GSFC and NOAA/NWS." />
 
-*The About AetherSDR window: version, build and renderer details.*
+*About AetherSDR includes links to the propagation and AetherMap data providers.*
 
 - the version and commit;
 - a **build details** card (Qt version, compile date, and the spectrum renderer in use). The text is selectable, so you can paste it into a bug report;
 - a **Contributor Logbook ↗** button that opens [contributors.aethersdr.com](https://contributors.aethersdr.com/#all-time).
+
+The footer links to the propagation and AetherMap data providers. In the HF Propagation Dashboard, HamQSL/N0NBH supplies HF and VHF band conditions and an X-ray class. NOAA SWPC supplies indices, forecasts and GOES X-ray flux. NASA SDO supplies solar images, and NASA SVS supplies lunar phase and illumination data.
 
 Drag anywhere in the window to move it. **Esc** or **Ctrl+W** (Cmd+W) closes it, and choosing About again raises the open window. Its animations stop when the operating system asks for reduced motion.
 
