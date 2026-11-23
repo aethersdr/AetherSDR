@@ -1063,6 +1063,10 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
         static_cast<double>(m_panStats.fftVboBytes) / secs;
     m[QStringLiteral("overlayRebuildsPerSec")] = m_panStats.overlayRebuilds / secs;
     m[QStringLiteral("overlayRebuildMsPerSec")] = msPerSec(m_panStats.overlayRebuildUs);
+    m[QStringLiteral("overlayFrequencyRebuildsPerSec")] =
+        m_panStats.overlayFrequencyRebuilds / secs;
+    m[QStringLiteral("overlayFrequencyRebuildMsPerSec")] =
+        msPerSec(m_panStats.overlayFrequencyRebuildUs);
     m[QStringLiteral("overlayUploadBytesPerSec")] =
         static_cast<double>(m_panStats.overlayUploadBytes) / secs;
     m[QStringLiteral("previewOverlayTransformsPerSec")] =
@@ -6691,7 +6695,7 @@ bool SpectrumWidget::updateFrequencyPreview(double oldCenterMhz,
         // dirty flag is frozen, so use that as the overlay transform base.
         bool overlayDirty = false;
 #ifdef AETHER_GPU_SPECTRUM
-        overlayDirty = m_overlayStaticDirty;
+        overlayDirty = m_overlayStaticDirty || m_overlayFrequencyDirty;
 #endif
         m_frequencyPreviewOverlayBaseCenterMhz = overlayDirty
             ? newCenterMhz : oldCenterMhz;
@@ -8548,13 +8552,18 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
         markOverlayDirty();
     } else {
         auto& o = m_sliceOverlays[idx];
-        if (o.freqMhz == freq && o.filterLowHz == fLow && o.filterHighHz == fHigh &&
-            o.isTxSlice == tx && o.isActive == active && o.mode == mode &&
-            o.rttyMark == rttyMark && o.rttyShift == rttyShift &&
-            o.ritOn == ritOn && o.ritFreq == ritFreq &&
-            o.xitOn == xitOn && o.xitFreq == xitFreq &&
-            o.diversity == diversity && o.diversityParent == diversityParent &&
-            o.diversityChild == diversityChild && o.diversityIndex == diversityIndex)
+        const bool frequencyChanged = o.freqMhz != freq;
+        const bool otherFieldsChanged =
+            o.filterLowHz != fLow || o.filterHighHz != fHigh ||
+            o.isTxSlice != tx || o.isActive != active || o.mode != mode ||
+            o.rttyMark != rttyMark || o.rttyShift != rttyShift ||
+            o.ritOn != ritOn || o.ritFreq != ritFreq ||
+            o.xitOn != xitOn || o.xitFreq != xitFreq ||
+            o.diversity != diversity || o.diversityParent != diversityParent ||
+            o.diversityChild != diversityChild || o.diversityIndex != diversityIndex;
+        const OverlayRepaint repaint = overlayRepaintForSliceChange(
+            frequencyChanged, otherFieldsChanged, cursorReadoutShowing());
+        if (repaint == OverlayRepaint::None)
             return;
         o.freqMhz = freq; o.filterLowHz = fLow; o.filterHighHz = fHigh;
         o.isTxSlice = tx; o.isActive = active;
@@ -8565,7 +8574,11 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
         o.mode = mode; o.rttyMark = rttyMark; o.rttyShift = rttyShift;
         o.ritOn = ritOn; o.ritFreq = ritFreq;
         o.xitOn = xitOn; o.xitFreq = xitFreq;
-        markOverlayDirty();
+        if (repaint == OverlayRepaint::FrequencyLayer) {
+            markFrequencyOverlayDirty();
+        } else {
+            markOverlayDirty("slice");
+        }
     }
 }
 
@@ -8692,7 +8705,13 @@ void SpectrumWidget::setSliceOverlayFreq(int sliceId, double freqMhz)
         if (so.sliceId == sliceId) {
             if (so.freqMhz == freqMhz) return;  // unchanged — no repaint needed
             so.freqMhz = freqMhz;
-            markOverlayDirty();  // repaint so markers reflect the new frequency (#1272)
+            // Repaint so markers reflect the new frequency (#1272).
+            if (overlayRepaintForSliceChange(true, false, cursorReadoutShowing())
+                    == OverlayRepaint::FrequencyLayer) {
+                markFrequencyOverlayDirty();
+            } else {
+                markOverlayDirty("slice");
+            }
             return;
         }
     }
@@ -8737,7 +8756,14 @@ void SpectrumWidget::setSplitPair(int rxSliceId, int txSliceId)
 void SpectrumWidget::setVfoFrequency(double freqMhz)
 {
     auto* o = const_cast<SliceOverlay*>(activeOverlay());
-    if (o) { o->freqMhz = freqMhz; markOverlayDirty(); }
+    if (!o) { return; }
+    o->freqMhz = freqMhz;
+    if (overlayRepaintForSliceChange(true, false, cursorReadoutShowing())
+            == OverlayRepaint::FrequencyLayer) {
+        markFrequencyOverlayDirty();
+    } else {
+        markOverlayDirty("slice");
+    }
 }
 
 void SpectrumWidget::setVfoFilter(int lowHz, int highHz)
@@ -14911,9 +14937,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
 
             // Cursor frequency label (#726)
-            if (m_showCursorFreq && m_hoveredTnfId < 0
-                && m_cursorPos.x() >= 0
-                && m_cursorPos.y() >= 0) {
+            if (cursorReadoutShowing()) {
                 double freqMhz = xToMhz(m_cursorPos.x());
                 // Snap to the exact VFO frequency when hovering within 8 px of a slice
                 // marker so the readout exactly matches the flag value (#1369).
@@ -15020,8 +15044,15 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
 
         // Static overlays: only repaint when state changes (markOverlayDirty).
         // Frequency-anchored elements live in their own texture so the preview
-        // shader can move them without also distorting screen-space controls.
-        if (rebuildStaticOverlay) {
+        // shader can move them without also distorting screen-space controls,
+        // and so a slice retune repaints and uploads that layer alone
+        // (markFrequencyOverlayDirty).
+        const bool frequencyLayerOnly = !rebuildStaticOverlay
+            && m_overlayFrequencyDirty && !resizePreview;
+        QElapsedTimer frequencyLayerTimer;
+        if (frequencyLayerOnly)
+            frequencyLayerTimer.start();
+        if (rebuildStaticOverlay || frequencyLayerOnly) {
             m_overlayFrequency.fill(Qt::transparent);
             QPainter frequencyPainter(&m_overlayFrequency);
             frequencyPainter.setRenderHint(QPainter::Antialiasing, false);
@@ -15037,7 +15068,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             drawSliceMarkers(frequencyPainter, specRect, wfRect);
             drawWsjtxMarkers(frequencyPainter, specRect, wfRect);
             drawOffScreenSlices(frequencyPainter, specRect);
+            frequencyPainter.end();
+            m_overlayFrequencyDirty = false;
+            m_overlayFrequencyNeedsUpload = true;
+        }
+        if (frequencyLayerOnly) {
+            ++m_panStats.overlayFrequencyRebuilds;
+            m_panStats.overlayFrequencyRebuildUs += static_cast<quint64>(
+                frequencyLayerTimer.nsecsElapsed() / 1000);
+        }
 
+        if (rebuildStaticOverlay) {
             m_overlayStatic.fill(Qt::transparent);
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
@@ -15066,7 +15107,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             m_smartMtrLabelsDirty = false;
             m_overlayStaticDirty = false;
             m_overlayNeedsUpload = true;
-            m_overlayFrequencyNeedsUpload = true;
             m_frequencyScalePreviewNeedsUpload = false;
         }
 
@@ -16201,9 +16241,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     }
 
     // ── Cursor frequency label (#456) ──────────────────────────────────────
-    if (m_showCursorFreq && m_hoveredTnfId < 0
-        && m_cursorPos.x() >= 0
-        && m_cursorPos.y() >= 0) {
+    if (cursorReadoutShowing()) {
         double freqMhz = xToMhz(m_cursorPos.x());
         // Snap to the exact VFO frequency when hovering within 8 px of a slice
         // marker so the readout exactly matches the flag value (#1369).
@@ -17758,6 +17796,30 @@ void SpectrumWidget::invalidateSmartMtrLabels()
 #else
     markOverlayDirty("smartMtr", !deferPresentToFft());
 #endif
+}
+
+void SpectrumWidget::markFrequencyOverlayDirty()
+{
+#ifdef AETHER_GPU_SPECTRUM
+    // During a preview the frequency layer is the shader's immutable source;
+    // markOverlayDirty() defers to the commit's full rebuild there.
+    if (m_frequencyPreviewActive) {
+        markOverlayDirty("slice");
+        return;
+    }
+    if (!m_overlayStaticDirty && !m_overlayFrequencyDirty)
+        m_panStats.noteDirty("sliceFreqLayer");
+    m_overlayFrequencyDirty = true;
+    update();
+#else
+    markOverlayDirty("slice");
+#endif
+}
+
+bool SpectrumWidget::cursorReadoutShowing() const
+{
+    return m_showCursorFreq && m_hoveredTnfId < 0
+        && m_cursorPos.x() >= 0 && m_cursorPos.y() >= 0;
 }
 
 void SpectrumWidget::drawSmartMtrValueLabels(QPainter& p)
