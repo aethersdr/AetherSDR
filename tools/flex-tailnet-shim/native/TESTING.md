@@ -24,7 +24,7 @@ reboot.
 
 ## How it differs from the container shim
 
-Same code, same version (`0.5.4-native`), started by a launcher (`shim.sh`)
+Same code, same version (`0.5.5-native`), started by a launcher (`shim.sh`)
 that:
 
 - keeps the node's identity and settings in `state/` beside the waveform
@@ -79,7 +79,7 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
    waveforms no other way to report errors.
 2. **Install:** `python3 -I tool.py --host <radio-ip> install AetherTailnet.ssdr_waveform`.
    Within a minute or two, `python3 -I tool.py --host <radio-ip> status`
-   should show `"version": "0.5.4-native"` and `"state": "unprovisioned"`.
+   should show `"version": "0.5.5-native"` and `"state": "unprovisioned"`.
    Note how long that took and whether a reboot was needed.
 3. **Sign in to the tailnet:**
    `python3 -I tool.py --host <radio-ip> provision --hostname flex-6400`.
@@ -256,7 +256,7 @@ RAM, which a reboot clears.
 ```sh
 git clone https://github.com/aethersdr/AetherSDR.git
 cd AetherSDR
-git checkout flex-tailnet-shim-v0.5.4
+git checkout flex-tailnet-shim-v0.5.5
 cd tools/flex-tailnet-shim/native
 python3 -I build.py --output ~/aether-tailnet [--log-url http://<pc-ip>:8765/] [--small]
 ```
@@ -266,3 +266,8 @@ to test unreleased changes, check out `main` (or the branch you were sent)
 instead. It needs Go 1.27.1 (a newer Go fetches it by itself) and Python 3. All
 dependencies are vendored. Without `--log-url` the package is reproducible
 byte for byte.
+
+The build also writes `discovery-helper-<version>.zip` beside the package:
+the discovery helper and its launchers, which a release publishes as an
+asset beside the waveform. `python3 -I ../package_helper.py --output DIR`
+writes it alone, for the container's release.

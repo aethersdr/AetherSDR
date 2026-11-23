@@ -161,6 +161,69 @@ int main(int argc, char** argv)
         ok &= expect(!tailnetshim::supportsQrSignIn(QString()), "an unknown version doesn't");
     }
 
+    // A status read before the keychain answered left the devices out: the
+    // window reads it again with the token, once, and again after a status
+    // that lists them.
+    {
+        TailnetShimStatus hidden;
+        hidden.announceDevicesHidden = true;
+        TailnetShimStatus listed;
+        ok &= expect(tailnetshim::shouldRereadWithToken(hidden, true, false),
+                     "a hidden list is read again with the token");
+        ok &= expect(!tailnetshim::shouldRereadWithToken(hidden, false, false),
+                     "not without a token");
+        ok &= expect(!tailnetshim::shouldRereadWithToken(hidden, true, true),
+                     "only once, so a refused token can't loop");
+        ok &= expect(!tailnetshim::shouldRereadWithToken(listed, true, false),
+                     "not when the devices are listed");
+
+        // Until a status lists the devices, the card can't be saved from a
+        // computer with the token: it shows no ticks, so Save would erase
+        // them (review of #7346). Why depends on whether the hidden status
+        // answered a read that carried the token.
+        using Block = tailnetshim::AnnounceDevicesBlock;
+        ok &= expect(tailnetshim::announceDevicesBlock(hidden, true) == Block::Reading,
+                     "a status read before the token blocks the card while the token's read runs");
+        TailnetShimStatus refused = hidden;
+        refused.readWithToken = true;
+        ok &= expect(tailnetshim::announceDevicesBlock(refused, true) == Block::TokenRefused,
+                     "a status read with the token and still hidden says the token was refused");
+        ok &= expect(tailnetshim::announceDevicesBlock(listed, true) == Block::None,
+                     "listed devices leave the card editable");
+        ok &= expect(tailnetshim::announceDevicesBlock(hidden, false) == Block::None,
+                     "without a token the card's own reason applies");
+
+        // The read with the token failed: nothing is on its way, so the card
+        // must not keep saying "Reading…" (on8st, 2026-11-20).
+        ok &= expect(tailnetshim::announceDevicesBlock(hidden, true, true) == Block::ReadFailed,
+                     "a failed read after a hidden status says the read failed");
+        ok &= expect(tailnetshim::announceDevicesBlock(refused, true, true) == Block::TokenRefused,
+                     "a refused token stays the reason after a later failure");
+        ok &= expect(tailnetshim::announceDevicesBlock(listed, true, true) == Block::None,
+                     "a failure leaves a listed card editable");
+    }
+
+    // Only: once 32 devices are ticked, the unticked boxes are disabled, so a
+    // 33rd tick can't vanish on Save; unticking one frees a slot.
+    {
+        const int max = tailnetshim::kMaxAnnounceIds;
+        ok &= expect(max == 32, "the shim's limit is 32 devices");
+        ok &= expect(tailnetshim::announceTickEnabled(false, max - 1),
+                     "below the limit an unticked box can be ticked");
+        ok &= expect(!tailnetshim::announceTickEnabled(false, max),
+                     "at the limit an unticked box is disabled");
+        ok &= expect(tailnetshim::announceTickEnabled(true, max),
+                     "at the limit a ticked box can still be unticked");
+        QStringList ids;
+        for (int i = 0; i < max + 1; ++i) {
+            ids << QStringLiteral("n%1").arg(i);
+        }
+        const QJsonArray kept = QJsonDocument::fromJson(tailnetshim::announceBody(
+            QStringLiteral("only"), ids)).object().value(QStringLiteral("announce_to")).toArray();
+        ok &= expect(kept.size() == max,
+                     "the body keeps the limit the boxes enforce, so no enabled tick is dropped");
+    }
+
     // The window starts the sign-in unasked only once the keychain has
     // answered, and a late keychain read never replaces a newer token
     // (review of #6932: held read -> fresh status -> provision -> late read).
@@ -561,6 +624,87 @@ int main(int argc, char** argv)
         ok &= expect(capped && capped->hostname.size() <= 256 && capped->lastError.size() <= 512
                          && capped->allow.size() <= 64,
                      "oversized status strings and lists are capped");
+    }
+
+    // The radio's announcement: modes, devices and what the body carries.
+    {
+        const QByteArray with = R"({"version":"0.7.0","state":"running","provisioned":true,
+            "announce":"only","announce_to":["n2","gone9"],
+            "announcement":{"heard":"2027-04-30T12:00:00Z","devices":[
+              {"id":"n1","name":"laptop","os":"macOS","online":true,"announced":true},
+              {"id":"n2","name":"win","os":"windows","online":true,"announced":true,"via":"helper"},
+              {"id":"n3","name":"phone","os":"iOS","online":false,"skipped":"offline"},
+              {"id":"n4","name":"shack","os":"linux","online":true,"skipped":"at the station"},
+              "junk", 7, {"name":"no id"}]}})";
+        const auto a = tailnetshim::parseStatus(with);
+        ok &= expect(a && a->announceSupported && a->announce == QStringLiteral("only")
+                         && a->announceTo == QStringList({QStringLiteral("n2"), QStringLiteral("gone9")})
+                         && a->announceHeard == QStringLiteral("2027-04-30T12:00:00Z"),
+                     "announcement mode, announce_to and heard parse");
+        ok &= expect(a && a->announceDevices.size() == 4, "malformed device entries are skipped");
+        if (a && a->announceDevices.size() == 4) {
+            const auto& d = a->announceDevices;
+            ok &= expect(d[0].id == QStringLiteral("n1") && d[0].name == QStringLiteral("laptop")
+                             && d[0].os == QStringLiteral("macOS") && d[0].online && d[0].announced
+                             && d[0].via.isEmpty() && d[0].skipped.isEmpty(),
+                         "an announced device's fields");
+            ok &= expect(d[1].announced && d[1].via == QStringLiteral("helper"), "via helper");
+            ok &= expect(!d[2].online && !d[2].announced && d[2].skipped == QStringLiteral("offline"),
+                         "an offline device's skipped reason");
+            ok &= expect(d[3].skipped == QStringLiteral("at the station"), "at the station reason");
+        }
+        ok &= expect(a && !a->announceDevicesHidden, "a status read with the token isn't hidden");
+        // Read without the admin token: the shim leaves the devices out and
+        // says so (#6984, condition 3).
+        const auto hidden = tailnetshim::parseStatus(
+            R"({"version":"0.5.5","state":"running","provisioned":true,"announce":"only",
+                "announce_to":[],"announcement":{"heard":"","devices":[],"devices_hidden":true}})");
+        ok &= expect(hidden && hidden->announceSupported && hidden->announceDevicesHidden
+                         && hidden->announce == QStringLiteral("only") && hidden->announceDevices.isEmpty(),
+                     "devices_hidden parses, and the mode still shows");
+        const auto none = tailnetshim::parseStatus(running);
+        ok &= expect(none && !none->announceSupported && none->announceDevices.isEmpty()
+                         && none->announce == QStringLiteral("all"),
+                     "a status without announcement is not supported");
+        const auto bad = tailnetshim::parseStatus(
+            R"({"version":"0.7.0","state":"running","announce":"sometimes","announcement":{}})");
+        ok &= expect(bad && bad->announceSupported && bad->announce == QStringLiteral("all")
+                         && bad->announceHeard.isEmpty(),
+                     "an unknown announce mode reads all");
+        QJsonArray many;
+        for (int i = 0; i < 400; ++i) {
+            many.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("n%1").arg(i)}});
+        }
+        const auto big = tailnetshim::parseStatus(QJsonDocument(QJsonObject{
+            {QStringLiteral("version"), QStringLiteral("0.7.0")},
+            {QStringLiteral("state"), QStringLiteral("running")},
+            {QStringLiteral("announcement"), QJsonObject{{QStringLiteral("devices"), many}}}}).toJson());
+        ok &= expect(big && big->announceDevices.size() == 256, "the device list is bounded");
+
+        const QJsonObject b = QJsonDocument::fromJson(tailnetshim::announceBody(
+            QStringLiteral("only"), {QStringLiteral("n1"), QStringLiteral("n1"),
+                                     QStringLiteral("n1; rm"), QString(),
+                                     QString(65, QLatin1Char('a')), QStringLiteral("n2")})).object();
+        ok &= expect(b.keys() == QStringList({QStringLiteral("announce"), QStringLiteral("announce_to")})
+                         && b.value(QStringLiteral("announce")).toString() == QStringLiteral("only"),
+                     "announceBody has just announce and announce_to");
+        ok &= expect(b.value(QStringLiteral("announce_to")).toArray()
+                         == QJsonArray({QStringLiteral("n1"), QStringLiteral("n2")}),
+                     "invalid ids are dropped and duplicates collapsed");
+        const QJsonObject empty = QJsonDocument::fromJson(
+            tailnetshim::announceBody(QStringLiteral("off"), {})).object();
+        ok &= expect(empty.contains(QStringLiteral("announce_to"))
+                         && empty.value(QStringLiteral("announce_to")).toArray().isEmpty(),
+                     "announce_to is sent even when empty");
+        QStringList ids;
+        for (int i = 0; i < 40; ++i) {
+            ids << QStringLiteral("n%1").arg(i);
+        }
+        const QJsonObject capped = QJsonDocument::fromJson(
+            tailnetshim::announceBody(QStringLiteral("sometimes"), ids)).object();
+        ok &= expect(capped.value(QStringLiteral("announce_to")).toArray().size() == 32
+                         && capped.value(QStringLiteral("announce")).toString() == QStringLiteral("all"),
+                     "ids are capped at 32 and a bad mode becomes all");
     }
 
     return ok ? 0 : 1;

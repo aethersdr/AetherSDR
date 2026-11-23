@@ -5,7 +5,8 @@ waveform for FLEX-6000 radios.
 The package is a ZIP with one AetherTailnet/ directory: the manifest, the
 launcher (shim.sh), a static ARMv7 build of the shim reporting its version
 as <shim version>-native, and the license bundle. Without --log-url it is
-byte-for-byte reproducible with the pinned toolchain.
+byte-for-byte reproducible with the pinned toolchain. The discovery
+helper's release ZIP (../package_helper.py) is written beside it.
 
     python3 -I build.py --output OUT_DIR [--log-url http://<pc>:8765/] [--small]
 
@@ -19,6 +20,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 import tempfile
 import zipfile
 
@@ -135,6 +137,9 @@ def main():
         os.replace(tmp, target)
     extra = (' small' if a.small else '') + (' with log sink ' + a.log_url if a.log_url else '')
     print(f'built {target} ({size} bytes){extra}')
+    # The discovery helper is released beside the shim, at its version.
+    subprocess.run([sys.executable, '-I', str(MODULE / 'package_helper.py'), '--output', str(a.output)],
+                   check=True)
 
 
 if __name__ == '__main__':
