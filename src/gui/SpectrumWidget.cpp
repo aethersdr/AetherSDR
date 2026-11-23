@@ -6626,16 +6626,14 @@ void SpectrumWidget::applyWaterfallViewFrameChange(double oldCenterMhz,
                                                    double newBandwidthMhz)
 {
 #ifdef AETHER_GPU_SPECTRUM
-    const bool rowFrequencyFrames =
-        m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
-        && m_wfFrameTexReady;
+    const bool dssMeshReady = m_dssMeshReady;
 #else
-    constexpr bool rowFrequencyFrames = false;
+    constexpr bool dssMeshReady = false;
 #endif
     switch (waterfallViewFrameAction(
-                rowFrequencyFrames,
+                waterfallRowFramesReady(),
                 m_spectrumRenderMode == SpectrumRenderMode::Mode3D,
-                m_wfLive, m_dss.historyRowCount() > 0)) {
+                dssMeshReady, m_wfLive, m_dss.historyRowCount() > 0)) {
     case WaterfallViewFrameAction::Reproject:
         handleWaterfallFrequencyFrameChange(oldCenterMhz, oldBandwidthMhz,
                                             newCenterMhz, newBandwidthMhz);
@@ -7870,7 +7868,17 @@ double SpectrumWidget::panCenterTargetMhz() const
 {
     const bool animating = m_panCenterAnim
         && m_panCenterAnim->state() != QAbstractAnimation::Stopped;
-    return animating ? m_panCenterTarget : m_centerMhz;
+    return followReferenceCenterMhz(m_centerMhz, m_panCenterTarget, animating);
+}
+
+bool SpectrumWidget::waterfallRowFramesReady() const
+{
+#ifdef AETHER_GPU_SPECTRUM
+    return m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
+        && m_wfFrameTexReady && m_wfSupplementalGpuTex != nullptr;
+#else
+    return false;
+#endif
 }
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
@@ -14581,9 +14589,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
     const float waterfallTargetBandwidthMhz =
         static_cast<float>(effectiveBandwidthMhz());
     const float waterfallRowFrequencyFrames =
-        m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
-            && m_wfFrameTexReady
-            && m_wfSupplementalGpuTex != nullptr ? 1.0f : 0.0f;
+        waterfallRowFramesReady() ? 1.0f : 0.0f;
     const QRgb wfFloorRgb = waterfallFloorRgb();
     float uniforms[] = {
         rowOffset,

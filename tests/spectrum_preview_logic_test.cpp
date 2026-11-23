@@ -537,43 +537,73 @@ int testWaterfallPipelineSelection()
 int testWaterfallViewFrameAction()
 {
     using namespace AetherSDR;
-    // Legacy pixels live in the view frame: every pipeline/mode/state combo
-    // without row frames must reproject.
+    // Arguments: rowFrequencyFrames, mode3D, dssMeshReady, live, hasDssHistory.
+    // Legacy pixels live in the view frame: every mode/state combo without row
+    // frames must reproject.
     for (const bool mode3D : {false, true}) {
-        for (const bool live : {false, true}) {
-            for (const bool history : {false, true}) {
-                if (waterfallViewFrameAction(false, mode3D, live, history)
-                    != WaterfallViewFrameAction::Reproject) {
-                    return fail("the legacy pipeline must reproject on a view move");
+        for (const bool mesh : {false, true}) {
+            for (const bool live : {false, true}) {
+                for (const bool history : {false, true}) {
+                    if (waterfallViewFrameAction(false, mode3D, mesh, live, history)
+                        != WaterfallViewFrameAction::Reproject) {
+                        return fail("the legacy pipeline must reproject on a view move");
+                    }
                 }
             }
         }
     }
     // Row frames: the shaders remap each row into the live view, so a 2D
-    // pan-follow step must not rewrite (and re-upload) the waterfall.
-    for (const bool live : {false, true}) {
-        for (const bool history : {false, true}) {
-            if (waterfallViewFrameAction(true, false, live, history)
-                != WaterfallViewFrameAction::None) {
-                return fail("row-frame 2D must leave the rows to the shader");
+    // pan-follow step must not rewrite (and re-upload) the waterfall. The DSS
+    // mesh does not matter in 2D.
+    for (const bool mesh : {false, true}) {
+        for (const bool live : {false, true}) {
+            for (const bool history : {false, true}) {
+                if (waterfallViewFrameAction(true, false, mesh, live, history)
+                    != WaterfallViewFrameAction::None) {
+                    return fail("row-frame 2D must leave the rows to the shader");
+                }
             }
         }
     }
-    if (waterfallViewFrameAction(true, true, true, true)
+    // 3D without the mesh draws the cached-image fallback, whose columns sit
+    // in the view frame: it must reproject, live or paused.
+    for (const bool live : {false, true}) {
+        for (const bool history : {false, true}) {
+            if (waterfallViewFrameAction(true, true, false, live, history)
+                != WaterfallViewFrameAction::Reproject) {
+                return fail("mesh-less 3D must reproject its cached surface");
+            }
+        }
+    }
+    // 3D with the mesh places each row by its own frame.
+    if (waterfallViewFrameAction(true, true, true, true, true)
         != WaterfallViewFrameAction::None) {
-        return fail("live row-frame 3D must leave the rows to the shader");
+        return fail("live mesh 3D must leave the rows to the shader");
     }
-    if (waterfallViewFrameAction(true, true, false, true)
+    if (waterfallViewFrameAction(true, true, true, false, true)
         != WaterfallViewFrameAction::RebuildDssHistory) {
-        return fail("paused row-frame 3D must rebuild its cached surface");
+        return fail("paused mesh 3D must rebuild its cached surface");
     }
-    if (waterfallViewFrameAction(true, true, false, false)
+    if (waterfallViewFrameAction(true, true, true, false, false)
         != WaterfallViewFrameAction::None) {
         return fail("paused 3D with no history has nothing to rebuild");
     }
     return 0;
 }
 
+int testFollowReferenceCenter()
+{
+    using namespace AetherSDR;
+    // Mid-glide at 7.22366 toward 7.223485: the next step chains from the
+    // destination, not the interim position.
+    if (!nearlyEqual(followReferenceCenterMhz(7.22366, 7.223485, true), 7.223485)) {
+        return fail("a follow step during the animation must chain from its target");
+    }
+    if (!nearlyEqual(followReferenceCenterMhz(7.22366, 7.223485, false), 7.22366)) {
+        return fail("with no animation running the visible center is the reference");
+    }
+    return 0;
+}
 int testWaterfallPaletteRecolorPlan()
 {
     using namespace AetherSDR;
@@ -1319,6 +1349,9 @@ int main()
         return result;
     }
     if (const int result = testWaterfallViewFrameAction(); result != 0) {
+        return result;
+    }
+    if (const int result = testFollowReferenceCenter(); result != 0) {
         return result;
     }
     if (const int result = testWaterfallPaletteRecolorPlan(); result != 0) {

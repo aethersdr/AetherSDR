@@ -1295,6 +1295,9 @@ private:
                                              double oldBandwidthMhz,
                                              double newCenterMhz,
                                              double newBandwidthMhz);
+    // The waterfall shader maps each row through its own frequency frame. The
+    // one predicate for both the shader flag and the view-frame decision.
+    bool waterfallRowFramesReady() const;
     // Brings the waterfall/3D rows to a new view frame by the cheapest correct
     // route for the active pipeline (see waterfallViewFrameAction()).
     void applyWaterfallViewFrameChange(double oldCenterMhz,
