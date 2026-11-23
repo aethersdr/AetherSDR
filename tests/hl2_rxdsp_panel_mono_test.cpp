@@ -20,9 +20,6 @@
 #include <string>
 #include <vector>
 
-// The control case only: puts the panel back to create_rxa()'s copy 0.
-extern "C" void SetRXAPanelBinaural(int channel, int bin);
-
 using namespace AetherSDR::hl2;
 using Mode = WdspChannel::Mode;
 
@@ -236,7 +233,8 @@ int main(int argc, char** argv)
         Rig mono(row(Mode::Usb));
         const Reading a = mono.read();
         Rig pair(row(Mode::Usb));
-        SetRXAPanelBinaural(pair.dsp.wdspChannelId(), 1);
+        // The control case only: puts the panel back to create_rxa()'s copy 0.
+        WdspChannel::setRxPanelBinauralForTest(pair.dsp.wdspChannelId(), 1);
         const Reading b = pair.read();
         print("USB copy 0 (control)", b);
         check(std::abs(b.corr) < 0.05 && std::abs(db(b.mean / b.l) + 3.01) < 0.05,

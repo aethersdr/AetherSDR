@@ -109,6 +109,8 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 
 > **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up. FM plays about 8 dB quieter again (a full-deviation 1 kHz tone, 1.08 → 0.43 of full scale); raise the slice's AF gain or your listening level if it is too quiet.
 
+> **Receive audio is mono (L = R) in every mode.** In SSB, CW and data, anything that mixes left and right to one channel (TCI mono, the decoders, Linux DAX, RADE) now gets about 3 dB more level than before; if you set an application's input level (for example WSJT-X) against the old level, check it once.
+
 ### Receive filters
 
 Choose filter presets in [RX Controls](./rx-controls.md) or the

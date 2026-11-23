@@ -1349,6 +1349,11 @@ uint64_t WdspChannel::threadAllocationSequenceForTest() noexcept
     return wdspPortThreadAllocationSequence();
 }
 
+void WdspChannel::setRxPanelBinauralForTest(int channelId, int binaural) noexcept
+{
+    SetRXAPanelBinaural(channelId, binaural);
+}
+
 int WdspChannel::openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept
 {
     // A refusal probe only. A call WDSP would accept would open a channel

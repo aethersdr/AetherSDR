@@ -591,6 +591,8 @@ public:
     // reaching WDSP. Otherwise returns WDSP's result, 0 for its refusal.
     static constexpr int kOpenProbeWouldOpen = -1;
     [[nodiscard]] static int openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept;
+    // Test only: SetRXAPanelBinaural on an open receive channel (1 = copy 0, L = I, R = Q).
+    static void setRxPanelBinauralForTest(int channelId, int binaural) noexcept;
     // Process-global, test only (#5734, AetherSDR WDSP patch 13): the DSP
     // worker sleeps this long right after it has released a blocked
     // processIq(). That is the window in which, before patch 13, the host
