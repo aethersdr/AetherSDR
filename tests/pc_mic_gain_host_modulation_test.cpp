@@ -5,6 +5,7 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/DeviceDiagnostics.h"
 #include "core/RadioCertification.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/TransmitDelta.h"
@@ -211,6 +212,35 @@ void testRadiocertRestore()
     check(audio.pcMicGain() == 100, "control-effect restores unity", audio.pcMicGain());
 }
 
+// The support bundle reports both: the saved value and what the engine applies.
+// On a host-modulating radio they differ (40 saved, 100 applied).
+void testDiagnosticsReportApplied()
+{
+    RadioModel radio;
+    AudioEngine audio;
+    FakeBackend* hl2 = install(radio, hostModulatingCaps());
+    bindPcMicGain(radio.transmitModel(), &audio,
+                  [&audio](int percent) { audio.setPcMicGain(percent); });
+    connectEdge(radio, hl2, true);
+
+    const QJsonObject devices = DeviceDiagnostics::buildAudioDevicesSnapshot(&audio, {})
+                                    .value(QStringLiteral("volumes")).toObject();
+    const QJsonObject startup = DeviceDiagnostics::buildAudioStartupSnapshot(&audio, {})
+                                    .value(QStringLiteral("volumes")).toObject();
+    for (const QJsonObject& v : {devices, startup}) {
+        const int saved = v.value(QStringLiteral("pc_mic_gain_pct")).toInt(-1);
+        const int applied = v.value(QStringLiteral("engine_pc_mic_gain_pct")).toInt(-1);
+        check(saved == kSaved, "diagnostics: pc_mic_gain_pct is the saved value", saved);
+        check(applied == 100, "diagnostics: engine_pc_mic_gain_pct is the applied value",
+              applied);
+    }
+    const QJsonValue none = DeviceDiagnostics::buildAudioDevicesSnapshot(nullptr, {})
+                                .value(QStringLiteral("volumes")).toObject()
+                                .value(QStringLiteral("engine_pc_mic_gain_pct"));
+    check(none.isNull(), "diagnostics: no engine, engine_pc_mic_gain_pct is null",
+          static_cast<int>(none.type()));
+}
+
 // MainWindow is not a test target: its session wiring must use the binding and
 // must not read the saved gain for itself. A tripwire on today's spelling, not
 // a behavior test: a reformat or a correct refactor of those lines fails it,
@@ -240,6 +270,7 @@ int main(int argc, char** argv)
     testFamilySwap();
     testMidSessionGrant();
     testRadiocertRestore();
+    testDiagnosticsReportApplied();
     testMainWindowUsesBinding();
 
     std::printf("%d failure(s)\n", failures);
