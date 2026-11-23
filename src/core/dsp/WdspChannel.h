@@ -152,6 +152,11 @@ public:
         // panel runs after the FM limiter, so 4.0 would lift its ~0.9 bound
         // past full scale (#7252).
         std::optional<double> fmRxPanelGain;
+        // RXA output panel copies I into Q (SetRXAPanelBinaural off), so L == R.
+        // Off keeps create_rxa()'s copy 0: L = I, R = Q, a 90 degree pair in
+        // SSB/CW/data and a silent R in AM/SAM under ANR or ANF. Receive-only;
+        // open() pushes it, and nothing else in WDSP rebuilds the panel.
+        bool rxPanelMono = false;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
