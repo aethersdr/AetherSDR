@@ -206,14 +206,16 @@ private:
     void loadAntennaSettings();
     void saveAntennaSettings();
     QJsonObject bandSettings(int portId, int bandId) const;
-    void setBandSettings(int portId, int bandId, std::optional<int> rx, std::optional<int> tx);
+    void setBandSettings(int portId, int bandId, std::optional<int> rx, std::optional<int> tx,
+                         bool clearExisting = false);
+    void clearBandSettings(int portId, int bandId);
     void saveBandRxAntenna(int portId, int bandId, int antennaId);
     void saveBandTxAntenna(int portId, int bandId, int antennaId);
     std::optional<int> recallBandRxAntenna(int portId, int bandId) const;
     std::optional<int> recallBandTxAntenna(int portId, int bandId) const;
     void onBandChanged(int portId, int oldBand, int oldRxAnt, int oldTxAnt, int newBand);
     void selectAntennaPair(int portId, int rxAntenna, int txAntenna,
-                           bool saveRx, bool saveTx);
+                           bool saveRx, bool saveTx, bool clearBandMemory = false);
     void recallBandAntennas(int portId, int bandId);
     bool antennaInUseByOtherPort(int portId, int antennaId) const;
     AgPortStatus selectionState(int portId) const;
@@ -273,6 +275,7 @@ private:
         int band;
         bool saveRx;
         bool saveTx;
+        bool clearBandMemory;
     };
     std::optional<PendingSelection> m_pendingSelectionA;
     std::optional<PendingSelection> m_pendingSelectionB;
@@ -284,6 +287,9 @@ private:
     bool m_initialPortAReady{false};
     bool m_initialPortBReady{false};
     bool m_initialAntennasReady{false};
+    bool m_initializationWarningActive{false};
+    int m_initialStatusRetryCount{0};
+    int m_initialStatusRetryLimit{3};
     QTimer* m_portInitWatchdog{nullptr};
 
     // Previous band per port (for detecting band changes)

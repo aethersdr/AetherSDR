@@ -729,6 +729,8 @@ void AntennaGeniusModel::completePrologue()
     m_initialPortAReady = false;
     m_initialPortBReady = false;
     m_initialAntennasReady = false;
+    m_initialStatusRetryCount = 0;
+    m_initializationWarningActive = false;
     m_connected = true;
     emit connected();
 
@@ -1069,7 +1071,13 @@ void AntennaGeniusModel::processStatus(const QString& body)
         if (complete && pending
             && pending->rxAntenna == ps.rxAntenna && pending->txAntenna == ps.txAntenna) {
             if (pending->band > 0 && reportedBand == pending->band) {
-                if (pending->saveRx || pending->saveTx)
+                if (pending->clearBandMemory && (pending->saveRx || pending->saveTx))
+                    setBandSettings(ps.portId, pending->band,
+                        pending->saveRx ? std::optional<int>(ps.rxAntenna) : std::nullopt,
+                        pending->saveTx ? std::optional<int>(ps.txAntenna) : std::nullopt, true);
+                else if (pending->clearBandMemory)
+                    clearBandSettings(ps.portId, pending->band);
+                else if (pending->saveRx || pending->saveTx)
                     setBandSettings(ps.portId, pending->band,
                         pending->saveRx ? std::optional<int>(ps.rxAntenna) : std::nullopt,
                         pending->saveTx ? std::optional<int>(ps.txAntenna) : std::nullopt);
@@ -1111,6 +1119,8 @@ void AntennaGeniusModel::runInitSequence()
     m_initialPortAReady = false;
     m_initialPortBReady = false;
     m_initialAntennasReady = false;
+    m_initialStatusRetryCount = 0;
+    m_initializationWarningActive = false;
     m_seqAntennaList = sendCommand("antenna list");
     m_seqBandList    = sendCommand("band list");
     m_seqPortA       = sendCommand("port get 1");
@@ -1133,11 +1143,12 @@ void AntennaGeniusModel::finishInitialPortStatus()
     if (!m_initialStatusRequired || !m_initialPortAReady || !m_initialAntennasReady
         || (m_device.radioPorts > 1 && !m_initialPortBReady))
         return;
-    const bool wasWaiting = m_portInitWatchdog->isActive();
     m_portInitWatchdog->stop();
+    if (m_initializationWarningActive) {
+        m_initializationWarningActive = false;
+        emit initializationWarning(QString());
+    }
     if (!m_initializingPorts) {
-        if (wasWaiting)
-            emit initializationWarning(QString());
         return;
     }
     m_initializingPorts = false;
@@ -1159,8 +1170,17 @@ void AntennaGeniusModel::retryInitialStatus()
     if (m_initializingPorts) {
         m_initializingPorts = false;
         qCWarning(lcTuner) << "AntennaGenius: initial antenna or port status incomplete; retrying without automatic recall";
+        m_initializationWarningActive = true;
         emit initializationWarning(tr("Antenna or port status incomplete; retrying"));
     }
+    if (m_initialStatusRetryCount >= m_initialStatusRetryLimit) {
+        m_portInitWatchdog->stop();
+        qCWarning(lcTuner) << "AntennaGenius: initial status retry limit reached";
+        m_initializationWarningActive = true;
+        emit initializationWarning(tr("Antenna or port status unavailable; reconnect to retry"));
+        return;
+    }
+    ++m_initialStatusRetryCount;
     if (!m_initialAntennasReady) {
         m_pending.remove(m_seqAntennaList);
         m_seqAntennaList = sendCommand("antenna list");
@@ -1210,7 +1230,8 @@ void AntennaGeniusModel::selectAntenna(int portId, int antennaId)
                  << "— keeping txant=" << txAnt;
     }
 
-    selectAntennaPair(portId, antennaId, txAnt, true, true);
+    selectAntennaPair(portId, antennaId, txAnt, antennaId != 0,
+                      antennaId != 0, antennaId == 0);
 }
 
 void AntennaGeniusModel::selectRxAntenna(int portId, int antennaId)
@@ -1249,7 +1270,7 @@ bool AntennaGeniusModel::antennaInUseByOtherPort(int portId, int antennaId) cons
 }
 
 void AntennaGeniusModel::selectAntennaPair(int portId, int rxAntenna, int txAntenna,
-                                           bool saveRx, bool saveTx)
+                                           bool saveRx, bool saveTx, bool clearBandMemory)
 {
     if (!m_connected || (portId != 1 && portId != 2)) return;
     if (m_initializingPorts) {
@@ -1265,6 +1286,7 @@ void AntennaGeniusModel::selectAntennaPair(int portId, int rxAntenna, int txAnte
             || (txAntenna > 0 && txAntenna != current.txAntenna);
         if (!ownReady || (!otherReady && picksAntenna)) {
             qCWarning(lcTuner) << "AntennaGenius: antenna selection blocked until port status is available";
+            m_initializationWarningActive = true;
             emit initializationWarning(tr("Port status incomplete; antenna selection is limited while retrying"));
             return;
         }
@@ -1284,6 +1306,7 @@ void AntennaGeniusModel::selectAntennaPair(int portId, int rxAntenna, int txAnte
     const int band = effectiveBand(portId);
     const bool carryRx = pending && pending->band == band && pending->saveRx;
     const bool carryTx = pending && pending->band == band && pending->saveTx;
+    const bool carryClear = pending && pending->band == band && pending->clearBandMemory;
     const int sequence = sendCommand(cmd);
     if (sequence < 0) {
         qCWarning(lcTuner) << "AntennaGenius: command could not be sent:"
@@ -1293,7 +1316,8 @@ void AntennaGeniusModel::selectAntennaPair(int portId, int rxAntenna, int txAnte
 
     const quint64 generation = ++m_selectionGeneration;
     pending = PendingSelection{sequence, generation, rxAntenna, txAntenna, band,
-                               saveRx || carryRx, saveTx || carryTx};
+                               saveRx || carryRx, saveTx || carryTx,
+                               clearBandMemory || carryClear};
     QTimer::singleShot(kSelectionStatusTimeoutMs, this, [this, portId, generation]() {
         auto& selection = portId == 1 ? m_pendingSelectionA : m_pendingSelectionB;
         if (selection && selection->generation == generation) {
@@ -1428,44 +1452,31 @@ void AntennaGeniusModel::loadAntennaSettings()
     }
 
     m_antennaSettings = QJsonObject{{"version", 1},
-        {"splitRxTx", s.value("AG_SplitRxTxMode").toString() == QStringLiteral("True")}};
+        {"splitRxTx", false}};
     QJsonObject ports;
     QStringList migratedKeys;
     for (int port = 1; port <= 2; ++port) {
         QJsonObject bands;
         for (int band = 1; band <= 15; ++band) {
             const QString legacy = QString("AG_Port%1_Band%2").arg(port).arg(band);
-            const QString rx = legacy + QStringLiteral("_RX");
-            const QString tx = legacy + QStringLiteral("_TX");
             QJsonObject pair;
             bool legacyOk = false;
-            bool rxOk = false;
-            bool txOk = false;
             const int old = s.value(legacy).toInt(&legacyOk);
-            const int savedRx = s.value(rx).toInt(&rxOk);
-            const int savedTx = s.value(tx).toInt(&txOk);
-            if (s.contains(rx) && rxOk && savedRx >= 0)
-                pair["rx"] = savedRx;
-            else if (old > 0)
+            if (old > 0)
                 pair["rx"] = old;
-            if (s.contains(tx) && txOk && savedTx >= 0)
-                pair["tx"] = savedTx;
-            else if (old > 0)
+            if (old > 0)
                 pair["legacyTx"] = old;
-            if ((s.contains(legacy) && !legacyOk)
-                || (s.contains(rx) && (!rxOk || savedRx < 0))
-                || (s.contains(tx) && (!txOk || savedTx < 0)))
+            if (s.contains(legacy) && !legacyOk)
                 qCWarning(lcTuner) << "AntennaGenius: ignoring invalid legacy antenna settings for" << legacy;
             if (!pair.isEmpty())
                 bands[QString::number(band)] = pair;
-            migratedKeys << legacy << rx << tx;
+            migratedKeys << legacy;
         }
         if (!bands.isEmpty())
             ports[QString::number(port)] = bands;
     }
     m_antennaSettings["ports"] = ports;
     s.setValue(key, QString::fromUtf8(QJsonDocument(m_antennaSettings).toJson(QJsonDocument::Compact)));
-    s.remove(QStringLiteral("AG_SplitRxTxMode"));
     for (const auto& oldKey : migratedKeys)
         s.remove(oldKey);
     s.save();
@@ -1501,11 +1512,13 @@ QJsonObject AntennaGeniusModel::bandSettings(int portId, int bandId) const
 }
 
 void AntennaGeniusModel::setBandSettings(int portId, int bandId,
-                                          std::optional<int> rx, std::optional<int> tx)
+                                          std::optional<int> rx, std::optional<int> tx,
+                                          bool clearExisting)
 {
     auto ports = m_antennaSettings.value("ports").toObject();
     auto bands = ports.value(QString::number(portId)).toObject();
-    auto pair = bands.value(QString::number(bandId)).toObject();
+    auto pair = clearExisting ? QJsonObject()
+                              : bands.value(QString::number(bandId)).toObject();
     if (rx)
         pair["rx"] = *rx;
     if (tx) {
@@ -1514,6 +1527,19 @@ void AntennaGeniusModel::setBandSettings(int portId, int bandId,
     }
     bands[QString::number(bandId)] = pair;
     ports[QString::number(portId)] = bands;
+    m_antennaSettings["ports"] = ports;
+    saveAntennaSettings();
+}
+
+void AntennaGeniusModel::clearBandSettings(int portId, int bandId)
+{
+    auto ports = m_antennaSettings.value("ports").toObject();
+    auto bands = ports.value(QString::number(portId)).toObject();
+    bands.remove(QString::number(bandId));
+    if (bands.isEmpty())
+        ports.remove(QString::number(portId));
+    else
+        ports[QString::number(portId)] = bands;
     m_antennaSettings["ports"] = ports;
     saveAntennaSettings();
 }

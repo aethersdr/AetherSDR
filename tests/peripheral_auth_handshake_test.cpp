@@ -442,8 +442,44 @@ int main(int argc, char** argv)
         CHECK(commands.size() == 1);
         CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=0")));
 
+        AntennaGeniusModel defaultDeselect;
+        QStringList deselectCommands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(defaultDeselect, deselectCommands);
+        defaultDeselect.selectAntenna(1, 0);
+        CHECK(deselectCommands.size() == 1);
+        AntennaGeniusModelTestAccess::status(defaultDeselect, 1, 5, 0, 0);
+        deselectCommands.clear();
+        AntennaGeniusModelTestAccess::recallBand(defaultDeselect, 1, 5);
+        CHECK(deselectCommands.isEmpty()); // Default-grid deselect is not remembered per band.
+
         settings.remove(rootKey);
         settings.remove(legacyKey);
+    }
+    {
+        AntennaGeniusModel permissions;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(permissions, commands);
+        permissions.selectTxAntenna(1, 1); // RX-only, and not held by the other port.
+        CHECK(commands.isEmpty());
+        AntennaGeniusModelTestAccess::setBand(permissions, 2, 0);
+        permissions.selectTxAntenna(2, 3); // TX-capable, but the band is unknown.
+        CHECK(commands.isEmpty());
+    }
+    {
+        AntennaGeniusModel connection;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        QSignalSpy warnings(&connection, &AntennaGeniusModel::initializationWarning);
+        AntennaGeniusModelTestAccess::beginInit(connection);
+        AntennaGeniusModelTestAccess::retryInit(connection);
+        AntennaGeniusModelTestAccess::retryInit(connection);
+        AntennaGeniusModelTestAccess::retryInit(connection);
+        const int commandCount = commands.size();
+        AntennaGeniusModelTestAccess::retryInit(connection);
+        CHECK(commandCount == 15);
+        CHECK(commands.size() == commandCount);
+        CHECK(!warnings.isEmpty());
+        CHECK(warnings.constLast().at(0).toString().contains(QStringLiteral("unavailable")));
     }
     {
         auto& settings = AppSettings::instance();
@@ -512,6 +548,7 @@ int main(int argc, char** argv)
         AntennaGeniusModel connection;
         QStringList commands;
         AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        QSignalSpy warnings(&connection, &AntennaGeniusModel::initializationWarning);
         AntennaGeniusModelTestAccess::beginInit(connection);
         const int antSeq = commands.at(0).section('|', 0, 0).mid(1).toInt();
         const int portASeq = commands.at(2).section('|', 0, 0).mid(1).toInt();
@@ -529,11 +566,14 @@ int main(int argc, char** argv)
         CHECK(connection.portB().transmitting);
         connection.selectAntenna(1, 2);
         CHECK(commands.size() == 7); // Other port is unknown.
+        CHECK(!warnings.isEmpty());
+        CHECK(warnings.constLast().at(0).toString().contains(QStringLiteral("limited")));
         connection.selectRxAntenna(1, 0);
         CHECK(commands.size() == 8); // Clearing is still possible.
         CHECK(commands.constLast().contains(QStringLiteral("rxant=0 txant=1")));
         AntennaGeniusModelTestAccess::status(connection, 2, 5, 0, 0);
         CHECK(commands.size() == 8); // A late status does not trigger a recall.
+        CHECK(warnings.constLast().at(0).toString().isEmpty());
         connection.selectAntenna(1, 2);
         CHECK(commands.size() == 9);
         CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=2")));

@@ -192,12 +192,15 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
   [Access codes](#access-codes-auth).
 - By default, one four-column antenna grid is shown per port. It tracks the
   RX selection and permits receive-only antennas; selecting an antenna also
-  updates TX when it has TX permission on the current band.
+  updates TX when it has TX permission on the current band. Click the selected
+  antenna again to clear both selections for the session; that deselection is
+  not recalled when returning to the band.
 - Turn on **Split RX/TX** to add separate two-column RX and TX grids. This lets
   a receive-only antenna stay selected while transmission uses a different,
   transmit-permitted antenna. Click a selected antenna again to deselect only
-  that direction. A deselected TX antenna is recalled as deselected for that
-  band. Port B is hidden on a single-port device.
+  that direction. A deselection in Split mode is recalled for that direction
+  and band.
+- Port B is hidden on a single-port device.
 - A new TX antenna can be selected only when the port's band is known and the
   antenna is permitted for TX on that band. If the band is unknown, the
   default grid changes RX without changing the current TX antenna.
@@ -207,8 +210,9 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
   permission but leaves them clickable. RX and TX choices are recalled
   independently per band.
 - If initial antenna or port status is incomplete, the applet retries and
-  skips the initial recall. Until port status arrives, selections that cannot
-  be checked against the other port are blocked.
+  skips the initial recall. It retries up to three times, five seconds apart;
+  after that, the status line asks you to reconnect. Until port status arrives,
+  selections that cannot be checked against the other port are blocked.
 - **AUTO** per port turns the device's own auto mode on or off for that port.
 
 ## Reference
