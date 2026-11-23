@@ -2424,6 +2424,7 @@ private:
     QRect m_smartMtrLabelStripPx;
     bool m_smartMtrLabelsDirty{false};
     bool m_overlayStaticDirty{true};
+    bool m_overlayFrequencyDirty{false};  // frequency layer only; see markFrequencyOverlayDirty()
     bool m_overlayNeedsUpload{true};
     bool m_overlayFrequencyNeedsUpload{true};
     bool m_frequencyScalePreviewNeedsUpload{false};
@@ -2548,6 +2549,8 @@ private:
         quint64 overlayRebuilds{0};       // static+bg QPainter repaints
         quint64 overlayRebuildUs{0};
         quint64 overlayUploadBytes{0};    // static+bg texture bytes uploaded
+        quint64 overlayFrequencyRebuilds{0};  // frequency-layer-only repaints
+        quint64 overlayFrequencyRebuildUs{0};
         quint64 previewOverlayTransforms{0};
         quint64 previewOverlayCommitRefreshes{0};
         quint64 previewScaleRefreshes{0};
@@ -2589,6 +2592,13 @@ private:
     // SmartMTR value change: GPU builds restore and re-upload only the label
     // band; otherwise identical to markOverlayDirty("smartMtr").
     void invalidateSmartMtrLabels();
+    // A slice frequency change: GPU builds repaint and re-upload only the
+    // frequency-anchored layer, since a tune moves nothing in the background
+    // or screen-space chrome. Falls back to markOverlayDirty() whenever the
+    // chrome reads slice positions too (see overlayRepaintForSliceChange()).
+    void markFrequencyOverlayDirty();
+    // The cursor frequency readout is on screen (same condition it paints under).
+    bool cursorReadoutShowing() const;
     // Union of every flag's label band, in widget coordinates.
     QRect smartMtrLabelsCoverageRect() const;
 

@@ -954,4 +954,30 @@ inline float selectedWaterfallTimeScaleMsPerRow(
         *kiwiTimeScaleAnchor, kiwiFallbackMsPerRow);
 }
 
+// Which overlay layers a slice-overlay change must repaint. Slice markers and
+// their off-screen indicators live only in the frequency-anchored layer, so a
+// pure retune repaints that layer alone. Anything else about the slice (mode,
+// filter, TX, active, RIT/XIT, diversity) stays a full rebuild, as does a
+// retune while the cursor readout is showing, because it snaps to a nearby
+// marker from the screen-space layer.
+enum class OverlayRepaint {
+    None,
+    FrequencyLayer,
+    Full,
+};
+
+inline OverlayRepaint overlayRepaintForSliceChange(bool frequencyChanged,
+                                                   bool otherFieldsChanged,
+                                                   bool cursorReadoutShowing)
+{
+    if (otherFieldsChanged) {
+        return OverlayRepaint::Full;
+    }
+    if (!frequencyChanged) {
+        return OverlayRepaint::None;
+    }
+    return cursorReadoutShowing ? OverlayRepaint::Full
+                                : OverlayRepaint::FrequencyLayer;
+}
+
 } // namespace AetherSDR

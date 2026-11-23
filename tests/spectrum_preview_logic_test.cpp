@@ -1243,6 +1243,33 @@ int testDssSupplementalCoverageCalibration()
     return 0;
 }
 
+int testOverlayRepaintForSliceChange()
+{
+    using namespace AetherSDR;
+    if (overlayRepaintForSliceChange(false, false, false) != OverlayRepaint::None
+        || overlayRepaintForSliceChange(false, false, true) != OverlayRepaint::None) {
+        return fail("an unchanged slice overlay must not repaint");
+    }
+    if (overlayRepaintForSliceChange(true, false, false)
+        != OverlayRepaint::FrequencyLayer) {
+        return fail("a pure retune must repaint only the frequency layer");
+    }
+    if (overlayRepaintForSliceChange(true, false, true) != OverlayRepaint::Full) {
+        return fail("a retune under the cursor readout must rebuild the chrome too");
+    }
+    const bool frequencyCases[] = {false, true};
+    const bool cursorCases[] = {false, true};
+    for (const bool frequency : frequencyCases) {
+        for (const bool cursor : cursorCases) {
+            if (overlayRepaintForSliceChange(frequency, true, cursor)
+                != OverlayRepaint::Full) {
+                return fail("any non-frequency slice change must rebuild every layer");
+            }
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -1319,6 +1346,9 @@ int main()
         return result;
     }
     if (const int result = testPanRadioXpixels(); result != 0) {
+        return result;
+    }
+    if (const int result = testOverlayRepaintForSliceChange(); result != 0) {
         return result;
     }
     return testStablePresentationAnchor();
