@@ -279,6 +279,12 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
                                "hint", body);
     gapLabel->setWordWrap(true);
     receive->addWidget(gapLabel);
+    // Maintainer ruling on #7327: the cost is stated here and on the docs page.
+    auto* bothLabel = roleLabel(tr("On a FLEX-6300, running it beside the WSPR receiver slows both, "
+                                   "and each misses some cycles."),
+                                "hint", body);
+    bothLabel->setWordWrap(true);
+    receive->addWidget(bothLabel);
 
     // ── Message and Apply ────────────────────────────────────────────────
     m_messageLabel = roleLabel(QString(), "message", body);
