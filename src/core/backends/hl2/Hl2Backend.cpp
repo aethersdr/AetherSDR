@@ -1754,6 +1754,7 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
             ++contributors;
     if (contributors <= 1 && r->audioGain == 1.0f
         && r->audioPanPercent == kAudioPanCentre) {
+        m_mixLimiterAtten = 0.0f;   // the limiter belongs to a mix, and this is not one
         // The queue was empty before the insert above, so it holds exactly the
         // block we were handed: emit that directly. This is the steady state and
         // the reason the fast path exists — no remix or clamp. The PCM
@@ -1839,10 +1840,28 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
         src.erase(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(take));
     }
 
-    // Clamp rather than scale by 1/N. Dividing would make every slice quieter
-    // the moment a second one is opened, which an operator reads as the radio
-    // going deaf; clamping leaves a single slice at exactly the level it had
-    // and only costs headroom when several loud slices genuinely coincide.
+    // Limit rather than scale by 1/N (a second slice must not make the first
+    // quieter) or clamp (two AGC-levelled slices sum past full scale). A frame
+    // that would pass kMixCeiling is put at kMixLimit (stereo-linked); a sum
+    // that never passes it is bit-identical. State is 1 - gain, because a
+    // float gain released towards 1 stalls a few ulps short of it.
+    float atten = m_mixLimiterAtten;
+    for (std::size_t k = 0; k + 1 < m_mixAccum.size(); k += 2) {
+        const float peak = std::max(std::fabs(m_mixAccum[k]), std::fabs(m_mixAccum[k + 1]));
+        if (peak * (1.0f - atten) > kMixCeiling) {
+            atten = 1.0f - kMixLimit / peak;
+        }
+        if (atten != 0.0f) {
+            const float g = 1.0f - atten;
+            m_mixAccum[k] *= g;
+            m_mixAccum[k + 1] *= g;
+            atten *= kMixReleasePerFrame;
+            if (atten < kMixAttenSnap) {
+                atten = 0.0f;
+            }
+        }
+    }
+    m_mixLimiterAtten = atten;
     for (float& s : m_mixAccum)
         s = std::clamp(s, -kMixCeiling, kMixCeiling);
 
@@ -1893,6 +1912,7 @@ void Hl2Backend::releaseReceiverDsps()
     // The mix buffers describe the set that just went away.
     m_mixAccum.clear();
     m_mixPending.clear();
+    m_mixLimiterAtten = 0.0f;
     // The DSP-dependent half of the index map is no longer true. The DDC and UI
     // numbers stay, because those are ours and outlive any DSP.
     for (const auto& ids : m_ids.all()) {

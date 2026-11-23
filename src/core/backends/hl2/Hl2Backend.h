@@ -998,6 +998,8 @@ private:
     // buffer (~47 calls/s per receiver).
     std::vector<std::deque<float>> m_mixPending;
     std::vector<float> m_mixAccum;
+    // The mix limiter's attenuation (1 - gain), carried across blocks; 0 when idle.
+    float m_mixLimiterAtten = 0.0f;
     // How far ahead the other receivers may get before a starved one is mixed as
     // silence: 2048 samples of interleaved L,R at 24 kHz = 1024 frames, ~43 ms.
     static constexpr std::size_t kMixStarvationSamples = 2048;
@@ -1398,6 +1400,13 @@ private:
     // Ceiling on host-mixed slice audio. N demodulated receivers are summed
     // here, so N loud slices can sum past full scale where one never could.
     static constexpr float kMixCeiling = 1.0f;
+    // Where the mix limiter puts a peak that would have passed kMixCeiling
+    // (-0.1 dBFS), and how fast its gain returns to unity (first order, per
+    // 24 kHz stereo frame). Below kMixAttenSnap the gain is snapped to exactly 1.
+    static constexpr float kMixLimit = 0.98855f;
+    static constexpr float kMixReleaseSeconds = 0.1f;
+    static constexpr float kMixReleasePerFrame = 1.0f - 1.0f / (kMixReleaseSeconds * 24000.0f);
+    static constexpr float kMixAttenSnap = 1e-5f;
     // Centre of SliceModel's 0..100 balance range.
     static constexpr int kAudioPanCentre = 50;
 
