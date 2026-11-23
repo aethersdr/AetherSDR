@@ -3728,7 +3728,7 @@ QString RadioModel::localPttInterlockMessage(TransmitModel::PttSource source) co
     // model path runs, so legacy local voice-mode preflight must not silently
     // eat their PTT. Pan-level receive-only TX inhibits above still apply.
     // Otherwise let the radio be authoritative and report any interlock.
-    if (source == TransmitModel::PttSource::Dax) {
+    if (source == TransmitModel::PttSource::Dax || source == TransmitModel::PttSource::Cat) {
         return QString();
     }
 
@@ -3740,6 +3740,7 @@ QString RadioModel::localPttInterlockMessage(TransmitModel::PttSource source) co
     const bool nonVoiceSource = (source == TransmitModel::PttSource::Tune
                               || source == TransmitModel::PttSource::TciHardware
                               || source == TransmitModel::PttSource::Dax
+                              || source == TransmitModel::PttSource::Cat
                               || source == TransmitModel::PttSource::Wspr
                               || s->sliceId() == m_digitalVoiceTxSliceId);
     if (!nonVoiceSource
@@ -3935,6 +3936,7 @@ QString RadioModel::radioInterlockNotificationMessage(const QString& reason, con
                 (m_interlockNotificationSource == TransmitModel::PttSource::Tune
                  || m_interlockNotificationSource == TransmitModel::PttSource::TciHardware
                  || m_interlockNotificationSource == TransmitModel::PttSource::Dax
+                 || m_interlockNotificationSource == TransmitModel::PttSource::Cat
                  || m_interlockNotificationSource == TransmitModel::PttSource::Wspr
                  || s->sliceId() == m_digitalVoiceTxSliceId);
             if (!nonVoiceSource
@@ -5314,6 +5316,9 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
     if (QThread::currentThread() != thread()) {
         return false;
     }
+    // Only producers that feed this client's own dax_tx stream wait for it.
+    // CAT keys without audio: the radio takes it from whichever DAX TX stream
+    // is selected, which may belong to SmartSDR DAX (#7407).
     const bool daxInput = backendCapabilities().hasDaxStreams
         && (source == TransmitModel::PttSource::Dax || source == TransmitModel::PttSource::Wspr);
     if (tx && daxInput && !daxTxStreamReady()) {
@@ -5568,7 +5573,7 @@ void RadioModel::updateOperatorTransmit()
         m_transmitModel.isTransmitting(),
         m_daxTxActive,
         src == TransmitModel::PttSource::TciHardware,
-        src == TransmitModel::PttSource::Dax,
+        src == TransmitModel::PttSource::Dax || src == TransmitModel::PttSource::Cat,
         sourceIsTuneCarrier,
         modeIsCw);
 

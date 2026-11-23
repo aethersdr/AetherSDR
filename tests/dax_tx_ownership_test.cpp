@@ -4,6 +4,8 @@
 #include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
+#include "core/RigctlProtocol.h"
+#include "core/SmartCatProtocol.h"
 #include "core/AudioEngine.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
@@ -22,6 +24,8 @@
 #include <cstdio>
 #include <vector>
 #include <limits>
+#include <functional>
+#include <memory>
 
 namespace AetherSDR {
 class AutomationServerTestAccess {
@@ -509,6 +513,59 @@ void interruptBeforeDispatch()
     DaxTxOwnershipTestAccess::timeout(f.model);
 }
 
+// #7407: SmartSDR DAX owns the radio's selected dax_tx stream and this client
+// has none. CAT PTT carries no audio, so it keys; a DAX-audio producer, which
+// would feed this client's absent stream, is still refused.
+void catKeysWithForeignDaxStream()
+{
+    const auto run = [](const char* dialect, const std::function<void(RadioModel&)>& keyUp,
+                        const std::function<void(RadioModel&)>& keyDown) {
+        Fixture f;
+        f.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
+        std::vector<QString> keys;
+        f.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command&) {
+            keys.push_back(command);
+            return true;
+        });
+        check(!f.model.daxTxStreamReady(), "a foreign client's selected dax_tx stream is not ours");
+        keyUp(f.model);
+        QCoreApplication::processEvents();
+        const bool keyed = !keys.empty() && keys.front().startsWith(QLatin1String("xmit 1"));
+        std::printf("    %s key commands: %zu%s%s\n", dialect, keys.size(),
+                    keys.empty() ? "" : " first=", keys.empty() ? "" : qPrintable(keys.front()));
+        check(keyed, dialect);
+        keyDown(f.model);
+        QCoreApplication::processEvents();
+        check(!keys.empty() && keys.back().startsWith(QLatin1String("xmit 0")),
+              "the CAT unkey reaches the backend as xmit 0");
+        f.backend->setTxCommandSink({});
+    };
+    std::unique_ptr<RigctlProtocol> rigctl;
+    run("rigctld T 1 keys while SmartSDR DAX owns the TX stream",
+        [&](RadioModel& m) { rigctl = std::make_unique<RigctlProtocol>(&m);
+                             check(rigctl->handleLine(QStringLiteral("T 1")).trimmed() == QLatin1String("RPRT 0"),
+                                   "rigctld acknowledges T 1"); },
+        [&](RadioModel&) { (void)rigctl->handleLine(QStringLiteral("T 0")); rigctl.reset(); });
+    std::unique_ptr<SmartCatProtocol> cat;
+    run("SmartSDR-CAT ZZTX1 keys while SmartSDR DAX owns the TX stream",
+        [&](RadioModel& m) { cat = std::make_unique<SmartCatProtocol>(&m);
+                             (void)cat->processCommand(QStringLiteral("ZZTX1")); },
+        [&](RadioModel&) { (void)cat->processCommand(QStringLiteral("ZZRX")); cat.reset(); });
+
+    Fixture dax;
+    dax.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
+    std::vector<QString> keys;
+    dax.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command&) {
+        keys.push_back(command);
+        return true;
+    });
+    const TxCoordinator::Producer producer = dax.model.registerTxProducer(&dax.audio);
+    const TxCoordinator::Request input = producer.request();
+    check(!dax.model.setProducerTransmit(input, true, TransmitModel::PttSource::Dax) && keys.empty(),
+          "a DAX-audio producer is still refused without this client's own stream");
+    dax.backend->setTxCommandSink({});
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("dax-tx-ownership-test"));
@@ -518,6 +575,6 @@ int main(int argc, char** argv)
     ordering(false); ordering(true);
     failuresAndClients(); mediaAndSourceFlags(); lifecycle(); creationAndBusy();
     exactInputAndKeyFences(); cancellationAndMalformedStatus(); createOrderingAndGuardRefresh();
-    interruptBeforeDispatch();
+    interruptBeforeDispatch(); catKeysWithForeignDaxStream();
     return failures ? 1 : 0;
 }
