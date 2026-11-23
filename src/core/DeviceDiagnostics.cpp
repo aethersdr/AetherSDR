@@ -336,6 +336,7 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
         volumes["engine_rx_volume_pct"] = qRound(audio->rxVolume() * 100.0f);
         volumes["engine_rx_muted"] = audio->isMuted();
         volumes["engine_rx_boost"] = audio->rxBoost();
+        volumes["engine_pc_mic_gain_pct"] = audio->pcMicGain();
         obj["rx_streaming"] = audio->isRxStreaming();
         obj["tx_streaming"] = audio->isTxStreaming();
         obj["dax_tx_mode"] = audio->isDaxTxMode();
@@ -345,6 +346,7 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
         volumes["engine_rx_volume_pct"] = QJsonValue();
         volumes["engine_rx_muted"] = QJsonValue();
         volumes["engine_rx_boost"] = QJsonValue();
+        volumes["engine_pc_mic_gain_pct"] = QJsonValue();
         obj["rx_streaming"] = QJsonValue();
         obj["tx_streaming"] = QJsonValue();
         obj["dax_tx_mode"] = QJsonValue();
@@ -422,6 +424,7 @@ QJsonObject buildAudioStartupSnapshot(const AudioEngine* audio, const QJsonObjec
         volumes["engine_rx_volume_pct"] = qRound(audio->rxVolume() * 100.0f);
         volumes["engine_rx_muted"] = audio->isMuted();
         volumes["engine_rx_boost"] = audio->rxBoost();
+        volumes["engine_pc_mic_gain_pct"] = audio->pcMicGain();
         obj["rx_streaming"] = audio->isRxStreaming();
         obj["tx_streaming"] = audio->isTxStreaming();
         obj["dax_tx_mode"] = audio->isDaxTxMode();
@@ -430,6 +433,7 @@ QJsonObject buildAudioStartupSnapshot(const AudioEngine* audio, const QJsonObjec
         volumes["engine_rx_volume_pct"] = QJsonValue();
         volumes["engine_rx_muted"] = QJsonValue();
         volumes["engine_rx_boost"] = QJsonValue();
+        volumes["engine_pc_mic_gain_pct"] = QJsonValue();
         obj["rx_streaming"] = QJsonValue();
         obj["tx_streaming"] = QJsonValue();
         obj["dax_tx_mode"] = QJsonValue();

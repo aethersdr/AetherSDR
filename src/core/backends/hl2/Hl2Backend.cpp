@@ -531,6 +531,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_metis, &MetisClient::radioPttChanged, this, &Hl2Backend::onRadioPttChanged);
     connect(m_metis, &MetisClient::txRouteRefused, this, &Hl2Backend::onMetisTxRouteRefused);
     connect(m_metis, &MetisClient::linkDown, this, [this] {
+        ++m_swrPublicationEpoch;
         // No link, no observation: a PTT the radio last reported ends here, so the
         // model never stays in transmit on a radio it can no longer hear.
         onRadioPttChanged(false);
@@ -1754,6 +1755,11 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
             ++contributors;
     if (contributors <= 1 && r->audioGain == 1.0f
         && r->audioPanPercent == kAudioPanCentre) {
+        // The limiter belongs to a mix, and this is not one. Deliberately a
+        // step, not the 0.1 s release: when a slice is muted or closed while
+        // the mix is being limited, the one left returns to its own level at
+        // once (by up to the attenuation in force, a few dB).
+        m_mixLimiterAtten = 0.0f;
         // The queue was empty before the insert above, so it holds exactly the
         // block we were handed: emit that directly. This is the steady state and
         // the reason the fast path exists — no remix or clamp. The PCM
@@ -1839,10 +1845,32 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
         src.erase(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(take));
     }
 
-    // Clamp rather than scale by 1/N. Dividing would make every slice quieter
-    // the moment a second one is opened, which an operator reads as the radio
-    // going deaf; clamping leaves a single slice at exactly the level it had
-    // and only costs headroom when several loud slices genuinely coincide.
+    // Limit rather than scale by 1/N (a second slice must not make the first
+    // quieter) or clamp (two AGC-levelled slices sum past full scale). A frame
+    // that would pass kMixCeiling is put at kMixLimit (stereo-linked); a sum
+    // that never passes it is bit-identical. kMixLimit is the attack target
+    // only: while the gain releases, a frame that lands between kMixLimit and
+    // kMixCeiling is not pulled back to kMixLimit, so the published peak can
+    // sit just under 0 dBFS; the clamp below stays the hard ceiling. State is
+    // 1 - gain, because a float gain released towards 1 stalls a few ulps
+    // short of it.
+    float atten = m_mixLimiterAtten;
+    for (std::size_t k = 0; k + 1 < m_mixAccum.size(); k += 2) {
+        const float peak = std::max(std::fabs(m_mixAccum[k]), std::fabs(m_mixAccum[k + 1]));
+        if (peak * (1.0f - atten) > kMixCeiling) {
+            atten = 1.0f - kMixLimit / peak;
+        }
+        if (atten != 0.0f) {
+            const float g = 1.0f - atten;
+            m_mixAccum[k] *= g;
+            m_mixAccum[k + 1] *= g;
+            atten *= kMixReleasePerFrame;
+            if (atten < kMixAttenSnap) {
+                atten = 0.0f;
+            }
+        }
+    }
+    m_mixLimiterAtten = atten;
     for (float& s : m_mixAccum)
         s = std::clamp(s, -kMixCeiling, kMixCeiling);
 
@@ -1893,6 +1921,7 @@ void Hl2Backend::releaseReceiverDsps()
     // The mix buffers describe the set that just went away.
     m_mixAccum.clear();
     m_mixPending.clear();
+    m_mixLimiterAtten = 0.0f;
     // The DSP-dependent half of the index map is no longer true. The DDC and UI
     // numbers stay, because those are ours and outlive any DSP.
     for (const auto& ids : m_ids.all()) {
@@ -7261,6 +7290,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) const
 {
     HealthSnapshot h;
+    h.swrPublication = HealthSnapshot::SwrPublication{
+        m_connectGeneration, m_swrPublicationEpoch, m_sessionSwrForwardWindows,
+        m_sessionSwrGateClears, m_keyed};
     auto put = [&h](const char* key, const QString& label, const QVariant& v) {
         const QString k = QString::fromLatin1(key);
         h.order.append(k);
@@ -9387,6 +9419,9 @@ void Hl2Backend::pushInitialState()
     }
     m_radioPtt = false;
     m_swrGate.reset();
+    ++m_swrPublicationEpoch;
+    m_sessionSwrForwardWindows = 0;
+    m_sessionSwrGateClears = 0;
     m_psAdcOverload = false;
     publishTransmitState();
     m_tuning = false;
@@ -9509,8 +9544,13 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // so the reverse conditions stay out of the count.
     const bool swrGatesPassed =
         swrFwd && *swrFwd >= kMinForwardCountsForSwr && swrModulated;
-    if (m_keyed && swrGatesPassed)
+    if (m_keyed && swrFwd) {
+        ++m_sessionSwrForwardWindows;
+    }
+    if (m_keyed && swrGatesPassed) {
         ++m_keyedSwrGateClears;
+        ++m_sessionSwrGateClears;
+    }
     if (swrGatesPassed && swrRev) {
         if (const auto swr = swrFromRaw(*swrFwd, *swrRev))
             emit meterUpdate(QStringLiteral("TX:SWR"), *swr);

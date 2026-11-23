@@ -1979,6 +1979,14 @@ target_include_directories(hl2_rxdsp_agc_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_agc_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_agc_test COMMAND hl2_rxdsp_agc_test)
 
+# The multi-slice speaker mix keeps one slice bit-identical and stops two
+# AGC-levelled slices passing full scale at high AGC ceilings: real Hl2RxDsp
+# chains into Hl2Backend::mixReceiverAudio(), offline, socket-free.
+add_executable(hl2_rx_mix_headroom_test tests/hl2_rx_mix_headroom_test.cpp)
+target_include_directories(hl2_rx_mix_headroom_test PRIVATE src)
+target_link_libraries(hl2_rx_mix_headroom_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rx_mix_headroom_test COMMAND hl2_rx_mix_headroom_test)
+
 add_executable(hl2_rxdsp_notch_audio_test tests/hl2_rxdsp_notch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_notch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_notch_audio_test PRIVATE aethercore Qt6::Core)
@@ -7075,6 +7083,17 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME automation_probe_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
+    # Tailnet shim discovery helper: relay framing over a socket pair, and a
+    # loopback broadcast. No shim or radio. Sockets, all on ephemeral ports
+    # and none reaching beyond this machine: a UDP 127.0.0.1 listener; TCP
+    # 127.0.0.1 listeners, one in a subprocess standing in for the shim's
+    # feed (a hello and its answer, no radio protocol); on Windows only, two
+    # UDP 0.0.0.0 listeners sharing one port (SO_REUSEADDR) for a
+    # 127.255.255.255 broadcast. A failed bind raises at once and each read
+    # has a timeout (2 s; 10 s for the subprocess), so it fails fast.
+    add_test(NAME tailnet_discovery_helper
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/test_discovery_helper.py)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
@@ -7445,6 +7464,71 @@ add_executable(green_heron_protocol_test
 target_include_directories(green_heron_protocol_test PRIVATE src)
 target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
 add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
+
+# microHAM TRIO antenna switch, which AetherSDR never switches. Pure: recorded state documents in,
+# snapshots and session decisions out, no socket and no clock.
+add_executable(microham_trio_protocol_test
+    tests/microham_trio_protocol_test.cpp
+    src/core/MicrohamTrioProtocol.cpp
+)
+target_include_directories(microham_trio_protocol_test PRIVATE src)
+target_link_libraries(microham_trio_protocol_test PRIVATE Qt6::Core)
+add_test(NAME microham_trio_protocol_test COMMAND microham_trio_protocol_test)
+
+# The held session over an injected transport and clock: handshake bytes,
+# framing, keep-alive, an eviction that is never retaken, release, close.
+add_executable(microham_trio_session_test
+    tests/microham_trio_session_test.cpp
+    src/core/MicrohamTrioSession.cpp
+    src/core/MicrohamTrioWebSocket.cpp
+    src/core/MicrohamTrioProtocol.cpp
+)
+target_include_directories(microham_trio_session_test PRIVATE src)
+target_link_libraries(microham_trio_session_test PRIVATE Qt6::Core)
+set_target_properties(microham_trio_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME microham_trio_session_test COMMAND microham_trio_session_test)
+
+# The TRIO model on a scripted transport and a hand-moved clock: settings,
+# session words, eviction, release, failures, a cancelled Test; nothing but
+# the handshake, keep-alives and a close leaves. Binds no socket; the
+# settings store is a private temporary profile.
+add_executable(microham_trio_model_test tests/microham_trio_model_test.cpp)
+target_include_directories(microham_trio_model_test PRIVATE src tests)
+target_link_libraries(microham_trio_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME microham_trio_model_test COMMAND microham_trio_model_test)
+
+# The Trio row on the Peripherals page with a scripted Trio: Add, Connect,
+# DIRECT / OFFLINE / Needs attention, the state field, Web UI, Remove.
+add_executable(microham_trio_peripherals_test
+    tests/microham_trio_peripherals_test.cpp
+    tests/fakes/PeripheralAuthStoreFake.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    src/gui/RadioSetupDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp
+    src/gui/Kpa500AdvancedWidget.cpp
+    src/gui/AntennaGeniusApplet.cpp
+    src/gui/ShackSwitchApplet.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h)
+target_include_directories(microham_trio_peripherals_test PRIVATE tests/fakes src tests)
+target_link_libraries(microham_trio_peripherals_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+set_target_properties(microham_trio_peripherals_test PROPERTIES AUTOMOC ON)
+add_test(NAME microham_trio_peripherals_test COMMAND microham_trio_peripherals_test)
+set_tests_properties(microham_trio_peripherals_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # aethersdr/radio/state payload shape + the drive-publish timing contract
 # (#5518). Links the real TransmitModel because the have-status latch and the
@@ -9109,6 +9193,17 @@ target_link_libraries(radiocert_unmeasured_test PRIVATE aethercore Qt6::Core Qt6
 set_target_properties(radiocert_unmeasured_test PROPERTIES AUTOMOC ON)
 add_test(NAME radiocert_unmeasured_test COMMAND radiocert_unmeasured_test)
 set_tests_properties(radiocert_unmeasured_test PROPERTIES TIMEOUT 90)
+
+# The saved PC mic gain never attenuates a host-modulating radio and comes back
+# on a family that uses it. Socket-free, never keys; radiocert's two gain stages
+# spin for a few seconds.
+add_executable(pc_mic_gain_host_modulation_test tests/pc_mic_gain_host_modulation_test.cpp)
+target_include_directories(pc_mic_gain_host_modulation_test PRIVATE src tests)
+target_compile_definitions(pc_mic_gain_host_modulation_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pc_mic_gain_host_modulation_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pc_mic_gain_host_modulation_test COMMAND pc_mic_gain_host_modulation_test)
+set_tests_properties(pc_mic_gain_host_modulation_test PROPERTIES TIMEOUT 90)
 
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)

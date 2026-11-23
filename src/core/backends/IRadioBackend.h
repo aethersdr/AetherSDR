@@ -14,6 +14,7 @@
 
 #include <map>
 #include <functional>
+#include <optional>
 #include <variant>
 
 #include <QByteArray>
@@ -1129,12 +1130,24 @@ public:
 
     // ---- diagnostics ----
     // Health/status registers this backend can report (converter overload, TX FIFO,
-    // thermal, firmware, link counters). Purely for display — nothing in the app
-    // makes a decision from it, hence a plain map. Synchronous: every value is cached
+    // thermal, firmware, link counters). Mostly for display, hence a plain map;
+    // the named diagnostic keys below and `swrPublication` are the exceptions,
+    // which radio certification reads to reach a verdict. Synchronous: every value is cached
     // from unsolicited telemetry; a backend with worker-side values caches them on
     // this thread (see Hl2Backend). `order` lists keys in display order; a key absent
     // from `values` renders as "not reported", never as zero.
     struct HealthSnapshot {
+        // The backend's SWR publication counters, for radio certification's
+        // run-scoped TX:SWR verdict (unset where the backend has none).
+        // Cumulative evidence across overs. A new session invalidates an
+        // observer's baseline, including when the same transport recovers.
+        struct SwrPublication {
+            quint64 connection = 0;
+            quint64 epoch = 0;
+            quint64 forwardWindows = 0;
+            quint64 gateClears = 0;
+            bool keyed = false;
+        };
         QVariantMap values;
         QStringList order;
         // Section headings, keyed by the value-key they precede.
@@ -1143,6 +1156,7 @@ public:
         // displayed under its own name.
         QMap<QString, QString> labels;
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
+        std::optional<SwrPublication> swrPublication;
 
         // Keys a DIAGNOSTIC reads back, named here rather than spelled twice
         // (#7063). Most rows in a snapshot are for a human to read, so their

@@ -569,10 +569,9 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_rttySensSlider->setValue(savedRttySens);
     m_rttySensSlider->setFixedWidth(60);
     applyPrimarySliderStyle(m_rttySensSlider);
-    m_rttyConfThreshold = rttyConfThresholdFor(savedRttySens);
     connectSliderSetting(m_rttySensSlider,
-        [this](int v) { m_rttyConfThreshold = rttyConfThresholdFor(v); },
-        [](int v) { RttyDecodeSettings::setSensitivity(v); });
+        [this](int) { m_rttySensUnsaved = true; },
+        [this](int) { flushRttySens(); });
     rttyBar->addWidget(m_rttySensSlider);
 
     // Stats
@@ -611,7 +610,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         " font-weight: bold; padding: 1px 6px; }"
         "QPushButton:hover { color: #ff6060; background: {{color.background.1}}; }");
     connect(rttyCloseBtn, &QPushButton::clicked, this, [this] {
-        m_rttyPanel->hide();
+        setRttyPanelVisible(false);
         emit rttyPanelCloseRequested();
     });
     rttyBar->addWidget(rttyCloseBtn);
@@ -1289,7 +1288,31 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
 
 void PanadapterApplet::setRttyPanelVisible(bool visible)
 {
+    const bool wasVisible = !m_rttyPanel->isHidden();
+    if (visible == wasVisible) { return; }
+    if (visible) {
+        // A programmatic edit made while hidden is saved before the reload,
+        // so it is shown rather than replaced and then written back.
+        flushRttySens();
+        const QSignalBlocker blocker(m_rttySensSlider);
+        m_rttySensSlider->setValue(RttyDecodeSettings::sensitivity());
+    } else {
+        flushRttySens();
+    }
     m_rttyPanel->setVisible(visible);
+}
+
+void PanadapterApplet::flushRttySens()
+{
+    if (m_rttySensUnsaved) {
+        RttyDecodeSettings::setSensitivity(m_rttySensSlider->value());
+        m_rttySensUnsaved = false;
+    }
+}
+
+float PanadapterApplet::rttyConfThreshold() const
+{
+    return rttyConfThresholdFor(m_rttySensSlider->value());
 }
 
 void PanadapterApplet::setRttyMarkHz(int hz)
@@ -1320,7 +1343,7 @@ void PanadapterApplet::appendRttyText(const QString& text, float confidence)
     // the CR/LF handling on purpose: Baudot CR and LF are ordinary codepoints
     // that noise hits as often as any other, and a dropped character must
     // not still spray blank lines down the pane. (#5028)
-    if (confidence < m_rttyConfThreshold) {
+    if (confidence < rttyConfThreshold()) {
         return;
     }
 

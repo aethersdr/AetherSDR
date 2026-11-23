@@ -2,7 +2,6 @@
 #include "core/backends/AutoRfGainControl.h"
 
 #include "core/RadioCertificationMath.h"
-#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientQuindarTone.h"
 #include "core/LogManager.h"
@@ -131,6 +130,23 @@ static_assert([] {
             return false;
     return true;
 }(), "a gatedOnForwardCounts meter must also set needsForwardPower");
+
+// The run's keyed-receipt observer and the inventory verdict both follow the
+// gated row, and the observer keeps a single flag. A second gated row would
+// read the first one's receipts, so exactly one is allowed.
+static_assert([] {
+    int gated = 0;
+    for (const MeterSpec& spec : kMeterTable)
+        gated += spec.gatedOnForwardCounts ? 1 : 0;
+    return gated == 1;
+}(), "the keyed-receipt observer follows exactly one gatedOnForwardCounts row");
+
+constexpr const MeterSpec& kGatedMeter = *[] {
+    for (const MeterSpec& spec : kMeterTable)
+        if (spec.gatedOnForwardCounts)
+            return &spec;
+    return static_cast<const MeterSpec*>(nullptr);
+}();
 
 }  // namespace
 
@@ -350,6 +366,42 @@ QJsonObject RadioCertification::renderedSnapshot() const
     return out;
 }
 
+void RadioCertification::beginSwrObservation()
+{
+    QObject::disconnect(m_swrConnection);
+    m_keyedSwrReceived = false;
+    m_swrBackend = m_radio ? m_radio->backend() : nullptr;
+    m_swrBaseline = m_swrBackend ? m_swrBackend->healthSnapshot().swrPublication : std::nullopt;
+    if (!m_swrBaseline) { return; }
+
+    const MeterModel& meters = m_radio->meterModel();
+    m_swrConnection = QObject::connect(&meters, &MeterModel::meterUpdated, &m_swrObserver,
+        [this](int index, float) {
+            if (m_keyedSwrReceived || !m_radio) { return; }
+            const MeterDef* def = m_radio->meterModel().meterDef(index);
+            if (!def || def->source != QLatin1String(kGatedMeter.source)
+                || def->name != QLatin1String(kGatedMeter.name)) {
+                return;
+            }
+            const auto current = currentSwrPublication();
+            m_keyedSwrReceived = current && current->keyed
+                && current->gateClears > m_swrBaseline->gateClears;
+        });
+}
+
+std::optional<RadioCertification::SwrPublication> RadioCertification::currentSwrPublication() const
+{
+    if (!m_swrBaseline || !m_radio || !m_swrBackend || m_radio->backend() != m_swrBackend) {
+        return std::nullopt;
+    }
+    const auto current = m_swrBackend->healthSnapshot().swrPublication;
+    if (!current || current->connection != m_swrBaseline->connection
+        || current->epoch != m_swrBaseline->epoch) {
+        return std::nullopt;
+    }
+    return current;
+}
+
 void RadioCertification::observeKeyedRf()
 {
     if (!m_radio)
@@ -538,7 +590,9 @@ void RadioCertification::stageControlEffect(const Options& o)
         return s2.value(QStringLiteral("micPeakDbfs")).toDouble(-999.0);
     };
 
-    const int restoreMic = AppSettings::instance().value("PcMicGain", 100).toInt();
+    // What the radio had, not the saved PcMicGain, which a host-modulating
+    // radio does not use.
+    const int restoreMic = m_audio->pcMicGain();
     const double micFull = keyedMicPeak(100);
     const double micHalf = keyedMicPeak(50);
     m_audio->setPcMicGain(restoreMic);
@@ -1374,6 +1428,11 @@ void RadioCertification::stageMeterInventory()
     const auto& meters = m_radio->meterModel();
     QJsonObject m;
     QStringList definedNeverFed, expectedButMissing, unitMismatches, inconclusive;
+    QString swrConcern;
+    bool swrInconclusive = false;
+    const auto publication = currentSwrPublication();
+    const std::optional<quint64> runClears = publication
+        ? std::optional(publication->gateClears - m_swrBaseline->gateClears) : std::nullopt;
 
     // kMeterTable's `expectedOnHl2` column is a fact about ONE radio class.
     const bool tableAppliesToThisRadio =
@@ -1465,7 +1524,7 @@ void RadioCertification::stageMeterInventory()
                 "this meter had nothing to report")
                 .arg(static_cast<double>(kKeyedRfFloorWatts), 0, 'g', 3);
         } else if (spec.gatedOnForwardCounts && m_swrGateCounts > 0
-                   && m_swrGateClears == 0) {
+                   && (runClears ? *runClears == 0 : m_swrGateClears == 0)) {
             // THE RUN RADIATED, AND THE PRODUCER STILL WITHHELD THIS METER.
             // rfConfirmed is true here: the keyed-RF precondition is satisfied
             // at MeterModel's consumer floor, which on the HL2 is ~67x below
@@ -1537,6 +1596,42 @@ void RadioCertification::stageMeterInventory()
             // three characters in the report.
             {QStringLiteral("note"), QString::fromUtf8(spec.note)},
         };
+        // `|| !publication`: a link drop or a backend replacement withdraws the
+        // meter definitions, so "not defined" after a session change is the
+        // change, not a fact about the radio. It stays INCONCLUSIVE.
+        if (spec.gatedOnForwardCounts && m_swrBaseline && (idx >= 0 || !publication)) {
+            row[QStringLiteral("fedWhileKeyedThisRun")] = publication
+                ? QJsonValue(m_keyedSwrReceived) : QJsonValue();
+            row[QStringLiteral("gateClearsThisRun")] = publication
+                ? QJsonValue(static_cast<qint64>(*runClears)) : QJsonValue();
+            if (!publication) {
+                swrConcern = QStringLiteral("the SWR publication session changed during the run");
+            } else if (anyKeyedWindow && *runClears > 0 && !m_keyedSwrReceived) {
+                row[QStringLiteral("verdict")] = QStringLiteral("NOT DELIVERED");
+                swrConcern = QStringLiteral("%1 keyed window(s) cleared the SWR gate, but no keyed "
+                                            "SWR reading reached the meter during this run").arg(*runClears);
+            } else if (!m_keyedSwrReceived) {
+                if (anyKeyedWindow && publication->forwardWindows == m_swrBaseline->forwardWindows) {
+                    swrConcern = QStringLiteral("no keyed forward sample was available during this run");
+                } else if (!untestedBecause.isEmpty()) {
+                    swrConcern = untestedBecause;
+                } else {
+                    swrConcern = QStringLiteral("no keyed window cleared the SWR gate during this run");
+                }
+            }
+            if (!swrConcern.isEmpty()) {
+                if (!row.contains(QStringLiteral("verdict"))) {
+                    row[QStringLiteral("verdict")] = QStringLiteral("INCONCLUSIVE");
+                    row[QStringLiteral("inconclusiveReason")] = swrConcern;
+                    swrInconclusive = true;
+                }
+                row[QStringLiteral("reason")] = swrConcern;
+                swrConcern = key + QStringLiteral(" — ") + row.value(QStringLiteral("verdict")).toString()
+                    + QStringLiteral(": ") + swrConcern;
+            }
+            m[key] = row;
+            continue;
+        }
         const bool untested = !untestedBecause.isEmpty();
         if (untested && idx >= 0 && age < 0) {
             row[QStringLiteral("verdict")] = QStringLiteral("INCONCLUSIVE");
@@ -1583,6 +1678,11 @@ void RadioCertification::stageMeterInventory()
         concern = QStringLiteral("expected on this radio but not defined: ")
                 + expectedButMissing.join(QStringLiteral(", "));
     }
+    // NOT DELIVERED is a negative finding and sits with the others.
+    if (!swrConcern.isEmpty() && !swrInconclusive) {
+        if (!concern.isEmpty()) { concern += QStringLiteral(". "); }
+        concern += swrConcern;
+    }
     if (!definedNeverFed.isEmpty()) {
         if (!concern.isEmpty()) concern += QStringLiteral(". ");
         concern += QStringLiteral(
@@ -1597,6 +1697,11 @@ void RadioCertification::stageMeterInventory()
     // must not come away with "TX:SWR is broken" from a run that never keyed
     // the PA, because the remedy the negative form recommends is deleting a
     // working meter.
+    // The gated row's own INCONCLUSIVE sentence follows the same rule; the
+    // lead below, when there is one, still goes first.
+    if (swrInconclusive) {
+        concern = concern.isEmpty() ? swrConcern : swrConcern + QStringLiteral(". ") + concern;
+    }
     if (!inconclusive.isEmpty()) {
         QString why;
         if (m_keyRefusals > 0 && !anyKeyedWindow) {
@@ -2791,9 +2896,8 @@ void RadioCertification::stageCarrierSuppression(const Options& o)
         return;
     // SSB has no carrier: keying with no audio should give ~no RF; anything
     // substantial is modulator DC offset. Mic gain goes to zero because the ALC
-    // lifts room noise into real modulation otherwise. AudioEngine has no getter,
-    // so restore from the persisted "PcMicGain" setting MainWindow applies.
-    const int restoreGain = AppSettings::instance().value("PcMicGain", 100).toInt();
+    // lifts room noise into real modulation otherwise.
+    const int restoreGain = m_audio->pcMicGain();
     if (m_audio)
         m_audio->setPcMicGain(0);
     spin(600);
@@ -2924,6 +3028,8 @@ void RadioCertification::stageLifecycle(const Options&)
 QJsonObject RadioCertification::run(const Options& o)
 {
     m_stages = QJsonArray{};
+    beginSwrObservation();
+    const auto stopObservingSwr = qScopeGuard([this] { QObject::disconnect(m_swrConnection); });
     // Per-run evidence, cleared with the stages it is reported beside. Carrying
     // a previous run's keyed-RF confirmation forward would make the second run
     // of a session inherit the first one's transmission.
