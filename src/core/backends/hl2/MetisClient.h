@@ -443,8 +443,8 @@ public:
     // ends. A late key-up without a scheduled release is applied at once.
     // An unscheduled edge flushes pending ones and takes effect now.
     // A scheduled key-up keeps `completion` until its element's release has
-    // been written to EP2, so the element's intent outlives its pending
-    // edges; a flush drops it. An unscheduled key-down is a hold of its own,
+    // been written to EP2 and its 5 ms fall has ended, so the element's intent
+    // outlives its pending edges; a flush drops it. An unscheduled key-down is a hold of its own,
     // which a scheduled release does not clear (see m_cwHolds).
     void setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
                       std::chrono::steady_clock::time_point scheduledAt = {},
@@ -1074,6 +1074,9 @@ private:
     // Empty once the first OFF frame after an unkey is written (sendControlPacket).
     TxCoordinator::Operation m_moxOperation;
     TxCoordinator::Operation m_cwOperation;
+    // The last written key-up's completion, held until its fall reaches zero:
+    // its intent bounds m_cwOperation, so ending it earlier cuts the fall.
+    TxCoordinator::Completion m_cwFallCompletion;
     // Scheduled CW edges (#5065), sorted by EP2 sample index. Sample 0 is
     // m_cwAnchor, taken with m_ep2Clock; the pacer re-syncs m_cwFrameSample to
     // its own frame count, and every other build advances it by one frame.

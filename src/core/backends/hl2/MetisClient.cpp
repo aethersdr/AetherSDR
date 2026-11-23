@@ -1800,14 +1800,15 @@ void MetisClient::enterCwMode(const TxCoordinator::Operation& operation)
 void MetisClient::applyDueCwEdges(std::int64_t sample, qint64 nowMs)
 {
     while (m_cwScheduleCount > 0 && m_cwSchedule[0].sample <= sample) {
-        const CwScheduledEdge edge = std::move(m_cwSchedule[0]);
+        CwScheduledEdge edge = std::move(m_cwSchedule[0]);
         for (std::size_t i = 1; i < m_cwScheduleCount; ++i) {
             m_cwSchedule[i - 1] = std::move(m_cwSchedule[i]);
         }
         m_cwSchedule[--m_cwScheduleCount] = {};
         if (!edge.down) {
             // The scheduled carrier only: a live hold stays on. The edge's
-            // completion is dropped with it, the element now written.
+            // completion is held until the fall it starts has ended.
+            m_cwFallCompletion = std::move(edge.completion);
             m_cwKeyDown = false;
             m_cwForceUpSample = -1;
             pruneCwHolds(nowMs);
@@ -1843,6 +1844,7 @@ void MetisClient::flushCwSchedule() noexcept
     m_cwScheduleCount = 0;
     m_cwForceUpSample = -1;
     m_cwReleaseOwed = false;
+    m_cwFallCompletion = {};
     m_cwUpOnAirTicks.store(0, std::memory_order_release);
 }
 
@@ -2195,6 +2197,9 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
     // the wire and it cannot be set behind the gate's back.
     const bool keyed = m_mox && m_txAllowed;
     auto pkt = ep2Packet(m_txSeq++, withMox(m_ccConfig, keyed), withMox(b, keyed));
+    if (!keyed || !m_cwMode) {
+        m_cwFallCompletion = {};   // no CW envelope is written to finish a fall
+    }
 
     // Only put samples on the wire while actually keyed. Unkeyed frames carry
     // transmit silence, which is what ep2Packet's zero fill already gives us --
@@ -2223,6 +2228,9 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
                 m_cwEnvelope = std::min(1.0, m_cwEnvelope + kRampStep);
             } else {
                 m_cwEnvelope = std::max(0.0, m_cwEnvelope - kRampStep);
+            }
+            if (m_cwEnvelope <= 0.0) {
+                m_cwFallCompletion = {};
             }
             const double shaped = 0.5 - 0.5 * std::cos(kPi * m_cwEnvelope);
             block[static_cast<std::size_t>(n)] = {static_cast<float>(kHl2CarrierAmplitude * shaped), 0.0f};
