@@ -64,11 +64,20 @@ struct AntennaGeniusModelTestAccess {
         model.processStatus(QStringLiteral("port %1 band=%2 rxant=%3 txant=%4")
                                 .arg(portId).arg(band).arg(rx).arg(tx));
     }
+    static void status(AntennaGeniusModel& model, const QString& body)
+    {
+        model.processStatus(body);
+    }
     static void response(AntennaGeniusModel& model, int seq, int code, const QString& body)
     {
         model.processResponse(seq, code, body);
     }
     static void beginInit(AntennaGeniusModel& model) { model.runInitSequence(); }
+    static void retryInit(AntennaGeniusModel& model) { model.retryInitialStatus(); }
+    static void expediteInitTimeout(AntennaGeniusModel& model)
+    {
+        model.m_portInitWatchdog->start(1);
+    }
     static void setBand(AntennaGeniusModel& model, int portId, int band)
     {
         (portId == 1 ? model.m_portA : model.m_portB).band = band;
@@ -453,6 +462,95 @@ int main(int argc, char** argv)
         CHECK(commands.size() == 1);
         CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=2")));
         settings.remove(QStringLiteral("AntennaGenius"));
+    }
+    {
+        auto& settings = AppSettings::instance();
+        settings.remove(QStringLiteral("AntennaGenius"));
+        settings.setValue(QStringLiteral("AG_Port1_Band5"), QStringLiteral("2"));
+        AntennaGeniusModel connection;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        QSignalSpy warnings(&connection, &AntennaGeniusModel::initializationWarning);
+        AntennaGeniusModelTestAccess::beginInit(connection);
+        const int antSeq = commands.at(0).section('|', 0, 0).mid(1).toInt();
+        const int portASeq = commands.at(2).section('|', 0, 0).mid(1).toInt();
+        const int portBSeq = commands.at(3).section('|', 0, 0).mid(1).toInt();
+        AntennaGeniusModelTestAccess::response(connection, portASeq, 0,
+            QStringLiteral("port 1 band=5 rxant=1 txant=1"));
+        AntennaGeniusModelTestAccess::response(connection, portASeq, 0, QString());
+        AntennaGeniusModelTestAccess::response(connection, portBSeq, 0,
+            QStringLiteral("port 2 band=5 rxant=0 txant=0"));
+        AntennaGeniusModelTestAccess::response(connection, portBSeq, 0, QString());
+        AntennaGeniusModelTestAccess::response(connection, antSeq, 0, QString());
+        AntennaGeniusModelTestAccess::expediteInitTimeout(connection);
+        CHECK(warnings.wait(100));
+        CHECK(!warnings.isEmpty());
+        CHECK(!warnings.constFirst().at(0).toString().isEmpty());
+        CHECK(commands.size() > 6);
+        const int retrySeq = commands.at(6).section('|', 0, 0).mid(1).toInt();
+        connection.selectAntenna(1, 2);
+        CHECK(commands.size() == 8);
+        CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=1")));
+        AntennaGeniusModelTestAccess::status(connection, 1, 5, 2, 1);
+        AntennaGeniusModelTestAccess::response(connection, retrySeq, 0,
+            QStringLiteral("antenna 2 name=Both tx=0020 rx=0020"));
+        AntennaGeniusModelTestAccess::response(connection, retrySeq, 0, QString());
+        CHECK(commands.size() == 8); // A late list does not trigger a recall.
+        CHECK(warnings.constLast().at(0).toString().isEmpty());
+        connection.selectAntenna(1, 2);
+        CHECK(commands.size() == 9);
+        CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=2")));
+        AntennaGeniusModelTestAccess::status(connection, QStringLiteral("port 1 tx=1"));
+        CHECK(connection.portA().transmitting);
+        CHECK(connection.portA().rxAntenna == 2 && connection.portA().txAntenna == 1);
+        settings.remove(QStringLiteral("AntennaGenius"));
+    }
+    {
+        auto& settings = AppSettings::instance();
+        settings.remove(QStringLiteral("AntennaGenius"));
+        settings.setValue(QStringLiteral("AG_Port1_Band5"), QStringLiteral("2"));
+        AntennaGeniusModel connection;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        AntennaGeniusModelTestAccess::beginInit(connection);
+        const int antSeq = commands.at(0).section('|', 0, 0).mid(1).toInt();
+        const int portASeq = commands.at(2).section('|', 0, 0).mid(1).toInt();
+        const int portBSeq = commands.at(3).section('|', 0, 0).mid(1).toInt();
+        AntennaGeniusModelTestAccess::response(connection, antSeq, 0,
+            QStringLiteral("antenna 2 name=Both tx=0020 rx=0020"));
+        AntennaGeniusModelTestAccess::response(connection, antSeq, 0, QString());
+        AntennaGeniusModelTestAccess::response(connection, portASeq, 0,
+            QStringLiteral("port 1 band=5 rxant=1 txant=1"));
+        AntennaGeniusModelTestAccess::response(connection, portASeq, 0, QString());
+        AntennaGeniusModelTestAccess::response(connection, portBSeq, 1, QStringLiteral("error"));
+        AntennaGeniusModelTestAccess::retryInit(connection);
+        CHECK(commands.size() == 7);
+        AntennaGeniusModelTestAccess::status(connection, QStringLiteral("port 2 tx=1"));
+        CHECK(connection.portB().transmitting);
+        connection.selectAntenna(1, 2);
+        CHECK(commands.size() == 7); // Other port is unknown.
+        connection.selectRxAntenna(1, 0);
+        CHECK(commands.size() == 8); // Clearing is still possible.
+        CHECK(commands.constLast().contains(QStringLiteral("rxant=0 txant=1")));
+        AntennaGeniusModelTestAccess::status(connection, 2, 5, 0, 0);
+        CHECK(commands.size() == 8); // A late status does not trigger a recall.
+        connection.selectAntenna(1, 2);
+        CHECK(commands.size() == 9);
+        CHECK(commands.constLast().contains(QStringLiteral("rxant=2 txant=2")));
+        settings.remove(QStringLiteral("AntennaGenius"));
+    }
+    {
+        AntennaGeniusModel connection;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        AntennaGeniusModelTestAccess::beginInit(connection);
+        AntennaGeniusModelTestAccess::retryInit(connection);
+        const int before = commands.size();
+        connection.selectRxAntenna(1, 0);
+        CHECK(commands.size() == before); // Unknown local TX cannot be preserved safely.
+        connection.disconnectFromDevice();
+        AntennaGeniusModelTestAccess::retryInit(connection);
+        CHECK(commands.size() == before);
     }
     {
         auto& settings = AppSettings::instance();

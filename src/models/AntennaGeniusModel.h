@@ -155,6 +155,7 @@ signals:
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();
     void connectionError(const QString& msg);
+    void initializationWarning(const QString& msg);
     // A socket attempt has begun, from any path; carries the host it asked for.
     void attemptStarted(const QString& host);
 
@@ -217,6 +218,8 @@ private:
     bool antennaInUseByOtherPort(int portId, int antennaId) const;
     AgPortStatus selectionState(int portId) const;
     void finishInitialPortStatus();
+    void retryInitialStatus();
+    bool hasCompletePortStatus(const QString& line, int portId) const;
 
     // Initialization sequence after TCP connect.
     void runInitSequence();
@@ -277,9 +280,11 @@ private:
     QJsonObject m_antennaSettings;
     bool m_antennaSettingsWritable{true};
     bool m_initializingPorts{false};
+    bool m_initialStatusRequired{false};
     bool m_initialPortAReady{false};
     bool m_initialPortBReady{false};
     bool m_initialAntennasReady{false};
+    QTimer* m_portInitWatchdog{nullptr};
 
     // Previous band per port (for detecting band changes)
     int m_prevBandA{-1};

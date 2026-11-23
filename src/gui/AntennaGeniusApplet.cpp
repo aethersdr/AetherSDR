@@ -442,6 +442,21 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "color: {{color.accent.danger}}; font-size: 10px;");
     });
 
+    connect(m_model, &AntennaGeniusModel::initializationWarning, this,
+            [this](const QString& msg) {
+        if (!m_model->isConnected()) return;
+        if (msg.isEmpty()) {
+            m_statusLabel->setText(QString("Connected — %1 v%2")
+                .arg(m_model->connectedDevice().name, m_model->connectedDevice().version));
+            ThemeManager::instance().applyStyleSheet(
+                m_statusLabel, "color: {{color.accent}}; font-size: 10px;");
+        } else {
+            m_statusLabel->setText(msg);
+            ThemeManager::instance().applyStyleSheet(
+                m_statusLabel, "color: {{color.accent.warning}}; font-size: 10px;");
+        }
+    });
+
     // Antenna list loaded → rebuild button grids.
     connect(m_model, &AntennaGeniusModel::antennasChanged,
             this, &AntennaGeniusApplet::rebuildAntennaButtons);
