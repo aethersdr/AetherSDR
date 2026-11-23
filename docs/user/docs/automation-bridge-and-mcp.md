@@ -53,10 +53,11 @@ You can also start the bridge for a single run by launching with `AETHER_AUTOMAT
 When an agent reports its first step, the Orbit badge in the lower-left status
 bar shows its name. Its current step appears beside the Band/Segment Zoom
 controls. A cyan dot beside the sentence gently pulses as the client repaints
-while the step is active. Reduced Motion keeps it steady. An agent can describe the test in a sentence. Hover over Orbit for
-the full text when the window is narrow. Radio notices temporarily take priority. Finishing, disconnecting, or
-five minutes of idle time clears the badge and activity. A second agent gets a
-busy response while the first agent holds the indicator.
+while the step is active. Reduced Motion keeps it steady. The activity can use
+up to 64 characters. Hover over Orbit for the full text when the window is narrow.
+Radio notices temporarily take priority. The badge and activity clear when the
+agent finishes, disconnects, or goes five minutes without reporting its step.
+A second agent gets a busy response while the first holds the indicator.
 
 ### Access token
 

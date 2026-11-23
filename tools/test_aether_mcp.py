@@ -226,7 +226,8 @@ def test_agent_activity_session():
     bridge.request.side_effect = [
         {"ok": True, "active": True}, {"ok": True, "active": True},
         {"ok": True, "active": True}, {"ok": True, "active": False}]
-    with patch.object(aether_mcp, "Bridge", return_value=bridge) as factory, \
+    work = Mock()
+    with patch.object(aether_mcp, "Bridge", side_effect=[bridge, work]) as factory, \
          patch.dict(os.environ, {"AETHER_MCP_SOCKET": "/tmp/first.sock"}, clear=False):
         try:
             result = aether_mcp.handle_tool("set_agent_activity", {})
@@ -235,14 +236,14 @@ def test_agent_activity_session():
             os.environ["AETHER_MCP_SOCKET"] = "/tmp/second.sock"
             check("active wrapper pins its selected application",
                   aether_mcp.bridge_socket_path() == "/tmp/first.sock")
-            aether_mcp._renew_agent_activity()
+            _REAL_BRIDGE_REQUEST({"cmd": "get", "model": "meters"})
+            aether_mcp.handle_tool("set_agent_activity", {"text": "Testing meters"})
             aether_mcp.handle_tool("set_agent_activity", {"text": "Testing tuning"})
             aether_mcp.handle_tool("set_agent_activity", {"text": ""})
             requests = [args[0][0] for args in bridge.request.call_args_list]
-            check("claim, test work, update and release share the owner connection",
-                  factory.call_count == 1 and len(requests) == 4
-                  and [r.get("text") for r in requests] == ["Testing meters", None, "Testing tuning", ""]
-                  and requests[1].get("action") == "renew")
+            check("only explicit activity reports use the owner connection",
+                  factory.call_count == 2 and work.request.call_count == 1
+                  and [r.get("text") for r in requests] == ["Testing meters", "Testing meters", "Testing tuning", ""])
             check("release closes the connection and drops the instance pin",
                   bridge.close.call_count == 1 and aether_mcp.bridge_socket_path() == "/tmp/second.sock")
         finally:

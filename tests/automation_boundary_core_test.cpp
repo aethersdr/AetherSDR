@@ -15,6 +15,8 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QLocalSocket>
+#include <QTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -31,15 +33,17 @@ class AutomationServerTestAccess
 public:
     using Wait = AutomationServer::ConnectWait;
 
-    static QJsonObject request(AutomationServer& server, const QJsonObject& request)
+    static QJsonObject request(AutomationServer& server, const QJsonObject& request,
+                               QLocalSocket* owner = nullptr)
     {
         return server.handleLine(QJsonDocument(request).toJson(QJsonDocument::Compact),
-                                 nullptr);
+                                 owner);
     }
     static QJsonObject request(AutomationServer& server, const QByteArray& line)
     {
         return server.handleLine(line, nullptr);
     }
+    static QTimer* activityTimer(AutomationServer& server) { return server.m_activityTimer; }
     static std::shared_ptr<Wait> addWait(AutomationServer& server)
     {
         auto wait = std::make_shared<Wait>();
@@ -109,6 +113,44 @@ QJsonObject tuneWithId(const QJsonValue& id)
         request.insert(QStringLiteral("id"), id);
     }
     return request;
+}
+
+void agentActivity()
+{
+    AutomationServer server;
+    QLocalSocket first, second; // Unconnected objects supply distinct connection identities.
+    QStringList changes;
+    QObject::connect(&server, &AutomationServer::agentActivityChanged,
+                     [&](const QString& text, const QString&) { changes.append(text); });
+    auto report = [&](QLocalSocket& client, const QString& text) {
+        return Access::request(server, {{"cmd", "agentActivity"}, {"text", text}}, &client);
+    };
+    QTimer* timer = Access::activityTimer(server);
+    check(timer->interval() == 300000 && !timer->isActive(), "claim starts unowned with a five-minute timeout");
+    timer->setInterval(100); // Exercise the real expiry handler without waiting five minutes.
+    server.setReadOnly(true);
+    check(!ok(report(first, "Testing meters")) && changes.isEmpty(), "observe-only bridge refuses claim");
+    server.setReadOnly(false);
+    check(ok(report(first, "Testing meters")) && changes == QStringList{"Testing meters"}, "first report claims");
+    const auto initialTimer = timer->id();
+    check(errorOf(report(second, "Testing tuning")) == "busy" && errorOf(report(second, "")) == "busy",
+          "other connection cannot update or release");
+    Access::request(server, {{"cmd", "get"}, {"model", "radio"}}, &first);
+    check(!ok(Access::request(server, {{"cmd", "agentActivity"}, {"action", "renew"}}, &first)),
+          "implicit renew request is refused");
+    check(!ok(report(first, QStringLiteral("\u202e\u2066\n"))) && timer->id() == initialTimer
+              && changes == QStringList{"Testing meters"},
+          "ordinary work, competing claims and invalid reports preserve the deadline and activity");
+    check(ok(report(first, "Testing meters")) && timer->id() != initialTimer && changes.size() == 1,
+          "repeating an explicit report renews without another announcement");
+    const QString boundary = QString(63, u'm') + QStringLiteral("\U0001f4fb");
+    check(ok(report(first, QStringLiteral("\u202d\u202e\u2066\u0085\t") + boundary + "extra"))
+              && changes.last() == boundary, "strip controls before the 64-code-point cap, preserving the final emoji");
+    check(pumpUntil([&] { return changes.last().isEmpty(); }), "expiry clears the connected owner's activity");
+    check(ok(report(second, "Testing tuning")) && errorOf(report(first, "")) == "busy",
+          "stale owner cannot clear a replacement claim");
+    check(ok(report(second, "")) && ok(report(second, "")) && changes.last().isEmpty() && !timer->isActive(),
+          "explicit release clears the claim and is repeatable");
 }
 
 void interlockProbe()
@@ -591,6 +633,7 @@ int main(int argc, char** argv)
     }
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     QCoreApplication app(argc, argv);
+    agentActivity();
     interlockProbe();
     jsonIdAndMhzContract();
     memoryActivate();

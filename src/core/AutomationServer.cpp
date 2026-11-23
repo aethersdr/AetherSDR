@@ -2343,9 +2343,17 @@ QJsonObject AutomationServer::setAgentActivity(QLocalSocket* socket, const QStri
     if (text.isEmpty()) {
         clearAgentActivity();
     } else {
-        const QString line = text.simplified();
-        if (line.isEmpty() || line.size() > 256)
-            return err(QStringLiteral("activity must be a short plain-text phrase (up to 256 characters)"));
+        // Strip Unicode Bidi_Control and Cc before measuring display text.
+        static const QRegularExpression controls(QStringLiteral(
+            R"([\p{Cc}\x{061C}\x{200E}-\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}])"));
+        QString cleaned = text;
+        auto points = cleaned.remove(controls).simplified().toStdU32String();
+        if (points.empty())
+            return err(QStringLiteral("activity must contain display text; send an empty string to release"));
+        constexpr std::size_t maxActivityCharacters = 64;
+        if (points.size() > maxActivityCharacters)
+            points.resize(maxActivityCharacters);
+        const QString line = QString::fromStdU32String(points);
         m_activityOwner = socket;
         m_activityTimer->start();
         if (m_activityText != line) {
@@ -3018,12 +3026,6 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("agentActivity", {}, "Report operator-visible activity on a held connection (JSON text, empty to release)",
             [](const QList<QByteArray>&, A&) { return err(QStringLiteral("use JSON with a text string")); },
             [](AutomationServer& self, A& args, QLocalSocket* sock) {
-                if (args.action == QLatin1String("renew")) {
-                    if (sock && self.m_activityOwner == sock)
-                        self.m_activityTimer->start();
-                    return QJsonObject{{QStringLiteral("ok"), true},
-                                       {QStringLiteral("active"), sock && self.m_activityOwner == sock}};
-                }
                 return self.setAgentActivity(sock, args.value);
             });
 
@@ -4028,7 +4030,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                                                     : QStringLiteral("false");
         if (cmd == QLatin1String("agentActivity")) {
             const auto text = obj.value(QStringLiteral("text"));
-            if (a.action != QLatin1String("renew") && !text.isString())
+            if (!a.action.isEmpty() || !text.isString())
                 return err(QStringLiteral("agentActivity requires a text string"));
             a.value = text.toString();
         }
@@ -4169,10 +4171,6 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                                     "-> Network to allow driving."));
     }
 
-    if (sock && sock == m_activityOwner && spec->name != QLatin1String("agentActivity")
-        && spec->name != QLatin1String("ping") && spec->name != QLatin1String("verbs")
-        && spec->name != QLatin1String("whoami"))
-        m_activityTimer->start();
     return spec->dispatch(*this, a, sock);
 }
 

@@ -148,10 +148,8 @@ class Bridge:
             pass  # best-effort teardown — a close failure is not actionable
 
 
-def bridge_request(obj, timeout=REQUEST_TIMEOUT_S, *, renew_activity=True):
+def bridge_request(obj, timeout=REQUEST_TIMEOUT_S):
     """Connect, send one request (with the token, if set), return the response."""
-    if renew_activity and obj.get("cmd") not in ("ping", "verbs", "whoami", "agentActivity"):
-        _renew_agent_activity()
     sock_path = bridge_socket_path()
     if not sock_path:
         raise RuntimeError(
@@ -183,21 +181,6 @@ def _close_activity_bridge():
     if _activity_bridge is not None:
         _activity_bridge.close()
         _activity_bridge = None
-
-
-def _renew_agent_activity():
-    if _activity_bridge is None:
-        return
-    # Keep ordinary requests on their own transports (timeouts and streaming
-    # replies vary). Only work from this wrapper can renew its held connection.
-    try:
-        response = _activity_bridge.request(_authenticated_request(
-            {"cmd": "agentActivity", "action": "renew"}))
-    except (OSError, ValueError):
-        _close_activity_bridge()
-        raise RuntimeError("Activity connection lost; select the app and report the step again") from None
-    if not response.get("active"):
-        raise RuntimeError("Activity claim ended; report the current step again or release it")
 
 
 def _set_agent_activity(args):
@@ -488,11 +471,11 @@ TOOLS = [
         "description": (
             "Before driving AetherSDR through MCP or Computer Use, describe your test in "
             "one sentence: say what you are doing and what you are checking. For example: "
-            "Tuning Slice A to 14.105 MHz and checking the frequency readback. "
-            "Update when the step changes. "
+            "Tuning Slice A to 14.105 MHz and checking the readback. "
+            "Update when the step changes. Repeat the report before five minutes if still working. "
             "Send an empty string when finished. A competing controller returns busy."),
         "inputSchema": {"type": "object", "properties": {
-            "text": {"type": "string", "description": "One operator-facing sentence (up to 256 characters), or empty to release"}
+            "text": {"type": "string", "description": "One operator-facing sentence (up to 64 characters), or empty to release"}
         }, "required": ["text"], "additionalProperties": False},
     },
     {
@@ -1317,7 +1300,6 @@ def handle_tool(name, args):
             time.sleep(interval)
 
     if name == "gesture":
-        _renew_agent_activity()
         global _gesture_bridge, _gesture_socket_path
         action = str(args.get("action") or "").strip().lower()
         if action not in ("begin", "move", "end", "cancel", "status"):
@@ -1458,7 +1440,7 @@ def resource_read(uri):
     req = _RESOURCE_REQUESTS.get(uri)
     if req is None:
         return None
-    data = bridge_request(req, renew_activity=False)
+    data = bridge_request(req)
     return {"contents": [{"uri": uri, "mimeType": "application/json",
                           "text": json.dumps(data, indent=2)}]}
 

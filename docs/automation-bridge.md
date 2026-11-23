@@ -176,16 +176,21 @@ niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 
 **Agent activity.** Before driving AetherSDR through MCP or Computer Use, send
 one sentence naming the test action and what you are checking. For example, call
-`set_agent_activity({"text":"Reading the simulator’s meters to check which signal levels are available."})`.
+`set_agent_activity({"text":"Reading the meters to check which signal levels are available."})`.
 When the step changes, call
-`set_agent_activity({"text":"Tuning Slice A to 14.105 MHz and checking the frequency readback."})`.
+`set_agent_activity({"text":"Tuning Slice A to 14.105 MHz and checking the readback."})`.
 Short labels such as “Testing tuning” also work. Finish with
 `set_agent_activity({"text":""})`. Existing radio notices take priority.
 The wrapper pins the app instance and holds a local connection for the claim.
 With the raw bridge, send `{"cmd":"agentActivity","text":"Testing meters"}`
 on a connection you keep open. The same connection can replace or clear the
 text. A competing caller receives `busy`. Closing the owner connection,
-stopping the bridge or five minutes of inactivity clears the badge and notice.
+stopping the bridge, or five minutes without an explicit owner report clears the
+badge and notice. For a long step, repeat its text before the deadline. Other
+tool calls leave the deadline unchanged. The bridge strips control and bidi
+control characters, simplifies whitespace, and displays the first 64 Unicode
+code points. Only an explicitly empty string releases the claim. Nonempty input
+that leaves no display text returns an error and preserves the current report.
 Observe-only sessions cannot claim the indicator.
 
 **Prompts and resources.** The server also exposes an MCP **prompt**,

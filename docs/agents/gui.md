@@ -133,9 +133,10 @@ PR in `Static checks` and emits inline diff annotations; it is warning-only.
 ## Agent Automation Bridge — verify the GUI without pixels
 
 Before driving AetherSDR through MCP or Computer Use, call `set_agent_activity`
-with one sentence describing the test action and what you are checking, for
-example “Tuning Slice A to 14.105 MHz and checking the frequency readback.”
-Update when the step changes. Send an empty string when finished.
+with up to 64 characters describing the test, for example “Tuning Slice A to
+14.105 MHz and checking the readback.” Update when the step changes. For a
+long step, repeat the report before five minutes elapse. Send an empty string
+when finished.
 
 AetherSDR ships an in-process, agent-drivable bridge (off in production).
 Launch with `AETHER_AUTOMATION=1` and drive a `QLocalServer` that speaks
