@@ -44,7 +44,10 @@ inline QString stationAntennaTransmitRefusal()
                                        "Antenna can't change while transmitting.");
 }
 
-// A key-on refused because a switch is moving (RFC #6237's objection uses it).
+// A key-on refused because a switch is moving. No caller here on purpose:
+// nothing in this layer gates keying. It is kept beside its twin so the key
+// objection of RFC #6237, when it lands, says the same thing every switch
+// says; station_antenna_menu_test pins the text until then.
 inline QString stationAntennaChangingKeyRefusal()
 {
     return QCoreApplication::translate(
