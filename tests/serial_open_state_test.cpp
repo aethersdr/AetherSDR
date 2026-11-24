@@ -41,6 +41,7 @@ int main(int argc, char** argv)
         return 1;
     }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     const QString missing = QDir(profile.path()).filePath(QStringLiteral("missing/ttyUSB99"));
     std::vector<State> observed;
     SerialPortController controller;
@@ -51,6 +52,37 @@ int main(int argc, char** argv)
     });
 
     auto& settings = AppSettings::instance();
+    const auto is = [&settings](const char* key, const char* value) {
+        return settings.value(key).toString() == QLatin1String(value);
+    };
+
+    // One-shot upgrade migration (#6972 ruling (a)). An upgrading station
+    // whose port was open last session keeps opening it at launch.
+    settings.remove("SerialAutoOpenMigrated");
+    settings.setValue("SerialPortOpen", "True");
+    settings.setValue("SerialAutoOpen", "False");
+    SerialPortController::seedStartupSettings();
+    check(is("SerialAutoOpen", "True") && is("SerialPortOpen", "True"),
+          "upgrade: a port left open becomes Auto-open and is requested this session");
+    check(is("SerialAutoOpenMigrated", "True"), "upgrade: the migration marker is written");
+
+    // After the migration the checkbox alone rules: a leftover session
+    // request does not re-enable an Auto-open the operator unticked.
+    settings.setValue("SerialAutoOpen", "False");
+    settings.setValue("SerialPortOpen", "True");
+    SerialPortController::seedStartupSettings();
+    check(is("SerialAutoOpen", "False") && is("SerialPortOpen", "False"),
+          "migrated: an unticked Auto-open stays off and clears the stale request");
+
+    // A fresh install only records the marker.
+    settings.remove("SerialAutoOpenMigrated");
+    settings.remove("SerialAutoOpen");
+    settings.remove("SerialPortOpen");
+    SerialPortController::seedStartupSettings();
+    check(is("SerialAutoOpenMigrated", "True") && !settings.contains("SerialAutoOpen")
+              && is("SerialPortOpen", "False"),
+          "fresh install: only the marker is written and nothing is requested");
+
     settings.setValue("SerialPortName", missing);
     settings.setValue("SerialAutoOpen", "True");
     settings.setValue("SerialPortOpen", "False");

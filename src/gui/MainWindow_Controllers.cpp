@@ -3407,20 +3407,7 @@ void MainWindow::wireExternalControllers()
 
     // Init that must happen on the worker thread (serial port open, etc.)
 #ifdef HAVE_SERIALPORT
-    {
-        auto& s = AppSettings::instance();
-        const QString migrationKey = QStringLiteral("SerialAutoOpenMigrated");
-        // Legacy releases reopened ports when either setting was true.
-        if (!s.contains(migrationKey)) {
-            if (s.value("SerialPortOpen", "False").toString() == "True") {
-                s.setValue("SerialAutoOpen", "True");
-            }
-            s.setValue(migrationKey, "True");
-        }
-        const bool autoOpen = s.value("SerialAutoOpen", "False").toString() == "True";
-        s.setValue("SerialPortOpen", autoOpen ? "True" : "False");
-        s.save();
-    }
+    SerialPortController::seedStartupSettings();
     queueSerialPortSettings();
     m_flexControl->setInvertDirection(
         AppSettings::instance().value("FlexControlInvertDir", "False").toString() == "True");

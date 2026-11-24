@@ -776,6 +776,21 @@ void SerialPortController::setCwKeyDown(bool down)
     applyPin(PinFunction::CwKey, down);
 }
 
+void SerialPortController::seedStartupSettings()
+{
+    auto& s = AppSettings::instance();
+    const QString migrationKey = QStringLiteral("SerialAutoOpenMigrated");
+    if (!s.contains(migrationKey)) {
+        if (s.value("SerialPortOpen", "False").toString() == "True") {
+            s.setValue("SerialAutoOpen", "True");
+        }
+        s.setValue(migrationKey, "True");
+    }
+    const bool autoOpen = s.value("SerialAutoOpen", "False").toString() == "True";
+    s.setValue("SerialPortOpen", autoOpen ? "True" : "False");
+    s.save();
+}
+
 bool SerialPortController::loadSettings()
 {
     auto& s = AppSettings::instance();

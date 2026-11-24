@@ -87,6 +87,14 @@ public:
     // Returns false if applying the settings could not open the requested port.
     bool loadSettings();
 
+    // Startup, GUI thread, before the first loadSettings(). Legacy releases
+    // reopened the port when either SerialAutoOpen or SerialPortOpen was true,
+    // so the first launch after upgrade carries SerialPortOpen=True into
+    // SerialAutoOpen once and writes SerialAutoOpenMigrated; after that the
+    // Auto-open checkbox alone decides. Then seeds this session's request
+    // (SerialPortOpen) from SerialAutoOpen and saves (#6972 ruling (a)).
+    static void seedStartupSettings();
+
 public slots:
     void setTransmitting(bool tx);
     void setCwKeyDown(bool down);
