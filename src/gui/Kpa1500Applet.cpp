@@ -9,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMessageBox>
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -362,14 +363,25 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
     // ── POWER / FAN / TRACK row ──────────────────────────────────────────
     m_powerBtn = makeSmallButton(QStringLiteral("POWER"), this);
     m_powerBtn->setAccessibleDescription(
-        tr("Wakes the amplifier or puts it to sleep. The label shows the current state."));
+        tr("Wakes the amplifier or puts it to sleep, asking first. The label shows the current state."));
     theme.applyStyleSheet(m_powerBtn, makeStateBtnStyle({
         activeStateStyle(QStringLiteral("on"), QStringLiteral("{{color.background.1}}"),
                          QStringLiteral("{{color.accent.success}}"),
                          QStringLiteral("{{color.text.primary}}")),
     }));
     connect(m_powerBtn, &QPushButton::clicked, this, [this]() {
-        emit powerRequested(!m_status.powerOn.value_or(true));
+        const bool on = !m_status.powerOn.value_or(true);
+        if (!on) {
+            // Waking over Ethernet is unproven; a stray click must not strand
+            // a remote amp asleep. Same pattern as RfkitApplet's reset confirm.
+            const auto reply = QMessageBox::question(this, tr("Put Amplifier to Sleep"),
+                tr("Put the KPA1500 to sleep? It may not wake again over the network."),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (reply != QMessageBox::Yes) {
+                return;
+            }
+        }
+        emit powerRequested(on);
     });
 
     auto* fanCaption = new QLabel(QStringLiteral("FAN MIN"), this);

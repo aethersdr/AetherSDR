@@ -372,6 +372,8 @@ The amplifier serves the same commands over TCP and UDP on that one port:
   Every control is confirmed by reading the amplifier's state back and is
   retried until it takes; if the amplifier never reports the requested state,
   the applet shows, for example, `Operate not confirmed by the amplifier`.
+  Retries pause while the radio transmits, so an antenna or ATU change is
+  never repeated under RF; they resume after transmit ends.
   **TUNE** is sent once and never repeated. The amplifier accepts any number
   of UDP clients, so AetherSDR can run alongside Elecraft's KPA1500 Remote.
 
@@ -400,7 +402,9 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   label appears when an external antenna switch reports an antenna number
   from 3 to 32.
 - **POWER**, which puts the amplifier to sleep; it reads `ASLEEP` while the
-  amplifier sleeps, and pressing it then wakes the amplifier. While asleep,
+  amplifier sleeps, and pressing it then wakes the amplifier. Putting it to
+  sleep asks for confirmation first, because waking it over the network is
+  not yet proven, and is refused while the radio transmits. While asleep,
   every other control is dimmed.
 - **FAN MIN**, the lowest speed the fans run at, 0 (off) to 5 (full). The
   amplifier raises the speed further as it heats up; **FAN** shows the speed

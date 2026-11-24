@@ -3,6 +3,7 @@
 #include "core/Kpa1500Connection.h"
 
 #include <QCoreApplication>
+#include <QThread>
 
 #include <algorithm>
 #include <cstdio>
@@ -54,6 +55,24 @@ struct Kpa1500TrackingTestAccess {
     {
         return connection.m_socket.state() == QAbstractSocket::UnconnectedState
             && connection.m_udp.state() == QAbstractSocket::UnconnectedState;
+    }
+
+    static int retryAttemptsAfterWait(Kpa1500Connection& connection)
+    {
+        Kpa1500Connection::PendingControl antenna;
+        antenna.group = QStringLiteral("AN");
+        antenna.frame = QByteArrayLiteral("^AN2;");
+        antenna.readback = QStringLiteral("AN");
+        antenna.lastSent.start();
+        connection.m_pending.push_back(std::move(antenna));
+        QThread::msleep(650);
+        connection.retryPendingControls();
+        for (const auto& control : connection.m_pending) {
+            if (control.group == QLatin1String("AN")) {
+                return control.attempts;
+            }
+        }
+        return -1;
     }
 
     static bool timerDeliveryHeld(Kpa1500Connection& connection)
@@ -126,6 +145,32 @@ int main(int argc, char** argv)
               "disabling tracking revokes pending FR");
         check(Kpa1500TrackingTestAccess::operatePreserved(connection),
               "disabling tracking preserves other controls");
+    }
+    {
+        Kpa1500Connection connection;
+        connection.setTxFrequency(14074, false, true);
+        check(Kpa1500TrackingTestAccess::retryAttemptsAfterWait(connection) == 0,
+              "a pending AN is not resent while TX is held");
+        connection.setTxFrequency(14074, false, false);
+        check(Kpa1500TrackingTestAccess::retryAttemptsAfterWait(connection) == 1,
+              "a pending AN resumes its retry once TX ends");
+        static int refusals = 0;
+        const QtMessageHandler previous = qInstallMessageHandler(
+            [](QtMsgType, const QMessageLogContext&, const QString& message) {
+                if (message.contains(QLatin1String("refusing sleep while transmitting"))) {
+                    ++refusals;
+                }
+            });
+        connection.setTxFrequency(14074, true, false);
+        connection.setPower(false);
+        check(refusals == 1, "sleep is refused while transmitting");
+        connection.setTxFrequency(14074, false, false);
+        connection.setPower(false);
+        connection.setTxFrequency(14074, true, false);
+        connection.setPower(true);
+        check(refusals == 1, "sleep after TX, and wake during TX, are not refused");
+        qInstallMessageHandler(previous);
+        check(Kpa1500TrackingTestAccess::socketsUnopened(connection), "retry test opens no transport");
     }
     return failures == 0 ? 0 : 1;
 }

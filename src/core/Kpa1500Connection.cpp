@@ -488,6 +488,11 @@ void Kpa1500Connection::retryPendingControls()
             ++it;
             continue;
         }
+        if (m_transmitting && it->resend) {
+            // Never repeat a control under RF; resume once transmit ends.
+            ++it;
+            continue;
+        }
         if (it->attempts >= kMaxControlAttempts) {
             qCWarning(lcTuner) << "Kpa1500Connection:" << it->label << "not confirmed after"
                                << it->attempts << "attempts";
@@ -615,6 +620,10 @@ void Kpa1500Connection::setFanMinimum(int level)
 
 void Kpa1500Connection::setPower(bool on)
 {
+    if (!on && m_transmitting) {
+        qCWarning(lcTuner) << "Kpa1500Connection: refusing sleep while transmitting";
+        return;
+    }
     PendingControl c;
     c.group = QStringLiteral("ON");
     c.label = on ? tr("Power on") : tr("Power off");
