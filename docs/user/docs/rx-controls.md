@@ -166,8 +166,9 @@ TCI) must be receiving on the slice; no PC Audio required. In every other mode,
 and in DIGU/DIGL with no DAX channel assigned, it measures this computer's audio,
 so turn **PC Audio** on first. If no audio arrives, Auto Sweep stops at its first
 step, puts the setting back and reports which source was silent. A slider move
-with no audio records no point and says which source is silent. In DIGU/DIGL
-only radio-side NR blocks a sweep; client-side NR (NR2/NR4/DFNR etc.) does not
+with no audio records no point and says which source is silent, unless a
+recommendation is on show; that stays. When the TCI source is in use, only
+radio-side NR blocks a sweep; client-side NR (NR2/NR4/DFNR etc.) does not
 affect TCI audio. With AGC **Off** (TargetLevel strategy), the target-level solve
 always uses PC Audio regardless of mode.
 Close the window with the corner ✕, Esc or Ctrl+W; closing it during

@@ -481,7 +481,7 @@ private slots:
     {
         // Source-selection matrix: isTciMode() gates TCI audio on
         //   DIGU/DIGL + daxChannel >= 1 + agcMode != "off"
-        // Verified indirectly through the sourceLabel (agcRole="hint"), which
+        // Verified indirectly through the sourceLabel (agcRole="source"), which
         // is the public observable for the private isTciMode() predicate.
 #ifdef HAVE_WEBSOCKETS
         Fixture fixture;
@@ -494,7 +494,7 @@ private slots:
 
         QLabel* source = nullptr;
         for (QLabel* label : dialog.findChildren<QLabel*>()) {
-            if (label->property("agcRole").toString() == QStringLiteral("hint")) {
+            if (label->property("agcRole").toString() == QStringLiteral("source")) {
                 source = label;
                 break;
             }
@@ -713,8 +713,7 @@ private slots:
         QLabel* hint = nullptr;
         QPushButton* startStop = nullptr;
         for (QLabel* label : dialog.findChildren<QLabel*>()) {
-            if (label->property("agcRole").toString() == QStringLiteral("hint")
-                && label->text().startsWith(QStringLiteral("Tune to a clear spot"))) {
+            if (label->property("agcRole").toString() == QStringLiteral("hint")) {
                 hint = label;
             }
         }
@@ -756,7 +755,8 @@ private slots:
         Fixture fixture;
         auto tci = std::make_unique<TciServer>(&fixture.radio);
         auto audio = std::make_unique<AudioEngine>();
-        auto* dialog = new AgcCalibrationDialog(&fixture.radio, audio.get(), tci.get(), {});
+        auto dialog = std::make_unique<AgcCalibrationDialog>(
+            &fixture.radio, audio.get(), tci.get(), AgcCalibrationDialog::NoiseFloorFn{});
         dialog->setSlice(fixture.radio.slice(0));
         dialog->show();
         fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
@@ -774,7 +774,7 @@ private slots:
         QCOMPARE(startStop->text(), QStringLiteral("Stop"));
 
         fixture.backend->agcRequests.clear();
-        delete dialog;
+        dialog.reset();
         QVERIFY(!fixture.backend->agcRequests.isEmpty());
         QCOMPARE(fixture.backend->agcRequests.constLast().threshold, 65);
         tci.reset();

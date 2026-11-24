@@ -47,7 +47,8 @@ QLabel[agcRole='result'] {
     color: {{color.canon.cyan}};
     font-weight: 600;
 }
-QLabel[agcRole='hint'] {
+QLabel[agcRole='hint'],
+QLabel[agcRole='source'] {
     color: {{color.canon.muted}};
 }
 QPushButton {
@@ -320,7 +321,8 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_modeLabel->setProperty("agcRole", QStringLiteral("mode"));
     m_modeLabel->setWordWrap(true);
     m_sourceLabel = new QLabel(this);
-    m_sourceLabel->setProperty("agcRole", QStringLiteral("hint"));
+    m_sourceLabel->setProperty("agcRole", QStringLiteral("source"));
+    m_sourceLabel->setWordWrap(true);
     m_quietLabel = new QLabel(this);
     m_quietLabel->setWordWrap(true);
     body->addWidget(m_modeLabel);
