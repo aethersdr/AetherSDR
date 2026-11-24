@@ -419,7 +419,9 @@ aethersdr_tx_filter_band:0,100,2900;    # set low and high cut, audio Hz
   client that enabled the set. That is also the answer to a set. A set that the
   limits changed but that left the passband as it was is answered to the
   sender only. A set that changes nothing gets no answer.
-- Allowed while transmitting, as in the Phone applet.
+- Allowed while transmitting, as in the Phone applet, except on a Hermes-Lite 2:
+  there a set while transmitting is refused, the passband stays as it was, and
+  the line sent back carries the unchanged pair. Unkeyed it applies at once.
 - The value is the operator's setting. On a Hermes-Lite 2 it applies to USB
   and LSB voice; CW, AM, FM and the digital modes transmit with their mode's
   own passband.

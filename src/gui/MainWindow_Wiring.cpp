@@ -4451,7 +4451,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](const QString& panId) {
         // Don't close the last pan
         if (m_panStack->count() <= 1) return;
-        clearCenterLockForPan(panId, true);
+        // A keyed close of the TX pan is refused (with a Notice): keep its lock.
+        if (!m_radioModel.keyedTxPanCloseRefused(panId)) clearCenterLockForPan(panId, true);
         // Single source of truth for teardown: removePanadapter sends the
         // FlexLib-correct "display pan remove" + "display panafall remove"
         // pair, so a panafall-created pan also frees its waterfall. (#3843)

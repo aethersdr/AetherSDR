@@ -433,7 +433,8 @@ void MainWindow::registerControlActions()
             // the active slice is not on (Select Panadapter N).
             const QString panId = m_panStack ? m_panStack->activePanId() : QString();
             if (panId.isEmpty() || !m_panStack || m_panStack->count() <= 1) return;
-            clearCenterLockForPan(panId, true);
+            // A keyed close of the TX pan is refused (with a Notice): keep its lock.
+            if (!m_radioModel.keyedTxPanCloseRefused(panId)) clearCenterLockForPan(panId, true);
             m_radioModel.removePanadapter(panId);
         })
         .inMidiCategory("Global")
