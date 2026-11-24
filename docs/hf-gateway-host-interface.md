@@ -30,7 +30,7 @@ these two sources, as cited below. No VARA binary was examined.
 | Not every command is answered with `OK`/`WRONG`: `VERSION` is answered with a `VERSION` line, and `SN` with an `SN` line (or `WRONG` from Data2G before any burst is decoded). A client's reply queue must be built per command | D2G (`host.cpp`, `Host::command`), MER (`VERSION`, `SN`, `BUFFER` **Response**) |
 | Command words are case-insensitive on the server side | D2G (`host.cpp`, `upper(words[0])`) |
 
-LF is not part of the framing in either source. `LineSplitter` ignores it so that a CRLF sender still frames cleanly. That's a robustness choice, not something either interface requires.
+The command port uses CR framing. `LineSplitter` tolerates LF between lines for CRLF senders and rejects LF inside a line.
 
 A line the splitter rejects keeps its place in its output. A server can then answer it `WRONG` in order, which the positional replies require.
 
@@ -52,7 +52,7 @@ A line the splitter rejects keeps its place in its output. A server can then ans
 | `VERSION text` | free text | D2G, MER |
 | `CQFRAME src bw` | — | D2G, MER |
 
-Bandwidth tokens accepted: 500, 1200, 2300, 2750 (D2G `arq/modes.hpp` `bw_name`; MER "BW").
+Accepted notification bandwidths are 500 and 2300 (D2G `arq/modes.cpp` `bw_name` and MER "BW"), 1200 (D2G only), and 2750 (MER only). D2G accepts the `BW2750` command and maps it to the 2300 cap (`host.cpp` `bw_cap`).
 
 ## Host → modem commands
 
@@ -73,18 +73,18 @@ Two behaviours the gateway's design relies on, both from MER:
 
 ### Recognised from a back end (`parseCommand`)
 
-Every command in the table above, plus the following. They're recognised so they can be answered and logged; the gateway's server decides the reply.
+Every command in the table above, plus the following. The parser recognises this subset so a future server can answer and log it. D2G also accepts `P2P`, `WINLINK`, `REGISTERED`, and `IGNOREKISSDCD` (`host.cpp` `IGNORED`). The future server determines which commands it supports and what it replies.
 
 | Command | Source |
 |---|---|
 | `LISTEN CQ` | D2G, MER (treated as `LISTEN ON`) |
 | `CONNECT from to` | D2G, MER |
-| `CQFRAME call bw` | D2G, MER |
-| `BW500` / `BW1200` / `BW2300` / `BW2750` | D2G (`bw_cap`), MER ("BW") |
+| `CQFRAME call bw` | D2G, MER. Sends a CQ frame over the air. |
+| `BW500` / `BW1200` / `BW2300` / `BW2750` | D2G (`bw_cap`). MER ("BW") supports 500, 2300 and 2750. |
 | `BITRATE` | MER |
-| `TUNE` | MER |
+| `TUNE` | MER. Keys the transmitter. |
 | `ENCRYPTION` | D2G (`IGNORED` list) |
-| `CHAT` | D2G, MER |
+| `CHAT` | D2G, MER. In MER, `CHAT ON` implicitly enables `LISTEN ON`. |
 | `PUBLIC` | D2G (`IGNORED`), MER |
 | `COMPRESSION` | D2G (`IGNORED`), MER |
 | `CLEANTXBUFFER` | D2G |

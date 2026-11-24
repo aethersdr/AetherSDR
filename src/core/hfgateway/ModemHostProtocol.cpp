@@ -52,7 +52,7 @@ bool parseUInt(const QString& s, qint64 max, qint64* out)
 // A plain decimal number, optionally signed, with at most one point.
 bool parseDecimal(const QString& s, double* out)
 {
-    static const QRegularExpression re(QStringLiteral("^[+-]?[0-9]{1,4}(\\.[0-9]{1,3})?$"));
+    static const QRegularExpression re(QRegularExpression::anchoredPattern(QStringLiteral("[+-]?[0-9]{1,4}(\\.[0-9]{1,3})?")));
     if (!re.match(s).hasMatch()) {
         return false;
     }
@@ -103,7 +103,7 @@ QList<Line> LineSplitter::feed(const QByteArray& bytes)
 {
     QList<Line> out;
     for (const char c : bytes) {
-        if (c == kLf) {
+        if (c == kLf && m_line.isEmpty() && !m_overflow && !m_badByte) {
             continue;
         }
         if (c == kCr) {
@@ -146,7 +146,8 @@ void LineSplitter::reset()
 
 bool isValidCallsign(const QString& call)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z0-9]([A-Z0-9/-]{0,13}[A-Z0-9])?$"));
+    static const QRegularExpression re(
+        QRegularExpression::anchoredPattern(QStringLiteral("[A-Z0-9]([A-Z0-9/-]{0,13}[A-Z0-9])?")));
     return re.match(call).hasMatch();
 }
 

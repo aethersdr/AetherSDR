@@ -55,8 +55,8 @@ struct Line {
 };
 
 // Splits a command-port byte stream into lines. Handles reads that join
-// several lines or split one. LF is ignored so a CRLF sender still frames
-// cleanly; empty lines are dropped.
+// several lines or split one. LF between lines is ignored so CRLF senders
+// still frame cleanly. Empty lines are dropped.
 class LineSplitter {
 public:
     QList<Line> feed(const QByteArray& bytes);
@@ -137,7 +137,7 @@ QByteArray cmdSn();
 // ── Host -> modem commands (the gateway as server) ──────────────────────────
 
 enum class CommandType {
-    Unknown,        // not in the cited vocabulary: answered WRONG
+    Unknown,        // outside the subset recognised by this parser
     Invalid,        // a known command with bad arguments: answered WRONG
     MyCall,
     ListenOn,
@@ -151,10 +151,10 @@ enum class CommandType {
     Sn,
     Bitrate,
     Bandwidth,      // BW500 / BW1200 / BW2300 / BW2750
-    CqFrame,
-    Tune,
+    CqFrame,        // can key the transmitter
+    Tune,           // keys the transmitter
     Encryption,
-    Chat,
+    Chat,           // CHAT ON implicitly enables listening
     Public,
     Compression,
     CleanTxBuffer,

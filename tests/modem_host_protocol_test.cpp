@@ -49,6 +49,10 @@ int main()
     {
         LineSplitter s;
         report("CRLF framing tolerated", texts(s.feed(QByteArray("OK\r\nWRONG\r\n"))) == QList<QString>{"OK", "WRONG"});
+        report("embedded LF is rejected across reads", s.feed(QByteArray("O")).isEmpty()
+                   && texts(s.feed(QByteArray("\nK\r"))) == QList<QString>{"<rejected>"});
+        report("DEL byte rejects the line",
+               texts(s.feed(QByteArray("OK\x7f\r"))) == QList<QString>{"<rejected>"});
         report("empty lines dropped", texts(s.feed(QByteArray("\r\r\rOK\r"))) == QList<QString>{"OK"});
     }
     {
@@ -93,9 +97,12 @@ int main()
     report("lower case rejected (callers upper-case)", !isValidCallsign("n0call"));
     report("leading or trailing separator rejected", !isValidCallsign("-N0CALL") && !isValidCallsign("N0CALL-")
                                                          && !isValidCallsign("/N0CALL"));
-    report("other characters rejected", !isValidCallsign("N0 CALL") && !isValidCallsign("N0CALL.") 
+    report("other characters rejected", !isValidCallsign("N0 CALL") && !isValidCallsign("N0CALL.")
                                             && !isValidCallsign("N0CALL_1"));
     report("empty rejected", !isValidCallsign(""));
+    report("callsign ending in LF rejected", !isValidCallsign("N0CALL\n"));
+    report("MYCALL refuses a callsign ending in LF", cmdMyCall({"N0CALL\n"}).isEmpty());
+    report("CONNECTED refuses a callsign ending in LF", fmtConnected("N0CALL", "N1CALL\n", 2300).isEmpty());
     report("known bandwidths", isKnownBandwidth(500) && isKnownBandwidth(1200) && isKnownBandwidth(2300)
                                    && isKnownBandwidth(2750));
     report("unknown bandwidth rejected", !isKnownBandwidth(2400) && !isKnownBandwidth(0));
@@ -153,7 +160,8 @@ int main()
         const Notification b = parseNotification("BITRATE (17) 2400 BPS");
         report("BITRATE", b.type == NotificationType::Bitrate && b.bitrateCode == 17 && b.bitsPerSecond == 2400);
         report("BITRATE malformed rejected", nt("BITRATE 17 2400 BPS") == NotificationType::Unknown
-                                                 && nt("BITRATE (17) 2400") == NotificationType::Unknown);
+                                                 && nt("BITRATE (17) 2400") == NotificationType::Unknown
+                                                 && nt("BITRATE (17) 2400 KBPS") == NotificationType::Unknown);
     }
     {
         const Notification r = parseNotification("REGISTERED N0CALL");
@@ -201,7 +209,8 @@ int main()
         const Command c = parseCommand("CONNECT N0CALL N1CALL");
         report("CONNECT parsed", c.type == CommandType::Connect && c.source == "N0CALL" && c.destination == "N1CALL");
         report("CONNECT bad args invalid", ct("CONNECT N0CALL") == CommandType::Invalid
-                                               && ct("CONNECT N0CALL N0_CALL") == CommandType::Invalid);
+                                               && ct("CONNECT N0CALL N0_CALL") == CommandType::Invalid
+                                               && ct("CONNECT N0CALL N1CALL X") == CommandType::Invalid);
     }
     {
         const Command b = parseCommand("BW2300");
@@ -237,6 +246,8 @@ int main()
     report("fmt SN", fmtSn(8.25) == "SN 8.3\r" || fmtSn(8.25) == "SN 8.2\r");
     report("fmt SN refuses out of range", fmtSn(100.0).isEmpty());
     report("fmt VERSION strips control bytes", fmtVersion(QStringLiteral("Aether\x01SDR")) == "VERSION AetherSDR\r");
+    report("fmt VERSION capped at 64 characters",
+           fmtVersion(QString(100, QLatin1Char('A'))) == QByteArray("VERSION ") + QByteArray(64, 'A') + '\r');
     report("fmt VERSION refuses empty", fmtVersion(QStringLiteral("\x01")).isEmpty());
 
     // Round trip: what the server formats, the client parses back.
