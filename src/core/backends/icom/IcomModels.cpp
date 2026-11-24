@@ -414,9 +414,16 @@ constexpr std::array<FeatureEvidence, 1> kTunerOnlyEvidence{{
 
 }  // namespace
 
+namespace {
+// Regional IC-7110 variants modelForId() resolves, each to its own profile
+// below. regionalTuningEnvelope() walks this list, so a region added here with
+// its own profile widens the readback bound with it.
+constexpr std::array<std::string_view, 2> kIc7110Markets{"US", "EU"};
+}  // namespace
+
 const IcomModel* modelForId(std::uint8_t addr, std::string_view market)
 {
-    if (addr == 0xBA && (market == "US" || market == "EU")) {
+    if (addr == 0xBA && std::ranges::find(kIc7110Markets, market) != kIc7110Markets.end()) {
         static const IcomModel us = [] {
             auto m = *modelForId(0xBA);
             m.market = "US";
@@ -435,6 +442,20 @@ const IcomModel* modelForId(std::uint8_t addr, std::string_view market)
         if (m.civAddress == addr)
             return &m;
     return nullptr;
+}
+
+std::optional<IcomTuningEnvelope> regionalTuningEnvelope(std::uint8_t addr)
+{
+    const IcomModel* base = modelForId(addr);
+    if (!base)
+        return std::nullopt;
+    IcomTuningEnvelope envelope{base->tuningMinHz, base->tuningMaxHz};
+    for (const std::string_view market : kIc7110Markets) {
+        const IcomModel* regional = modelForId(addr, market);
+        envelope.minHz = std::min(envelope.minHz, regional->tuningMinHz);
+        envelope.maxHz = std::max(envelope.maxHz, regional->tuningMaxHz);
+    }
+    return envelope;
 }
 
 namespace {

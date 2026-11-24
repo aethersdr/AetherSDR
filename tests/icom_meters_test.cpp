@@ -362,6 +362,15 @@ static void testModelTable()
           "European IC-7110 advertises four metres with European VHF/UHF limits");
     check(modelForId(0xBA, "unknown") == ic7110 && modelForId(0xA4, "US") == ic705,
           "unknown regions and other model identities keep their original profiles");
+    const auto envelope = regionalTuningEnvelope(0xBA);
+    check(envelope && us && eu && envelope->minHz == 30'000 && envelope->maxHz == 450'000'000
+              && envelope->minHz <= std::min(us->tuningMinHz, eu->tuningMinHz)
+              && envelope->maxHz >= std::max(us->tuningMaxHz, eu->tuningMaxHz),
+          "IC-7110 readbacks are bounded by the hull of every regional profile");
+    const auto ic705Envelope = regionalTuningEnvelope(0xA4);
+    check(ic705 && ic705Envelope && ic705Envelope->minHz == ic705->tuningMinHz
+              && ic705Envelope->maxHz == ic705->tuningMaxHz && !regionalTuningEnvelope(0x01),
+          "a model without regions keeps its own envelope; an unknown ID has none");
 
     // Six-byte frequencies. A codec against a hardcoded 5 misaligns by two
     // bytes and decodes a plausible-looking wrong frequency.

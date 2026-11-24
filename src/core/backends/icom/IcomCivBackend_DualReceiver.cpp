@@ -117,11 +117,11 @@ bool IcomCivBackend::validSelectedBandReply(const CivFrame& frame) const
     switch (frame.cmd) {
     case 0x25: {
         const auto hz = decodeFreqExact(frame.data, kFreqBytes);
-        // The widest known regional profile bounds plausibility, including the
+        // The hull of every regional profile bounds plausibility, including the
         // gap between decks. Only outgoing tunes use the selected market's limits.
-        const IcomModel* widest = modelForId(m_model->civAddress, "US");
-        return frame.sub == vfoMode::kSelected && hz && widest
-            && *hz >= widest->tuningMinHz && *hz <= widest->tuningMaxHz;
+        const auto envelope = regionalTuningEnvelope(m_model->civAddress);
+        return frame.sub == vfoMode::kSelected && hz && envelope
+            && *hz >= envelope->minHz && *hz <= envelope->maxHz;
     }
     case cmd::kVfoMode: {
         const auto state = decodeVfoMode(frame.data);

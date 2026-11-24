@@ -48,6 +48,12 @@ int main(int argc, char** argv)
 
     // ---- the non-secret document round-trips ------------------------------
     IcomSettings::reset();
+    // Every Icom connect saves the region combo. The default (Japan / other)
+    // is the absence of an entry, so an IC-705 connect stores nothing.
+    IcomSettings::setIc7110Market("ic-705.local", 50001, "");
+    check(!QJsonDocument::fromJson(AppSettings::instance().value(QStringLiteral("Icom")).toString().toUtf8())
+               .object().contains(QStringLiteral("ic7110Markets")),
+          "saving the default region for a new endpoint writes no ic7110Markets entry");
     IcomSettings::setIc7110Market("Station.local", 50001, "US");
     IcomSettings::setIc7110Market("station.local", 55110, "EU");
     check(IcomSettings::ic7110Market("station.local", 50001) == "US"

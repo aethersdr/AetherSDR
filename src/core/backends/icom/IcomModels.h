@@ -166,6 +166,16 @@ txBandwidthProfileFor(const IcomModel& model);
 // nullptr; a configured command address is never an input to this lookup.
 [[nodiscard]] const IcomModel* modelForId(std::uint8_t id, std::string_view market = {});
 
+// The hull of every receive envelope modelForId() can return for this ID: the
+// base row and each regional variant. A readback is plausible whichever region
+// the operator chose, so this, not the selected market, bounds it. It walks
+// the same market list as modelForId(), not a named "widest" region.
+struct IcomTuningEnvelope {
+    std::uint64_t minHz = 0;
+    std::uint64_t maxHz = 0;
+};
+[[nodiscard]] std::optional<IcomTuningEnvelope> regionalTuningEnvelope(std::uint8_t id);
+
 // Canonical profile-name lookup for tools/tests. Never use operator-defined
 // RS-BA1 names to identify connected hardware.
 [[nodiscard]] const IcomModel* modelForName(std::string_view name);
