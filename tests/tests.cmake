@@ -187,11 +187,11 @@ get_property(_aether_targets_before_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS
 
 # ── aether_non_test_targets: everything the root declared before this file ───
 # Built from the same baseline, so the production/test boundary has one
-# definition. ci.yml builds this instead of `all`, on pull requests and main:
-# it runs none of the tests, and compiling and linking them was most of its build
-# time. Every default-built executable and library the root CMakeLists.txt
-# declares above include(tests/tests.cmake) joins without a CI edit. Custom
-# targets and targets from add_subdirectory() build only when a collected
+# definition. CI's Linux PR job builds this target. CI's macOS job builds it
+# alongside its gate tests on PRs and main. Full Suite builds the Linux
+# default graph on main. Default-built executables and libraries the root
+# CMakeLists.txt declares above include(tests/tests.cmake) join without a CI
+# edit. Custom targets and targets from add_subdirectory() build only when a collected
 # target depends on them; everything declared in this file, tests and tools
 # such as kiwi_directory_poc alike, is left out.
 add_custom_target(aether_non_test_targets)
@@ -5523,6 +5523,25 @@ add_test(NAME serial_port_combo_test COMMAND serial_port_combo_test)
 set_tests_properties(serial_port_combo_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Serial PTT/CW open-failure classification and advice (#6972): pure logic
+# with an injected device probe, so the permission case runs under root CI.
+add_executable(serial_open_error_test
+    tests/serial_open_error_test.cpp
+    src/core/SerialOpenError.cpp
+)
+target_include_directories(serial_open_error_test PRIVATE src)
+target_link_libraries(serial_open_error_test PRIVATE Qt6::Core)
+add_test(NAME serial_open_error_test COMMAND serial_open_error_test)
+
+# Serial PTT/CW controller state and session intent (#6972). A missing path
+# in a private temporary directory exercises the failure without opening a port.
+if(TARGET Qt6::SerialPort)
+    add_executable(serial_open_state_test tests/serial_open_state_test.cpp)
+    target_include_directories(serial_open_state_test PRIVATE src tests)
+    target_link_libraries(serial_open_state_test PRIVATE aethercore Qt6::Core Qt6::SerialPort)
+    add_test(NAME serial_open_state_test COMMAND serial_open_state_test)
+endif()
+
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
 )
@@ -6333,6 +6352,19 @@ add_executable(kpa1500_protocol_test
 target_include_directories(kpa1500_protocol_test PRIVATE src)
 target_link_libraries(kpa1500_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kpa1500_protocol_test COMMAND kpa1500_protocol_test)
+
+# Socket-free state injection; production socket members remain unopened.
+add_executable(kpa1500_tracking_state_test
+    tests/kpa1500_tracking_state_test.cpp
+    src/core/Kpa1500Connection.cpp
+    src/core/Kpa1500Protocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+target_include_directories(kpa1500_tracking_state_test PRIVATE src tests)
+target_link_libraries(kpa1500_tracking_state_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME kpa1500_tracking_state_test COMMAND kpa1500_tracking_state_test)
 
 add_executable(spe_legacy_protocol_test
     tests/spe_legacy_protocol_test.cpp
@@ -8693,6 +8725,21 @@ if(AETHER_HL2_TX_TXA)
     target_include_directories(hl2_tx_latency_test PRIVATE src)
     target_link_libraries(hl2_tx_latency_test PRIVATE aethercore Qt6::Core)
     add_test(NAME hl2_tx_latency_test COMMAND hl2_tx_latency_test)
+
+    # While keyed, a TX mode, TX filter or TX-slice change is refused (a
+    # mid-over bandpass swap splatters); unkeyed it applies at once. Real
+    # backend, socket-free, nothing on air. 77 = starved by machine load.
+    add_executable(hl2_tx_keyed_mode_change_test tests/hl2_tx_keyed_mode_change_test.cpp)
+    target_include_directories(hl2_tx_keyed_mode_change_test PRIVATE src tests)
+    target_link_libraries(hl2_tx_keyed_mode_change_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME hl2_tx_keyed_mode_change_test COMMAND hl2_tx_keyed_mode_change_test)
+    set_tests_properties(hl2_tx_keyed_mode_change_test PROPERTIES SKIP_RETURN_CODE 77)
+
+    # not registered: manual measurement tool. A mode or passband change on a
+    # running TXA channel, call by call. Real-time paced, minutes long.
+    add_executable(hl2_tx_keyed_mode_change_measure EXCLUDE_FROM_ALL tests/hl2_tx_keyed_mode_change_measure.cpp)
+    target_include_directories(hl2_tx_keyed_mode_change_measure PRIVATE src tests)
+    target_link_libraries(hl2_tx_keyed_mode_change_measure PRIVATE aethercore Qt6::Core)
 endif()
 
 # radiocert's measurement primitives. Header-only by design so this needs no
@@ -12441,6 +12488,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_rx_only_tx_chain_test
     hl2_automation_no_tx_gate_test
     serial_cw_key_baseline_test
+    serial_open_state_test
     hl2_receive_only_mode_key_test
     hl2_persist_restart_test
     hl2_tx_mode_reconnect_test
@@ -12581,6 +12629,7 @@ set(AETHER_SETTINGS_CONSUMERS
     bandplan_voice_labels_test
     bandplan_usage_resource_test
     vkamp_connection_test
+    kpa1500_tracking_state_test
     rfkit_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test

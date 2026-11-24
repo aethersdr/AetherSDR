@@ -1092,6 +1092,23 @@ ConnectionPanel::ConnectionPanel(QWidget* parent, RemoteDiscovery remoteDiscover
     populateIcomCivCombo();
     m_manualIcomCivRow = addManualRow(QStringLiteral("Icom CI-V:"), m_manualIcomCivCombo);
 
+    m_ic7110Market = new QComboBox(manualGroup);
+    m_ic7110Market->setObjectName(QStringLiteral("connectionIc7110Market"));
+    m_ic7110Market->setAccessibleName(tr("IC-7110 radio region"));
+    m_ic7110Market->addItem(tr("Japan / other / unknown"), QString{});
+    m_ic7110Market->addItem(tr("United States"), QStringLiteral("US"));
+    m_ic7110Market->addItem(tr("Europe"), QStringLiteral("EU"));
+    AetherSDR::applyComboStyle(m_ic7110Market, comboExtraRules);
+    m_ic7110MarketRow = addManualRow(tr("IC-7110 region:"), m_ic7110Market);
+    const auto restoreMarket = [this] {
+        const auto saved = IcomSettings::ic7110Market(m_manualIpEdit->text(), selectedIcomBasePort());
+        m_ic7110Market->setCurrentIndex(qMax(0, m_ic7110Market->findData(saved)));
+    };
+    connect(m_manualIpEdit, &QLineEdit::textChanged, this, restoreMarket);
+    connect(m_manualIcomBasePortSpin, &QSpinBox::valueChanged, this, restoreMarket);
+    connect(m_manualIcomPortCombo, &QComboBox::currentIndexChanged, this, restoreMarket);
+    restoreMarket();
+
     // The hex entry, kept for the radio whose address has been changed to
     // something no model uses, and for a shared CI-V bus where the operator is
     // selecting WHICH DEVICE rather than naming a model.
@@ -2850,6 +2867,7 @@ void ConnectionPanel::syncIcomCivCustomRow()
     const bool custom =
         m_manualIcomCivCombo->currentData().toString() == QLatin1String("__custom__");
     m_manualIcomCivCustomRow->setVisible(icom && custom);
+    m_ic7110MarketRow->setVisible(icom);
 }
 
 void ConnectionPanel::syncIcomPortCustomRow()
@@ -3395,6 +3413,9 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             resolved = hostInfo.addresses().first();
         }
         m_pendingIcomResolvedHost = resolved.toString();
+        const QString market = m_ic7110Market->currentData().toString();
+        IcomSettings::setIc7110Market(trimmedIp, basePort, market);
+        IcomSettings::setIc7110Market(m_pendingIcomResolvedHost, basePort, market);
 
         RadioInfo info;
         info.family   = QString::fromLatin1(kFamilyIcom);
@@ -4783,6 +4804,9 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
         bool stale = false;
         const RadioBindSettings bind = currentManualBindSettings(&stale);
         if (stale) { setStatusText(tr("Choose an available source interface before saving.")); return; }
+        if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
+            IcomSettings::setIc7110Market(host, selectedIcomBasePort(), m_ic7110Market->currentData().toString());
+        }
         saveManualProfile(host, bind, bind.bindAddress);
         setCurrentMode(WorkspaceMode);
     });

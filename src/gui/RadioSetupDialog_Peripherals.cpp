@@ -27,6 +27,7 @@
 #include "core/AcomConnection.h"
 #include "core/AppSettings.h"
 #include "core/Kpa1500Connection.h"
+#include "core/Kpa1500Discovery.h"
 #include "core/Kpa500Connection.h"
 #include "core/LpMeterConnection.h"
 #include "core/PeripheralRemovalGuard.h"
@@ -2163,12 +2164,36 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
     ui.portSpin = makePortSpin(ui);
     ui.portSpin->setValue(PeripheralSettings::deviceInt("Kpa1500", "ManualPort", ui.defaultPort));
     ui.portSpin->setAccessibleName(tr("KPA1500 control port"));
-    ui.portSpin->setAccessibleDescription(tr("TCP control port, 1 to 65535, default 1500"));
+    ui.portSpin->setAccessibleDescription(
+        tr("Control port, 1 to 65535, default 1500. The amplifier uses the same port for TCP "
+           "and UDP"));
+
+    // The amp serves the same command set over TCP and UDP on one port.
+    ui.modeCombo = new QComboBox;
+    ui.modeCombo->setObjectName(QStringLiteral("peripheralTransport_%1").arg(ui.id));
+    ui.modeCombo->setAccessibleName(tr("KPA1500 transport"));
+    ui.modeCombo->setAccessibleDescription(
+        tr("TCP or UDP. UDP polls the meters faster and confirms every control by reading it "
+           "back. Takes effect the next time you connect."));
+    for (auto t : {Kpa1500::Transport::Tcp, Kpa1500::Transport::Udp}) {
+        ui.modeCombo->addItem(Kpa1500::transportLabel(t), Kpa1500::transportSettingValue(t));
+    }
+    {
+        const QString saved = Kpa1500::transportSettingValue(Kpa1500::transportFromSettingValue(
+            PeripheralSettings::deviceString("Kpa1500", "Transport")));
+        const int idx = ui.modeCombo->findData(saved);
+        ui.modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    connect(ui.modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [combo = ui.modeCombo](int idx) {
+        PeripheralSettings::setDeviceString("Kpa1500", "Transport",
+                                            combo->itemData(idx).toString());
+    });
 
     ui.connectButton = makeConnectButton(ui);
     ui.connectButton->setAccessibleName(tr("Connect or disconnect the Elecraft KPA1500"));
-    connect(ui.connectButton, &QPushButton::clicked, this, [u, refresh]() {
-        if (u->isConnected()) {
+    connect(ui.connectButton, &QPushButton::clicked, this, [this, u, refresh]() {
+        if (u->isConnected() || (u->isConnecting && u->isConnecting())) {
             u->disconnectNow();
             return;
         }
@@ -2180,8 +2205,18 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
             return;
         }
         const int port = u->portSpin->value();
+        if (ip != PeripheralSettings::deviceString("Kpa1500", "ManualIp")) {
+            // A saved MAC belongs to the amp at the old address; Wake-on-LAN
+            // must not be aimed at it. The new amp's ^MA replaces it.
+            PeripheralSettings::clearDeviceField("Kpa1500", "MacAddress");
+            if (m_kpa1500) {
+                m_kpa1500->setWakeMacAddress(QString());
+            }
+        }
         PeripheralSettings::setDeviceString("Kpa1500", "ManualIp", ip);
         PeripheralSettings::setDeviceInt("Kpa1500", "ManualPort", port);
+        PeripheralSettings::setDeviceString("Kpa1500", "Transport",
+                                            u->modeCombo->currentData().toString());
         u->state.connecting = true;
         refresh();
         u->connectNetwork(ip, static_cast<quint16>(port));
@@ -2190,8 +2225,91 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
 
     addFormRow(detail, tr("IP Address"), ui.addressEdit);
     addFormRow(detail, tr("Port"), ui.portSpin);
+    addFormRow(detail, tr("Transport"), ui.modeCombo);
 
-    m_peripheralRowSavers.append([u]() {
+    // Find: the amp answers ^SN over UDP from any client, so a sweep of this
+    // computer's networks locates it without knowing its address.
+    auto* findHint = new QLabel;
+    findHint->setObjectName(QStringLiteral("peripheralFindHint_%1").arg(ui.id));
+    findHint->setWordWrap(true);
+    applyLabelStyle(findHint);
+    findHint->hide();
+    addFormRow(detail, QString(), findHint);
+
+    auto* findButton = new QPushButton(tr("Find"));
+    findButton->setObjectName(QStringLiteral("peripheralFind_%1").arg(ui.id));
+    findButton->setAccessibleName(tr("Find Elecraft KPA1500 on the network"));
+    findButton->setAccessibleDescription(
+        tr("Asks every address on this computer's local networks for a KPA1500 serial number "
+           "on the port above, over UDP, and fills in the address of the amplifier that "
+           "answers. Sends queries only."));
+    auto* discovery = new Kpa1500Discovery(findButton);
+    const QString findDescription = findButton->accessibleDescription();
+    auto updateFindAvailability = [findButton, u, findDescription]() {
+        const bool connected = u->isConnected();
+        findButton->setEnabled(!connected);
+        const QString reason = connected ? tr("Disconnect to search for a different amplifier")
+                                         : QString();
+        findButton->setToolTip(reason);
+        findButton->setAccessibleDescription(connected ? reason : findDescription);
+    };
+    updateFindAvailability();
+    connect(m_kpa1500, &Kpa1500Connection::connected, findButton, updateFindAvailability);
+    connect(m_kpa1500, &Kpa1500Connection::disconnected, findButton, updateFindAvailability);
+    connect(findButton, &QPushButton::clicked, this, [findButton, findHint, discovery, u]() {
+        if (discovery->isRunning()) {
+            return;
+        }
+        findButton->setEnabled(false);
+        findButton->setText(tr("Searching…"));
+        findHint->setText(tr("Searching this computer's networks on UDP port %1…")
+                              .arg(u->portSpin->value()));
+        findHint->show();
+        discovery->start(static_cast<quint16>(u->portSpin->value()));
+    });
+    connect(discovery, &Kpa1500Discovery::failed, findButton,
+            [findButton, findHint, updateFindAvailability](const QString& error) {
+        findButton->setText(tr("Find"));
+        updateFindAvailability();
+        findHint->setText(tr("Find could not open a UDP socket: %1").arg(error));
+    });
+    connect(discovery, &Kpa1500Discovery::finished, findButton,
+            [findButton, findHint, discovery, u, updateFindAvailability](int count) {
+        findButton->setText(tr("Find"));
+        updateFindAvailability();
+        const QList<Kpa1500Discovery::Found> amps = discovery->results();
+        auto describe = [](const Kpa1500Discovery::Found& f) {
+            return f.firmware.isEmpty()
+                ? tr("KPA1500 S/N %1 at %2").arg(f.serialNumber, f.address.toString())
+                : tr("KPA1500 S/N %1 (firmware %2) at %3")
+                      .arg(f.serialNumber, f.firmware, f.address.toString());
+        };
+        if (count == 0 || amps.isEmpty()) {
+            findHint->setText(
+                tr("No KPA1500 answered on UDP port %1. Check that the amplifier is on the same "
+                   "network and its port matches, or enter its address by hand.")
+                    .arg(u->portSpin->value()));
+            return;
+        }
+        if (amps.size() == 1) {
+            u->addressEdit->setText(amps.first().address.toString());
+            findHint->setText(tr("Found %1. Press Connect.").arg(describe(amps.first())));
+            return;
+        }
+        findHint->setText(tr("Found %1 amplifiers. Pick one:").arg(amps.size()));
+        QMenu menu(findButton);
+        for (const Kpa1500Discovery::Found& f : amps) {
+            QAction* pick = menu.addAction(describe(f));
+            const QString address = f.address.toString();
+            connect(pick, &QAction::triggered, findButton, [u, findHint, address]() {
+                u->addressEdit->setText(address);
+                findHint->setText(tr("Selected %1. Press Connect.").arg(address));
+            });
+        }
+        menu.exec(findButton->mapToGlobal(QPoint(0, findButton->height())));
+    });
+
+    m_peripheralRowSavers.append([this, u]() {
         if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
             return;
         }
@@ -2201,13 +2319,17 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
         }
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualIp");
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualPort");
+        PeripheralSettings::clearDeviceField("Kpa1500", "MacAddress");
+        if (m_kpa1500) {
+            m_kpa1500->setWakeMacAddress(QString());
+        }
         // Connected or still retrying: a reconnect loop aimed at the cleared
         // address would otherwise keep dialing it until restart.
         if (u->description().startsWith(savedIp + ":")) {
             u->disconnectNow();
         }
     });
-    finishDetailPage(detail, ui, {});
+    finishDetailPage(detail, ui, {findButton});
 }
 
 namespace {
@@ -2597,10 +2719,20 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                             PeripheralDeviceUi::Kind::Kpa1500, Kpa1500::kDefaultPort);
         ui->settingsGroup = QStringLiteral("Kpa1500");
         ui->isConnected = [this]() { return m_kpa1500->isConnected(); };
+        // Asleep with its link down, the amp is still being reached for:
+        // the row offers Disconnect, which ends that state.
+        ui->isConnecting = [this]() { return m_kpa1500->isAsleepOffline(); };
         ui->disconnectNow = [this]() { m_kpa1500->disconnect(); };
-        ui->connectNetwork = [this](const QString& h, quint16 p) { m_kpa1500->connectNetwork(h, p); };
+        ui->connectNetwork = [this](const QString& h, quint16 p) {
+            m_kpa1500->setTransport(Kpa1500::transportFromSettingValue(
+                PeripheralSettings::deviceString("Kpa1500", "Transport")));
+            m_kpa1500->connectNetwork(h, p);
+        };
         ui->description = [this]() { return m_kpa1500->description(); };
-        ui->afterRemoval = [this]() { m_kpa1500->disconnect(); };
+        ui->afterRemoval = [this]() {
+            m_kpa1500->disconnect();
+            m_kpa1500->setWakeMacAddress(QString());
+        };
         buildKpa1500Device(*ui, detailStack, refresh);
     }
     if (m_rfkit) {
@@ -3639,6 +3771,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_kpa1500) {
         wireLinkDevice(QStringLiteral("kpa1500"), m_kpa1500);
+        connect(m_kpa1500, &Kpa1500Connection::asleepOfflineChanged, this,
+                [onLink]() { onLink(QStringLiteral("kpa1500")); });
     }
     if (m_rfkit) {
         wireLinkDevice(QStringLiteral("rfkit"), m_rfkit);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <functional>
 #include <optional>
 
@@ -31,15 +32,23 @@ namespace AetherSDR {
 // echoing the command with its current value, so one parser handles the
 // whole stream.
 //
-// Transport is TCP on port 1500 (the amp also exposes a UDP server on the
-// same port accepting the same command set; this implementation is TCP-only
-// on purpose — see Kpa1500Connection.h).
+// Transport is TCP or UDP on port 1500: the amp runs a UDP server on the
+// same port accepting the identical command set. The framing is the same on
+// both; see Kpa1500Connection.h for how UDP control is confirmed.
 namespace Kpa1500 {
 
-// Default TCP control port. The amp allows this to be moved with `^CP`, so
-// the Peripherals row exposes it as an editable field rather than a
-// constant.
+// Default control port, shared by the amp's TCP and UDP servers. The amp
+// allows this to be moved with `^CP`, so the Peripherals row exposes it as
+// an editable field rather than a constant.
 inline constexpr quint16 kDefaultPort = 1500;
+
+enum class Transport { Tcp, Udp };
+
+// Stable settings value ("tcp" / "udp"). Anything unrecognized, including
+// an unset key, reads back as Tcp so existing configurations keep TCP.
+QString transportSettingValue(Transport transport);
+Transport transportFromSettingValue(const QString& value);
+QString transportLabel(Transport transport);  // "TCP" / "UDP"
 
 // ── Wire framing ─────────────────────────────────────────────────────────
 
@@ -81,9 +90,10 @@ public:
     void feed(const QByteArray& bytes);
     void reset() { m_buf.clear(); }
 
-    // Widest payload any documented KPA1500 reply carries, with generous
-    // headroom — anything longer is a desynchronized stream, not a message.
-    static constexpr int kMaxArgChars = 64;
+    // Widest payload any documented KPA1500 reply carries (the ^DA ATU
+    // setting text, ~70 chars), with headroom — anything longer is a
+    // desynchronized stream, not a message.
+    static constexpr int kMaxArgChars = 128;
     static constexpr int kMaxBufferBytes = 4096;
 
 private:
@@ -121,6 +131,19 @@ struct Status {
     std::optional<bool>  atuInline;       // ^AI
     std::optional<bool>  tuning;          // ^TP, a full-search tune is running
     std::optional<bool>  keyed;           // ^TQ — amp's own view of its key state
+    std::optional<bool>  powerOn;         // ^ON, false while the amp sleeps
+    std::optional<float> inputWatts;      // ^PWI drive power; 0 in STBY or while tuning
+    std::optional<float> paVolts;         // ^VI supply voltage (reply in tenths)
+    std::optional<int>   paAmps;          // ^VI PA current, whole amps
+    std::optional<int>   fanMinimum;      // ^FC operator-set minimum, 0-5
+    std::optional<int>   fanSpeed;        // ^FS current speed, 0-5 (may exceed the minimum)
+    std::optional<int>   attenuatorCode;  // ^AS two hex digits, 0x00 = not deployed
+    std::optional<int>   frequencyKhz;    // ^FR frequency the amp is tracking
+    std::optional<QString> atuSetting;    // ^DA the amp's own ATU summary text
+    std::optional<QString> firmware;      // ^RV e.g. "03.10"
+    std::optional<QString> serialNumber;  // ^SN e.g. "00022"
+    std::optional<QString> macAddress;    // ^MA normalized "54:10:EC:14:75:22"
+    std::optional<bool>  netWake;         // ^WL, NET WAKE on LAN enabled
 };
 
 // Folds one decoded message into `status`, returning true if it changed
@@ -135,6 +158,9 @@ bool applyMessage(const Message& message, Status& status);
 // rather than as a band the operator does not have.
 QString bandName(int code);
 
+// `^AS` overdrive-attenuator reason → short label ("PA CURRENT"). Unknown
+// non-zero codes render as their hex value; 0 renders as empty.
+QString attenuatorReason(int code);
 // ── Command builders (host → amp) ────────────────────────────────────────
 //
 // Queries. The amp does not broadcast spontaneously, so the connection
@@ -152,6 +178,18 @@ QByteArray buildCancelTune();                   // ^FE
 // they are accepted on readback (kMaxAntennaNumber) but never commanded.
 QByteArray buildSelectAntenna(int port);        // ^AN<n>
 QByteArray buildClearFault();                   // ^FLC
+QByteArray buildSetPower(bool on);              // ^ON1 / ^ON0
+// ^FCn, 0 (off) to 5 (all fans full). Out of range yields an empty frame.
+QByteArray buildSetFanMinimum(int level);
+// ^FRfffff in kHz: tells the amp the TX frequency so it selects the band
+// and ATU memory without transmitting. Outside kMinTrackKhz..kMaxTrackKhz
+// (the amp's 160-6 m coverage, with margin) yields an empty frame.
+QByteArray buildSetFrequency(int khz);
+
+inline constexpr int kMinFan = 0;
+inline constexpr int kMaxFan = 5;
+inline constexpr int kMinTrackKhz = 1500;
+inline constexpr int kMaxTrackKhz = 55000;
 
 inline constexpr int kMinAntenna = 1;
 inline constexpr int kMaxAntenna = 2;
@@ -177,6 +215,54 @@ QByteArray buildKeyStateQuery();                // ^TQ
 
 inline constexpr int kMinKeyTimeoutSec = 1;
 inline constexpr int kMaxKeyTimeoutSec = 99;
+
+// ── Wake-on-LAN ──────────────────────────────────────────────────────────
+//
+// Programming Reference (rev. 5/5/2024, firmware 03.02): "Wakeup" (p. 8) and
+// ^WL (new in 01.67): with NET WAKE on, a sleeping amp wakes on a magic
+// packet of "6 bytes of 255 followed by 16 repetitions of the KPA1500's MAC
+// address"; ^MA answers the MAC as ^MA54:10:EC:14:75:22;.
+inline constexpr quint16 kWakeOnLanPort = 9;
+inline constexpr int kMacBytes = 6;
+
+// Six colon-separated hex octets, either case. Anything else is nullopt.
+std::optional<QByteArray> parseMacAddress(const QString& text);
+QString formatMacAddress(const QByteArray& mac);   // "54:10:EC:14:75:22"
+// 102 bytes; empty unless `mac` is exactly kMacBytes long.
+QByteArray buildWakeOnLanPacket(const QByteArray& mac);
+
+// ── UDP query pacing ─────────────────────────────────────────────────────
+//
+// The reference asks a client to "wait for the corresponding RESPONSE
+// before sending more commands". At most one query is outstanding: the next
+// goes out when the amp answers that command, or after kReplyTimeoutMs.
+// Pure state; the caller supplies a monotonic clock in ms and does the I/O.
+class QueryPacer {
+public:
+    static constexpr qint64 kReplyTimeoutMs = 120;
+
+    // A query already queued or outstanding is not queued twice. `urgent`
+    // puts it at the head (a control's readback), moving a queued copy there.
+    void enqueue(const QString& cmd, bool urgent = false);
+    // The query to write now, or nullopt while one is outstanding and not yet
+    // timed out, or when the queue is empty.
+    std::optional<QString> takeNext(qint64 nowMs);
+    // True when `cmd` was the outstanding query, which is then released.
+    bool replied(const QString& cmd);
+    // ms until the outstanding query times out; -1 when none is outstanding.
+    qint64 msUntilTimeout(qint64 nowMs) const;
+    bool drained() const { return m_queue.empty() && !m_outstanding; }
+    bool outstanding() const { return m_outstanding.has_value(); }
+    int queued() const { return static_cast<int>(m_queue.size()); }
+    int timeouts() const { return m_timeouts; }
+    void clear();
+
+private:
+    std::deque<QString> m_queue;
+    std::optional<QString> m_outstanding;
+    qint64 m_sentAtMs{0};
+    int m_timeouts{0};
+};
 
 }  // namespace Kpa1500
 }  // namespace AetherSDR

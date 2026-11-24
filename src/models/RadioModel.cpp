@@ -721,6 +721,8 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
 
     if (family.compare(QLatin1String("icom"), Qt::CaseInsensitive) != 0)
         return;
+    req.params.insert(QStringLiteral("icom.ic7110Market"), IcomSettings::ic7110Market(
+        req.host, req.port ? req.port : IcomSettings::defaultBasePort()));
     req.params.insert(QStringLiteral("icom.username"), IcomSettings::username());
     req.params.insert(QStringLiteral("icom.password"), IcomCredentials::sessionPassword());
     req.params.insert(QStringLiteral("icom.serialPort"), IcomSettings::serialPort());
@@ -1365,6 +1367,11 @@ void RadioModel::setupBackend(const QString& family)
     });
     connect(m_backend.get(), &IRadioBackend::configurationWarning,
             this, &RadioModel::configurationWarning);
+
+    // A change refused while transmitting goes on the panadapter, like the
+    // other transmit-time notices: the status bar would hide the TX indicator.
+    connect(m_backend.get(), &IRadioBackend::transmitChangeRefused,
+            this, &RadioModel::noticeTransmitChangeRefused);
 
     // Transport counters from a backend that owns its own socket. Wired
     // unconditionally: a backend that measures nothing never emits this, and one
@@ -6142,6 +6149,13 @@ bool RadioModel::removePanadapter(const QString& panId, PanCloseIntent intent)
         || !control->supports(PanLifecycleAction::Remove)
         || !original->ownedByClient(clientHandle())
         || (intent == PanCloseIntent::Ordinary && m_panadapters.size() <= 1)) { return false; }
+    // Before panAboutToRemove: a refused close must leave every listener's
+    // state for the pan (its throttle rates) as it was. The backend refuses
+    // the same close too; this only makes the refusal arrive first.
+    if (const SliceModel* tx = txSliceRefusingKeyedPanClose(panId)) {
+        noticeTransmitChangeRefused(tx->sliceId(), tr("TX panadapter can't close while transmitting."));
+        return false;
+    }
     // Before the fence below snapshots the pan's revision: a listener may
     // still write to this pan (the adaptive-throttle restore does, so the
     // radio doesn't keep the cap for the next pan it opens in this slot).
@@ -6175,6 +6189,34 @@ bool RadioModel::removePanadapter(const QString& panId, PanCloseIntent intent)
                 qCWarning(lcProtocol) << "RadioModel: display teardown not confirmed" << reply.result.message;
             }
         }, current) != ReceiveDispatch::Unsupported;
+}
+
+bool RadioModel::keyedTxPanCloseRefused(const QString& panId) const
+{
+    return txSliceRefusingKeyedPanClose(panId) != nullptr;
+}
+
+SliceModel* RadioModel::txSliceRefusingKeyedPanClose(const QString& panId) const
+{
+    const auto control = backendCapabilities().panLifecycleControl;
+    if (!control || !m_radioTransmitting
+        || control->txPanCloseWhileKeyed != PanLifecycleControl::TxPanCloseWhileKeyed::Refused) {
+        return nullptr;
+    }
+    for (SliceModel* s : m_slices) {
+        if (s && s->isTxSlice() && s->panId() == panId) {
+            return s;
+        }
+    }
+    return nullptr;
+}
+
+void RadioModel::noticeTransmitChangeRefused(int sliceId, const QString& message)
+{
+    const SliceModel* s = slice(sliceId);
+    emitInterlockNotification(message,
+                              QStringLiteral("tx-keyed-change:%1:%2").arg(sliceId).arg(message),
+                              s ? s->panId() : QString());
 }
 
 // ── Pan accessor implementations ──────────────────────────────────────────────

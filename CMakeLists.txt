@@ -1169,6 +1169,7 @@ set(CORE_SOURCES
     src/core/VkampConnection.cpp
     src/core/Kpa1500Protocol.cpp
     src/core/Kpa1500Connection.cpp
+    src/core/Kpa1500Discovery.cpp
     src/core/RfkitProtocol.cpp
     src/core/RfkitConnection.cpp
     src/core/LpMeterProtocol.cpp
@@ -1248,6 +1249,7 @@ set(CORE_SOURCES
     src/core/SystemInventory.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp
+    src/core/SerialOpenError.cpp
     src/core/FlexControlManager.cpp
     src/core/OpusCodec.cpp
     src/core/CtyDatParser.cpp

@@ -2331,11 +2331,16 @@ void TciServer::reapCreatedVfoBSlice(int sliceId)
         m_model->removeCreatedSlice(m_createdVfoBSlices.take(sliceId));
         return;
     }
+    // The entry goes whether or not the pan closes. A keyed close of the TX
+    // pan is refused (#7553): that pan then stays open for the operator to
+    // close; TCI does not retry it. Asked first, so TCI's own reap raises no
+    // operator Notice for a close the operator did not ask for.
     const CreatedVfoBPan created = m_createdVfoBPans.take(sliceId);
     if (created.slice && created.pan && m_model->controlSessionCurrent(created.session)
         && m_model->slice(sliceId) == created.slice
         && m_model->panadapter(created.pan->panId()) == created.pan
-        && m_model->sliceOwnedByUs(sliceId)) {
+        && m_model->sliceOwnedByUs(sliceId)
+        && !m_model->keyedTxPanCloseRefused(created.pan->panId())) {
         m_model->removePanadapter(created.pan->panId());
     }
 }

@@ -126,7 +126,12 @@ public:
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
+    // While keyed, a move of transmit to another slice is refused (see
+    // refuseTransmitChangeWhileKeyed), and a caller's completion is refused too.
     void setTxSlice(int sliceId) override;
+    ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                   const RadioControlCompletion& completion,
+                                   const RadioControlFence& current) override;
     void setActiveSlice(int sliceId) override;
     void setPanCenter(const QString& panId, double hz,
                       PanCenterIntent intent) override;
@@ -366,6 +371,9 @@ private:
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
     friend struct Hl2TxRouteTestAccess;
+    // Keys the backend's own modulator socket-free, for
+    // hl2_tx_keyed_mode_change_test's refusals while keyed.
+    friend struct Hl2TxKeyedChangeTestAccess;
     friend struct Hl2RxGainDuringTxTestAccess;
     // Arms and ends the transmit tail, for tci_ext_hl2_hw_test's hw.set refusal.
     friend struct Hl2HwSetTailTestAccess;
@@ -392,6 +400,14 @@ private:
     HealthSnapshot healthSnapshot(std::int64_t nowNs) const;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
+    // True while the HL2 is keyed (host key, tune, or the radio's own PTT).
+    bool transmitKeyed() const { return m_keyed || m_tuning || m_radioPtt; }
+    // While keyed, a change to the transmitter's mode, passband or slice is
+    // refused, not held or switched live: TXA swaps a bandpass mask at a block
+    // boundary, so a mid-over swap splatters, and a held one would leave the
+    // slice showing a mode the transmitter is not sending. Tells the operator
+    // (transmitChangeRefused) and returns true when it refuses.
+    bool refuseTransmitChangeWhileKeyed(int sliceId, const QString& message);
     // setCwKeying()'s body. A scheduled edge's instant, and a key-down's own
     // release instant, ride to MetisClient, which places them on the EP2
     // sample clock (#5065).

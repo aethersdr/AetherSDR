@@ -337,6 +337,156 @@ int main()
            atuModeLabel(AtuMode::Unknown) != "BYPASS"
                && atuModeLabel(AtuMode::Unknown) != "INLINE");
 
+    // ── Remote-control readouts and controls ─────────────────────────────
+    {
+        auto apply = [](const char* frame, Status& s) {
+            const auto m = parseMessage(QByteArray(frame));
+            return m && applyMessage(*m, s);
+        };
+        Status s;
+        report("^ON1; -> powerOn", apply("^ON1;", s) && s.powerOn == true);
+        report("^ON0; -> asleep", apply("^ON0;", s) && s.powerOn == false);
+        report("^ON2; rejected", !apply("^ON2;", s) && s.powerOn == false);
+        report("^PWI0045; -> 45 W drive", apply("^PWI0045;", s) && s.inputWatts == 45.0f);
+        report("^VI513 061; -> 51.3 V, 61 A",
+               apply("^VI513 061;", s) && s.paVolts && qFuzzyCompare(*s.paVolts, 51.3f)
+                   && s.paAmps == 61);
+        report("^VI513; (one field) rejected", !apply("^VI513;", s) && s.paAmps == 61);
+        report("^FC3; -> fan minimum 3", apply("^FC3;", s) && s.fanMinimum == 3);
+        report("^FC9; out of range rejected", !apply("^FC9;", s) && s.fanMinimum == 3);
+        report("^FS5; -> fan speed 5", apply("^FS5;", s) && s.fanSpeed == 5);
+        report("^AS20; -> attenuator code 0x20", apply("^AS20;", s) && s.attenuatorCode == 0x20);
+        report("attenuatorReason(0x20) == PA CURRENT", attenuatorReason(0x20) == "PA CURRENT");
+        report("attenuatorReason(0) is empty", attenuatorReason(0).isEmpty());
+        report("attenuatorReason(0x61) == GAIN LOW", attenuatorReason(0x61) == "GAIN LOW");
+        report("attenuatorReason(0x80) == 50V SUPPLY", attenuatorReason(0x80) == "50V SUPPLY");
+        report("attenuatorReason(0x91) == SWR VERY HIGH", attenuatorReason(0x91) == "SWR VERY HIGH");
+        report("attenuatorReason(0xB0) == DISSIPATION", attenuatorReason(0xB0) == "DISSIPATION");
+        report("attenuatorReason(0xF0) == GAIN HIGH", attenuatorReason(0xF0) == "GAIN HIGH");
+        report("attenuatorReason(unknown) shows hex", attenuatorReason(0x42) == "42");
+        report("^FR14074; -> 14074 kHz", apply("^FR14074;", s) && s.frequencyKhz == 14074);
+        report("^FR00000; is not a frequency", !apply("^FR00000;", s) && s.frequencyKhz == 14074);
+        report("^DA long ATU summary decodes (beyond the old 64-char cap)",
+               apply("^DA18086 AN1 Side ANT 340 nH (L06) 0 pf (C00) SWR Bypass 3.0 extra text;", s)
+                   && s.atuSetting
+                   && s.atuSetting->startsWith(QStringLiteral("18086 AN1 Side ANT")));
+        report("^RV03.10; -> firmware", apply("^RV03.10;", s) && s.firmware == QStringLiteral("03.10"));
+        report("^SN00022; -> serial", apply("^SN00022;", s) && s.serialNumber == QStringLiteral("00022"));
+    }
+    report("buildSetPower(true) == ^ON1;", buildSetPower(true) == "^ON1;");
+    report("buildSetPower(false) == ^ON0;", buildSetPower(false) == "^ON0;");
+    report("buildSetFanMinimum(0) == ^FC0;", buildSetFanMinimum(0) == "^FC0;");
+    report("buildSetFanMinimum(5) == ^FC5;", buildSetFanMinimum(5) == "^FC5;");
+    report("buildSetFanMinimum out of range is empty",
+           buildSetFanMinimum(-1).isEmpty() && buildSetFanMinimum(6).isEmpty());
+    report("buildSetFrequency(14074) == ^FR14074;", buildSetFrequency(14074) == "^FR14074;");
+    report("buildSetFrequency(1840) zero-pads to ^FR01840;", buildSetFrequency(1840) == "^FR01840;");
+    report("buildSetFrequency outside 160-6 m coverage is empty",
+           buildSetFrequency(144200).isEmpty() && buildSetFrequency(500).isEmpty());
+
+    // ── Transport setting ────────────────────────────────────────────────
+    report("transportSettingValue round-trips TCP",
+           transportFromSettingValue(transportSettingValue(Transport::Tcp)) == Transport::Tcp);
+    report("transportSettingValue round-trips UDP",
+           transportFromSettingValue(transportSettingValue(Transport::Udp)) == Transport::Udp);
+    report("transport setting is case-insensitive",
+           transportFromSettingValue(QStringLiteral(" UDP ")) == Transport::Udp);
+    report("an unset transport setting keeps TCP",
+           transportFromSettingValue(QString()) == Transport::Tcp);
+    report("an unrecognized transport setting keeps TCP",
+           transportFromSettingValue(QStringLiteral("serial")) == Transport::Tcp);
+
+    // ── Wake-on-LAN (Programming Reference rev. 5/5/2024: Wakeup p. 8, ^MA, ^WL) ──
+    {
+        const QByteArray mac = QByteArray::fromHex("5410EC147522");
+        report("parseMacAddress(^MA example) -> 6 bytes",
+               parseMacAddress(QStringLiteral("54:10:EC:14:75:22")) == mac);
+        report("parseMacAddress accepts lower-case hex",
+               parseMacAddress(QStringLiteral("54:10:ec:14:75:22")) == mac);
+        report("parseMacAddress rejects 5 octets, a bad octet, or another separator",
+               !parseMacAddress(QStringLiteral("54:10:EC:14:75"))
+                   && !parseMacAddress(QStringLiteral("54:10:EC:14:75:2G"))
+                   && !parseMacAddress(QStringLiteral("54:10:EC:14:75:225"))
+                   && !parseMacAddress(QStringLiteral("54-10-EC-14-75-22"))
+                   && !parseMacAddress(QString()));
+        report("formatMacAddress round-trips", formatMacAddress(mac) == QStringLiteral("54:10:EC:14:75:22"));
+
+        const QByteArray packet = buildWakeOnLanPacket(mac);
+        bool shape = packet.size() == 6 + 16 * 6 && packet.left(6) == QByteArray(6, char(0xFF));
+        for (int i = 0; shape && i < 16; ++i) {
+            shape = packet.mid(6 + i * 6, 6) == mac;
+        }
+        report("magic packet: 6 x 0xFF, then 16 copies of the MAC", shape);
+        report("magic packet refuses a MAC that is not 6 bytes",
+               buildWakeOnLanPacket(QByteArray::fromHex("5410EC1475")).isEmpty()
+                   && buildWakeOnLanPacket(QByteArray()).isEmpty());
+
+        auto apply = [](const char* frame, Status& s) {
+            const auto m = parseMessage(QByteArray(frame));
+            return m && applyMessage(*m, s);
+        };
+        Status s;
+        report("^MA54:10:EC:14:75:22; -> MAC", apply("^MA54:10:EC:14:75:22;", s)
+                   && s.macAddress == QStringLiteral("54:10:EC:14:75:22"));
+        report("^MA reply in lower case is normalized, not a change",
+               !apply("^MA54:10:ec:14:75:22;", s) && s.macAddress == QStringLiteral("54:10:EC:14:75:22"));
+        report("a malformed ^MA leaves the MAC untouched",
+               !apply("^MA54:10:EC;", s) && s.macAddress == QStringLiteral("54:10:EC:14:75:22"));
+        report("^MAAC:... (MAC starting with a letter) is still ^MA",
+               apply("^MAAC:DE:48:00:11:22;", s) && s.macAddress == QStringLiteral("AC:DE:48:00:11:22"));
+        report("^WL1; -> NET WAKE on", apply("^WL1;", s) && s.netWake == true);
+        report("^WL0; -> NET WAKE off", apply("^WL0;", s) && s.netWake == false);
+        report("^WL2; is rejected", !apply("^WL2;", s) && s.netWake == false);
+    }
+
+    // ── UDP query pacing ─────────────────────────────────────────────────
+    {
+        QueryPacer p;
+        p.enqueue(QStringLiteral("PWF"));
+        p.enqueue(QStringLiteral("PWR"));
+        p.enqueue(QStringLiteral("SW"));
+        report("pacer: the first query goes out", p.takeNext(0) == QStringLiteral("PWF"));
+        report("pacer: nothing more while one is outstanding", !p.takeNext(10) && p.queued() == 2);
+        report("pacer: another command's reply does not release it",
+               !p.replied(QStringLiteral("SW")) && !p.takeNext(20));
+        report("pacer: its own reply releases the next", p.replied(QStringLiteral("PWF"))
+                   && p.takeNext(30) == QStringLiteral("PWR"));
+        report("pacer: msUntilTimeout counts down from the send",
+               p.msUntilTimeout(30 + 20) == QueryPacer::kReplyTimeoutMs - 20);
+        report("pacer: still held one ms before the timeout",
+               !p.takeNext(30 + QueryPacer::kReplyTimeoutMs - 1));
+        report("pacer: an unanswered query is given up at the timeout",
+               p.takeNext(30 + QueryPacer::kReplyTimeoutMs) == QStringLiteral("SW") && p.timeouts() == 1);
+        p.enqueue(QStringLiteral("SW"));
+        p.enqueue(QStringLiteral("TM"));
+        p.enqueue(QStringLiteral("TM"));
+        report("pacer: a query outstanding or queued is not queued twice", p.queued() == 1);
+        p.enqueue(QStringLiteral("AN"), true);
+        report("pacer: an urgent readback jumps the queue",
+               p.replied(QStringLiteral("SW")) && p.takeNext(200) == QStringLiteral("AN"));
+        report("pacer: not drained while one is outstanding or queued", !p.drained());
+        {
+            QueryPacer q;
+            q.enqueue(QStringLiteral("PWF"));
+            q.takeNext(0);
+            q.enqueue(QStringLiteral("PWR"));
+            q.enqueue(QStringLiteral("TP"));
+            q.enqueue(QStringLiteral("TP"), true);
+            report("pacer: an urgent readback already queued moves to the head",
+                   q.queued() == 2 && q.replied(QStringLiteral("PWF"))
+                       && q.takeNext(10) == QStringLiteral("TP"));
+        }
+        p.replied(QStringLiteral("AN"));
+        report("pacer: drains after the last reply", p.takeNext(210) == QStringLiteral("TM")
+                   && p.replied(QStringLiteral("TM")) && p.drained() && !p.takeNext(220)
+                   && p.msUntilTimeout(220) == -1);
+        p.enqueue(QStringLiteral("ON"));
+        p.takeNext(300);
+        p.clear();
+        report("pacer: clear() forgets the queue and the outstanding query",
+               p.drained() && !p.replied(QStringLiteral("ON")));
+    }
+
     if (g_failed == 0) {
         std::printf("\nAll KPA1500 protocol tests passed.\n");
     } else {

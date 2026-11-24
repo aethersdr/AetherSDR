@@ -83,6 +83,8 @@ public:
     };
 
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
+    // Applied at once. Hl2Backend refuses both while keyed: in the TXA build a
+    // mid-over bandpass swap splatters.
     Q_INVOKABLE void setMode(WdspChannel::Mode mode);
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     // Linear gain applied to the audio before modulation. 1.0 = unity.
@@ -190,8 +192,10 @@ public slots:
     void processAudioBlock(const std::vector<float>& mono,
                            TxAudioSource source,
                            const TxCoordinator::Context& context);
-    // Drop anything buffered — on unkey, so the next transmission does not
-    // start with the tail of the previous one.
+    // Ends the over: drops anything buffered and stops the channel, so the next
+    // transmission does not start with the tail of this one. Hl2Backend posts it
+    // at unkey, and at a re-key whose unkey cleanup was skipped (#7216);
+    // processAudioBlock() runs it on a new context.
     void reset();
 
 signals:

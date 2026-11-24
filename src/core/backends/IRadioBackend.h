@@ -1297,6 +1297,12 @@ signals:
     // on it), so advice sent there becomes a reconnect loop. If it does not stop the
     // radio working, it belongs here.
     void configurationWarning(const QString& message);
+    // A mode, passband or TX-slice change the backend refused because the radio
+    // is transmitting; `message` tells the operator why. The refused control has
+    // already been republished unchanged. `sliceId` is -1 when no slice can be
+    // named (no TX receiver); RadioModel then posts the Notice with no pan, and
+    // the panadapter overlay falls back to the TX or active slice's pan.
+    void transmitChangeRefused(int sliceId, const QString& message);
     // A transmission the operator keyed did not go out, for a reason the
     // operator should see (`reason`, one short line). Once per transmission;
     // RadioModel raises it as a "TX failed" notice. MOX is not changed by it.

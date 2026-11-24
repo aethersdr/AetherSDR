@@ -75,6 +75,9 @@ public:
     // presenting the IC-705's address as a deliberate choice.
     static constexpr std::uint8_t kDefaultCivAddress = 0xA4;
 
+    static QString ic7110Market(const QString& host, quint16 port);
+    static void setIc7110Market(const QString& host, quint16 port, const QString& market);
+
     // Restore every field to its default.
     static void reset();
 

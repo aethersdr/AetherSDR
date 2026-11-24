@@ -415,6 +415,16 @@ public:
     // Only the backend's explicit CW break-in path uses CW holds to sustain
     // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
     bool setCwMox(bool keyed, const TxCoordinator::Operation& operation);
+    // A break-in key-down while the backend is still keyed (#7567), in one
+    // call so no frame is built between them: setCwKeyDown(true, ...), and
+    // only if it admitted the down, MOX raised again under `operation` when
+    // the operation that raised it has lapsed (MOX already dropped, or drops
+    // on the next frame). Otherwise MOX is left as it is. Returns what
+    // setCwMox() returns (a new over), false when nothing was raised.
+    bool setCwKeyDownRaisingMox(const TxCoordinator::Operation& operation,
+                                std::chrono::steady_clock::time_point scheduledAt,
+                                std::chrono::steady_clock::time_point releaseAt,
+                                const TxCoordinator::Completion& completion);
     [[nodiscard]] bool isKeyed() const noexcept { return m_mox; }
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);
@@ -446,7 +456,8 @@ public:
     // been written to EP2 and its 5 ms fall has ended, so the element's intent
     // outlives its pending edges; a flush drops it. An unscheduled key-down is a hold of its own,
     // which a scheduled release does not clear (see m_cwHolds).
-    void setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
+    // Returns true when a key-down was admitted (held, or scheduled).
+    bool setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
                       std::chrono::steady_clock::time_point scheduledAt = {},
                       std::chrono::steady_clock::time_point releaseAt = {},
                       const TxCoordinator::Completion& completion = {});
