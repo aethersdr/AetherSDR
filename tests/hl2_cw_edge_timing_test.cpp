@@ -493,6 +493,92 @@ static void testShiftBoundRefusesTheOver()
     }
 }
 
+// N8 (latch): an over can end by lapse, with no clearCwKeying(). The refusal
+// and shift must still end with it, and only with it.
+static void testOverEndedByLapse()
+{
+    const std::int64_t leadMs = Access::leadSamples() * 1000 / kRate;
+    const std::int64_t boundMs = Access::maxShiftSamples() * 1000 / kRate;
+    struct Element {
+        TxCoordinator::Intent intent;
+        TxCoordinator::Operation op;
+    };
+    auto begin = [](Bench& b, const TxCoordinator::Producer& p) {
+        const auto request = p.request();
+        Element e;
+        e.intent = b.tx.coordinator.beginRequest(request, b.tx.operation, TxCoordinator::Activity::CwKey);
+        e.op = b.tx.coordinator.requestOperation(request);
+        return e;
+    };
+    auto nowMsOf = [](const Bench& b) { return Access::frameSample(b.client) * 1000 / kRate; };
+    {
+        // Break-in shape: MOX rides the over's own operation, so the lapse
+        // drops MOX too. A refused over, then an immediate re-key.
+        Bench b;
+        const auto producer = b.tx.coordinator.registerProducer();
+        Element first = begin(b, producer);
+        b.client.setMox(true, first.op);
+        b.play({{100, true, 100, true, 140}, {140, false, 140},
+                {180, true, 180 + leadMs + boundMs + 20, true, 220}, {220, false, 220 + leadMs + boundMs + 20}},
+               700, &first.op);
+        check(b.client.cwRefusedDowns() == 1, "lapse: the over was refused past the bound");
+        (void)b.tx.coordinator.endIntent(first.intent);
+        b.play({}, 720);
+        check(!b.client.isKeyed() && b.client.cwShiftSamples() == 0,
+              "lapse: MOX dropped with the operation, and the over's shift is cleared");
+        Element next = begin(b, producer);
+        b.client.setMox(true, next.op);
+        const std::int64_t nowMs = nowMsOf(b);
+        b.play({{nowMs + 5, true, nowMs + 5, true, nowMs + 45}, {nowMs + 45, false, nowMs + 45}},
+               nowMs + 300, &next.op);
+        const auto runs = carriers(b.iTrace);
+        check(runs.size() == 2 && within(runs[1].length, samplesOfMs(40), 1) && b.client.cwRefusedDowns() == 1,
+              "lapse: an immediate re-key after a refused over that ended by lapse is keyed whole");
+    }
+    {
+        // Lapse inside the over (manual MOX, or the break-in hang holding MOX
+        // under its own operation): the element's operation ends but MOX
+        // stays up, so the refusal stands until the over ends.
+        Bench b;
+        const auto producer = b.tx.coordinator.registerProducer();
+        Element first = begin(b, producer);
+        b.play({{100, true, 100, true, 140}, {140, false, 140},
+                {180, true, 180 + leadMs + boundMs + 20, true, 220}, {220, false, 220 + leadMs + boundMs + 20}},
+               700, &first.op);
+        (void)b.tx.coordinator.endIntent(first.intent);
+        b.play({}, 720);
+        Element next = begin(b, producer);
+        const std::int64_t nowMs = nowMsOf(b);
+        b.play({{nowMs + 5, true, nowMs + 5, true, nowMs + 45}, {nowMs + 45, false, nowMs + 45}},
+               nowMs + 300, &next.op);
+        check(b.client.isKeyed() && carriers(b.iTrace).size() == 1 && b.client.cwRefusedDowns() == 2,
+              "lapse with MOX up: the refused over stays refused until it ends");
+    }
+    {
+        // Not refused, only shifted: the lapse with MOX up keeps the shift
+        // (one over), and the lapse that drops MOX clears it.
+        Bench b;
+        const auto producer = b.tx.coordinator.registerProducer();
+        Element first = begin(b, producer);
+        b.play({{100, true, 100 + leadMs + 30, true, 140}, {140, false, 140 + leadMs + 30}}, 400, &first.op);
+        const std::int64_t shifted = b.client.cwShiftSamples();
+        (void)b.tx.coordinator.endIntent(first.intent);
+        b.play({}, 420);
+        check(shifted > 0 && b.client.cwShiftSamples() == shifted && b.client.cwRefusedDowns() == 0,
+              "lapse with MOX up, not refused: the over's shift is kept");
+        Element second = begin(b, producer);
+        b.client.setMox(true, second.op);
+        b.play({{450, true, 450, true, 490}, {490, false, 490}}, 700, &second.op);
+        (void)b.tx.coordinator.endIntent(second.intent);
+        b.play({}, 720);
+        check(!b.client.isKeyed() && b.client.cwShiftSamples() == 0,
+              "lapse with MOX down, not refused: the over's shift is cleared");
+        const auto runs = carriers(b.iTrace);
+        check(runs.size() == 2 && within(runs[1].length, samplesOfMs(40), 1),
+              "lapse, not refused: both elements keyed whole");
+    }
+}
+
 static void testForcedKeyUpCap()
 {
     const std::int64_t capMs = Access::capSamples() * 1000 / kRate;
@@ -1012,6 +1098,7 @@ int main(int argc, char** argv)
     testScheduledTrainsAreSampleExact();
     testLateKeyDownShiftsWholeElement();
     testShiftBoundRefusesTheOver();
+    testOverEndedByLapse();
     testForcedKeyUpCap();
     testScheduleCapacity();
     testFlushPaths();

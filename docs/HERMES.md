@@ -1876,7 +1876,12 @@ keeps both workflows consistent:
   it is longer; past `kCwMaxEdgeShiftMs` (250 ms) it is refused and the over
   has no carrier until it ends, with one "TX failed" notice per over
   (`MetisClient::cwOverRefused` → `IRadioBackend::transmitFailed` → the
-  `tx-failed:` interlock notice); MOX still falls with the break-in hang. A
+  `tx-failed:` interlock notice); MOX still falls with the break-in hang. The
+  over ends at `clearCwKeying()` or, when no cleanup is permitted, once the
+  operation holding CW has lapsed and MOX is down with no scheduled key-down
+  pending (`MetisClient::buildNextControlPacket`); either clears the shift and
+  the refusal, so the next over keys. A lapse while MOX stays up (manual MOX,
+  the hang) is a gap inside the over and keeps both. A
   keyer stopped mid-element keeps the element's deadline as the key-up's
   `scheduledAt` (as for every other backend) and carries the stop instant in
   `releaseAt`; the HL2 keys up there. The break-in hang counts from the shifted key-up's wire

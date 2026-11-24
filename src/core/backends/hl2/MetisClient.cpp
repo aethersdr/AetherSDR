@@ -2105,6 +2105,22 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         m_cwEnvelope = 0.0;
         m_cwForceUpSample = -1;
     }
+    // An over can end with no clearCwKeying(): the operation holding CW
+    // lapses, MOX drops with it (break-in), and the backend's unkey may not
+    // be permitted to clean up. Clear that over's shift and refusal here, as
+    // clearCwKeying() would, or the next over's scheduled key-downs are
+    // refused silently. Only once MOX is down and no scheduled key-down is
+    // pending: a gap between elements of one over (manual MOX, the break-in
+    // hang) keeps the over's shift and refusal until the over really ends.
+    if (!m_cwMode && !m_mox && (m_cwOverRefused || m_cwShiftSamples != 0)) {
+        bool downPending = false;
+        for (std::size_t i = 0; i < m_cwScheduleCount; ++i) {
+            downPending = downPending || m_cwSchedule[i].down;
+        }
+        if (!downPending) {
+            resetCwShift();
+        }
+    }
     // Pending scheduled edges keep their own operations, checked as each is due.
     const std::int64_t cwFrameStart = m_cwFrameSample;
     m_cwFrameSample += kTxSamplesPerPacket;
