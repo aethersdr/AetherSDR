@@ -1275,6 +1275,10 @@ signals:
     // on it), so advice sent there becomes a reconnect loop. If it does not stop the
     // radio working, it belongs here.
     void configurationWarning(const QString& message);
+    // A mode, passband or TX-slice change the backend refused because the radio
+    // is transmitting; `message` tells the operator why. The refused control has
+    // already been republished unchanged.
+    void transmitChangeRefused(int sliceId, const QString& message);
 
     void capabilitiesChanged();
 

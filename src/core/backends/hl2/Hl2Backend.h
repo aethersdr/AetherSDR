@@ -365,6 +365,9 @@ private:
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
     friend struct Hl2TxRouteTestAccess;
+    // Keys the backend's own modulator socket-free, for
+    // hl2_tx_keyed_mode_change_test's refusals while keyed.
+    friend struct Hl2TxKeyedChangeTestAccess;
     friend struct Hl2RxGainDuringTxTestAccess;
     // Arms and ends the transmit tail, for tci_ext_hl2_hw_test's hw.set refusal.
     friend struct Hl2HwSetTailTestAccess;

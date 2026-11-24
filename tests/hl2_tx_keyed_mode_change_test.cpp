@@ -1,21 +1,36 @@
-// A mode or passband change that reaches Hl2TxDsp while an over is running is
-// held until the over ends: swapping TXA's bandpass mid-stream (above all the
-// minimum- to linear-phase swap of USB -> DIGU) splatters. Sample-counted on the
-// emitted IQ, socket-free, paced at real time like hl2_tx_passband_onset_test.
-//   1. USB -> DIGU keyed, as Hl2Backend::setSliceMode queues it: the over's
-//      out-of-band energy around the change stays at the unchanged over's.
-//   2. The held change is not lost: it reaches the channel at unkey, and the
-//      next over transmits DIGU (a 200 Hz tone,
-//      outside USB's 300 Hz edge, passes at a fresh DIGU channel's level).
-//   3. Control: the same change made between overs applies to the next over.
+// While the HL2 is keyed, a change to the transmitter's mode, TX passband or
+// TX slice is refused: the slice, the Phone applet and the transmitter keep
+// what they had, and the operator is told why. Swapping TXA's bandpass
+// mid-over (above all USB -> DIGU's minimum- to linear-phase swap) splatters,
+// and a held change would leave the slice showing a mode the transmitter is
+// not sending. Through the real Hl2Backend and its modulator on the I/O thread,
+// socket-free, in the production lifecycle: setKeying() edges, a fresh TX
+// operation and context per over, no explicit Hl2TxDsp::reset(). Real-time paced.
+//   1. Keyed USB -> DIGU via SliceModel::setMode (the path the mode button,
+//      CAT MD and TCI modulation share): refused, the slice stays USB, the
+//      channel stays USB minimum phase, the over does not splatter.
+//   2. Keyed TX filter change: refused, the echo puts the applet back.
+//   3. Keyed TX-slice move to an LSB receiver: refused, transmit stays put.
+//   4. After the over, an unkeyed USB -> DIGU reaches the channel at once, the
+//      published TX passband follows, and the next over transmits DIGU.
 
-#include "core/backends/hl2/Hl2TxDsp.h"
+#include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/MetisClient.h"
+#include "models/SliceModel.h"
 
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QObject>
+#include <QString>
+#include <QStringList>
+#include <QVariant>
+#include <QVariantList>
+#include <QVariantMap>
 
 #include <algorithm>
 #include <chrono>
@@ -24,6 +39,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -34,7 +51,73 @@ using namespace AetherSDR::hl2;
 using Mode = WdspChannel::Mode;
 using Iq = std::vector<std::complex<float>>;
 
+namespace AetherSDR::hl2 {
+
+struct MetisClientTestAccess {
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
+};
+
+struct Hl2TxKeyedChangeTestAccess {
+    // Two receivers, the transmit gate open and a session without a socket.
+    static void prepare(Hl2Backend& b)
+    {
+        b.m_ids.reset(2);
+        b.m_rx.assign(2, Hl2Backend::Receiver{});
+        b.m_txAllowed = true;
+        QMetaObject::invokeMethod(b.m_metis, [m = b.m_metis] {
+            m->enableTransmit(true);
+            MetisClientTestAccess::setStreaming(*m);
+        }, Qt::BlockingQueuedConnection);
+    }
+    static bool configureTx(Hl2Backend& b)
+    {
+        bool ok = false;
+        QMetaObject::invokeMethod(b.m_txDsp, [&ok, dsp = b.m_txDsp] {
+            Hl2TxDsp::Config cfg;
+            cfg.mode = Mode::Usb;
+            cfg.filterLowHz = 300.0;
+            cfg.filterHighHz = 2700.0;
+            cfg.alcEnabled = false;   // linear, so a level compares across channels
+            std::string err;
+            ok = dsp->configure(cfg, &err);
+            dsp->setMicGain(1.0);
+        }, Qt::BlockingQueuedConnection);
+        return ok;
+    }
+    // Everything already posted to the I/O thread has run when this returns.
+    static std::optional<WdspChannel::Config> channel(Hl2Backend& b)
+    {
+        std::optional<WdspChannel::Config> c;
+        QMetaObject::invokeMethod(b.m_txDsp, [&c, dsp = b.m_txDsp] {
+            if (const WdspChannel::Config* p = dsp->channelConfig()) {
+                c = *p;
+            }
+        }, Qt::BlockingQueuedConnection);
+        return c;
+    }
+    static Mode configMode(Hl2Backend& b)
+    {
+        Mode m = Mode::Usb;
+        QMetaObject::invokeMethod(b.m_txDsp, [&m, dsp = b.m_txDsp] { m = dsp->config().mode; },
+                                  Qt::BlockingQueuedConnection);
+        return m;
+    }
+    static unsigned long long faults(Hl2Backend& b)
+    {
+        unsigned long long n = 0;
+        QMetaObject::invokeMethod(b.m_txDsp, [&n, dsp = b.m_txDsp] { n = dsp->modulatorFaultBlocks(); },
+                                  Qt::BlockingQueuedConnection);
+        return n;
+    }
+    static Hl2TxDsp* txDsp(Hl2Backend& b) { return b.m_txDsp; }
+    static int txDdc(const Hl2Backend& b) { return b.m_txDdc; }
+};
+
+}  // namespace AetherSDR::hl2
+
 namespace {
+
+using Access = Hl2TxKeyedChangeTestAccess;
 
 int g_failures = 0;
 void check(bool ok, const std::string& what)
@@ -50,8 +133,11 @@ constexpr double kFsIn = 24000.0;
 constexpr double kFsOut = 48000.0;
 constexpr std::size_t kChunk = 240;            // 10 ms at 24 kHz
 constexpr std::size_t kChunks = 120;           // 1.2 s per over
-constexpr std::size_t kEvent = 60;             // change queued before 0.6 s of input
+constexpr std::size_t kEvent = 60;             // change before 0.6 s of input
 constexpr long kMs = 48;                       // output samples per ms
+// The output time at which a change could first show; the window is generous.
+constexpr long kEventOut = static_cast<long>(kEvent * kChunk * 2);
+constexpr std::size_t kSettle = 12288;         // key-up ramp and fill
 
 void pumpFor(double ms)
 {
@@ -63,63 +149,64 @@ void pumpFor(double ms)
     }
 }
 
-std::vector<float> tone(double hz, double amp)
+// Interleaved stereo int16 chunks, as AudioEngine hands them to submitTxAudio().
+std::vector<QByteArray> tone(double hz, double amp)
 {
-    std::vector<float> x(kChunk * kChunks);
-    for (std::size_t n = 0; n < x.size(); ++n) {
-        x[n] = static_cast<float>(amp * std::sin(2.0 * kPi * hz * static_cast<double>(n) / kFsIn));
+    std::vector<QByteArray> chunks;
+    for (std::size_t k = 0; k < kChunks; ++k) {
+        QByteArray pcm(static_cast<int>(kChunk * 2 * sizeof(qint16)), Qt::Uninitialized);
+        auto* s = reinterpret_cast<qint16*>(pcm.data());
+        for (std::size_t i = 0; i < kChunk; ++i) {
+            const double n = static_cast<double>(k * kChunk + i);
+            const auto v = static_cast<qint16>(
+                std::lround(32767.0 * amp * std::sin(2.0 * kPi * hz * n / kFsIn)));
+            s[2 * i] = v;
+            s[2 * i + 1] = v;
+        }
+        chunks.push_back(pcm);
     }
-    return x;
+    return chunks;
 }
 
 struct Over {
     Iq iq;
-    unsigned long long faults = 0;
-    unsigned long long stallDrops = 0;
+    bool starved = false;
 };
 
-// One over on `tx`, `event` called before chunk kEvent; tx.reset() after it,
-// as the next over's new context does.
-Over runOver(Hl2TxDsp& tx, const TxCoordinator::Context& ctx, const std::vector<float>& audio,
-             const std::function<void()>& event, const std::function<void()>& beforeReset = {})
+// One over in the production lifecycle: a fresh operation and media context,
+// setKeying(true), real-time audio, setKeying(false). The unkey's own cleanup
+// (Hl2Backend::applyKeying) ends the over; nothing here resets the modulator.
+Over runOver(Hl2Backend& backend, TxTestAuthority& auth, const TxCoordinator::Producer& mic,
+             const std::vector<QByteArray>& audio, const std::function<void()>& event)
 {
     Over o;
-    const unsigned long long faults0 = tx.modulatorFaultBlocks();
-    const unsigned long long drops0 = tx.modulatorStallDrops();
-    const QMetaObject::Connection c = QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
-        [&o](const Iq& iq, const TxCoordinator::Context&) { o.iq.insert(o.iq.end(), iq.begin(), iq.end()); });
+    std::mutex lock;
+    const QMetaObject::Connection c = QObject::connect(Access::txDsp(backend), &Hl2TxDsp::iqReady,
+        Access::txDsp(backend), [&o, &lock](const Iq& iq, const TxCoordinator::Context&) {
+            const std::lock_guard<std::mutex> g(lock);
+            o.iq.insert(o.iq.end(), iq.begin(), iq.end());
+        }, Qt::DirectConnection);
+    const TxCoordinator::Operation op =
+        auth.coordinator.acquire(auth.actor, TxCoordinator::monotonicMs()).operation;
+    const TxCoordinator::Context ctx = auth.coordinator.mediaContext(mic, op);
+    const unsigned long long faults0 = Access::faults(backend);
+    backend.setKeying(true, op, {});
     for (std::size_t k = 0; k < kChunks; ++k) {
         if (k == kEvent && event) {
             event();
         }
-        const auto first = audio.begin() + static_cast<std::ptrdiff_t>(k * kChunk);
-        tx.processAudioBlock(std::vector<float>(first, first + static_cast<std::ptrdiff_t>(kChunk)),
-                             TxAudioSource::Microphone, ctx);
+        backend.submitTxAudio(audio[k], 24000, TxAudioSource::Microphone, ctx);
         pumpFor(1000.0 * static_cast<double>(kChunk) / kFsIn);
     }
     pumpFor(50.0);
+    o.starved = Access::faults(backend) > faults0;
+    backend.setKeying(false, op, {});
+    (void)Access::channel(backend);   // the unkey's posted cleanup has run
+    (void)auth.coordinator.finishLocalIntent(op);
     QObject::disconnect(c);
-    o.faults = tx.modulatorFaultBlocks() - faults0;
-    o.stallDrops = tx.modulatorStallDrops() - drops0;
-    if (beforeReset) {
-        beforeReset();
-    }
-    tx.reset();
+    pumpFor(20.0);
+    const std::lock_guard<std::mutex> g(lock);
     return o;
-}
-
-bool configureTx(Hl2TxDsp& tx, Mode mode, double lo, double hi)
-{
-    Hl2TxDsp::Config cfg;
-    cfg.mode = mode;
-    cfg.filterLowHz = lo;
-    cfg.filterHighHz = hi;
-    cfg.alcEnabled = false;   // linear, so a level compares across channels
-    std::string err;
-    const bool ok = tx.configure(cfg, &err);
-    check(ok, "the modulator configures " + err);
-    tx.setMicGain(1.0);
-    return ok;
 }
 
 void fft(std::vector<std::complex<double>>& a)
@@ -181,6 +268,16 @@ double oobDbc(const Iq& x, long start)
     return 10.0 * std::log10(std::max(out, 1e-300) / std::max(in, 1e-300));
 }
 
+// Worst 100 ms window from the change to 200 ms after it, 10 ms steps.
+double worstOob(const Iq& x)
+{
+    double worst = -400.0;
+    for (long w = kEventOut - 50 * kMs; w <= kEventOut + 150 * kMs; w += 10 * kMs) {
+        worst = std::max(worst, oobDbc(x, w));
+    }
+    return worst;
+}
+
 double rms(const Iq& x, std::size_t from)
 {
     double acc = 0.0;
@@ -193,110 +290,213 @@ double rms(const Iq& x, std::size_t from)
 
 double db(double r) { return 20.0 * std::log10(std::max(r, 1e-30)); }
 
-// The output time at which the change could first show: input block kEvent
-// plus the channel's latency is later than this, so the window is generous.
-constexpr long kEventOut = static_cast<long>(kEvent * kChunk * 2);
-constexpr std::size_t kSettle = 12288;   // key-up ramp and fill, as hl2_tx_passband_onset_test
+bool isUsbMinPhase(const std::optional<WdspChannel::Config>& c)
+{
+    return c && c->mode == Mode::Usb && c->minimumPhase && c->filterLowHz == 300.0
+        && c->filterHighHz == 2700.0;
+}
 
-bool starved(const Over& o) { return o.faults > 0; }
+bool isDiguLinear(const std::optional<WdspChannel::Config>& c)
+{
+    return c && c->mode == Mode::Digu && !c->minimumPhase && c->filterLowHz == 150.0
+        && c->filterHighHz == 3000.0;
+}
+
+std::optional<std::pair<double, double>> publishedTxPassband(Hl2Backend& backend)
+{
+    backend.settleDspChainsForTest();
+    for (const QVariant& v : backend.dspChains()) {
+        const QVariantMap e = v.toMap();
+        if (e.value(QStringLiteral("chain")).toString() == QLatin1String("hl2-tx")) {
+            return std::make_pair(e.value(QStringLiteral("filterLowHz")).toDouble(),
+                                  e.value(QStringLiteral("filterHighHz")).toDouble());
+        }
+    }
+    return std::nullopt;
+}
+
+// A fresh channel's level for `audio`: the reference for "transmits DIGU".
+double freshLevel(Mode mode, double lo, double hi, const std::vector<QByteArray>& audio, bool& starved)
+{
+    TxTestAuthority auth;
+    const TxCoordinator::Producer mic = auth.coordinator.registerProducer(true);
+    Hl2TxDsp tx;
+    Hl2TxDsp::Config cfg;
+    cfg.mode = mode;
+    cfg.filterLowHz = lo;
+    cfg.filterHighHz = hi;
+    cfg.alcEnabled = false;
+    std::string err;
+    if (!tx.configure(cfg, &err)) {
+        check(false, "a reference modulator configures " + err);
+        return 0.0;
+    }
+    tx.setMicGain(1.0);
+    Iq iq;
+    QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx, [&iq](const Iq& x, const TxCoordinator::Context&) {
+        iq.insert(iq.end(), x.begin(), x.end());
+    });
+    const TxCoordinator::Context ctx = auth.coordinator.mediaContext(mic, auth.operation);
+    for (const QByteArray& pcm : audio) {
+        const auto* s = reinterpret_cast<const qint16*>(pcm.constData());
+        std::vector<float> mono(kChunk);
+        for (std::size_t i = 0; i < kChunk; ++i) {
+            mono[i] = static_cast<float>(s[2 * i]) / 32768.0f;
+        }
+        tx.processAudioBlock(mono, TxAudioSource::Microphone, ctx);
+        pumpFor(1000.0 * static_cast<double>(kChunk) / kFsIn);
+    }
+    pumpFor(50.0);
+    starved = starved || tx.modulatorFaultBlocks() > 0;
+    return rms(iq, kSettle);
+}
 
 }  // namespace
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("hl2-tx-keyed-mode-change"));
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "Cannot create isolated settings profile\n");
+        return 1;
+    }
     QCoreApplication app(argc, argv);
 #if !AETHER_HL2_TX_TXA
     std::fprintf(stderr, "SKIP: phasing build has no TXA channel\n");
     return 77;
 #else
-    TxTestAuthority authority;
-    const std::vector<float> t1k = tone(1000.0, 0.5);
-    const std::vector<float> t200 = tone(200.0, 0.5);
+    const std::vector<QByteArray> t1k = tone(1000.0, 0.5);
+    const std::vector<QByteArray> t200 = tone(200.0, 0.5);
     bool inconclusive = false;
 
-    // Reference levels for the 200 Hz tone on fresh channels.
-    double ref200Digu = 0.0;
-    double ref200Usb = 0.0;
-    {
-        Hl2TxDsp d;
-        Hl2TxDsp u;
-        if (configureTx(d, Mode::Digu, 150.0, 3000.0) && configureTx(u, Mode::Usb, 300.0, 2700.0)) {
-            const Over od = runOver(d, authority.context, t200, {});
-            const Over ou = runOver(u, authority.context, t200, {});
-            inconclusive = inconclusive || starved(od) || starved(ou);
-            ref200Digu = rms(od.iq, kSettle);
-            ref200Usb = rms(ou.iq, kSettle);
-            std::fprintf(stderr, "200 Hz tone: fresh DIGU %.3f dB, fresh USB %.3f dB\n",
-                         db(ref200Digu), db(ref200Usb));
-            check(db(ref200Digu) - db(ref200Usb) > 40.0,
-                  "a 200 Hz tone tells DIGU from USB (USB stops it, DIGU passes it)");
+    const double ref200Digu = freshLevel(Mode::Digu, 150.0, 3000.0, t200, inconclusive);
+    const double ref200Usb = freshLevel(Mode::Usb, 300.0, 2700.0, t200, inconclusive);
+    std::fprintf(stderr, "200 Hz tone: fresh DIGU %.3f dB, fresh USB %.3f dB\n",
+                 db(ref200Digu), db(ref200Usb));
+    check(db(ref200Digu) - db(ref200Usb) > 40.0,
+          "a 200 Hz tone tells DIGU from USB (USB stops it, DIGU passes it)");
+
+    TxTestAuthority auth;
+    (void)auth.coordinator.finishLocalIntent(auth.operation);   // each over acquires its own
+    const TxCoordinator::Producer mic = auth.coordinator.registerProducer(true);
+    Hl2Backend backend;
+    Access::prepare(backend);
+
+    // Wired as RadioModel wires it: both connections direct.
+    SliceModel slice(0);
+    QObject::connect(&slice, &SliceModel::modeChangeRequested, &backend,
+                     [&backend](const QString& m) { backend.setSliceMode(0, m); });
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &slice, [&slice](int id, const SliceDelta& d) {
+        if (id == 0) {
+            slice.applyChanges(d);
         }
-    }
-
-    // 1 + 2. USB -> DIGU while keyed, then the next over.
-    {
-        Hl2TxDsp ctl;
-        Hl2TxDsp tx;
-        if (configureTx(ctl, Mode::Usb, 300.0, 2700.0) && configureTx(tx, Mode::Usb, 300.0, 2700.0)) {
-            const Over c = runOver(ctl, authority.context, t1k, {});
-            bool heldInOver = false;
-            const Over e = runOver(tx, authority.context, t1k, [&tx] {
-                // Hl2Backend::setSliceMode's two queued calls, in its order.
-                tx.setMode(Mode::Digu);
-                tx.setFilter(150.0, 3000.0);
-            }, [&tx, &heldInOver] {
-                const WdspChannel::Config* c = tx.channelConfig();
-                heldInOver = c && c->mode == Mode::Usb && c->minimumPhase
-                    && tx.config().mode == Mode::Digu;
-            });
-            inconclusive = inconclusive || starved(c) || starved(e);
-            // Worst 100 ms window from the change to 200 ms after it, 10 ms steps.
-            double worstEv = -400.0;
-            double worstCtl = -400.0;
-            for (long w = kEventOut - 50 * kMs; w <= kEventOut + 150 * kMs; w += 10 * kMs) {
-                worstEv = std::max(worstEv, oobDbc(e.iq, w));
-                worstCtl = std::max(worstCtl, oobDbc(c.iq, w));
-            }
-            std::fprintf(stderr, "keyed USB -> DIGU: out-of-band %.1f dBc, unchanged over %.1f dBc\n",
-                         worstEv, worstCtl);
-            check(worstEv - worstCtl <= 10.0,
-                  "a keyed USB -> DIGU change does not splatter (out-of-band within 10 dB of the unchanged over)");
-
-            check(heldInOver,
-                  "the change is held while the over runs: the channel is still USB, minimum phase");
-            const WdspChannel::Config* applied = tx.channelConfig();
-            check(applied && applied->mode == Mode::Digu && !applied->minimumPhase,
-                  "the held change reaches the channel when the over ends (reset)");
-
-            const Over next = runOver(tx, authority.context, t200, {});
-            inconclusive = inconclusive || starved(next);
-            const double lvl = rms(next.iq, kSettle);
-            std::fprintf(stderr, "next over, 200 Hz tone: %.3f dB (fresh DIGU %.3f dB)\n", db(lvl), db(ref200Digu));
-            check(std::fabs(db(lvl) - db(ref200Digu)) < 0.5,
-                  "the held change applies to the next over: it transmits DIGU");
-            applied = tx.channelConfig();
-            check(applied && applied->mode == Mode::Digu && !applied->minimumPhase
-                      && applied->filterLowHz == 150.0 && applied->filterHighHz == 3000.0,
-                  "after the over the channel runs DIGU, linear phase, 150..3000 Hz");
+    });
+    QString lastAnnounced;
+    QObject::connect(&slice, &SliceModel::modeChanged, &slice,
+                     [&lastAnnounced](const QString& m) { lastAnnounced = m; });
+    QStringList refusals;
+    QObject::connect(&backend, &IRadioBackend::transmitChangeRefused, &backend,
+                     [&refusals](int id, const QString& m) { refusals << QStringLiteral("%1:%2").arg(id).arg(m); });
+    std::optional<std::pair<int, int>> txFilterEcho;
+    QObject::connect(&backend, &IRadioBackend::transmitChanged, &backend, [&txFilterEcho](const TransmitDelta& d) {
+        if (d.txFilterLow && d.txFilterHigh) {
+            txFilterEcho = std::make_pair(*d.txFilterLow, *d.txFilterHigh);
         }
-    }
-
-    // 3. Control: the same change between overs reaches the next over at once.
-    {
-        Hl2TxDsp tx;
-        if (configureTx(tx, Mode::Usb, 300.0, 2700.0)) {
-            const Over first = runOver(tx, authority.context, t1k, {});
-            tx.setMode(Mode::Digu);
-            tx.setFilter(150.0, 3000.0);
-            const WdspChannel::Config* applied = tx.channelConfig();
-            check(applied && applied->mode == Mode::Digu && !applied->minimumPhase,
-                  "a change between overs reaches the channel immediately");
-            const Over second = runOver(tx, authority.context, t200, {});
-            inconclusive = inconclusive || starved(first) || starved(second);
-            check(std::fabs(db(rms(second.iq, kSettle)) - db(ref200Digu)) < 0.5,
-                  "a change between overs: the next over transmits DIGU");
+    });
+    std::optional<bool> slice1Tx;
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend, [&slice1Tx](int id, const SliceDelta& d) {
+        if (id == 1 && d.txSlice) {
+            slice1Tx = *d.txSlice;
         }
+    });
+
+    slice.setMode(QStringLiteral("USB"));
+    backend.setSliceMode(1, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend)) {
+        check(false, "the backend's modulator configures");
+        return 1;
     }
+    check(isUsbMinPhase(Access::channel(backend)),
+          "setup: the TX channel runs USB, minimum phase, 300..2700 Hz");
+
+    // Control over: nothing changes.
+    const Over control = runOver(backend, auth, mic, t1k, {});
+    inconclusive = inconclusive || control.starved;
+
+    // 1-3. The keyed over: a mode change, a TX filter change and a TX-slice move.
+    std::optional<WdspChannel::Config> duringOver;
+    bool modeRefused = false;
+    bool filterRefused = false;
+    bool moveRefused = false;
+    bool completionRefused = false;
+    QString completionText;
+    QStringList seen;
+    const Over keyed = runOver(backend, auth, mic, t1k, [&] {
+        refusals.clear();
+        lastAnnounced.clear();
+        slice.setMode(QStringLiteral("DIGU"));
+        modeRefused = refusals == QStringList{QStringLiteral("0:Mode can't change while transmitting.")};
+        seen << refusals;
+
+        refusals.clear();
+        txFilterEcho.reset();
+        backend.setTxFilter(100, 2900);
+        filterRefused = refusals == QStringList{QStringLiteral("0:TX filter can't change while transmitting.")}
+            && txFilterEcho == std::make_pair(300, 2700);
+        seen << refusals;
+
+        refusals.clear();
+        slice1Tx.reset();
+        backend.requestTxSlice(1, true, [&](const RadioControlReply& r) {
+            completionRefused = r.kind == RadioControlReply::Kind::Refused;
+            completionText = r.message;
+        }, {});
+        backend.setTxSlice(1);   // the requestSliceControl path
+        moveRefused = refusals.size() == 2
+            && refusals.at(0) == QLatin1String("1:TX slice can't change while transmitting.")
+            && refusals.at(1) == refusals.at(0)
+            && Access::txDdc(backend) == 0 && slice1Tx == false;
+        seen << refusals;
+
+        duringOver = Access::channel(backend);
+    });
+    inconclusive = inconclusive || keyed.starved;
+    std::fprintf(stderr, "refusals told to the operator: %s\n", qPrintable(seen.join(QStringLiteral(" | "))));
+
+    check(modeRefused, "a keyed USB -> DIGU is refused and the operator is told "
+                       "\"Mode can't change while transmitting.\"");
+    check(slice.mode() == QLatin1String("USB"), "the refused change leaves the slice in USB");
+    check(lastAnnounced.isEmpty() || lastAnnounced == QLatin1String("USB"),
+          "the last modeChanged after the refusal is not DIGU");
+    check(isUsbMinPhase(duringOver) && Access::configMode(backend) == Mode::Usb,
+          "the transmitter is unchanged while keyed: USB, minimum phase, 300..2700 Hz");
+    check(filterRefused,
+          "a keyed TX filter change is refused and told; the echo puts the applet back on 300..2700");
+    check(moveRefused, "a keyed TX-slice move is refused on both paths; transmit stays on slice 0");
+    check(completionRefused && completionText.contains(QLatin1String("transmitting")),
+          "the TX-slice move's completion is answered Refused");
+    const double worstEv = worstOob(keyed.iq);
+    const double worstCtl = worstOob(control.iq);
+    std::fprintf(stderr, "keyed over: out-of-band %.1f dBc, unchanged over %.1f dBc\n", worstEv, worstCtl);
+    check(worstEv - worstCtl <= 10.0,
+          "the keyed over does not splatter (out-of-band within 10 dB of the unchanged over)");
+    check(isUsbMinPhase(Access::channel(backend)),
+          "after the over the channel is still USB: nothing was held for the unkey");
+
+    // 4. Between overs the change applies at once.
+    refusals.clear();
+    slice.setMode(QStringLiteral("DIGU"));
+    check(refusals.isEmpty() && slice.mode() == QLatin1String("DIGU"), "an unkeyed USB -> DIGU is accepted");
+    check(isDiguLinear(Access::channel(backend)),
+          "an unkeyed change after a prior over reaches the channel at once: DIGU, linear phase, 150..3000 Hz");
+    const auto published = publishedTxPassband(backend);
+    check(published && published->first == 150.0 && published->second == 3000.0,
+          "the published TX passband follows at once: 150..3000 Hz");
+    const Over next = runOver(backend, auth, mic, t200, {});
+    inconclusive = inconclusive || next.starved;
+    const double lvl = rms(next.iq, kSettle);
+    std::fprintf(stderr, "next over, 200 Hz tone: %.3f dB (fresh DIGU %.3f dB)\n", db(lvl), db(ref200Digu));
+    check(std::fabs(db(lvl) - db(ref200Digu)) < 0.5, "the next over transmits DIGU");
 
     if (g_failures > 0) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
