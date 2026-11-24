@@ -4447,7 +4447,7 @@ ReceiveDispatch Hl2Backend::requestTxSlice(int sliceId, bool enabled,
         setTxSlice(sliceId);   // refuses, tells the operator and republishes
         if (completion) {
             completion({RadioControlReply::Kind::Refused, -1,
-                        QStringLiteral("TX slice can't change while transmitting")});
+                        QStringLiteral("TX slice can't change while transmitting.")});
         }
         return ReceiveDispatch::LocalOnly;
     }
@@ -6676,6 +6676,7 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
     if (transmitKeyed()) {
         if (lowHz != m_txFilterLowHz || highHz != m_txFilterHighHz || !m_txFilterFromOperator) {
             const auto* txIds = m_ids.byDdc(m_txDdc);
+            // -1 with no TX receiver: the Notice then goes to the TX or active slice's pan.
             refuseTransmitChangeWhileKeyed(txIds ? txIds->uiNumber : -1,
                                            tr("TX filter can't change while transmitting."));
         }
