@@ -8469,6 +8469,22 @@ if(Qt6WebSockets_FOUND)
     add_test(NAME aetherd_remote_engine_loopback_test COMMAND aetherd_remote_engine_loopback_test)
     set_tests_properties(aetherd_remote_engine_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
+    add_executable(aetherd_remote_pairing_policy_test tests/aetherd_remote_pairing_policy_test.cpp)
+    target_include_directories(aetherd_remote_pairing_policy_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_pairing_policy_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME aetherd_remote_pairing_policy_test COMMAND aetherd_remote_pairing_policy_test)
+
+    # Socket-owning test: desktop pairing with our own in-process engine.
+    # A QLocalServer uses a unique name, and a QWebSocketServer binds a TCP
+    # ephemeral port on 127.0.0.1. Skips (77) without openssl or on bind failure.
+    add_executable(aetherd_remote_pairing_client_test tests/aetherd_remote_pairing_client_test.cpp)
+    target_include_directories(aetherd_remote_pairing_client_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_pairing_client_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME aetherd_remote_pairing_client_test COMMAND aetherd_remote_pairing_client_test)
+    set_tests_properties(aetherd_remote_pairing_client_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
     # Socket-owning test: our own TCI server is the subject, so this is inside
     # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
     # via TciServer::start(0)) on QHostAddress::Any, with local 127.0.0.1 clients to

@@ -175,28 +175,43 @@ void tailnetAdmission()
 {
 #ifdef HAVE_WEBSOCKETS
     const QHostAddress tailnet("100.101.102.103");
+    const QHostAddress tailnetPeer("100.110.111.112");
     const QHostAddress wireguard("10.8.0.2");
+    const QHostAddress wireguardPeer("10.8.0.3");
     const QHostAddress lan("192.168.50.10");
-    const QList<NetworkInterfaceRecord> linuxInterfaces{
-        {"tailscale0", {}, {tailnet}}, {"wg0", {}, {wireguard}}, {"eth0", {}, {lan}}};
-    check(RemoteEngineBackend::tailnetPathAdmitted(tailnet, InterfaceNaming::Linux, linuxInterfaces),
-          "ws:// is admitted from a Linux Tailscale interface");
-    check(RemoteEngineBackend::tailnetPathAdmitted(wireguard, InterfaceNaming::Linux, linuxInterfaces),
-          "ws:// is admitted from a Linux WireGuard interface");
-    check(!RemoteEngineBackend::tailnetPathAdmitted(lan, InterfaceNaming::Linux, linuxInterfaces),
-          "ws:// is refused on a LAN interface");
-    check(!RemoteEngineBackend::tailnetPathAdmitted(QHostAddress("100.64.9.9"),
-                                                     InterfaceNaming::Linux, linuxInterfaces),
+    using InterfaceAddress = RemoteEngineBackend::InterfaceAddress;
+    const QList<InterfaceAddress> linuxInterfaces{
+        {"tailscale0", {}, tailnet, 32}, {"wg0", {}, wireguard, 24}, {"eth0", {}, lan, 24}};
+    check(RemoteEngineBackend::tailnetPathAdmitted(
+              tailnet, tailnetPeer, InterfaceNaming::Linux, linuxInterfaces),
+          "a Linux Tailscale peer is admitted");
+    check(!RemoteEngineBackend::tailnetPathAdmitted(
+              tailnet, lan, InterfaceNaming::Linux, linuxInterfaces),
+          "a Tailscale exit route cannot admit an off-tailnet peer");
+    check(RemoteEngineBackend::tailnetPathAdmitted(
+              wireguard, wireguardPeer, InterfaceNaming::Linux, linuxInterfaces),
+          "a Linux WireGuard peer on the tunnel subnet is admitted");
+    check(!RemoteEngineBackend::tailnetPathAdmitted(
+              wireguard, lan, InterfaceNaming::Linux, linuxInterfaces),
+          "a Linux WireGuard peer outside the tunnel subnet is refused");
+    check(!RemoteEngineBackend::tailnetPathAdmitted(lan, tailnetPeer, InterfaceNaming::Linux, linuxInterfaces),
+          "LAN interfaces cannot admit Tailnet peers");
+    check(!RemoteEngineBackend::tailnetPathAdmitted(QHostAddress("100.64.9.9"), tailnetPeer,
+                                                    InterfaceNaming::Linux, linuxInterfaces),
           "an address on no known interface is refused");
-    check(!RemoteEngineBackend::tailnetPathAdmitted({}, InterfaceNaming::Linux, linuxInterfaces),
-          "a null address is refused");
-    const QList<NetworkInterfaceRecord> macInterfaces{{"utun4", {}, {tailnet, wireguard}}};
-    check(RemoteEngineBackend::tailnetPathAdmitted(tailnet, InterfaceNaming::MacOS, macInterfaces),
+    check(!RemoteEngineBackend::tailnetPathAdmitted({}, tailnetPeer, InterfaceNaming::Linux, linuxInterfaces)
+              && !RemoteEngineBackend::tailnetPathAdmitted(tailnet, {}, InterfaceNaming::Linux, linuxInterfaces),
+          "both socket addresses must be known");
+    const QList<InterfaceAddress> macInterfaces{{"utun4", {}, tailnet, 32}, {"utun5", {}, wireguard, 24}};
+    check(RemoteEngineBackend::tailnetPathAdmitted(
+              tailnet, tailnetPeer, InterfaceNaming::MacOS, macInterfaces),
           "macOS recognizes a Tailscale-addressed utun interface");
-    check(!RemoteEngineBackend::tailnetPathAdmitted(wireguard, InterfaceNaming::MacOS, macInterfaces),
-          "an unrelated macOS utun address is refused");
-    const QList<NetworkInterfaceRecord> windowsInterfaces{{"{adapter-id}", "Tailscale", {tailnet}}};
-    check(RemoteEngineBackend::tailnetPathAdmitted(tailnet, InterfaceNaming::Windows, windowsInterfaces),
+    check(!RemoteEngineBackend::tailnetPathAdmitted(
+              wireguard, wireguardPeer, InterfaceNaming::MacOS, macInterfaces),
+          "an unrelated macOS utun is refused");
+    const QList<InterfaceAddress> windowsInterfaces{{"{adapter-id}", "Tailscale", tailnet, 32}};
+    check(RemoteEngineBackend::tailnetPathAdmitted(
+              tailnet, tailnetPeer, InterfaceNaming::Windows, windowsInterfaces),
           "Windows uses the adapter's human-readable name");
 #else
     std::printf("[SKIP] no Qt WebSockets: the backend is not built\n");

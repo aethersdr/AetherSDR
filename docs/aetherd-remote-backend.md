@@ -94,12 +94,13 @@ define, and the far engine's `capabilities` decide what is offered.
   it into that engine's record. The token goes only to the address it was
   paired at and to tailnet addresses stored in the same engine's record, and to
   nothing else.
-- **`ws://` is admitted only over WireGuard.** After the TCP connect and before
-  anything is sent, the socket's local address must belong to an up
-  Tailscale or Linux `wg*` interface on the desktop. A Mac's `utun*` interface
-  must hold the socket's local Tailscale address. On Windows the adapter must
-  be named Tailscale. If that fails, the connect fails closed, says why, and
-  `hello` is never sent. A plain `ws://` LAN address is never accepted.
+- **`ws://` requires a peer on the tunnel.** The desktop connects directly
+  without a proxy and checks both ends of the socket before sending `hello`.
+  Tailscale requires a recognized interface and a peer in the Tailscale
+  IPv4 or IPv6 range. Linux `wg*` interfaces require the peer to be on the
+  interface's configured subnet. A Mac's `utun*` interface must hold the
+  socket's local Tailscale address. On Windows the adapter must be named
+  Tailscale. A failed check closes the socket before sending the token.
 - **The hazard.** On the tailnet path, the WireGuard peer identity is the only
   thing that says the far end is the engine. The certificate pin does not
   apply there.

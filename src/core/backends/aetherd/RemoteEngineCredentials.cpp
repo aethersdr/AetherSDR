@@ -1,6 +1,7 @@
 #include "RemoteEngineCredentials.h"
 
 #include <QHash>
+#include <QRegularExpression>
 
 namespace AetherSDR::aetherd {
 
@@ -11,6 +12,22 @@ QHash<QString, RemoteEngineRecord>& cache()
     return records;
 }
 } // namespace
+
+bool RemoteEngineCredentials::validEngineId(const QString& engineId)
+{
+    static const QRegularExpression hex(QStringLiteral(R"(\A[a-f0-9]{64}\z)"));
+    return hex.match(engineId).hasMatch();
+}
+
+QString RemoteEngineCredentials::engineIdOf(const QString& serial)
+{
+    return tailnetSerial(serial) ? serial.chopped(kTailnetSuffix.size()) : serial;
+}
+
+bool RemoteEngineCredentials::tailnetSerial(const QString& serial)
+{
+    return serial.endsWith(kTailnetSuffix);
+}
 
 void RemoteEngineCredentials::setSession(const RemoteEngineRecord& record)
 {

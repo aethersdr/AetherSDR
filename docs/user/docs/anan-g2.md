@@ -39,6 +39,17 @@ Configure the receive front end under **Settings → Radio Setup... → Radio �
 | **Send receive audio to the radio** | Off | Also plays receive audio through the G2's own speaker and headphone jack. Takes effect on the next connect. |
 | **Mute the radio's speaker amplifier** | Off | Switches off the amplifier inside the G2. Sending the radio silence leaves the amplifier running and hissing; this stops it. Applies at once. A clean disconnect hands the radio back unmuted. |
 
+### Connect through a remote engine
+
+When AetherSDR's radio engine already controls the G2, use its remote engine entry to tune from another computer. The remote engine connection mirrors tuning and receive controls. Spectrum, waterfall, receive audio and transmit are unavailable through this connection.
+
+1. Join the G2's local network. On the G2's screen, open **Settings → Remote clients → Pair a device** to get the ten-digit code.
+2. On the desktop, open **File → Connect to Radio... → Nearby radios**. Under **Remote engine**, choose the advertised engine in **Address** or enter its `wss://<IP address>:<port>`.
+3. Enter the code and click **Pair**. Select the remote engine entry in **Nearby radios** and click **Connect Selected Radio**. Disconnecting the desktop leaves the G2 connected to its engine.
+4. To connect later through a configured Tailnet listener, right-click the engine and choose **Set Tailnet Address…**. Enter its `ws://<IP address>:<port>` and select the **(tailnet)** entry when connecting over Tailscale or a Linux WireGuard subnet.
+
+The desktop saves the token in the OS keychain when available. If the keychain cannot save it, pair again at the next launch. **Forget This Engine** removes the pairing from the desktop. To revoke the token on the G2, remove the desktop from **Remote clients** on the G2's screen.
+
 ## Receiving with the G2
 
 - **Receive** with live tuning and zoom. Changing the zoom changes the DDC rate live, without rebuilding the session.
