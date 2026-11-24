@@ -470,7 +470,10 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
 
     connect(m_model, &AntennaGeniusModel::antennaSelectionRefused, this,
             [this](const QString& msg) {
-        if (!m_model->isConnected()) return;
+        // The ShackSwitch applet reports refusals for a ShackSwitch.
+        if (!m_model->isConnected()
+            || AntennaGeniusModel::isShackSwitch(m_model->connectedDevice()))
+            return;
         const quint64 generation = ++m_selectionRefusalGeneration;
         m_statusLabel->setText(msg);
         ThemeManager::instance().applyStyleSheet(

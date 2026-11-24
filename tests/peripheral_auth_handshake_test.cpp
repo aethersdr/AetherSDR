@@ -517,6 +517,107 @@ int main(int argc, char** argv)
         CHECK(commands.size() == commandCount);
         CHECK(!warnings.isEmpty());
         CHECK(warnings.constLast().at(0).toString().contains(QStringLiteral("unavailable")));
+
+        // After the retries give up, a list fetched by "antenna reload" still
+        // makes the antenna permissions known.
+        CHECK(!connection.canTxOnBand(2, 5));
+        AntennaGeniusModelTestAccess::status(connection, QStringLiteral("antenna reload"));
+        CHECK(commands.size() == commandCount + 1);
+        CHECK(commands.constLast().contains(QStringLiteral("antenna list")));
+        const int reloadSeq = commands.constLast().section('|', 0, 0).mid(1).toInt();
+        AntennaGeniusModelTestAccess::response(connection, reloadSeq, 0,
+            QStringLiteral("antenna 2 name=Both tx=0020 rx=0020"));
+        AntennaGeniusModelTestAccess::response(connection, reloadSeq, 0, QString());
+        CHECK(connection.canTxOnBand(2, 5));
+        CHECK(connection.canRxOnBand(2, 5));
+    }
+    {
+        // A band recall seen while keyed is deferred silently and re-run on tx=0.
+        auto& settings = AppSettings::instance();
+        settings.remove(QStringLiteral("AntennaGenius"));
+        settings.setValue(QStringLiteral("AG_Port1_Band5"), QStringLiteral("2"));
+        AntennaGeniusModel keyedRecall;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(keyedRecall, commands);
+        QSignalSpy refusals(&keyedRecall, &AntennaGeniusModel::antennaSelectionRefused);
+        AntennaGeniusModelTestAccess::status(
+            keyedRecall, QStringLiteral("port 1 band=0 rxant=1 txant=1 tx=1"));
+        AntennaGeniusModelTestAccess::status(
+            keyedRecall, QStringLiteral("port 1 band=5 rxant=1 txant=1 tx=1"));
+        CHECK(commands.isEmpty());
+        CHECK(refusals.isEmpty()); // Logged only: the operator picked nothing.
+        AntennaGeniusModelTestAccess::status(
+            keyedRecall, QStringLiteral("port 1 band=5 rxant=1 txant=1 tx=0"));
+        CHECK(commands.size() == 1);
+        CHECK(!commands.isEmpty()
+              && commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=2")));
+        AntennaGeniusModelTestAccess::status(
+            keyedRecall, QStringLiteral("port 1 tx=0"));
+        CHECK(commands.size() == 1); // Re-run once, not on every status.
+        CHECK(refusals.isEmpty());
+        settings.remove(QStringLiteral("AntennaGenius"));
+    }
+    {
+        // The initial recall after a connect while keyed is deferred the same way.
+        auto& settings = AppSettings::instance();
+        settings.remove(QStringLiteral("AntennaGenius"));
+        settings.setValue(QStringLiteral("AG_Port1_Band5"), QStringLiteral("2"));
+        AntennaGeniusModel connection;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(connection, commands);
+        QSignalSpy refusals(&connection, &AntennaGeniusModel::antennaSelectionRefused);
+        AntennaGeniusModelTestAccess::beginInit(connection);
+        CHECK(commands.size() == 6);
+        const int antSeq = commands.at(0).section('|', 0, 0).mid(1).toInt();
+        const int portASeq = commands.at(2).section('|', 0, 0).mid(1).toInt();
+        const int portBSeq = commands.at(3).section('|', 0, 0).mid(1).toInt();
+        AntennaGeniusModelTestAccess::response(connection, antSeq, 0,
+            QStringLiteral("antenna 2 name=Both tx=0020 rx=0020"));
+        AntennaGeniusModelTestAccess::response(connection, antSeq, 0, QString());
+        AntennaGeniusModelTestAccess::response(connection, portASeq, 0,
+            QStringLiteral("port 1 band=5 rxant=1 txant=1 tx=1"));
+        AntennaGeniusModelTestAccess::response(connection, portASeq, 0, QString());
+        AntennaGeniusModelTestAccess::response(connection, portBSeq, 0,
+            QStringLiteral("port 2 band=5 rxant=0 txant=0"));
+        AntennaGeniusModelTestAccess::response(connection, portBSeq, 0, QString());
+        CHECK(commands.size() == 6);
+        CHECK(refusals.isEmpty());
+        AntennaGeniusModelTestAccess::status(
+            connection, QStringLiteral("port 1 band=5 rxant=1 txant=1 tx=0"));
+        CHECK(commands.size() == 7);
+        CHECK(commands.size() == 7
+              && commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=2")));
+        settings.remove(QStringLiteral("AntennaGenius"));
+    }
+    {
+        // A pick the device accepted but then reports differently is dropped,
+        // so the next pick composes from the report.
+        AntennaGeniusModel overridden;
+        QStringList commands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(overridden, commands);
+        overridden.selectRxAntenna(1, 2);
+        CHECK(commands.size() == 1);
+        const int seq = commands.constLast().section('|', 0, 0).mid(1).toInt();
+        AntennaGeniusModelTestAccess::response(overridden, seq, 0, QString());
+        AntennaGeniusModelTestAccess::status(
+            overridden, QStringLiteral("port 1 band=5 rxant=1 txant=3"));
+        overridden.selectTxAntenna(1, 0);
+        CHECK(commands.size() == 2);
+        CHECK(commands.size() == 2
+              && commands.constLast().contains(QStringLiteral("port set 1 rxant=1 txant=0")));
+
+        // Before the device answers, a different status may be an older echo,
+        // so the pick stays pending.
+        AntennaGeniusModel inFlight;
+        QStringList inFlightCommands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(inFlight, inFlightCommands);
+        inFlight.selectRxAntenna(1, 2);
+        AntennaGeniusModelTestAccess::status(
+            inFlight, QStringLiteral("port 1 band=5 rxant=1 txant=3"));
+        inFlight.selectTxAntenna(1, 0);
+        CHECK(inFlightCommands.size() == 2);
+        CHECK(inFlightCommands.size() == 2
+              && inFlightCommands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=0")));
     }
     {
         auto& settings = AppSettings::instance();

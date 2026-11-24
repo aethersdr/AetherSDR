@@ -278,6 +278,7 @@ private:
         bool saveRx;
         bool saveTx;
         bool clearBandMemory;
+        bool acknowledged{false}; // The device answered the command without an error.
     };
     std::optional<PendingSelection> m_pendingSelectionA;
     std::optional<PendingSelection> m_pendingSelectionB;
@@ -289,6 +290,9 @@ private:
     bool m_initialPortAReady{false};
     bool m_initialPortBReady{false};
     bool m_initialAntennasReady{false};
+    // A band recall refused while the port reported tx=1, re-run once tx=0 arrives.
+    bool m_recallDeferredA{false};
+    bool m_recallDeferredB{false};
     bool m_initializationWarningActive{false};
     int m_initialStatusRetryCount{0};
     int m_initialStatusRetryLimit{3};

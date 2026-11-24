@@ -424,6 +424,8 @@ void AntennaGeniusModel::beginAttempt()
     m_pending.clear();
     m_pendingSelectionA.reset();
     m_pendingSelectionB.reset();
+    m_recallDeferredA = false;
+    m_recallDeferredB = false;
     m_initializingPorts = false;
     m_initialStatusRequired = false;
     m_portInitWatchdog->stop();
@@ -516,6 +518,8 @@ void AntennaGeniusModel::disconnectFromDevice()
     m_pending.clear();
     m_pendingSelectionA.reset();
     m_pendingSelectionB.reset();
+    m_recallDeferredA = false;
+    m_recallDeferredB = false;
     m_initializingPorts = false;
     m_initialStatusRequired = false;
     m_portInitWatchdog->stop();
@@ -898,6 +902,11 @@ void AntennaGeniusModel::processResponse(int seq, int code, const QString& body)
             m_pending.remove(seq);
             return;
         }
+    } else {
+        for (auto* selection : {&m_pendingSelectionA, &m_pendingSelectionB}) {
+            if (*selection && (*selection)->sequence == seq)
+                (*selection)->acknowledged = true;
+        }
     }
 
     // Empty body marks end of multi-line response.
@@ -947,9 +956,9 @@ void AntennaGeniusModel::processResponse(int seq, int code, const QString& body)
                 m_antennas.append(ant);
             }
             qCDebug(lcTuner) << "AntennaGenius:" << m_antennas.size() << "antennas loaded";
-            if (m_initializingPorts || m_portInitWatchdog->isActive()) {
-                m_initialAntennasReady = !m_antennas.isEmpty();
-            }
+            // Any list counts, including one fetched by a later "antenna reload"
+            // after the init retries gave up; otherwise permissions stay unknown.
+            m_initialAntennasReady = !m_antennas.isEmpty();
             emit antennasChanged();
             finishInitialPortStatus();
 
@@ -1083,6 +1092,12 @@ void AntennaGeniusModel::processStatus(const QString& body)
                         pending->saveTx ? std::optional<int>(ps.txAntenna) : std::nullopt);
             }
             pending.reset();
+        } else if (complete && pending && pending->acknowledged) {
+            // The device accepted the command but reports another pair (auto
+            // mode, or another client): the request is no longer live.
+            qCDebug(lcTuner) << "AntennaGenius: port" << ps.portId
+                             << "reports a different pair than the pending selection — dropped";
+            pending.reset();
         }
         if (ps.portId == 1) {
             int oldBand = m_portA.band;
@@ -1102,6 +1117,15 @@ void AntennaGeniusModel::processStatus(const QString& body)
                 onBandChanged(2, oldBand, oldRxAnt, oldTxAnt, ps.band);
         }
         finishInitialPortStatus();
+        bool& deferred = ps.portId == 1 ? m_recallDeferredA : m_recallDeferredB;
+        if (deferred && !ps.transmitting) {
+            deferred = false;
+            const int band = effectiveBand(ps.portId);
+            qCDebug(lcTuner) << "AntennaGenius: port" << ps.portId
+                             << "TX ended — running the deferred band recall";
+            if (band > 0)
+                recallBandAntennas(ps.portId, band);
+        }
     } else if (body.startsWith("antenna reload")) {
         // Antenna configuration changed on the device — re-fetch.
         qCDebug(lcTuner) << "AntennaGenius: antenna reload, re-fetching list";
@@ -1611,6 +1635,16 @@ void AntennaGeniusModel::recallBandAntennas(int portId, int bandId)
     if (savedTx && txAntenna > 0 && !canTxOnBand(txAntenna, bandId))
         txAntenna = ps.txAntenna;
 
+    // An automatic recall is refused while keyed like a pick, but the operator
+    // asked for nothing, so it is logged only and re-run once tx=0 arrives.
+    bool& deferred = portId == 1 ? m_recallDeferredA : m_recallDeferredB;
+    if (m_connected && ps.transmitting) {
+        qCInfo(lcTuner) << "AntennaGenius: band recall deferred while port"
+                        << portId << "is transmitting";
+        deferred = true;
+        return;
+    }
+    deferred = false;
     qCDebug(lcTuner) << "AntennaGenius: recalling RX" << antennaName(rxAntenna)
              << "TX" << antennaName(txAntenna) << "for band"
              << bandName(bandId) << "on port" << portId;

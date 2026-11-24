@@ -102,6 +102,10 @@ struct AntennaGeniusModelTestAccess {
     {
         model.processStatus(status);
     }
+    static void setDeviceName(AntennaGeniusModel& model, const QString& name)
+    {
+        model.m_device.name = name;
+    }
 };
 }
 
@@ -2310,6 +2314,81 @@ bool checkAgAntennaSelectionMode()
         && unknownBandTxBlocked && keyedPickRefused && disabledReasonDescribed;
 }
 
+// A ShackSwitch shows and announces a refused pick on its own status line, and
+// its dummy-load reroute waits for tx=0 instead of being dropped.
+bool checkShackSwitchRefusal()
+{
+    AppSettings::instance().remove(QStringLiteral("AntennaGenius"));
+    AppSettings::instance().setValue(QStringLiteral("SS_DummyLoadAnt"), 3);
+    const auto cleanup = qScopeGuard([] {
+        AppSettings::instance().remove(QStringLiteral("AntennaGenius"));
+        AppSettings::instance().remove(QStringLiteral("SS_DummyLoadAnt"));
+    });
+    const QString sentence = QStringLiteral("Antenna can't change while transmitting.");
+    AntennaGeniusModel model;
+    QStringList commands;
+    AntennaGeniusModelTestAccess::prepareSelectionMode(model, commands);
+    AntennaGeniusModelTestAccess::setDeviceName(model, QStringLiteral("ShackSwitch"));
+    AntennaGeniusApplet agApplet;
+    agApplet.setModel(&model);
+    ShackSwitchApplet applet;
+    applet.setModel(&model);
+    emit model.antennasChanged();
+    QLabel* status = applet.findChild<QLabel*>(QStringLiteral("ssConnectionStatus"));
+    QLabel* agStatus = agApplet.findChild<QLabel*>(QStringLiteral("agConnectionStatus"));
+    if (!status || !agStatus) {
+        std::fprintf(stderr, "ShackSwitch or AG status label missing\n");
+        return false;
+    }
+
+    // Both ports on antenna 1 while B is keyed: the reroute waits.
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 2 auto=1 source=MANUAL band=5 rxant=1 txant=0 tx=1 inhibit=0"));
+    const bool rerouteWaitsWhileKeyed = commands.isEmpty();
+
+    static QObject* announcementSource = nullptr;
+    static QStringList politeAnnouncements;
+    announcementSource = status;
+    politeAnnouncements.clear();
+    const bool accessibilityWasActive = QAccessible::isActive();
+    const QAccessible::UpdateHandler previousUpdateHandler =
+        QAccessible::installUpdateHandler([](QAccessibleEvent* event) {
+            if (event->type() != QAccessible::Announcement)
+                return;
+            const auto* announcement = static_cast<QAccessibleAnnouncementEvent*>(event);
+            if (announcement->politeness() == QAccessible::AnnouncementPoliteness::Polite)
+                politeAnnouncements.append(
+                    (event->object() == announcementSource ? QStringLiteral("ss:")
+                                                           : QStringLiteral("other:"))
+                    + announcement->message());
+        });
+    QAccessible::setActive(true);
+    model.selectAntenna(2, 2); // A manual pick while keyed.
+    QAccessible::installUpdateHandler(previousUpdateHandler);
+    QAccessible::setActive(accessibilityWasActive);
+    const bool manualPickRefused = commands.isEmpty() && status->text() == sentence
+        && agStatus->text() != sentence
+        && politeAnnouncements == QStringList{QStringLiteral("ss:") + sentence};
+
+    // tx=0 with the conflict still there: the reroute is sent now.
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 2 auto=1 source=MANUAL band=5 rxant=1 txant=0 tx=0 inhibit=0"));
+    const bool reroutedAfterTx = commands.size() == 1
+        && commands.constLast().contains(QStringLiteral("port set 2 rxant=3"));
+    // Sent once per conflict, not on every status before the switch confirms.
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 2 auto=1 source=MANUAL band=5 rxant=1 txant=0 tx=0 inhibit=0"));
+    const bool sentOnce = commands.size() == 1;
+
+    if (!rerouteWaitsWhileKeyed || !manualPickRefused || !reroutedAfterTx || !sentOnce) {
+        std::fprintf(stderr, "ShackSwitch refusal: waits=%d refused=%d (\"%s\", %lld) rerouted=%d once=%d\n",
+                     rerouteWaitsWhileKeyed, manualPickRefused, qPrintable(status->text()),
+                     static_cast<long long>(politeAnnouncements.size()), reroutedAfterTx, sentOnce);
+        return false;
+    }
+    return true;
+}
+
 bool checkKpa500NetworkSetup()
 {
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
@@ -2932,7 +3011,7 @@ void printUsage(const char* program)
     std::fprintf(stderr,
         "usage: %s [--case=automatic|removal|auth-read|manual-recovery|external-ag|"
         "discovery|availability|discovered-recovery|interaction|ag-antenna-status|"
-        "ag-antenna-selection-mode]\n", program);
+        "ag-antenna-selection-mode|ss-antenna-refusal]\n", program);
 }
 
 const char* parseCase(int argc, char** argv, bool& valid)
@@ -2950,7 +3029,8 @@ const char* parseCase(int argc, char** argv, bool& valid)
                                  Case{"manual-recovery"}, Case{"external-ag"},
                                  Case{"discovery"}, Case{"availability"},
                                  Case{"discovered-recovery"}, Case{"interaction"},
-                                 Case{"ag-antenna-status"}, Case{"ag-antenna-selection-mode"}}) {
+                                 Case{"ag-antenna-status"}, Case{"ag-antenna-selection-mode"},
+                                 Case{"ss-antenna-refusal"}}) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate.name;
         }
@@ -3087,6 +3167,15 @@ int main(int argc, char** argv)
     if (selected("ag-antenna-status") && runStage("ag-antenna-status", [] {
             if (!checkAgAntennaStatusLabel()) {
                 std::fprintf(stderr, "Antenna Genius RX/TX status label regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("ss-antenna-refusal") && runStage("ss-antenna-refusal", [] {
+            if (!checkShackSwitchRefusal()) {
+                std::fprintf(stderr, "ShackSwitch keyed refusal regressed\n");
                 return 1;
             }
             return 0;
