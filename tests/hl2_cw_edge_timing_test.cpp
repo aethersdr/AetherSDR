@@ -577,6 +577,80 @@ static void testOverEndedByLapse()
         check(runs.size() == 2 && within(runs[1].length, samplesOfMs(40), 1),
               "lapse, not refused: both elements keyed whole");
     }
+    {
+        // MOX on the over's own operation, still live (the break-in hang holds
+        // the last key-up's completion, so its operation): a later element in
+        // the same over stays refused.
+        Bench b;
+        const auto producer = b.tx.coordinator.registerProducer();
+        Element first = begin(b, producer);
+        b.client.setMox(true, first.op);
+        b.play({{100, true, 100, true, 140}, {140, false, 140},
+                {180, true, 180 + leadMs + boundMs + 20, true, 220}, {220, false, 220 + leadMs + boundMs + 20}},
+               700, &first.op);
+        Element next = begin(b, producer);
+        const std::int64_t nowMs = nowMsOf(b);
+        b.play({{nowMs + 5, true, nowMs + 5, true, nowMs + 45}, {nowMs + 45, false, nowMs + 45}},
+               nowMs + 300, &next.op);
+        check(b.client.isKeyed() && carriers(b.iTrace).size() == 1 && b.client.cwRefusedDowns() == 2,
+              "MOX on the over's live operation: a later element of the refused over stays refused");
+    }
+    {
+        // A shifted over lapses mid-element with its key-up still scheduled
+        // at the old shift. An immediate re-key is placed with no shift, before
+        // that stale key-up: the stale edge must be gone, or it cuts the new
+        // element.
+        Bench b;
+        const auto producer = b.tx.coordinator.registerProducer();
+        Element first = begin(b, producer);
+        b.client.setMox(true, first.op);
+        b.play({{100, true, 100 + leadMs + 200, true, 300}}, 100 + leadMs + 205, &first.op);
+        (void)b.tx.coordinator.endIntent(first.intent);
+        b.play({}, 100 + leadMs + 215);
+        check(!b.client.isKeyed() && Access::pending(b.client) == 0 && b.client.cwShiftSamples() == 0,
+              "lapse mid-element: the stale key-up is dropped and the shift cleared");
+        Element next = begin(b, producer);
+        b.client.setMox(true, next.op);
+        const std::int64_t nowMs = nowMsOf(b);
+        b.play({{nowMs + 5, true, nowMs + 5, true, nowMs + 205}, {nowMs + 205, false, nowMs + 205}},
+               nowMs + 500, &next.op);
+        const auto runs = carriers(b.iTrace);
+        check(runs.size() == 2 && within(runs[1].length, samplesOfMs(200), 1),
+              "lapse mid-element: the re-keyed 200 ms element is whole, not cut by the stale key-up");
+    }
+    {
+        // The over's next key-down was already scheduled when its operation
+        // lapsed: that dead edge must not hold the over open.
+        Bench b;
+        const auto producer = b.tx.coordinator.registerProducer();
+        Element first = begin(b, producer);
+        b.client.setMox(true, first.op);
+        b.play({{100, true, 100 + leadMs + 30, true, 140}, {140, false, 140 + leadMs + 30},
+                {300, true, 210, true, 340}}, 230, &first.op);
+        check(b.client.cwShiftSamples() > 0 && Access::pending(b.client) >= 1,
+              "lapsed pending down: the over is shifted with its next key-down queued");
+        (void)b.tx.coordinator.endIntent(first.intent);
+        b.play({}, 250);
+        check(Access::pending(b.client) == 0 && b.client.cwShiftSamples() == 0,
+              "lapsed pending down: a key-down whose operation lapsed does not keep the over's shift");
+    }
+    {
+        // A lead asked for during an unshifted over that ends by lapse is in
+        // force for the next one.
+        Bench b;
+        const auto producer = b.tx.coordinator.registerProducer();
+        Element first = begin(b, producer);
+        b.client.setMox(true, first.op);
+        b.play({{100, true, 100, true, 140}}, 120, &first.op);
+        b.client.setCwEdgeLeadMs(10);
+        check(Access::leadSamplesInForce(b.client) == Access::leadSamples(),
+              "deferred lead: unchanged during the over");
+        b.play({}, 250, &first.op);
+        (void)b.tx.coordinator.endIntent(first.intent);
+        b.play({}, 270);
+        check(Access::leadSamplesInForce(b.client) == 10 * kRate / 1000,
+              "deferred lead: an over that ends by lapse puts the new lead in force");
+    }
 }
 
 static void testForcedKeyUpCap()

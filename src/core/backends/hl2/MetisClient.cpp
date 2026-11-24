@@ -2107,18 +2107,29 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
     }
     // An over can end with no clearCwKeying(): the operation holding CW
     // lapses, MOX drops with it (break-in), and the backend's unkey may not
-    // be permitted to clean up. Clear that over's shift and refusal here, as
-    // clearCwKeying() would, or the next over's scheduled key-downs are
-    // refused silently. Only once MOX is down and no scheduled key-down is
-    // pending: a gap between elements of one over (manual MOX, the break-in
-    // hang) keeps the over's shift and refusal until the over really ends.
-    if (!m_cwMode && !m_mox && (m_cwOverRefused || m_cwShiftSamples != 0)) {
-        bool downPending = false;
+    // be permitted to clean up. End that over here as clearCwKeying() would:
+    // drop its stale edges (and the completions they hold), and clear its
+    // shift and refusal and apply a deferred lead. Otherwise the next over's
+    // scheduled key-downs are refused silently, or placed at the old shift
+    // behind a stale key-up that cuts them. Only once MOX is down and no
+    // key-down whose operation is still live is pending: a gap between
+    // elements of one over (manual MOX, or the break-in hang, which holds the
+    // last key-up's completion and so its operation) keeps the over's state,
+    // and a new over's first key-down may reach us just before its MOX.
+    if (!m_cwMode && !m_mox) {
+        bool liveDownPending = false;
         for (std::size_t i = 0; i < m_cwScheduleCount; ++i) {
-            downPending = downPending || m_cwSchedule[i].down;
+            liveDownPending = liveDownPending
+                || (m_cwSchedule[i].down && m_cwSchedule[i].operation.permitsDispatch(now));
         }
-        if (!downPending) {
-            resetCwShift();
+        if (!liveDownPending) {
+            if (m_cwScheduleCount > 0) {
+                flushCwSchedule();
+            }
+            if (m_cwOverRefused || m_cwShiftSamples != 0
+                || m_cwEdgeLeadSamples != cwLeadSamplesOfMs(m_cwEdgeLeadRequestedMs)) {
+                resetCwShift();
+            }
         }
     }
     // Pending scheduled edges keep their own operations, checked as each is due.
