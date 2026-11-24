@@ -78,6 +78,9 @@ public:
 
     void syncPanProcessingSettings(int avg, int fps, bool weightedAvg);
     void syncWfLineDuration(int rate);
+    // Shows the per-radio "Link display rates across pans" flag (#6799) with
+    // the toggle's signal blocked: MainWindow keeps every pan's panel in step.
+    void syncLinkPanDisplayRates(bool on);
     void syncKiwiWaterfallSettings(int minDbm, int maxDbm, bool autoScale,
                                    int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
@@ -330,6 +333,8 @@ signals:
     // per pan. MainWindow owns the fan-out (it is the only object that can see
     // the other pans and the radio).
     void displaySettingsCloneRequested();
+    // The operator toggled "Link display rates across pans" (#6799).
+    void linkPanDisplayRatesChanged(bool on);
 
 private:
     QString m_panId;
@@ -557,6 +562,7 @@ private:
     QSlider*     m_floorRangeSlider{nullptr};   // half-dB steps
     QLabel*      m_floorRangeLabel{nullptr};
     QPushButton* m_cloneToAllPansBtn{nullptr};
+    QPushButton* m_linkRatesBtn{nullptr};
 
     QComboBox*   m_freqGridSpacingCmb{nullptr};
     QComboBox*   m_freqScaleFontCmb{nullptr};
