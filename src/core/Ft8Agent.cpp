@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QTimeZone>
 
 #include <QJsonArray>
@@ -20,13 +21,14 @@ namespace ft8 {
 namespace {
 
 // Bounds for what the agent sends; anything outside them is not an FT8
-// decode and is dropped (Principle VII). A 15-second cycle produces far more
+// decode and is dropped. A 15-second cycle produces far more
 // cycles per hour than WSPR's two-minute one, so the cycle bound is higher
 // even though the agent itself keeps 240.
 constexpr int kMaxSpots = 5000;
 constexpr int kMaxCycles = 500;
 constexpr qint64 kMinHz = 100000;
 constexpr qint64 kMaxHz = 500000000;
+constexpr qint64 kMaxCycleTime = 100000000000;
 constexpr int kMaxStringChars = 64;
 
 bool validCall(const QString& s)
@@ -100,18 +102,20 @@ std::optional<Ft8Status> parseStatus(const QByteArray& json)
     s.state = boundedString(root->value(QLatin1String("state")), kMaxStringChars);
     s.clockSynced = root->value(QLatin1String("clock_synced")).toBool();
     s.clockSource = boundedString(root->value(QLatin1String("clock_source")), kMaxStringChars);
-    s.uptimeS = static_cast<qint64>(root->value(QLatin1String("uptime_s")).toDouble());
-    s.callsign = boundedString(root->value(QLatin1String("callsign")), kMaxStringChars);
+    s.uptimeS = root->value(QLatin1String("uptime_s")).toInteger();
+    const QString callsign = root->value(QLatin1String("callsign")).toString();
+    if (validCall(callsign)) {
+        s.callsign = callsign;
+    }
     s.grid = boundedString(root->value(QLatin1String("grid")), kMaxStringChars);
     s.band = boundedString(root->value(QLatin1String("band")), kMaxStringChars);
-    s.dialHz = static_cast<qint64>(root->value(QLatin1String("dial_hz")).toDouble());
+    s.dialHz = root->value(QLatin1String("dial_hz")).toInteger();
     s.slice = root->value(QLatin1String("slice")).toBool();
     s.sliceIndex = s.slice && inRange(root->value(QLatin1String("slice_index")), 0, 63)
         ? root->value(QLatin1String("slice_index")).toInt(-1) : -1;
     s.audio = root->value(QLatin1String("audio")).toBool();
     const QJsonValue skipped = root->value(QLatin1String("skipped_cycles"));
-    s.skippedCycles = skipped.isDouble() && skipped.toDouble() >= 0
-        ? static_cast<qint64>(skipped.toDouble()) : -1;
+    s.skippedCycles = qMax<qint64>(-1, skipped.toInteger(-1));
 
     const QJsonArray cycles = root->value(QLatin1String("cycles")).toArray();
     for (const QJsonValue& v : cycles) {
@@ -120,15 +124,15 @@ std::optional<Ft8Status> parseStatus(const QByteArray& json)
         }
         const QJsonObject o = v.toObject();
         Ft8Cycle c;
-        c.start = static_cast<qint64>(o.value(QLatin1String("t")).toDouble());
+        c.start = o.value(QLatin1String("t")).toInteger();
         c.band = boundedString(o.value(QLatin1String("band")), kMaxStringChars);
-        c.dialHz = static_cast<qint64>(o.value(QLatin1String("dial_hz")).toDouble());
+        c.dialHz = o.value(QLatin1String("dial_hz")).toInteger();
         c.spots = o.value(QLatin1String("spots")).toInt();
         c.decodeMs = o.value(QLatin1String("decode_ms")).toInt();
         c.audioPct = o.value(QLatin1String("audio_pct")).toInt();
         c.lostPackets = o.value(QLatin1String("lost_packets")).toInt();
         c.audioDbfs = o.value(QLatin1String("audio_dbfs")).toDouble();
-        if (c.start <= 0 || c.decodeMs < 0) {
+        if (c.start <= 0 || c.start > kMaxCycleTime || c.decodeMs < 0) {
             continue;   // one unreadable cycle is dropped, not the status
         }
         s.cycles.append(c);
@@ -141,15 +145,16 @@ std::optional<Ft8Status> parseStatus(const QByteArray& json)
         }
         const QJsonObject o = v.toObject();
         Ft8Spot sp;
-        sp.cycleStart = static_cast<qint64>(o.value(QLatin1String("t")).toDouble());
+        sp.cycleStart = o.value(QLatin1String("t")).toInteger();
         sp.band = boundedString(o.value(QLatin1String("band")), kMaxStringChars);
         sp.score = o.value(QLatin1String("score")).toInt();
         sp.dt = o.value(QLatin1String("dt")).toDouble();
-        sp.frequencyHz = static_cast<qint64>(o.value(QLatin1String("hz")).toDouble());
+        sp.frequencyHz = o.value(QLatin1String("hz")).toInteger();
         sp.call = boundedString(o.value(QLatin1String("call")), kMaxStringChars);
         sp.grid = boundedString(o.value(QLatin1String("grid")), kMaxStringChars);
         sp.message = boundedString(o.value(QLatin1String("msg")), kMaxStringChars);
-        if (sp.cycleStart <= 0 || sp.frequencyHz < kMinHz || sp.frequencyHz > kMaxHz
+        if (sp.cycleStart <= 0 || sp.cycleStart > kMaxCycleTime
+            || sp.frequencyHz < kMinHz || sp.frequencyHz > kMaxHz
             || !validCall(sp.call) || !validGrid(sp.grid)) {
             continue;   // one bad spot is dropped
         }
@@ -279,14 +284,13 @@ QString writeBundledPackage(const Ft8Package::Pin& pin, const QString& dir, QStr
         }
         return {};
     }
-    QFile out(target);
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate) || out.write(bytes) != bytes.size()) {
+    QSaveFile out(target);
+    if (!out.open(QIODevice::WriteOnly) || out.write(bytes) != bytes.size() || !out.commit()) {
         if (error) {
             *error = QObject::tr("The FT8 receiver could not be unpacked for installing.");
         }
         return {};
     }
-    out.close();
     return target;
 }
 

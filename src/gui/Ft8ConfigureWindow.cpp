@@ -434,8 +434,8 @@ void Ft8ConfigureWindow::showStatus(const Ft8Status& st)
     }
     const Ft8Cycle& c = st.cycles.last();
     QString decode = c.decodeMs > kDecodeBudgetMs
-        ? tr("Last decode %1 ms, over the %2 ms a cycle allows.").arg(c.decodeMs).arg(kDecodeBudgetMs)
-        : tr("Last decode %1 ms of the %2 ms a cycle allows.").arg(c.decodeMs).arg(kDecodeBudgetMs);
+        ? tr("Last decode %1 ms, over the %2 ms target.").arg(c.decodeMs).arg(kDecodeBudgetMs)
+        : tr("Last decode %1 ms, target %2 ms.").arg(c.decodeMs).arg(kDecodeBudgetMs);
     if (st.skippedCycles > 0) {
         decode += QLatin1Char(' ')
             + tr("%n cycle(s) missed since the receiver started.", nullptr,

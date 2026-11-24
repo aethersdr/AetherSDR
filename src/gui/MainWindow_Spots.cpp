@@ -924,15 +924,18 @@ void MainWindow::readReceiverSlice(RadioAgentClient* client, const QString& labe
     // A client of its own: reads can overlap, and each ends on its own.
     client->setParent(this);
     client->setRadioAddress(radio);
+    const RadioControlSession session = m_radioModel.controlSession();
     auto finish = std::make_shared<std::function<void(int)>>();
-    *finish = [this, client, label, done = std::move(done)](int sliceIndex) {
+    *finish = [this, client, label, session, done = std::move(done)](int sliceIndex) {
         client->disconnect(this);
         client->cancel();
         client->deleteLater();
-        if (sliceIndex >= 0) {
+        if (sliceIndex >= 0 && m_radioModel.controlSessionCurrent(session)) {
             m_radioModel.reserveSlice(sliceIndex, label);
         }
-        if (done) done();
+        if (done) {
+            done();
+        }
     };
     // Once: taken out before it runs, so it never runs while being destroyed.
     auto call = [finish](int sliceIndex) {

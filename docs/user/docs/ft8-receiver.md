@@ -82,7 +82,7 @@ The receiver keeps decoding on the radio whether or not AetherSDR is reading it.
 
 These are limits of the receiver as approved in [#7114](https://github.com/aethersdr/AetherSDR/issues/7114).
 
-- On a busy band, a decode can take longer than the 2 seconds a cycle allows, and the next cycle is then missed. The Configure window says so when the last decode ran over ([#7558](https://github.com/aethersdr/AetherSDR/issues/7558)).
+- On a busy band, a decode can run past the 2-second target. If it is still running one second into the next cycle, the receiver skips that capture. The Configure window shows the elapsed decode time and the receiver's count of missed cycles ([#7558](https://github.com/aethersdr/AetherSDR/issues/7558)).
 - On a FLEX-6300, running it beside the [WSPR receiver](./wspr-receiver.md) slows both, and each misses some cycles ([#7559](https://github.com/aethersdr/AetherSDR/issues/7559)).
 - On a FLEX-6300, **Radio default** puts the receiver's slice on ANT1. If your antenna is on ANT2, it decodes nothing until you set **ANTENNA** ([#7560](https://github.com/aethersdr/AetherSDR/issues/7560)).
 - **DAX CHANNEL** offers 1 to 4 on every radio, including a radio that has only two ([#7561](https://github.com/aethersdr/AetherSDR/issues/7561)).

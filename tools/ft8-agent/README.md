@@ -1,7 +1,6 @@
 # AetherFT8 — an FT8 receiver that runs on the radio
 
-Status: **prototype, proposed in RFC #7114 and not yet approved.** No PR until it is,
-per `GOVERNANCE.md` and the rule recorded in #7112.
+A receive-only waveform and container implementing [RFC #7114](https://github.com/aethersdr/AetherSDR/issues/7114).
 
 Built from `tools/wspr-agent` (AetherWSPR, #7019). The shim is the same; the cycle and
 the decoder differ.
@@ -10,7 +9,7 @@ the decoder differ.
 |---|---|---|
 | cycle | 120 s | **15 s** |
 | capture | 114 s | **13 s** |
-| decode budget | ~6 s | **2 s** |
+| nominal decode target | ~6 s | **2 s** |
 | audio to the decoder | complex 375 Hz baseband (mixed down 1500 Hz) | **real 12 kHz** |
 | decoder | `wsprd` from WSJT-X, forked child, stdout parsed | **`ft8_lib`, in-process** |
 | status port | 48995 | **48997** |
@@ -97,8 +96,8 @@ behaviourally correct and not merely syntactically valid.
 the same source runs natively in 27-42 ms. A Cortex-A8 at 700 MHz-1 GHz is far slower than
 either number represents. The figure that counts is the one measured on the radio: on a
 FLEX-6300, 40 m in the evening, decodes took a median of **2.6 s** and at most **2.9 s**
-against the **2 s** a cycle leaves after its 13-second capture. A decode that ends more
-than 1 s into the next cycle costs that cycle; `skipped_cycles` in `/v1/status` counts them.
+against the **2 s** a cycle leaves after its 13-second capture. If a decode is still running one second into the next cycle,
+the receiver skips that capture and increments `skipped_cycles` in `/v1/status`.
 
 ## Known gaps
 

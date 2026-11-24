@@ -127,6 +127,9 @@ void testStatusRefusals()
     check(!ft8::parseStatus(QByteArray("not json")), "garbage is refused");
     check(!ft8::parseStatus(QByteArray("[]")), "a JSON array is refused");
     check(!ft8::parseStatus(QByteArray("{}")), "an object without an agent is refused");
+    const auto malformedCall = ft8::parseStatus(R"({"agent":"AetherFT8","callsign":"BAD CALL"})");
+    check(malformedCall && malformedCall->callsign.isEmpty(),
+          "a malformed receiver callsign is discarded without losing status");
     // AetherWSPR answers the same shape on 48995. Reading its status as FT8
     // would show WSPR spots in the FT8 window, so refuse it outright.
     check(!ft8::parseStatus(QByteArray(R"({"agent":"AetherWSPR","state":"capturing"})")),
@@ -140,6 +143,9 @@ void testSpotDropping()
     const char* mixed = R"({"agent":"AetherFT8","state":"capturing","spots":[
 {"t":1794194655,"band":"20m","score":25,"dt":1.0,"hz":0,"call":"BAD","grid":"","msg":"x"},
 {"t":1794194655,"band":"20m","score":25,"dt":1.0,"hz":14075503,"call":"9Z4BM","grid":"FN42","msg":"y"},
+{"t":1794194655,"band":"20m","score":25,"dt":1.0,"hz":14075503,"call":"BAD CALL","grid":"FN42","msg":"x"},
+{"t":1794194655,"band":"20m","score":25,"dt":1.0,"hz":14075503,"call":"9Z4BM","grid":"ZZ42","msg":"x"},
+{"t":9223372036854775807,"band":"20m","score":25,"dt":1.0,"hz":14075503,"call":"9Z4BM","grid":"FN42","msg":"x"},
 {"t":0,"band":"20m","score":1,"dt":0.0,"hz":14075000,"call":"NOTIME","grid":"","msg":"z"}]})";
     auto st = ft8::parseStatus(QByteArray(mixed));
     check(st.has_value(), "a status with bad spots still parses");
@@ -147,6 +153,9 @@ void testSpotDropping()
         return;
     }
     check(st->spots.size() == 1, "only the good spot is kept");
+    if (st->spots.size() != 1) {
+        return;
+    }
     check(st->spots.at(0).call == QLatin1String("9Z4BM"), "and it is the right one");
     check(st->spots.at(0).grid == QLatin1String("FN42"), "a real grid is kept");
 }
@@ -323,8 +332,11 @@ void testSkippedCycles()
     const auto negative = ft8::parseStatus(R"({"agent":"AetherFT8","skipped_cycles":-3})");
     check(with && with->skippedCycles == 12, "the count of skipped cycles is read");
     check(without && without->skippedCycles == -1, "a receiver that doesn't count them reads as unknown");
-    check(bad && bad->skippedCycles == -1 && negative && negative->skippedCycles == -1,
-          "a count that isn't a non-negative number reads as unknown");
+    const auto fraction = ft8::parseStatus(R"({"agent":"AetherFT8","skipped_cycles":2.5})");
+    const auto tooLarge = ft8::parseStatus(R"({"agent":"AetherFT8","skipped_cycles":1e25})");
+    check(bad && bad->skippedCycles == -1 && negative && negative->skippedCycles == -1
+              && fraction && fraction->skippedCycles == -1 && tooLarge && tooLarge->skippedCycles == -1,
+          "a skipped-cycle count must be a representable non-negative integer");
 }
 
 void testBands()

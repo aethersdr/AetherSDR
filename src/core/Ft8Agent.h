@@ -15,8 +15,8 @@ namespace AetherSDR {
 
 struct DxSpot;
 
-// The FT8 receiver that runs on the radio (tools/ft8-agent): a legacy
-// waveform that decodes FT8 from a slice of its own and serves its spots and
+// The FT8 receiver runs as a waveform or container (tools/ft8-agent).
+// It decodes FT8 from a slice of its own and serves its spots and
 // settings as JSON on TCP 48997. Built from AetherWSPR (WsprAgent.h), which
 // is the template for the shim around the decoder; what differs is the
 // 15-second cycle, the decoder, and a much smaller settings set.
@@ -30,9 +30,8 @@ struct DxSpot;
 // vendored decoder's transmit-side encoder is not built. There is nothing in
 // these settings that can key a radio.
 namespace ft8 {
-// Band hopping is NOT supported by the agent. WSPR's schedule is WSJT-X's
-// two-minute slot rotation and has no FT8 meaning; #7114 leaves the question
-// open rather than inventing one. A fixed band is the whole band story here.
+// The agent supports a hop schedule, but FT8 Configure exposes a single
+// band per RFC #7114.
 inline constexpr bool kSupportsHopping = false;
 }  // namespace ft8
 
@@ -81,10 +80,8 @@ struct Ft8Cycle {
     double audioDbfs{0.0};
 };
 
-// An FT8 cycle is 15 s with ~12.6 s of signal; the agent captures 13 s, so
-// what is left to decode in is 2 s. Measured on a FLEX-6300 this is tight:
-// median 1966 ms, max 2275 ms, with 6 of 13 cycles over. A UI that shows
-// decodeMs should show it against this.
+// A 13 s capture leaves a nominal 2 s decode target in each 15 s cycle.
+// The next capture can still start during its first second.
 inline constexpr int kCycleSeconds = 15;
 inline constexpr int kDecodeBudgetMs = 2000;
 

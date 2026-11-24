@@ -4,6 +4,7 @@
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
 #include "core/backends/flex/RadioConnection.h"
+#include "core/Ft8AgentClient.h"
 #include "core/RigctlProtocol.h"
 #include "core/WsprAgentClient.h"
 #include "models/RadioModel.h"
@@ -543,6 +544,21 @@ void receiverSliceFromStatus()
     check(slices.size() == 2 && slices.at(0).at(0).toInt() == 2 && slices.at(1).at(0).toInt() == -1,
           "a WSPR status reports the receiver's slice, and -1 when it has none");
     check(failures.size() == 1, "another receiver's status is refused, and names no slice");
+
+    struct Ft8ClientProbe : Ft8AgentClient {
+        using Ft8AgentClient::received;
+    };
+    Ft8ClientProbe ft8;
+    QSignalSpy ft8Slices(&ft8, &RadioAgentClient::receiverSlice);
+    QSignalSpy ft8Failures(&ft8, &RadioAgentClient::requestFailed);
+    ft8.received(QStringLiteral("status"),
+                 R"({"agent":"AetherFT8","band":"20m","slice":true,"slice_index":3})");
+    ft8.received(QStringLiteral("status"), R"({"agent":"AetherFT8","band":"20m","slice":false})");
+    ft8.received(QStringLiteral("status"),
+                 R"({"agent":"AetherWSPR","band":"20m","slice":true,"slice_index":2})");
+    check(ft8Slices.size() == 2 && ft8Slices.at(0).at(0).toInt() == 3 && ft8Slices.at(1).at(0).toInt() == -1,
+          "an FT8 status reports the receiver's slice, and -1 when it has none");
+    check(ft8Failures.size() == 1, "the FT8 client refuses a WSPR status and names no slice");
 }
 
 // The spot feed's status reads reserve the receiver's slice; the feed is never

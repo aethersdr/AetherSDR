@@ -2109,10 +2109,9 @@ void DxClusterDialog::buildFt8Tab(QTabWidget* tabs)
             const QString when = QDateTime::fromSecsSinceEpoch(s.cycleStart, QTimeZone::UTC).toString("HH:mm:ss");
             m_ft8Tab.console->appendPlainText(
                 QStringLiteral("%1  %2  %3  %4  %5")
-                    .arg(when, s.band.leftJustified(5))
-                    .arg(s.frequencyHz / 1e6, 0, 'f', 6)
-                    .arg(s.score, 3)
-                    .arg(s.message));
+                    .arg(when, s.band.leftJustified(5),
+                         QString::number(s.frequencyHz / 1e6, 'f', 6),
+                         QString::number(s.score).rightJustified(3), s.message));
         });
     }
     if (m_radioModel) {
