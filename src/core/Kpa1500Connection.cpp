@@ -277,6 +277,8 @@ void Kpa1500Connection::disconnect()
 void Kpa1500Connection::onTransportUp()
 {
     m_connected = true;
+    m_maAsks = 0;
+    m_wlAsks = 0;
     ++m_connectEpoch;  // the connect timeout must not abort a later probe of this link
     m_lastFaultCode = 0;
     m_lastRx.start();
@@ -390,11 +392,19 @@ void Kpa1500Connection::onMessage(const Kpa1500::Message& message)
         if (!m_connected) {
             onTransportUp();
         }
+        applyReply(message);
+        // After the reply is applied: a deferred poll started from here must
+        // see the state (and the confirmation) this reply carries.
         if (released) {
             pumpQueries();
         }
+        return;
     }
+    applyReply(message);
+}
 
+void Kpa1500Connection::applyReply(const Kpa1500::Message& message)
+{
     const std::optional<bool> wasPowerOn = m_status.powerOn;
     const bool changed = Kpa1500::applyMessage(message, m_status);
 
@@ -485,10 +495,29 @@ void Kpa1500Connection::poll()
         queueQuery(QStringLiteral("TQ"));
     }
     const QStringList& slow = slowPollCommands();
-    if (m_status.macAddress && slow.at(m_slowPollIndex % slow.size()) == QLatin1String("MA")) {
+    // Firmware before 01.67 has no ^WL, and an amp may never answer ^MA:
+    // stop spending pacer timeouts on a query unanswered kMaxWakeQueryAsks
+    // times on this link. A known ^WL keeps being read (the front panel can
+    // change it); a known ^MA is not.
+    auto skip = [this](const QString& cmd) {
+        if (cmd == QLatin1String("MA")) {
+            return m_status.macAddress.has_value() || m_maAsks >= kMaxWakeQueryAsks;
+        }
+        if (cmd == QLatin1String("WL")) {
+            return !m_status.netWake && m_wlAsks >= kMaxWakeQueryAsks;
+        }
+        return false;
+    };
+    for (int i = 0; i < slow.size() && skip(slow.at(m_slowPollIndex % slow.size())); ++i) {
         m_slowPollIndex = (m_slowPollIndex + 1) % slow.size();
     }
-    queueQuery(slow.at(m_slowPollIndex % slow.size()));
+    const QString& slowCmd = slow.at(m_slowPollIndex % slow.size());
+    if (slowCmd == QLatin1String("MA")) {
+        ++m_maAsks;
+    } else if (slowCmd == QLatin1String("WL") && !m_status.netWake) {
+        ++m_wlAsks;
+    }
+    queueQuery(slowCmd);
     m_slowPollIndex = (m_slowPollIndex + 1) % slow.size();
 
     retryPendingControls();
@@ -994,17 +1023,20 @@ void Kpa1500Connection::sendWakeOnLan()
         return;
     }
     const QByteArray packet = Kpa1500::buildWakeOnLanPacket(*mac);
+    QStringList sent;
     for (const QHostAddress& target : targets) {
-        m_wakeSocket.writeDatagram(packet, target, Kpa1500::kWakeOnLanPort);
+        if (m_wakeSocket.writeDatagram(packet, target, Kpa1500::kWakeOnLanPort) == packet.size()) {
+            sent << target.toString();
+        } else {
+            qCWarning(lcTuner) << "Kpa1500Connection: Wake-on-LAN to" << target.toString()
+                               << "failed:" << m_wakeSocket.errorString();
+        }
     }
-    qCInfo(lcTuner).noquote() << "Kpa1500Connection: Wake-on-LAN for" << Kpa1500::formatMacAddress(*mac)
-                              << "sent to" << [&targets]() {
-                                     QStringList list;
-                                     for (const QHostAddress& t : targets) {
-                                         list << t.toString();
-                                     }
-                                     return list.join(QStringLiteral(", "));
-                                 }();
+    if (!sent.isEmpty()) {
+        qCInfo(lcTuner).noquote() << "Kpa1500Connection: Wake-on-LAN for"
+                                  << Kpa1500::formatMacAddress(*mac) << "sent to"
+                                  << sent.join(QStringLiteral(", "));
+    }
 }
 
 void Kpa1500Connection::key()

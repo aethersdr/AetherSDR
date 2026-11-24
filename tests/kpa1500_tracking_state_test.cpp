@@ -129,6 +129,61 @@ struct Kpa1500TrackingTestAccess {
         return out;
     }
 
+    // A UDP reply that confirms STANDBY also releases the pacer, and the cycle
+    // it ends had deferred a poll. That poll (and its retry pass) must see the
+    // confirmation: the control is due for its last retry when the reply lands.
+    static std::pair<int, bool> confirmingReplyBeforeDeferredPoll(Kpa1500Connection& c)
+    {
+        int unconfirmed = 0;
+        const auto link = QObject::connect(&c, &Kpa1500Connection::controlUnconfirmed,
+                                           [&unconfirmed](const QString&) { ++unconfirmed; });
+        c.m_activeTransport = Kpa1500::Transport::Udp;
+        c.m_udpOpen = true;
+        c.m_connected = true;
+        c.m_status.powerOn = true;
+        c.m_status.operate = true;
+        auto standby = Kpa1500Connection::operateControl(false);
+        standby.attempts = 5;   // kMaxControlAttempts: the next retry pass expires it
+        standby.lastSent.start();
+        c.m_pending.push_back(std::move(standby));
+        QThread::msleep(650);
+        c.m_pacer.enqueue(QStringLiteral("OS"));
+        c.m_pacer.takeNext(c.m_clock.elapsed());   // ^OS; outstanding (nothing written)
+        c.m_pollDeferred = true;
+        c.m_lastRx.start();
+        c.onMessage(*Kpa1500::parseMessage("^OS0;"));
+        const bool confirmed = c.m_pending.empty();
+        QObject::disconnect(link);
+        c.m_pacer.clear();
+        c.m_paceTimer.stop();
+        c.m_pollTimer.stop();
+        c.m_udpOpen = false;
+        c.m_connected = false;
+        c.m_activeTransport = Kpa1500::Transport::Tcp;
+        return {unconfirmed, confirmed};
+    }
+
+    // An amp that never answers ^MA or ^WL (firmware before 01.67): the slow
+    // rotation stops asking after kMaxWakeQueryAsks. Writes fail (no socket).
+    static std::pair<int, int> wakeQueryAsksAfterRotations(Kpa1500Connection& c, int rotations)
+    {
+        c.m_activeTransport = Kpa1500::Transport::Udp;
+        c.m_udpOpen = true;
+        c.m_connected = true;
+        c.m_status.powerOn = true;
+        c.m_lastRx.start();
+        for (int i = 0; i < rotations * 14; ++i) {
+            c.poll();
+        }
+        const std::pair<int, int> asks{c.m_maAsks, c.m_wlAsks};
+        c.m_pacer.clear();
+        c.m_paceTimer.stop();
+        c.m_udpOpen = false;
+        c.m_connected = false;
+        c.m_activeTransport = Kpa1500::Transport::Tcp;
+        return asks;
+    }
+
     struct Probe {
         int disconnects{0};
         int connects{0};
@@ -522,6 +577,20 @@ int main(int argc, char** argv)
         check(r.atu == 1 && r.antenna == 1, "a pending ATU in-line/bypass or antenna change is held under TX");
         check(r.operate == 1, "a pending OPERATE (^OS1) is held under TX");
         check(Kpa1500TrackingTestAccess::socketsUnopened(c), "TX retry test opens no transport");
+    }
+    {
+        Kpa1500Connection c;
+        const auto [unconfirmed, confirmed] =
+            Kpa1500TrackingTestAccess::confirmingReplyBeforeDeferredPoll(c);
+        check(confirmed && unconfirmed == 0,
+              "a UDP reply confirms its control before the deferred poll it releases runs");
+        check(Kpa1500TrackingTestAccess::socketsUnopened(c), "deferred-poll test opens no transport");
+    }
+    {
+        Kpa1500Connection c;
+        const auto [ma, wl] = Kpa1500TrackingTestAccess::wakeQueryAsksAfterRotations(c, 6);
+        check(ma == 3 && wl == 3, "unanswered ^MA and ^WL stop being asked after three slow rotations");
+        check(Kpa1500TrackingTestAccess::socketsUnopened(c), "wake-query test opens no transport");
     }
     for (const bool autoReconnect : {false, true}) {
         // Finding 3: UDP keeps probing after the silence drop.

@@ -242,7 +242,7 @@ public:
     static constexpr qint64 kReplyTimeoutMs = 120;
 
     // A query already queued or outstanding is not queued twice. `urgent`
-    // puts it at the head (a control's readback).
+    // puts it at the head (a control's readback), moving a queued copy there.
     void enqueue(const QString& cmd, bool urgent = false);
     // The query to write now, or nullopt while one is outstanding and not yet
     // timed out, or when the queue is empty.

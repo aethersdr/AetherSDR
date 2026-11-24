@@ -465,6 +465,17 @@ int main()
         report("pacer: an urgent readback jumps the queue",
                p.replied(QStringLiteral("SW")) && p.takeNext(200) == QStringLiteral("AN"));
         report("pacer: not drained while one is outstanding or queued", !p.drained());
+        {
+            QueryPacer q;
+            q.enqueue(QStringLiteral("PWF"));
+            q.takeNext(0);
+            q.enqueue(QStringLiteral("PWR"));
+            q.enqueue(QStringLiteral("TP"));
+            q.enqueue(QStringLiteral("TP"), true);
+            report("pacer: an urgent readback already queued moves to the head",
+                   q.queued() == 2 && q.replied(QStringLiteral("PWF"))
+                       && q.takeNext(10) == QStringLiteral("TP"));
+        }
         p.replied(QStringLiteral("AN"));
         report("pacer: drains after the last reply", p.takeNext(210) == QStringLiteral("TM")
                    && p.replied(QStringLiteral("TM")) && p.drained() && !p.takeNext(220)

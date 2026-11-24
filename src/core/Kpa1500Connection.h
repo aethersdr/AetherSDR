@@ -168,6 +168,7 @@ private:
     void sendWakeOnLan();
     void onTransportError(const QString& errorString);
     void onMessage(const Kpa1500::Message& message);
+    void applyReply(const Kpa1500::Message& message);
     void poll();
     bool sendRaw(const QByteArray& frame);   // control path: requires a live link
     bool writeFrame(const QByteArray& frame);  // any open transport, incl. UDP probing
@@ -212,6 +213,9 @@ private:
     QElapsedTimer m_clock;     // monotonic ms for m_pacer
     QTimer m_paceTimer;        // fires when the outstanding query times out
     bool m_pollDeferred{false};   // a tick found the last poll cycle still in flight
+    int m_maAsks{0};   // slow-rotation ^MA / ^WL asks on this link while unknown
+    int m_wlAsks{0};
+    static constexpr int kMaxWakeQueryAsks = 3;
     Kpa1500::Transport m_transport{Kpa1500::Transport::Tcp};
     // Transport of the current/last attempt; m_transport may change under it.
     Kpa1500::Transport m_activeTransport{Kpa1500::Transport::Tcp};

@@ -2214,7 +2214,7 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
         menu.exec(findButton->mapToGlobal(QPoint(0, findButton->height())));
     });
 
-    m_peripheralRowSavers.append([u]() {
+    m_peripheralRowSavers.append([this, u]() {
         if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
             return;
         }
@@ -2225,6 +2225,9 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualIp");
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualPort");
         PeripheralSettings::clearDeviceField("Kpa1500", "MacAddress");
+        if (m_kpa1500) {
+            m_kpa1500->setWakeMacAddress(QString());
+        }
         // Connected or still retrying: a reconnect loop aimed at the cleared
         // address would otherwise keep dialing it until restart.
         if (u->description().startsWith(savedIp + ":")) {

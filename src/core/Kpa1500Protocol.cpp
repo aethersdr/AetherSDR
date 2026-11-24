@@ -570,8 +570,15 @@ QByteArray buildWakeOnLanPacket(const QByteArray& mac)
 
 void QueryPacer::enqueue(const QString& cmd, bool urgent)
 {
-    if (m_outstanding == cmd || std::find(m_queue.begin(), m_queue.end(), cmd) != m_queue.end()) {
+    if (m_outstanding == cmd) {
         return;
+    }
+    const auto queued = std::find(m_queue.begin(), m_queue.end(), cmd);
+    if (queued != m_queue.end()) {
+        if (!urgent) {
+            return;
+        }
+        m_queue.erase(queued);   // an urgent readback moves to the head
     }
     if (urgent) {
         m_queue.push_front(cmd);

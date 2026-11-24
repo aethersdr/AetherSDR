@@ -119,8 +119,9 @@ command whose delivery matters and UDP gives no delivery signal. So on UDP:
   when it drains, so the meter cadence stays at 250 ms when replies allow
   and stretches, rather than piling up, when they don't. The reference asks
   a client to "wait for the corresponding RESPONSE before sending more
-  commands". SETs are not paced (they get no reply), and a control's
-  readback query goes to the head of the queue.
+  commands". SETs are not paced (they get no reply, and STANDBY must
+  not queue behind meter queries), and a control's readback query goes to the
+  head of the queue.
 - Every control is **confirmed by readback**: the SET is followed by its
   query (`^OS`, `^AI`, `^AN`, `^FL`, `^TP`) and resent every 600 ms until the
   reply shows the requested state, at most five times, after which
@@ -164,7 +165,9 @@ pull-down, characters on the USB host port, and, with the NET WAKE on LAN menu
 item enabled (`^WL1`, new in 01.67), a Wake-on-LAN magic packet: "6 bytes of
 255 followed by 16 repetitions of the KPA1500's MAC address". The MAC comes
 from `^MA` (`^MA54:10:EC:14:75:22;`). Both are asked at link-up and on the wake
-edge, `^WL` stays in the slow rotation, and `^MA` is asked there until known.
+edge. In the slow rotation `^WL` is re-read every cycle once it has answered,
+and `^MA` until it is known; either is dropped from the rotation after three
+unanswered asks on a link (firmware before 01.67 has no `^WL`).
 POWER on an asleep amp sends `^ON1` and, unless `^WL0` was read, the magic
 packet to UDP port 9 on the broadcast address of each local network holding
 the amp's address, and to the amp itself (`Kpa1500Connection::wakeTargets`).
