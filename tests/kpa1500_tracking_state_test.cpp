@@ -1,6 +1,7 @@
 // Inject pending work directly. No socket is bound, connected or serviced.
 #include "TestSettingsProfile.h"
 #include "core/Kpa1500Connection.h"
+#include "core/Kpa1500Protocol.h"
 #include "core/PeripheralSettings.h"
 
 #include <QCoreApplication>
@@ -85,6 +86,41 @@ struct Kpa1500TrackingTestAccess {
             }
         }
         return -1;
+    }
+
+    // Tracking is on, the link counts as up (no socket is opened: writeFrame
+    // refuses without one), and the amp's power state is whatever `power` says.
+    static bool tracksWithPower(Kpa1500Connection& connection, std::optional<bool> power)
+    {
+        connection.m_followTx = true;
+        connection.m_connected = true;
+        connection.m_transmitting = false;
+        connection.m_status.powerOn = power;
+        connection.m_trackWantKhz = 14074;
+        connection.m_trackSentKhz.reset();
+        connection.sendTrack();
+        const bool sent = connection.m_trackSentKhz.has_value();
+        connection.m_connected = false;
+        return sent;
+    }
+
+    static std::optional<int> firstReadingTracks(Kpa1500Connection& connection)
+    {
+        connection.m_followTx = true;
+        connection.m_connected = true;
+        connection.m_transmitting = false;
+        connection.m_status.powerOn.reset();
+        connection.m_trackWantKhz = 14074;
+        connection.m_trackSentKhz.reset();
+        connection.scheduleTrack();
+        if (connection.m_trackSentKhz) {
+            connection.m_connected = false;
+            return -1;  // sent before the power state was known
+        }
+        connection.onMessage(*Kpa1500::parseMessage("^ON1;"));
+        const std::optional<int> sent = connection.m_trackSentKhz;
+        connection.m_connected = false;
+        return sent;
     }
 
     static bool timerDeliveryHeld(Kpa1500Connection& connection)
@@ -196,6 +232,20 @@ int main(int argc, char** argv)
               "a held AN waits a full retry interval after unkey");
         check(Kpa1500TrackingTestAccess::socketsUnopened(connection),
               "unkey retry test opens no transport");
+    }
+    {
+        Kpa1500Connection connection;
+        check(!Kpa1500TrackingTestAccess::tracksWithPower(connection, std::nullopt),
+              "TRACK sends no FR before the amp's power state is known");
+        check(!Kpa1500TrackingTestAccess::tracksWithPower(connection, false),
+              "TRACK sends no FR to a sleeping amp");
+        check(Kpa1500TrackingTestAccess::tracksWithPower(connection, true),
+              "TRACK sends FR to an amp known to be awake");
+        check(Kpa1500TrackingTestAccess::socketsUnopened(connection),
+              "power-state test opens no transport");
+        Kpa1500Connection fresh;  // no earlier ^FR, so the rate limit is not in play
+        check(Kpa1500TrackingTestAccess::firstReadingTracks(fresh) == 14074,
+              "the first ON1 reading on a link sends the pending frequency");
     }
     {
         PeripheralSettings::setDeviceString(QStringLiteral("Kpa1500"), QStringLiteral("Transport"),

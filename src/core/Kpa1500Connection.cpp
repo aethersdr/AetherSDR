@@ -269,6 +269,9 @@ void Kpa1500Connection::onTransportUp()
     for (const QString& cmd : identityCommands()) {
         writeFrame(Kpa1500::buildQuery(cmd));
     }
+    // TRACK waits for a known power state (scheduleTrack), so ask for it now
+    // rather than when the slow rotation next reaches ^ON.
+    writeFrame(Kpa1500::buildQuery(QStringLiteral("ON")));
     poll();  // don't make the applet wait a full interval for its first reading
     emit connected();
     scheduleTrack();
@@ -366,8 +369,10 @@ void Kpa1500Connection::onMessage(const Kpa1500::Message& message)
         return;
     }
 
-    if (message.cmd == QLatin1String("ON") && m_status.powerOn == true && wasPowerOn == false) {
-        m_trackSentKhz.reset();  // the amp just woke: give it the frequency again
+    if (message.cmd == QLatin1String("ON") && m_status.powerOn == true && wasPowerOn != true) {
+        // The amp just woke, or reported awake for the first time on this
+        // link: give it the frequency (again).
+        m_trackSentKhz.reset();
         scheduleTrack();
     }
 
@@ -706,8 +711,10 @@ void Kpa1500Connection::setTxFrequency(std::optional<int> khz, bool localTransmi
 
 void Kpa1500Connection::scheduleTrack()
 {
+    // Track only an amp known to be awake: an unknown power state waits for
+    // the first ^ON reading, which re-schedules this (onMessage).
     if (!m_followTx || !m_connected || m_transmitting || !m_trackWantKhz
-        || m_trackWantKhz == m_trackSentKhz || m_status.powerOn == false) {
+        || m_trackWantKhz == m_trackSentKhz || m_status.powerOn != true) {
         return;
     }
     if (!m_trackLastSent.isValid() || m_trackLastSent.elapsed() >= kTrackIntervalMs) {
@@ -721,10 +728,10 @@ void Kpa1500Connection::scheduleTrack()
 
 void Kpa1500Connection::sendTrack()
 {
-    // Re-check: transmit may have started, or tracking stopped, since the
-    // timer was armed.
+    // Re-check: transmit may have started, tracking stopped, or the amp gone
+    // to sleep, since the timer was armed.
     if (!m_followTx || !m_connected || m_transmitting || !m_trackWantKhz
-        || m_trackWantKhz == m_trackSentKhz) {
+        || m_trackWantKhz == m_trackSentKhz || m_status.powerOn != true) {
         return;
     }
     const int khz = *m_trackWantKhz;

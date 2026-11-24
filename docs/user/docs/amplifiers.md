@@ -416,7 +416,8 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   offset, and coalesces fast tuning into a few updates a second. Band changes
   wait until the radio stops transmitting, including transmissions owned by
   another client. Losing the transmit slice or disconnecting the radio cancels
-  pending frequency updates. Slices outside 160–6 m are not tracked. **TRACK**
+  pending frequency updates. Slices outside 160–6 m are not tracked, and no
+  frequency is sent until the amplifier has reported that it is awake. **TRACK**
   is off by default and is remembered; turn it off if the amplifier already gets
   frequency from a radio cable.
 
