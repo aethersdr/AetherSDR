@@ -9,7 +9,8 @@
 //   1. Keyed USB -> DIGU via SliceModel::setMode (the path the mode button,
 //      CAT MD and TCI modulation share): refused, the slice stays USB, the
 //      channel stays USB minimum phase, the over does not splatter.
-//   2. Keyed TX filter change: refused, the echo puts the applet back.
+//   2. Keyed TX filter change: refused, the echo puts the applet back. A
+//      re-send of the pair the applet shows changes nothing and is not told.
 //   3. Keyed TX-slice move to an LSB receiver: refused, transmit stays put.
 //   4. After the over, an unkeyed USB -> DIGU reaches the channel at once, the
 //      published TX passband follows, and the next over transmits DIGU.
@@ -439,6 +440,7 @@ int main(int argc, char** argv)
     std::optional<WdspChannel::Config> duringOver;
     bool modeRefused = false;
     bool filterRefused = false;
+    bool usbResendQuiet = false;
     bool moveRefused = false;
     bool completionRefused = false;
     QString completionText;
@@ -456,6 +458,12 @@ int main(int argc, char** argv)
         filterRefused = refusals == QStringList{QStringLiteral("0:TX filter can't change while transmitting.")}
             && txFilterEcho == std::make_pair(300, 2700);
         seen << refusals;
+
+        // The pair the applet already shows, sent again (no operator cut yet).
+        refusals.clear();
+        txFilterEcho.reset();
+        backend.setTxFilter(300, 2700);
+        usbResendQuiet = refusals.isEmpty() && txFilterEcho == std::make_pair(300, 2700);
 
         refusals.clear();
         slice1Tx.reset();
@@ -484,6 +492,7 @@ int main(int argc, char** argv)
           "the transmitter is unchanged while keyed: USB, minimum phase, 300..2700 Hz");
     check(filterRefused,
           "a keyed TX filter change is refused and told; the echo puts the applet back on 300..2700");
+    check(usbResendQuiet, "a keyed re-send of the shown 300..2700 is not told as a refusal; the echo is unchanged");
     check(moveRefused, "a keyed TX-slice move is refused on both paths; transmit stays on slice 0");
     check(completionRefused && completionText.contains(QLatin1String("transmitting")),
           "the TX-slice move's completion is answered Refused");
@@ -523,6 +532,7 @@ int main(int argc, char** argv)
           "setup: unkeyed DIGU publishes 150..3000 Hz while the USB cut is kept");
 
     bool diguFilterRefused = false;
+    bool diguResendQuiet = false;
     std::optional<std::pair<int, int>> diguEcho;
     // 6 (keyed half). The TX-owning pan is DDC 0; closing it would hand
     // transmit to the LSB receiver.
@@ -540,6 +550,12 @@ int main(int argc, char** argv)
         diguEcho = txFilterEcho;
         diguFilterRefused = refusals == QStringList{QStringLiteral("0:TX filter can't change while transmitting.")};
 
+        // DIGU's published pair sent again, with the saved USB cut differing.
+        refusals.clear();
+        txFilterEcho.reset();
+        backend.setTxFilter(150, 3000);
+        diguResendQuiet = refusals.isEmpty() && txFilterEcho == std::make_pair(150, 3000);
+
         refusals.clear();
         closeReturned = backend.removePanadapter(txPan);
         closeRefusalTold = refusals == QStringList{
@@ -550,6 +566,7 @@ int main(int argc, char** argv)
     std::fprintf(stderr, "keyed DIGU filter request echo: %d..%d\n",
                  diguEcho ? diguEcho->first : -1, diguEcho ? diguEcho->second : -1);
     check(diguFilterRefused, "a keyed TX filter change in DIGU is refused and told");
+    check(diguResendQuiet, "a keyed re-send of DIGU's shown 150..3000 is not told as a refusal, though the saved USB cut differs");
     check(diguEcho == std::make_pair(150, 3000),
           "the refusal echoes DIGU's published 150..3000, not the saved USB cut");
     const auto diguAfter = publishedTxPassband(backend);

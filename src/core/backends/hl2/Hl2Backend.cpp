@@ -6674,16 +6674,18 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
     highHz = std::clamp(highHz, lowHz + 50, kTxAudioMaxHz);
 
     if (transmitKeyed()) {
-        if (lowHz != m_txFilterLowHz || highHz != m_txFilterHighHz || !m_txFilterFromOperator) {
+        // The pair published for the current mode: DIGU's 150..3000 even with
+        // a saved USB cut, which stays saved. A request for exactly that pair
+        // changes nothing, so it is not told as a refusal.
+        const Receiver* txRx = rx(m_txDdc);
+        const auto [shownLo, shownHi] = effectiveTxPassband(txRx ? txRx->mode : QStringLiteral("USB"));
+        if (lowHz != shownLo || highHz != shownHi) {
             const auto* txIds = m_ids.byDdc(m_txDdc);
             // -1 with no TX receiver: the Notice then goes to the TX or active slice's pan.
             refuseTransmitChangeWhileKeyed(txIds ? txIds->uiNumber : -1,
                                            tr("TX filter can't change while transmitting."));
         }
-        // Put the Phone applet back on the pair published for the current mode
-        // (DIGU's 150..3000 even with a saved USB cut, which stays saved).
-        const Receiver* txRx = rx(m_txDdc);
-        const auto [shownLo, shownHi] = effectiveTxPassband(txRx ? txRx->mode : QStringLiteral("USB"));
+        // Put the Phone applet back on that pair.
         TransmitDelta delta;
         delta.txFilterLow = shownLo;
         delta.txFilterHigh = shownHi;

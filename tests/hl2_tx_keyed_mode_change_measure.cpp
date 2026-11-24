@@ -328,7 +328,7 @@ void report(const Event& e, const std::string& stim, const Out& ev, const Out& b
 {
     const long ms = 48;
     std::printf("{\"event\":\"%s\",\"stim\":\"%s\"", e.name.c_str(), stim.c_str());
-    const long tE = (ev.ok && before.ok) ? firstDiff(ev.iq, before.iq) : -2;
+    const long tE = (ev.ok && before.ok && after.ok) ? firstDiff(ev.iq, before.iq) : -2;
     if (tE < 0) {
         std::printf(",\"tE_ms\":null,\"diverges\":false,\"error\":\"%s\"}\n",
                     tE == -1 ? "identical to the control (no divergence)" : "run failed");
@@ -389,7 +389,7 @@ int main(int argc, char** argv)
         {"noop-usb-repush", usb, usb, [](Hl2TxDsp& tx) { tx.setMode(Mode::Usb); tx.setFilter(300.0, 2700.0); }},
         // The operator path, as Hl2Backend::setSliceMode queues it.
         {"usb-digu-hl2path", usb, digu, [](Hl2TxDsp& tx) { tx.setMode(Mode::Digu); tx.setFilter(150.0, 3000.0); }},
-        // The previous harness's event: Hl2TxDsp::setMode only (filter unchanged).
+        // Hl2TxDsp::setMode alone, the filter unchanged.
         {"usb-digu-setmode-only", usb, {Mode::Digu, 300.0, 2700.0}, [](Hl2TxDsp& tx) { tx.setMode(Mode::Digu); }},
         // One WDSP call at a time on the open channel.
         {"wdsp-SetTXAMode-only", usb, usb, [ch](Hl2TxDsp& tx) { ch(tx)->setMode(Mode::Digu); }},
