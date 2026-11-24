@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/TailscaleInterface.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/aetherd/RemoteEngineCredentials.h"
 #include "core/backends/aetherd/RemoteEngineScheduler.h"
@@ -39,9 +40,8 @@ public:
     struct Options {
         // Milliseconds from a monotonic origin, for the client bucket.
         std::function<qint64()> clockMs;
-        // The interface name that holds a local address; empty when none.
-        // Injected so the WireGuard admission check is testable.
-        std::function<QString(const QHostAddress&)> interfaceForLocalAddress;
+        // Up interfaces, injected for socket-free route admission tests.
+        std::function<QList<NetworkInterfaceRecord>()> networkInterfaces;
     };
 
     explicit RemoteEngineBackend(QObject* parent = nullptr);
@@ -74,14 +74,13 @@ public:
     // request's serial is the engine id. Nullopt when this machine never
     // paired with it this session.
     [[nodiscard]] static std::optional<RemoteEngineRecord> recordFor(const RadioConnectRequest& request);
-    // ws:// is admitted only when our end of the socket is on an up
-    // tailscale*/wg* interface.
+    // ws:// is admitted only when our end is on an up Tailscale or WireGuard interface.
     [[nodiscard]] static bool tailnetPathAdmitted(const QHostAddress& localAddress,
-        const std::function<QString(const QHostAddress&)>& interfaceFor);
+        InterfaceNaming naming, const QList<NetworkInterfaceRecord>& interfaces);
     // The lowercase hex SHA-256 the pin compares.
     [[nodiscard]] static QString fingerprintOf(const QByteArray& certificateDer);
 
-    // For tests: what has gone out on the wire after hello.
+    // For tests: recent methods sent on the wire after hello.
     [[nodiscard]] QStringList sentMethodsForTest() const { return m_sentMethods; }
     [[nodiscard]] RemoteEngineScheduler::Limits clientLimitsForTest() const { return m_scheduler.limits(); }
     [[nodiscard]] bool helloSentForTest() const { return m_helloSent; }
@@ -136,6 +135,7 @@ private:
     Phase m_phase{Phase::Idle};
     bool m_connected{false};
     bool m_snapshotReady{false};
+    bool m_subscribePending{false};
     bool m_tailnet{false};
     bool m_helloSent{false};
     QString m_pin;

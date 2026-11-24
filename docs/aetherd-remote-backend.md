@@ -96,9 +96,9 @@ define, and the far engine's `capabilities` decide what is offered.
   nothing else.
 - **`ws://` is admitted only over WireGuard.** After the TCP connect and before
   anything is sent, the socket's local address must belong to an up
-  `tailscale*`/`wg*` interface on the desktop. This is the client-side mirror of
-  the server's `RemoteControlServer::wireGuardInterfaceFor()` check, applied to
-  the client's own end. If that fails, the connect fails closed, says why, and
+  Tailscale or Linux `wg*` interface on the desktop. A Mac's `utun*` interface
+  must hold the socket's local Tailscale address. On Windows the adapter must
+  be named Tailscale. If that fails, the connect fails closed, says why, and
   `hello` is never sent. A plain `ws://` LAN address is never accepted.
 - **The hazard.** On the tailnet path, the WireGuard peer identity is the only
   thing that says the far end is the engine. The certificate pin does not
@@ -153,9 +153,9 @@ a test, see *Tests*):
    - **What the client bucket charges.** Every frame the backend sends after
      `welcome`: control requests, subscribes, re-reads, conflict retries and
      resync snapshots.
-   - **Its size.** Half the advertised rate, with a burst of the same size but
-     never more than half the advertised burst: 50 a second with a burst of
-     50 at today's values. It falls back to exactly that when `welcome`
+   - **Its size.** Half the advertised rate up to 50 a second, with a burst of
+     the same size capped at half the advertised burst (at least one frame):
+     50 a second with a burst of 50 at today's values. It falls back to exactly that when `welcome`
      carries no limits.
    - **The invariant.** Client burst + client rate × T stays below server
      burst + server rate × T for every interval T. The 150 frames of

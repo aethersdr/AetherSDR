@@ -1,6 +1,8 @@
 #include "RemoteEngineBackend.h"
 #include "RemoteEngineMapping.h"
 
+#include "core/control/ControlProtocolCodec.h"
+
 #include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -22,19 +24,20 @@ namespace AetherSDR::aetherd {
 namespace {
 
 const QString kRadioSession = QStringLiteral("radio-1");
+constexpr qsizetype kRecentMethodLimit = 512;
 
-QString upInterfaceHolding(const QHostAddress& address)
+QList<NetworkInterfaceRecord> upNetworkInterfaces()
 {
-    // Not "interface": that is a macro once windows.h is in the translation unit.
+    QList<NetworkInterfaceRecord> records;
     for (const QNetworkInterface& candidate : QNetworkInterface::allInterfaces()) {
         if (!candidate.flags().testFlag(QNetworkInterface::IsUp)) { continue; }
+        NetworkInterfaceRecord record{candidate.name(), candidate.humanReadableName(), {}};
         for (const QNetworkAddressEntry& entry : candidate.addressEntries()) {
-            if (entry.ip().isEqual(address, QHostAddress::ConvertV4MappedToIPv4)) {
-                return candidate.name();
-            }
+            record.addresses.append(entry.ip());
         }
+        records.append(std::move(record));
     }
-    return {};
+    return records;
 }
 
 // The certificate problems a self-made, pinned certificate always has. Any
@@ -76,8 +79,8 @@ RemoteEngineBackend::Options RemoteEngineBackend::withDefaults(Options options)
         timer->start();
         options.clockMs = [timer] { return timer->elapsed(); };
     }
-    if (!options.interfaceForLocalAddress) {
-        options.interfaceForLocalAddress = upInterfaceHolding;
+    if (!options.networkInterfaces) {
+        options.networkInterfaces = upNetworkInterfaces;
     }
     return options;
 }
@@ -109,11 +112,18 @@ std::optional<RemoteEngineRecord> RemoteEngineBackend::recordFor(const RadioConn
 }
 
 bool RemoteEngineBackend::tailnetPathAdmitted(const QHostAddress& localAddress,
-    const std::function<QString(const QHostAddress&)>& interfaceFor)
+    InterfaceNaming naming, const QList<NetworkInterfaceRecord>& interfaces)
 {
-    if (localAddress.isNull() || !interfaceFor) { return false; }
-    const QString name = interfaceFor(localAddress);
-    return name.startsWith(QLatin1String("tailscale")) || name.startsWith(QLatin1String("wg"));
+    if (localAddress.isNull()) { return false; }
+    for (const NetworkInterfaceRecord& candidate : interfaces) {
+        for (const QHostAddress& address : candidate.addresses) {
+            if (address.isEqual(localAddress, QHostAddress::ConvertV4MappedToIPv4)) {
+                return (naming == InterfaceNaming::Linux && candidate.name.startsWith(QLatin1String("wg")))
+                    || isTailscaleInterface(naming, candidate.name, candidate.humanReadableName, address);
+            }
+        }
+    }
+    return false;
 }
 
 QString RemoteEngineBackend::fingerprintOf(const QByteArray& certificateDer)
@@ -163,15 +173,19 @@ void RemoteEngineBackend::openSocket(const RemoteEngineRecord& record, bool tail
     m_sessionId.clear();
     m_lastSequence = -1;
     m_snapshotReady = false;
+    m_subscribePending = false;
     m_pending.clear();
     m_cache.clear();
     m_sentMethods.clear();
     m_helloSent = false;
     m_agcMode.clear();
+    m_capabilityJson = {};
     m_scheduler.clear();
     m_scheduler.setLimits({});
     m_socket = std::make_unique<QWebSocket>(QStringLiteral("aethersdr"), QWebSocketProtocol::VersionLatest);
     QWebSocket* socket = m_socket.get();
+    socket->setMaxAllowedIncomingFrameSize(control::ProtocolLimits::kMaxMessageBytes);
+    socket->setMaxAllowedIncomingMessageSize(control::ProtocolLimits::kMaxMessageBytes);
     connect(socket, &QWebSocket::connected, this, [this, generation] {
         if (generation == m_generation) { onSocketConnected(); }
     });
@@ -207,7 +221,8 @@ void RemoteEngineBackend::openSocket(const RemoteEngineRecord& record, bool tail
 void RemoteEngineBackend::onSocketConnected()
 {
     if (m_tailnet) {
-        if (!tailnetPathAdmitted(m_socket->localAddress(), m_options.interfaceForLocalAddress)) {
+        if (!tailnetPathAdmitted(m_socket->localAddress(), hostInterfaceNaming(),
+                                 m_options.networkInterfaces())) {
             fail(tr("A ws:// tailnet address is used only over a WireGuard (Tailscale) interface; "
                     "this connection is not. Nothing was sent."));
             return;
@@ -237,6 +252,7 @@ void RemoteEngineBackend::sendNow(Pending::Kind kind, const QString& method, con
                         {QStringLiteral("method"), method}, {QStringLiteral("params"), params}};
     if (kind != Pending::Kind::Hello) {
         request.insert(QStringLiteral("sessionId"), m_sessionId);
+        if (m_sentMethods.size() == kRecentMethodLimit) { m_sentMethods.removeFirst(); }
         m_sentMethods.append(method);
     } else {
         m_helloSent = true;
@@ -285,6 +301,8 @@ void RemoteEngineBackend::pump()
 
 void RemoteEngineBackend::subscribe()
 {
+    if (m_phase != Phase::Live || m_subscribePending) { return; }
+    m_subscribePending = true;
     m_scheduler.enqueuePlain(QStringLiteral("resource.subscribe"), QJsonObject{
         {QStringLiteral("resources"), QJsonArray{
              QJsonObject{{QStringLiteral("type"), QStringLiteral("radioSession")}},
@@ -338,28 +356,30 @@ void RemoteEngineBackend::onResponse(const QJsonObject& message)
         subscribe();
         return;
     case Pending::Kind::Subscribe:
+        m_subscribePending = false;
         if (!code.isEmpty()) {
             fail(tr("The engine refused the subscription (%1).").arg(code));
             return;
         }
         m_lastSequence = std::max(m_lastSequence,
-                                  qint64(result.value(QStringLiteral("sequence")).toDouble(-1)));
+                                  result.value(QStringLiteral("sequence")).toInteger(-1));
         applyBaseline(result.value(QStringLiteral("resources")).toArray(), true);
         m_snapshotReady = true;
         refreshCapabilities();
         schedulePump();
         return;
     case Pending::Kind::Get: {
-        if (code.isEmpty()) {
+        const qint64 revision = result.value(QStringLiteral("revision")).toInteger(-1);
+        if (code.isEmpty() && revision >= 0) {
             applyResource(result.value(QStringLiteral("resource")).toObject(),
-                          quint64(result.value(QStringLiteral("revision")).toDouble()),
+                          quint64(revision),
                           result.value(QStringLiteral("value")).toObject());
         }
         // The conflicted intent this re-read serves is retried once, unless a
         // newer intent for the same method is already queued (latest wins).
         const std::pair<QString, QJsonObject> retry = m_retryIntents.take(pending.resourceKey);
         m_scheduler.completed(pending.resourceKey);
-        if (code.isEmpty() && !retry.first.isEmpty()
+        if (code.isEmpty() && revision >= 0 && !retry.first.isEmpty()
             && !m_scheduler.hasQueuedIntent(pending.resourceKey, retry.first)) {
             m_scheduler.submitIntent(pending.resourceKey, retry.first, retry.second, true);
         }
@@ -405,15 +425,17 @@ void RemoteEngineBackend::onResponse(const QJsonObject& message)
 
 void RemoteEngineBackend::onEvent(const QJsonObject& message)
 {
-    const qint64 sequence = qint64(message.value(QStringLiteral("sequence")).toDouble(-1));
+    const qint64 sequence = message.value(QStringLiteral("sequence")).toInteger(-1);
     // Sequences rise but skip numbers: the engine coalesces a resource's queued
     // events to the newest complete value. Only an out-of-order one is stale.
     if (sequence <= m_lastSequence) { return; }
     m_lastSequence = sequence;
     const QString event = message.value(QStringLiteral("event")).toString();
     if (event == QLatin1String("resource.changed")) {
+        const qint64 revision = message.value(QStringLiteral("revision")).toInteger(-1);
+        if (revision < 0) { return; }
         applyResource(message.value(QStringLiteral("resource")).toObject(),
-                      quint64(message.value(QStringLiteral("revision")).toDouble()),
+                      quint64(revision),
                       message.value(QStringLiteral("value")).toObject());
     } else if (event == QLatin1String("resource.removed")) {
         removeResource(message.value(QStringLiteral("resource")).toObject());
@@ -442,9 +464,11 @@ void RemoteEngineBackend::applyBaseline(const QJsonArray& resources, bool replac
     }
     for (const QJsonObject& entry : ordered) {
         const QJsonObject address = entry.value(QStringLiteral("resource")).toObject();
+        const qint64 revision = entry.value(QStringLiteral("revision")).toInteger(-1);
+        if (revision < 0) { continue; }
         // A baseline is authoritative even at an equal revision.
         m_cache.remove(resourceKey(address));
-        applyResource(address, quint64(entry.value(QStringLiteral("revision")).toDouble()),
+        applyResource(address, quint64(revision),
                       entry.value(QStringLiteral("value")).toObject());
     }
 }
@@ -732,6 +756,8 @@ void RemoteEngineBackend::finish()
     m_pending.clear();
     m_retryIntents.clear();
     m_snapshotReady = false;
+    m_subscribePending = false;
+    m_token.clear();
     if (m_socket) {
         m_socket->disconnect(this);
         m_socket->abort();

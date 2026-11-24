@@ -170,8 +170,8 @@ RadioCapabilities capabilitiesFrom(const QJsonObject& radioSession, const QStrin
 
     const QJsonObject frequency = caps.value(QStringLiteral("sliceFrequencyControl")).toObject();
     c.sliceFrequencyControl = {authorityFrom(frequency.value(QStringLiteral("authority"))),
-                               qint64(frequency.value(QStringLiteral("minimumHz")).toDouble()),
-                               qint64(frequency.value(QStringLiteral("maximumHz")).toDouble())};
+                               frequency.value(QStringLiteral("minimumHz")).toInteger(),
+                               frequency.value(QStringLiteral("maximumHz")).toInteger()};
     if (const QJsonObject mode = caps.value(QStringLiteral("receiveModeControl")).toObject(); !mode.isEmpty()) {
         c.receiveModeControl = ReceiveModeControl{authorityFrom(mode.value(QStringLiteral("authority"))),
                                                   stringsFrom(mode.value(QStringLiteral("modes")))};
@@ -198,8 +198,8 @@ RadioCapabilities capabilitiesFrom(const QJsonObject& radioSession, const QStrin
         if (record.isEmpty()) { return std::nullopt; }
         ReceivePanRangeControl control;
         control.authority = authorityFrom(record.value(QStringLiteral("authority")));
-        control.minimumHz = qint64(record.value(QStringLiteral("minimumHz")).toDouble());
-        control.maximumHz = qint64(record.value(QStringLiteral("maximumHz")).toDouble());
+        control.minimumHz = record.value(QStringLiteral("minimumHz")).toInteger();
+        control.maximumHz = record.value(QStringLiteral("maximumHz")).toInteger();
         return control;
     };
     c.receivePanCenterControl = range("receivePanCenterControl");

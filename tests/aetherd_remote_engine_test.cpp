@@ -38,6 +38,12 @@ void bucketSize()
     check(RemoteEngineScheduler::clientLimits({{"requestsPerSecond", -1}, {"requestBurst", 200}})
               == RemoteEngineScheduler::Limits{50.0, 50.0},
           "nonsense limits fall back too");
+    check(RemoteEngineScheduler::clientLimits({{"requestsPerSecond", 1e300}, {"requestBurst", 1e300}})
+              == RemoteEngineScheduler::Limits{50.0, 50.0},
+          "an advertised increase cannot exceed the client's maximum budget");
+    check(RemoteEngineScheduler::clientLimits({{"requestsPerSecond", 1e-300}, {"requestBurst", 10}})
+              == RemoteEngineScheduler::Limits{50.0, 50.0},
+          "sub-unit limits cannot overflow the scheduler timer");
 }
 
 void bucketCharges()
@@ -168,21 +174,30 @@ void capabilities()
 void tailnetAdmission()
 {
 #ifdef HAVE_WEBSOCKETS
-    const auto names = [](const QHostAddress& address) -> QString {
-        if (address == QHostAddress("100.101.102.103")) { return "tailscale0"; }
-        if (address == QHostAddress("10.8.0.2")) { return "wg0"; }
-        if (address == QHostAddress("192.168.50.10")) { return "eth0"; }
-        return {};
-    };
-    check(RemoteEngineBackend::tailnetPathAdmitted(QHostAddress("100.101.102.103"), names),
-          "ws:// is admitted from a tailscale interface");
-    check(RemoteEngineBackend::tailnetPathAdmitted(QHostAddress("10.8.0.2"), names),
-          "and from a wg interface");
-    check(!RemoteEngineBackend::tailnetPathAdmitted(QHostAddress("192.168.50.10"), names),
-          "never from a LAN interface");
-    check(!RemoteEngineBackend::tailnetPathAdmitted(QHostAddress("100.64.9.9"), names),
+    const QHostAddress tailnet("100.101.102.103");
+    const QHostAddress wireguard("10.8.0.2");
+    const QHostAddress lan("192.168.50.10");
+    const QList<NetworkInterfaceRecord> linuxInterfaces{
+        {"tailscale0", {}, {tailnet}}, {"wg0", {}, {wireguard}}, {"eth0", {}, {lan}}};
+    check(RemoteEngineBackend::tailnetPathAdmitted(tailnet, InterfaceNaming::Linux, linuxInterfaces),
+          "ws:// is admitted from a Linux Tailscale interface");
+    check(RemoteEngineBackend::tailnetPathAdmitted(wireguard, InterfaceNaming::Linux, linuxInterfaces),
+          "ws:// is admitted from a Linux WireGuard interface");
+    check(!RemoteEngineBackend::tailnetPathAdmitted(lan, InterfaceNaming::Linux, linuxInterfaces),
+          "ws:// is refused on a LAN interface");
+    check(!RemoteEngineBackend::tailnetPathAdmitted(QHostAddress("100.64.9.9"),
+                                                     InterfaceNaming::Linux, linuxInterfaces),
           "an address on no known interface is refused");
-    check(!RemoteEngineBackend::tailnetPathAdmitted(QHostAddress(), names), "nor a null address");
+    check(!RemoteEngineBackend::tailnetPathAdmitted({}, InterfaceNaming::Linux, linuxInterfaces),
+          "a null address is refused");
+    const QList<NetworkInterfaceRecord> macInterfaces{{"utun4", {}, {tailnet, wireguard}}};
+    check(RemoteEngineBackend::tailnetPathAdmitted(tailnet, InterfaceNaming::MacOS, macInterfaces),
+          "macOS recognizes a Tailscale-addressed utun interface");
+    check(!RemoteEngineBackend::tailnetPathAdmitted(wireguard, InterfaceNaming::MacOS, macInterfaces),
+          "an unrelated macOS utun address is refused");
+    const QList<NetworkInterfaceRecord> windowsInterfaces{{"{adapter-id}", "Tailscale", {tailnet}}};
+    check(RemoteEngineBackend::tailnetPathAdmitted(tailnet, InterfaceNaming::Windows, windowsInterfaces),
+          "Windows uses the adapter's human-readable name");
 #else
     std::printf("[SKIP] no Qt WebSockets: the backend is not built\n");
 #endif

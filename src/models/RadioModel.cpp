@@ -769,7 +769,8 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     // framing and the 1364/556 packet split must scale with the rate first.
 }
 
-std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
+std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family,
+                                                       QString* unavailableReason)
 {
     if (family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0)
         return std::make_unique<hl2::Hl2Backend>();
@@ -805,6 +806,7 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
         return std::make_unique<aetherd::RemoteEngineBackend>();
 #else
         qWarning() << "RadioModel: remote-engine backend requested but this build has no Qt WebSockets";
+        *unavailableReason = tr("This build has no Qt WebSockets, so it cannot reach a remote engine.");
         return nullptr;
 #endif
     }
@@ -813,9 +815,12 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
         return std::make_unique<rtl::RtlSdrBackend>();
 #else
         qWarning() << "RadioModel: RTL-SDR backend requested but RTL support is disabled";
+        *unavailableReason = tr("This build has no RTL-SDR support — librtlsdr or fftw3f "
+                                "was unavailable when AetherSDR was compiled.");
         return nullptr;
 #endif
     }
+    Q_UNUSED(unavailableReason);
     return std::make_unique<FlexBackend>();
 }
 
@@ -992,12 +997,10 @@ void RadioModel::setupBackend(const QString& family)
         // construction wiring below is
         // guarded by a dynamic_cast so the Flex path stays byte-identical and a
         // non-Flex backend simply skips it (it owns its own wire objects).
-        m_backend = makeBackend(m_family);
+        QString unavailableReason;
+        m_backend = makeBackend(m_family, &unavailableReason);
         if (!m_backend) {
-            emit connectionError(m_family == QLatin1String("aetherd")
-                ? tr("This build has no Qt WebSockets, so it cannot reach a remote engine.")
-                : tr("This build has no RTL-SDR support — librtlsdr or fftw3f "
-                     "was unavailable when AetherSDR was compiled."));
+            emit connectionError(unavailableReason);
             return;
         }
         connect(m_backend.get(), &IRadioBackend::daxTxStreamChanged, this,

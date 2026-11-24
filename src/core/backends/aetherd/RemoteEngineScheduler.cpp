@@ -16,13 +16,14 @@ RemoteEngineScheduler::Limits RemoteEngineScheduler::clientLimits(const QJsonObj
 {
     const double rate = welcomeLimits.value(QStringLiteral("requestsPerSecond")).toDouble();
     const double burst = welcomeLimits.value(QStringLiteral("requestBurst")).toDouble();
-    if (!std::isfinite(rate) || !std::isfinite(burst) || rate <= 0.0 || burst <= 0.0) {
+    if (!std::isfinite(rate) || !std::isfinite(burst) || rate < 1.0 || burst < 1.0) {
         return {};
     }
     // Half the advertised rate, and a burst of the same size but never more
     // than half the advertised burst: 50/s with a burst of 50 at 100/200, so
     // the 150 frames between the two bursts absorb frames the network bunches.
-    return {rate / 2.0, std::max(1.0, std::floor(std::min(rate, burst) / 2.0))};
+    const double clientRate = std::min(rate / 2.0, Limits{}.requestsPerSecond);
+    return {clientRate, std::max(1.0, std::floor(std::min(clientRate, burst / 2.0)))};
 }
 
 RemoteEngineScheduler::RemoteEngineScheduler(std::function<qint64()> clockMs)

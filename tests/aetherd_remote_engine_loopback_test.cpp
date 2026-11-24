@@ -302,6 +302,15 @@ int main(int argc, char* argv[])
         check(waitUntil([&] { return remote.sessionCount() == 0; }), "rule 2: the engine sees the socket close");
         check(engine.resources.get({"radioSession", {}, "radio-1"}).has_value(),
               "rule 2: the engine still holds its radio");
+
+        int capabilityUpdates = 0;
+        QObject::connect(&backend, &IRadioBackend::capabilitiesChanged, [&] { ++capabilityUpdates; });
+        backend.connectRadio(requestFor(fingerprint, port));
+        check(waitUntil([&] { return capabilityUpdates > 0; })
+                  && backend.capabilities().agcModes == QStringList{"med"},
+              "reconnecting the same backend republishes capabilities after the snapshot");
+        backend.disconnectRadio();
+        check(waitUntil([&] { return remote.sessionCount() == 0; }), "the reconnected socket closes");
     }
 
     // ---- the pin ------------------------------------------------------------
