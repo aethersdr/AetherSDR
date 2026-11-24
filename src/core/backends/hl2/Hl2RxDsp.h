@@ -115,11 +115,10 @@ public:
         // ceiling — 120 dB is the TOP of WDSP's AGC gain range, so leaving it
         // there runs the HL2 wide open and slams the demodulated audio past
         // full scale (measured: peak 3.19, 10% of samples clipping on WWV).
-        // 39 dB is the slice model's default threshold of 65 through the
-        // 0..100 -> 0..60 dB map (see Hl2Backend::setSliceAgc). Measured clean
-        // on live hardware; the previous 65 dB clipped 60% of samples.
+        // 39 dB is the slice model's default threshold of 65 through
+        // Hl2DbReference::agcCeilingDbAtReference(), the 0..100 -> 0..90 dB map.
         int agcMode = 3;
-        double maximumAgcGainDb = 39.0;   // = slice default 65 * 0.6
+        double maximumAgcGainDb = 39.0;   // = agcCeilingDbAtReference(65), the slice default
         // false (live): processIq is non-blocking — real-time input paces WDSP's
         // async worker and audio flows with ~1 block latency. true: processIq
         // waits for each output block. That does not make a burst feed
@@ -321,8 +320,10 @@ public:
     //
     // AGC-off level 0..100 -> WDSP fixed gain: 10 + 0.6 * (level - 10) dB, so
     // the default level 10 is exactly WDSP's 10 dB channel default, and the
-    // slope matches the AGC-T threshold's 0.6 dB/unit. Not referred to the LNA
-    // gain: with AGC off the operator rides RF gain against overload.
+    // slope matches the AGC-T map's 0.6 dB/unit below its 65 knee. Above the
+    // knee AGC-T rises 51/35 dB/unit to 90 dB, while AGC off stays linear to
+    // 64 dB. Not referred to the LNA gain: with AGC off the operator rides RF
+    // gain against overload.
     static constexpr double kAgcFixedGainDbPerUnit = 0.6;
     static constexpr int kDefaultAgcOffLevel = 10;           // SliceModel::m_agcOffLevel
     static constexpr double kDefaultAgcFixedGainDb = 10.0;   // WdspChannel::Config

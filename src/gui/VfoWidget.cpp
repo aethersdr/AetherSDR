@@ -1695,6 +1695,7 @@ void VfoWidget::buildTabContent()
         m_panSlider = new CenterMarkSlider(50, Qt::Horizontal);
         m_panSlider->setRange(0, 100);
         m_panSlider->setValue(50);
+        m_panSlider->setAccessibleName(tr("Audio pan"));
         applyPrimarySliderStyle(m_panSlider);
         panRow->addWidget(m_panSlider, 1);
         auto* panR = new QLabel("R");

@@ -76,6 +76,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 - **Up to four receivers** (A–D), each with its own slice, panadapter, audio and S-meter. Add one with **Tools → Add Panadapter...**; close its pane to remove it.
 - The receivers share one converter, so the **span (sample rate), LNA gain, band and antenna are radio-wide**. Mode, passband, AGC and frequency are per receiver. The RX antenna menu offers **ANT**, the one receive input; KiwiSDR receivers, when configured, are listed beside it.
 - **After a restart** the receivers you had open come back, each with its own frequency, mode, passband, noise blanker, NR, ANF, APF, squelch, RIT/XIT, audio gain and pan, and transmit returns to the receiver that had it. If the span allows fewer receivers than you had, the others are kept and come back on a later connect with room for them, unless you add or close a receiver first.
+- **Several receivers playing at once** are summed for your speakers and the radio's own codec. When the sum would pass full scale, the mix is turned down just enough and then eased back up, instead of clipping. One receiver alone is never changed, and each receiver's own audio for TCI and the decoders is taken before the mix.
 - After disconnecting and reconnecting to the same HL2, transmit returns to the receiver that held it and uses that receiver’s mode and transmit passband. Each panadapter keeps its centre, as after a restart, unless its slice no longer fits in the middle 80 % of the span; then it is centred on the slice. Reconnecting does not key the radio.
 - **Span** snaps to 48, 96, 192 or 384 kHz. Four receivers run up to 192 kHz, three at 384 kHz. **Use low bandwidth mode** caps the span at 96 kHz. Only the pane holding the TX slice (otherwise the first docked pane) has live span buttons; the others are dimmed with the reason.
 - **Band buttons** switch the hardware filters and preamp as well as the frequency.
@@ -110,6 +111,8 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 
 > **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up. FM plays about 8 dB quieter again (a full-deviation 1 kHz tone, 1.08 → 0.43 of full scale); raise the slice's AF gain or your listening level if it is too quiet.
 
+> **Receive audio is mono (L = R) in every mode.** Anything that mixes left and right to one channel (TCI mono, the decoders, Linux DAX, RADE) now gets more level than before: about 3 dB in SSB, CW and data, and about 6 dB in DSB and in AM or SAM with the noise reduction or auto-notch on; if you set an application's input level (for example WSJT-X) against the old level, check it once.
+
 ### Receive filters
 
 Choose filter presets in [RX Controls](./rx-controls.md) or the
@@ -139,9 +142,12 @@ The panadapter SQL line and **Auto** squelch use the HL2's own scale.
 ### AGC and APF
 
 - AGC mode and threshold are remembered across restarts.
+- **AGC on:** the **AGC-T** slider sets the most gain the AGC may apply: 0.6 dB per step up to 65 (39 dB, the default), then faster, to 90 dB at 100. The higher it is, the louder weak signals come up, and with them the band noise between signals.
 - **AGC off:** the **AGC-T** slider sets a fixed gain, 4–64 dB (10 dB by default). The AGC-off level is remembered per receiver.
 - Selecting **DIGU** or **DIGL** turns AGC off on that receiver. Raise the AGC-off level if data audio is too quiet. A band-stack bookmark recalled into DIGU or DIGL also keeps AGC off, whatever AGC mode it stored.
 - **APF**, the CW audio peaking filter, is centered on your CW pitch. Its toggle and level are in the P/CW pane.
+
+> **Upgrading from an older version:** **AGC-T** above 65 gives more gain than before (at 100, 90 dB instead of 60 dB). A threshold or band-stack bookmark saved above 65 comes back louder; lower **AGC-T** if the noise between signals is too loud.
 
 ### RIT and XIT
 
@@ -170,6 +176,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
 - **SWR while transmitting** is the ratio of the highest forward and the highest reflected reading in each 0.1 s telemetry window, so it reads the load rather than the speech envelope. It appears about 0.2 s after keying and holds its last reading through short pauses in speech; when the carrier drops to a lower level and stays there, it also holds for a moment before following. This applies to overs AetherSDR keys (MOX, PTT from a client, tune); an over keyed on the radio's own PTT input still shows the latest pair. Unkeyed, and in **Tools → Radio Health...**, SWR is the ratio of the latest pair of readings.
+- In the certification meter inventory, **NOT DELIVERED** means a keyed window cleared the SWR gate during this run and the meter received no keyed reading. A missing reflected sample can cause this. A link drop makes the result **INCONCLUSIVE**. Start a fresh run after the link recovers.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
 - **DSB carrier:** DSB suppresses the carrier. On one HL2 into a dummy load, on a build of main from 2026-10-31 (`adc4e4a9f`), the remaining carrier measured 47 dB below the sidebands.

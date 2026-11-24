@@ -2194,6 +2194,8 @@
     },
     {
       "id": "about-window",
+      "radio": "demo",
+      "device_pixel_ratio": 1,
       "page": "menu-reference",
       "anchor_heading": "About AetherSDR",
       "settle": 3,
@@ -2210,8 +2212,8 @@
       "grab": {
         "target": "CanonWindow"
       },
-      "caption": "The About AetherSDR window: version, build and renderer details.",
-      "alt": "About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 licence, the GitHub link, trademark notices and an OK button follow."
+      "caption": "About AetherSDR includes links to the propagation and AetherMap data providers.",
+      "alt": "About AetherSDR with build details, the Contributor Logbook button, and links to HamQSL/N0NBH, NOAA SWPC, NASA SDO, NASA SVS, NASA/GSFC and NOAA/NWS."
     },
     {
       "id": "multiflex-dashboard",
@@ -3817,6 +3819,43 @@
       ],
       "caption": "The FFTW Wisdom window, shown the first time NR2 starts on a computer.",
       "alt": "FFTW Wisdom window. It reads Computing COMPLEX FORWARD FFT size 2048... and This window will automatically close when wisdom generation is complete, above a progress bar at 38%, Working..., an elapsed time of 0:09 and a Cancel button."
+    },
+    {
+      "id": "aethermap-source-credits",
+      "page": "psk-reporter-map",
+      "anchor_heading": "Sources & licenses",
+      "radio": "demo",
+      "device_pixel_ratio": 1,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherMap...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "PskReporterMapDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "pskReporterRadarInfo",
+          "action": "click"
+        },
+        {
+          "wait_visible": "pskReporterRadarInfoPanel"
+        }
+      ],
+      "grab": {
+        "target": "pskReporterSidebarContent"
+      },
+      "crop": {
+        "union": [
+          "pskReporterRadarInfo",
+          "pskReporterRadarInfoPanel"
+        ],
+        "pad": 5
+      },
+      "caption": "AetherMap lists the weather contributors, regional backups, map sources and licenses.",
+      "alt": "Expanded Sources & licenses panel with LibreWXR, its upstream weather providers, NOAA/NWS regional radar, and NASA/GSFC city lights from 2016 via NASA GIBS."
     },
     {
       "id": "psk-reporter-sidebar",

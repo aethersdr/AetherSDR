@@ -13,8 +13,8 @@ router whose ports you can't forward, and it needs no SmartLink account.
 The radio needs firmware **4.2.18 or later**.
 
 AetherSDR installs and sets it up for you from the **Waveforms**
-window. After that you connect from anywhere with **Connect by IP**, as if the
-radio were on your desk.
+window. After that the radio appears in your radio list wherever you are, as
+if it were on your desk, and **Connect by IP** works too.
 
 > ### 💲 It costs nothing
 > Tailscale's **Personal plan is free forever**, for non-commercial use (which
@@ -289,15 +289,53 @@ Remember `--accept-routes` on Linux computers (Part 2).
 ## Part 6 — Connect from anywhere
 
 1. Make sure Tailscale is running and logged in on the remote computer.
-2. In AetherSDR open **File → Connect to Radio...** and choose **Connect by
-   IP** (see [Manual Connection](./manual-connection.md)).
-3. Set **Radio type:** to **FlexRadio**, enter the radio's **tailnet
-   address**, and click **Connect by IP**.
+2. In AetherSDR open **File → Connect to Radio...** → **On This Network**.
+   The radio is listed at its tailnet address; select it and click
+   **Connect Selected Radio**.
+3. If it isn't listed, choose **Connect by IP** instead (see
+   [Manual Connection](./manual-connection.md)): set **Radio type:** to
+   **FlexRadio**, enter the radio's **tailnet address**, and click
+   **Connect by IP**.
 
 The container passes the session through to the radio: control, audio,
 panadapter, waterfall, meters, DAX, and the extra connections the radio opens
 on demand (file transfers, for example). Each remote client gets its own
 session, and the radio sees an ordinary client.
+
+### Who the radio is announced to
+
+On its own network the radio announces itself about once a second, and that
+is how clients list it. A tailnet carries no such broadcasts, so the
+container sends a copy of each announcement to your tailnet devices, naming
+the radio's tailnet address. The **Radio announcement** card in **Remote
+Access** chooses which devices get it:
+
+- **Every device away from the station** (the default)
+- **Only the devices ticked below**
+- **Off**
+
+Click **Save Announcement** to apply a change. A new sign-in after
+**Disconnect** or **Reset** (Part 7) starts it back at **Every device away
+from the station**, so choose again afterwards if you had picked another.
+Each device in the list shows what happens to it:
+
+| Status | Meaning |
+|---|---|
+| **Announced** | It is sent the announcement. |
+| **At the station** | It is on the radio's own network and hears the radio's broadcast, so it isn't sent a second one. |
+| **Via its discovery helper** | A discovery helper on that computer receives the announcement and broadcasts it there. |
+| **Not ticked** | **Only the devices ticked below** is chosen and it isn't ticked. |
+| **Offline** | It isn't connected to the tailnet now. |
+| **Not on the tailnet now** | It is ticked but no longer in your tailnet. Untick it and save. |
+| **Not sent: over the limit of 32 devices** | At most 32 devices are sent the announcement. |
+| **No IPv4 address** | It has no tailnet IPv4 address to send to. |
+
+Below the list, **Last heard from the radio at** shows that the container
+hears the radio's own broadcast. If it says the announcement hasn't been
+heard, nothing is sent.
+
+An older container can't announce the radio: the card says so and its
+controls are dimmed. Update it (Part 4).
 
 ### Audio and bandwidth
 
@@ -317,13 +355,56 @@ session, and the radio sees an ordinary client.
 
 ### Other clients
 
-The container relays the standard SmartSDR protocol, so other clients that
-can **connect by IP** from a computer running Tailscale also work through
-it. SmartSDR for Windows has been used this way. SmartSDR for Mac connects
-from container version 0.5.4: set it to **Fixed IP** with the radio's
-tailnet IPv4 address (the `100.x.y.z` one, not the `fd7a:` IPv6 one). With an earlier version it lists the radio at its LAN
-address and can't connect. A device that can't run Tailscale itself can't
-reach the tailnet.
+The container relays the standard SmartSDR protocol, so other clients on a
+computer running Tailscale also work through it:
+
+- **SmartSDR for Mac** lists the radio from its announcement, and can also
+  connect by IP: set it to **Fixed IP** with the radio's tailnet IPv4
+  address (the `100.x.y.z` one, not the `fd7a:` IPv6 one).
+- **SmartSDR for Windows** lists the radio from its announcement. Only one
+  program on a computer receives each announcement, so SmartSDR, DAX and CAT
+  can't all see the radio at once unless a discovery helper runs on that
+  computer. With the helper running, SmartSDR, DAX and CAT all work over the
+  tailnet, and AetherSDR on the same computer lists the radio too.
+
+A device that can't run Tailscale itself can't reach the tailnet.
+
+### The discovery helper
+
+SmartSDR for Windows lists the radio without help when it is the only Smart
+program running. When SmartSDR DAX or SmartSDR CAT runs as well, only one of
+them gets each announcement. The discovery helper receives the announcement
+from the radio and broadcasts it on the computer, where every program gets it.
+
+1. Download `discovery-helper-<version>.zip` from the AetherSDR GitHub
+   release tagged `flex-tailnet-shim-v<version>`, the same release as the
+   container, and unzip it anywhere.
+2. Install Python 3.8 or newer from [python.org](https://www.python.org/downloads/).
+   Not the Microsoft Store's Python: under it the helper connects, but DAX and
+   CAT never hear its broadcast.
+3. The helper looks for the radio by its tailnet name, `flex-radio` unless
+   you tell it otherwise. If yours differs, run `setx TAILNET_SHIM <name>` once
+   in a Command Prompt.
+4. Run `run-discovery-helper.bat` and leave its window open. Close the window
+   to stop it.
+
+On macOS or Linux, run `./run-discovery-helper.sh` instead, with
+`export TAILNET_SHIM=<name>` if the name differs.
+
+The helper connects to the radio over the tailnet, on TCP 48996, and only to a
+tailnet address. The radio serves it only when the **Radio announcement**
+setting includes that computer. It refuses the helper when the setting is
+**Off**, when the computer isn't ticked under **Only the devices ticked
+below**, or when the computer is at the station, and the helper's window
+shows why. The helper tries again every 30 seconds, so it starts working by
+itself once the setting includes the computer. While it is served, the
+computer shows **Via its discovery helper** in the card.
+
+On Windows the helper broadcasts on the computer's loopback network, so the
+announcement stays on that computer. On macOS and Linux it broadcasts to
+255.255.255.255, which also goes out on that computer's local network: other
+devices there see the announcement, though they can't reach the tailnet
+address it names.
 
 ## Network Diagnostics
 
@@ -397,6 +478,28 @@ container.
   share the tailnet (family, club members), limit who may reach the radio
   with **Access controls** in the admin console; tag the radio with an auth
   key (Part 4) to write rules for it by tag.
+- **Limiting access also needs a rule for the announcement.** The radio
+  sends its announcement to your devices without being asked, so it needs
+  permission in that direction: UDP 4992 from the radio to your devices.
+  With the radio tagged `tag:radio` and your operators in `group:hams`, add
+  this to **grants**:
+  `{"src": ["tag:radio"], "dst": ["group:hams"], "ip": ["udp:4992"]}`.
+  Without it the radio isn't listed, but **Connect by IP** still works. A
+  discovery helper connects to the radio on TCP 48996, so a rule that lists
+  ports must include it. The default rules (everyone reaches everything)
+  need neither.
+- The announcement carries what the radio broadcasts on its own network:
+  model, serial number, nickname, callsign, firmware version, and the names
+  and LAN addresses of connected clients. It goes only to the devices chosen
+  under **Radio announcement**, and a discovery helper's broadcast on macOS
+  and Linux also reaches that computer's local network (see
+  [The discovery helper](#the-discovery-helper)).
+- The **Radio announcement** card lists your tailnet's devices only on the
+  computer that holds the admin token. The container leaves the device names
+  out of the status it gives any other computer on the station network.
+- A discovery helper connects only to a tailnet address, where the radio
+  checks which device is connecting, and is served only when the
+  announcement setting includes that device.
 - Containers before 0.5.0 kept their own **Who may connect** list. Version
   0.5.0 drops it when it starts, so after updating, set any restriction with
   your tailnet's access rules instead.
@@ -430,6 +533,8 @@ container.
 | Tailnet | UDP | VITA-49 audio, panadapter, waterfall, meters, DAX (per session) |
 | Tailnet | TCP, as the radio opens them | Side channels such as file transfer |
 | Tailnet | TCP 48993 | Network Diagnostics report (`GET /v1/session`) |
+| Tailnet, radio to your devices | UDP 4992 | The radio's announcement, which lists it |
+| Tailnet | TCP 48996 | Discovery helper |
 | Tailnet, via shared routes | UDP 9007 / 9008 / 9010 discovery, device TCP ports | Antenna Genius / PGXL / TGXL |
 | Radio LAN only | TCP 48992 | Setup interface used by **Remote Access** |
 
@@ -454,14 +559,43 @@ about a fifth of one core and around 34 MB of memory.
 - **"Could not join the tailnet"**: the key is used up, expired or
   revoked. Generate a new one. If your tailnet requires device approval,
   approve the radio on **Machines**, or use a **Pre-approved** key.
-- **Disconnect is missing and the sharing settings are grayed out**: this
-  computer doesn't hold the admin token. Use the computer that set the radio
+- **Disconnect is missing, the sharing and announcement settings are grayed
+  out, and the announcement card lists no devices**: this computer doesn't
+  hold the admin token. Use the computer that set the radio
   up, or **Reset** (Part 7).
 - **Can't connect remotely**:
   - check that Tailscale is running on the remote computer, that the radio
     shows as connected on **Machines**, and that your tailnet's access rules
     let you reach it;
   - right after a radio reboot, give the container about 20 seconds.
+- **The radio isn't listed remotely**:
+  - in **Remote Access** at the station, check the **Radio announcement**
+    card: the radio must have been heard, and your device must show
+    **Announced**;
+  - if your access rules limit who may reach the radio, add the rule under
+    [Security](#security);
+  - meanwhile, use **Connect by IP**.
+- **SmartSDR doesn't list the radio while AetherSDR is open on the same
+  computer**: only one program on a computer receives each copy of the
+  announcement. AetherSDR gives it up once it is connected to the radio over
+  the tailnet; until then, start SmartSDR first, or run the
+  [discovery helper](#the-discovery-helper), whose broadcast every program
+  receives.
+- **A computer at the station lists the radio twice**, at its LAN address and
+  at its tailnet address: the container takes a device to be at the station
+  when Tailscale's direct connection to it runs over the radio's network. A
+  computer that is idle on the tailnet, or reached through a relay, has no
+  direct connection, so it counts as away and is sent the announcement. It
+  corrects itself once Tailscale connects directly. Meanwhile, untick it
+  under **Only the devices ticked below**, or pick the LAN entry.
+- **The discovery helper says it was refused**: its window gives the reason.
+  - **The radio's announcement is off** or **this device isn't ticked**:
+    change the **Radio announcement** setting, and the helper connects within
+    30 seconds.
+  - **This device is at the station**: the computer is on the radio's own
+    network and already hears the radio's broadcast, so it needs no helper.
+  - **Not a tailnet address**: `TAILNET_SHIM` or `--shim` names something
+    outside the tailnet. Use the radio's tailnet name.
 - **Spectrum or audio stutters**:
   - check **Network Diagnostics → Remote Link** for a relayed path;
   - keep Opus on, and see [Low Bandwidth Connections](./low-bandwidth-connections.md).

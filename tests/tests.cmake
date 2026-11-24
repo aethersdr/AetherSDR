@@ -1979,6 +1979,14 @@ target_include_directories(hl2_rxdsp_agc_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_agc_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_agc_test COMMAND hl2_rxdsp_agc_test)
 
+# The multi-slice speaker mix keeps one slice bit-identical and stops two
+# AGC-levelled slices passing full scale at high AGC ceilings: real Hl2RxDsp
+# chains into Hl2Backend::mixReceiverAudio(), offline, socket-free.
+add_executable(hl2_rx_mix_headroom_test tests/hl2_rx_mix_headroom_test.cpp)
+target_include_directories(hl2_rx_mix_headroom_test PRIVATE src)
+target_link_libraries(hl2_rx_mix_headroom_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rx_mix_headroom_test COMMAND hl2_rx_mix_headroom_test)
+
 add_executable(hl2_rxdsp_notch_audio_test tests/hl2_rxdsp_notch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_notch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_notch_audio_test PRIVATE aethercore Qt6::Core)
@@ -1990,6 +1998,13 @@ add_executable(hl2_rxdsp_channel_nr_anf_test tests/hl2_rxdsp_channel_nr_anf_test
 target_include_directories(hl2_rxdsp_channel_nr_anf_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_channel_nr_anf_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_channel_nr_anf_test COMMAND hl2_rxdsp_channel_nr_anf_test)
+
+# The HL2 receive panel is mono (L == R) in every mode, including AM/SAM under
+# ANR or ANF, and stays so across a mode change and a rebuild.
+add_executable(hl2_rxdsp_panel_mono_test tests/hl2_rxdsp_panel_mono_test.cpp)
+target_include_directories(hl2_rxdsp_panel_mono_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_panel_mono_test COMMAND hl2_rxdsp_panel_mono_test)
 
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
@@ -7064,6 +7079,17 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME automation_probe_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
+    # Tailnet shim discovery helper: relay framing over a socket pair, and a
+    # loopback broadcast. No shim or radio. Sockets, all on ephemeral ports
+    # and none reaching beyond this machine: a UDP 127.0.0.1 listener; TCP
+    # 127.0.0.1 listeners, one in a subprocess standing in for the shim's
+    # feed (a hello and its answer, no radio protocol); on Windows only, two
+    # UDP 0.0.0.0 listeners sharing one port (SO_REUSEADDR) for a
+    # 127.255.255.255 broadcast. A failed bind raises at once and each read
+    # has a timeout (2 s; 10 s for the subprocess), so it fails fast.
+    add_test(NAME tailnet_discovery_helper
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/test_discovery_helper.py)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
@@ -9189,6 +9215,17 @@ set_target_properties(radiocert_unmeasured_test PROPERTIES AUTOMOC ON)
 add_test(NAME radiocert_unmeasured_test COMMAND radiocert_unmeasured_test)
 set_tests_properties(radiocert_unmeasured_test PROPERTIES TIMEOUT 90)
 
+# The saved PC mic gain never attenuates a host-modulating radio and comes back
+# on a family that uses it. Socket-free, never keys; radiocert's two gain stages
+# spin for a few seconds.
+add_executable(pc_mic_gain_host_modulation_test tests/pc_mic_gain_host_modulation_test.cpp)
+target_include_directories(pc_mic_gain_host_modulation_test PRIVATE src tests)
+target_compile_definitions(pc_mic_gain_host_modulation_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pc_mic_gain_host_modulation_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pc_mic_gain_host_modulation_test COMMAND pc_mic_gain_host_modulation_test)
+set_tests_properties(pc_mic_gain_host_modulation_test PROPERTIES TIMEOUT 90)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -10829,6 +10866,19 @@ add_executable(hl2_auto_gain_policy_test
 )
 target_include_directories(hl2_auto_gain_policy_test PRIVATE src)
 add_test(NAME hl2_auto_gain_policy_test COMMAND hl2_auto_gain_policy_test)
+# The same law fed two recorded on-air legs (tests/Hl2AutoGainReplayD168.h).
+# MetisProtocol.cpp for Ep4Stats::peakDbfs(); no Qt, no socket.
+add_executable(hl2_auto_gain_replay_test
+    tests/hl2_auto_gain_replay_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_auto_gain_replay_test PRIVATE src tests)
+add_test(NAME hl2_auto_gain_replay_test COMMAND hl2_auto_gain_replay_test)
+# The +48 dB legs of a second evening (tests/Hl2AutoGainReplayD245.h).
+add_executable(hl2_auto_gain_replay_d245_test
+    tests/hl2_auto_gain_replay_d245_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_auto_gain_replay_d245_test PRIVATE src tests)
+add_test(NAME hl2_auto_gain_replay_d245_test COMMAND hl2_auto_gain_replay_d245_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
