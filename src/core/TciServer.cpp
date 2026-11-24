@@ -2339,24 +2339,73 @@ void TciServer::reapCreatedVfoBSlice(int sliceId)
         && m_model->panadapter(created.pan->panId()) == created.pan
         && m_model->sliceOwnedByUs(sliceId)) {
         const QString panId = created.pan->panId();
-        const bool keyedRefusal = m_model->keyedTxPanCloseRefused(panId);
-        if (!m_model->removePanadapter(panId) && keyedRefusal) {
-            // Refused only because it is the TX pan of a keyed radio: kept,
-            // and reaped again when transmit drops (retryOwedVfoBPanReaps).
-            m_vfoBPanReapsOwed.insert(sliceId);
+        // Asked before the close, not inferred from its result: the model
+        // would refuse it with an operator Notice, and this close is TCI's own.
+        if (m_model->keyedTxPanCloseRefused(panId)) {
+            oweVfoBPanReap(sliceId, -1, std::nullopt);
             return;
         }
+        m_model->removePanadapter(panId);
     }
     m_createdVfoBPans.remove(sliceId);
     m_vfoBPanReapsOwed.remove(sliceId);
 }
 
+bool TciServer::tciTransmitKeyed() const
+{
+    return m_model && (m_model->isRadioTransmitting() || m_model->transmitModel().isTransmitting()
+                       || m_model->transmitModel().isTuning());
+}
+
+void TciServer::oweVfoBPanReap(int createdSliceId, int rxSliceId, std::optional<QString> confirmation)
+{
+    auto it = m_vfoBPanReapsOwed.find(createdSliceId);
+    if (it != m_vfoBPanReapsOwed.end() && rxSliceId < 0) {
+        return;   // already owed with its TX move; the reap is part of it
+    }
+    OwedVfoBReap owed;
+    owed.rxSliceId = rxSliceId;
+    owed.rx = (m_model && rxSliceId >= 0) ? m_model->slice(rxSliceId) : nullptr;
+    owed.confirmation = std::move(confirmation);
+    m_vfoBPanReapsOwed.insert(createdSliceId, owed);
+}
+
 void TciServer::retryOwedVfoBPanReaps()
 {
-    const QList<int> owed = m_vfoBPanReapsOwed.values();
-    m_vfoBPanReapsOwed.clear();
-    for (const int sliceId : owed) {
-        reapCreatedVfoBSlice(sliceId);
+    // Runs a turn after the unkey edge: a disconnect's own transmit-false edge
+    // has cleared the owed set by then, and a radio still keyed keeps it.
+    if (!m_model || !m_model->isConnected() || tciTransmitKeyed()) {
+        return;
+    }
+    const QHash<int, OwedVfoBReap> owed = std::exchange(m_vfoBPanReapsOwed, {});
+    QPointer<TciServer> self(this);
+    for (auto it = owed.cbegin(); it != owed.cend(); ++it) {
+        const int createdId = it.key();
+        const OwedVfoBReap entry = it.value();
+        // Bound again by a live route during the over: it is in use, not owed.
+        if (m_routingState.rxSliceId() == createdId || m_routingState.txSliceId() == createdId) {
+            continue;
+        }
+        if (entry.rxSliceId < 0) {
+            reapCreatedVfoBSlice(createdId);
+            continue;
+        }
+        if (!entry.rx || m_model->slice(entry.rxSliceId) != entry.rx) {
+            continue;   // TX has nowhere to go back to: leave the pan, as a failed teardown always has
+        }
+        promoteTxSliceAndContinue(entry.rxSliceId, [self, createdId, entry](bool selected) {
+            if (!self) {
+                return;
+            }
+            if (selected) {
+                self->reapCreatedVfoBSlice(createdId);
+                if (entry.confirmation) {
+                    self->broadcast(*entry.confirmation);
+                }
+            } else if (self->tciTransmitKeyed()) {
+                self->oweVfoBPanReap(createdId, entry.rxSliceId, entry.confirmation);
+            }
+        });
     }
 }
 
@@ -2567,9 +2616,10 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
 
     QPointer<TciServer> self(this);
     const quint64 transitionGeneration = beginRouteTransition();
+    const int rxSliceId = rxSlice->sliceId();
     promoteTxSliceAndContinue(
-        rxSlice->sliceId(),
-        [self, confirmation, createdSliceId, transitionGeneration](bool selected) {
+        rxSliceId,
+        [self, confirmation, createdSliceId, rxSliceId, transitionGeneration](bool selected) {
             if (!self) {
                 return;
             }
@@ -2580,6 +2630,11 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
                 }
                 self->m_routingState.clearTciRoute();
                 self->broadcast(confirmation);
+            } else if (createdSliceId >= 0 && self->tciTransmitKeyed()) {
+                // TX can't move back while keyed (#7553): the route ends now,
+                // and TX, the reap and the confirmation follow on the unkey edge.
+                self->m_routingState.clearTciRoute();
+                self->oweVfoBPanReap(createdSliceId, rxSliceId, confirmation);
             }
             self->finishRouteTransition(transitionGeneration);
         });
@@ -5595,7 +5650,7 @@ void TciServer::broadcastTuneState()
 void TciServer::onRadioTransmittingChanged(bool transmitting)
 {
     if (!transmitting && !m_vfoBPanReapsOwed.isEmpty()) {
-        retryOwedVfoBPanReaps();
+        QTimer::singleShot(0, this, &TciServer::retryOwedVfoBPanReaps);
     }
     const bool changed = transmitting != m_lastRadioTx;
     m_lastRadioTx = transmitting;
@@ -5759,11 +5814,17 @@ void TciServer::teardownTciRoute()
         return;
     }
     QPointer<TciServer> self(this);
-    promoteTxSliceAndContinue(rxSliceId, [self, txSliceId, removeCreated, originalTx, session](bool selected) {
-        if (self && selected && removeCreated && self->m_model && originalTx
-            && self->m_model->controlSessionCurrent(session)
-            && self->m_model->slice(txSliceId) == originalTx) {
+    promoteTxSliceAndContinue(rxSliceId, [self, rxSliceId, txSliceId, removeCreated, originalTx, session](bool selected) {
+        if (!self || !removeCreated || !self->m_model || !originalTx
+            || !self->m_model->controlSessionCurrent(session)
+            || self->m_model->slice(txSliceId) != originalTx) {
+            return;
+        }
+        if (selected) {
             self->reapCreatedVfoBSlice(txSliceId);
+        } else if (self->tciTransmitKeyed()) {
+            // TX can't move back while keyed (#7553): finish on the unkey edge.
+            self->oweVfoBPanReap(txSliceId, rxSliceId, std::nullopt);
         }
     });
 }
