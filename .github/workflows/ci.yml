@@ -33,8 +33,8 @@ on:
 # Auto-cancel superseded runs when a newer commit lands on the same PR, so a
 # rapid push stream doesn't stack full runs. PR runs share a stable per-PR
 # group (the older run is cancelled); main runs append the unique run_id so
-# each is its own group — main stays fully parallel and never queues or
-# cancels, leaving the post-merge push:main guard exactly as it was.
+# each is its own group. Windows and macOS runs on main do not cancel
+# one another, and Full Suite handles post-merge Linux validation.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -250,7 +250,7 @@ jobs:
   #                         script + version
   #   * MSVC object files — sccache over a LOCAL dir, persisted by actions/cache
   #   All of the above restore on every run and save only from main; the
-  #   reasoning is on the Linux job's DeepFilterNet3 step.
+  #   rationale is in "Compiler-cache strategy" below.
   #
   # sccache used to run on the GitHub Actions cache backend
   # (SCCACHE_GHA_ENABLED), which stores each object as its own cache entry
@@ -729,9 +729,8 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "cross_needle_meter_test" --no-tests=error --output-on-failure
 
-      # Dependency caches: saved LAST and only from a green main run — see the
-      # Linux job's Save DeepFilterNet3 step for why the save is not placed
-      # next to the setup step.
+      # Save dependencies after validation on main. See "Compiler-cache
+      # strategy" below.
       - name: Save Qt
         if: github.ref == 'refs/heads/main' && success() && steps.cache-qt-win.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -764,8 +763,7 @@ jobs:
           sccache --show-stats
           sccache --stop-server
 
-      # Save LAST, and only from a green main build — see full-suite.yml's
-      # equivalent step and "Compiler-cache strategy" at the bottom of the file.
+      # Save on a green main run after stopping the sccache server.
       - name: Save sccache objects
         if: github.ref == 'refs/heads/main' && success()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -810,7 +808,7 @@ jobs:
       # the same). Keyed on everything that changes its contents — the Qt
       # version, the module set, and the aqt version that resolved them — so
       # the entry is written once and then just restored. Saved from main only;
-      # see the Linux job's DeepFilterNet3 step for why.
+      # see "Compiler-cache strategy" below.
       - name: Restore Qt
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-qt-mac
@@ -1066,9 +1064,8 @@ jobs:
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
 
       # Builds aether_non_test_targets plus the two gate tests run below, on
-      # PRs and main alike; same reasoning as the Linux job's Build step. A
-      # gate test added to a ctest -R step here must also join this --target
-      # list: its PR otherwise fails at ctest with "Could not find executable".
+      # PRs and main alike. Each ctest -R selection also needs its executable
+      # in the target list so CTest can find it.
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu) --target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test
 
@@ -1109,11 +1106,9 @@ jobs:
             xcrun -sdk macosx metallib - -o "$RUNNER_TEMP/ggml-metal-intel-dmg.metallib"
           ls -l "$RUNNER_TEMP/ggml-metal-intel-dmg.metallib"
 
-      # Dependency caches: saved LAST and only from a green main run — see the
-      # Linux job's Save DeepFilterNet3 step for why the save is not placed
-      # next to the setup step. The ccache-action above saves from its own
-      # post-job hook (with the KNOWN GAP its comment describes); these three
-      # are ordinary steps and do get the `success()` half.
+      # Save dependencies after validation on main. See "Compiler-cache
+      # strategy" below. These steps check `success()`; the ccache-action
+      # above saves from its own post-job hook as documented at setup.
       #
       # qtkeychain: macos-dmg.yml restores this same key on a tag ref and
       # cannot read a PR's copy anyway; the entry it normally finds is the one
@@ -1205,13 +1200,20 @@ jobs:
 # the "ccache stats" / "sccache stats" steps already print the hit rate and that
 # is the number to look at before spending a job on it.
 #
+# DEPENDENCY CACHES
+# Qt, FFTW, DeepFilterNet and qtkeychain use the same main-only write policy.
+# Keep CI's dependency saves after validation so a partial or failed setup
+# cannot fill an immutable key. A PR that changes a dependency key (for example,
+# a Qt version bump) misses on each push until main publishes the new key.
+#
 # IF YOU ARE CHANGING THIS
 #
 # - Keep run_id (or the macOS action's append-timestamp) in the SAVE key.
 #   actions/cache entries are immutable, so a stable key makes every save after
 #   the first a silent no-op and freezes the cache at its first-ever contents.
-# - Keep the save steps last, after the stats steps, and after
-#   `sccache --stop-server` on Windows — the server holds cache files open.
+# - On Windows, save sccache after the stats step and `sccache --stop-server`
+#   because the server holds cache files open. Full Suite saves Linux ccache
+#   immediately after Build so a later CTest timeout leaves a warm cache.
 # - Do not add an exact-match key to the RESTORE steps. The prefix fallback is
 #   the mechanism; an exact key that never matches just adds a lookup.
 # - SUPERSEDED main entries are swept by .github/workflows/cache-cleanup.yml.

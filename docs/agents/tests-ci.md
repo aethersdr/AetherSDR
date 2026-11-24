@@ -101,10 +101,10 @@ commit's Full Suite run: do not add a concurrency group that cancels or
 replaces older commits. Windows/macOS main validation remains in `ci.yml`.
 
 Full Suite publishes `ccache-linux-full-<run_id>` and the Linux DeepFilterNet
-cache only after a successful complete build on a main push. Saves happen at
-the end of the job, even when CTest failed, so test regressions do not freeze
-the compiler cache and cleanup can follow publication promptly. The final
-failure step still makes that test verdict red. Manual runs are restore-only.
+cache only after a successful build on a main push. The compiler cache save
+runs immediately after Build, so a later CTest timeout preserves a completed
+save. A missing DeepFilterNet cache is saved after reporting if the run is
+still active, including when CTest fails. Manual runs are restore-only.
 `cache-cleanup.yml` watches both CI and Full Suite completions; retain both.
 Both Linux jobs restore the Full Suite cache first and use the retired
 `ccache-linux-build-` prefix as a fallback. Both use a 2000M cache cap.

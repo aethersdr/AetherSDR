@@ -47,20 +47,30 @@ merging. The reasoning:
 
 ## CI from PR to main
 
-![AetherSDR CI flow: PR checks and review lead to a main commit, with one Linux CI/full-suite build and a retained verdict for every commit.](assets/ci-flow-linux-build-once.png)
+```mermaid
+flowchart TD
+    PR["Pull request push"] --> Gate["Linux build, Windows and macOS checks, static checks, applicable docs"]
+    Gate --> Merge["Code owner review and squash merge"]
+    Merge --> CI["CI on main: Windows and macOS"]
+    Merge --> Full["Full Suite on main: one Linux build"]
+    Full --> Cache["Attempt to save the Linux compiler cache"]
+    Cache --> CTest["Run serial CTest and report the commit's verdict"]
+```
 
 A branch push to an open PR starts Linux, Windows and macOS validation plus
 static checks and applicable documentation jobs. A newer push to that PR
 cancels its superseded runs. Build new tests locally: the Linux PR gate builds
-production targets, and the full test suite runs after merge.
+production targets. Windows and macOS run their frozen PR test selections.
+Linux Full Suite runs after merge.
 
 After the squash merge, every main commit gets its own **Full Suite** run:
 configure, build the entire Linux default graph once, then run unfiltered,
 serial CTest. Full Suite is the sole writer of the shared Linux compiler and
-DeepFilterNet caches. Its cache saves run after testing when compilation
-succeeded, even if a test failed; that preserves the warm build cache without
-changing the red test verdict. Failed builds and cancelled/manual runs do not
-publish these caches. Cache cleanup follows Full Suite completion.
+DeepFilterNet caches. On a main push, Full Suite saves the compiler cache
+immediately after a successful build, before CTest starts, so a later test
+timeout preserves a completed save. It saves a missing DeepFilterNet cache
+after reporting when the build succeeded and the run is still active.
+Cache cleanup follows Full Suite completion.
 
 The Linux `build` job in CI is PR-only; it is skipped on main. Windows and
 macOS retain their post-merge CI runs. Full Suite has no supersession

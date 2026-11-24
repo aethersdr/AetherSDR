@@ -125,6 +125,19 @@ jobs:
           df -h /__w
           exit "$rc"
 
+      # Publish compiled objects before CTest can hit the job timeout.
+      # A cache upload failure must leave CTest free to run.
+      - name: Save ccache objects
+        continue-on-error: true
+        if: >-
+          !cancelled() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          # Entries are immutable; the prefix restore selects the newest save.
+          key: ccache-linux-full-${{ github.run_id }}
+
       # A Configure or Build failure skips ctest, and a skipped step's output
       # reads as null, which the report steps' `exit != '0'` treats as equal
       # to 0. So a main that failed to build went red with no tracking issue.
@@ -163,7 +176,7 @@ jobs:
           set -o pipefail
           ec=0
           ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
-          # Defer CTest's verdict until after reporting and cache publication.
+          # Defer CTest's verdict until after reporting and dependency caching.
           # Failure to write the verdict itself must still fail this step.
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
@@ -490,10 +503,8 @@ jobs:
               core.notice(`Opened #${created.data.number}`);
             }
 
-      # Publish at the end so workflow_run cleanup follows the save promptly.
-      # A test failure must not freeze a fully built compiler cache. Preserve
-      # the former CI policy: only a successful complete main-push build writes;
-      # PRs, manual runs, failed builds, and cancellations remain read-only.
+      # Publish a missing dependency cache after reporting, even for a red
+      # test verdict, provided the main-push build succeeded.
       - name: Save DeepFilterNet3
         if: >-
           !cancelled() && github.event_name == 'push' &&
@@ -503,16 +514,6 @@ jobs:
         with:
           path: third_party/deepfilter
           key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
-
-      - name: Save ccache objects
-        if: >-
-          !cancelled() && github.event_name == 'push' &&
-          github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: /ccache
-          # Entries are immutable; the prefix restore selects the newest save.
-          key: ccache-linux-full-${{ github.run_id }}
 
       - name: Fail the job if any test failed
         if: ${{ !cancelled() && steps.ctest.outputs.exit != '0' }}
