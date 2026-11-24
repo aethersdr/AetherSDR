@@ -101,7 +101,7 @@ void testFlexWireTextUnchanged()
     SliceModel s(3);
     FlexBackend backend;
     QStringList sent;
-    backend.setSliceCommandSink([&sent](const QString& cmd) { sent << cmd; });
+    backend.setSliceCommandSinkForTest([&sent](const QString& cmd) { sent << cmd; });
     QObject::connect(&s, &SliceModel::receiveDspRequested, &s,
                      [&](const SliceDspRequest& request) { backend.requestSliceDsp(3, request); });
     QObject::connect(&s, &SliceModel::commandReady, &s,

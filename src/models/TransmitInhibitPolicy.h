@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/backends/RadioCapabilities.h"
 #include "core/backends/flex/CommandParser.h"
 
 #include <QMap>
@@ -7,6 +8,14 @@
 #include <QString>
 
 namespace AetherSDR::TransmitInhibitPolicy {
+
+// Match SmartSDR's MOX keying in DIGU/DIGL. The radio's transmit dax flag
+// chooses the selected DAX TX stream when enabled and the mic input when
+// disabled. Host-modulated and seam-fed radios keep the voice preflight.
+inline bool moxKeysRadioDax(const RadioCapabilities& caps)
+{
+    return caps.hasDaxStreams && !caps.hostModulates && !caps.takesTxAudioOverSeam;
+}
 
 struct SliceTxCommand {
     bool valid{false};

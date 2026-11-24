@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Injected command/reply sinks and recorded status: no radio, peer or RF.
 #include "TestSettingsProfile.h"
 #include "SeamThreadAffinityProbe.h"
@@ -32,7 +33,7 @@ public:
     // sink: TUNE inhibit writes are fenced service writes.
     static void openSession(RadioModel& radio, FlexBackend& backend)
     {
-        radio.wireFlexTransmitServices(&backend);
+        FlexCommandTestAccess::bindSynchronous(radio, backend);
         radio.m_connection->m_state.store(ConnectionState::Connected);
         radio.m_sessionCommands = SessionCommandGuard::create();
         radio.m_sessionWire = radio.m_connection;
@@ -77,11 +78,7 @@ struct Fixture {
         backend = owned.get();
         backend->connected = false;
         backend->setFirmwareVersionProvider([this] { return version; });
-        backend->setCommandSink([this](const QString& command, FlexBackend::CommandReply reply) {
-            wire << command;
-            if (reply) { replies.push_back(std::move(reply)); }
-            return true;
-        });
+
         radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
         TuneOutputControlTestAccess::identity(radio, version);
         TuneOutputControlTestAccess::injectWire(radio, inert, wire);
@@ -92,6 +89,11 @@ struct Fixture {
         radio.slice(0)->applyChanges(delta);
         backend->connected = true;
         TuneOutputControlTestAccess::openSession(radio, *backend);
+        backend->setCommandSinkForTest([this](const QString& command, FlexBackend::CommandReply reply) {
+            wire << command;
+            if (reply) { replies.push_back(std::move(reply)); }
+            return true;
+        });
         band(9, QStringLiteral("20"), QStringLiteral("0"));
         band(5, QStringLiteral("40"), QStringLiteral("1"));
         wire.clear();
@@ -299,17 +301,16 @@ void genericSinkCompatibility()
     RadioModel radio;
     TuneOutputControlTestAccess::injectWire(radio, inert, wire);
     check(!radio.isConnected(), "generic command fixture is disconnected");
-    check(radio.backend()->requestRadioNickname(QStringLiteral("Test")) == ReceiveDispatch::Dispatched,
-          "existing typed generic control dispatch is retained");
+    check(radio.backend()->requestRadioNickname(QStringLiteral("Test")) == ReceiveDispatch::Unsupported,
+          "a disconnected typed control is refused before dispatch");
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-    check(wire == QStringList{QStringLiteral("radio name Test")},
-          "reply-capable generic sink preserves existing disconnected command forwarding");
+    check(wire.isEmpty(), "a disconnected control queues no transport write");
 }
 
 void droppedDispatch()
 {
     Fixture f;
-    f.backend->setCommandSink([](const QString&, FlexBackend::CommandReply) { return false; });
+    f.backend->setCommandSinkForTest([](const QString&, FlexBackend::CommandReply) { return false; });
     f.radio.requestTuneOutputSuppression(9, true);
     const TuneOutputControlState state = f.radio.tuneOutputControl(9);
     check(!state.pending && state.haveValue && !state.suppressed && !state.reason.isEmpty()

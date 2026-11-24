@@ -157,7 +157,9 @@ ReceiveDispatch FlexBackend::requestWaveform(const WaveformRequest& request,
         return ReceiveDispatch::Unsupported;
     }
     const TransferCommandSink sink = m_transferSink;
-    return sink(QStringLiteral("waveform %1 %2").arg(waveformActionVerb(request.action), request.name),
+    const QString verb = request.action == WaveformAction::Unregister
+        ? QStringLiteral("remove") : waveformActionVerb(request.action);
+    return sink(QStringLiteral("waveform %1 %2").arg(verb, request.name),
                 guard, completion)
         ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }

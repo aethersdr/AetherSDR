@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Inject the production command writer and status path; no socket, peer or RF.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -19,8 +20,7 @@ public:
     }
     static void setup(RadioModel& radio, FlexBackend& backend)
     {
-        backend.setSetupCommandSink(radio.setupCommandSink());
-        radio.wireFlexTransmitServices(&backend);
+        FlexCommandTestAccess::bindSynchronous(radio, backend);
     }
     static bool apply(RadioModel& radio) { return radio.applyTuneInhibit(); }
     static void openSession(RadioModel& radio)
@@ -30,7 +30,7 @@ public:
         radio.m_sessionWire = radio.m_connection;
         radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
         if (auto* flex = dynamic_cast<FlexBackend*>(radio.m_backend.get())) {
-            flex->setSetupCommandSink(radio.setupCommandSink());
+            FlexCommandTestAccess::bind(radio, *flex);
         }
     }
     static void restore(RadioModel& radio) { radio.restoreTuneInhibit(); }
@@ -49,14 +49,15 @@ public:
     static void disconnect(RadioModel& radio) { radio.onDisconnected(); }
     static void reopen(RadioModel& radio) { radio.m_txSessionClosing = false; }
     static void closing(RadioModel& radio, bool value) { radio.m_txSessionClosing = value; }
-    static void expiring(RadioModel& radio, bool value) { radio.m_expiringPendingCallbacks = value; }
-    static QList<RadioModel::ResponseCallback> callbacks(const RadioModel& radio)
+    static void expiring(RadioModel& radio, bool value) { if (value) { FlexCommandTestAccess::session(radio).invalidate(); }
+        else { FlexCommandTestAccess::session(radio).begin(2); } }
+    static QList<FlexCommandTestAccess::Reply> callbacks(const RadioModel& radio)
     {
-        return radio.m_pendingCallbacks.values();
+        return FlexCommandTestAccess::replies(const_cast<RadioModel&>(radio));
     }
     static void replyAll(RadioModel& radio, int code)
     {
-        const auto callbacks = std::exchange(radio.m_pendingCallbacks, {});
+        const auto callbacks = FlexCommandTestAccess::replies(radio, true);
         for (const auto& callback : callbacks) { callback(code, {}); }
     }
     static void onWrite(RadioConnection& connection, std::function<void(const QString&)> callback)
@@ -390,7 +391,7 @@ void reentrantStartDuringRestore()
     f.band(9, "20", false, false, false, false);
     f.wire.clear();
     bool once = false;
-    f.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command&) { f.wire << command; return true; });
+    f.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) { f.wire << command; return true; });
     TxOperationIntegrationTestAccess::onWrite(f.inert, [&](const QString& command) {
         f.wire << command;
         if (!std::exchange(once, true)) { f.radio.transmitModel().startTune(); }
@@ -414,7 +415,7 @@ void refusalAndClosing()
     f.apply();
     f.wire.clear();
     bool once = false;
-    f.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command&) { f.wire << command; return true; });
+    f.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) { f.wire << command; return true; });
     TxOperationIntegrationTestAccess::onWrite(f.inert, [&](const QString& command) {
         f.wire << command;
         if (!std::exchange(once, true)) { f.radio.transmitModel().atuStart(); }
@@ -509,7 +510,7 @@ void reentrantStartDuringApply()
         preferences(true, true, false, false);
         Fixture f;
         bool once = false;
-        f.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command&) { f.wire << command; return true; });
+        f.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) { f.wire << command; return true; });
         TxOperationIntegrationTestAccess::onWrite(f.inert, [&](const QString& command) {
             f.wire << command;
             if (!std::exchange(once, true)) {
@@ -539,7 +540,7 @@ void admittedProductionPaths()
 {
     preferences(false, true, true, true);
     Fixture f;
-    f.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command& fence) {
+    f.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command& fence) {
         Q_UNUSED(fence);
         f.wire << command;
         return true;
