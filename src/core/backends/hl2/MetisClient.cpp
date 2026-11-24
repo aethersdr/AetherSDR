@@ -1750,10 +1750,13 @@ void MetisClient::scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Oper
 {
     if (target < m_cwFrameSample) {
         // A late key-up is applied at once: the element runs long, never short.
+        // It goes on the wire in the frame being built, and replaces any
+        // release it cut, so the break-in hang counts from that frame (#7570).
         ++m_cwLateKeyUps;
         m_cwKeyDown = false;
         m_cwForceUpSample = -1;
         m_cwOperation = operation;
+        publishCwUpOnAir(m_cwFrameSample);
         return;
     }
     if (!insertCwEdge(CwScheduledEdge{target, false, operation, release, completion})) {
@@ -1762,10 +1765,15 @@ void MetisClient::scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Oper
         logCwFailSafe("scheduled CW edges overflowed; keyed up");
         return;
     }
+    publishCwUpOnAir(target);
+}
+
+void MetisClient::publishCwUpOnAir(std::int64_t sample) noexcept
+{
     // Split like cwSampleAt(), so a long session cannot overflow the product.
     constexpr std::int64_t kNsPerSecond = 1'000'000'000;
     const auto onAir = m_cwAnchor + std::chrono::nanoseconds(
-        (target / kEp2AudioRateHz) * kNsPerSecond + (target % kEp2AudioRateHz) * kNsPerSecond / kEp2AudioRateHz);
+        (sample / kEp2AudioRateHz) * kNsPerSecond + (sample % kEp2AudioRateHz) * kNsPerSecond / kEp2AudioRateHz);
     m_cwUpOnAirTicks.store(std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                onAir.time_since_epoch()).count(),
                            std::memory_order_release);

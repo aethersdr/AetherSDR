@@ -1143,6 +1143,8 @@ private:
     bool insertCwEdge(const CwScheduledEdge& edge);
     void scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Operation& operation, bool release,
                          const TxCoordinator::Completion& completion);
+    // The wire instant of EP2 sample `sample`, published for the break-in hang.
+    void publishCwUpOnAir(std::int64_t sample) noexcept;
     // Unscheduled key-downs still held (a straight key, a TCI keyer hold),
     // each by its original operation and so its producer's intent. The
     // carrier is m_cwKeyDown (the scheduled elements') or any hold. The model
