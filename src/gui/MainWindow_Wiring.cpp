@@ -8168,6 +8168,26 @@ void MainWindow::wireMeters()
             return;
         }
         setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, label, token);
+        // Actionable states: OPERATE, STANDBY, FAULT. TX is interlocked; OFF and
+        // "–" are not in the click cycle. (#7549)
+        const bool actionable = label == QStringLiteral("OPERATE")
+                             || label == QStringLiteral("STANDBY")
+                             || label == QStringLiteral("FAULT");
+        m_kpa500Container->setCursor(actionable ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        // Tooltip shows what a click will do; plain name when not actionable.
+        if (label == QStringLiteral("OPERATE"))
+            m_kpa500Container->setToolTip(QStringLiteral("Elecraft KPA500\nClick to switch to Standby"));
+        else if (label == QStringLiteral("STANDBY"))
+            m_kpa500Container->setToolTip(QStringLiteral("Elecraft KPA500\nClick to switch to Operate"));
+        else if (label == QStringLiteral("FAULT"))
+            m_kpa500Container->setToolTip(QStringLiteral("Elecraft KPA500\nClick to clear fault"));
+        else
+            m_kpa500Container->setToolTip(QStringLiteral("Elecraft KPA500"));
+        // Accessible description: setIndicatorStyle wrote the aetherStateCycle text
+        // for all states; clear it for non-actionable states so AT doesn't announce
+        // "Press to toggle…" when no click is available. (docs/a11y.md)
+        if (!actionable)
+            m_kpa500Container->setAccessibleDescription(QString());
         // Accessibility: state word in the name, not just color (docs/a11y.md).
         m_kpa500Container->setAccessibleName(
             QStringLiteral("KPA500: %1").arg(
