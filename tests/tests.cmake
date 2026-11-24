@@ -612,6 +612,17 @@ target_include_directories(control_remote_pairing_test PRIVATE src)
 target_link_libraries(control_remote_pairing_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME control_remote_pairing_test COMMAND control_remote_pairing_test)
 
+# aetherd's LAN advertisement (aetherd-remote-backend.md §1): the probe format,
+# the reply's contents and size, the rate bound, and the source-address and
+# WireGuard-interface filters, socket-free; then one probe over 127.0.0.1 to a
+# responder bound on an EPHEMERAL port (never the fixed 4996). Skips (77) when
+# it cannot bind.
+add_executable(aetherd_discovery_responder_test tests/aetherd_discovery_responder_test.cpp)
+target_include_directories(aetherd_discovery_responder_test PRIVATE src)
+target_link_libraries(aetherd_discovery_responder_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME aetherd_discovery_responder_test COMMAND aetherd_discovery_responder_test)
+set_tests_properties(aetherd_discovery_responder_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
 # grants observation only; no control or transmit capability may appear.
@@ -1998,6 +2009,13 @@ add_executable(hl2_rxdsp_channel_nr_anf_test tests/hl2_rxdsp_channel_nr_anf_test
 target_include_directories(hl2_rxdsp_channel_nr_anf_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_channel_nr_anf_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_channel_nr_anf_test COMMAND hl2_rxdsp_channel_nr_anf_test)
+
+# The HL2 receive panel is mono (L == R) in every mode, including AM/SAM under
+# ANR or ANF, and stays so across a mode change and a rebuild.
+add_executable(hl2_rxdsp_panel_mono_test tests/hl2_rxdsp_panel_mono_test.cpp)
+target_include_directories(hl2_rxdsp_panel_mono_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_panel_mono_test COMMAND hl2_rxdsp_panel_mono_test)
 
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
@@ -6845,7 +6863,8 @@ target_link_libraries(peripheral_auth_dialog_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 set_target_properties(peripheral_auth_dialog_test PROPERTIES AUTOMOC ON)
 foreach(_case IN ITEMS automatic removal auth-read manual-recovery external-ag
-        discovery availability discovered-recovery interaction)
+        discovery availability discovered-recovery interaction ag-antenna-status
+        ag-antenna-selection-mode ss-antenna-refusal)
     add_test(NAME peripheral_auth_dialog_${_case}_test
         COMMAND peripheral_auth_dialog_test --case=${_case})
     set_tests_properties(peripheral_auth_dialog_${_case}_test PROPERTIES
@@ -10845,6 +10864,19 @@ add_executable(hl2_auto_gain_policy_test
 )
 target_include_directories(hl2_auto_gain_policy_test PRIVATE src)
 add_test(NAME hl2_auto_gain_policy_test COMMAND hl2_auto_gain_policy_test)
+# The same law fed two recorded on-air legs (tests/Hl2AutoGainReplayD168.h).
+# MetisProtocol.cpp for Ep4Stats::peakDbfs(); no Qt, no socket.
+add_executable(hl2_auto_gain_replay_test
+    tests/hl2_auto_gain_replay_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_auto_gain_replay_test PRIVATE src tests)
+add_test(NAME hl2_auto_gain_replay_test COMMAND hl2_auto_gain_replay_test)
+# The +48 dB legs of a second evening (tests/Hl2AutoGainReplayD245.h).
+add_executable(hl2_auto_gain_replay_d245_test
+    tests/hl2_auto_gain_replay_d245_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_auto_gain_replay_d245_test PRIVATE src tests)
+add_test(NAME hl2_auto_gain_replay_d245_test COMMAND hl2_auto_gain_replay_d245_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -11298,6 +11330,8 @@ target_include_directories(auto_agc_threshold_gui_test PRIVATE src tests)
 target_link_libraries(auto_agc_threshold_gui_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test
 )
+target_compile_definitions(auto_agc_threshold_gui_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME auto_agc_threshold_gui_test
          COMMAND auto_agc_threshold_gui_test)
 set_tests_properties(auto_agc_threshold_gui_test PROPERTIES

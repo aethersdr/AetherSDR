@@ -110,6 +110,8 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 
 > **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up. FM plays about 8 dB quieter again (a full-deviation 1 kHz tone, 1.08 → 0.43 of full scale); raise the slice's AF gain or your listening level if it is too quiet.
 
+> **Receive audio is mono (L = R) in every mode.** Anything that mixes left and right to one channel (TCI mono, the decoders, Linux DAX, RADE) now gets more level than before: about 3 dB in SSB, CW and data, and about 6 dB in DSB and in AM or SAM with the noise reduction or auto-notch on; if you set an application's input level (for example WSJT-X) against the old level, check it once.
+
 ### Receive filters
 
 Choose filter presets in [RX Controls](./rx-controls.md) or the
@@ -139,9 +141,12 @@ The panadapter SQL line and **Auto** squelch use the HL2's own scale.
 ### AGC and APF
 
 - AGC mode and threshold are remembered across restarts.
+- **AGC on:** the **AGC-T** slider sets the most gain the AGC may apply: 0.6 dB per step up to 65 (39 dB, the default), then faster, to 90 dB at 100. The higher it is, the louder weak signals come up, and with them the band noise between signals.
 - **AGC off:** the **AGC-T** slider sets a fixed gain, 4–64 dB (10 dB by default). The AGC-off level is remembered per receiver.
 - Selecting **DIGU** or **DIGL** turns AGC off on that receiver. Raise the AGC-off level if data audio is too quiet. A band-stack bookmark recalled into DIGU or DIGL also keeps AGC off, whatever AGC mode it stored.
 - **APF**, the CW audio peaking filter, is centered on your CW pitch. Its toggle and level are in the P/CW pane.
+
+> **Upgrading from an older version:** **AGC-T** above 65 gives more gain than before (at 100, 90 dB instead of 60 dB). A threshold or band-stack bookmark saved above 65 comes back louder; lower **AGC-T** if the noise between signals is too loud.
 
 ### RIT and XIT
 

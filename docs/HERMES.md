@@ -734,8 +734,8 @@ convergence must be verified on real hardware through the automation bridge.
   this host — so the operator's mode and threshold live in the client's
   operating-state document or nowhere. They ride the RFC #4603 `Agc` domain as
   typed universal fields (`RestoredRadioState::agcMode` /
-  `agcThreshold` — 0..100 operator units, NOT dB; the backend multiplies by
-  `kAgcCeilingDbPerUnit` to reach real dB), captured on every `setSliceAgc` and
+  `agcThreshold` — 0..100 operator units, NOT dB; the backend maps them to
+  real dB with `Hl2DbReference::agcCeilingDbAtReference()`), captured on every `setSliceAgc` and
   seeded back onto **every** receiver by `Hl2Backend::seedReceiverAgc()`.
 - **"Flat" means ONE remembered pair, not one AGC.** The runtime control is
   per-receiver — `setSliceAgc(sliceId, …)` resolves `ddcForSlice()` and writes a

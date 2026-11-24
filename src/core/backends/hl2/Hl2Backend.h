@@ -233,7 +233,8 @@ public:
     //             needs a measured wideband headroom reading; arms the bandscope gate.
     // "ramp"      3-6 dB attack, 1 dB release on a dwell.
     // "probe"     probingReleaseConfig(): 6 dB both ways; failed probes double the
-    //             interval. What "bandscope" degenerates to without the measurement.
+    //             interval. "bandscope" without the measurement, and a release is
+    //             believed after 3 s clean rather than 30 s.
     // "binary"    binaryHighLowConfig(): two-state per-band switch.
     // Same state machine, different numbers; selecting a mode installs its floor.
     // "default" names the law a backend starts with. A chosen law and floor are
@@ -1394,8 +1395,8 @@ private:
     double m_alcTargetPeak = 0.85;
 
     // The AGC threshold -> WDSP gain ceiling map is
-    // Hl2DbReference::kAgcCeilingDbPerUnit via m_dbRef.agcCeilingDb(), so the
-    // ceiling is referred to LNA gain like the displayed dBm.
+    // Hl2DbReference::agcCeilingDbAtReference() via m_dbRef.agcCeilingDb(), so
+    // the ceiling is referred to LNA gain like the displayed dBm.
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
