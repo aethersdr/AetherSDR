@@ -1,12 +1,23 @@
 #include "core/hfgateway/ModemHostClient.h"
 
+#include <QPointer>
 #include <QTcpSocket>
 
 namespace AetherSDR::ModemHost {
 
+namespace {
+constexpr int kConnectTimeoutMs = 5000;
+constexpr int kCommandReadBufferBytes = 16 * kMaxLineBytes;
+}  // namespace
+
 Client::Client(QObject* parent)
     : QObject(parent)
+    , m_connectTimeout(this)
 {
+    m_connectTimeout.setSingleShot(true);
+    connect(&m_connectTimeout, &QTimer::timeout, this, [this] {
+        onSocketLost(QStringLiteral("timed out connecting to the modem port pair"));
+    });
 }
 
 Client::~Client()
@@ -22,13 +33,16 @@ void Client::connectToModem(const QString& host, quint16 commandPort, quint16 da
 
     m_cmd = new QTcpSocket(this);
     m_data = new QTcpSocket(this);
+    m_cmd->setReadBufferSize(kCommandReadBufferBytes);
+    m_data->setReadBufferSize(kMaxDataBacklogBytes);
+    const QPointer<Client> self(this);
+    QTcpSocket* const command = m_cmd;
+    QTcpSocket* const data = m_data;
     connect(m_cmd, &QTcpSocket::readyRead, this, &Client::onCommandReadyRead);
-    connect(m_data, &QTcpSocket::readyRead, this, [this]() {
-        if (m_data) {
-            const QByteArray bytes = m_data->readAll();
-            if (!bytes.isEmpty()) {
-                emit dataReceived(bytes);
-            }
+    connect(data, &QTcpSocket::readyRead, this, [this, data] {
+        const QByteArray bytes = data->readAll();
+        if (!bytes.isEmpty()) {
+            emit dataReceived(bytes);
         }
     });
     for (QTcpSocket* s : {m_cmd, m_data}) {
@@ -39,8 +53,14 @@ void Client::connectToModem(const QString& host, quint16 commandPort, quint16 da
         });
     }
     setState(State::Connecting);
-    m_cmd->connectToHost(host, commandPort);
-    m_data->connectToHost(host, dataPort);
+    if (!self || m_cmd != command) {
+        return;
+    }
+    m_connectTimeout.start(kConnectTimeoutMs);
+    command->connectToHost(host, commandPort);
+    if (self && m_cmd == command) {
+        data->connectToHost(host, dataPort);
+    }
 }
 
 void Client::disconnectFromModem()
@@ -60,13 +80,19 @@ bool Client::send(Request request, const QStringList& callsigns)
         if (Session::isStop(request) && m_session.refusal() == Refusal::QueueFull) {
             // The modem has left kHardMaxOutstanding commands unanswered and
             // can't even be told to stop: fail closed.
-            emit problem(QStringLiteral("modem is not answering commands; disconnected"));
-            disconnectFromModem();
+            onSocketLost(QStringLiteral("modem is not answering commands; disconnected"));
         }
         return false;
     }
-    m_cmd->write(bytes);
-    return true;
+    const QPointer<Client> self(this);
+    QTcpSocket* const command = m_cmd;
+    if (command->write(bytes) != bytes.size()) {
+        if (self && m_cmd == command) {
+            onSocketLost(QStringLiteral("could not send the modem command; disconnected"));
+        }
+        return false;
+    }
+    return self && m_cmd == command;
 }
 
 bool Client::writeData(const QByteArray& bytes)
@@ -93,6 +119,7 @@ void Client::onSocketConnected()
 {
     if (m_cmd && m_data && m_cmd->state() == QAbstractSocket::ConnectedState
         && m_data->state() == QAbstractSocket::ConnectedState) {
+        m_connectTimeout.stop();
         setState(State::Connected);
     }
 }
@@ -104,8 +131,11 @@ void Client::onSocketLost(const QString& why)
     }
     // Either socket going away ends the connection: a modem reachable on one
     // port but not the other is not usable, and must fail closed.
-    emit problem(why);
+    const QPointer<Client> self(this);
     disconnectFromModem();
+    if (self && m_state == State::Disconnected) {
+        emit problem(why);
+    }
 }
 
 void Client::onCommandReadyRead()
@@ -113,12 +143,13 @@ void Client::onCommandReadyRead()
     if (!m_cmd) {
         return;
     }
-    const QList<Line> lines = m_splitter.feed(m_cmd->readAll());
+    const QPointer<Client> self(this);
+    QTcpSocket* const command = m_cmd;
+    const QList<Line> lines = m_splitter.feed(command->readAll());
     for (const Line& line : lines) {
         if (line.rejected) {
             if (m_splitter.rejectedLines() >= kMaxRejectedLines) {
-                emit problem(QStringLiteral("too many malformed lines from the modem; disconnected"));
-                disconnectFromModem();
+                onSocketLost(QStringLiteral("too many malformed lines from the modem; disconnected"));
                 return;
             }
             continue;
@@ -135,14 +166,15 @@ void Client::onCommandReadyRead()
             emit problem(QStringLiteral("reply with no command outstanding: %1").arg(ev.notification.raw));
             break;
         }
-        if (m_state == State::Disconnected) {
-            return;  // a slot disconnected us
+        if (!self || m_cmd != command) {
+            return;  // a slot may close or replace this connection
         }
     }
 }
 
 void Client::closeSockets()
 {
+    m_connectTimeout.stop();
     for (QTcpSocket** p : {&m_cmd, &m_data}) {
         if (QTcpSocket* s = *p) {
             *p = nullptr;

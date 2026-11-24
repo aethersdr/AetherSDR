@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 #include <QtGlobal>
 
 class QTcpSocket;
@@ -42,14 +43,16 @@ public:
     explicit Client(QObject* parent = nullptr);
     ~Client() override;
 
-    // Opens both sockets. Hosts other than loopback are allowed but the caller
-    // is expected to have warned: a remote modem that reports PTT ON would
-    // ask this station to key.
+    // Opens both sockets with a fresh session and no transmit grant. The
+    // caller must verify the external modem is idle and set up for RX only.
     void connectToModem(const QString& host, quint16 commandPort, quint16 dataPort);
     void disconnectFromModem();
     State state() const { return m_state; }
 
-    void setTransmitPermitted(bool permitted) { m_session.setTransmitPermitted(permitted); }
+    void setTransmitPermitted(bool permitted)
+    {
+        m_session.setTransmitPermitted(permitted && m_state == State::Connected);
+    }
     bool transmitPermitted() const { return m_session.transmitPermitted(); }
 
     // False, and nothing sent, when the session refuses (see Session::refusal())
@@ -77,6 +80,7 @@ private:
     void onSocketLost(const QString& why);
     void closeSockets();
 
+    QTimer m_connectTimeout;
     QTcpSocket* m_cmd = nullptr;
     QTcpSocket* m_data = nullptr;
     LineSplitter m_splitter;

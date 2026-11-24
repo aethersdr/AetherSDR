@@ -122,6 +122,15 @@ int main()
         report("label capped", withEngines({e}).engines.value(0).label.size() == 64);
     }
 
+    {
+        QJsonObject e = engine("e");
+        e.insert("commandPort", 1e300);
+        e.insert("dataPort", -1e300);
+        const EngineConfig r = withEngines({e}).engines.value(0);
+        report("huge ports fall back", r.commandPort == 8300 && r.dataPort == 8301);
+        report("terminal line break in an engine id is rejected", !isValidEngineId("e\n"));
+    }
+
     // ── Back-end validation ─────────────────────────────────────────────────
     {
         QJsonObject b;

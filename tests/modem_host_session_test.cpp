@@ -29,12 +29,16 @@ int main()
         report("refused request is not queued", s.outstanding() == 0);
         report("data refused without permission", !s.mayWriteData());
         report("LISTEN OFF always allowed", s.request(Request::ListenOff) == "LISTEN OFF\r");
-        report("DISCONNECT always allowed", s.request(Request::Disconnect) == "DISCONNECT\r");
-        report("ABORT always allowed", s.request(Request::Abort) == "ABORT\r");
+        report("DISCONNECT requires permission", s.request(Request::Disconnect).isEmpty()
+                                                   && s.refusal() == Refusal::NotPermitted);
+        report("ABORT requires permission", s.request(Request::Abort).isEmpty()
+                                              && s.refusal() == Refusal::NotPermitted);
         report("MYCALL allowed", s.request(Request::MyCall, {"N0CALL"}) == "MYCALL N0CALL\r");
         report("VERSION allowed", s.request(Request::Version) == "VERSION\r");
         s.setTransmitPermitted(true);
         report("LISTEN ON allowed with permission", s.request(Request::ListenOn) == "LISTEN ON\r");
+        report("DISCONNECT and ABORT allowed with permission",
+               s.request(Request::Disconnect) == "DISCONNECT\r" && s.request(Request::Abort) == "ABORT\r");
         report("data allowed with permission", s.mayWriteData());
         s.setTransmitPermitted(false);
         report("revoking permission refuses LISTEN ON again", s.request(Request::ListenOn).isEmpty());
@@ -75,15 +79,19 @@ int main()
         Session s;
         s.request(Request::ListenOff);
         s.request(Request::Version);
-        s.request(Request::Disconnect);
+        s.request(Request::ListenOff);
         s.onLine("OK");
+        report("malformed PTT does not consume VERSION", s.onLine("PTT MAYBE").kind == Session::Event::Kind::Notification
+                                                         && s.outstanding() == 2);
+        report("unknown notification does not consume VERSION",
+               s.onLine("FUTURE NOTICE").kind == Session::Event::Kind::Notification && s.outstanding() == 2);
         const Session::Event v = s.onLine("VARA version 4.9.0 registered");
         report("free-text line answers VERSION", v.kind == Session::Event::Kind::Reply
                                                      && v.request == Request::Version && v.ok
                                                      && v.version == "VARA version 4.9.0 registered");
         const Session::Event m = s.onLine("OK");
         report("the next OK answers the next command, not VERSION", m.kind == Session::Event::Kind::Reply
-                                                                       && m.request == Request::Disconnect
+                                                                       && m.request == Request::ListenOff
                                                                        && s.outstanding() == 0);
     }
     {
@@ -129,6 +137,7 @@ int main()
         report("one more ordinary command is refused", s.request(Request::Version).isEmpty()
                                                            && s.refusal() == Refusal::QueueFull);
         report("ordinary MYCALL refused too", s.request(Request::MyCall, {"N0CALL"}).isEmpty());
+        s.setTransmitPermitted(true);
         report("stop commands still go out past the soft cap", s.request(Request::ListenOff) == "LISTEN OFF\r"
                                                                     && s.request(Request::Disconnect) == "DISCONNECT\r"
                                                                     && s.request(Request::Abort) == "ABORT\r");
@@ -139,6 +148,8 @@ int main()
                                                             && s.refusal() == Refusal::QueueFull);
         s.reset();
         report("reset clears the queue", s.outstanding() == 0);
+        report("reset revokes transmit permission", !s.mayWriteData()
+                   && s.request(Request::ListenOn).isEmpty() && s.refusal() == Refusal::NotPermitted);
         report("after reset requests work", !s.request(Request::ListenOff).isEmpty());
     }
 

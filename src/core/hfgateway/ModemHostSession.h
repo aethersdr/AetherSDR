@@ -20,13 +20,10 @@
 // lines also arrive unsolicited and Data2G answers some of them WRONG; the
 // gateway relies on the unsolicited reports instead.
 //
-// Transmit permission. LISTEN ON lets a modem answer a call, which keys the
-// radio, so it is refused unless the owner has granted permission. Ending
-// things (LISTEN OFF, DISCONNECT, ABORT) and setting MYCALL never need
-// permission, and stop commands are also exempt from the soft reply cap.
-// The session never offers CONNECT, CQFRAME or TUNE at all. Permission starts
-// off and revoking it does not send anything by itself; the owner decides
-// what to send (LISTEN OFF).
+// LISTEN ON, DISCONNECT and ABORT can cause a modem to transmit. They
+// require a grant for this connection. LISTEN OFF and MYCALL never need one.
+// Stop commands can use the reserved reply capacity. Reset clears the grant;
+// revoking it does not send a command.
 
 namespace AetherSDR::ModemHost {
 

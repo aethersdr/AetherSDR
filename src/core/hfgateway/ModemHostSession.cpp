@@ -5,7 +5,8 @@ namespace AetherSDR::ModemHost {
 QByteArray Session::request(Request request, const QStringList& callsigns)
 {
     m_refusal = Refusal::None;
-    if (request == Request::ListenOn && !m_permitted) {
+    if (!m_permitted
+        && (request == Request::ListenOn || request == Request::Disconnect || request == Request::Abort)) {
         m_refusal = Refusal::NotPermitted;
         return {};
     }
@@ -50,14 +51,12 @@ Session::Event Session::onLine(const QString& line)
         return ev;
     }
 
-    // The reply to VERSION is a free-text line whose shape differs by modem:
-    // Data2G sends "VERSION <text>", Mercury sends "VARA version 4.9.0
-    // registered" (docs/hf-gateway-host-interface.md). So while VERSION is
-    // the oldest outstanding command, a VERSION line or any line that isn't
-    // a known notification answers it. Otherwise a VERSION line is
-    // unsolicited.
+    // Data2G returns VERSION <text>. Mercury returns a VARA banner.
+    // An unrelated or malformed notification must not advance the reply FIFO.
+    const bool versionBanner = n.type == NotificationType::Unknown
+        && n.raw.trimmed().startsWith(QLatin1String("VARA "), Qt::CaseInsensitive);
     if (!m_awaiting.empty() && m_awaiting.front() == Request::Version
-        && (n.type == NotificationType::Version || n.type == NotificationType::Unknown)) {
+        && (n.type == NotificationType::Version || versionBanner)) {
         ev.kind = Event::Kind::Reply;
         ev.request = Request::Version;
         ev.ok = true;
@@ -80,6 +79,7 @@ void Session::reset()
 {
     m_awaiting.clear();
     m_refusal = Refusal::None;
+    m_permitted = false;
 }
 
 QString toString(Request request)

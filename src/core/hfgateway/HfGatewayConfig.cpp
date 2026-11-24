@@ -6,6 +6,9 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include <cmath>
+#include <limits>
+
 namespace AetherSDR::HfGateway {
 
 namespace {
@@ -22,6 +25,8 @@ const QString kDataPort = QStringLiteral("dataPort");
 const QString kLoopbackOnly = QStringLiteral("loopbackOnly");
 
 constexpr int kMaxLabelChars = 64;
+constexpr int kMinPort = 1024;
+constexpr int kMaxPort = std::numeric_limits<quint16>::max();
 
 quint16 portOr(const QJsonObject& o, const QString& key, quint16 fallback)
 {
@@ -30,11 +35,10 @@ quint16 portOr(const QJsonObject& o, const QString& key, quint16 fallback)
         return fallback;
     }
     const double d = v.toDouble();
-    const int p = static_cast<int>(d);
-    if (static_cast<double>(p) != d || !isValidPort(p)) {
+    if (!(d >= kMinPort && d <= kMaxPort) || d != std::floor(d)) {
         return fallback;
     }
-    return static_cast<quint16>(p);
+    return static_cast<quint16>(d);
 }
 
 QString cleanLabel(const QString& text)
@@ -73,12 +77,13 @@ Profile profileFromString(const QString& text)
 
 bool isValidPort(int port)
 {
-    return port >= 1024 && port <= 65535;
+    return port >= kMinPort && port <= kMaxPort;
 }
 
 bool isValidEngineId(const QString& id)
 {
-    static const QRegularExpression re(QStringLiteral("^[a-z0-9-]{1,32}$"));
+    static const QRegularExpression re(
+        QRegularExpression::anchoredPattern(QStringLiteral("[a-z0-9-]{1,32}")));
     return re.match(id).hasMatch();
 }
 
@@ -153,7 +158,7 @@ Config fromJson(const QJsonObject& json)
             e.host = host;
         }
         e.commandPort = portOr(o, kCommandPort, e.commandPort);
-        const quint16 defaultData = e.commandPort < 65535 ? static_cast<quint16>(e.commandPort + 1) : e.dataPort;
+        const quint16 defaultData = e.commandPort < kMaxPort ? static_cast<quint16>(e.commandPort + 1) : e.dataPort;
         e.dataPort = portOr(o, kDataPort, defaultData);
         if (e.dataPort == e.commandPort) {
             e.dataPort = defaultData;

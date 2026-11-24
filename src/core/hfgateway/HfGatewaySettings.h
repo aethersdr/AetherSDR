@@ -15,7 +15,8 @@ public:
     static constexpr const char* kRootKey = "HfGateway";
 
     static Config load();
-    static void save(const Config& config);
+    // False when the store cannot commit the document or its schema is newer.
+    static bool save(const Config& config);
 };
 
 }  // namespace AetherSDR::HfGateway

@@ -28,7 +28,7 @@ these two sources, as cited below. No VARA binary was examined.
 | Data port is an unframed byte stream, payload only while connected | MER ("Data Port") |
 | One client per port at a time | MER ("One client at a time") |
 | Replies `OK` / `WRONG` are positional: they answer the oldest outstanding command | D2G (`Replies OK / WRONG`), MER (each command's **Response**) |
-| Not every command is answered with `OK`/`WRONG`. `VERSION` is answered with a free-text line whose shape differs by modem: Data2G sends `VERSION <text>`, Mercury sends `VARA version 4.9.0 registered`. `SN` is answered with an `SN` line, or `WRONG` from Data2G before any burst is decoded. A client's reply queue must be built per command, and must accept any non-notification line as `VERSION`'s reply | D2G (`host.cpp`, `Host::command`), MER (`VERSION`, `SN`, `BUFFER` **Response**), MER-SRC (`VERSION` handler) |
+| Not every command is answered with `OK`/`WRONG`. `VERSION` is answered with a free-text line whose shape differs by modem: Data2G sends `VERSION <text>`, Mercury sends `VARA version 4.9.0 registered`. `SN` is answered with an `SN` line, or `WRONG` from Data2G before any burst is decoded. The client matches `VERSION <text>` and VARA banners to the outstanding version request. Unrelated lines do not advance the reply queue. | D2G (`host.cpp`, `Host::command`), MER (`VERSION`, `SN`, `BUFFER` **Response**), MER-SRC (`VERSION` handler) |
 | Command words are case-insensitive on the server side | D2G (`host.cpp`, `upper(words[0])`) |
 
 The command port uses CR framing. `LineSplitter` tolerates LF between lines for CRLF senders and rejects LF inside a line.
