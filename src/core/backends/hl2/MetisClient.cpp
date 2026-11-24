@@ -1696,7 +1696,13 @@ bool MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
                 --at;
             }
             if (at == 0) {
-                return false;   // the element's own release is already on the wire
+                // The element's own release is already on the wire. Its fall
+                // holds this completion until it reaches zero, or the intent
+                // ends and the writer drops CW mode mid-fall (#7568).
+                if (m_cwMode && !m_cwKeyDown && m_cwEnvelope > 0.0) {
+                    m_cwFallCompletion = completion;
+                }
+                return false;
             }
             if (target >= m_cwSchedule[at - 1].sample) {
                 m_cwSchedule[at - 1].completion = completion;   // held until it is written
