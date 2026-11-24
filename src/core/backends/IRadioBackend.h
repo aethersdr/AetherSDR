@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RadioStatusObservation.h"
+#include "ConnectionSession.h"
 #include "core/ReceiveData.h"
 #include "SetupStatusObservation.h"
 
@@ -78,12 +79,16 @@ struct RadioConnectRequest {
     QString version;        // RadioInfo::version from discovery; empty when not reported
     QVariantMap params;     // family-specific extras (namespaced by the backend)
     RadioSerialIdentity serialIdentity;
-    // Local IPv4 address that reached the radio; null lets the OS choose.
+    // Local address that reached the radio; null lets the OS choose.
     QHostAddress localBindAddress;
     // RadioModel's automatic retry after a lost link, not an operator's connect.
     // A backend whose radio obeys any controller (ANAN Protocol 2) checks the
     // radio is free first, so a retry never fights another client for it.
     bool automaticReconnect = false;
+    // Explicit source selection is mandatory; localBindAddress alone remains
+    // an automatically discovered preference for existing backends.
+    QHostAddress explicitLocalBindAddress;
+    bool requireExplicitLocalBind{false};
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode
@@ -146,6 +151,9 @@ struct MemoryRecallDetails {
 //     before returning or asynchronously — never twice, never from a worker. The
 //     destructor completes the same drain and never waits on a
 //     BlockingQueuedConnection whose target may be waiting on this thread.
+//     An explicit Deferred request may leave bounded transport cleanup on its
+//     worker after retiring all session deliveries. A replacement dial waits
+//     for that cleanup; default disconnect and destruction drain it fully.
 //     Disconnecting signals does not drop calls already queued, so
 //     teardownBackend() bumps a generation counter and every handler bound to a
 //     backend-owned object returns early on mismatch (RadioModel::setupBackend()).
@@ -194,6 +202,7 @@ public:
     // hear the radio's reply leaves it to RadioModel, which reports it as not
     // confirmed rather than assume the radio agreed.
     virtual bool answersTransmitControl() const { return false; }
+    virtual void setRadioStateWriteHold(qint64) {}
     virtual ReceiveDispatch requestSessionControl(const SessionControlRequest&,
         const SessionCommandGuard&, const SessionControlCompletion& = {})
     { return ReceiveDispatch::Unsupported; }
@@ -403,6 +412,11 @@ public:
     // storeOperatingState when handled, otherwise RadioStateMemory::store.
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
+    virtual void disconnectRadio(const RadioDisconnectRequest&) { disconnectRadio(); }
+    virtual std::optional<ConnectionSession> connectionSession() const { return std::nullopt; }
+    // Start after client registration; a port collision may request one rebind.
+    virtual ReceiveTransportResult startReceiveTransport(bool rebind = false)
+    { Q_UNUSED(rebind); return {}; }
     virtual bool isConnected() const = 0;
 
     // A session with the radio is up, WHATEVER TRANSPORT CARRIED IT.
@@ -1266,6 +1280,9 @@ signals:
     // at most once per ticket.
     void transmitControlAnswered(quint64 ticket, bool applied);
     // ---- connection state UP ----
+    // Opens observation delivery before the transport may publish any status.
+    void connectionSessionStarting(quint64 epoch);
+    void connectionVersionReceived(const QString& version);
     void connected();
     void disconnected();
     void connectionError(const QString& reason);
@@ -1275,6 +1292,10 @@ signals:
     // on it), so advice sent there becomes a reconnect loop. If it does not stop the
     // radio working, it belongs here.
     void configurationWarning(const QString& message);
+    // A transmission the operator keyed did not go out, for a reason the
+    // operator should see (`reason`, one short line). Once per transmission;
+    // RadioModel raises it as a "TX failed" notice. MOX is not changed by it.
+    void transmitFailed(const QString& reason);
 
     void capabilitiesChanged();
 

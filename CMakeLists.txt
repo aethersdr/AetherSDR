@@ -902,6 +902,7 @@ set(CORE_SOURCES
     src/core/control/RadioConnectionTarget.h  # socket-free connection intent seam
     src/core/backends/ModelRadioConnectionTarget.cpp # native translation and lifecycle
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
+    src/core/control/AppControlHost.cpp # the app serving the local endpoint (--control-socket)
     src/core/control/RadioTelemetryAdapter.cpp # bounded read-only telemetry
     src/core/control/ModelSliceFrequencyTarget.cpp # validated non-keying intents
     src/core/control/ModelReceiveControlTarget.cpp # typed receive operations
@@ -913,6 +914,9 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexReceiveData.cpp
     src/core/backends/flex/FlexBackend_ReceiveData.cpp
     src/core/backends/flex/FlexDisplayStatus.cpp
+    src/core/backends/flex/FlexLanSession.cpp
+    src/core/backends/flex/FlexCommandSession.cpp
+    src/core/backends/flex/FlexBackend_Commands.cpp
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexRadioStatus.cpp
     src/core/backends/flex/FlexCwControls.cpp
@@ -1273,6 +1277,12 @@ set(CORE_SOURCES
     src/core/tnc/KissFraming.cpp
     src/core/tnc/KissTncServer.cpp
     src/core/tnc/TncTerminal.cpp
+    src/core/hfgateway/ModemHostProtocol.cpp
+    src/core/hfgateway/ModemHostSession.cpp
+    src/core/hfgateway/ModemHostClient.cpp
+    src/core/hfgateway/HfGatewayConfig.cpp
+    src/core/hfgateway/HfGatewaySettings.cpp
+    src/models/HfGatewayModemModel.cpp
     src/core/pms/PmsMailbox.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsStationList.cpp
@@ -1465,6 +1475,7 @@ set(GUI_SOURCES
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
     src/gui/Data2gMonitorPage.cpp
+    src/gui/HfGatewayPage.cpp
     src/gui/AprsMessagesDialog.cpp
     src/gui/AprsSymbolIcons.cpp
     src/gui/FlexControlDialog.cpp

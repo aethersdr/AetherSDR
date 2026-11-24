@@ -1,5 +1,9 @@
+#include "core/LogManager.h"
+#include <algorithm>
 #include "models/RadioModel.h"
+#include "models/ProfileLoadPolicy.h"
 
+#include <QDateTime>
 #include <QList>
 #include <QMap>
 #include <QPointer>
@@ -42,7 +46,42 @@ ReceiveDispatch RadioModel::requestProfile(const ProfileRequest& request,
     const RadioControlFence current = [alive, session] {
         return alive && alive->controlSessionCurrent(session);
     };
-    const ReceiveDispatch result = m_backend->requestProfile(request, reply, current);
+    const bool loading = request.action == ProfileRequest::Action::Load;
+    const bool topology = loading && request.kind == ProfileRequest::Kind::Global;
+    const QString type = request.kind == ProfileRequest::Kind::Global ? QStringLiteral("global")
+        : request.kind == ProfileRequest::Kind::Transmit ? QStringLiteral("tx")
+        : request.kind == ProfileRequest::Kind::Cw ? QStringLiteral("cw") : QStringLiteral("mic");
+    const auto hold = [alive, current, topology] {
+        if (!current() || !topology) { return; }
+        alive->m_profileLoadRadioStateWriteHoldUntilMs = std::max(
+            alive->m_profileLoadRadioStateWriteHoldUntilMs,
+            QDateTime::currentMSecsSinceEpoch() + kProfileLoadStateWriteHoldMs);
+        alive->m_backend->setRadioStateWriteHold(alive->m_profileLoadRadioStateWriteHoldUntilMs);
+    };
+    if (loading) {
+        hold();
+        emit profileLoadStarted(type, request.name);
+        if (!current()) { return ReceiveDispatch::Unsupported; }
+    }
+    const RadioControlCompletion completed = [alive, current, loading, topology, type,
+        name = request.name, hold, reply](const RadioControlReply& result) {
+        if (reply) { reply(result); }
+        if (!current() || !loading) { return; }
+        if (result.kind != RadioControlReply::Kind::Accepted) {
+            qCWarning(lcProtocol).noquote() << "RadioModel: profile load rejected"
+                << QStringLiteral("type=%1").arg(type) << QStringLiteral("name=%1").arg(name)
+                << QStringLiteral("code=%1").arg(static_cast<quint32>(result.code), 0, 16)
+                << QStringLiteral("body=%1").arg(result.message);
+            return;
+        }
+        qCInfo(lcProtocol).noquote() << "RadioModel: profile load accepted"
+            << QStringLiteral("type=%1").arg(type) << QStringLiteral("name=%1").arg(name);
+        hold();
+        if (topology) { alive->scheduleRxAudioStreamEnsure(QStringLiteral("profile-load:%1").arg(type)); }
+        QTimer::singleShot(750, alive, [alive, current] { if (current()) { alive->refreshProfiles(); } });
+        emit alive->profileLoadCompleted(type, name);
+    };
+    const ReceiveDispatch result = m_backend->requestProfile(request, completed, current);
     if (result == ReceiveDispatch::Unsupported && alive) { return refuse(); }
     return result;
 }

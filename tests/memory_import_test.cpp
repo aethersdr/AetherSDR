@@ -85,7 +85,9 @@ void testModeEdits()
     for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("DIGU"),
                                QStringLiteral("LSB"), QStringLiteral("DIGL"),
                                QStringLiteral("FM"), QStringLiteral("DFM")}) {
-        model.sendCmdPublic(QStringLiteral("memory set 0 mode=%1").arg(mode), {});
+        MemoryPatch patch;
+        patch.mode = mode;
+        model.requestMemory({MemoryRequest::Action::Update, 0, patch});
         const MemoryEntry edited = model.memories().value(0);
         const bool expectedData = mode == "DIGU" || mode == "DIGL" || mode == "DFM";
         check((edited.dataMode != 0) == expectedData,
@@ -107,8 +109,10 @@ void testModeEdits()
         AppSettings::instance().radioFeatureExact("local", "", "MemoryBank")).toJson());
     check(saved.memories.value(0).mode == "DFM" && saved.memories.value(0).dataMode == 1,
           "edited native mode and DATA flag persist together");
-    model.sendCmdPublic("memory create", {});
-    model.sendCmdPublic("memory set 1 mode=DIGU", {});
+    MemoryEntry manual;
+    manual.mode = QStringLiteral("DIGU");
+    manual.freq = 14.1;
+    model.createMemory(manual, &model, {});
     check(model.memories().value(1).dataMode == 0,
           "ordinary local memories do not acquire unnecessary native schema fields");
 }
@@ -191,7 +195,8 @@ void testDisconnectedRecall()
     imported.toneMode = QStringLiteral("off");
     model.backend()->memoryChanged(imported);
     int result = -1;
-    model.sendCmdPublic("memory apply 0", [&](int code, const QString&) { result = code; });
+    model.requestMemory({MemoryRequest::Action::Recall, 0}, &model,
+        [&](const RadioControlReply& reply) { result = reply.kind == RadioControlReply::Kind::Accepted ? 0 : 1; });
     QCoreApplication::processEvents();
     check(result > 0, "disconnected native recall returns a refusal");
     check(slice->frequency() == 14.25 && slice->mode() == "USB",
@@ -309,8 +314,11 @@ int main(int argc, char** argv)
     {
         RadioModel model;
         // Inject the real backend signal. No connectRadio, sockets or peer.
-        model.sendCmdPublic("memory create", {});
-        model.sendCmdPublic("memory set 0 name=Manual freq=7.2 mode=LSB", {});
+        MemoryEntry manual;
+        manual.name = QStringLiteral("Manual");
+        manual.freq = 7.2;
+        manual.mode = QStringLiteral("LSB");
+        model.createMemory(manual, &model, {});
         model.backend()->memoryChanged(imported);
         check(model.memories().size() == 2 && model.memories().value(0).name == "Manual",
               "native slot collision allocates a new row and preserves the manual row");
@@ -320,8 +328,11 @@ int main(int argc, char** argv)
             }
         }
         check(importedIndex == 1, "import uses the lowest free client slot");
-        model.sendCmdPublic(QString("memory set %1 name=Operator owner=Trustee group=Local")
-                                .arg(importedIndex), {});
+        MemoryPatch patch;
+        patch.name = QStringLiteral("Operator");
+        patch.owner = QStringLiteral("Trustee");
+        patch.group = QStringLiteral("Local");
+        model.requestMemory({MemoryRequest::Action::Update, importedIndex, patch});
         // Include stripped control bytes: lookup and persistence must normalize
         // identically, or the next Sync allocates a duplicate forever.
         imported.importSource->append(QChar(1));

@@ -1157,9 +1157,9 @@
   "split": "Core: center/bandwidth, dBm range, antenna list, RF gain, WNB, fps/waterfall cadence. Flex ext: daxiqChannel, clientHandle, VITA-49 stream IDs, loopA/B, preamp string, applyPanStatus/applyWaterfallStatus kv parsing of SmartSDR status.",
   "confidence": "high"
  },
- "models/ProfileLoadCommand.h": {
-  "tag": "vendor(flex)",
-  "note": "Parses SmartSDR 'profile global/tx/mic load' wire command + recall-hold timing/suppression sentinels; Flex-only",
+ "models/ProfileLoadPolicy.h": {
+  "tag": "universal",
+  "note": "Profile recall timing and topology classification shared by engine policy and presentation; wire classification is private to the Flex backend",
   "split": "",
   "confidence": "high"
  },
@@ -1871,6 +1871,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/HfGatewayModemModel.h": {
+  "tag": "universal",
+  "note": "Receive-only external modem status, monitoring and configuration for AetherModem. The model owns the host-port client and exposes no radio or transmit control.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/Data2gReceiveModel.h": {
   "tag": "universal",
   "note": "Receive-only Data2G monitor fed mono 24 kHz audio from the AX.25 receive model's existing tap; decode runs on its own worker with a bounded queue and generation retirement. No radio protocol, no audio source of its own and no transmit authority.",
@@ -1904,6 +1910,12 @@
  "core/backends/aetherd/RemoteEnginePairing.h": {
   "tag": "ui-support",
   "note": "One-shot pairing.complete exchange with a remote aetherd over wss://, pinned by the pairing code's check digits, driven by the connection panel. Credential acquisition plumbing, not a control-protocol client of the radio.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/control/AppControlHost.h": {
+  "tag": "universal",
+  "note": "The desktop app serving aetherd's local v1 control endpoint (--control-socket) for its own radio: the receive targets aetherd binds, over a connection target that only observes the app's connection, with no radio.connect/disconnect, no transmit verbs and no catalogue. Family-neutral; included only by src/main.cpp.",
   "split": "",
   "confidence": "high"
  }

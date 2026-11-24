@@ -350,14 +350,8 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         if (name.isEmpty()) return;
 
         if (type == "global") {
-            // A dropped command never produces an R-line, so "Saving..." would
-            // otherwise sit there forever claiming a save is in progress. There
-            // is no menu guard on opening this dialog, so the disconnected case
-            // is reachable directly: sendCmd() still allocates a seq and stores
-            // the callback, but RadioConnection::writeCommand() early-returns on
-            // !isConnected() and nothing ever resolves it (WanConnection::
-            // sendCommand() likewise returns 0 without invoking the callback).
-            // Say so up front instead of sending into the void.
+            // The dialog can open while disconnected. Refuse before entering
+            // the pending-save presentation when no radio can accept the request.
             if (!m_model || !m_model->isConnected()) {
                 setTabStatus(
                     type,

@@ -199,7 +199,7 @@ public:
 
     FlexShapedBackend()
     {
-        flex.setSliceCommandSink([this](const QString& c) { wire.append(c); });
+        flex.setSliceCommandSinkForTest([this](const QString& c) { wire.append(c); });
     }
 
     RadioCapabilities capabilities() const override { return {}; }

@@ -29,6 +29,18 @@ namespace {
 
 int g_failed = 0;
 
+void connectDemoSession(SimBackend& sim)
+{
+    RadioConnectRequest request;
+    request.serial = SimBackend::demoSerial();
+    request.host = QStringLiteral("127.0.0.1");
+    request.port = 4992;
+    QSignalSpy connected(&sim, &SimBackend::connected);
+    sim.connectRadio(request);
+    if (connected.isEmpty()) { connected.wait(2000); }
+}
+
+
 void report(const char* name, bool ok)
 {
     std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", name);
@@ -289,7 +301,7 @@ void testNoSpectrumForwardedOnceDisconnectedIsAnnounced()
         emit sim.signalSourceForTest()->spectrumFrameReady(0, sim.pcmSession(), oneSpectrumRow());
     }, Qt::DirectConnection);
 
-    emit sim.connection()->disconnected();
+    sim.disconnectRadio();
 
     report("the gate is closed before disconnected() is announced",
            !connectedDuringAnnouncement);
@@ -333,7 +345,7 @@ void testConnectedIsAnnouncedWithTheGateOpen()
         connectedDuringAnnouncement = sim.isConnected();
     }, Qt::DirectConnection);
 
-    emit sim.connection()->connected();
+    connectDemoSession(sim);
 
     report("the gate is open before connected() is announced", connectedDuringAnnouncement);
     sim.disconnectRadio();
@@ -350,7 +362,7 @@ void testPanCreatedInsideConnectedSurvives()
         created = sim.createPanadapter();
     }, Qt::DirectConnection);
 
-    emit sim.connection()->connected();
+    connectDemoSession(sim);
 
     report("a connected() slot can create a pan", created);
     report("the pan a connected() slot created keeps its id",
@@ -365,7 +377,7 @@ void testFirstSpectrumRowAfterWireConnectIsForwarded()
 {
     SimBackend sim;
     QSignalSpy spectrumSpy(&sim, &SimBackend::spectrumFrameReady);
-    emit sim.connection()->connected();
+    connectDemoSession(sim);
 
     QEventLoop loop;
     QTimer poll;
