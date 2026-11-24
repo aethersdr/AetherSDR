@@ -156,7 +156,11 @@ The slice has no DAX channel, or the program is reading a different device.
 
 ### Transmit audio does not reach the radio
 
-The program sends to the wrong device, the TX slice is in a voice mode, or this app's DAX TX stream is not selected.
+The program sends to the wrong device, the TX slice is in a voice mode, or the wrong DAX TX stream is selected.
+
+**With SmartSDR DAX on Windows:** set the program's audio output to SmartSDR DAX's TX device and key over CAT (rigctld or SmartSDR-CAT). CAT keys the radio without AetherSDR's **TX stream**, so leave that toggle **Not selected**. Selecting it takes DAX TX away from SmartSDR DAX, and the radio then transmits no power.
+
+**With AetherSDR's own DAX:**
 
 1. Set the program's audio output to **AetherSDR TX**.
 2. Put the TX slice in a digital mode (DIGU or DIGL).

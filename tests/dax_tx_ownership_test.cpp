@@ -551,6 +551,14 @@ void catKeysWithForeignDaxStream()
         [&](RadioModel& m) { cat = std::make_unique<SmartCatProtocol>(&m);
                              (void)cat->processCommand(QStringLiteral("ZZTX1")); },
         [&](RadioModel&) { (void)cat->processCommand(QStringLiteral("ZZRX")); cat.reset(); });
+    run("rigctld client drop while keyed unkeys",
+        [&](RadioModel& m) { rigctl = std::make_unique<RigctlProtocol>(&m);
+                             (void)rigctl->handleLine(QStringLiteral("T 1")); },
+        [&](RadioModel&) { rigctl.reset(); });
+    run("SmartSDR-CAT client drop while keyed unkeys",
+        [&](RadioModel& m) { cat = std::make_unique<SmartCatProtocol>(&m);
+                             (void)cat->processCommand(QStringLiteral("ZZTX1")); },
+        [&](RadioModel&) { cat.reset(); });
 
     Fixture dax;
     dax.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
