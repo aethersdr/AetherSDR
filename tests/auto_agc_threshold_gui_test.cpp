@@ -164,7 +164,8 @@ public:
 
     // Test helper for the source-selection matrix: set mode + agcMode + daxChannel
     // independently of the agcThresholdMode plumbing used by status().
-    void modeStatus(int sliceId, const QString& mode, const QString& agcMode, int daxCh)
+    void modeStatus(int sliceId, const QString& mode, const QString& agcMode, int daxCh,
+                    int threshold = 65)
     {
         SliceDelta delta;
         delta.active        = true;
@@ -173,7 +174,7 @@ public:
         delta.filterLow     = 100;
         delta.filterHigh    = 2800;
         delta.agcMode       = agcMode;
-        delta.agcThreshold  = 65;
+        delta.agcThreshold  = threshold;
         delta.agcThresholdMode = AgcThresholdMode::Manual;
         delta.daxChannel    = daxCh;
         emit sliceChanged(sliceId, delta);
@@ -548,6 +549,105 @@ private slots:
 #else
         QSKIP("HAVE_WEBSOCKETS not set; TCI source-selection test requires TciServer");
 #endif
+    }
+
+    void calibrationDialogTciWiringFollowsDaxChannel()
+    {
+        // The TCI source is wired, not just labelled: a manual AGC-T move
+        // records only when rxLevel arrives on the slice's own DAX channel.
+        // A settle with no level since the move reports "no TCI audio".
+#ifdef HAVE_WEBSOCKETS
+        Fixture fixture;
+        TciServer tci(&fixture.radio);
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
+        settle();
+
+        QLabel* result = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("result")) {
+                result = label;
+            }
+        }
+        QVERIFY(result);
+        const QString noTci = QStringLiteral("no TCI audio");
+
+        // A level on the slice's DAX channel after the move: the point records.
+        // The manual settle is 280 ms, so wait past it before checking.
+        fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1, 40);
+        settle();
+        emit tci.rxLevel(1, 0.3f);
+        QTest::qWait(600);
+        QVERIFY2(!result->text().contains(noTci), qPrintable(result->text()));
+
+        // A level on another DAX channel only: nothing reached the engine.
+        fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1, 30);
+        settle();
+        emit tci.rxLevel(2, 0.3f);
+        QTRY_VERIFY_WITH_TIMEOUT(result->text().contains(noTci), 2000);
+#else
+        QSKIP("HAVE_WEBSOCKETS not set; TCI wiring test requires TciServer");
+#endif
+    }
+
+    void calibrationDialogDestroyedMidSweepRestoresWhileSourcesLive()
+    {
+        // ~MainWindow deletes this dialog before it frees TciServer and
+        // AudioEngine (pinned below): its destructor stops the sweep, and
+        // onFinished() rewires through both raw pointers. Same order here,
+        // so the sanitizer sweep sees that path run against live sources.
+#ifdef HAVE_WEBSOCKETS
+        Fixture fixture;
+        auto tci = std::make_unique<TciServer>(&fixture.radio);
+        auto audio = std::make_unique<AudioEngine>();
+        auto* dialog = new AgcCalibrationDialog(&fixture.radio, audio.get(), tci.get(), {});
+        dialog->setSlice(fixture.radio.slice(0));
+        dialog->show();
+        fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
+        settle();
+
+        QPushButton* startStop = nullptr;
+        for (QPushButton* button : dialog->findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("Auto Sweep")) {
+                startStop = button;
+            }
+        }
+        QVERIFY(startStop);
+        startStop->click();
+        settle();
+        QCOMPARE(startStop->text(), QStringLiteral("Stop"));
+
+        fixture.backend->agcRequests.clear();
+        delete dialog;
+        QVERIFY(!fixture.backend->agcRequests.isEmpty());
+        QCOMPARE(fixture.backend->agcRequests.constLast().threshold, 65);
+        tci.reset();
+        audio.reset();
+#else
+        QSKIP("HAVE_WEBSOCKETS not set; teardown test requires TciServer");
+#endif
+    }
+
+    void mainWindowDestroysCalibrationDialogBeforeItsSources()
+    {
+        // MainWindow is not linked into this target, so the teardown order
+        // inside ~MainWindow is pinned from the source.
+        QFile file(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString source = QString::fromUtf8(file.readAll());
+        const qsizetype dtor = source.indexOf(QStringLiteral("MainWindow::~MainWindow()"));
+        const qsizetype dialogDelete =
+            source.indexOf(QStringLiteral("delete m_agcCalibrationDialog.data();"), dtor);
+        const qsizetype tciFree =
+            source.indexOf(QStringLiteral("m_session->shutdownTciServer();"), dtor);
+        const qsizetype audioFree = source.indexOf(QStringLiteral("delete m_audio;"), dtor);
+        QVERIFY(dtor >= 0 && tciFree > dtor && audioFree > dtor);
+        QVERIFY2(dialogDelete > dtor && dialogDelete < tciFree && dialogDelete < audioFree,
+            "~MainWindow must delete the AGC-T calibration dialog before freeing "
+            "TciServer and AudioEngine");
     }
 
     void initTestCase()

@@ -103,13 +103,15 @@ private:
     // Connect (or reconnect) the appropriate audio source to the calibration
     // engine based on the current slice mode. Keeps audio live at all times —
     // not just during auto sweeps — so the manual slider path always has fresh
-    // RMS data. Called from the constructor, updateModeUi(), onStartStop()
-    // (before startAutoSweep()), and onFinished().
+    // RMS data. Called from updateModeUi() while idle, onStartStop() (before
+    // the NR check and startAutoSweep()), and onFinished().
     void rewireAudioSource();
     // Any noise reduction stage that mutates the audio before the calibration
     // tap is emitted. For the PC-Audio path: client-side NR2/RN2/NR4/DFNR/MNR/
     // BNR/NNR via AudioEngine, plus radio-side NR. For the TCI path: only
     // radio-side NR — client NR runs in AudioEngine which TCI never touches.
+    // Reads the latched source (m_tciActive), so mid-sweep it judges the tap
+    // the sweep is actually using.
     bool nrSuppressesCalibration() const;
 
     RadioModel*  m_radio{nullptr};

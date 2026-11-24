@@ -11130,6 +11130,8 @@ target_include_directories(auto_agc_threshold_gui_test PRIVATE src tests)
 target_link_libraries(auto_agc_threshold_gui_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test
 )
+target_compile_definitions(auto_agc_threshold_gui_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME auto_agc_threshold_gui_test
          COMMAND auto_agc_threshold_gui_test)
 set_tests_properties(auto_agc_threshold_gui_test PROPERTIES

@@ -2752,6 +2752,15 @@ MainWindow::~MainWindow()
         m_ax25HfPacketDecodeDialog = nullptr;
     }
 
+    // ~AgcCalibrationDialog stops a running sweep, and onFinished() rewires
+    // the audio source through raw TciServer and AudioEngine pointers. Both
+    // are freed below, before deleteChildren() would reach the dialog.
+    if (m_agcCalibrationDialog) {
+        ShutdownTrace trace("agc_calibration.dialog.destroy");
+        delete m_agcCalibrationDialog.data();
+        m_agcCalibrationDialog = nullptr;
+    }
+
 #ifdef HAVE_WEBSOCKETS
     // Stop TCI producers while both the model and audio consumer are alive.
     // The controller joins its I/O worker before AudioEngine teardown.

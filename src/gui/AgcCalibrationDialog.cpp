@@ -400,21 +400,22 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_floorTimer->start();
 
     updateModeUi();
-    rewireAudioSource();
 }
 
 AgcCalibrationDialog::~AgcCalibrationDialog()
 {
+    // Destroyed without a close (the app quitting): put the AGC-T back too.
+    // stop() reaches onFinished(), which rewires the audio source, so this
+    // runs before the disconnect below.
+    if (m_engine.isRunning()) {
+        m_engine.stop();
+    }
     // Sever the audio source connection before m_engine is destroyed as a
     // member. Without this, the AudioEngine audio thread can emit levelChanged
     // concurrently with m_engine's destructor, causing a race on m_engine's
     // QObject state (manifests as a crash in QTimer::~QTimer).
     disconnect(m_audioConn);
     m_audioConn = {};
-    // Destroyed without a close (the app quitting): put the AGC-T back too.
-    if (m_engine.isRunning()) {
-        m_engine.stop();
-    }
 }
 
 void AgcCalibrationDialog::done(int result)
@@ -533,9 +534,10 @@ bool AgcCalibrationDialog::isTciMode() const
 void AgcCalibrationDialog::rewireAudioSource()
 {
     // Connect (or re-connect) the appropriate audio source. Called whenever the
-    // source might have changed: constructor end, mode change (via updateModeUi),
-    // sweep start, and sweep finish. Keeping audio connected at all times means
-    // the manual slider path always has fresh RMS data, not just during sweeps.
+    // source might have changed: construction and mode change (both via
+    // updateModeUi), sweep start, and sweep finish. Keeping audio connected at
+    // all times means the manual slider path always has fresh RMS data, not
+    // just during sweeps.
     // m_tciActive latches the result so labels name the wired source, not the
     // live mode (which can change mid-sweep without rewiring). (#7263)
     m_tciActive = isTciMode();
@@ -559,7 +561,7 @@ void AgcCalibrationDialog::rewireAudioSource()
 
 bool AgcCalibrationDialog::nrSuppressesCalibration() const
 {
-    if (isTciMode()) {
+    if (m_tciActive) {
         // TCI audio never passes through AudioEngine, so client-side NR stages
         // (NR2/RN2/NR4/DFNR/MNR/BNR/NNR) do not affect the calibration tap.
         // Only radio-side NR (slice nr flag) matters here.
@@ -603,14 +605,12 @@ void AgcCalibrationDialog::updateModeUi()
     // start path also refuses to begin until NR is off.
     if (nrSuppressesCalibration() && m_hintLabel) {
         m_hintLabel->setText(m_tciActive
-            ? QStringLiteral(
-                "⚠ Disable radio-side Noise Reduction (NR) for accurate "
-                "calibration — NR crushes the noise floor the knee detector is "
-                "looking for.")
-            : QStringLiteral(
-                "⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR/NNR) for accurate "
-                "calibration — NR crushes the noise floor the knee detector is "
-                "looking for."));
+            ? tr("⚠ Disable radio-side Noise Reduction (NR) for accurate "
+                 "calibration — NR crushes the noise floor the knee detector is "
+                 "looking for.")
+            : tr("⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR/NNR) for accurate "
+                 "calibration — NR crushes the noise floor the knee detector is "
+                 "looking for."));
     } else if (m_hintLabel) {
         m_hintLabel->setText(QStringLiteral(
             "Tune to a clear spot, then Auto Sweep — or move the AGC-T "
@@ -672,17 +672,17 @@ void AgcCalibrationDialog::updateModeUi()
     if (off) {
         // isTciMode() returns false when agcMode == "off" (TargetLevel always
         // uses PC Audio), so there is no TCI branch here.
-        m_modeLabel->setText(QStringLiteral(
+        m_modeLabel->setText(tr(
             "Calibrating radio AGC-T (agc_off_level) via PC Audio — "
             "finding a comfortable fixed gain. AGC is off; no knee in this mode."));
     } else {
         if (m_tciActive) {
-            m_modeLabel->setText(QStringLiteral(
+            m_modeLabel->setText(tr(
                 "Calibrating radio AGC-T (agc_threshold) via TCI audio (%1) — "
                 "finding the knee just above the noise floor.")
                 .arg(m_slice->mode()));
         } else {
-            m_modeLabel->setText(QStringLiteral(
+            m_modeLabel->setText(tr(
                 "Calibrating radio AGC-T (agc_threshold) via PC Audio (%1) — "
                 "finding the knee just above the noise floor.")
                 .arg(m_slice->agcMode().toUpper()));
@@ -717,11 +717,17 @@ void AgcCalibrationDialog::onStartStop()
         updateModeUi();
         return;
     }
+    // Latch the audio source for this sweep. rewireAudioSource() chooses TCI or
+    // PC Audio from the current mode; calling it here, before the NR check and
+    // startAutoSweep(), fixes the source for the entire sweep. DAX (TCI) is
+    // pre-AF-gain and PC Audio is post-volume — they must not mix in one sweep.
+    rewireAudioSource();
+
     // Refuse to start while any NR stage is suppressing the calibration tap.
     // The user can disable NR and try again. Mirrors the quiet-spot guard
     // pattern in the engine and matches the in-hint warning text.
     if (nrSuppressesCalibration()) {
-        const QString nrMsg = isTciMode()
+        const QString nrMsg = m_tciActive
             ? tr("Radio-side Noise Reduction (NR) is active and is crushing the "
                  "audio noise floor that the AGC knee detector measures. "
                  "Turn off NR on this slice, then try Auto Sweep again.")
@@ -737,13 +743,6 @@ void AgcCalibrationDialog::onStartStop()
     }
     m_curve->clear();
     m_applyBtn->setEnabled(false);
-
-    // Latch the audio source for this sweep. rewireAudioSource() chooses TCI or
-    // PC Audio from the current mode; calling it here before startAutoSweep()
-    // ensures the source is fixed for the entire sweep. DAX (TCI) is pre-AF-gain
-    // and PC Audio is post-volume — they must not mix across a single sweep.
-    rewireAudioSource();
-
     m_engine.startAutoSweep();
 }
 
