@@ -240,6 +240,30 @@ struct Kpa1500TrackingTestAccess {
         return out;
     }
 
+    // TCP by host name, link down: the address resolved at link-up is the
+    // wake target, and ^WL0 read before the drop does not stop the packet.
+    static bool hostnameWakeTarget(Kpa1500Connection& c)
+    {
+        bool targeted = false;
+        c.m_wakeSender = [&targeted](const QByteArray&, const QHostAddress& target, quint16) {
+            targeted = targeted || target == QHostAddress(QStringLiteral("192.0.2.15"));
+            return static_cast<qint64>(102);
+        };
+        c.m_lastHost = QStringLiteral("kpa1500.lan");
+        c.m_peerAddress = QHostAddress(QStringLiteral("192.0.2.15"));
+        c.m_connected = true;
+        c.m_status.powerOn = false;
+        c.m_status.netWake = false;
+        c.setWakeMacAddress(QStringLiteral("54:10:EC:14:75:22"));
+        c.onTransportDown();
+        c.m_reconnectTimer.stop();
+        c.m_wakeSentAt.invalidate();
+        c.sendWakeOnLan(true);   // wakeFromSleep() without the redial
+        c.disconnect();
+        c.m_lastHost.clear();
+        return targeted;
+    }
+
     // TCP: a dropped, confirmed-asleep link. A failed reconnect attempt is
     // retried only within the window after a wake (auto-reconnect off).
     static std::pair<bool, bool> tcpWakeRetries(Kpa1500Connection& c)
@@ -667,7 +691,7 @@ int main(int argc, char** argv)
         check(Kpa1500TrackingTestAccess::socketsUnopened(c), "wake-query test opens no transport");
     }
     {
-        // Q1 = (a): a confirmed-asleep amp keeps its applet and POWER wakes it.
+        // A confirmed-asleep amp keeps its applet, and POWER wakes it.
         using A = Kpa1500TrackingTestAccess;
         const QString mac = QStringLiteral("54:10:EC:14:75:22");
         Kpa1500Connection asleep;
@@ -691,7 +715,10 @@ int main(int argc, char** argv)
         const auto [heldBeforeWake, retriedAndCleared] = A::tcpWakeRetries(tcp);
         check(heldBeforeWake, "TCP: a confirmed-asleep drop does not redial before POWER (auto-reconnect off)");
         check(retriedAndCleared, "TCP: after a wake, a failed redial is retried; disconnect() ends the state");
-        check(A::socketsUnopened(asleep) && A::socketsUnopened(awake) && A::socketsUnopened(noMac)
+        Kpa1500Connection named;
+        check(A::hostnameWakeTarget(named),
+              "offline, a host-name amp is woken at the address resolved at link-up, even after ^WL0");
+        check(A::socketsUnopened(named) && A::socketsUnopened(asleep) && A::socketsUnopened(awake) && A::socketsUnopened(noMac)
                   && A::socketsUnopened(tcp),
               "asleep-offline tests open no transport");
     }

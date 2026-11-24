@@ -2098,7 +2098,7 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
     ui.connectButton = makeConnectButton(ui);
     ui.connectButton->setAccessibleName(tr("Connect or disconnect the Elecraft KPA1500"));
     connect(ui.connectButton, &QPushButton::clicked, this, [this, u, refresh]() {
-        if (u->isConnected()) {
+        if (u->isConnected() || (u->isConnecting && u->isConnecting())) {
             u->disconnectNow();
             return;
         }
@@ -2624,6 +2624,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                             PeripheralDeviceUi::Kind::Kpa1500, Kpa1500::kDefaultPort);
         ui->settingsGroup = QStringLiteral("Kpa1500");
         ui->isConnected = [this]() { return m_kpa1500->isConnected(); };
+        // Asleep with its link down, the amp is still being reached for:
+        // the row offers Disconnect, which ends that state.
+        ui->isConnecting = [this]() { return m_kpa1500->isAsleepOffline(); };
         ui->disconnectNow = [this]() { m_kpa1500->disconnect(); };
         ui->connectNetwork = [this](const QString& h, quint16 p) {
             m_kpa1500->setTransport(Kpa1500::transportFromSettingValue(
@@ -3673,6 +3676,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_kpa1500) {
         wireLinkDevice(QStringLiteral("kpa1500"), m_kpa1500);
+        connect(m_kpa1500, &Kpa1500Connection::asleepOfflineChanged, this,
+                [onLink]() { onLink(QStringLiteral("kpa1500")); });
     }
     if (m_rfkit) {
         wireLinkDevice(QStringLiteral("rfkit"), m_rfkit);

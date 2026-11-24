@@ -181,6 +181,9 @@ void Kpa1500Connection::connectNetwork(const QString& host, quint16 port)
     if (m_asleepOffline && (host != m_lastHost || port != m_lastPort)) {
         setAsleepOffline(false);   // another amplifier: the sleeping one is not ours to wake
     }
+    if (host != m_lastHost) {
+        m_peerAddress.clear();
+    }
     m_lastHost = host;
     m_lastPort = port;
     m_activeTransport = m_transport;
@@ -310,11 +313,12 @@ void Kpa1500Connection::wakeFromSleep()
         qCWarning(lcTuner) << "Kpa1500Connection: wake refused — no saved MAC address for Wake-on-LAN";
         return;
     }
-    sendWakeOnLan();
+    sendWakeOnLan(true);
     m_wakeSentAt.start();
-    // UDP never stopped probing. TCP dials again, and keeps dialing for
+    // A probing UDP link is still open; otherwise (TCP, or a UDP attempt
+    // that timed out) dial again, and keep dialing for
     // kWakeReconnectWindowMs, while the amp boots.
-    if (m_activeTransport == Kpa1500::Transport::Tcp && !m_connected && !m_reconnectTimer.isActive()) {
+    if (!linkOpen() && !m_reconnectTimer.isActive()) {
         reconnect();
     }
 }
@@ -323,6 +327,8 @@ void Kpa1500Connection::onTransportUp()
 {
     m_connected = true;
     setAsleepOffline(false);
+    m_peerAddress = m_activeTransport == Kpa1500::Transport::Udp ? m_udp.peerAddress()
+                                                                 : m_socket.peerAddress();
     m_maAsks = 0;
     m_wlAsks = 0;
     ++m_connectEpoch;  // the connect timeout must not abort a later probe of this link
@@ -1057,9 +1063,9 @@ QList<QHostAddress> Kpa1500Connection::wakeTargets(const QHostAddress& amp,
     return targets;
 }
 
-void Kpa1500Connection::sendWakeOnLan()
+void Kpa1500Connection::sendWakeOnLan(bool ignoreNetWake)
 {
-    if (m_status.netWake == false) {
+    if (!ignoreNetWake && m_status.netWake == false) {
         qCInfo(lcTuner) << "Kpa1500Connection: NET WAKE is off on the amp — no Wake-on-LAN packet";
         return;
     }
@@ -1072,6 +1078,9 @@ void Kpa1500Connection::sendWakeOnLan()
     QHostAddress amp(m_lastHost);
     if (amp.isNull()) {
         amp = m_activeTransport == Kpa1500::Transport::Udp ? m_udp.peerAddress() : m_socket.peerAddress();
+    }
+    if (amp.isNull()) {
+        amp = m_peerAddress;
     }
     QList<QNetworkAddressEntry> entries;
     const auto interfaces = QNetworkInterface::allInterfaces();

@@ -180,8 +180,11 @@ off or unknown reads "may not wake over the network".
 reading (`Kpa1500Connection::isAsleepOffline()`), the applet stays up showing
 ASLEEP, with every control but POWER disabled. POWER then sends the magic
 packet to the saved MAC (`wakeFromSleep()`) and is disabled, with a reason,
-when no MAC is saved. UDP never stopped probing; TCP dials again and keeps
-dialing for 60 s after the wake, whatever the Auto-reconnect setting. The
+when no MAC is saved. A probing UDP link is still open; otherwise (TCP, or a UDP
+attempt that timed out) it dials again and keeps dialing for 60 s after the
+wake, whatever the Auto-reconnect setting. The packet goes out even after
+`^WL0`, and a host-name address uses the one resolved at link-up. The
+Peripherals row offers Disconnect in this state. The
 state ends when the link comes back, on `disconnect()` (operator disconnect
 or Remove), or on `connectNetwork()` to another address. A drop while the amp
 was awake hides the applet as before.

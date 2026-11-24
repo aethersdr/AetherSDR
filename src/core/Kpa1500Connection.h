@@ -175,7 +175,9 @@ private:
     // UDP queries go through m_pacer; TCP writes them at once.
     void queueQuery(const QString& cmd, bool urgent = false);
     void pumpQueries();
-    void sendWakeOnLan();
+    // `ignoreNetWake`: send even after ^WL0 (the asleep-offline wake, where
+    // the packet is the only thing POWER can do).
+    void sendWakeOnLan(bool ignoreNetWake = false);
     void wakeFromSleep();
     void setAsleepOffline(bool on);
     void reconnect();   // the reconnect timer's attempt: same address, state kept
@@ -228,6 +230,7 @@ private:
     QTimer m_paceTimer;        // fires when the outstanding query times out
     bool m_pollDeferred{false};   // a tick found the last poll cycle still in flight
     bool m_asleepOffline{false};
+    QHostAddress m_peerAddress;   // resolved at link-up: a hostname still has a WoL target offline
     std::optional<bool> m_sleepNetWake;
     QElapsedTimer m_wakeSentAt;   // TCP keeps reconnecting for a while after a wake
     static constexpr int kWakeReconnectWindowMs = 60000;
