@@ -320,8 +320,10 @@ public:
     //
     // AGC-off level 0..100 -> WDSP fixed gain: 10 + 0.6 * (level - 10) dB, so
     // the default level 10 is exactly WDSP's 10 dB channel default, and the
-    // slope matches the AGC-T threshold's 0.6 dB/unit. Not referred to the LNA
-    // gain: with AGC off the operator rides RF gain against overload.
+    // slope matches the AGC-T map's 0.6 dB/unit below its 65 knee. Above the
+    // knee AGC-T rises 51/35 dB/unit to 90 dB, while AGC off stays linear to
+    // 64 dB. Not referred to the LNA gain: with AGC off the operator rides RF
+    // gain against overload.
     static constexpr double kAgcFixedGainDbPerUnit = 0.6;
     static constexpr int kDefaultAgcOffLevel = 10;           // SliceModel::m_agcOffLevel
     static constexpr double kDefaultAgcFixedGainDb = 10.0;   // WdspChannel::Config

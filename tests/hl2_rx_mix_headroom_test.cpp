@@ -267,7 +267,7 @@ int main(int argc, char** argv)
     twoSlices(70.0, true);
     // The top of the AGC-T map at the reference LNA gain is the 90 dB case.
     const double top = Hl2DbReference{}.agcCeilingDb(100);
-    check(top == 90.0, "AGC-T 100 maps to a 90 dB ceiling at the reference LNA gain");
+    check(std::abs(top - 90.0) < 1e-9, "AGC-T 100 maps to a 90 dB ceiling at the reference LNA gain");
     twoSlices(top, true);
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) FAILED\n", g_failures);
