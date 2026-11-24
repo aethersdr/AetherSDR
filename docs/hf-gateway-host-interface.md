@@ -12,7 +12,7 @@ If a token isn't listed here, the code doesn't use it.
 |---|---|---|
 | D2G | Data2G host layer, vendored: `third_party/data2g/core/host/host.hpp` (the header comment lists the command and notification vocabulary) and `host.cpp` | v0.5.0, as vendored (#7283) |
 | MER | Mercury `docs/TNC.md`, "Mercury TNC Command Reference", github.com/Rhizomatica/mercury | commit `762bb75bbc541ac55a0be98fcd6c66e72fef1773` |
-| MER-SRC | Mercury `data_interfaces/tcp_interfaces.c`, the `VERSION` handler only | commit `274bd5c956a5fa00f755ea01a6067fad33d8fa16` |
+| MER-SRC | Mercury `data_interfaces/tcp_interfaces.c`, the `VERSION` handler, and `datalink_arq/arq.c` and `arq_fsm.c` for session teardown | commit `274bd5c956a5fa00f755ea01a6067fad33d8fa16` |
 
 Both are open-source modems that document the interface they implement so
 that existing host applications work unchanged. The checkable claim is this:
@@ -27,7 +27,7 @@ these two sources, as cited below. No VARA binary was examined.
 | Command lines are ASCII, each terminated by CR (`\r`) | MER ("All control commands and responses are CR-terminated ASCII") |
 | Data port is an unframed byte stream, payload only while connected | MER ("Data Port") |
 | One client per port at a time | MER ("One client at a time") |
-| Taking the command port from the built-in chat UI or losing the port can end the modem's active session | MER-SRC (`host_release_tnc`, `close_ctl_client` and `ARQ_CMD_CLIENT_DISCONNECT`), D2G (`host.cpp`, `reset_on_command_drop`) |
+| Taking the command port from the built-in chat UI or losing the port can end the modem's active session | MER-SRC (`host_release_tnc`, `close_ctl_client` and `ARQ_CMD_CLIENT_DISCONNECT`), D2G (`host.cpp`, `Host::client_gone`) |
 | Replies `OK` / `WRONG` are positional: they answer the oldest outstanding command | D2G (`Replies OK / WRONG`), MER (each command's **Response**) |
 | Not every command is answered with `OK`/`WRONG`. `VERSION` is answered with a free-text line whose shape differs by modem: Data2G sends `VERSION <text>`, Mercury sends `VARA version 4.9.0 registered`. `SN` is answered with an `SN` line, or `WRONG` from Data2G before any burst is decoded. The client matches `VERSION <text>` and VARA banners to the outstanding version request. Unrelated lines do not advance the reply queue. | D2G (`host.cpp`, `Host::command`), MER (`VERSION`, `SN`, `BUFFER` **Response**), MER-SRC (`VERSION` handler) |
 | Command words are case-insensitive on the server side | D2G (`host.cpp`, `upper(words[0])`) |
