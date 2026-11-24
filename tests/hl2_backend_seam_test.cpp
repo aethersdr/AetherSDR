@@ -14,6 +14,8 @@
 #include "core/backends/hl2/MetisProtocol.h"
 #include "gui/ClientFftSmoothingGate.h"
 #include "core/AppSettings.h"
+#include "core/RadioCertification.h"
+#include "models/RadioModel.h"
 
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
@@ -787,6 +789,118 @@ static void forwardPowerSkippedHealthRow()
           "skipped row: reported when every response so far was skipped");
 }
 
+namespace AetherSDR {
+class RadioCertificationTestAccess {
+public:
+    static void begin(RadioCertification& cert) { cert.beginSwrObservation(); }
+    static QJsonObject inventory(RadioCertification& cert)
+    {
+        cert.observeKeyedRf();
+        cert.stageMeterInventory();
+        return cert.m_stages.last().toObject().value("measured").toObject();
+    }
+    static QString concern(const RadioCertification& cert)
+    {
+        return cert.m_stages.last().toObject().value("concern").toString();
+    }
+};
+}
+
+static void swrReceiptDuringCertification()
+{
+    RadioModel radio;
+    check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "install offline HL2 for SWR inventory");
+    auto* backend = static_cast<Hl2Backend*>(radio.backend());
+    Access::metisEdge(*backend, "linkUp");
+    Access::fakeStreamingLink(*backend, true);
+    auto feed = [&](std::optional<int> forward, std::optional<int> reverse) {
+        hl2::Hl2Telemetry window;
+        window.forwardPowerRaw = window.forwardPowerPeakRaw = forward;
+        window.reversePowerRaw = window.reversePowerPeakRaw = reverse;
+        Access::publish(*backend, window);
+    };
+    using Cert = RadioCertificationTestAccess;
+    RadioCertification cert(&radio, nullptr);
+    Access::setKeyedFlag(*backend, true);
+    Access::pastKeyOn(*backend);
+    feed(2000, 11); // Receipt before the run.
+    Cert::begin(cert);
+    feed(2000, std::nullopt);
+    Access::setKeyedFlag(*backend, false);
+    feed(2000, 11); // A tail reading is a real receipt, outside the keyed window.
+    const auto missed = Cert::inventory(cert);
+    const auto missingRow = missed.value("TX:SWR").toObject();
+    check(missingRow.value("everFed").toBool() && !missingRow.value("fedWhileKeyedThisRun").toBool()
+          && missingRow.value("gateClearsThisRun").toInt() == 1
+          && missingRow.value("verdict").toString() == QStringLiteral("NOT DELIVERED"),
+          "missing reverse after a gate clear remains a finding despite earlier and tail receipts");
+
+    Cert::begin(cert);
+    Access::setKeyedFlag(*backend, true);
+    feed(76, 11);
+    const auto low = Cert::inventory(cert);
+    const auto lowRow = low.value("TX:SWR").toObject();
+    check(lowRow.value("gateClearsThisRun").toInt(-1) == 0
+          && lowRow.value("verdict").toString() == QStringLiteral("INCONCLUSIVE"),
+          "a suppressed run cannot inherit a prior gate clear or receipt");
+    check(low.value("keyedRf").toObject().value("backendSwrGateCounts").toInt() == 320
+          && lowRow.value("inconclusiveReason").toString().contains(QStringLiteral("320"))
+          && low.value("keyedRf").toObject().value("maxDrivePercentWhileKeyed").isDouble(),
+          "the run-local gate verdict retains the mainline threshold and keyed drive evidence");
+
+    feed(2000, 11);
+    const auto delivered = Cert::inventory(cert).value("TX:SWR").toObject();
+    check(delivered.value("fedWhileKeyedThisRun").toBool() && !delivered.contains("verdict"),
+          "an eligible keyed SWR reaches the real MeterModel");
+
+    Access::setKeyedFlag(*backend, false);
+    Access::metisEdge(*backend, "linkDown");
+    const auto linkStillDown = Cert::inventory(cert).value("TX:SWR").toObject();
+    check(!linkStillDown.value("defined").toBool()
+          && linkStillDown.value("fedWhileKeyedThisRun").isNull()
+          && linkStillDown.value("verdict").toString() == QStringLiteral("INCONCLUSIVE"),
+          "a link that is still down at inventory time fences the earlier receipt");
+    const QString downConcern = Cert::concern(cert);
+    const auto swrAt = downConcern.indexOf(QStringLiteral("TX:SWR — INCONCLUSIVE"));
+    const auto missingAt = downConcern.indexOf(QStringLiteral("expected on this radio but not defined"));
+    check(swrAt == 0 && missingAt > swrAt,
+          "the SWR row's INCONCLUSIVE sentence comes before the negative findings");
+    Access::metisEdge(*backend, "linkUp");
+    Access::setKeyedFlag(*backend, true);
+    Access::pastKeyOn(*backend);
+    feed(2000, 11);
+    const auto recovered = Cert::inventory(cert).value("TX:SWR").toObject();
+    check(recovered.value("fedWhileKeyedThisRun").isNull()
+          && recovered.value("gateClearsThisRun").isNull()
+          && recovered.value("verdict").toString() == QStringLiteral("INCONCLUSIVE"),
+          "link recovery fences both the earlier receipt and later telemetry");
+
+    Cert::begin(cert);
+    feed(2000, 11);
+    check(Cert::inventory(cert).value("TX:SWR").toObject().value("fedWhileKeyedThisRun").toBool(),
+          "a fresh run after recovery observes keyed delivery");
+
+    Cert::begin(cert);
+    feed(std::nullopt, std::nullopt);
+    check(Cert::inventory(cert).value("TX:SWR").toObject().value("inconclusiveReason")
+              .toString().contains(QStringLiteral("no keyed forward sample")),
+          "a run without forward telemetry has insufficient gate evidence");
+
+    Cert::begin(cert);
+    QObject::disconnect(backend, &IRadioBackend::meterUpdate, &radio, nullptr);
+    feed(2000, 11);
+    const auto dropped = Cert::inventory(cert).value("TX:SWR").toObject();
+    check(dropped.value("verdict").toString() == QStringLiteral("NOT DELIVERED"),
+          "a producer emission alone cannot satisfy the receipt check");
+    Access::setKeyedFlag(*backend, false);
+    Access::metisEdge(*backend, "linkDown");
+    check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "replace the offline HL2 fixture");
+    check(Cert::inventory(cert).value("TX:SWR").toObject().value("verdict")
+              == QStringLiteral("INCONCLUSIVE"),
+          "a replacement backend cannot inherit an earlier observation");
+}
+
+
 // #7063: the three SWR-gate health rows, and the two properties a diagnostic
 // reading them depends on.
 //
@@ -1325,6 +1439,7 @@ int main(int argc, char** argv)
     swrKeyOnWindowsEveryOver();
     forwardPowerSkippedHealthRow();
     swrGateHealthRows();
+    swrReceiptDuringCertification();
 #if AETHER_HL2_TX_TXA
     pureSignalOverloadAcrossQueuedDelivery();
     pureSignalAttenuationReply();

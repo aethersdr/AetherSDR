@@ -2757,6 +2757,15 @@ MainWindow::~MainWindow()
         m_ax25HfPacketDecodeDialog = nullptr;
     }
 
+    // ~AgcCalibrationDialog stops a running sweep, and onFinished() rewires
+    // the audio source through raw TciServer and AudioEngine pointers. Both
+    // are freed below, before deleteChildren() would reach the dialog.
+    if (m_agcCalibrationDialog) {
+        ShutdownTrace trace("agc_calibration.dialog.destroy");
+        delete m_agcCalibrationDialog.data();
+        m_agcCalibrationDialog = nullptr;
+    }
+
 #ifdef HAVE_WEBSOCKETS
     // Stop TCI producers while both the model and audio consumer are alive.
     // The controller joins its I/O worker before AudioEngine teardown.
@@ -4858,7 +4867,11 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
     // A canon dialog, so not showOrRaisePersistent(): that applies View →
     // Frameless Window, which a CanonWindow does not follow.
     if (!m_agcCalibrationDialog) {
-        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, floorFn, this);
+#ifdef HAVE_WEBSOCKETS
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, tciServer(), floorFn, this);
+#else
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, nullptr, floorFn, this);
+#endif
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_agcCalibrationDialog = dlg;
     }
@@ -5707,7 +5720,7 @@ void MainWindow::buildUI()
     auto* splitter = m_splitter;
 
     // Connection panel — a modeless CanonWindow dialog, always frameless.
-    m_connPanel = new ConnectionPanel(this);
+    m_connPanel = new ConnectionPanel(this, ConnectionPanel::RemoteDiscovery::Enabled);
     // Sizing belongs to the panel now. It sets these same two values in its own
     // constructor and then adjusts them per screen in fitToScreen(), which
     // every show path here runs first — a hardcoded pair at this level went

@@ -890,6 +890,7 @@ set(CORE_SOURCES
     src/core/control/ControlCredentials.cpp   # explicit credential identity, not TX grants
     src/core/control/ControlPairing.cpp  # aetherd remote clients: pairing (aetherd-remote-clients.md)
     src/core/control/VaultPairingIssuer.cpp  # aetherd remote clients: paired credentials into the vault
+    src/core/control/DiscoveryResponder.cpp  # aetherd remote clients: LAN advertisement (aetherd-remote-backend.md §1)
     src/core/control/ControlCredentialVault.cpp # OS-vault-only, explicit provisioning composition
     src/core/control/ControlCredentialProvisioner.cpp
     src/core/control/ControlInputPump.cpp     # bounded input turns and terminal authority lifetime
@@ -988,6 +989,13 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomCivBackend_DualReceiver.cpp
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
+    # Remote aetherd engines (family "aetherd", docs/aetherd-remote-backend.md):
+    # the socket-free pieces build everywhere; the backend needs Qt WebSockets.
+    src/core/backends/aetherd/RemoteEngineCredentials.cpp
+    src/core/backends/aetherd/RemoteEngineMapping.cpp
+    src/core/backends/aetherd/RemoteEngineScheduler.cpp
+    src/core/backends/aetherd/RemoteEngineStore.cpp      # paired engines: settings + keychain token
+    src/core/backends/aetherd/RemoteEngineDiscovery.cpp  # AETHERD-DISCOVER 1 on UDP 4996
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
     src/core/dsp/SpectralEnvelope.cpp # FFT De-comb (cepstral true envelope)
     src/core/dsp/WdspChannel.cpp
@@ -1219,6 +1227,7 @@ set(CORE_SOURCES
     src/core/SpectrogramBuffer.cpp
     src/core/SignalClassifier.cpp
     src/core/Resampler.cpp
+    src/core/ReceiverAudioMixer.cpp
     src/core/NvidiaAfxFilter.cpp
     src/core/NvidiaAfxPack.cpp
     src/core/DeepFilterFilter.cpp
@@ -2992,6 +3001,8 @@ if(Qt6WebSockets_FOUND)
     target_sources(aethercore PRIVATE
         src/core/FreeDvClient.cpp
         src/core/control/RemoteControlServer.cpp  # aetherd network listener (aetherd-remote-clients.md)
+        src/core/backends/aetherd/RemoteEngineBackend.cpp  # family "aetherd" (aetherd-remote-backend.md)
+        src/core/backends/aetherd/RemoteEnginePairing.cpp  # pairing.complete over wss://, code-pinned
     )
     target_sources(AetherSDR PRIVATE
         src/gui/FreeDvReporterDialog.cpp

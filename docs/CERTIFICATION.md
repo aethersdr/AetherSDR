@@ -993,6 +993,15 @@ full drive) or the key-on and speech-pause gate (key a steady
 carrier for longer). The verdict turns on the count rather than the peak
 because a peak above the floor can still be withheld.
 
+The HL2 inventory also records `gateClearsThisRun` and `fedWhileKeyedThisRun`.
+A clear counts even if the reflected reading is missing. If any window cleared
+and the meter received no keyed SWR update during the run, its verdict is
+`NOT DELIVERED`. One keyed SWR update anywhere in the run counts as delivered,
+so a meter path that stops later in the run still reads as delivered at
+inventory time. Earlier readings and unkeyed tail updates still contribute to
+`everFed`. A backend or link-session change makes the run-scoped fields null
+and the verdict `INCONCLUSIVE`.
+
 **Finish the family table.** `expectationsApplied: false` on anything that is
 not an HL2 (§2.1). Until that lands, every per-meter reading is measured and
 valid and NOTHING renders a verdict on it — which is how a run can be green and

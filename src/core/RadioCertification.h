@@ -2,11 +2,14 @@
 
 #include "models/MeterModel.h"   // kMinForwardWattsForSwr — the keyed-RF floor
 #include "TxCoordinator.h"
+#include "core/backends/IRadioBackend.h"
 #include "models/TxController.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QMetaObject>
+#include <QObject>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -175,6 +178,14 @@ private:
         int peakCounts = -1;
     };
     SwrGateReading readSwrGate() const;
+    using SwrPublication = IRadioBackend::HealthSnapshot::SwrPublication;
+    void beginSwrObservation();
+    std::optional<SwrPublication> currentSwrPublication() const;
+    QPointer<IRadioBackend> m_swrBackend;
+    std::optional<SwrPublication> m_swrBaseline;
+    bool m_keyedSwrReceived = false;
+    QObject m_swrObserver;
+    QMetaObject::Connection m_swrConnection;
 
     // What the rf stage concludes about SWR from one keyed window. Separate so
     // the decision is testable without a transmitter. `result` is one of

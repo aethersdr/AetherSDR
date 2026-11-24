@@ -2,6 +2,9 @@
 #include "core/AppSettings.h"
 #include "models/ConnectionWorkspace.h"
 #include "core/backends/flex/SmartLinkClient.h"
+#ifdef HAVE_WEBSOCKETS
+#include "core/backends/aetherd/RemoteEngineStore.h"
+#endif
 #include "gui/ConnectionPanel.h"
 
 #include <QApplication>
@@ -817,6 +820,34 @@ int main(int argc, char** argv)
             check("a typed password survives editing the user name", pass->text() == "typed");
         }
     }
+#ifdef HAVE_WEBSOCKETS
+    {
+        const QString engineId = QString(64, u'a');
+        const QString tailnetSerial = engineId + aetherd::RemoteEngineCredentials::kTailnetSuffix;
+        const QVariant lastSerial = settings.value("LastConnectedRadioSerial");
+        const QVariant autoConnect = settings.value("AutoConnectToLastRadio", "True");
+        settings.setValue("LastConnectedRadioSerial", tailnetSerial);
+        settings.setValue("AutoConnectToLastRadio", "True");
+        aetherd::RemoteEngineStore::save({engineId, "engine", "wss://192.0.2.7:8443",
+                                         "ws://100.101.102.103:8443", QString(64, u'b')});
+        ConnectionPanel panel;
+        RadioInfo offered;
+        QObject::connect(&panel, &ConnectionPanel::remoteEngineRestored, &panel,
+                         [&](const RadioInfo& radio) { offered = radio; });
+        QCoreApplication::processEvents();
+        check("startup hands off the remembered remote engine's selected route",
+              offered.serial == tailnetSerial && offered.address == QHostAddress("100.101.102.103")
+                  && offered.family == "aetherd");
+
+        aetherd::RemoteEngineStore::forget(engineId);
+        ConnectionPanel unpaired;
+        QSignalSpy unavailable(&unpaired, &ConnectionPanel::startupConnectUnavailable);
+        QCoreApplication::processEvents();
+        check("startup reports a saved remote engine with no credential", unavailable.size() == 1);
+        settings.setValue("LastConnectedRadioSerial", lastSerial);
+        settings.setValue("AutoConnectToLastRadio", autoConnect);
+    }
+#endif
     check("newer settings schema can be staged for guard test",
         settings.setRadioFeature("local", "", "ConnectionWorkspace", 2, document));
     check("newer schema is never loaded as an older document", ConnectionWorkspace::load().isEmpty());
