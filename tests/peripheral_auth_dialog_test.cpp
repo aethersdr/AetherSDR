@@ -23,6 +23,7 @@
 #include "core/backends/AmpDelta.h"
 #include "PeripheralAuthStoreFake.h"
 
+#include <QAccessible>
 #include <QApplication>
 #include <QCheckBox>
 #include <QPointer>
@@ -2272,10 +2273,30 @@ bool checkAgAntennaSelectionMode()
     AntennaGeniusModelTestAccess::processStatus(
         model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=3 txant=2 tx=1 inhibit=0"));
     const int commandsBeforeKeyedPick = commands.size();
+    // The refusal is also announced politely, from the status label.
+    static QObject* announcementSource = nullptr;
+    static QStringList politeAnnouncements;
+    announcementSource = connectionStatus;
+    politeAnnouncements.clear();
+    const bool accessibilityWasActive = QAccessible::isActive();
+    const QAccessible::UpdateHandler previousUpdateHandler =
+        QAccessible::installUpdateHandler([](QAccessibleEvent* event) {
+            if (event->type() != QAccessible::Announcement
+                || event->object() != announcementSource)
+                return;
+            const auto* announcement = static_cast<QAccessibleAnnouncementEvent*>(event);
+            if (announcement->politeness() == QAccessible::AnnouncementPoliteness::Polite)
+                politeAnnouncements.append(announcement->message());
+        });
+    QAccessible::setActive(true);
     model.selectRxAntenna(1, 2);
+    QAccessible::installUpdateHandler(previousUpdateHandler);
+    QAccessible::setActive(accessibilityWasActive);
     const bool keyedPickRefused = connectionStatus
         && connectionStatus->text() == QStringLiteral("Antenna can't change while transmitting.")
-        && commands.size() == commandsBeforeKeyedPick;
+        && commands.size() == commandsBeforeKeyedPick
+        && politeAnnouncements
+            == QStringList{QStringLiteral("Antenna can't change while transmitting.")};
 
     return initializedFromModel && pendingSelectionNotShown && rxOnlyDefaultSelection
         && pendingClearNotShown && clearsByRx

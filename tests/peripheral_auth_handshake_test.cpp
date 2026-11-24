@@ -464,6 +464,21 @@ int main(int argc, char** argv)
         AntennaGeniusModelTestAccess::setBand(permissions, 2, 0);
         permissions.selectTxAntenna(2, 3); // TX-capable, but the band is unknown.
         CHECK(commands.isEmpty());
+        // Positive control: in the same fixture a permitted TX pick does send,
+        // so the refusals above come from the guard, not from the fixture.
+        permissions.selectTxAntenna(1, 3);
+        CHECK(commands.size() == 1);
+        CHECK(!commands.isEmpty()
+              && commands.constLast().contains(QStringLiteral("port set 1 rxant=1 txant=3")));
+
+        AntennaGeniusModel knownBand;
+        QStringList knownBandCommands;
+        AntennaGeniusModelTestAccess::captureAntennaCommands(knownBand, knownBandCommands);
+        knownBand.selectTxAntenna(2, 3); // The same pick on port B once its band is known.
+        CHECK(knownBandCommands.size() == 1);
+        CHECK(!knownBandCommands.isEmpty()
+              && knownBandCommands.constLast().contains(
+                  QStringLiteral("port set 2 rxant=0 txant=3")));
     }
     {
         AntennaGeniusModel keyed;

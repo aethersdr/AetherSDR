@@ -5,6 +5,7 @@
 #include "GuardedSlider.h"
 #include "models/AntennaGeniusModel.h"
 
+#include <QAccessible>
 #include <QPushButton>
 #include <QCheckBox>
 #include <QLabel>
@@ -474,6 +475,14 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
         m_statusLabel->setText(msg);
         ThemeManager::instance().applyStyleSheet(
             m_statusLabel, "color: {{color.accent.warning}}; font-size: 10px;");
+        // A label text change is not announced, so a screen-reader user who
+        // clicked would hear nothing; announce the refusal politely, as the
+        // status-bar notice does (StatusBarMessageOverlay).
+        if (QAccessible::isActive()) {
+            QAccessibleAnnouncementEvent announcement(m_statusLabel, msg);
+            announcement.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+            QAccessible::updateAccessibility(&announcement);
+        }
         QTimer::singleShot(kSelectionRefusalMessageMs, this, [this, msg, generation] {
             if (generation != m_selectionRefusalGeneration
                 || !m_model || !m_model->isConnected() || m_statusLabel->text() != msg)
