@@ -6113,6 +6113,13 @@ target_include_directories(hf_gateway_config_test PRIVATE src)
 target_link_libraries(hf_gateway_config_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME hf_gateway_config_test COMMAND hf_gateway_config_test)
 
+# HF Gateway Stage 1 engine (RFC #7296): the receive-only guarantees, with
+# no socket opened.
+add_executable(hf_gateway_engine_test tests/hf_gateway_engine_test.cpp)
+target_include_directories(hf_gateway_engine_test PRIVATE src)
+target_link_libraries(hf_gateway_engine_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hf_gateway_engine_test COMMAND hf_gateway_engine_test)
+
 add_executable(lp100a_protocol_test
     tests/lp100a_protocol_test.cpp
     src/core/LpMeterProtocol.cpp

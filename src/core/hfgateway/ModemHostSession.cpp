@@ -23,6 +23,8 @@ QByteArray Session::request(Request request, const QStringList& callsigns)
     case Request::Disconnect: bytes = cmdDisconnect(); break;
     case Request::Abort: bytes = cmdAbort(); break;
     case Request::Version: bytes = cmdVersion(); break;
+    case Request::MonitorOn: bytes = cmdMonitor(true); break;
+    case Request::MonitorOff: bytes = cmdMonitor(false); break;
     }
     if (bytes.isEmpty()) {
         m_refusal = Refusal::Invalid;
@@ -72,7 +74,8 @@ Session::Event Session::onLine(const QString& line)
 
 bool Session::isStop(Request request)
 {
-    return request == Request::ListenOff || request == Request::Disconnect || request == Request::Abort;
+    return request == Request::ListenOff || request == Request::MonitorOff
+        || request == Request::Disconnect || request == Request::Abort;
 }
 
 void Session::reset()
@@ -91,6 +94,8 @@ QString toString(Request request)
     case Request::Disconnect: return QStringLiteral("DISCONNECT");
     case Request::Abort: return QStringLiteral("ABORT");
     case Request::Version: return QStringLiteral("VERSION");
+    case Request::MonitorOn: return QStringLiteral("MONITOR ON");
+    case Request::MonitorOff: return QStringLiteral("MONITOR OFF");
     }
     return QStringLiteral("?");
 }

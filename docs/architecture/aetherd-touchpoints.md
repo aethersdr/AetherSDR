@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 298 touchpoint headers (241 core, 57 models) — 298/298 tagged, 0/298 converted.
+**Totals:** 299 touchpoint headers (241 core, 58 models) — 299/299 tagged, 0/299 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -177,7 +177,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 2 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 4 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 195 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 196 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 18 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
@@ -274,6 +274,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/FirmwareInstallModel.h` | 1 | peripheral(ctr2) — CTR2-Max firmware installer model behind the CTR2 window: the signed release catalog, which controller is connected and in what mode, and actions on it (EspFirmwareJob in ROM download mode, or Ctr2ProxyModel's updater over the USB link), each checked against the device the operator confirmed. Controller firmware tooling, no radio state; a peripheral, NOT behind the radio seam. | unconverted |
 | `models/FlexWaveformModel.h` | 2 | vendor(flex) — Flex waveform/WFP status mirror with typed management intents; the backend encodes commands. | unconverted |
 | `models/GreenHeronModel.h` | 1 | peripheral(greenheron) — Green Heron "Everyware" client — antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md. | unconverted |
+| `models/HfGatewayModemModel.h` | 1 | universal — Receive-only external modem status, monitoring and configuration for AetherModem. The model owns the host-port client and exposes no radio or transmit control. | unconverted |
 | `models/Kat500Model.h` | 4 | peripheral(elecraft) — Typed model facade for the independent Elecraft KAT500 serial/raw-TCP tuner, with confirmed operating/configuration state and bounded maintenance operations. No radio-family wire or carrier commands are exposed to GUI. | unconverted |
 | `models/Kat500TxController.h` | 2 | peripheral(elecraft) — Engine-owned external tuner sequence through typed RadioModel and captured TX input; KAT500 remains an independent peripheral. No vendor radio wire or GUI dependency. | unconverted |
 | `models/Kat500Types.h` | 2 | peripheral(elecraft) — Model-owned KAT500 status, configuration and maintenance value types for the typed peripheral facade. No transport or raw command path in GUI. | unconverted |

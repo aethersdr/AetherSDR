@@ -1865,6 +1865,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/HfGatewayModemModel.h": {
+  "tag": "universal",
+  "note": "Receive-only external modem status, monitoring and configuration for AetherModem. The model owns the host-port client and exposes no radio or transmit control.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/Data2gReceiveModel.h": {
   "tag": "universal",
   "note": "Receive-only Data2G monitor fed mono 24 kHz audio from the AX.25 receive model's existing tap; decode runs on its own worker with a bounded queue and generation retirement. No radio protocol, no audio source of its own and no transmit authority.",
