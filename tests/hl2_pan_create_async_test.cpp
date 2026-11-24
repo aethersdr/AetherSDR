@@ -15,6 +15,7 @@
 
 #include "TestSettingsProfile.h"
 #include "TestDspBuildWait.h"
+#include "TxTestAuthority.h"
 #include "SeamThreadAffinityProbe.h"
 
 #include <QCoreApplication>
@@ -41,6 +42,10 @@
 #include <tuple>
 
 namespace AetherSDR::hl2 {
+
+struct MetisClientTestAccess {
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
+};
 
 struct Hl2PanCreateTestAccess {
     static bool rebuildReceivers(Hl2Backend& backend, int count)
@@ -191,6 +196,17 @@ struct Hl2PanCreateTestAccess {
     {
         return backend.effectiveTxPassband(mode);
     }
+    // The transmit gate open and a session without a socket, so setKeying()
+    // keys (as in hl2_tx_keyed_mode_change_test).
+    static void openTransmit(Hl2Backend& backend)
+    {
+        backend.m_txAllowed = true;
+        QMetaObject::invokeMethod(backend.m_metis, [m = backend.m_metis] {
+            m->enableTransmit(true);
+            MetisClientTestAccess::setStreaming(*m);
+        }, Qt::BlockingQueuedConnection);
+    }
+    static bool keyed(const Hl2Backend& backend) { return backend.transmitKeyed(); }
 };
 
 }   // namespace AetherSDR::hl2
@@ -898,6 +914,87 @@ void aFailedTxBuildHandsTheModulatorTheNewOwnersMode()
     check(published == expected, "the TX chain's published passband is LSB's");
 }
 
+// #7586, keyed: the TX receiver's build fails during the over. It cannot be
+// kept, and handing the modulator receiver 0's LSB mid-over splatters
+// (#7553), so the over ends with a notice and the hand-off follows the unkey.
+void aKeyedFailedTxBuildEndsTheOverThenHandsOver()
+{
+    using Mode = WdspChannel::Mode;
+    TxTestAuthority auth;   // outlives the backend: its operation keys it
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend, Mode::Lsb, QStringLiteral("LSB"))) {
+        check(false, "the backend's modulator configures");
+        return;
+    }
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+    QStringList notices;
+    QObject::connect(&backend, &IRadioBackend::transmitFailed, &backend,
+                     [&notices](const QString& reason) { notices << reason; });
+    // mox=false as published; the modulator's mode at that instant (nothing
+    // posted after the edge has run yet); whether the hand-off's passband
+    // echo, posted right after its setMode, came while still keyed.
+    std::optional<bool> moxOff;
+    std::optional<Mode> modeAtUnkey;
+    std::optional<bool> handoffWhileKeyed;
+    QObject::connect(&backend, &IRadioBackend::transmitChanged, &backend,
+                     [&](const AetherSDR::TransmitDelta& d) {
+                         if (d.mox && !*d.mox && !moxOff) {
+                             moxOff = true;
+                             modeAtUnkey = Access::txConfig(backend).mode;
+                         }
+                         if (d.txFilterLow && d.txFilterHigh && !handoffWhileKeyed)
+                             handoffWhileKeyed = Access::keyed(backend);
+                     });
+
+    ThreadHold hold(Access::buildContext(backend));
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "keyed: the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setTxSlice(ui);
+    backend.setSliceMode(ui, QStringLiteral("DIGU"));
+    Access::openTransmit(backend);
+    backend.setKeying(true, auth.operation, {});
+    check(Access::keyed(backend) && Access::txDdc(backend) == 1
+              && Access::txConfig(backend).mode == Mode::Digu,
+          "keyed setup: keyed on the new DIGU receiver, the modulator runs DIGU");
+
+    moxOff.reset();
+    handoffWhileKeyed.reset();
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+    check(lifecycleFailures == 1 && Access::txDdc(backend) == 0,
+          "keyed: the build fails and transmit falls back to receiver 0");
+    std::fprintf(stderr, "     keyed after the failure: keyed %d, mox-off %d, notices [%s]\n",
+                 Access::keyed(backend) ? 1 : 0, moxOff.value_or(false) ? 1 : 0,
+                 qPrintable(notices.join(QStringLiteral(" | "))));
+    check(!Access::keyed(backend) && moxOff.value_or(false),
+          "keyed: the over ends (MOX off is published)");
+    check(notices == QStringList{QStringLiteral("TX receiver failed; transmission stopped.")},
+          "keyed: one notice tells the operator why");
+    check(modeAtUnkey == Mode::Digu,
+          "keyed: the modulator was still DIGU when the over ended");
+    check(handoffWhileKeyed == false,
+          "keyed: the hand-off reached the modulator only after the unkey");
+
+    const auto lsb = Access::txPassbandFor(backend, QStringLiteral("LSB"));
+    const AetherSDR::hl2::Hl2TxDsp::Config after = Access::txConfig(backend);
+    std::fprintf(stderr, "     keyed, after the unkey: modulator mode %d, %g..%g Hz (LSB is %d..%d)\n",
+                 static_cast<int>(after.mode), after.filterLowHz, after.filterHighHz,
+                 lsb.first, lsb.second);
+    check(after.mode == Mode::Lsb && after.filterLowHz == lsb.first
+              && after.filterHighHz == lsb.second,
+          "keyed: then the modulator runs receiver 0's LSB and passband");
+}
+
 }   // namespace
 
 // Swallows the retired chain's DeferredDelete so it is still alive when its
@@ -1054,6 +1151,7 @@ int main(int argc, char** argv)
     aFailedBuildLeavesTheRolesOnALiveReceiver();
     aFailedBuildWithdrawsItsSMeter();
     aFailedTxBuildHandsTheModulatorTheNewOwnersMode();
+    aKeyedFailedTxBuildEndsTheOverThenHandsOver();
     aStaleSpectrumFrameDoesNotPublishOnTheReuser(false);
     aStaleSpectrumFrameDoesNotPublishOnTheReuser(true);
     std::fprintf(stderr, "hl2_pan_create_async_test: %d failure(s)\n", g_failures);
