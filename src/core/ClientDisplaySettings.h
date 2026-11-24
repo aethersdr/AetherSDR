@@ -10,11 +10,14 @@
 
 namespace AetherSDR {
 
-// Client-kept display state (waterfallRates, fftAverages, fftFps, dbmRanges),
-// keyed by pan slot in the schema-1 `ClientDisplay` document. The caller passes
-// who owns each value: a false owner reads and writes nothing, so no copy can
-// fight a radio's own (#2465, #4126). Radio publications and adaptive caps never
-// write here. Tables are optional and every writer is read-modify-write: no bump.
+// Client-kept display state in the schema-1 `ClientDisplay` document: tables
+// keyed by pan slot (waterfallRates, fftAverages, fftFps, dbmRanges,
+// spotMarkers) and per-radio flags (showTxInWaterfall, linkPanDisplayRates).
+// Where the caller passes who owns a value, a false owner reads and writes
+// nothing, so no copy can fight a radio's own (#2465, #4126). spotMarkers and
+// linkPanDisplayRates are the client's own preferences on every backend and
+// take no owner. Radio publications and adaptive caps never write here. Tables
+// are optional and every writer is read-modify-write: no bump.
 class ClientDisplaySettings {
 public:
     // The Display panel's own FFT FPS slider bounds (SpectrumOverlayMenu). A

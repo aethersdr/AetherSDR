@@ -73,6 +73,12 @@ int main(int argc, char** argv)
     const RadioSettingsScope linkFlex(QStringLiteral("flex"), QStringLiteral("link-A"));
     const RadioSettingsScope linkOther(QStringLiteral("flex"), QStringLiteral("link-B"));
     check(!ClientDisplaySettings::linkPanDisplayRates(linkFlex), "absent link flag reads off");
+    // Every existing user has a v1 document without the key.
+    const RadioSettingsScope linkLegacy(QStringLiteral("flex"), QStringLiteral("link-C"));
+    ClientDisplaySettings::saveWaterfallRate(linkLegacy, 0, true, 40);
+    check(ClientDisplaySettings::waterfallRate(linkLegacy, 0, true) == 40
+        && !ClientDisplaySettings::linkPanDisplayRates(linkLegacy),
+          "a v1 document without the link flag reads off");
     check(ClientDisplaySettings::saveLinkPanDisplayRates(linkFlex, true)
         && ClientDisplaySettings::linkPanDisplayRates(linkFlex), "link flag saves on a Flex-shaped scope");
     check(!ClientDisplaySettings::linkPanDisplayRates(linkOther), "link flag is per radio");

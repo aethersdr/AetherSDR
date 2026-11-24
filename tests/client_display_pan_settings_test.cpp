@@ -496,9 +496,23 @@ int main(int argc, char** argv)
         check(wiring.contains(QStringLiteral(
                   "scheduleClientFftFpsSave(sw->panIndex(), 25);")),
               "Reset to Defaults saves the default FFT FPS");
-        check(precedes(wiring, "scheduleClientFftFpsSave(tsw->panIndex(), v);",
-                       "if (m_adaptiveThrottleActive) {\n                continue;"),
+        // Anchored to each loop: the two loops share the guard's text, so an
+        // unanchored order check would let one loop's guard stand in for the
+        // other's.
+        check(followsWithin(wiring, "scheduleClientFftFpsSave(tsw->panIndex(), v);",
+                            "if (m_adaptiveThrottleActive) {\n                continue;", 200),
               "the slider saves before the adaptive-throttle return, so the cap cannot drop it");
+        check(followsWithin(wiring, "scheduleClientWaterfallRateSave(tsw->panIndex(), clampedRate);",
+                            "if (m_adaptiveThrottleActive) {\n                continue;", 300),
+              "the waterfall rate saves before the adaptive-throttle return");
+        // Link Rates (#6799): both operator handlers go through the target list,
+        // so a refactor cannot quietly drop the fan-out from one of them.
+        check(followsWithin(wiring, "connect(menu, &SpectrumOverlayMenu::fftFpsChanged,",
+                            "for (auto* target : displayRateTargets(applet)) {", 600),
+              "the FPS slider applies to every pan displayRateTargets() returns");
+        check(followsWithin(wiring, "const auto applyWaterfallLineDuration = [this, applet, sw](int rate) {",
+                            "for (auto* target : displayRateTargets(applet)) {", 2500),
+              "the waterfall rate applies to every pan displayRateTargets() returns");
 
         // The dBm range: both operator gestures adopt, both primes restore.
         check(wiring.count(QStringLiteral("adoptClientOwnedDbmRange(applet->panId()")) >= 3,

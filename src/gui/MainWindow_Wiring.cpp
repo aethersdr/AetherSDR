@@ -3314,8 +3314,16 @@ void MainWindow::reloadLinkPanDisplayRates()
 // sends nothing to the radio and changes no rate.
 void MainWindow::setLinkPanDisplayRates(bool on)
 {
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!ClientDisplaySettings::saveLinkPanDisplayRates(scope, on)
+        && scope.hasRadioIdentity()) {
+        // The store refused (a corrupt or newer document): show and use what
+        // it holds, so the toggle cannot read on for a session and then
+        // silently revert at the next connection.
+        reloadLinkPanDisplayRates();
+        return;
+    }
     m_linkPanDisplayRates = on;
-    ClientDisplaySettings::saveLinkPanDisplayRates(m_radioModel.settingsScope(), on);
     if (!m_panStack) {
         return;
     }
