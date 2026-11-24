@@ -3725,7 +3725,7 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     });
     connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
 #ifdef HAVE_SERIALPORT
-        QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
+        queueSerialPortSettings();
         auto& fcs = AppSettings::instance();
         const bool fcOpen = fcs.value("FlexControlOpen", "False").toString() == "True";
         const QString fcPort = fcs.value("FlexControlPort").toString();
@@ -3773,6 +3773,8 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     dlg->setFlexControlConnectionStatus(
         m_flexControlConnected,
         m_flexControlConnected && m_flexControl ? m_flexControl->portName() : QString());
+    dlg->setSerialPortConnectionStatus(m_serialPortOpen, m_serialPortDevice,
+                                       m_serialPortError);
 #endif
     // VK3AMP hardware variant changed in Peripherals settings -- rescale
     // the live forward-power gauge to match (see RadioSetupDialog.h's own
@@ -3792,7 +3794,7 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     connect(dlg, &QDialog::finished, this, [this, prevComp]() {
 #ifdef HAVE_SERIALPORT
         // Re-load serial port settings if changed (on worker thread)
-        QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
+        queueSerialPortSettings();
         // Re-check FlexControl open/close state
         auto& fcs = AppSettings::instance();
         bool fcOpen = fcs.value("FlexControlOpen", "False").toString() == "True";
