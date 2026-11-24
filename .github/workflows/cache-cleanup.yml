@@ -18,16 +18,16 @@ name: Cache cleanup
 # lowered, revisit whether prune-main is still earning its keep — a short
 # retention does much of the same work for free.
 #
-# One cause is handled here — SUPERSEDED main entries. ci.yml saves a compiler
-# cache on every green main build, keyed on run_id because actions/cache entries
-# are immutable. Restores resolve through restore-keys to the MOST RECENT match,
+# One cause is handled here — SUPERSEDED main entries. CI saves the Windows
+# and macOS compiler caches and Full Suite saves the Linux cache. Each save
+# needs a new key because actions/cache entries are immutable. Restores resolve through restore-keys to the MOST RECENT match,
 # so the moment run N+1 saves, run N's entry is unreachable — and being
 # unreachable it is never accessed again, so nothing refreshes its LRU position
 # and nothing deletes it.
 #
-# That adds up fast. Each main push saves one entry per compiler-cache prefix
-# below, ~5 GiB in all (sizes and the budget are in ci.yml's CCACHE_MAXSIZE
-# comment), several times a day, and each is unreachable once the next lands.
+# That adds up fast. Main pushes can save several GiB across workflows
+# (see the budget in full-suite.yml). Each prefix's old entry stops being
+# the restore choice once the next lands.
 # Unmanaged, that pins the repo at its allowance with caches nothing will
 # ever read.
 #
@@ -102,8 +102,8 @@ jobs:
           # been ONE such cold build; the insurance was causing them weekly.
           #
           # The sparse case the insurance guarded against is closed by the
-          # `success()` gate on the Linux and Windows saves (ci.yml, "Save
-          # ccache objects" / "Save sccache objects"). It is NOT closed on
+          # successful-build gate in Full Suite's Linux save and the
+          # `success()` gate in CI's Windows save. It is NOT closed on
           # macOS: ci.yml's "Set up ccache" step documents that the
           # ccache-action saves from a post-job hook with no `success()` half,
           # so a failed main build there can still write a sparse entry and
@@ -111,7 +111,7 @@ jobs:
           # lightest config and one cold macOS rebuild is the whole cost. If a
           # corrupt entry ever lands on any prefix, `gh cache delete` it and
           # take the one cold rebuild; do not go back to 2 without re-doing
-          # the budget in ci.yml's CCACHE_MAXSIZE comment.
+          # the budget in full-suite.yml's CCACHE_MAXSIZE comment.
           KEEP: "1"
         run: |
           set -euo pipefail
@@ -126,6 +126,8 @@ jobs:
           # the first pass precisely because the rule was written as "caches in
           # ci.yml" — the scope that matters is the repository's 10 GB, so if
           # you add a run_id-keyed compiler cache in ANY workflow, add it here.
+          # Keep pruning the retired ccache-linux-build- prefix while it
+          # remains a restore fallback and its final entry ages out.
           PREFIXES="
             ccache-linux-build-
             ccache-linux-full-

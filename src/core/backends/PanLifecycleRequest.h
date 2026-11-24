@@ -17,6 +17,12 @@ struct PanLifecycleControl {
     // A native create can wait for local work before publishing a pan or
     // definitively failing. It remains fenced to the original session.
     bool createWaitsForLocalBuild{false};
+    // Closing the pan that hosts the TX slice while the radio is transmitting.
+    // Refused: the backend refuses it (a close would hand transmit to another
+    // receiver mid-over), so RadioModel refuses it up front, with the same
+    // Notice, before anything above the seam starts tearing the pan down.
+    enum class TxPanCloseWhileKeyed { Allowed, Refused };
+    TxPanCloseWhileKeyed txPanCloseWhileKeyed{TxPanCloseWhileKeyed::Allowed};
     bool supports(PanLifecycleAction action) const { return actions.contains(action); }
 };
 enum class PanCloseIntent { Ordinary, ExplicitTeardown };

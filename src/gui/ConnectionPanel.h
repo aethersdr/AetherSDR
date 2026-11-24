@@ -453,6 +453,8 @@ private:
     QWidget*     m_manualIcomPassRow{nullptr};
     QWidget*     m_manualIcomPortRow{nullptr};
     QWidget*     m_manualIcomPortCustomRow{nullptr};
+    QComboBox*   m_ic7110Market{nullptr};
+    QWidget*     m_ic7110MarketRow{nullptr};
     QWidget*     m_manualIcomCivRow{nullptr};
     // The hex entry's own row, shown only for "Custom...". Separate from the
     // combo's row so the two can be hidden independently — the label column is

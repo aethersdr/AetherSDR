@@ -170,7 +170,11 @@ RTL declaration check runs only when the RTL backend is built.
 `panDisplayControl` lists the `PanDisplayField`s a backend implements, plus which
 geometry components (center, span) it can change. `panLifecycleControl` lists the
 pan actions it implements and whether creation is `Native` (published before the
-call returns) or `Answered` (the reply names the ID; publication follows). Both are
+call returns) or `Answered` (the reply names the ID; publication follows), and
+`txPanCloseWhileKeyed`: `Refused` means closing the pan that hosts the TX slice
+while transmitting is refused, so `RadioModel::removePanadapter()` refuses it with
+the transmit-change Notice before `panAboutToRemove`, and callers keep their own
+state for the pan (center lock, TCI's created VFO-B pan). Both are
 desktop request records: `RadioModel::requestPanDisplay()`, `requestPanCreation()`,
 `removePanadapter()`, `resyncDisplayInventory()` and the RF gain range query refuse
 anything undeclared. They do not widen the daemon capability catalogue.
@@ -178,7 +182,7 @@ anything undeclared. They do not widen the daemon capability catalogue.
 | Backend | `panDisplayControl` fields | Span | `panLifecycleControl` |
 |---|---|---|---|
 | Flex | geometry, band, level range, pixels, average, FPS, weighted average, RF gain, WNB + level, loops A/B, noise-floor position + enable, waterfall rate/color gain/black level/auto-black/defaults | ✅ | Answered: create, remove, inventory refresh, RF gain info |
-| HL2 | geometry, RF gain, FPS, average, weighted average | ✅ | Native: create, remove |
+| HL2 | geometry, RF gain, FPS, average, weighted average | ✅ | Native: create, remove; TX pan close while keyed: Refused |
 | ANAN | geometry, RF gain, FPS, average, weighted average, spectrum points | ✅ | Native: create, remove (RX2; RX1's pan refuses removal) |
 | RTL | geometry, RF gain, FPS, average, weighted average | ✅ | absent |
 | Icom | geometry, RF gain | ✅ | absent |

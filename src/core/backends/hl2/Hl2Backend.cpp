@@ -1494,6 +1494,15 @@ bool Hl2Backend::removePanadapter(const QString& panId)
         qCWarning(lcHl2) << "HL2: refusing to close the last receiver";
         return false;
     }
+    // Closing the TX-owning receiver hands transmit to another one, which is a
+    // TX-slice change; while keyed that is refused like setTxSlice() (D1). The
+    // pan stays: RadioModel only drops it on panRemoved. Disconnect does not
+    // come through here (releaseReceiverDsps()).
+    if (ddc == m_txDdc
+        && refuseTransmitChangeWhileKeyed(ids->uiNumber,
+                                          tr("TX panadapter can't close while transmitting."))) {
+        return false;
+    }
     m_replayUnreopened.clear();   // see createPanadapter()
     // m_txDdc and the active DDC are indices, and removal renumbers every
     // index after the closed one. A role on the closing receiver must move; a
@@ -1584,8 +1593,15 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     publishWideState();
     // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
     // TX register (with the new owner's XIT) leaves the closed receiver.
+    // Its mode and passband too, or the new TX slice shows one mode while the
+    // modulator sends the closed receiver's.
     if (txMoved) {
         retuneReceiver(m_txDdc);
+        if (const Receiver* owner = rx(m_txDdc); owner && m_txDsp) {
+            QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
+                Q_ARG(WdspChannel::Mode, modeFromString(owner->mode)));
+            pushTxPassband(owner->mode);
+        }
     }
     // The TX slice may have moved; republish so the indicator follows.
     emitAllSliceState();
@@ -2426,6 +2442,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     c.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Native,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    // removePanadapter() refuses closing the TX pan while keyed (D1, #7553).
+    c.panLifecycleControl->txPanCloseWhileKeyed = PanLifecycleControl::TxPanCloseWhileKeyed::Refused;
     // No Flex stream plane: receive audio is native and graphic EQ is host-side.
     c.audioStreamControl = std::nullopt;
     c.radioGraphicEqControl = std::nullopt;
@@ -3866,6 +3884,16 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
         return;
     }
     const QString mode = canonicalOfferedMode(requested);
+    if (ddc == m_txDdc && transmitKeyed()) {
+        // The TX slice's mode is the transmitter's. A repeat of the current
+        // mode changes nothing, so only a change is announced; either way the
+        // republish puts SliceModel's optimistic mode back.
+        if (r->mode.compare(mode, Qt::CaseInsensitive) != 0) {
+            refuseTransmitChangeWhileKeyed(sliceId, tr("Mode can't change while transmitting."));
+        }
+        emitSliceState(ddc);
+        return;
+    }
 
     const QString previous = r->mode;
     r->mode = mode;
@@ -4400,6 +4428,34 @@ void Hl2Backend::setActiveSlice(int sliceId)
     emitSliceState(ddc);
 }
 
+bool Hl2Backend::refuseTransmitChangeWhileKeyed(int sliceId, const QString& message)
+{
+    if (!transmitKeyed()) {
+        return false;
+    }
+    qCWarning(lcHl2).noquote() << "HL2: refused while transmitting (slice" << sliceId << "):"
+                               << message;
+    emit transmitChangeRefused(sliceId, message);
+    return true;
+}
+
+ReceiveDispatch Hl2Backend::requestTxSlice(int sliceId, bool enabled,
+                                           const RadioControlCompletion& completion,
+                                           const RadioControlFence& current)
+{
+    const int ddc = ddcForSlice(sliceId);
+    if (enabled && transmitKeyed() && ddc >= 0 && ddc != m_txDdc) {
+        if (current && !current()) { return ReceiveDispatch::Unsupported; }
+        setTxSlice(sliceId);   // refuses, tells the operator and republishes
+        if (completion) {
+            completion({RadioControlReply::Kind::Refused, -1,
+                        QStringLiteral("TX slice can't change while transmitting.")});
+        }
+        return ReceiveDispatch::LocalOnly;
+    }
+    return IRadioBackend::requestTxSlice(sliceId, enabled, completion, current);
+}
+
 void Hl2Backend::setTxSlice(int sliceId)
 {
     const int ddc = ddcForSlice(sliceId);
@@ -4407,6 +4463,12 @@ void Hl2Backend::setTxSlice(int sliceId)
     if (!r) {
         qCWarning(lcHl2) << "HL2: cannot move transmit to slice" << sliceId
                          << "— no such receiver";
+        return;
+    }
+    if (ddc != m_txDdc
+        && refuseTransmitChangeWhileKeyed(sliceId, tr("TX slice can't change while transmitting."))) {
+        emitSliceState(ddc);
+        emitSliceState(m_txDdc);
         return;
     }
     if (ddc == m_txDdc) {
@@ -5648,7 +5710,20 @@ void Hl2Backend::keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
     // A fresh element supersedes that local hang. The earlier element's own
     // completion is still held by its scheduled release in MetisClient.
     m_cwHangCompletion = {};
-    if (m_metis) {
+    // A break-in key-down inside the hang. A fence of the run that raised MOX
+    // (a CWX clear, a refusal) drops it at the writer while this backend stays
+    // keyed, and the element would be admitted with nothing on EP2 (#7567).
+    // Its admission and the MOX it may raise again are one I/O-thread action:
+    // a frame built between them would pass the down's sample unkeyed.
+    const bool rekeyInHang = down && breakIn && m_keyed && m_cwAutoKeyed;
+    if (m_metis && rekeyInHang) {
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, dsp = m_txDsp, operation, completion, scheduledAt,
+                                            releaseAt] {
+            if (metis->setCwKeyDownRaisingMox(operation, scheduledAt, releaseAt, completion) && dsp) {
+                dsp->reset();   // #7216, as applyKeying() does
+            }
+        }, Qt::QueuedConnection);
+    } else if (m_metis) {
         // A scheduled key-up's completion goes with it: MetisClient releases it
         // once the element's release is written to EP2, not when this returns.
         QMetaObject::invokeMethod(m_metis, [metis = m_metis, down, operation, completion, scheduledAt,
@@ -6612,6 +6687,26 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 {
     lowHz = std::clamp(lowHz, 0, kTxAudioMaxHz - 50);
     highHz = std::clamp(highHz, lowHz + 50, kTxAudioMaxHz);
+
+    if (transmitKeyed()) {
+        // The pair published for the current mode: DIGU's 150..3000 even with
+        // a saved USB cut, which stays saved. A request for exactly that pair
+        // changes nothing, so it is not told as a refusal.
+        const Receiver* txRx = rx(m_txDdc);
+        const auto [shownLo, shownHi] = effectiveTxPassband(txRx ? txRx->mode : QStringLiteral("USB"));
+        if (lowHz != shownLo || highHz != shownHi) {
+            const auto* txIds = m_ids.byDdc(m_txDdc);
+            // -1 with no TX receiver: the Notice then goes to the TX or active slice's pan.
+            refuseTransmitChangeWhileKeyed(txIds ? txIds->uiNumber : -1,
+                                           tr("TX filter can't change while transmitting."));
+        }
+        // Put the Phone applet back on that pair.
+        TransmitDelta delta;
+        delta.txFilterLow = shownLo;
+        delta.txFilterHigh = shownHi;
+        emit transmitChanged(delta);
+        return;
+    }
 
     m_txFilterFromOperator = true;
     m_txFilterLowHz = lowHz;

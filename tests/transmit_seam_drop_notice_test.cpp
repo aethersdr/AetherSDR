@@ -318,6 +318,42 @@ void txSliceSelectionNotice()
     check(transmitting.dropped == QStringList{QStringLiteral("tx slice")},
           "a transmit-capable radio that refuses TX-slice selection still reports it");
 }
+// #7553: a change the backend refused while keyed goes on the refused slice's
+// panadapter as an interlock Notice, keyed by slice and message. With no slice
+// to name (-1) it still goes out, with no pan, for the overlay's fallback.
+// Through the production setupBackend() wiring (rebuildBackendForTest), which
+// is where the connection lives; setBackendForTest() does not make it.
+void transmitChangeRefusedNotice()
+{
+    RadioModel radio;
+    if (!radio.rebuildBackendForTest(QStringLiteral("hl2")) || !radio.backend()) {
+        check(false, "the HL2 backend is built through setupBackend()");
+        return;
+    }
+    SliceDelta delta;
+    delta.inUse = true; delta.frequency = 14.2; delta.mode = QStringLiteral("USB");
+    delta.filterLow = 100; delta.filterHigh = 2800;
+    delta.panId = QStringLiteral("0x40000000"); delta.txSlice = true;
+    radio.emitBackendSliceChangedForTest(0, delta);
+    struct Notice { QString message, key, panId; };
+    std::vector<Notice> notices;
+    QObject::connect(&radio, &RadioModel::interlockNotificationRequested, &radio,
+                     [&notices](const QString& message, const QString& key, const QString& panId) {
+                         notices.push_back({message, key, panId});
+                     });
+    const SliceModel* txSlice = radio.slice(0);
+    const QString filter = QStringLiteral("TX filter can't change while transmitting.");
+    emit radio.backend()->transmitChangeRefused(0, filter);
+    check(txSlice && !txSlice->panId().isEmpty() && notices.size() == 1 && notices[0].message == filter
+              && notices[0].key == QStringLiteral("tx-keyed-change:0:") + filter
+              && notices[0].panId == txSlice->panId(),
+          "a keyed-change refusal is a Notice on the refused slice's panadapter");
+    const QString mode = QStringLiteral("Mode can't change while transmitting.");
+    emit radio.backend()->transmitChangeRefused(-1, mode);
+    check(notices.size() == 2 && notices[1].message == mode
+              && notices[1].key == QStringLiteral("tx-keyed-change:-1:") + mode && notices[1].panId.isEmpty(),
+          "a refusal with no slice to name is still a Notice, with no pan");
+}
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("transmit-control-receipts"));
@@ -334,5 +370,6 @@ int main(int argc, char** argv)
     cwPitchBackendLifetime();
     icomMicReadbackWindow();
     txSliceSelectionNotice();
+    transmitChangeRefusedNotice();
     return failures ? 1 : 0;
 }

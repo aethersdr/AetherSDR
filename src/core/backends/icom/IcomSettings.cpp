@@ -43,6 +43,11 @@ quint16 portOr(const QJsonObject& obj, const char* field, quint16 fallback)
     return static_cast<quint16>(v);
 }
 
+QString marketKey(const QString& host, quint16 port)
+{
+    return QStringLiteral("%1|%2").arg(host.trimmed().toLower()).arg(port);
+}
+
 }  // namespace
 
 QJsonObject IcomSettings::readObj()
@@ -51,6 +56,26 @@ QJsonObject IcomSettings::readObj()
     if (json.isEmpty())
         return {};
     return QJsonDocument::fromJson(json.toUtf8()).object();
+}
+
+QString IcomSettings::ic7110Market(const QString& host, quint16 port)
+{
+    return readObj().value("ic7110Markets").toObject().value(marketKey(host, port)).toString();
+}
+
+void IcomSettings::setIc7110Market(const QString& host, quint16 port, const QString& market)
+{
+    auto obj = readObj();
+    auto markets = obj.value("ic7110Markets").toObject();
+    const auto key = marketKey(host, port);
+    if (markets.value(key).toString() == market)
+        return;
+    if (market == "US" || market == "EU")
+        markets.insert(key, market);
+    else
+        markets.remove(key);
+    obj.insert("ic7110Markets", markets);
+    writeObj(obj);
 }
 
 void IcomSettings::writeObj(const QJsonObject& obj)

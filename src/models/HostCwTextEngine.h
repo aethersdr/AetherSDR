@@ -118,6 +118,9 @@ private:
     int m_nextRetiringId{0};
     std::shared_ptr<char> m_alive{std::make_shared<char>()};   // for the retire polls
     bool m_closed{false};
+
+    // Drives the kRetireWaitMs cap, which no offline run reaches by itself.
+    friend struct HostCwTextEngineTestAccess;
 };
 
 } // namespace AetherSDR

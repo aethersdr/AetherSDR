@@ -10,11 +10,14 @@
 
 namespace AetherSDR {
 
-// Client-kept display state (waterfallRates, fftAverages, fftFps, dbmRanges),
-// keyed by pan slot in the schema-1 `ClientDisplay` document. The caller passes
-// who owns each value: a false owner reads and writes nothing, so no copy can
-// fight a radio's own (#2465, #4126). Radio publications and adaptive caps never
-// write here. Tables are optional and every writer is read-modify-write: no bump.
+// Client-kept display state in the schema-1 `ClientDisplay` document: tables
+// keyed by pan slot (waterfallRates, fftAverages, fftFps, dbmRanges,
+// spotMarkers) and per-radio flags (showTxInWaterfall, linkPanDisplayRates).
+// Where the caller passes who owns a value, a false owner reads and writes
+// nothing, so no copy can fight a radio's own (#2465, #4126). spotMarkers and
+// linkPanDisplayRates are the client's own preferences on every backend and
+// take no owner. Radio publications and adaptive caps never write here. Tables
+// are optional and every writer is read-modify-write: no bump.
 class ClientDisplaySettings {
 public:
     // The Display panel's own FFT FPS slider bounds (SpectrumOverlayMenu). A
@@ -147,6 +150,45 @@ public:
         if (!scope.setFeature(QStringLiteral("ClientDisplay"), 1, doc)) {
             qWarning() << "ClientDisplay: settings write did not persist";
         }
+    }
+
+    // "Link display rates across pans" (#6799), one flag per radio. The flag is
+    // the client's own preference on every backend, so no ownership gate: a
+    // Flex, which keeps FPS and waterfall rate itself, still remembers it.
+    // Absent or malformed reads as off.
+    static bool linkPanDisplayRates(const RadioSettingsScope& scope)
+    {
+        if (!scope.hasRadioIdentity()) {
+            return false;
+        }
+        int version = 0;
+        const QJsonObject doc = scope.featureExact(QStringLiteral("ClientDisplay"), &version);
+        if (version != 1) {
+            return false;
+        }
+        const QJsonValue value = doc.value(QStringLiteral("linkPanDisplayRates"));
+        return value.isBool() && value.toBool();
+    }
+
+    static bool saveLinkPanDisplayRates(const RadioSettingsScope& scope, bool on)
+    {
+        if (!scope.hasRadioIdentity()) {
+            return false;
+        }
+        int version = 0;
+        AppSettings::FeatureReadStatus status;
+        QJsonObject doc = scope.featureExact(QStringLiteral("ClientDisplay"), &version, &status);
+        if (version > 1 || status == AppSettings::FeatureReadStatus::Corrupt
+            || status == AppSettings::FeatureReadStatus::Unavailable) {
+            qWarning() << "ClientDisplay: refusing to replace unreadable or newer settings";
+            return false;
+        }
+        doc.insert(QStringLiteral("linkPanDisplayRates"), on);
+        if (!scope.setFeature(QStringLiteral("ClientDisplay"), 1, doc)) {
+            qWarning() << "ClientDisplay: settings write did not persist";
+            return false;
+        }
+        return true;
     }
 
     static void saveWaterfallRate(const RadioSettingsScope& scope, int panIndex,

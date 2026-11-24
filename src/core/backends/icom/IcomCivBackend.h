@@ -351,6 +351,26 @@ private:
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
     bool hasDualReceivers() const;
+    bool hasSelectedBandDualwatch() const;
+    void pollSelectedBandRadio();
+    bool selectedBandCommandAllowed(const CivFrame& frame, bool writing) const;
+    bool validSelectedBandReply(const CivFrame& frame) const;
+    std::optional<std::uint8_t> m_selectedBand;
+    std::optional<std::uint8_t> m_confirmedScopeSource;
+    bool m_ic7110RegionMismatchWarned = false;
+    std::optional<bool> m_scopeEnabled;
+    std::optional<bool> m_scopeOutputEnabled;
+    bool m_mainModeConfirmed = false;
+    // While a compound 26 00 write is awaiting readback, retain only fields
+    // edited again by the operator. Untouched fields come from the next reply.
+    struct MainVfoEdit {
+        qint64 deadlineMs;
+        std::optional<CivMode> mode;
+        bool data = false;
+        int filter = 0;
+    };
+    std::optional<MainVfoEdit> m_pendingMainVfoEdit;
+    void requestMainVfoEdit(std::optional<CivMode> mode, bool data, int filter);
     // SUB-addressed setters not yet supported on MAIN/SUB radios: warn and refuse.
     bool refuseDeferredSubControl(int receiver);
     void initializeDualReceivers();
@@ -435,6 +455,7 @@ private:
     std::unique_ptr<IcomSession> m_session;
     std::uint64_t m_sessionGeneration = 0;
     const IcomModel* m_model = nullptr;
+    std::string m_ic7110Market;
 
     // ---- Confirmation provenance (the `stateFreshness` diagnostic) ----------
     //

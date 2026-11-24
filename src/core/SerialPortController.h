@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include "TxCoordinator.h"
+#include "SerialOpenError.h"
 
 #if defined(HAVE_SERIALPORT) || defined(Q_OS_WIN)
 #include <QElapsedTimer>
@@ -80,9 +81,19 @@ public:
     void setPaddleSwap(bool swap) { m_paddleSwap = swap; }
     bool paddleSwap() const { return m_paddleSwap; }
 
-    // Load/save configuration from AppSettings
-    void loadSettings();
-    void saveSettings();
+    // Apply configuration from AppSettings. The port is opened only while
+    // SerialPortOpen is "True" (the operator's request for this session);
+    // SerialAutoOpen is consumed once at startup by MainWindow (#6972).
+    // Returns false if applying the settings could not open the requested port.
+    bool loadSettings();
+
+    // Startup, GUI thread, before the first loadSettings(). Legacy releases
+    // reopened the port when either SerialAutoOpen or SerialPortOpen was true,
+    // so the first launch after upgrade carries SerialPortOpen=True into
+    // SerialAutoOpen once and writes SerialAutoOpenMigrated; after that the
+    // Auto-open checkbox alone decides. Then seeds this session's request
+    // (SerialPortOpen) from SerialAutoOpen and saves (#6972 ruling (a)).
+    static void seedStartupSettings();
 
 public slots:
     void setTransmitting(bool tx);
@@ -95,6 +106,13 @@ signals:
                          const TxCoordinator::Request& straightKeyInput);
     void txInputsCancelled();
     void errorOccurred(const QString& msg);
+    // The observed result of every open() and close() (#6972). On failure,
+    // open is false and error/nativeCode/failureKind (SerialOpenFailureKind)
+    // describe it; group is set only when joining it is the remedy. device is
+    // the full system path (/dev/ttyUSB0, COM3).
+    void connectionStateChanged(bool open, const QString& device,
+                                const QString& error, int nativeCode,
+                                int failureKind, const QString& group);
 
 private:
     friend class TxOperationIntegrationTestAccess;
@@ -116,6 +134,7 @@ private:
     std::atomic<quint64> m_inputPortEpoch{0};
     void applyPin(PinFunction targetFn, bool active);
     void updatePolling();
+    void reportOpenFailure(const SerialOpenFailure& failure);
 
     // Output state
     PinFunction m_dtrFn{PinFunction::None};

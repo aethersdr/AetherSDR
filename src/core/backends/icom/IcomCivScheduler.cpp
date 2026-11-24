@@ -188,6 +188,23 @@ bool IcomCivScheduler::hasQueuedOrInFlight(std::string_view key) const noexcept
                        [key](const Queued& queued) { return queued.request.key == key; });
 }
 
+void IcomCivScheduler::invalidateMatching(const std::function<bool(const Request&)>& matches)
+{
+    std::erase_if(m_queue, [&](const Queued& queued) { return matches(queued.request); });
+    const auto invalidate = [&](const Queued& queued) {
+        if (matches(queued.request)) {
+            auto& generation = m_generations.at(queued.request.key);
+            generation = std::max(generation, queued.generation + 1);
+        }
+    };
+    if (m_inFlight) {
+        invalidate(*m_inFlight);
+    }
+    for (const Expired& expired : m_expired) {
+        invalidate(expired.request);
+    }
+}
+
 void IcomCivScheduler::dropStaleExpired(std::int64_t nowMs)
 {
     while (!m_expired.empty() && m_expired.front().forgetAtMs <= nowMs) {

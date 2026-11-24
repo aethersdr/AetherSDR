@@ -14,7 +14,15 @@
 // a host-text element's fall is whole when the next down is already queued;
 // HostCwTextEngine's natural end leaves its last element whole on EP2, and
 // the same sender's next text a word space after it (the wall-clock cases:
-// its real keyer times the text, frames follow 5 ms behind).
+// its real keyer times the text, frames follow 5 ms behind); a host-text run
+// fenced inside the break-in hang leaves the next text keyed on EP2 (#7567);
+// an element after such a fence, due in the next EP2 frame, is whole even
+// when the pacer builds frames right after its key-down reaches the I/O
+// thread, because admission and the MOX re-raise are one action (#7572); the
+// same holds for the two other fences of a host-text run inside the hang, a
+// refused key-down and the retire cap; a re-key after such a fence that the
+// EP2 writer refuses (past the shift bound) raises no MOX; and a re-key in a
+// live over leaves its MOX alone.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -30,6 +38,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QEventLoop>
 #include <QString>
 #include <QVariantMap>
@@ -55,6 +64,7 @@ struct MetisClientTestAccess {
     }
     static constexpr int rateHz() { return MetisClient::kEp2AudioRateHz; }
     static std::size_t pending(const MetisClient& client) { return client.m_cwScheduleCount; }
+    static TxCoordinator::Operation moxOperation(const MetisClient& client) { return client.m_moxOperation; }
 };
 
 struct Hl2TxGateTestAccess {
@@ -78,6 +88,16 @@ struct Hl2TxGateTestAccess {
         return packet;
     }
     static bool keyed(const Hl2Backend& backend) { return backend.m_keyed; }
+    static MetisClient* metis(Hl2Backend& backend) { return backend.m_metis; }
+    // MOX as the EP2 writer holds it, not as the backend believes it.
+    static bool wireKeyed(Hl2Backend& backend)
+    {
+        bool keyed = false;
+        QMetaObject::invokeMethod(backend.m_metis, [&keyed, metis = backend.m_metis] {
+            keyed = metis->isKeyed();
+        }, Qt::BlockingQueuedConnection);
+        return keyed;
+    }
     // The EP2 writer's fail-safe counters: shifted downs, late ups, refused downs.
     static std::string counters(Hl2Backend& backend)
     {
@@ -87,6 +107,15 @@ struct Hl2TxGateTestAccess {
                 + std::to_string(metis->cwLateKeyUps()) + ", refused " + std::to_string(metis->cwRefusedDowns());
         }, Qt::BlockingQueuedConnection);
         return text;
+    }
+    // The operation the EP2 writer holds MOX under.
+    static TxCoordinator::Operation moxOperation(Hl2Backend& backend)
+    {
+        TxCoordinator::Operation operation;
+        QMetaObject::invokeMethod(backend.m_metis, [&operation, metis = backend.m_metis] {
+            operation = MetisClientTestAccess::moxOperation(*metis);
+        }, Qt::BlockingQueuedConnection);
+        return operation;
     }
     static std::size_t pending(Hl2Backend& backend)
     {
@@ -98,6 +127,29 @@ struct Hl2TxGateTestAccess {
     }
 };
 }  // namespace AetherSDR::hl2
+
+namespace AetherSDR {
+// The retire cap: every finished run's producer is polled as if kRetireWaitMs
+// had passed. The hang outlasts no cap offline (2000 ms + lead + shift bound
+// is under 2500 ms), so a test reaches it only this way.
+struct HostCwTextEngineTestAccess {
+    static bool inputPending(const HostCwTextEngine& engine)
+    {
+        return engine.m_model && std::any_of(engine.m_retiring.cbegin(), engine.m_retiring.cend(),
+            [&engine](const HostCwTextEngine::Retiring& r) { return engine.m_model->txProducerInputPending(r.producer); });
+    }
+    static void expireRetireWait(HostCwTextEngine& engine)
+    {
+        std::vector<int> ids;
+        for (const HostCwTextEngine::Retiring& r : engine.m_retiring) {
+            ids.push_back(r.id);
+        }
+        for (const int id : ids) {
+            engine.pollRetiring(id, HostCwTextEngine::kRetireWaitMs);
+        }
+    }
+};
+}  // namespace AetherSDR
 
 using namespace AetherSDR;
 using namespace AetherSDR::hl2;
@@ -132,6 +184,36 @@ static void appendI(const std::array<std::uint8_t, kUsbPacketSize>& pkt, std::ve
         }
     }
 }
+
+// The EP2 pacer, run on the I/O thread the moment a queued call there has
+// admitted a key-down (the schedule grew), before the next queued call is
+// delivered. Models the worker reaching onEp2PacerTick() between two calls the
+// model thread posted back to back. Lives on the I/O thread; read it there.
+class PacerAfterAdmittedDown : public QObject {
+public:
+    PacerAfterAdmittedDown(MetisClient* metis, int frames) : m_metis(metis), m_frames(frames) {}
+    std::vector<int> trace;
+    bool fired = false;
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (fired || watched != m_metis || event->type() != QEvent::MetaCall) {
+            return false;
+        }
+        const std::size_t before = MetisClientTestAccess::pending(*m_metis);
+        watched->event(event);   // deliver this call now...
+        if (MetisClientTestAccess::pending(*m_metis) > before) {
+            fired = true;        // ...and run the pacer before the next one
+            for (int k = 0; k < m_frames; ++k) {
+                appendI(m_metis->buildNextControlPacket(), trace);
+            }
+        }
+        return true;
+    }
+private:
+    MetisClient* m_metis;
+    int m_frames;
+};
 
 struct Run { std::int64_t start; std::int64_t length; };
 static std::vector<Run> carriers(const std::vector<int>& iTrace)
@@ -565,6 +647,275 @@ static void testHostTextSameSenderNextTextIsSpaced(std::int64_t secondAtMs, bool
     }
 }
 
+// #7567: a host-text run fenced inside the break-in hang (a CWX clear,
+// stopAll()) drops MOX at the writer while the backend stays keyed. The next
+// text inside the same hang must still put RF on EP2, or be refused; it must
+// never be admitted and keyed silently. Manual MOX is the control: the
+// operator's own MOX survives the fence.
+static void testHostTextFencedInTheHangNextTextIsOnTheWire(bool breakIn)
+{
+    const std::string name = std::string("host text fenced in the hang, ")
+        + (breakIn ? "break-in" : "manual MOX") + ": ";
+    Rig rig(breakIn);
+    SliceDelta slice;
+    slice.frequency = 7.020;
+    slice.mode = QStringLiteral("CW");
+    slice.panId = QStringLiteral("0x40000000");
+    slice.txSlice = true;
+    rig.model.emitBackendSliceChangedForTest(0, slice);
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(true);
+        Rig::settle();
+    }
+    const TxCoordinator::Producer client = rig.model.registerTxProducer();
+    const TxCoordinator::Request sender = client.request();
+    int endedRuns = 0;
+    bool secondRefused = false;
+    HostCwTextEngine engine(&rig.model, [&](const TxCoordinator::Request&, bool refused) {
+        ++endedRuns;
+        secondRefused = secondRefused || (endedRuns >= 2 && refused);
+    });
+    constexpr int kWpm = 20;
+    const auto wallMs = [&rig] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - rig.t0).count();
+    };
+    const auto pump = [&](std::int64_t untilMs) {
+        while (wallMs() < untilMs) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+            rig.buildTo(wallMs() - 5);
+        }
+    };
+    const std::int64_t startMs = wallMs();
+    check(engine.play(sender, QStringLiteral("E"), kWpm, {}), name + "the first message plays");
+    // The dit (60 ms) is on EP2 a lead after it; the 1000 ms hang runs on.
+    pump(startMs + 250);
+    const bool keyedAtFence = Hl2TxGateTestAccess::keyed(*rig.backend);
+    engine.stopAll();   // the CWX clear: fences the run's producer now
+    pump(startMs + 350);
+    const bool keyedAtSecond = Hl2TxGateTestAccess::keyed(*rig.backend);
+    check(keyedAtFence && keyedAtSecond, name + "the fence and the second text both fall inside the hang");
+    check(engine.play(sender, QStringLiteral("E"), kWpm, {}), name + "the second message plays");
+    pump(startMs + 350 + 800);
+    const auto runs = carriers(rig.iTrace);
+    check(secondRefused || (runs.size() == 2 && within(runs[1].length, samplesOfMs(1200 / kWpm), 2)),
+          name + "the second dit is whole on EP2, or refused (" + runsText(runs) + "; "
+              + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(false);
+        Rig::settle();
+    }
+}
+
+// After a fence in the break-in hang, the next element's key-down is due in
+// the very next EP2 frame, and the pacer builds frames as soon as that
+// key-down is admitted on the I/O thread. Any frame built between admitting
+// the down and raising MOX would pass the down's sample unkeyed and cut the
+// element short, with no shift and no refusal, so the element must be whole
+// at its sample (#7572).
+static void testRekeyAfterAFenceIsOneIoAction()
+{
+    const std::string name = "re-key after a fence, down due in the next frame, pacer between the calls: ";
+    Rig rig(true);
+    const TxCoordinator::Producer first = rig.model.registerTxProducer();
+    rig.element(first.request().derive(), 100, 160);
+    Rig::settle();
+    rig.buildTo(300);   // the first dit (140-200 ms on EP2) is written; the hang runs on
+    first.invalidate(); // the fence: the operation holding MOX lapses
+    rig.buildTo(320);
+    check(Hl2TxGateTestAccess::keyed(*rig.backend) && !Hl2TxGateTestAccess::wireKeyed(*rig.backend),
+          name + "the fence dropped MOX at the writer inside the hang");
+    // The next down lands in the frame after the cursor.
+    const std::int64_t cursor = static_cast<std::int64_t>(rig.iTrace.size());
+    const std::int64_t perMs = kRate / 1000;
+    const std::int64_t downMs = (cursor + perMs - 1) / perMs - Hl2Settings::kCwEdgeLeadDefaultMs;
+    const std::int64_t target = (downMs + Hl2Settings::kCwEdgeLeadDefaultMs) * perMs;
+    check(target >= cursor && target < cursor + kFrame,
+          name + "the down is due in the next frame (cursor " + std::to_string(cursor) + ", down at "
+              + std::to_string(target) + ")");
+    auto* pacer = new PacerAfterAdmittedDown(Hl2TxGateTestAccess::metis(*rig.backend),
+                                             static_cast<int>(samplesOfMs(10) / kFrame) + 1);
+    MetisClient* metis = Hl2TxGateTestAccess::metis(*rig.backend);
+    pacer->moveToThread(metis->thread());
+    QMetaObject::invokeMethod(metis, [metis, pacer] { metis->installEventFilter(pacer); },
+                              Qt::BlockingQueuedConnection);
+    const TxCoordinator::Producer second = rig.model.registerTxProducer();
+    rig.element(second.request().derive(), downMs, downMs + 60);
+    Rig::settle();
+    bool fired = false;
+    QMetaObject::invokeMethod(metis, [&] {
+        metis->removeEventFilter(pacer);
+        fired = pacer->fired;
+        rig.iTrace.insert(rig.iTrace.end(), pacer->trace.begin(), pacer->trace.end());
+        delete pacer;
+    }, Qt::BlockingQueuedConnection);
+    check(fired && rig.refusedDowns == 0, name + "the pacer ran right after the down was admitted");
+    rig.buildTo(800);
+    const auto runs = carriers(rig.iTrace);
+    check(runs.size() == 2 && within(runs[1].length, samplesOfMs(60), 2)
+              && within(runs[1].start, target + samplesOfMs(5) / 2, 2),
+          name + "the element is whole on EP2, at its sample (" + runsText(runs) + "; "
+              + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
+}
+
+// The re-key's MOX is raised only for a down the EP2 writer
+// admitted. Here the down after the fence is later than the shift bound, so
+// setCwKeyDown() refuses it; MOX must stay down at the writer for the rest of
+// the hang, or the radio keys with no carrier until the hang ends.
+static void testRefusedRekeyAfterAFenceRaisesNoMox()
+{
+    const std::string name = "re-key after a fence, refused past the shift bound: ";
+    Rig rig(true);
+    const TxCoordinator::Producer first = rig.model.registerTxProducer();
+    rig.element(first.request().derive(), 100, 160);
+    Rig::settle();
+    rig.buildTo(300);   // the first dit (140-200 ms on EP2) is written; the hang runs on
+    first.invalidate(); // the fence: the operation holding MOX lapses
+    rig.buildTo(600);   // the frame cursor runs ahead of the next element
+    check(Hl2TxGateTestAccess::keyed(*rig.backend) && !Hl2TxGateTestAccess::wireKeyed(*rig.backend),
+          name + "the fence dropped MOX at the writer inside the hang");
+    // After the first element for the model, but due on air at 240 ms against
+    // a 600 ms cursor: 360 ms late, past the 250 ms shift bound.
+    const TxCoordinator::Producer second = rig.model.registerTxProducer();
+    rig.element(second.request().derive(), 200, 260);
+    Rig::settle();
+    const std::string counters = Hl2TxGateTestAccess::counters(*rig.backend);
+    check(counters.find("refused 1") != std::string::npos && rig.refusedDowns == 0,
+          name + "the down reached the EP2 writer and was refused there (" + counters + "; " + std::to_string(rig.refusedDowns) + " refused by the model)");
+    check(Hl2TxGateTestAccess::keyed(*rig.backend) && !Hl2TxGateTestAccess::wireKeyed(*rig.backend),
+          name + "the refused down raised no MOX at the writer");
+    rig.buildTo(800);
+    const auto runs = carriers(rig.iTrace);
+    check(!Hl2TxGateTestAccess::wireKeyed(*rig.backend) && runs.size() == 1,
+          name + "no MOX and no carrier after it (" + runsText(runs) + ")");
+}
+
+// Inside the hang with no fence, the over is live and its
+// MOX is left alone. The re-key admits the down and calls nothing else: the
+// writer keeps MOX under the first element's operation, not the new one's.
+static void testRekeyInALiveOverLeavesItsMoxAlone()
+{
+    const std::string name = "re-key in a live over: ";
+    Rig rig(true);
+    const TxCoordinator::Producer first = rig.model.registerTxProducer();
+    rig.element(first.request().derive(), 100, 160);
+    Rig::settle();
+    rig.buildTo(300);
+    const TxCoordinator::Operation held = Hl2TxGateTestAccess::moxOperation(*rig.backend);
+    check(Hl2TxGateTestAccess::keyed(*rig.backend) && Hl2TxGateTestAccess::wireKeyed(*rig.backend),
+          name + "the hang holds MOX at the writer");
+    const TxCoordinator::Producer second = rig.model.registerTxProducer();
+    rig.element(second.request().derive(), 400, 460);
+    Rig::settle();
+    const TxCoordinator::Operation after = Hl2TxGateTestAccess::moxOperation(*rig.backend);
+    check(rig.refusedDowns == 0 && after.sameAuthority(held),
+          name + "MOX is still held under the first element's operation");
+    rig.buildTo(800);
+    const auto runs = carriers(rig.iTrace);
+    check(runs.size() == 2 && within(runs[1].length, samplesOfMs(60), 2),
+          name + "the second element is whole on EP2 (" + runsText(runs) + ")");
+}
+
+// The two other routes by which a host-text run's
+// producer is fenced inside the break-in hang, into the same #7567 fix.
+// Refusal: the run's second key-down is refused at the host-text gates (the
+// TX slice leaves CW), and refused() fences the run at once. Retire cap: the
+// drained run's input is still pending in the hang when kRetireWaitMs expires,
+// and the cap fences it anyway. Either way the next text inside the same hang
+// is whole on EP2, or refused with a notice; never admitted silently. Manual
+// MOX is the control: the operator's MOX survives the fence.
+enum class HangFence { Refusal, RetireCap };
+static void testHostTextOtherFenceInTheHang(HangFence route, bool breakIn)
+{
+    const bool refusal = route == HangFence::Refusal;
+    const std::string name = std::string("host text fenced in the hang by ")
+        + (refusal ? "a refused key-down" : "the retire cap") + ", " + (breakIn ? "break-in" : "manual MOX") + ": ";
+    Rig rig(breakIn);
+    const auto setMode = [&rig](const QString& mode) {
+        SliceDelta slice;
+        slice.frequency = 7.020;
+        slice.mode = mode;
+        slice.panId = QStringLiteral("0x40000000");
+        slice.txSlice = true;
+        rig.model.emitBackendSliceChangedForTest(0, slice);
+    };
+    setMode(QStringLiteral("CW"));
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(true);
+        Rig::settle();
+    }
+    int notices = 0;
+    QObject::connect(&rig.model, &RadioModel::interlockNotificationRequested,
+                     [&notices](const QString&, const QString& key, const QString&) {
+                         notices += key.startsWith(QLatin1String("cw-text-")) ? 1 : 0;
+                     });
+    const TxCoordinator::Producer client = rig.model.registerTxProducer();
+    const TxCoordinator::Request sender = client.request();
+    int endedRuns = 0;
+    bool firstRefused = false;
+    bool secondRefused = false;
+    HostCwTextEngine engine(&rig.model, [&](const TxCoordinator::Request&, bool refused) {
+        ++endedRuns;
+        (endedRuns == 1 ? firstRefused : secondRefused) = refused;
+    });
+    constexpr int kWpm = 20;
+    const auto wallMs = [&rig] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - rig.t0).count();
+    };
+    const auto pump = [&](std::int64_t untilMs) {
+        while (wallMs() < untilMs) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+            rig.buildTo(wallMs() - 5);
+        }
+    };
+    const std::int64_t startMs = wallMs();
+    if (refusal) {
+        // "EE": the first dit (0-60 ms) keys; the second is due at 240 ms.
+        check(engine.play(sender, QStringLiteral("EE"), kWpm, {}), name + "the first message plays");
+        pump(startMs + 150);
+        setMode(QStringLiteral("USB"));
+        pump(startMs + 320);
+        setMode(QStringLiteral("CW"));
+        check(endedRuns == 1 && firstRefused && notices == 1,
+              name + "its second key-down is refused with a notice, and the run ends ("
+                  + std::to_string(notices) + " notices)");
+    } else {
+        check(engine.play(sender, QStringLiteral("E"), kWpm, {}), name + "the first message plays");
+        pump(startMs + 150);
+        const bool pending = engine.retiring() && HostCwTextEngineTestAccess::inputPending(engine);
+        HostCwTextEngineTestAccess::expireRetireWait(engine);
+        // Manual MOX has no hang: the input ends once the release is written,
+        // so the run is already fenced and the cap finds nothing to fence.
+        check(endedRuns == 1 && !firstRefused && pending == breakIn && !engine.retiring(),
+              name + (breakIn ? "the drained run's input is pending in the hang, and the cap fences it"
+                              : "the drained run's input ended with its release, and it is fenced"));
+    }
+    pump(startMs + 350);
+    const bool keyed = Hl2TxGateTestAccess::keyed(*rig.backend);
+    const bool wire = Hl2TxGateTestAccess::wireKeyed(*rig.backend);
+    check(keyed && wire == !breakIn,
+          name + "the second text falls inside the hang, with MOX at the writer "
+              + (wire ? "kept" : "dropped by the fence"));
+    const int noticesBefore = notices;
+    const std::int64_t secondMs = wallMs();
+    check(engine.play(sender, QStringLiteral("E"), kWpm, {}), name + "the second message plays");
+    pump(secondMs + 800);
+    std::vector<Run> later;
+    for (const Run& r : carriers(rig.iTrace)) {
+        if (r.start >= samplesOfMs(secondMs)) {
+            later.push_back(r);
+        }
+    }
+    check((secondRefused && notices > noticesBefore)
+              || (!secondRefused && later.size() == 1 && within(later[0].length, samplesOfMs(1200 / kWpm), 2)),
+          name + "the second dit is whole on EP2, or refused with a notice (" + runsText(later) + "; "
+              + (secondRefused ? "refused" : "not refused") + "; " + Hl2TxGateTestAccess::counters(*rig.backend)
+              + ")");
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(false);
+        Rig::settle();
+    }
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-cw-element-completion"));
@@ -588,6 +939,15 @@ int main(int argc, char** argv)
     testHostTextSameSenderNextTextIsSpaced(200, true, false);
     testHostTextSameSenderNextTextIsSpaced(400, true, false);
     testHostTextSameSenderNextTextIsSpaced(150, true, true);
+    testHostTextFencedInTheHangNextTextIsOnTheWire(true);
+    testHostTextFencedInTheHangNextTextIsOnTheWire(false);
+    testRekeyAfterAFenceIsOneIoAction();
+    testRefusedRekeyAfterAFenceRaisesNoMox();
+    testRekeyInALiveOverLeavesItsMoxAlone();
+    testHostTextOtherFenceInTheHang(HangFence::Refusal, true);
+    testHostTextOtherFenceInTheHang(HangFence::Refusal, false);
+    testHostTextOtherFenceInTheHang(HangFence::RetireCap, true);
+    testHostTextOtherFenceInTheHang(HangFence::RetireCap, false);
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

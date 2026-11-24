@@ -382,6 +382,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get daxtx`](#get-daxtx) | This client's radio-confirmed DAX TX ownership, audio readiness, pending request, and guard reasons. |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
+| | [`get serial`](#get-serial) | Serial PTT/CW port — observed open state and the last open failure (#6972). |
 | | [`get titlebar`](#get-titlebar) | Unified 52 px title bar — brand, radio tabs, audio cluster, window chrome. |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
@@ -3462,6 +3463,34 @@ dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `visible=false`. A TUNE, two-tone, ATU, DAX, TCI, or CW transmit must leave
 `visible=false` throughout.
 
+### `get serial`
+Read the serial PTT/CW port (**Radio Setup → Serial & Controllers**) as the
+controller last reported it — not the saved Open request. Works with no radio
+connected and never keys.
+
+```json
+→ {"cmd":"get","model":"serial"}
+← {"ok":true,"model":"serial","available":true,"open":false,
+   "device":"/dev/ttyUSB0","error":"Permission denied: Can't open /dev/ttyUSB0 (errno 13)",
+   "errorCode":13,"failureKind":1,"group":"dialout","errorDialogVisible":true,
+   "openRequested":false,"autoOpen":false}
+```
+
+Fields: `open` (the port is actually open), `device` (full system path of the
+last open/close), `error` (summary of the last failed open, empty after a
+successful open or a close), `errorCode` (errno, or the Win32 error; 0 when not
+known), `failureKind` (0 none, 1 permission, 2 not found, 3 in use, 4 other),
+`group` (the group whose membership would grant access; set only for a Linux
+permission failure where that is the remedy), `errorDialogVisible` (the "Serial
+Port Open Failed" dialog is showing), `openRequested` (the session's
+`SerialPortOpen` request; a failed open withdraws it), `autoOpen` (the startup
+preference). `available` is false in builds without Qt SerialPort. A trailing
+property narrows it: `get serial open` → `{"value":false}`. To prove the failure
+path without transmitting, select a port the user cannot open (or one that is
+not present), run `invoke serialOpenButton click`, then assert `open=false`,
+`error` non-empty and `errorDialogVisible=true`. Use `serialCloseButton` for
+the serial PTT/CW **Close** control.
+
 ### `get titlebar`
 Read the unified 52 px title bar — the single strip that owns the brand mark,
 the radio tabs, the audio cluster, and the window controls on every platform.
@@ -4545,12 +4574,23 @@ opens the receive audio path. Scope size/mode rejection logs under
 `aether.icom.pan` are limited to one warning per five seconds and include
 expected/received waveform counts or the unsupported mode.
 
-MAIN/SUB profiles also report radio-read `dualWatch` (null until known).
-`civ dualwatch on` / `civ dualwatch off` explicitly request the documented
-`07 C2` RX setting. Confirm the resulting boolean with `civ profile`; acceptance
-of the request is not readback. These commands preserve receiver frequencies,
-editing focus, split and TX routing, are unavailable in observe-only mode, and
-do not enable TX automation. Connection startup reads Dualwatch without setting it.
+On IC-7610, IC-7760 and modern-scope IC-785x, `civ dualwatch on` and
+`civ dualwatch off` request the `07 C2` setting. The IC-7110 uses `16 59`.
+Connection startup reads Dualwatch. After a change, use `civ profile` to
+check the radio-confirmed `dualWatch` boolean (null until known).
+
+On the IC-7110, `civ scopesource main` or `civ scopesource sub` selects the
+single streamed scope with `27 12`. In `civ profile`, `selectedBand` is the
+front-panel control focus, `scopeSource` is the radio-confirmed scope source,
+and `scopeFrameSource` identifies the accepted waveform. These fields use
+`0` for MAIN and `1` for SUB. The single editable slice belongs to MAIN.
+SUB is a scope preview. The app reports a CI-V refusal in the status bar.
+Scope selection and Dualwatch changes require a writable bridge and work
+with TX automation disabled. `scope.enabled` and
+`scope.outputEnabled` report the scope display and waveform-output switches.
+`lanOutput` reports the Wi-Fi output setting from SET 0122. Its values are
+`-1` while unknown, `0` for AF and `1` for IF. Only AF opens the shared
+station monitor.
 
 `civ scopepreset <range> <slot>` requests a preset read; adding `<lower-Hz>
 <upper-Hz>` explicitly writes whole-kHz edges inside that range, up to 1 MHz
@@ -5347,7 +5387,7 @@ audio devices require separate hardware validation.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopesource main\|sub\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (bounded by the power ceiling) |
