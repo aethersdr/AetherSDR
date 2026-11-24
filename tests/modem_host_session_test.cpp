@@ -139,6 +139,8 @@ int main()
         report("one more ordinary command is refused", s.request(Request::Version).isEmpty()
                                                            && s.refusal() == Refusal::QueueFull);
         report("ordinary MYCALL refused too", s.request(Request::MyCall, {"N0CALL"}).isEmpty());
+        report("MONITOR OFF is allowed past the soft cap without a grant",
+               s.request(Request::MonitorOff) == "MONITOR OFF\r");
         s.setTransmitPermitted(true);
         report("stop commands still go out past the soft cap", s.request(Request::ListenOff) == "LISTEN OFF\r"
                                                                     && s.request(Request::Disconnect) == "DISCONNECT\r"

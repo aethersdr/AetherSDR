@@ -49,7 +49,7 @@ class Session {
 public:
     // Replies awaited before ordinary commands are refused.
     static constexpr int kMaxOutstanding = 16;
-    // Stop commands (LISTEN OFF, DISCONNECT, ABORT) are exempt from
+    // Stop commands (LISTEN OFF, MONITOR OFF, DISCONNECT, ABORT) are exempt from
     // kMaxOutstanding: a modem that has stopped answering must still be told
     // to stop. Past this hard limit the modem is not answering at all, and
     // even a stop command is refused; the client drops the connection.

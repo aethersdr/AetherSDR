@@ -6,6 +6,8 @@
 #include <QStringList>
 #include <QtGlobal>
 
+#include <optional>
+
 // The VARA-style TCP host interface that external HF data modems expose:
 // an ASCII command port (CR-terminated lines) plus a data port that carries
 // the session's payload as an opaque byte stream.
@@ -121,7 +123,7 @@ struct Notification {
     QString monitorMode;      // Monitor: the mode it decoded on, e.g. DATAC16
     QString monitorKind;      // Monitor: CALL, ACCEPT, CQ, DISCONNECT, ...
     QString monitorFrom;      // Monitor: FROM= when present (CALL, CQ), else empty
-    double monitorSnDb = 0.0; // Monitor: SNR= when present and in range
+    std::optional<double> monitorSnDb; // Monitor: SNR= when present and in range
     // Monitor: source (FROM=) and bandwidthHz (BW=) are also set when present.
 };
 

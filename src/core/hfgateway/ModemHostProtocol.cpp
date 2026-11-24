@@ -254,7 +254,8 @@ Notification parseNotification(const QString& raw)
         // "MONITOR <mode> <kind> <detail...> SNR=<snr>" (Mercury docs/TNC.md,
         // MONITOR). Display-only telemetry: fields that fail validation are
         // left empty rather than rejecting the line.
-        static const QRegularExpression word(QStringLiteral("^[A-Z0-9_]{1,16}$"));
+        static const QRegularExpression word(
+            QRegularExpression::anchoredPattern(QStringLiteral("[A-Z0-9_]{1,16}")));
         if (!word.match(t.at(1)).hasMatch() || !word.match(t.at(2)).hasMatch()) {
             return unknown(raw);
         }

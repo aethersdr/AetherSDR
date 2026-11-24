@@ -74,7 +74,8 @@ Session::Event Session::onLine(const QString& line)
 
 bool Session::isStop(Request request)
 {
-    return request == Request::ListenOff || request == Request::Disconnect || request == Request::Abort;
+    return request == Request::ListenOff || request == Request::MonitorOff
+        || request == Request::Disconnect || request == Request::Abort;
 }
 
 void Session::reset()

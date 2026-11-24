@@ -1278,7 +1278,7 @@ set(CORE_SOURCES
     src/core/hfgateway/ModemHostClient.cpp
     src/core/hfgateway/HfGatewayConfig.cpp
     src/core/hfgateway/HfGatewaySettings.cpp
-    src/core/hfgateway/HostPortEngine.cpp
+    src/models/HfGatewayModemModel.cpp
     src/core/pms/PmsMailbox.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsStationList.cpp

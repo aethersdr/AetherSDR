@@ -1,4 +1,4 @@
-#include "core/hfgateway/HostPortEngine.h"
+#include "models/HfGatewayModemModel.h"
 
 #include <QCoreApplication>
 
@@ -32,10 +32,11 @@ int main(int argc, char** argv)
         EngineConfig c;
         c.id = toString(p);
         c.profile = p;
-        HostPortEngine engine(c);
+        HfGatewayModemModel engine(c);
         report("engine starts without transmit permission", !engine.transmitPermitted());
-        report("engine starts disconnected", engine.state() == AetherSDR::ModemHost::Client::State::Disconnected);
+        report("engine starts disconnected", engine.state() == HfGatewayModemModel::State::Disconnected);
         engine.setMonitor(true);
+        report("a disconnected modem never reports active monitoring", !engine.monitorActive());
         report("monitor toggling never grants permission", !engine.transmitPermitted());
         report("monitor only for Mercury", engine.monitorSupported() == (p == Profile::Mercury)
                                                && engine.monitor() == (p == Profile::Mercury));

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/hfgateway/HfGatewayConfig.h"
+#include "models/HfGatewayModemModel.h"
 
 #include <QList>
 #include <QWidget>
@@ -14,10 +14,6 @@ class QTreeWidget;
 class QVBoxLayout;
 
 namespace AetherSDR {
-
-namespace HfGateway {
-class HostPortEngine;
-}
 
 // AetherModem's "HF Gateway" tab, Stage 1 of RFC #7296: receive-only.
 //
@@ -43,19 +39,19 @@ private:
     void buildEngines();
     void buildHeard();
     void buildLog();
-    void rebuildEngines();
     void addEngineRow(const HfGateway::EngineConfig& config);
     void removeEngineRow(int index);
     void refreshEngineRow(int index);
     void refreshHeard();
     void addEngine();
     void removeEngine(int index);
-    void saveConfig();
+    bool saveConfig(const HfGateway::Config& config);
+    void confirmConnection(HfGateway::HfGatewayModemModel* engine);
     void appendLog(const QString& engineLabel, const QString& text, bool warning);
-    QString engineLabel(const HfGateway::HostPortEngine* engine) const;
+    QString engineLabel(const HfGateway::HfGatewayModemModel* engine) const;
 
     HfGateway::Config m_config;
-    QList<HfGateway::HostPortEngine*> m_engines;
+    QList<HfGateway::HfGatewayModemModel*> m_engines;
 
     QVBoxLayout* m_engineRows{nullptr};
     QLabel* m_noEnginesHint{nullptr};

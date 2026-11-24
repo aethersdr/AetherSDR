@@ -956,8 +956,6 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     }
     m_gatewayTab = tabButton(QStringLiteral("HF Gateway"), false, tabsFrame);
     m_gatewayTab->setEnabled(true);
-    // Group ids are stack indices: HF Gateway follows HF Data when that exists.
-    const int gatewayIndex = m_data2gTab ? 7 : 6;
     auto* tabGroup = new QButtonGroup(this);
     tabGroup->setExclusive(true);
     tabGroup->addButton(m_ax25Tab, 0);
@@ -967,7 +965,6 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     tabGroup->addButton(m_mailboxTab, 4);
     tabGroup->addButton(m_dstarTab, 5);
     if (m_data2gTab) { tabGroup->addButton(m_data2gTab, 6); }
-    tabGroup->addButton(m_gatewayTab, gatewayIndex);
     tabs->addWidget(m_ax25Tab, 1);
     tabs->addWidget(m_digiTab, 1);
     tabs->addWidget(m_kissTab, 1);
@@ -1095,11 +1092,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         m_tabStack->addWidget(m_data2gPage);
     }
 
-    // HF Gateway (RFC #7296, Stage 1): receive-only, stack index gatewayIndex.
+    // HF Gateway follows the optional HF Data page.
     m_gatewayPage = new HfGatewayPage(m_tabStack);
-    const int addedGatewayIndex = m_tabStack->addWidget(m_gatewayPage);
-    Q_ASSERT(addedGatewayIndex == gatewayIndex);
-    Q_UNUSED(addedGatewayIndex);
+    tabGroup->addButton(m_gatewayTab, m_tabStack->addWidget(m_gatewayPage));
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     m_logFrame = logFrame;
