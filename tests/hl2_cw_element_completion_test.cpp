@@ -20,7 +20,10 @@
 // when the pacer builds frames right after its key-down reaches the I/O
 // thread (#7572 review: admission and the MOX re-raise are one action); and
 // the same holds for the two other fences of a host-text run inside the hang,
-// a refused key-down and the retire cap (#7572 review, non-blocking).
+// a refused key-down and the retire cap (#7572 review, non-blocking); a
+// re-key after such a fence that the EP2 writer refuses (past the shift
+// bound) raises no MOX, and a re-key in a live over leaves its MOX alone
+// (#7572 review, N1 and N2).
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -62,6 +65,7 @@ struct MetisClientTestAccess {
     }
     static constexpr int rateHz() { return MetisClient::kEp2AudioRateHz; }
     static std::size_t pending(const MetisClient& client) { return client.m_cwScheduleCount; }
+    static TxCoordinator::Operation moxOperation(const MetisClient& client) { return client.m_moxOperation; }
 };
 
 struct Hl2TxGateTestAccess {
@@ -104,6 +108,15 @@ struct Hl2TxGateTestAccess {
                 + std::to_string(metis->cwLateKeyUps()) + ", refused " + std::to_string(metis->cwRefusedDowns());
         }, Qt::BlockingQueuedConnection);
         return text;
+    }
+    // The operation the EP2 writer holds MOX under.
+    static TxCoordinator::Operation moxOperation(Hl2Backend& backend)
+    {
+        TxCoordinator::Operation operation;
+        QMetaObject::invokeMethod(backend.m_metis, [&operation, metis = backend.m_metis] {
+            operation = MetisClientTestAccess::moxOperation(*metis);
+        }, Qt::BlockingQueuedConnection);
+        return operation;
     }
     static std::size_t pending(Hl2Backend& backend)
     {
@@ -745,6 +758,64 @@ static void testRekeyAfterAFenceIsOneIoAction()
               + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
 }
 
+// #7572 review, N1: the re-key's MOX is raised only for a down the EP2 writer
+// admitted. Here the down after the fence is later than the shift bound, so
+// setCwKeyDown() refuses it; MOX must stay down at the writer for the rest of
+// the hang, or the radio keys with no carrier until the hang ends.
+static void testRefusedRekeyAfterAFenceRaisesNoMox()
+{
+    const std::string name = "re-key after a fence, refused past the shift bound: ";
+    Rig rig(true);
+    const TxCoordinator::Producer first = rig.model.registerTxProducer();
+    rig.element(first.request().derive(), 100, 160);
+    Rig::settle();
+    rig.buildTo(300);   // the first dit (140-200 ms on EP2) is written; the hang runs on
+    first.invalidate(); // the fence: the operation holding MOX lapses
+    rig.buildTo(600);   // the frame cursor runs ahead of the next element
+    check(Hl2TxGateTestAccess::keyed(*rig.backend) && !Hl2TxGateTestAccess::wireKeyed(*rig.backend),
+          name + "the fence dropped MOX at the writer inside the hang");
+    // After the first element for the model, but due on air at 240 ms against
+    // a 600 ms cursor: 360 ms late, past the 250 ms shift bound.
+    const TxCoordinator::Producer second = rig.model.registerTxProducer();
+    rig.element(second.request().derive(), 200, 260);
+    Rig::settle();
+    const std::string counters = Hl2TxGateTestAccess::counters(*rig.backend);
+    check(counters.find("refused 1") != std::string::npos && rig.refusedDowns == 0,
+          name + "the down reached the EP2 writer and was refused there (" + counters + "; " + std::to_string(rig.refusedDowns) + " refused by the model)");
+    check(Hl2TxGateTestAccess::keyed(*rig.backend) && !Hl2TxGateTestAccess::wireKeyed(*rig.backend),
+          name + "the refused down raised no MOX at the writer");
+    rig.buildTo(800);
+    const auto runs = carriers(rig.iTrace);
+    check(!Hl2TxGateTestAccess::wireKeyed(*rig.backend) && runs.size() == 1,
+          name + "no MOX and no carrier after it (" + runsText(runs) + ")");
+}
+
+// #7572 review, N2: inside the hang with no fence, the over is live and its
+// MOX is left alone. The re-key admits the down and calls nothing else: the
+// writer keeps MOX under the first element's operation, not the new one's.
+static void testRekeyInALiveOverLeavesItsMoxAlone()
+{
+    const std::string name = "re-key in a live over: ";
+    Rig rig(true);
+    const TxCoordinator::Producer first = rig.model.registerTxProducer();
+    rig.element(first.request().derive(), 100, 160);
+    Rig::settle();
+    rig.buildTo(300);
+    const TxCoordinator::Operation held = Hl2TxGateTestAccess::moxOperation(*rig.backend);
+    check(Hl2TxGateTestAccess::keyed(*rig.backend) && Hl2TxGateTestAccess::wireKeyed(*rig.backend),
+          name + "the hang holds MOX at the writer");
+    const TxCoordinator::Producer second = rig.model.registerTxProducer();
+    rig.element(second.request().derive(), 400, 460);
+    Rig::settle();
+    const TxCoordinator::Operation after = Hl2TxGateTestAccess::moxOperation(*rig.backend);
+    check(rig.refusedDowns == 0 && after.sameAuthority(held),
+          name + "MOX is still held under the first element's operation");
+    rig.buildTo(800);
+    const auto runs = carriers(rig.iTrace);
+    check(runs.size() == 2 && within(runs[1].length, samplesOfMs(60), 2),
+          name + "the second element is whole on EP2 (" + runsText(runs) + ")");
+}
+
 // #7572 review (non-blocking): the two other routes by which a host-text run's
 // producer is fenced inside the break-in hang, into the same #7567 fix.
 // Refusal: the run's second key-down is refused at the host-text gates (the
@@ -872,6 +943,8 @@ int main(int argc, char** argv)
     testHostTextFencedInTheHangNextTextIsOnTheWire(true);
     testHostTextFencedInTheHangNextTextIsOnTheWire(false);
     testRekeyAfterAFenceIsOneIoAction();
+    testRefusedRekeyAfterAFenceRaisesNoMox();
+    testRekeyInALiveOverLeavesItsMoxAlone();
     testHostTextOtherFenceInTheHang(HangFence::Refusal, true);
     testHostTextOtherFenceInTheHang(HangFence::Refusal, false);
     testHostTextOtherFenceInTheHang(HangFence::RetireCap, true);
