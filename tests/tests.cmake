@@ -8468,6 +8468,36 @@ if(Qt6WebSockets_FOUND)
     add_test(NAME remote_control_loopback_test COMMAND remote_control_loopback_test)
     set_tests_properties(remote_control_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
+    # Socket-owning test: the remote-engine backend (family "aetherd",
+    # aetherd-remote-backend.md) against an in-process aetherd on 127.0.0.1 and
+    # an EPHEMERAL port, with a fake receive target and in-process clients only:
+    # the silent connect (also through a real RadioModel), disconnect sending
+    # nothing, intents paced 1/ms for 3 s inside the client bucket, a conflict
+    # retried, slice add/remove and resync, the certificate pin. Skips (77)
+    # without the openssl tool or when it cannot bind.
+    add_executable(aetherd_remote_engine_loopback_test tests/aetherd_remote_engine_loopback_test.cpp)
+    target_include_directories(aetherd_remote_engine_loopback_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_engine_loopback_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets Qt6::Test)
+    add_test(NAME aetherd_remote_engine_loopback_test COMMAND aetherd_remote_engine_loopback_test)
+    set_tests_properties(aetherd_remote_engine_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
+    add_executable(aetherd_remote_pairing_policy_test tests/aetherd_remote_pairing_policy_test.cpp)
+    target_include_directories(aetherd_remote_pairing_policy_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_pairing_policy_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME aetherd_remote_pairing_policy_test COMMAND aetherd_remote_pairing_policy_test)
+
+    # Socket-owning test: desktop pairing with our own in-process engine.
+    # A QLocalServer uses a unique name, and a QWebSocketServer binds a TCP
+    # ephemeral port on 127.0.0.1. Skips (77) without openssl or on bind failure.
+    add_executable(aetherd_remote_pairing_client_test tests/aetherd_remote_pairing_client_test.cpp)
+    target_include_directories(aetherd_remote_pairing_client_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_pairing_client_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME aetherd_remote_pairing_client_test COMMAND aetherd_remote_pairing_client_test)
+    set_tests_properties(aetherd_remote_pairing_client_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
     # Socket-owning test: our own TCI server is the subject, so this is inside
     # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
     # via TciServer::start(0)) on QHostAddress::Any, with local 127.0.0.1 clients to
@@ -9029,6 +9059,14 @@ add_executable(backend_family_switch_test tests/backend_family_switch_test.cpp)
 target_include_directories(backend_family_switch_test PRIVATE src tests)
 target_link_libraries(backend_family_switch_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME backend_family_switch_test COMMAND backend_family_switch_test)
+
+# The remote-engine backend's socket-free pieces (aetherd-remote-backend.md §2):
+# the client bucket and its size, latest-wins per resource and method, the
+# resource -> seam mapping, and the ws:// WireGuard admission check.
+add_executable(aetherd_remote_engine_test tests/aetherd_remote_engine_test.cpp)
+target_include_directories(aetherd_remote_engine_test PRIVATE src)
+target_link_libraries(aetherd_remote_engine_test PRIVATE aethercore Qt6::Core)
+add_test(NAME aetherd_remote_engine_test COMMAND aetherd_remote_engine_test)
 
 add_executable(demo_applet_tooltip_test
     tests/demo_applet_tooltip_test.cpp
