@@ -15,7 +15,10 @@
 // HostCwTextEngine's natural end leaves its last element whole on EP2, and
 // the same sender's next text a word space after it (the wall-clock cases:
 // its real keyer times the text, frames follow 5 ms behind); a host-text run
-// fenced inside the break-in hang leaves the next text keyed on EP2 (#7567).
+// fenced inside the break-in hang leaves the next text keyed on EP2 (#7567);
+// an element after such a fence, due in the next EP2 frame, is whole even
+// when the pacer builds frames right after its key-down reaches the I/O
+// thread (#7572 review: admission and the MOX re-raise are one action).
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -31,6 +34,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QEventLoop>
 #include <QString>
 #include <QVariantMap>
@@ -79,6 +83,16 @@ struct Hl2TxGateTestAccess {
         return packet;
     }
     static bool keyed(const Hl2Backend& backend) { return backend.m_keyed; }
+    static MetisClient* metis(Hl2Backend& backend) { return backend.m_metis; }
+    // MOX as the EP2 writer holds it, not as the backend believes it.
+    static bool wireKeyed(Hl2Backend& backend)
+    {
+        bool keyed = false;
+        QMetaObject::invokeMethod(backend.m_metis, [&keyed, metis = backend.m_metis] {
+            keyed = metis->isKeyed();
+        }, Qt::BlockingQueuedConnection);
+        return keyed;
+    }
     // The EP2 writer's fail-safe counters: shifted downs, late ups, refused downs.
     static std::string counters(Hl2Backend& backend)
     {
@@ -133,6 +147,36 @@ static void appendI(const std::array<std::uint8_t, kUsbPacketSize>& pkt, std::ve
         }
     }
 }
+
+// The EP2 pacer, run on the I/O thread the moment a queued call there has
+// admitted a key-down (the schedule grew), before the next queued call is
+// delivered. Models the worker reaching onEp2PacerTick() between two calls the
+// model thread posted back to back. Lives on the I/O thread; read it there.
+class PacerAfterAdmittedDown : public QObject {
+public:
+    PacerAfterAdmittedDown(MetisClient* metis, int frames) : m_metis(metis), m_frames(frames) {}
+    std::vector<int> trace;
+    bool fired = false;
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (fired || watched != m_metis || event->type() != QEvent::MetaCall) {
+            return false;
+        }
+        const std::size_t before = MetisClientTestAccess::pending(*m_metis);
+        watched->event(event);   // deliver this call now...
+        if (MetisClientTestAccess::pending(*m_metis) > before) {
+            fired = true;        // ...and run the pacer before the next one
+            for (int k = 0; k < m_frames; ++k) {
+                appendI(m_metis->buildNextControlPacket(), trace);
+            }
+        }
+        return true;
+    }
+private:
+    MetisClient* m_metis;
+    int m_frames;
+};
 
 struct Run { std::int64_t start; std::int64_t length; };
 static std::vector<Run> carriers(const std::vector<int>& iTrace)
@@ -625,6 +669,57 @@ static void testHostTextFencedInTheHangNextTextIsOnTheWire(bool breakIn)
     }
 }
 
+// #7572 review, P1: after a fence in the break-in hang, the next element's
+// key-down is due in the very next EP2 frame, and the pacer builds frames as
+// soon as that key-down is admitted on the I/O thread. Had the MOX re-raise
+// been a second queued call, those frames went out unkeyed past the down's
+// sample: the down was then applied late and its release kept its sample, so
+// the element came out short (or not at all), with no shift and no refusal.
+static void testRekeyAfterAFenceIsOneIoAction()
+{
+    const std::string name = "re-key after a fence, down due in the next frame, pacer between the calls: ";
+    Rig rig(true);
+    const TxCoordinator::Producer first = rig.model.registerTxProducer();
+    rig.element(first.request().derive(), 100, 160);
+    Rig::settle();
+    rig.buildTo(300);   // the first dit (140-200 ms on EP2) is written; the hang runs on
+    first.invalidate(); // the fence: the operation holding MOX lapses
+    rig.buildTo(320);
+    check(Hl2TxGateTestAccess::keyed(*rig.backend) && !Hl2TxGateTestAccess::wireKeyed(*rig.backend),
+          name + "the fence dropped MOX at the writer inside the hang");
+    // The next down lands in the frame after the cursor.
+    const std::int64_t cursor = static_cast<std::int64_t>(rig.iTrace.size());
+    const std::int64_t perMs = kRate / 1000;
+    const std::int64_t downMs = (cursor + perMs - 1) / perMs - Hl2Settings::kCwEdgeLeadDefaultMs;
+    const std::int64_t target = (downMs + Hl2Settings::kCwEdgeLeadDefaultMs) * perMs;
+    check(target >= cursor && target < cursor + kFrame,
+          name + "the down is due in the next frame (cursor " + std::to_string(cursor) + ", down at "
+              + std::to_string(target) + ")");
+    auto* pacer = new PacerAfterAdmittedDown(Hl2TxGateTestAccess::metis(*rig.backend),
+                                             static_cast<int>(samplesOfMs(10) / kFrame) + 1);
+    MetisClient* metis = Hl2TxGateTestAccess::metis(*rig.backend);
+    pacer->moveToThread(metis->thread());
+    QMetaObject::invokeMethod(metis, [metis, pacer] { metis->installEventFilter(pacer); },
+                              Qt::BlockingQueuedConnection);
+    const TxCoordinator::Producer second = rig.model.registerTxProducer();
+    rig.element(second.request().derive(), downMs, downMs + 60);
+    Rig::settle();
+    bool fired = false;
+    QMetaObject::invokeMethod(metis, [&] {
+        metis->removeEventFilter(pacer);
+        fired = pacer->fired;
+        rig.iTrace.insert(rig.iTrace.end(), pacer->trace.begin(), pacer->trace.end());
+        delete pacer;
+    }, Qt::BlockingQueuedConnection);
+    check(fired && rig.refusedDowns == 0, name + "the pacer ran right after the down was admitted");
+    rig.buildTo(800);
+    const auto runs = carriers(rig.iTrace);
+    check(runs.size() == 2 && within(runs[1].length, samplesOfMs(60), 2)
+              && within(runs[1].start, target + samplesOfMs(5) / 2, 2),
+          name + "the element is whole on EP2, at its sample (" + runsText(runs) + "; "
+              + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-cw-element-completion"));
@@ -650,6 +745,7 @@ int main(int argc, char** argv)
     testHostTextSameSenderNextTextIsSpaced(150, true, true);
     testHostTextFencedInTheHangNextTextIsOnTheWire(true);
     testHostTextFencedInTheHangNextTextIsOnTheWire(false);
+    testRekeyAfterAFenceIsOneIoAction();
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
