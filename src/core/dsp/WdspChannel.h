@@ -615,6 +615,9 @@ public:
     // After output-count readiness, wait for the last hook and DSP body before
     // arming another hold. Test/control only; NEVER call while a hold is armed.
     void synchronizeWorkerForTest() const noexcept;
+    // TXA's own ALC reduction in dB at the last block's end (0 = not acting);
+    // NaN on a receive channel.
+    [[nodiscard]] double txAlcReductionDbForTest() const noexcept;
     // ---- PureSignal (TX channels; calcc.c) ---------------------------------
     // Thin wrappers over WDSP's PS API for the Hermes-Lite 2 controller
     // (Hl2PureSignal). None takes the control fence: calcc guards its own state

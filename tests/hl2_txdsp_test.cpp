@@ -2790,6 +2790,78 @@ int main(int argc, char** argv)
         check(tx.modulatorStallDrops() > 0, "stalled filter-tap case: the probe stalls the worker");
         check(lossy == 0, "filter taps: a window with dropped blocks is not published as a filter loss");
     }
+    // The default ALC target holds a full-scale tone at 0.95, and TXA's own ALC
+    // (threshold 0.99742) never reduces behind it, in USB and in AM.
+    {
+        struct TargetRun { double alcPeakDbfs = -400.0; double iqPeak = 0.0;
+                           double wdspAlcMaxDb = 0.0; double wdspAlcMinDb = 0.0;
+                           unsigned long long faults = 0; };
+        auto targetOnce = [](WdspChannel::Mode mode) -> TargetRun {
+            TargetRun out;
+            Hl2TxDsp tx;
+            TxTestAuthority authority;
+            Hl2TxDsp::Config cfg;   // the shipped defaults, ALC on
+            cfg.mode = mode;
+            std::string err;
+            if (!tx.configure(cfg, &err) || tx.pureSignalChannel() == nullptr) {
+                std::fprintf(stderr, "FAIL: ALC target configure: %s\n", err.c_str());
+                ++g_failures;
+                return out;
+            }
+            std::vector<std::complex<float>> captured;
+            QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                             [&captured](const std::vector<std::complex<float>>& iq) {
+                captured.insert(captured.end(), iq.begin(), iq.end());
+            });
+            float lastAlcPeakDbfs = -400.0f;   // the post-ALC audio peak, per block
+            QObject::connect(&tx, &Hl2TxDsp::alcPeak, &tx,
+                             [&lastAlcPeakDbfs](float dbfs) { lastAlcPeakDbfs = dbfs; });
+            const int fs = cfg.inputSampleRateHz;
+            const int total = fs * 2;
+            constexpr std::size_t kChunk = 240;
+            std::vector<float> chunk(kChunk);
+            bool firstRead = true;
+            for (int off = 0; off < total; off += static_cast<int>(kChunk)) {
+                for (std::size_t n = 0; n < kChunk; ++n)
+                    chunk[n] = static_cast<float>(
+                        std::sin(2.0 * M_PI * 1000.0 * (off + static_cast<int>(n)) / fs));
+                feed(tx, chunk, TxAudioSource::Microphone, authority.context);
+                if (off >= fs / 2) {   // after the first blocks have run
+                    const double db = tx.pureSignalChannel()->txAlcReductionDbForTest();
+                    out.wdspAlcMaxDb = firstRead ? db : std::max(out.wdspAlcMaxDb, db);
+                    out.wdspAlcMinDb = firstRead ? db : std::min(out.wdspAlcMinDb, db);
+                    firstRead = false;
+                    out.alcPeakDbfs = std::max(out.alcPeakDbfs,
+                                               static_cast<double>(lastAlcPeakDbfs));
+                }
+            }
+            for (std::size_t i = captured.size() / 2; i < captured.size(); ++i)
+                out.iqPeak = std::max(out.iqPeak, static_cast<double>(std::abs(captured[i])));
+            out.faults = tx.modulatorFaultBlocks();
+            return out;
+        };
+        for (const auto mode : {WdspChannel::Mode::Usb, WdspChannel::Mode::Am}) {
+            const bool am = mode == WdspChannel::Mode::Am;
+            const TargetRun r = retryIfStarved<TargetRun>(
+                "the ALC target case", [&] { return targetOnce(mode); });
+            std::fprintf(stderr,
+                         "ALC target (%s): post-ALC peak %.4f, settled |IQ| peak %.4f, "
+                         "TXA ALC %.4f..%.4f dB\n",
+                         am ? "AM" : "USB", std::pow(10.0, r.alcPeakDbfs / 20.0),
+                         r.iqPeak, r.wdspAlcMinDb, r.wdspAlcMaxDb);
+            check(std::fabs(Hl2TxDsp::Config{}.alcTargetPeak - 0.95) < 1e-12
+                      && std::fabs(r.alcPeakDbfs - 20.0 * std::log10(0.95)) < 0.05,
+                  "the default ALC target is 0.95 and the ALC holds the tone there");
+            // USB: the tone's envelope is the ALC's output. AM: carrier + 0.5 x env.
+            const double expected = am ? 0.5 + 0.5 * 0.95 : 0.95;
+            check(std::fabs(r.iqPeak - expected) < 0.01 && r.iqPeak < 0.99742,
+                  am ? "AM: a full-scale tone is held by the default target (|IQ| 0.975)"
+                     : "USB: a full-scale tone is held at 0.95, under TXA's ALC threshold");
+            check(r.wdspAlcMinDb >= -0.005 && r.wdspAlcMaxDb < 0.005,
+                  am ? "AM: TXA's own ALC stays at 0 dB behind the 0.95 target"
+                     : "USB: TXA's own ALC stays at 0 dB behind the 0.95 target");
+        }
+    }
 #endif  // AETHER_HL2_TX_TXA
 
     if (g_failures == 0)

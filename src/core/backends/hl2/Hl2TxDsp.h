@@ -76,7 +76,11 @@ public:
         // (Hl2TxLevelPolicy.h, +40 dB), not here. Fast attack, slow release, so
         // over-level input is limited rather than flat-topped by the clamp.
         bool alcEnabled = true;
-        double alcTargetPeak = 0.85;   // leave headroom below clipping
+        // 0.95 keeps the peak into TXA's own ALC (threshold 0.99742) below it in
+        // every mode, so WDSP's ALC stays a safety net: TXA's AM/DSB/FM bandpass
+        // (100..3000 Hz) lifts a voice peak x1.034, so 0.98 would make it act and
+        // the ceiling is ~0.965. Nothing reaches the int16 clamp (max |I|,|Q| 0.953).
+        double alcTargetPeak = 0.95;
         // No attack constant: each sample that needs the reduction has it
         // (Hl2TxAlc.h), so nothing overshoots into the hard clamp.
         double alcReleaseSec = 0.500;  // slow enough not to pump between words

@@ -1418,7 +1418,7 @@ private:
     // setKeying()'s unkey mic diagnostic. The ALC only reduces, so the mic peak is
     // the on-air level up to this target. Seeded with Config's default as a literal
     // (Hl2TxDsp is forward-declared); a static_assert in Hl2Backend.cpp pins them.
-    double m_alcTargetPeak = 0.85;
+    double m_alcTargetPeak = 0.95;
 
     // The AGC threshold -> WDSP gain ceiling map is
     // Hl2DbReference::agcCeilingDbAtReference() via m_dbRef.agcCeilingDb(), so
