@@ -519,11 +519,12 @@ void interruptBeforeDispatch()
 void catKeysWithForeignDaxStream()
 {
     const auto run = [](const char* dialect, const std::function<void(RadioModel&)>& keyUp,
-                        const std::function<void(RadioModel&)>& keyDown) {
+                        const std::function<void()>& keyDown,
+                        const std::function<void()>& cleanup) {
         Fixture f;
         f.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
         std::vector<QString> keys;
-        f.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command&) {
+        f.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) {
             keys.push_back(command);
             return true;
         });
@@ -534,36 +535,40 @@ void catKeysWithForeignDaxStream()
         std::printf("    %s key commands: %zu%s%s\n", dialect, keys.size(),
                     keys.empty() ? "" : " first=", keys.empty() ? "" : qPrintable(keys.front()));
         check(keyed, dialect);
-        keyDown(f.model);
+        const auto keyCount = keys.size();
+        keyDown();
         QCoreApplication::processEvents();
-        check(!keys.empty() && keys.back().startsWith(QLatin1String("xmit 0")),
+        check(keyed && keys.size() > keyCount && keys.back().startsWith(QLatin1String("xmit 0")),
               "the CAT unkey reaches the backend as xmit 0");
-        f.backend->setTxCommandSink({});
+        cleanup();
+        f.backend->setTxCommandSinkForTest({});
     };
     std::unique_ptr<RigctlProtocol> rigctl;
     run("rigctld T 1 keys while SmartSDR DAX owns the TX stream",
         [&](RadioModel& m) { rigctl = std::make_unique<RigctlProtocol>(&m);
                              check(rigctl->handleLine(QStringLiteral("T 1")).trimmed() == QLatin1String("RPRT 0"),
                                    "rigctld acknowledges T 1"); },
-        [&](RadioModel&) { (void)rigctl->handleLine(QStringLiteral("T 0")); rigctl.reset(); });
+        [&] { (void)rigctl->handleLine(QStringLiteral("T 0")); },
+        [&] { rigctl.reset(); });
     std::unique_ptr<SmartCatProtocol> cat;
     run("SmartSDR-CAT ZZTX1 keys while SmartSDR DAX owns the TX stream",
         [&](RadioModel& m) { cat = std::make_unique<SmartCatProtocol>(&m);
                              (void)cat->processCommand(QStringLiteral("ZZTX1")); },
-        [&](RadioModel&) { (void)cat->processCommand(QStringLiteral("ZZRX")); cat.reset(); });
+        [&] { (void)cat->processCommand(QStringLiteral("ZZRX")); },
+        [&] { cat.reset(); });
     run("rigctld client drop while keyed unkeys",
         [&](RadioModel& m) { rigctl = std::make_unique<RigctlProtocol>(&m);
                              (void)rigctl->handleLine(QStringLiteral("T 1")); },
-        [&](RadioModel&) { rigctl.reset(); });
+        [&] { rigctl.reset(); }, [] {});
     run("SmartSDR-CAT client drop while keyed unkeys",
         [&](RadioModel& m) { cat = std::make_unique<SmartCatProtocol>(&m);
                              (void)cat->processCommand(QStringLiteral("ZZTX1")); },
-        [&](RadioModel&) { cat.reset(); });
+        [&] { cat.reset(); }, [] {});
 
     Fixture dax;
     dax.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
     std::vector<QString> keys;
-    dax.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command&) {
+    dax.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) {
         keys.push_back(command);
         return true;
     });
@@ -571,7 +576,39 @@ void catKeysWithForeignDaxStream()
     const TxCoordinator::Request input = producer.request();
     check(!dax.model.setProducerTransmit(input, true, TransmitModel::PttSource::Dax) && keys.empty(),
           "a DAX-audio producer is still refused without this client's own stream");
-    dax.backend->setTxCommandSink({});
+    dax.backend->setTxCommandSinkForTest({});
+}
+
+// Flex MOX in DIGU/DIGL keys regardless of the radio's DAX audio route (#7407).
+void moxKeysFlexDigitalMode()
+{
+    for (const char* mode : {"DIGU", "DIGL"}) {
+        Fixture f;
+        f.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
+        applyFlexSliceStatus(f.model, 0, {{QStringLiteral("mode"), QString::fromLatin1(mode)}});
+        std::vector<QString> keys;
+        f.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) {
+            keys.push_back(command);
+            return true;
+        });
+        QString notice;
+        QObject::connect(&f.model, &RadioModel::interlockNotificationRequested, &f.model,
+                         [&](const QString& message, const QString&, const QString&) { notice = message; });
+        f.model.transmitModel().requestPttOn(TransmitModel::PttSource::Mox);
+        QCoreApplication::processEvents();
+        std::printf("    MOX in %s: %zu key commands%s%s; notice \"%s\"\n", mode, keys.size(),
+                    keys.empty() ? "" : " first=", keys.empty() ? "" : qPrintable(keys.front()),
+                    qPrintable(notice));
+        const bool keyed = !keys.empty() && keys.front().startsWith(QLatin1String("xmit 1"));
+        const auto keyCount = keys.size();
+        check(keyed, "MOX keys a Flex DIGU/DIGL slice");
+        check(!notice.contains(QLatin1String("voice")), "MOX in DIGU/DIGL raises no voice refusal");
+        f.model.transmitModel().requestPttOff(TransmitModel::PttSource::Mox);
+        QCoreApplication::processEvents();
+        check(keyed && keys.size() > keyCount && keys.back().startsWith(QLatin1String("xmit 0")),
+              "MOX release unkeys");
+        f.backend->setTxCommandSinkForTest({});
+    }
 }
 
 int main(int argc, char** argv)
@@ -583,6 +620,6 @@ int main(int argc, char** argv)
     ordering(false); ordering(true);
     failuresAndClients(); mediaAndSourceFlags(); lifecycle(); creationAndBusy();
     exactInputAndKeyFences(); cancellationAndMalformedStatus(); createOrderingAndGuardRefresh();
-    interruptBeforeDispatch(); catKeysWithForeignDaxStream();
+    interruptBeforeDispatch(); catKeysWithForeignDaxStream(); moxKeysFlexDigitalMode();
     return failures ? 1 : 0;
 }

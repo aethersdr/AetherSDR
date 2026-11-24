@@ -167,6 +167,8 @@ The program sends to the wrong device, the TX slice is in a voice mode, or the w
 3. With the radio idle and your local TX slice selected, click the **TX stream** toggle. Wait for **Selected** without **Audio blocked**, then initiate a new transmission in your program.
 4. If taking is disabled, read its tooltip for the current reason. Resolve an active transmission or profile load before requesting a handoff.
 
+On a FlexRadio, **MOX** or a PTT footswitch can key a DIGU or DIGL slice. With DAX enabled in the radio's TX settings, the radio uses its selected DAX TX stream. With DAX disabled, it uses the configured mic input. On other radios, the DIGU/DIGL voice preflight still applies, with RADE digital voice exempt.
+
 ### A DAX row is missing
 
 The connected radio has fewer slices than that channel number, so AetherSDR does not show it. Use a lower channel number.

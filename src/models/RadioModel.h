@@ -2875,6 +2875,7 @@ private:
     bool transmitStartBlockedByKeyObjection(const QString& gate);
     void emitKeyObjectionNotice(const QString& message, const QString& gate);
     void noteLocalTxSliceEnableIntent(int sliceId);
+    bool moxKeysRadioDax() const;
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
     QString radioInterlockNotificationMessage(const QString& reason, const QString& state) const;
