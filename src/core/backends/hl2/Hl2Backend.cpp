@@ -3841,6 +3841,16 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
         return;
     }
     const QString mode = canonicalOfferedMode(requested);
+    if (ddc == m_txDdc && transmitKeyed()) {
+        // The TX slice's mode is the transmitter's. A repeat of the current
+        // mode changes nothing, so only a change is announced; either way the
+        // republish puts SliceModel's optimistic mode back.
+        if (r->mode.compare(mode, Qt::CaseInsensitive) != 0) {
+            refuseTransmitChangeWhileKeyed(sliceId, tr("Mode can't change while transmitting."));
+        }
+        emitSliceState(ddc);
+        return;
+    }
 
     const QString previous = r->mode;
     r->mode = mode;
@@ -4375,6 +4385,34 @@ void Hl2Backend::setActiveSlice(int sliceId)
     emitSliceState(ddc);
 }
 
+bool Hl2Backend::refuseTransmitChangeWhileKeyed(int sliceId, const QString& message)
+{
+    if (!transmitKeyed()) {
+        return false;
+    }
+    qCWarning(lcHl2).noquote() << "HL2: refused while transmitting (slice" << sliceId << "):"
+                               << message;
+    emit transmitChangeRefused(sliceId, message);
+    return true;
+}
+
+ReceiveDispatch Hl2Backend::requestTxSlice(int sliceId, bool enabled,
+                                           const RadioControlCompletion& completion,
+                                           const RadioControlFence& current)
+{
+    const int ddc = ddcForSlice(sliceId);
+    if (enabled && transmitKeyed() && ddc >= 0 && ddc != m_txDdc) {
+        if (current && !current()) { return ReceiveDispatch::Unsupported; }
+        setTxSlice(sliceId);   // refuses, tells the operator and republishes
+        if (completion) {
+            completion({RadioControlReply::Kind::Refused, -1,
+                        QStringLiteral("TX slice can't change while transmitting")});
+        }
+        return ReceiveDispatch::LocalOnly;
+    }
+    return IRadioBackend::requestTxSlice(sliceId, enabled, completion, current);
+}
+
 void Hl2Backend::setTxSlice(int sliceId)
 {
     const int ddc = ddcForSlice(sliceId);
@@ -4382,6 +4420,12 @@ void Hl2Backend::setTxSlice(int sliceId)
     if (!r) {
         qCWarning(lcHl2) << "HL2: cannot move transmit to slice" << sliceId
                          << "— no such receiver";
+        return;
+    }
+    if (ddc != m_txDdc
+        && refuseTransmitChangeWhileKeyed(sliceId, tr("TX slice can't change while transmitting."))) {
+        emitSliceState(ddc);
+        emitSliceState(m_txDdc);
         return;
     }
     if (ddc == m_txDdc) {
@@ -6556,6 +6600,24 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 {
     lowHz = std::clamp(lowHz, 0, kTxAudioMaxHz - 50);
     highHz = std::clamp(highHz, lowHz + 50, kTxAudioMaxHz);
+
+    if (transmitKeyed()) {
+        if (lowHz != m_txFilterLowHz || highHz != m_txFilterHighHz || !m_txFilterFromOperator) {
+            const auto* txIds = m_ids.byDdc(m_txDdc);
+            refuseTransmitChangeWhileKeyed(txIds ? txIds->uiNumber : -1,
+                                           tr("TX filter can't change while transmitting."));
+        }
+        // Put the Phone applet back on the pair it showed before the request.
+        const Receiver* txRx = rx(m_txDdc);
+        const auto [shownLo, shownHi] = m_txFilterFromOperator
+            ? std::pair<int, int>{m_txFilterLowHz, m_txFilterHighHz}
+            : effectiveTxPassband(txRx ? txRx->mode : QStringLiteral("USB"));
+        TransmitDelta delta;
+        delta.txFilterLow = shownLo;
+        delta.txFilterHigh = shownHi;
+        emit transmitChanged(delta);
+        return;
+    }
 
     m_txFilterFromOperator = true;
     m_txFilterLowHz = lowHz;

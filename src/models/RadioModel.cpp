@@ -1642,6 +1642,16 @@ void RadioModel::setupBackend(const QString& family)
                 this, &RadioModel::configurationWarning);
     }
 
+    // A change refused while transmitting goes on the panadapter, like the
+    // other transmit-time notices: the status bar would hide the TX indicator.
+    connect(m_backend.get(), &IRadioBackend::transmitChangeRefused,
+            this, [this](int sliceId, const QString& message) {
+        const SliceModel* s = slice(sliceId);
+        emitInterlockNotification(message,
+                                  QStringLiteral("tx-keyed-change:%1:%2").arg(sliceId).arg(message),
+                                  s ? s->panId() : QString());
+    });
+
     // Transport counters from a backend that owns its own socket. Wired
     // unconditionally: a backend that measures nothing never emits this, and one
     // that does is the only source the network readouts have.

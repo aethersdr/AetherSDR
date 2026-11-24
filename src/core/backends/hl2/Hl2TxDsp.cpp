@@ -90,7 +90,6 @@ bool Hl2TxDsp::buildModulator(std::string* error)
 {
     m_channel.reset();
     m_modulatorRunning = false;
-    m_modeFilterHeld = false;   // the new channel opens on m_config
     m_exchangePending.clear();
     m_headWait.invalidate();
     m_pendingWarned = false;
@@ -134,17 +133,6 @@ void Hl2TxDsp::applyModeAndFilter()
     if (!m_channel) {
         return;
     }
-    // Held while an over runs: TXA swaps a bandpass's whole mask at a block
-    // boundary, so a mid-over phase or passband change splatters. modulate()
-    // applies it before the next over starts the channel.
-    if (m_modulatorRunning) {
-        if (!m_modeFilterHeld) {
-            qCInfo(lcTxMod) << "HL2 TXA modulator: mode/passband change held until this over ends";
-        }
-        m_modeFilterHeld = true;
-        return;
-    }
-    m_modeFilterHeld = false;
     // Both calls, every time: SetTXAMode does not pick an SSB sideband (the
     // passband sign does), so a mode-only USB->LSB change would stay on USB.
     const auto [lowHz, highHz] =
@@ -187,11 +175,6 @@ void Hl2TxDsp::resetModulatorState()
     if (m_exchangeTimer) {
         m_exchangeTimer->stop();
     }
-    // The over has ended: a change held during it reaches the stopped channel
-    // now, not at the next key-up (TXASetMP's redesign would delay that over).
-    if (m_modeFilterHeld) {
-        applyModeAndFilter();
-    }
 }
 
 void Hl2TxDsp::modulate(std::span<const float> audio)
@@ -208,9 +191,6 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     // Started on the first block of an over (reset() is the only transition
     // this stage sees); WDSP's mute envelope ramps up from there.
     if (!m_modulatorRunning) {
-        if (m_modeFilterHeld) {
-            applyModeAndFilter();
-        }
         if (!m_channel->setRunning(true)) {
             qCWarning(lcTxMod) << "HL2 TXA modulator: start refused; this over "
                                   "will not reach the wire";

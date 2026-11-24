@@ -83,8 +83,8 @@ public:
     };
 
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
-    // TXA build: during an over both are recorded in config() and reach the
-    // channel when the over ends (a mid-over bandpass swap splatters).
+    // Applied at once. Hl2Backend refuses both while keyed: in the TXA build a
+    // mid-over bandpass swap splatters.
     Q_INVOKABLE void setMode(WdspChannel::Mode mode);
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     // Linear gain applied to the audio before modulation. 1.0 = unity.
@@ -192,8 +192,10 @@ public slots:
     void processAudioBlock(const std::vector<float>& mono,
                            TxAudioSource source,
                            const TxCoordinator::Context& context);
-    // Drop anything buffered — on unkey, so the next transmission does not
-    // start with the tail of the previous one.
+    // Ends the over: drops anything buffered and stops the channel, so the next
+    // transmission does not start with the tail of this one. Hl2Backend posts it
+    // at unkey, and at a re-key whose unkey cleanup was skipped (#7216);
+    // processAudioBlock() runs it on a new context.
     void reset();
 
 signals:
@@ -263,9 +265,6 @@ private:
     // Whether the TXA channel is started; reset() stops it and the next block
     // restarts it. Tracked because setRunning() is a control call.
     bool m_modulatorRunning = false;
-    // A mode or passband change arrived during an over; m_config holds it and
-    // reset() applies it, or modulate() before the next over starts.
-    bool m_modeFilterHeld = false;
     // Permanent zero Q plane: audio is mono, and xpanel's inselect = 2
     // (create_txa) zeroes Q anyway (measured).
     std::vector<float> m_zeroQ;
