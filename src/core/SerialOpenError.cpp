@@ -26,10 +26,13 @@ SerialOpenFailureKind classifySerialOpenFailure(const SerialDeviceProbe& probe,
     }
     if (qtNotFound)
         return SerialOpenFailureKind::NotFound;
-    if (probe.exists && (probe.accessErrno == EACCES || probe.accessErrno == EPERM))
-        return SerialOpenFailureKind::Permission;
-    if (nativeCode == EBUSY)
+    if (nativeCode == EBUSY) {
         return SerialOpenFailureKind::InUse;
+    }
+    if (nativeCode == EACCES || nativeCode == EPERM
+        || (probe.exists && (probe.accessErrno == EACCES || probe.accessErrno == EPERM))) {
+        return SerialOpenFailureKind::Permission;
+    }
     // The node is there and this user may read/write it, yet Qt reported a
     // permission error: that is the lock file or TIOCEXCL, i.e. in use.
     if (qtPermission && probe.exists)

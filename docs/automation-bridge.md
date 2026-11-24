@@ -3487,8 +3487,9 @@ Port Open Failed" dialog is showing), `openRequested` (the session's
 preference). `available` is false in builds without Qt SerialPort. A trailing
 property narrows it: `get serial open` → `{"value":false}`. To prove the failure
 path without transmitting, select a port the user cannot open (or one that is
-not present), click **Open** through the bridge, then assert `open=false`,
-`error` non-empty and `errorDialogVisible=true`.
+not present), run `invoke serialOpenButton click`, then assert `open=false`,
+`error` non-empty and `errorDialogVisible=true`. Use `serialCloseButton` for
+the serial PTT/CW **Close** control.
 
 ### `get titlebar`
 Read the unified 52 px title bar — the single strip that owns the brand mark,

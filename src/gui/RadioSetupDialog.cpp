@@ -9096,13 +9096,14 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* row = new QHBoxLayout;
         row->setSpacing(8);
 
-
         auto* openBtn = new QPushButton("Open");
+        openBtn->setObjectName(QStringLiteral("serialOpenButton"));
         // Min-width rather than fixed-width: macOS native button metrics need
         // more horizontal room than the 80 px Windows/Fusion baseline.
         openBtn->setMinimumWidth(80);
         setButtonRole(openBtn, ButtonRole::Select);
         auto* closeBtn = new QPushButton("Close");
+        closeBtn->setObjectName(QStringLiteral("serialCloseButton"));
         closeBtn->setMinimumWidth(80);
         setButtonRole(closeBtn, ButtonRole::Select);
 
@@ -9126,6 +9127,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
         // and close, including failures (#6972).
         connect(openBtn, &QPushButton::clicked, this, [this]() {
             auto& s = AppSettings::instance();
+            if (s.value("SerialPortName").toString().isEmpty()) {
+                setSerialPortConnectionStatus(false, {}, tr("Select a serial port."));
+                return;
+            }
             s.setValue("SerialPortOpen", "True");
             s.save();
             emit serialSettingsChanged();

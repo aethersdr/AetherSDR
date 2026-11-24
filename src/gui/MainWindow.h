@@ -1616,6 +1616,8 @@ private:
     int                   m_serialPortFailureKind{0};  // SerialOpenFailureKind
     QString               m_serialPortGroup;
     QPointer<QMessageBox> m_serialOpenErrorBox;   // one at a time, never stacked
+    quint64               m_serialSettingsRevision{0};
+    void queueSerialPortSettings();
     void handleSerialConnectionState(bool open, const QString& device,
                                      const QString& error, int nativeCode,
                                      int failureKind, const QString& group);

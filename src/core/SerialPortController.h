@@ -84,7 +84,8 @@ public:
     // Apply configuration from AppSettings. The port is opened only while
     // SerialPortOpen is "True" (the operator's request for this session);
     // SerialAutoOpen is consumed once at startup by MainWindow (#6972).
-    void loadSettings();
+    // Returns false if applying the settings could not open the requested port.
+    bool loadSettings();
 
 public slots:
     void setTransmitting(bool tx);

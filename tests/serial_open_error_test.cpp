@@ -80,6 +80,9 @@ void testNoGroupAdviceWhenItWouldNotHelp()
     SerialDeviceProbe allowed = deniedDialoutNode();
     allowed.accessErrno = 0;
     check(serialGroupRemedy(allowed).isEmpty(), "accessible node: no group advice");
+    check(classifySerialOpenFailure(allowed, false, true, EACCES)
+              == SerialOpenFailureKind::Permission,
+          "native permission denial takes precedence over an accessible device node");
 
     SerialOpenFailure f;
     f.kind = SerialOpenFailureKind::Permission;

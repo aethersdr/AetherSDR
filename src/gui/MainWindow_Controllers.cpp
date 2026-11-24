@@ -3408,17 +3408,20 @@ void MainWindow::wireExternalControllers()
     // Init that must happen on the worker thread (serial port open, etc.)
 #ifdef HAVE_SERIALPORT
     {
-        // Auto-open is startup intent only; SerialPortOpen is the operator's
-        // request for this session. Overwrite (never OR) so a request left
-        // over from the last session doesn't reopen with Auto-open off. (#6972)
         auto& s = AppSettings::instance();
+        const QString migrationKey = QStringLiteral("SerialAutoOpenMigrated");
+        // Legacy releases reopened ports when either setting was true.
+        if (!s.contains(migrationKey)) {
+            if (s.value("SerialPortOpen", "False").toString() == "True") {
+                s.setValue("SerialAutoOpen", "True");
+            }
+            s.setValue(migrationKey, "True");
+        }
         const bool autoOpen = s.value("SerialAutoOpen", "False").toString() == "True";
         s.setValue("SerialPortOpen", autoOpen ? "True" : "False");
         s.save();
     }
-    QMetaObject::invokeMethod(m_serialPort, [this] {
-        m_serialPort->loadSettings();
-    });
+    queueSerialPortSettings();
     m_flexControl->setInvertDirection(
         AppSettings::instance().value("FlexControlInvertDir", "False").toString() == "True");
     if (AppSettings::instance().value("FlexControlAutoDetect", "True").toString() == "True") {
@@ -3492,6 +3495,24 @@ void MainWindow::wireExternalControllers()
 }
 
 #ifdef HAVE_SERIALPORT
+void MainWindow::queueSerialPortSettings()
+{
+    const quint64 revision = ++m_serialSettingsRevision;
+    QMetaObject::invokeMethod(m_serialPort, [this, revision] {
+        if (m_serialPort->loadSettings()) {
+            return;
+        }
+        QMetaObject::invokeMethod(this, [this, revision] {
+            // A failed attempt cannot withdraw a newer Open request.
+            if (revision == m_serialSettingsRevision) {
+                auto& settings = AppSettings::instance();
+                settings.setValue("SerialPortOpen", "False");
+                settings.save();
+            }
+        });
+    });
+}
+
 void MainWindow::handleSerialConnectionState(bool open, const QString& device,
                                              const QString& error, int nativeCode,
                                              int failureKind, const QString& group)
@@ -3504,6 +3525,9 @@ void MainWindow::handleSerialConnectionState(bool open, const QString& device,
         m_serialPortErrorCode = 0;
         m_serialPortFailureKind = 0;
         m_serialPortGroup.clear();
+        if (open && m_serialOpenErrorBox) {
+            m_serialOpenErrorBox->close();
+        }
     } else {
         SerialOpenFailure failure;
         failure.kind = kind;
@@ -3515,13 +3539,6 @@ void MainWindow::handleSerialConnectionState(bool open, const QString& device,
         m_serialPortErrorCode = nativeCode;
         m_serialPortFailureKind = failureKind;
         m_serialPortGroup = group;
-
-        // The open request failed: withdraw it, so nothing retries in the
-        // background and the next attempt is the operator's next Open click
-        // (one attempt, one dialog).
-        auto& s = AppSettings::instance();
-        s.setValue("SerialPortOpen", "False");
-        s.save();
 
         if (!device.isEmpty())
             showSerialOpenError(failure);
@@ -3556,12 +3573,12 @@ void MainWindow::showSerialOpenError(const SerialOpenFailure& failure)
     box->setStandardButtons(QMessageBox::Ok);
     box->setDefaultButton(QMessageBox::Ok);
     m_serialOpenErrorBox = box;
-    // Non-modal show(): no nested event loop, radio events keep flowing.
     box->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString()
         == QLatin1String("True"));
     // setFramelessMode() can clear the native title on macOS; restore it.
     box->setWindowTitle(title);
+    box->setWindowModality(Qt::NonModal);
     box->show();
     box->raise();
     box->activateWindow();

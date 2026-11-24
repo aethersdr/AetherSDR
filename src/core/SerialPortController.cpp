@@ -776,7 +776,7 @@ void SerialPortController::setCwKeyDown(bool down)
     applyPin(PinFunction::CwKey, down);
 }
 
-void SerialPortController::loadSettings()
+bool SerialPortController::loadSettings()
 {
     auto& s = AppSettings::instance();
     QString port = s.value("SerialPortName", "").toString();
@@ -866,13 +866,14 @@ void SerialPortController::loadSettings()
 #  endif
 #endif
         } else {
-            open(port, baud, data, par, stop);
+            return open(port, baud, data, par, stop);
         }
     } else if (!shouldOpen && isOpen()) {
         close();
     } else {
         updatePolling();
     }
+    return true;
 }
 
 } // namespace AetherSDR

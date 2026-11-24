@@ -5533,6 +5533,15 @@ target_include_directories(serial_open_error_test PRIVATE src)
 target_link_libraries(serial_open_error_test PRIVATE Qt6::Core)
 add_test(NAME serial_open_error_test COMMAND serial_open_error_test)
 
+# Serial PTT/CW controller state and session intent (#6972). A missing path
+# in a private temporary directory exercises the failure without opening a port.
+if(TARGET Qt6::SerialPort)
+    add_executable(serial_open_state_test tests/serial_open_state_test.cpp)
+    target_include_directories(serial_open_state_test PRIVATE src tests)
+    target_link_libraries(serial_open_state_test PRIVATE aethercore Qt6::Core Qt6::SerialPort)
+    add_test(NAME serial_open_state_test COMMAND serial_open_state_test)
+endif()
+
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
 )
@@ -12396,6 +12405,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_rx_only_tx_chain_test
     hl2_automation_no_tx_gate_test
     serial_cw_key_baseline_test
+    serial_open_state_test
     hl2_receive_only_mode_key_test
     hl2_persist_restart_test
     hl2_tx_mode_reconnect_test
