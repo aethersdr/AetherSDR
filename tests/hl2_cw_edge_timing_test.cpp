@@ -454,6 +454,53 @@ static void testLateKeyDownShiftsWholeElement()
     }
 }
 
+// #7570: a key-down stamped before the session's anchor (EP2 sample 0) but
+// delivered after start() is late by its real distance from the anchor, not
+// "infinitely": inside the lead it is placed exactly, past the lead it shifts
+// the over by that lateness, and only past the bound is it refused.
+static void testKeyDownStampedBeforeTheAnchor()
+{
+    const std::int64_t leadMs = Access::leadSamples() * 1000 / kRate;
+    Bench ref;
+    ref.play({{100, true, 100, true, 160}, {160, false, 160}}, 400);
+    const auto refRuns = carriers(ref.iTrace);
+    const std::int64_t refOffset = refRuns.empty() ? 0
+        : refRuns[0].start - (samplesOfMs(100) + Access::leadSamples());
+    {
+        // 5 ms before the anchor, a 60 ms element: inside the lead.
+        Bench b;
+        b.play({{-5, true, 0, true, 55}, {55, false, 55}}, 400);
+        const auto runs = carriers(b.iTrace);
+        check(b.client.cwRefusedDowns() == 0 && b.client.cwShiftSamples() == 0,
+              "stamped 5 ms before the anchor: not refused, nothing shifted");
+        check(runs.size() == 1 && within(runs[0].length, samplesOfMs(60), 1),
+              "stamped 5 ms before the anchor: one 60 ms element, within +-1 sample");
+        check(runs.size() == 1
+                  && within(runs[0].start - (samplesOfMs(-5) + Access::leadSamples()), refOffset, 1),
+              "stamped 5 ms before the anchor: placed at its own instant plus the lead");
+    }
+    {
+        // 20 ms past the lead before the anchor: shifted by exactly that lateness.
+        const std::int64_t downMs = -(leadMs + 20);
+        Bench b;
+        b.play({{downMs, true, 0, true, downMs + 60}, {downMs + 60, false, 0}}, 400);
+        const auto runs = carriers(b.iTrace);
+        check(b.client.cwRefusedDowns() == 0 && b.client.cwShiftedElements() == 1,
+              "stamped lead + 20 ms before the anchor: not refused, the over shifted once");
+        check(within(b.client.cwShiftSamples(), samplesOfMs(20), 1),
+              "stamped lead + 20 ms before the anchor: the shift is its real lateness, 20 ms");
+        check(runs.size() == 1 && within(runs[0].length, samplesOfMs(60), 1),
+              "stamped lead + 20 ms before the anchor: one 60 ms element, within +-1 sample");
+    }
+    {
+        // A second before the anchor is past lead plus bound: still refused.
+        Bench b;
+        b.play({{-1000, true, 0, true, -940}, {-940, false, 0}}, 400);
+        check(b.client.cwRefusedDowns() == 1 && carriers(b.iTrace).empty(),
+              "stamped 1 s before the anchor: past the bound, refused, no carrier");
+    }
+}
+
 static void testShiftBoundRefusesTheOver()
 {
     const std::int64_t leadMs = Access::leadSamples() * 1000 / kRate;
@@ -1172,6 +1219,7 @@ int main(int argc, char** argv)
     testScheduledTrainsAreSampleExact();
     testLateKeyDownShiftsWholeElement();
     testShiftBoundRefusesTheOver();
+    testKeyDownStampedBeforeTheAnchor();
     testOverEndedByLapse();
     testForcedKeyUpCap();
     testScheduleCapacity();
