@@ -48,7 +48,12 @@ jobs:
       # Windows 1.02 per MSVC version, macOS 0.44, canary 0.94, and deps 1.8.
       # The retired Linux build prefix still occupies space until it expires,
       # and overlapping saves can exceed the 10 GiB limit before cleanup.
-      # Use the cache-cleanup usage report and ccache hit rates to judge the cap.
+      # Judge the cap by the "ccache stats" step, not by "Cache size" alone:
+      # a cache at 100% with a climbing Cleanups count is fine while main's
+      # hit rate holds near the ~96-99% it has run at. If the hit rate falls,
+      # the window is too narrow; re-do this budget before raising the cap,
+      # because CI's Linux PR job restores this entry under the same cap. If
+      # cache-cleanup's "Report repo cache usage" nears 10 GiB, lower it.
       CCACHE_MAXSIZE: 2000M
 
     steps:
