@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -160,6 +161,8 @@ public:
     // Remove every QUEUED request carrying this semantic key; one already in
     // flight is left to complete. Returns how many were removed.
     std::size_t cancelQueued(std::string_view key) noexcept;
+    // Drop pending requests and make later replies to dispatched requests stale.
+    void invalidateMatching(const std::function<bool(const Request&)>& matches);
     // A request carrying exactly this key is queued or in flight.
     [[nodiscard]] bool hasQueuedOrInFlight(std::string_view key) const noexcept;
 

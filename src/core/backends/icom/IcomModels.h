@@ -61,6 +61,7 @@ struct IcomModel {
     // tuningMinHz/tuningMaxHz — icom_family_test pins that containment. Unknown names
     // are dropped at the boundary, so a typo costs a button, never a bogus one.
     std::string_view bands;
+    std::string_view market{};  // Explicit regional variant for IC-7110 receive coverage.
 
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
@@ -163,7 +164,17 @@ txBandwidthProfileFor(const IcomModel& model);
 
 // Look up the model ID payload returned by CI-V 19 00. Unknown IDs return
 // nullptr; a configured command address is never an input to this lookup.
-[[nodiscard]] const IcomModel* modelForId(std::uint8_t id);
+[[nodiscard]] const IcomModel* modelForId(std::uint8_t id, std::string_view market = {});
+
+// The hull of every receive envelope modelForId() can return for this ID: the
+// base row and each regional variant. A readback is plausible whichever region
+// the operator chose, so this, not the selected market, bounds it. It walks
+// the same market list as modelForId(), not a named "widest" region.
+struct IcomTuningEnvelope {
+    std::uint64_t minHz = 0;
+    std::uint64_t maxHz = 0;
+};
+[[nodiscard]] std::optional<IcomTuningEnvelope> regionalTuningEnvelope(std::uint8_t id);
 
 // Canonical profile-name lookup for tools/tests. Never use operator-defined
 // RS-BA1 names to identify connected hardware.
@@ -182,10 +193,8 @@ txBandwidthProfileFor(const IcomModel& model);
 // still tune and listen.
 [[nodiscard]] const IcomModel& unknownModel();
 
-// One RF deck: a range this model can tune, and the PA rating inside it.
-//
-// A model needs this only when its tunable range is NOT the single continuous
-// interval [tuningMinHz, tuningMaxHz] — which, today, means the IC-9700 alone.
+// One continuous tuning range. A name identifies an amateur band only if the
+// range belongs to that band. A positive power is a documented PA rating.
 struct IcomBand {
     std::string_view name;
     std::uint64_t lowHz = 0;
@@ -282,6 +291,7 @@ enum class IcomFeature : std::uint8_t {
     GpsTimeConfiguration,
     MemoryChannels,
     AntennaTuner,
+    SelectedBandDualwatch,
 };
 
 enum class MemoryDialect : std::uint8_t {
@@ -470,6 +480,11 @@ struct IcomModelProfile {
     std::span<const AttenStep> attenuatorSteps{};
     std::span<const std::string_view> modes{};
     std::span<const std::string_view> receiveOnlyModes{};
+    // 07 D2 operating-band selection, 16 59 SUB on/off and one selectable
+    // scope. 25/26 address MAIN's selected/unselected VFOs.
+    bool selectedBandDualwatch = false;
+    // Decimal 1A 05 item used to distinguish AF speaker audio from a 12 kHz IF.
+    std::optional<int> networkAfIfItem{};
 
     [[nodiscard]] const FeatureEvidence* evidenceFor(IcomFeature feature) const noexcept;
     [[nodiscard]] bool supports(IcomFeature feature) const noexcept;

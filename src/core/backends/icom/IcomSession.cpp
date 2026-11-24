@@ -465,9 +465,15 @@ void IcomSession::requestStreamsIfReady()
     req.radioId   = m_radioId;
     req.radioName = m_radioName.toStdString();
     req.username  = m_params.username.toStdString();
-    const bool stereoRx = m_params.rxChannels == 2
+    const auto hint = m_params.modelHint ? m_params.modelHint : m_advertisedCivAddress;
+    const IcomModel* mediaModel = modelForId(hint);
+    const bool receiveOnly = mediaModel && !mediaModel->hasTransmit;
+    if (receiveOnly) {
+        m_params.enableTx = false;
+    }
+    const bool stereoRx = !receiveOnly && (m_params.rxChannels == 2
         || (m_params.rxChannels == 0
-            && preferredRxChannelsForModelHint(m_advertisedCivAddress) == 2);
+            && preferredRxChannelsForModelHint(hint) == 2));
     m_rxCodec = stereoRx ? AudioCodec::Lpcm2ch16 : m_params.codec;
     m_rx = RxAssembler(m_rxCodec);
     req.rxCodec   = m_rxCodec;

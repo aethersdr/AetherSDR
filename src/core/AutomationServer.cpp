@@ -3814,7 +3814,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|scopepreset <range> <slot> [lower-Hz upper-Hz]|scopeslot <receiver> <slot>|session|scheduler|incident> — CI-V "
+            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|scopesource main|sub|scopepreset <range> <slot> [lower-Hz upper-Hz]|scopeslot <receiver> <slot>|session|scheduler|incident> — CI-V "
             "inject, frame trace, receiver profile, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
@@ -9172,6 +9172,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
     }
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
                         && a != QLatin1String("dualwatch")
+                        && a != QLatin1String("scopesource")
                         && a != QLatin1String("scopepreset")
                         && a != QLatin1String("scopeslot")
                         && a != QLatin1String("session")
@@ -9179,7 +9180,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
                         && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
         return err(QStringLiteral(
-            "civ requires an action (send|trace|profile|dualwatch|scopepreset|scopeslot|session|scheduler|incident)"));
+            "civ requires an action (send|trace|profile|dualwatch|scopesource|scopepreset|scopeslot|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -9213,6 +9214,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
                        : a == QLatin1String("dualwatch") ? QStringLiteral("receiver.dualwatch")
+                       : a == QLatin1String("scopesource") ? QStringLiteral("scope.source")
                        : a == QLatin1String("scopepreset") ? QStringLiteral("scope.preset")
                        : a == QLatin1String("scopeslot") ? QStringLiteral("scope.slot")
                        : a == QLatin1String("profile") ? QStringLiteral("profile.show")

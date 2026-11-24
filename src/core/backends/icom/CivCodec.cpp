@@ -1525,7 +1525,7 @@ std::vector<std::uint8_t> cmdXitEnable(std::uint8_t to, bool on)
     return buildFrameSub(to, cmd::kTuneOffset, tuneOffset::kXitOnOff, body);
 }
 
-std::vector<std::uint8_t> cmdScopeReference(std::uint8_t to, double db)
+std::vector<std::uint8_t> cmdScopeReference(std::uint8_t to, double db, std::uint8_t selector)
 {
     // -20.0 .. +20.0 dB in 0.5 dB steps. Magnitude is two BCD bytes holding
     // four digits (10 / 1 / 0.1 / 0.01, the last fixed at 0), and the SIGN is a
@@ -1536,10 +1536,9 @@ std::vector<std::uint8_t> cmdScopeReference(std::uint8_t to, double db)
     // Round to the nearest half-dB the radio can actually represent.
     const int halfSteps = static_cast<int>(std::lround(std::abs(clamped) * 2.0));
     const int tenths    = halfSteps * 5;            // e.g. 20.5 dB -> 205
-    // FOUR bytes, and the first is the 0x27 family's leading fixed 0x00 — the
-    // same one 27 15 needs. See cmdScopeSpan for what omitting it costs.
+    // The leading byte is the scope selector, fixed at zero on single-receiver radios.
     const std::array<std::uint8_t, 4> body{
-        0x00,
+        selector,
         static_cast<std::uint8_t>((((tenths / 100) % 10) << 4) | ((tenths / 10) % 10)),
         static_cast<std::uint8_t>(((tenths % 10) << 4) | 0),
         static_cast<std::uint8_t>(negative ? 0x01 : 0x00),

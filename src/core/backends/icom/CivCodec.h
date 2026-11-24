@@ -752,7 +752,7 @@ struct ScopeEdgeWindow {
                                                    double centreHz,
                                                    double widthHz) noexcept;
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeSpan(std::uint8_t to, int spanHz);
-[[nodiscard]] std::vector<std::uint8_t> cmdScopeReference(std::uint8_t to, double db);
+[[nodiscard]] std::vector<std::uint8_t> cmdScopeReference(std::uint8_t to, double db, std::uint8_t selector = 0);
 
 // RIT / dTX. The OFFSET is a signed magnitude: two BCD bytes little-endian
 // holding 0000..9999 Hz, then a sign byte (00 plus, 01 minus) — the same
