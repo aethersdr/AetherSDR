@@ -1017,7 +1017,10 @@ void tciKeyedTeardown(KeyedTeardownCase c)
     f.backend->caps.panLifecycleControl->txPanCloseWhileKeyed =
         PanLifecycleControl::TxPanCloseWhileKeyed::Refused;
     // The HL2 declares its keyed TX-move refusal, so TCI can ask first.
-    f.backend->caps.txSliceChangeRefusedWhileKeyed = c != KeyedTeardownCase::OtherRefusal;
+    if (c != KeyedTeardownCase::OtherRefusal) {
+        f.backend->caps.txSliceControl = RadioCapabilities::TxSliceControl{
+            RadioCapabilities::TxSliceControl::ChangeWhileKeyed::Refused};
+    }
     f.backend->closesPans = true;
     f.backend->removesVfoBSlice = true;
     TciServer server(&f.radio);

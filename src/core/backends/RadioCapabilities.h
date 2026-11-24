@@ -968,10 +968,16 @@ struct RadioCapabilities {
     struct RadioPttObservation {};
     std::optional<RadioPttObservation> radioPttObservation;
 
-    // requestTxSlice() moving transmit to another slice is refused while the radio
-    // is keyed (#7553; reply code RadioControlReply::kRefusedWhileKeyed).
-    // RadioModel::keyedTxSliceChangeRefused() lets a caller ask first. HL2: true.
-    bool txSliceChangeRefusedWhileKeyed = false;
+    // How requestTxSlice() treats a move of transmit to another slice while the
+    // radio is keyed. Refused: the backend refuses it (#7553; reply code
+    // RadioControlReply::kRefusedWhileKeyed), and
+    // RadioModel::keyedTxSliceChangeRefused() lets a caller ask first. Absent =
+    // nothing declared, read as Allowed. HL2: Refused.
+    struct TxSliceControl {
+        enum class ChangeWhileKeyed { Allowed, Refused };
+        ChangeWhileKeyed changeWhileKeyed{ChangeWhileKeyed::Allowed};
+    };
+    std::optional<TxSliceControl> txSliceControl;
 
     // Reachable RX filter widths in Hz; empty = continuous or unknown (the UI keeps
     // its configurable list). Set by radios with a short fixed IF set (IC-705
