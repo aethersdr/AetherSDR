@@ -119,13 +119,10 @@ struct Ft8Status {
 // WsprPackage: the bytes are pinned by size and SHA-256 and checked before
 // anything is sent to the radio, so a damaged resource installs nothing.
 //
-// ⚠ Rebuild with `tools/ft8-agent/build.py --armv7-only` ON LINUX, copy the
-// result to resources/waveforms/, and bump the version, hash and size here
+// ⚠ Rebuild with `tools/ft8-agent/build.py` ON LINUX, copy both results to
+// resources/waveforms/, and bump the version, hashes and sizes here
 // together. A package built on Windows installs and then silently never
 // runs -- only the zip container differs, and nothing reports the problem.
-//
-// There is no container pin yet, so FLEX-8000 and Aurora are not served by
-// this installer and its menu entry is dimmed on them.
 struct Ft8Package {
     struct Pin {
         const char* resource;
@@ -134,8 +131,13 @@ struct Ft8Package {
         qint64 size;
     };
     static constexpr const char* kVersion = "0.1.6";
+    // FLEX-6000: a legacy waveform, whose settings persist on /user.
     static constexpr Pin kLegacy{":/waveforms/AetherFT8.ssdr_waveform", "AetherFT8.ssdr_waveform",
                                  "d7e7f9d4e164a4d1e3e7e7f6963956810546a25ca0832593835cab685f3cf3fc", 117456};
+    // FLEX-8000 and Aurora: a container, because a legacy waveform has only
+    // RAM there and the container's writable layer survives a reboot.
+    static constexpr Pin kContainer{":/waveforms/AetherFT8.tar.gz", "AetherFT8.tar.gz",
+                                    "ebc6abc295cec75711e43979de668b7832afb2f61695fad47ff4d4ab9ecd3305", 137176};
 };
 
 // GET and POST /v1/config. A strict subset of WsprConfig: no hopping, no

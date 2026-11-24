@@ -140,7 +140,7 @@ Spots from the [WSPR receiver](./wspr-receiver.md) running on your radio, read o
 
 ### FT8
 
-Spots from the [FT8 receiver](./ft8-receiver.md) running on a FLEX-6000, read over the radio's local network. Install the receiver first, from **Tools → Waveforms... → Install → FT8 Receiver**.
+Spots from the [FT8 receiver](./ft8-receiver.md) running on the radio, read over the radio's local network. Install the receiver first, from **Tools → Waveforms... → Install → FT8 Receiver**.
 
 - **Lifetime** — how long an FT8 spot stays on the panadapter (default 30 minutes)
 - **Auto-Start** — start reading when a radio that has the receiver connects

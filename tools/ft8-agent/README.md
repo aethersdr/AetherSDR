@@ -74,7 +74,9 @@ Needs **zig 0.17** (it bundles the linker and musl for both targets); `build.py`
 the version and refuses otherwise. `--armv7-only` skips the arm64 container, which needs
 `../flex-tailnet-shim/mkimage.py`.
 
-Produces `AetherFT8.ssdr_waveform` for a FLEX-6000. Measured 2026-11-08:
+Produces `AetherFT8.ssdr_waveform` for a FLEX-6000 and `AetherFT8.tar.gz`, an arm64
+container image, for a FLEX-8000 or Aurora. The container has not run on a radio.
+Measured on a FLEX-6300, 2026-11-08:
 
 | | |
 |---|---|

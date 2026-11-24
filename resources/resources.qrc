@@ -20,6 +20,7 @@
         <file alias="AetherWSPR.ssdr_waveform">waveforms/AetherWSPR.ssdr_waveform</file>
         <file alias="AetherWSPR.tar.gz">waveforms/AetherWSPR.tar.gz</file>
         <file alias="AetherFT8.ssdr_waveform">waveforms/AetherFT8.ssdr_waveform</file>
+        <file alias="AetherFT8.tar.gz">waveforms/AetherFT8.tar.gz</file>
         <file alias="AetherGPS.ssdr_waveform">waveforms/AetherGPS.ssdr_waveform</file>
         <file alias="AetherGPS.tar.gz">waveforms/AetherGPS.tar.gz</file>
     </qresource>

@@ -5245,13 +5245,22 @@ add_test(NAME wspr_agent_test COMMAND wspr_agent_test)
 
 # The FT8 receiver on the radio (tools/ft8-agent): its status and settings
 # JSON parse, malformed replies are refused, another agent's status is
-# refused outright, and the settings body round-trips. Socket-free.
+# refused outright, the settings body round-trips, and each bundled package
+# matches its pin. Socket-free; writes only to a QTemporaryDir.
 add_executable(ft8_agent_test
     tests/ft8_agent_test.cpp
     src/core/Ft8Agent.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/ZipArchive.cpp
+    $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(ft8_agent_test PRIVATE src)
 target_link_libraries(ft8_agent_test PRIVATE Qt6::Core Qt6::Network)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(ft8_agent_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(ft8_agent_test PRIVATE zlibstatic)
+endif()
 add_test(NAME ft8_agent_test COMMAND ft8_agent_test)
 
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,

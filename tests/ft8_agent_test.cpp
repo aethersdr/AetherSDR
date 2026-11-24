@@ -1,8 +1,9 @@
 // The FT8 receiver on the radio (tools/ft8-agent): its status and settings
 // JSON parse; malformed replies are refused and out-of-range spots dropped;
 // another agent's status is refused outright; the settings body round-trips
-// through the receiver's own keys; and only LAN or tailnet addresses are
-// tried. Socket-free.
+// through the receiver's own keys; only LAN or tailnet addresses are tried;
+// and each bundled package matches its pin. Socket-free; writes only to a
+// QTemporaryDir.
 //
 // The fixtures are REAL replies captured from a FLEX-6300 on 2026-11-08,
 // not invented ones -- including the first live decode, which is also the
@@ -10,11 +11,16 @@
 
 #include "core/DxSpot.h"
 #include "core/Ft8Agent.h"
+#include "core/LegacyWaveformPackage.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTemporaryDir>
 
 #include <cstdio>
 
@@ -208,6 +214,43 @@ void testReachable()
           "over SmartLink a LAN address left from an earlier session is not tried");
 }
 
+void testBundledPackages()
+{
+    check(isFt8Waveform(QStringLiteral("AetherFT8")) && !isFt8Waveform(QStringLiteral("AetherWSPR")),
+          "the receiver's row is recognized, and nothing else is");
+    for (const Ft8Package::Pin& pin : {Ft8Package::kLegacy, Ft8Package::kContainer}) {
+        QTemporaryDir dir;
+        QString error;
+        const QString path = ft8::writeBundledPackage(pin, dir.path(), &error);
+        QFile f(path);
+        const QByteArray bytes = f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+        check(!path.isEmpty() && bytes.size() == pin.size
+                  && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex() == QByteArray(pin.sha256),
+              "a bundled package is written and matches its pin");
+    }
+    QTemporaryDir dir;
+    QString error;
+    const LegacyWaveformPackageInfo info =
+        inspectLegacyWaveformPackageFile(ft8::writeBundledPackage(Ft8Package::kLegacy, dir.path(), &error));
+    check(info.valid && info.waveformName == QLatin1String(kFt8WaveformName)
+              && info.version == QLatin1String(Ft8Package::kVersion),
+          "the legacy one is a valid waveform named AetherFT8, at the pinned version");
+    {
+        QTemporaryDir container;
+        QFile f(ft8::writeBundledPackage(Ft8Package::kContainer, container.path(), &error));
+        const QByteArray head = f.open(QIODevice::ReadOnly) ? f.read(2) : QByteArray();
+        check(head == QByteArray::fromHex("1f8b"), "the container one is a gzip archive");
+    }
+    QTemporaryDir other;
+    QString why;
+    Ft8Package::Pin wrong = Ft8Package::kContainer;
+    wrong.resource = ":/cty.dat";
+    const QString none = ft8::writeBundledPackage(wrong, other.path(), &why);
+    check(none.isEmpty() && !why.isEmpty()
+              && !QFile::exists(QDir(other.path()).filePath(QString::fromLatin1(wrong.fileName))),
+          "a resource that doesn't match the pin is refused and nothing is written");
+}
+
 void testBands()
 {
     // ⚠ These must be the FT8 dials, not WSPR's. Getting this wrong puts the
@@ -303,6 +346,7 @@ int main(int argc, char** argv)
     testConfigRoundTrip();
     testAdminToken();
     testReachable();
+    testBundledPackages();
     testBands();
     testPanadapterSpot();
     testSpotHubStyle();

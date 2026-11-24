@@ -1,15 +1,15 @@
 ---
 title: "FT8 Receiver"
 slug: "/ft8-receiver"
-description: "A receive-only FT8 decoder that runs on a FLEX-6000 itself, with no PC, and feeds its spots to SpotHub and the panadapter."
+description: "A receive-only FT8 decoder that runs on the radio itself, with no PC, and feeds its spots to SpotHub and the panadapter."
 status: "Experimental, receive-only"
-applies_to: ["FLEX-6000"]
+applies_to: ["FlexRadio"]
 platforms: ["Linux", "macOS", "Windows"]
 ---
 
 :::info[Status]
 
-**Status:** Experimental, receive-only · **Applies to:** FLEX-6000 · **Platforms:** Linux, macOS, Windows
+**Status:** Experimental, receive-only · **Applies to:** FlexRadio · **Platforms:** Linux, macOS, Windows
 
 :::
 
@@ -21,7 +21,7 @@ It finds fewer stations than WSJT-X on a crowded band. It decodes 77.3% of the m
 
 ## Requirements
 
-- A FLEX-6000 series radio, where it runs as a legacy waveform. On a FLEX-8000 or Aurora the **FT8 Receiver** entry is dimmed.
+- A FLEX-6000 series radio, where it runs as a legacy waveform. A FLEX-8000 series or Aurora radio installs it as a container and so needs the radio's Waveform Processor ready, but this hasn't been tested on one.
 - AetherSDR connected to the radio over its **local network**. SmartLink can't reach the receiver.
 - One free slice. The receiver takes one of the radio's slices for as long as it runs. On a two-slice radio such as the FLEX-6300, that leaves one.
 - One free DAX channel.
@@ -32,15 +32,15 @@ It finds fewer stations than WSJT-X on a crowded band. It decodes 77.3% of the m
 1. Open **Tools → Waveforms...**
 2. Click **Install** and choose **FT8 Receiver**.
 
-The receiver ships inside AetherSDR, so nothing is downloaded. It takes less than 200 KB on the radio. It listens on 20 m (14.074 MHz) until you change that.
+The receiver ships inside AetherSDR, so nothing is downloaded. It takes less than 500 KB on the radio. It listens on 20 m (14.074 MHz) until you change that.
 
-To remove it, click **Uninstall** on its **AetherFT8** row. This also removes its settings and its slice.
+To remove it, click **Uninstall** (FLEX-6000) or **Remove** (FLEX-8000 and Aurora) on its **AetherFT8** row. This also removes its settings and its slice.
 
-To update it, uninstall it and install it again. That starts it over with default settings.
+To update it, remove it and install it again. That starts it over with default settings.
 
 ## Configuring the receiver
 
-Click **Configure...** on the **AetherFT8** row in the Waveforms window, or in **SpotHub → FT8**. The receiver keeps these settings itself, in a file on the radio, so they apply with no computer connected. Click **Apply** to send your changes to the radio. The receiver applies them on its next cycle.
+Click **Configure...** on the **AetherFT8** row in the Waveforms window, or in **SpotHub → FT8**. The receiver keeps these settings itself, on the radio, so they apply with no computer connected. Click **Apply** to send your changes to the radio. The receiver applies them on its next cycle.
 
 The first computer to click **Apply** claims the receiver: AetherSDR keeps the receiver's admin token in your system keychain, and only that computer can change the settings afterward. On another computer, reinstall the receiver to start over.
 
@@ -107,7 +107,7 @@ AetherSDR reaches the receiver only on the radio's local network.
 Only the computer that first clicked **Apply** can change the settings.
 
 1. Open **Tools → Waveforms...**
-2. Click **Uninstall** on the **AetherFT8** row.
+2. Click **Uninstall** or **Remove** on the **AetherFT8** row.
 3. Click **Install** and choose **FT8 Receiver**, then configure it from this computer.
 
 ## See also

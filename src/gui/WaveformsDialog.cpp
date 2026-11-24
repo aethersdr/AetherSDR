@@ -1653,18 +1653,19 @@ void WaveformsDialog::updateInstallButtonState()
         m_installWsprAction->setStatusTip(wsprTip);
     }
     if (m_installFt8Action) {
-        // Only the legacy armv7 package is pinned (see Ft8Package), so the
-        // entry is offered on a radio known to take it and dimmed elsewhere.
+        // The WSPR receiver's gate: the container on a radio with a Waveform
+        // Processor, under the Docker gate; any other, the legacy waveform.
         const bool reachable = ft8::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
         const bool hasWaveforms = m_radioModel->backendCapabilities().hasWaveforms;
         const bool native = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Native;
-        m_installFt8Action->setEnabled(!busy && connected && hasWaveforms && reachable && native);
+        const bool runtimeReady = native || dockerReady;
+        m_installFt8Action->setEnabled(!busy && connected && hasWaveforms && reachable && runtimeReady);
         const QString ft8Tip = busy ? tr("A waveform install is already in progress.")
             : !connected            ? tr("Connect to a radio before installing the FT8 receiver.")
             : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
             : !reachable            ? tr("Connect over the radio's local network or Remote Access to install "
                                          "the FT8 receiver.")
-            : !native               ? tr("The FT8 receiver is available for FLEX-6000 series radios only.")
+            : !runtimeReady         ? dockerBlocker
                                     : tr("Install the FT8 receiver (version %1), a receive-only FT8 "
                                          "decoder that runs on the radio.")
                                           .arg(QString::fromLatin1(Ft8Package::kVersion));
@@ -1740,11 +1741,18 @@ void WaveformsDialog::onInstallFt8Clicked()
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    // Legacy only: Ft8Package has no container pin, and updateInstallButtonState
-    // dims this entry on a radio that would need one.
+    const bool docker = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container;
+    if (docker) {
+        const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+        if (!blocker.isEmpty()) {
+            showDockerWfpNotReadyDialog(this, blocker);
+            return;
+        }
+    }
+    // The package ships inside AetherSDR; the installer wants a file.
     QString error;
     const QString path = ft8::writeBundledPackage(
-        Ft8Package::kLegacy,
+        docker ? Ft8Package::kContainer : Ft8Package::kLegacy,
         QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
             + QStringLiteral("/waveforms/aether-ft8-%1").arg(QString::fromLatin1(Ft8Package::kVersion)),
         &error);
@@ -1754,7 +1762,7 @@ void WaveformsDialog::onInstallFt8Clicked()
         box.get()->exec();
         return;
     }
-    installWaveformPath(false, path, m_radioModel, m_radioModel->controlSession());
+    installWaveformPath(docker, path, m_radioModel, m_radioModel->controlSession());
 }
 
 void WaveformsDialog::onInstallWsprClicked()
