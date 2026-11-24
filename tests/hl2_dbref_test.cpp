@@ -235,6 +235,14 @@ int main()
           "a 32 dB LNA cut refers AGC-T 100 (90 + 32) onto WDSP's own maximum");
     check(agc.agcCeilingDb(100) <= Hl2DbReference::kAgcCeilingDbMax,
           "the referred ceiling stays inside WDSP's own maximum");
+    // So at this LNA the top of the slider is flat, and that is intended: from
+    // about AGC-T 98.6 (88 dB at the reference + 32) every unit refers past
+    // kAgcCeilingDbMax and lands on it. The map still rises at every unit at
+    // the reference LNA (checked above); only the clamp flattens it here.
+    check(agc.agcCeilingDb(98) < Hl2DbReference::kAgcCeilingDbMax,
+          "a 32 dB LNA cut leaves AGC-T 98 below WDSP's maximum");
+    check(near(agc.agcCeilingDb(99), Hl2DbReference::kAgcCeilingDbMax),
+          "a 32 dB LNA cut puts AGC-T 99 on WDSP's maximum, flat to 100");
 
     // The display term must NOT leak into the audio term. fullScaleDbm
     // calibrates a dBm axis; the AGC lives inside the digital chain and never
