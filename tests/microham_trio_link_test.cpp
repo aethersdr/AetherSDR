@@ -123,6 +123,12 @@ struct Rig {
     // Answer the pending command with the state it asked for.
     void reply(const char* antenna) { peer.push(stateDoc("radio2", antenna, lastId())); }
     void replySplit(const char* tx, const char* rx) { peer.push(splitDoc("radio2", tx, rx, lastId())); }
+    // Split off as the device answers it: `v` on the former RX half (d184, d288).
+    void replySplitOff()
+    {
+        const auto& s = trio.view().snapshot;
+        peer.push(stateDoc("radio2", s ? s->antennaRx.toLatin1().constData() : "", lastId()));
+    }
 };
 
 const QString kTrio = QLatin1String(MicrohamTrioRadioLink::kSourceId);
@@ -236,9 +242,15 @@ void testImplicitSplit()
            rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant3"), false).isEmpty()
                && rig.commands() == 4
                && rig.lastCommand().startsWith(R"({"a": "set_value", "gid": "split", "v": false, "id": ")"));
+    rig.replySplitOff();
+    report("split off lands on the former RX half, so `v` follows to Antenna3",
+           rig.commands() == 5
+               && rig.lastCommand().startsWith(R"({"a": "set_value", "gid": "antenna", "v": "ant3")"),
+           rig.lastCommand().toStdString());
     rig.reply("ant3");
-    report("one command was enough: split off, TX and RX on Antenna3",
-           rig.commands() == 4 && !rig.trio.pickUnderWay()
+    report("done: split off, TX and RX on Antenna3",
+           rig.commands() == 5 && !rig.trio.pickUnderWay()
+               && trioViewOf(rig.radio).txCurrent == QStringLiteral("TRIO:ant3")
                && trioViewOf(rig.radio).rxCurrent == QStringLiteral("TRIO:ant3"));
 
     // Into split again, then a TX pick equal to the RX half ends it.
@@ -250,15 +262,15 @@ void testImplicitSplit()
            rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant1"), true).isEmpty()
                && rig.commands() == sent + 1
                && rig.lastCommand().startsWith(R"({"a": "set_value", "gid": "split", "v": false)"));
-    rig.reply("ant3");
-    report("and when split off leaves the other port, `v` follows",
-           rig.commands() == sent + 2
-               && rig.lastCommand().startsWith(R"({"a": "set_value", "gid": "antenna", "v": "ant1")"),
+    rig.replySplitOff();
+    report("split off lands on the RX half, which is the pick: one command",
+           rig.commands() == sent + 1 && !rig.trio.pickUnderWay()
+               && trioViewOf(rig.radio).txCurrent == QStringLiteral("TRIO:ant1")
+               && trioViewOf(rig.radio).rxCurrent == QStringLiteral("TRIO:ant1"),
            rig.lastCommand().toStdString());
-    rig.reply("ant1");
     report("RX pick equal to TX without split sends nothing",
            rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant1"), false).isEmpty()
-               && rig.commands() == sent + 2);
+               && rig.commands() == sent + 1);
 
     // Keyed between two commands of one pick: the rest is not sent.
     rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant2"), false);

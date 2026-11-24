@@ -161,15 +161,13 @@ struct Command {
 // A set_value of the antenna group's `v`: one port for TX and RX of the radio
 // that holds focus, split off. `key` must be a button the snapshot lists:
 // keys reach us from the device and are echoed back, so they are validated
-// here. `requestId` is a fresh UUID; the reply carries it. Key order and
-// spacing are the ones the device's own page sends, recorded on one unit.
+// here. `requestId` is a fresh UUID; the reply carries it. Key order is the
+// device page's; the page sends compact JSON, and the device accepts both.
 Command encodeAntennaSelect(const Snapshot& snapshot, const QString& key,
                             const QString& requestId);
 
-// Any of the four. The `v` form is the one the Trio's own page was recorded
-// sending; the split and half forms follow the state document's own fields
-// (`split.v`, `antenna.txv` "tx_antN", `antenna.rxv` "rx_antN") and were not
-// recorded on the wire.
+// Any of the four. All four are the forms the Trio's own page sends (`split`
+// `v` bool, `txv` "tx_antN", `rxv` "rx_antN"), and the device accepts each.
 Command encodeAntennaCommand(const Snapshot& snapshot, AntennaField field, const QString& key,
                              const QString& requestId);
 
