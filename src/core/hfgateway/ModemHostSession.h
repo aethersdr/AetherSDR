@@ -21,9 +21,9 @@
 // gateway relies on the unsolicited reports instead.
 //
 // LISTEN ON, DISCONNECT and ABORT can cause a modem to transmit. They
-// require a grant for this connection. LISTEN OFF and MYCALL never need one.
-// Stop commands can use the reserved reply capacity. Reset clears the grant;
-// revoking it does not send a command.
+// require a grant for this connection. LISTEN OFF, MYCALL and MONITOR do
+// not. Stop commands can use the reserved reply capacity. Reset clears
+// the grant; revoking it does not send a command.
 
 namespace AetherSDR::ModemHost {
 
@@ -34,6 +34,8 @@ enum class Request {
     Disconnect,
     Abort,
     Version,
+    MonitorOn,   // Mercury only; read-only, never keys (docs/TNC.md, MONITOR)
+    MonitorOff,
 };
 
 enum class Refusal {
@@ -47,7 +49,7 @@ class Session {
 public:
     // Replies awaited before ordinary commands are refused.
     static constexpr int kMaxOutstanding = 16;
-    // Stop commands (LISTEN OFF, DISCONNECT, ABORT) are exempt from
+    // Stop commands (LISTEN OFF, MONITOR OFF, DISCONNECT, ABORT) are exempt from
     // kMaxOutstanding: a modem that has stopped answering must still be told
     // to stop. Past this hard limit the modem is not answering at all, and
     // even a stop command is refused; the client drops the connection.

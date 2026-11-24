@@ -914,6 +914,9 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexReceiveData.cpp
     src/core/backends/flex/FlexBackend_ReceiveData.cpp
     src/core/backends/flex/FlexDisplayStatus.cpp
+    src/core/backends/flex/FlexLanSession.cpp
+    src/core/backends/flex/FlexCommandSession.cpp
+    src/core/backends/flex/FlexBackend_Commands.cpp
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexRadioStatus.cpp
     src/core/backends/flex/FlexCwControls.cpp
@@ -1281,6 +1284,7 @@ set(CORE_SOURCES
     src/core/hfgateway/ModemHostClient.cpp
     src/core/hfgateway/HfGatewayConfig.cpp
     src/core/hfgateway/HfGatewaySettings.cpp
+    src/models/HfGatewayModemModel.cpp
     src/core/pms/PmsMailbox.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsStationList.cpp
@@ -1473,6 +1477,7 @@ set(GUI_SOURCES
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
     src/gui/Data2gMonitorPage.cpp
+    src/gui/HfGatewayPage.cpp
     src/gui/AprsMessagesDialog.cpp
     src/gui/AprsSymbolIcons.cpp
     src/gui/FlexControlDialog.cpp

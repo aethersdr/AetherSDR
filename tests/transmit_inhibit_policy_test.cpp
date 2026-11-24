@@ -86,5 +86,29 @@ int main()
                      "does not restore a slice we cannot safely claim");
     }
 
+    {
+        RadioCapabilities flex;
+        flex.hasDaxStreams = true;
+        RadioCapabilities hl2;
+        hl2.hostModulates = true;
+        hl2.takesTxAudioOverSeam = true;
+        RadioCapabilities icom;
+        icom.takesTxAudioOverSeam = true;
+        RadioCapabilities hostModulatedDax = flex;
+        hostModulatedDax.hostModulates = true;
+        RadioCapabilities seamFedDax = flex;
+        seamFedDax.takesTxAudioOverSeam = true;
+        ok &= expect(TransmitInhibitPolicy::moxKeysRadioDax(flex),
+                     "MOX keys DIGU/DIGL on a radio that modulates its DAX TX stream");
+        ok &= expect(!TransmitInhibitPolicy::moxKeysRadioDax(hl2),
+                     "a host-modulated radio keeps the DIGU/DIGL voice refusal");
+        ok &= expect(!TransmitInhibitPolicy::moxKeysRadioDax(icom),
+                     "a seam-fed radio keeps the DIGU/DIGL voice refusal");
+        ok &= expect(!TransmitInhibitPolicy::moxKeysRadioDax(hostModulatedDax),
+                     "DAX streams on a host-modulated radio keep the refusal");
+        ok &= expect(!TransmitInhibitPolicy::moxKeysRadioDax(seamFedDax),
+                     "DAX streams on a seam-fed radio keep the refusal");
+    }
+
     return ok ? 0 : 1;
 }

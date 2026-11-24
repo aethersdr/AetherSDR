@@ -139,10 +139,6 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
         } else {
             s = new SliceModel(id, this);
             if (values.squelchLevel) { s->setManualSquelchLevel(*values.squelchLevel); }
-            // Forward slice commands to the radio
-            connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
-                sendSliceCommand(s, cmd);
-            });
             // Initial lock observation and selection intents, wired at EVERY
             // construction site rather than only the backend-materialising one.
             initializeObservedSlice(s);
@@ -207,13 +203,7 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
         m_transmitModel.setMaxPowerLevel(*observation.internalPaPower);
         if (!currentSlice()) { return; }
     }
-    if (isConnected()) {
-        const QStringList commands = s->drainPendingCommands();
-        for (const QString& command : commands) {
-            if (!currentSlice()) { return; }
-            sendSliceCommand(s, command);
-        }
-    }
+
 }
 
 } // namespace AetherSDR

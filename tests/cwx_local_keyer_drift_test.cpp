@@ -134,8 +134,13 @@ void testCumulativeTargetsAtExactCadence()
     }
 
     const auto waitCountBeforeDrain = static_cast<qint64>(f.keyer.waits.size());
+    const std::chrono::steady_clock::time_point epoch = f.keyer.epoch();
     f.keyer.setElapsed(300);
     f.keyer.tick();
+    // The drain's key-up is the last dit's grid instant, not the wake (#7245).
+    report("exact: natural drain stamps the last key-up at its grid instant",
+           !f.states.empty() && f.states.back() == 0 && !f.whens.empty()
+               && f.whens.back() == epoch + std::chrono::milliseconds(300));
 
     report("exact: natural drain leaves keyer idle", f.keyer.isIdle());
     expectEq("exact: natural drain resets target", f.keyer.nextEdgeMs(), 0);
@@ -359,6 +364,37 @@ void testLiveSpaceIsOneWordGap()
            f.whens.size() == 3 && f.whens[2] == epoch + std::chrono::milliseconds(480));
 }
 
+// #7245 review 5: text played into a keyer that has drained starts, with
+// setSpacingAfterDrain(7), a word space after the drain's key-up; without it
+// (every keyer but host text's), it starts at once, as before.
+void testSpacingAfterDrain()
+{
+    for (const bool spaced : {true, false}) {
+        const std::string name = spaced ? "after drain, spaced: " : "after drain, unspaced: ";
+        Fixture f;
+        if (spaced) {
+            f.keyer.setSpacingAfterDrain(7);
+        }
+        f.keyer.setElapsed(0);
+        f.keyer.start(QStringLiteral("E"), 20);
+        f.keyer.setElapsed(60);
+        f.keyer.tick();   // drains: the key-up at its grid instant
+        f.keyer.start(QStringLiteral("E"), 20);
+        if (spaced) {
+            report(name + "the second dit waits", f.states.size() == 2 && f.keyer.lastWait() > 400);
+            f.keyer.setElapsed(f.keyer.nextEdgeMs());
+            f.keyer.tick();
+        }
+        expectStates(name + "dit, key-up, dit", f.states, {1, 0, 1});
+        const auto gap = f.whens.size() == 3 ? f.whens[2] - f.whens[1] : std::chrono::steady_clock::duration{};
+        const auto ms = std::chrono::duration_cast<std::chrono::microseconds>(gap).count() / 1000.0;
+        report(name + (spaced ? "7 units (420 ms) after the drain's key-up" : "keyed at once"),
+               spaced ? gap >= std::chrono::milliseconds(420) && gap < std::chrono::milliseconds(422)
+                      : gap < std::chrono::milliseconds(20),
+               "gap=" + std::to_string(ms) + " ms");
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -373,6 +409,7 @@ int main(int argc, char** argv)
     testScheduledInstantsFollowTheGridNotTheWake();
     testWordGapAcrossEntries();
     testLiveSpaceIsOneWordGap();
+    testSpacingAfterDrain();
 
     std::printf("\n%s\n",
                 g_failed == 0

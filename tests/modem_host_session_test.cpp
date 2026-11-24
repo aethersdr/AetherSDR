@@ -35,6 +35,8 @@ int main()
                                               && s.refusal() == Refusal::NotPermitted);
         report("MYCALL allowed", s.request(Request::MyCall, {"N0CALL"}) == "MYCALL N0CALL\r");
         report("VERSION allowed", s.request(Request::Version) == "VERSION\r");
+        report("MONITOR allowed without permission", s.request(Request::MonitorOn) == "MONITOR ON\r"
+                                                          && s.request(Request::MonitorOff) == "MONITOR OFF\r");
         s.setTransmitPermitted(true);
         report("LISTEN ON allowed with permission", s.request(Request::ListenOn) == "LISTEN ON\r");
         report("DISCONNECT and ABORT allowed with permission",
@@ -137,6 +139,8 @@ int main()
         report("one more ordinary command is refused", s.request(Request::Version).isEmpty()
                                                            && s.refusal() == Refusal::QueueFull);
         report("ordinary MYCALL refused too", s.request(Request::MyCall, {"N0CALL"}).isEmpty());
+        report("MONITOR OFF is allowed past the soft cap without a grant",
+               s.request(Request::MonitorOff) == "MONITOR OFF\r");
         s.setTransmitPermitted(true);
         report("stop commands still go out past the soft cap", s.request(Request::ListenOff) == "LISTEN OFF\r"
                                                                     && s.request(Request::Disconnect) == "DISCONNECT\r"
