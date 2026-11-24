@@ -317,7 +317,9 @@ int main(int argc, char** argv)
     if (bareA11y) {
         const auto controlled = bareA11y->relations();
         for (const auto& relation : controlled)
-            controlsReadout = controlsReadout || relation.first->object() == &readout;
+            controlsReadout = controlsReadout
+                || (relation.first->object() == &readout
+                    && relation.second.testFlag(QAccessible::Controlled));
     }
     check(controlsReadout, "the pan reports the widget its value drives");
 
