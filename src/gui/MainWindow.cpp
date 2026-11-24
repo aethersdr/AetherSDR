@@ -53,6 +53,7 @@
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanReslice.h"
 #include "PanLayoutDialog.h"
+#include "PanLayoutShrinkPolicy.h"
 #include "core/CwRecordGate.h"        // micTapOwnsRecorder — carried explicitly (AGENTS.md, #3532)
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
@@ -549,7 +550,7 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 
 // panCountForLayoutId moved to MainWindowHelpers (#3351 Phase 1c).
 
-// defaultPanLayoutForCount moved to MainWindow_Session.cpp (#3351 Phase 2c).
+// defaultPanLayoutForCount moved to PanLayoutShrinkPolicy::defaultLayoutForCount.
 
 
 // xvtrPolicyBandsFrom / xvtrListSummary / xvtrForBandSummary moved to
@@ -11371,29 +11372,25 @@ void MainWindow::applyPanLayout(const QString& layoutId)
                 removalCandidates.append(applet->panId());
             }
         }
-        int toRemove = existing - needed;
-        for (int i = removalCandidates.size() - 1; i >= 0 && toRemove > 0; --i) {
-            const QString panId = removalCandidates.at(i);
-            if (panId == PanSliceTitle::kPlaceholderPanId) continue;
-            qDebug() << "applyPanLayout: closing pan" << panId;
-            // Route through removePanadapter so a layout-shrink tears down the
-            // waterfall too ("display pan remove" + "display panafall remove"),
-            // not just the panadapter stream. (#3843)
-            m_radioModel.removePanadapter(panId);
-            // Radio will send "removed" status → panadapterRemoved signal
-            // → PanadapterStack::removePanadapter()
-            --toRemove;
-        }
+        // removePanadapter also tears down the waterfall (#3843); the removal
+        // itself arrives later through panadapterRemoved.
+        const PanLayoutShrinkPolicy::Outcome outcome = PanLayoutShrinkPolicy::closeFromEnd(
+            removalCandidates, existing, needed, PanSliceTitle::kPlaceholderPanId,
+            [this](const QString& panId) {
+                qDebug() << "applyPanLayout: closing pan" << panId;
+                return m_radioModel.removePanadapter(panId);
+            });
+        const QString reflowId = PanLayoutShrinkPolicy::reflowLayout(layoutId, needed, outcome.survivors);
 
         // Pan removal and slot rekeying arrive asynchronously. Reflow now and
         // after each settling turn so the final survivors, rather than a pan
         // that is still waiting to disappear, receive the canonical cells.
-        startCanvasPanLayoutSettle(layoutId, needed);
+        startCanvasPanLayoutSettle(reflowId, panCountForLayoutId(reflowId));
 
         // Rearrange remaining pans after a short delay for radio to process
-        QTimer::singleShot(500, this, [this, layoutId]() {
+        QTimer::singleShot(500, this, [this, reflowId]() {
             if (!m_workspaceController || !m_workspaceController->isEnabled()) {
-                m_panStack->rearrangeLayout(layoutId);
+                m_panStack->rearrangeLayout(reflowId);
             }
         });
         return;
