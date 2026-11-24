@@ -1494,6 +1494,15 @@ bool Hl2Backend::removePanadapter(const QString& panId)
         qCWarning(lcHl2) << "HL2: refusing to close the last receiver";
         return false;
     }
+    // Closing the TX-owning receiver hands transmit to another one, which is a
+    // TX-slice change; while keyed that is refused like setTxSlice() (D1). The
+    // pan stays: RadioModel only drops it on panRemoved. Disconnect does not
+    // come through here (releaseReceiverDsps()).
+    if (ddc == m_txDdc
+        && refuseTransmitChangeWhileKeyed(ids->uiNumber,
+                                          tr("TX panadapter can't close while transmitting."))) {
+        return false;
+    }
     m_replayUnreopened.clear();   // see createPanadapter()
     // m_txDdc and the active DDC are indices, and removal renumbers every
     // index after the closed one. A role on the closing receiver must move; a
@@ -1584,8 +1593,15 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     publishWideState();
     // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
     // TX register (with the new owner's XIT) leaves the closed receiver.
+    // Its mode and passband too, or the new TX slice shows one mode while the
+    // modulator sends the closed receiver's.
     if (txMoved) {
         retuneReceiver(m_txDdc);
+        if (const Receiver* owner = rx(m_txDdc); owner && m_txDsp) {
+            QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
+                Q_ARG(WdspChannel::Mode, modeFromString(owner->mode)));
+            pushTxPassband(owner->mode);
+        }
     }
     // The TX slice may have moved; republish so the indicator follows.
     emitAllSliceState();
@@ -6663,11 +6679,10 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
             refuseTransmitChangeWhileKeyed(txIds ? txIds->uiNumber : -1,
                                            tr("TX filter can't change while transmitting."));
         }
-        // Put the Phone applet back on the pair it showed before the request.
+        // Put the Phone applet back on the pair published for the current mode
+        // (DIGU's 150..3000 even with a saved USB cut, which stays saved).
         const Receiver* txRx = rx(m_txDdc);
-        const auto [shownLo, shownHi] = m_txFilterFromOperator
-            ? std::pair<int, int>{m_txFilterLowHz, m_txFilterHighHz}
-            : effectiveTxPassband(txRx ? txRx->mode : QStringLiteral("USB"));
+        const auto [shownLo, shownHi] = effectiveTxPassband(txRx ? txRx->mode : QStringLiteral("USB"));
         TransmitDelta delta;
         delta.txFilterLow = shownLo;
         delta.txFilterHigh = shownHi;

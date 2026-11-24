@@ -13,6 +13,12 @@
 //   3. Keyed TX-slice move to an LSB receiver: refused, transmit stays put.
 //   4. After the over, an unkeyed USB -> DIGU reaches the channel at once, the
 //      published TX passband follows, and the next over transmits DIGU.
+//   5. A saved USB cut, then DIGU between overs: a keyed TX filter request is
+//      refused and the echo is DIGU's published 150..3000, not the saved cut,
+//      which still applies on return to USB.
+//   6. Keyed close of the TX-owning pan: refused, transmit, its mode and both
+//      receivers stay. Unkeyed, the same close goes through and transmit takes
+//      the surviving receiver's mode.
 
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
@@ -111,6 +117,12 @@ struct Hl2TxKeyedChangeTestAccess {
     }
     static Hl2TxDsp* txDsp(Hl2Backend& b) { return b.m_txDsp; }
     static int txDdc(const Hl2Backend& b) { return b.m_txDdc; }
+    static int receivers(const Hl2Backend& b) { return static_cast<int>(b.m_rx.size()); }
+    static QString panIdForDdc(const Hl2Backend& b, int ddc)
+    {
+        const auto* ids = b.m_ids.byDdc(ddc);
+        return ids ? ids->panId : QString();
+    }
 };
 
 }  // namespace AetherSDR::hl2
@@ -497,6 +509,79 @@ int main(int argc, char** argv)
     const double lvl = rms(next.iq, kSettle);
     std::fprintf(stderr, "next over, 200 Hz tone: %.3f dB (fresh DIGU %.3f dB)\n", db(lvl), db(ref200Digu));
     check(std::fabs(db(lvl) - db(ref200Digu)) < 0.5, "the next over transmits DIGU");
+
+    // 5. A saved USB cut survives DIGU, and a keyed refusal echoes what DIGU
+    //    publishes, not the saved cut.
+    slice.setMode(QStringLiteral("USB"));
+    backend.setTxFilter(200, 2800);
+    const auto usbCut = publishedTxPassband(backend);
+    check(usbCut && usbCut->first == 200.0 && usbCut->second == 2800.0,
+          "setup: a custom USB cut 200..2800 Hz is published");
+    slice.setMode(QStringLiteral("DIGU"));
+    const auto diguPublished = publishedTxPassband(backend);
+    check(diguPublished && diguPublished->first == 150.0 && diguPublished->second == 3000.0,
+          "setup: unkeyed DIGU publishes 150..3000 Hz while the USB cut is kept");
+
+    bool diguFilterRefused = false;
+    std::optional<std::pair<int, int>> diguEcho;
+    // 6 (keyed half). The TX-owning pan is DDC 0; closing it would hand
+    // transmit to the LSB receiver.
+    const QString txPan = Access::panIdForDdc(backend, 0);
+    QStringList removedPans;
+    QObject::connect(&backend, &IRadioBackend::panRemoved, &backend,
+                     [&removedPans](const QString& id) { removedPans << id; });
+    bool closeReturned = true;
+    bool closeRefusalTold = false;
+    std::optional<WdspChannel::Config> afterKeyedClose;
+    const Over diguOver = runOver(backend, auth, mic, t1k, [&] {
+        refusals.clear();
+        txFilterEcho.reset();
+        backend.setTxFilter(100, 2900);
+        diguEcho = txFilterEcho;
+        diguFilterRefused = refusals == QStringList{QStringLiteral("0:TX filter can't change while transmitting.")};
+
+        refusals.clear();
+        closeReturned = backend.removePanadapter(txPan);
+        closeRefusalTold = refusals == QStringList{
+            QStringLiteral("0:TX panadapter can't close while transmitting.")};
+        afterKeyedClose = Access::channel(backend);
+    });
+    inconclusive = inconclusive || diguOver.starved;
+    std::fprintf(stderr, "keyed DIGU filter request echo: %d..%d\n",
+                 diguEcho ? diguEcho->first : -1, diguEcho ? diguEcho->second : -1);
+    check(diguFilterRefused, "a keyed TX filter change in DIGU is refused and told");
+    check(diguEcho == std::make_pair(150, 3000),
+          "the refusal echoes DIGU's published 150..3000, not the saved USB cut");
+    const auto diguAfter = publishedTxPassband(backend);
+    check(diguAfter && diguAfter->first == 150.0 && diguAfter->second == 3000.0,
+          "the published TX passband is still 150..3000 after the refusal");
+
+    std::fprintf(stderr, "keyed close of the TX pan %s: returned %d, receivers %d, txDdc %d\n",
+                 qPrintable(txPan), closeReturned ? 1 : 0, Access::receivers(backend),
+                 Access::txDdc(backend));
+    check(!closeReturned && closeRefusalTold,
+          "a keyed close of the TX-owning pan is refused and the operator is told");
+    check(Access::receivers(backend) == 2 && removedPans.isEmpty() && Access::txDdc(backend) == 0,
+          "the refused close removes nothing: both receivers stay and transmit stays on DDC 0");
+    check(isDiguLinear(afterKeyedClose) && Access::configMode(backend) == Mode::Digu,
+          "the refused close leaves the transmitter in DIGU, 150..3000 Hz");
+
+    // Back to USB between overs: the saved cut applies again.
+    slice.setMode(QStringLiteral("USB"));
+    const auto usbAgain = publishedTxPassband(backend);
+    check(usbAgain && usbAgain->first == 200.0 && usbAgain->second == 2800.0,
+          "the saved USB cut 200..2800 is still applied on return to USB");
+
+    // 6 (unkeyed half). The same close goes through between overs, and the
+    // surviving LSB receiver takes transmit with its own mode.
+    refusals.clear();
+    const bool unkeyedClose = backend.removePanadapter(txPan);
+    check(unkeyedClose && refusals.isEmpty() && Access::receivers(backend) == 1
+              && removedPans == QStringList{txPan} && Access::txDdc(backend) == 0,
+          "an unkeyed close of the TX-owning pan goes through; transmit moves to the survivor");
+    const auto afterClose = Access::channel(backend);
+    check(afterClose && afterClose->mode == Mode::Lsb && Access::configMode(backend) == Mode::Lsb,
+          "after the unkeyed close the transmitter runs the surviving receiver's LSB");
 
     if (g_failures > 0) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
