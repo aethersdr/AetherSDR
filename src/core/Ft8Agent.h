@@ -116,9 +116,9 @@ struct Ft8Status {
 };
 
 // The receiver's package, shipped inside AetherSDR so the Waveforms window
-// can install it without the operator finding a file. Same shape as
-// WsprPackage: the bytes are pinned by size and SHA-256 and checked before
-// anything is sent to the radio, so a damaged resource installs nothing.
+// can install it without the operator finding a file. The bytes are pinned
+// by size and SHA-256 and checked before anything is sent to the radio, so
+// a damaged resource installs nothing. WsprPackage has the same shape.
 //
 // ⚠ Rebuild with `tools/ft8-agent/build.py` ON LINUX, copy both results to
 // resources/waveforms/, and bump the version, hashes and sizes here

@@ -1475,11 +1475,10 @@ typedef struct {
 /* The next DAX channel to try after the radio refused one.
  *
  * ⛔ A FLEX-6300 has only channels 1 and 2; 3 and 4 return 50000016
- * (measured). The agent's own default is 4, so a fresh install on a 6300
- * never gets audio -- and the old behaviour was to re-ask for the SAME
- * refused channel every 10 s, forever. Nigel put it plainly: a blank
- * install should just work, with nothing clever needed and no host
- * involved.
+ * (measured). The agent's own default is 3, so a fresh install on a 6300
+ * is refused on its first ask, and asking again for the SAME channel
+ * would never get audio. A blank install has to work with no host
+ * involved, so the agent moves to another channel instead.
  *
  * Walking DOWN rather than up is deliberate: channel 1 exists on every
  * 6000, 7000 and 8000, so the walk always terminates somewhere real. The
@@ -2261,10 +2260,10 @@ static int selftest_dax_fallback(void)
 /* Both encodings of "RR73" reach spot_from_message, and neither may become a
  * grid.
  *
- * This is the assertion the earlier fix lacked. The recording test
- * (websdr_test6.wav) cannot cover it: its 20 spots contain no sign-off at
- * all, and it SKIPS entirely unless the binary runs from tools/ft8-agent. A
- * round trip through ftx_message_encode cannot cover it either, because
+ * The recording test (websdr_test6.wav) cannot cover it: its 20 spots
+ * contain no sign-off at all, and it SKIPS entirely unless the binary runs
+ * from tools/ft8-agent. A round trip through ftx_message_encode cannot
+ * cover it either, because
  * packgrid() special-cases "RR73" and only ever emits the token form.
  *
  * So build a valid message and patch the 15-bit trailing field directly, to

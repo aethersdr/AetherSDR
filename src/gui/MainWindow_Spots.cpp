@@ -857,9 +857,8 @@ void MainWindow::wireSpotSubsystem()
     });
 
     // The FT8 receiver's decodes reach the panadapter the same way. Without
-    // this the receiver decodes and the operator sees nothing: before it, FT8
-    // appeared in no GUI surface except its own Configure window, while the
-    // agent held hundreds of spots with nowhere to go.
+    // this the receiver decodes and the operator sees its spots nowhere
+    // except the receiver's own Configure window.
     connect(m_ft8Feed, &Ft8SpotFeed::spotReceived,
             this, [queueSpotCmd](const DxSpot& spot) {
         queueSpotCmd(spot, "FT8");
