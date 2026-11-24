@@ -183,6 +183,7 @@ void Kpa1500Connection::connectNetwork(const QString& host, quint16 port)
     }
     if (host != m_lastHost) {
         m_peerAddress.clear();
+        m_linkUpSeen = false;
     }
     m_lastHost = host;
     m_lastPort = port;
@@ -281,6 +282,8 @@ void Kpa1500Connection::disconnect()
     m_status = {};
     m_lastFaultCode = 0;
     m_wakeSentAt.invalidate();
+    m_sleepSentMs.reset();
+    m_linkUpSeen = false;
     if (wasConnected) {
         qCDebug(lcTuner) << "Kpa1500Connection: disconnected";
         emit disconnected();
@@ -326,6 +329,7 @@ void Kpa1500Connection::wakeFromSleep()
 void Kpa1500Connection::onTransportUp()
 {
     m_connected = true;
+    m_linkUpSeen = true;
     setAsleepOffline(false);
     m_peerAddress = m_activeTransport == Kpa1500::Transport::Udp ? m_udp.peerAddress()
                                                                  : m_socket.peerAddress();
@@ -333,7 +337,7 @@ void Kpa1500Connection::onTransportUp()
     m_wlAsks = 0;
     ++m_connectEpoch;  // the connect timeout must not abort a later probe of this link
     m_lastFaultCode = 0;
-    m_lastRx.start();
+    m_lastRxMs = m_clock.elapsed();
     m_trackSentKhz.reset();
     qCInfo(lcTuner) << "Kpa1500Connection: connected to" << description();
     // TRACK waits for a known power state (scheduleTrack), so ask for it now
@@ -352,18 +356,35 @@ void Kpa1500Connection::onTransportUp()
     scheduleTrack();
 }
 
-void Kpa1500Connection::dropSilentUdpLink()
+void Kpa1500Connection::dropSilentLink()
 {
-    qCWarning(lcTuner) << "Kpa1500Connection: no UDP reply from" << description()
-                       << "for" << kUdpSilenceMs << "ms — treating the link as down";
-    onTransportDown(true);
+    const bool udp = m_activeTransport == Kpa1500::Transport::Udp;
+    qCWarning(lcTuner) << "Kpa1500Connection: no" << (udp ? "UDP" : "TCP") << "reply from"
+                       << description() << "for" << kLinkSilenceMs << "ms — treating the link as down";
+    if (udp) {
+        onTransportDown(true);
+        return;
+    }
+    // A peer that went quiet without FIN/RST leaves the socket connected
+    // until the kernel gives up; close it and take the normal drop path.
+    m_socket.abort();
+    if (m_connected) {
+        onTransportDown();
+    }
+}
+
+bool Kpa1500Connection::sleepJustSent() const
+{
+    return m_sleepSentMs && m_clock.elapsed() - *m_sleepSentMs < kSleepDropWindowMs;
 }
 
 void Kpa1500Connection::onTransportDown(bool keepProbing)
 {
     const bool wasConnected = m_connected;
     // Confirmed asleep when the link went: the amp's network may sleep too.
-    const bool asleep = wasConnected && m_status.powerOn == false;
+    // A sleep sent just now whose readback never came counts too: the amp's
+    // network can stop the moment it takes ^ON0.
+    const bool asleep = wasConnected && (m_status.powerOn == false || sleepJustSent());
     const std::optional<bool> netWake = m_status.netWake;
     m_connected = false;
     if (keepProbing) {
@@ -417,6 +438,14 @@ void Kpa1500Connection::onTransportError(const QString& errorString)
 {
     qCWarning(lcTuner) << "Kpa1500Connection: transport error" << errorString;
     emit connectionFailed(errorString);
+    if (!m_deliberateDisconnect && !m_connected && !m_linkUpSeen && !m_asleepOffline
+        && canWakeFromSleep() && !m_lastHost.isEmpty()) {
+        // No link, but a saved MAC: the amp may be asleep since before this
+        // run. Offer POWER (Wake-on-LAN) in the applet's ASLEEP state.
+        qCInfo(lcTuner) << "Kpa1500Connection: no link to" << description()
+                        << "— offering Wake-on-LAN with the saved MAC";
+        setAsleepOffline(true);
+    }
     if (!m_deliberateDisconnect && (m_autoReconnect || wakeReconnecting()) && !m_connected) {
         armReconnect();
     }
@@ -431,7 +460,11 @@ void Kpa1500Connection::armReconnect()
 
 void Kpa1500Connection::onReadyRead()
 {
-    m_parser.feed(m_socket.readAll());
+    const QByteArray bytes = m_socket.readAll();
+    if (!bytes.isEmpty()) {
+        m_lastRxMs = m_clock.elapsed();
+    }
+    m_parser.feed(bytes);
 }
 
 void Kpa1500Connection::onUdpReadyRead()
@@ -455,7 +488,7 @@ void Kpa1500Connection::onMessage(const Kpa1500::Message& message)
         if (!m_udpOpen) {
             return;
         }
-        m_lastRx.start();
+        m_lastRxMs = m_clock.elapsed();
         const bool released = m_pacer.replied(message.cmd);
         if (!m_connected) {
             onTransportUp();
@@ -531,13 +564,13 @@ void Kpa1500Connection::applyReply(const Kpa1500::Message& message)
 
 void Kpa1500Connection::poll()
 {
+    if (m_connected && m_clock.elapsed() - m_lastRxMs > kLinkSilenceMs) {
+        dropSilentLink();
+        return;
+    }
     if (!linkOpen()) { return; }
 
     const bool udp = m_activeTransport == Kpa1500::Transport::Udp;
-    if (udp && m_connected && m_lastRx.elapsed() > kUdpSilenceMs) {
-        dropSilentUdpLink();
-        return;
-    }
 
     if (udp && !m_pacer.drained()) {
         // The last cycle is still waiting on replies: start the next one when
@@ -893,7 +926,11 @@ void Kpa1500Connection::setPower(bool on)
     c.satisfied = [on](const Kpa1500::Message& m, const Kpa1500::Status& s) {
         return m.cmd == QLatin1String("ON") && s.powerOn == on;
     };
-    sendControl(std::move(c));
+    if (sendControl(std::move(c)) && !on) {
+        m_sleepSentMs = m_clock.elapsed();
+    } else if (on) {
+        m_sleepSentMs.reset();
+    }
 }
 
 void Kpa1500Connection::setFollowTx(bool on)

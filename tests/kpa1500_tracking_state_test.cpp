@@ -150,7 +150,7 @@ struct Kpa1500TrackingTestAccess {
         c.m_pacer.enqueue(QStringLiteral("OS"));
         c.m_pacer.takeNext(c.m_clock.elapsed());   // ^OS; outstanding (nothing written)
         c.m_pollDeferred = true;
-        c.m_lastRx.start();
+        c.m_lastRxMs = c.m_clock.elapsed();
         c.onMessage(*Kpa1500::parseMessage("^OS0;"));
         const bool confirmed = c.m_pending.empty();
         QObject::disconnect(link);
@@ -171,7 +171,7 @@ struct Kpa1500TrackingTestAccess {
         c.m_udpOpen = true;
         c.m_connected = true;
         c.m_status.powerOn = true;
-        c.m_lastRx.start();
+        c.m_lastRxMs = c.m_clock.elapsed();
         for (int i = 0; i < rotations * 14; ++i) {
             c.poll();
         }
@@ -221,7 +221,7 @@ struct Kpa1500TrackingTestAccess {
         c.m_connected = true;
         c.m_status.powerOn = !asleep;
         c.setWakeMacAddress(mac);
-        c.dropSilentUdpLink();
+        c.dropSilentLink();
         out.asleepOffline = c.isAsleepOffline();
         out.canWake = c.canWakeFromSleep();
         c.setPower(true);
@@ -282,6 +282,52 @@ struct Kpa1500TrackingTestAccess {
         return {asleep && !retriedBeforeWake, retriedAfterWake && !c.isAsleepOffline()};
     }
 
+    // TCP, link up, nothing received for `quietMs`; the amp's last power
+    // reading is `power`. No socket: the check runs before the open-link test.
+    static std::pair<bool, bool> tcpQuiet(Kpa1500Connection& c, qint64 quietMs, std::optional<bool> power)
+    {
+        c.m_activeTransport = Kpa1500::Transport::Tcp;
+        c.m_connected = true;
+        c.m_status.powerOn = power;
+        c.m_lastRxMs = c.m_clock.elapsed() - quietMs;
+        c.poll();
+        const std::pair<bool, bool> out{!c.m_connected, c.isAsleepOffline()};
+        c.m_reconnectTimer.stop();
+        c.disconnect();
+        return out;
+    }
+
+    // A ^ON0 sent `agoMs` ago, never confirmed (power still reads on), then
+    // the link drops.
+    static bool unconfirmedSleepThenDrop(Kpa1500Connection& c, qint64 agoMs)
+    {
+        c.m_activeTransport = Kpa1500::Transport::Tcp;
+        c.m_connected = true;
+        c.m_status.powerOn = true;
+        c.setWakeMacAddress(QStringLiteral("54:10:EC:14:75:22"));
+        c.m_sleepSentMs = c.m_clock.elapsed() - agoMs;
+        c.onTransportDown();
+        const bool asleep = c.isAsleepOffline();
+        c.m_reconnectTimer.stop();
+        c.disconnect();
+        return asleep;
+    }
+
+    // No link to the saved address has come up in this run and the attempt
+    // fails: with a saved MAC, the ASLEEP/POWER wake offer appears.
+    static bool startupFailureOffersWake(Kpa1500Connection& c, const QString& mac, bool linkSeen)
+    {
+        c.m_lastHost = QStringLiteral("192.0.2.15");
+        c.setWakeMacAddress(mac);
+        c.m_linkUpSeen = linkSeen;
+        c.onTransportError(QStringLiteral("Connection timed out"));
+        const bool offered = c.isAsleepOffline();
+        c.m_reconnectTimer.stop();
+        c.disconnect();
+        c.m_lastHost.clear();
+        return offered;
+    }
+
     struct Probe {
         int disconnects{0};
         int connects{0};
@@ -306,7 +352,7 @@ struct Kpa1500TrackingTestAccess {
         c.m_status.powerOn = true;
         c.m_status.serialNumber = QStringLiteral("00123");
         c.m_pollTimer.start();
-        c.dropSilentUdpLink();
+        c.dropSilentLink();
         out.downButOpen = !c.m_connected && c.m_udpOpen && c.m_pollTimer.isActive();
         out.reconnectArmed = c.m_reconnectTimer.isActive();
         out.statusCleared = !c.m_status.powerOn && !c.m_status.serialNumber;
@@ -721,6 +767,39 @@ int main(int argc, char** argv)
         check(A::socketsUnopened(named) && A::socketsUnopened(asleep) && A::socketsUnopened(awake) && A::socketsUnopened(noMac)
                   && A::socketsUnopened(tcp),
               "asleep-offline tests open no transport");
+    }
+    {
+        using A = Kpa1500TrackingTestAccess;
+        // TCP silence, the same rule as UDP.
+        Kpa1500Connection t1;
+        check(A::tcpQuiet(t1, 4000, true) == std::make_pair(true, false),
+              "TCP: no bytes for longer than the silence limit drops the link (awake: no asleep state)");
+        Kpa1500Connection t2;
+        check(A::tcpQuiet(t2, 4000, false) == std::make_pair(true, true),
+              "TCP: a silent link to a sleeping amp enters the asleep-offline state");
+        Kpa1500Connection t3;
+        check(A::tcpQuiet(t3, 2900, true).first == false,
+              "TCP: a gap under the silence limit (e.g. between slow polls) keeps the link");
+        // A sleep whose readback never came.
+        Kpa1500Connection u1;
+        check(A::unconfirmedSleepThenDrop(u1, 1000),
+              "a sleep sent just before the drop, unconfirmed, enters the asleep-offline state");
+        Kpa1500Connection u2;
+        check(!A::unconfirmedSleepThenDrop(u2, 6100),   // kSleepDropWindowMs + 100
+              "a sleep sent longer ago than the window does not count");
+        // An amp already asleep when this run started.
+        Kpa1500Connection s1;
+        check(A::startupFailureOffersWake(s1, QStringLiteral("54:10:EC:14:75:22"), false),
+              "no link yet and a saved MAC: a failed attempt offers the wake (ASLEEP, POWER)");
+        Kpa1500Connection s2;
+        check(!A::startupFailureOffersWake(s2, QString(), false),
+              "no saved MAC: a failed attempt offers no wake");
+        Kpa1500Connection s3;
+        check(!A::startupFailureOffersWake(s3, QStringLiteral("54:10:EC:14:75:22"), true),
+              "after a link came up this run, a failed reconnect offers no wake (an awake drop hides)");
+        check(A::socketsUnopened(t1) && A::socketsUnopened(t2) && A::socketsUnopened(t3)
+                  && A::socketsUnopened(u1) && A::socketsUnopened(s1),
+              "silence, unconfirmed-sleep and startup-wake tests open no transport");
     }
     for (const bool autoReconnect : {false, true}) {
         // Finding 3: UDP keeps probing after the silence drop.

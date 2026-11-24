@@ -34,7 +34,7 @@ namespace AetherSDR {
 //   UDP — one `^CMD;` frame per datagram to the amp's UDP server, which
 //         accepts the identical command set. There is no connection, so the
 //         link is declared up on the first well-formed reply and down after
-//         kUdpSilenceMs without one; while down it keeps probing and comes
+//         kLinkSilenceMs without one; while down it keeps probing and comes
 //         back up on the next reply. Queries are paced, one outstanding at a
 //         time (Kpa1500::QueryPacer). Because a datagram can be lost, every
 //         control command is confirmed by readback: it is resent with a
@@ -171,7 +171,8 @@ private:
     // `keepProbing`: a UDP link that went silent stays open and is polled,
     // so the first reply brings it back up (auto-reconnect is not involved).
     void onTransportDown(bool keepProbing = false);
-    void dropSilentUdpLink();
+    void dropSilentLink();   // UDP keeps probing; TCP closes and reconnects as usual
+    bool sleepJustSent() const;   // an unconfirmed ^ON0 within kSleepDropWindowMs
     // UDP queries go through m_pacer; TCP writes them at once.
     void queueQuery(const QString& cmd, bool urgent = false);
     void pumpQueries();
@@ -230,6 +231,8 @@ private:
     QTimer m_paceTimer;        // fires when the outstanding query times out
     bool m_pollDeferred{false};   // a tick found the last poll cycle still in flight
     bool m_asleepOffline{false};
+    std::optional<qint64> m_sleepSentMs;   // m_clock time of the last ^ON0 POWER put on the wire
+    bool m_linkUpSeen{false};   // a link to this address came up during this run
     QHostAddress m_peerAddress;   // resolved at link-up: a hostname still has a WoL target offline
     std::optional<bool> m_sleepNetWake;
     QElapsedTimer m_wakeSentAt;   // TCP keeps reconnecting for a while after a wake
@@ -244,7 +247,7 @@ private:
     Kpa1500::Transport m_activeTransport{Kpa1500::Transport::Tcp};
     bool m_udpOpen{false};
     QString m_udpLastError;
-    QElapsedTimer m_lastRx;
+    qint64 m_lastRxMs{0};   // m_clock time of the last reply (UDP) or bytes (TCP)
     std::vector<PendingControl> m_pending;
 
     bool m_followTx{false};
@@ -287,10 +290,19 @@ private:
     static constexpr int kPollIntervalMs = 500;
     // UDP has no head-of-line blocking, so the meters poll twice as fast.
     static constexpr int kUdpPollIntervalMs = 250;
-    static constexpr int kUdpSilenceMs = 3000;
+    // No reply for this long means the link is down, on either transport.
+    // Every poll tick (500 ms TCP, 250 ms UDP) asks the fast set, or ^ON
+    // while asleep, so an answering amp is never this quiet; slow-rotation
+    // gaps do not matter.
+    static constexpr int kLinkSilenceMs = 3000;
+    // A sleep sent this recently, unconfirmed when the link drops, counts as
+    // confirmed: the drop lands at most kLinkSilenceMs plus a poll tick after
+    // the last reply, and the sleep's own confirmation runs for
+    // kControlRetryMs * kMaxControlAttempts (kSleepDropWindowMs, below).
     static constexpr int kMaxDatagramBytes = 1024;
     static constexpr int kControlRetryMs = 600;
     static constexpr int kMaxControlAttempts = 5;
+    static constexpr int kSleepDropWindowMs = kLinkSilenceMs + kControlRetryMs * kMaxControlAttempts;
     // Rotates one slow query per tick alongside the fast set, so the meters
     // stay at the full poll rate while the configuration readbacks (band,
     // antenna, ATU, operate state) still refresh a couple of times a

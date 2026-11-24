@@ -364,8 +364,9 @@ only and changes nothing on the amplifier.
 The amplifier serves the same commands over TCP and UDP on that one port:
 
 - **TCP** (default): a stream connection; meters refresh every 500 ms. The
-  amplifier accepts only one TCP client at a time, so Elecraft's KPA1500
-  Remote and AetherSDR cannot both use TCP.
+  connection reads as lost after 3 seconds without a reply, even if the
+  network never closes it. The amplifier accepts only one TCP client at a
+  time, so Elecraft's KPA1500 Remote and AetherSDR cannot both use TCP.
 - **UDP**: one command per datagram, so a lost packet never stalls the
   meters, which refresh about every 250 ms. AetherSDR waits for each answer
   (or a short timeout) before asking the next question, so a slow link
@@ -422,12 +423,16 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   the network. Sleep is refused while the radio transmits: the applet then
   shows `Sleep refused while transmitting`. Waking is never refused. While
   asleep, every other control is dimmed, and hovering over one says whether
-  POWER can wake the amplifier. If the connection drops while the amplifier is asleep
-  (its network may sleep with it), the applet stays open and shows `ASLEEP`:
+  POWER can wake the amplifier. If the connection drops while the amplifier is asleep, or
+  just after you put it to sleep (its network may sleep with it), the applet
+  stays open and shows `ASLEEP`. The same happens when AetherSDR cannot reach
+  the amplifier at startup and has its MAC address from an earlier session,
+  since it may have been left asleep.
   **POWER** then sends the Wake-on-LAN packet and AetherSDR keeps trying to
   reach the amplifier until it answers. **POWER** is dimmed in that state if
-  AetherSDR has never read the amplifier's MAC address. Disconnecting or
-  removing the amplifier, or changing its address, closes the applet.
+  AetherSDR has never read the amplifier's MAC address. Pressing **Disconnect**
+  on the amplifier's Peripherals row, or
+  removing the amplifier or changing its address, closes the applet.
 - **FAN MIN**, the lowest speed the fans run at, 0 (off) to 5 (full). The
   amplifier raises the speed further as it heats up; **FAN** shows the speed
   it is actually running.

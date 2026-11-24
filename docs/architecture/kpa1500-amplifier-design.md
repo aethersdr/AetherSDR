@@ -109,7 +109,8 @@ command whose delivery matters and UDP gives no delivery signal. So on UDP:
 - Each `^CMD;` goes in its own datagram, and each received datagram is parsed
   on its own, so a lost datagram cannot splice two replies together.
 - The link is declared up on the first well-formed reply (8 s connect
-  timeout) and down after 3 s without one. A link that went silent stays
+  timeout) and down after 3 s without one (`kLinkSilenceMs`; TCP uses the
+  same rule, below). A link that went silent stays
   open and keeps polling, so the first reply brings it back up; the
   Auto-reconnect setting is not involved (it governs TCP, and a UDP attempt
   that never got a reply).
@@ -176,15 +177,26 @@ The MAC is persisted as `PeripheralSettings` device `"Kpa1500"` field
 clear it. The sleep dialog and the asleep tooltip say whether NET WAKE is on;
 off or unknown reads "may not wake over the network".
 
+**TCP silence.** A TCP link that receives no bytes for `kLinkSilenceMs` (3 s)
+is closed and takes the normal drop path (reconnect, and the asleep-offline
+state below), since a peer whose network went quiet without FIN or RST would
+otherwise hold the socket open until the kernel gives up. Every 500 ms tick
+asks the fast set (or `^ON` while asleep), so an answering amp is never that
+quiet; the slow rotation does not matter.
+
 **Asleep and offline.** If the link drops while `^ON0` is the last power
-reading (`Kpa1500Connection::isAsleepOffline()`), the applet stays up showing
+reading, or within `kSleepDropWindowMs` (6 s: the 3 s silence limit plus the
+sleep's own 5 × 600 ms confirmation) of a `^ON0` POWER sent that was never
+confirmed (`Kpa1500Connection::isAsleepOffline()`), the applet stays up showing
 ASLEEP, with every control but POWER disabled. POWER then sends the magic
 packet to the saved MAC (`wakeFromSleep()`) and is disabled, with a reason,
 when no MAC is saved. A probing UDP link is still open; otherwise (TCP, or a UDP
 attempt that timed out) it dials again and keeps dialing for 60 s after the
 wake, whatever the Auto-reconnect setting. The packet goes out even after
 `^WL0`, and a host-name address uses the one resolved at link-up. The
-Peripherals row offers Disconnect in this state. The
+Peripherals row offers Disconnect in this state. The same
+state is offered when an attempt fails before any link to the address came up
+in this run and a MAC is saved: the amp may have been left asleep. The
 state ends when the link comes back, on `disconnect()` (operator disconnect
 or Remove), or on `connectNetwork()` to another address. A drop while the amp
 was awake hides the applet as before.
