@@ -3118,7 +3118,9 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_operatingStateMaxWaitTimer, &QTimer::timeout, this,
             [this] { persistOperatingState(false); });
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (isConnected() || m_connectAttemptActive) { return; }
+        // A backend can decline a busy probe without emitting a lifecycle
+        // signal. Let the next tick retry; the LAN owner deduplicates its dial.
+        if (isConnected()) { return; }
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
             qCDebug(lcProtocol) << "RadioModel: auto-reconnecting to" << m_lastInfo.address.toString();
             // A retry is an attempt too (#4912). This path does NOT go through
@@ -4290,18 +4292,22 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
-    // Finish the old session before replacing its identity or cleanup state.
-    // A callback can submit newer intent during teardown; it wins over this one.
-    if (!m_wanConn && (isConnected() || m_connectAttemptActive)
+    // The transport snapshot can outlive the worker's disconnect until the
+    // owner receives it. A pending Flex or Demo dial has no snapshot yet.
+    const bool lanDialOrConnected = m_connection && (isConnected() || m_connectAttemptActive);
+    const bool hasLanSession = m_backend && m_backend->connectionSession().has_value();
+    if (!m_wanConn && lanDialOrConnected
         && info.address == m_lastInfo.address && info.port == m_lastInfo.port
         && info.serial == m_lastInfo.serial && info.family == m_lastInfo.family
+        && info.model == m_lastInfo.model && info.version == m_lastInfo.version
+        && info.maxSlices == m_lastInfo.maxSlices && info.maxPanadapters == m_lastInfo.maxPanadapters
         && info.bindSettings.mode == m_lastInfo.bindSettings.mode
         && info.bindSettings.bindAddress == m_lastInfo.bindSettings.bindAddress
         && info.sessionBindAddress == m_lastInfo.sessionBindAddress) { return; }
+    // Retire the owned LAN or SmartLink session before replacing its identity.
+    // A callback can submit newer intent during teardown; it wins over this one.
     const QPointer<RadioModel> intentOwner(this);
-    // The snapshot remains owned until the worker's queued disconnect is delivered.
-    const bool hasLanSession = m_backend && m_backend->connectionSession().has_value();
-    if (isConnected() || m_connectAttemptActive || m_wanConn || hasLanSession) {
+    if (lanDialOrConnected || m_wanConn || hasLanSession) {
         const quint64 retiringIntent = m_connectionIntentRevision + 1;
         disconnectFromRadio();
         if (!intentOwner || m_connectionIntentRevision != retiringIntent) { return; }

@@ -579,6 +579,27 @@ private slots:
         QCOMPARE(changes.size(), 3);
         model.disconnectFromRadio();
     }
+
+    void replacementAtSameAddressRefreshesDeclaredCapacity()
+    {
+        RadioModel model;
+        RadioInfo selected = demoInfo();
+        selected.family = QStringLiteral("flex");
+        selected.maxSlices = 8;
+        selected.maxPanadapters = 8;
+        model.connectToRadio(selected);
+        const int originalPanadapters = model.maxPanadapters();
+
+        // Keep the synthetic transport while varying only the discovery data.
+        // A replacement at the same address need not have the old capacity.
+        selected.model = QStringLiteral("FLEX-6400");
+        selected.maxSlices = 0;
+        selected.maxPanadapters = 0;
+        model.connectToRadio(selected);
+        QCOMPARE(originalPanadapters, 8);
+        QCOMPARE(model.maxPanadapters(), 2);
+        model.disconnectFromRadio();
+    }
 };
 
 int main(int argc, char** argv)
