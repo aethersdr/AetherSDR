@@ -6,10 +6,12 @@ here, and `ctest` checks that it still is:
 
 ```bash
 python3 tools/gen_hl2_autogain_replay_d168.py           # rewrite the header
+python3 tools/gen_hl2_autogain_replay_d168.py --check   # exit 1 if it differs
+python3 tools/gen_hl2_autogain_replay_d245.py           # rewrite the header
 python3 tools/gen_hl2_autogain_replay_d245.py --check   # exit 1 if it differs
 ```
 
-Both legs were recorded receive only, from one Hermes-Lite 2 on the air, by a
+Both runs were recorded receive only, from one Hermes-Lite 2 on the air, by a
 runner that armed the auto RF gain law and polled the backend's health 4 times
 a second. Per leg there are two inputs:
 

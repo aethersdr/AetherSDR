@@ -43,7 +43,7 @@ LOG = DATA / 'hl2-auto-rf-gain.txt'
 HEADER_PATH = REPO / 'tests' / 'Hl2AutoGainReplayD168.h'
 TZ = datetime.timezone(datetime.timedelta(hours=2))   # CEST, 2026-10-01
 TICK_MS = 123
-LINE = re.compile(r'\[(\d\d:\d\d:\d\d\.\d+)\] DBG aether.hl2: HL2 auto RF gain: (attack|release) (-?\d+) dB '
+LINE = re.compile(r'\[(\d\d:\d\d:\d\d\.\d+)\] DBG aether\.hl2: HL2 auto RF gain: (attack|release) (-?\d+) dB '
                   r'-> offset (\d+) dB, window (\d+) / (\d+) , headroom "([^"]+)"')
 
 
