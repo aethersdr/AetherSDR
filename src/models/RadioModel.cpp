@@ -25,6 +25,9 @@
 #include "core/backends/anan/AnanBackend.h"    // aetherd ANAN P2 Phase 1b (family "anan")
 #include "core/backends/anan/AnanSettings.h"   // owned "Anan" settings object (Principle V)
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
+#ifdef HAVE_WEBSOCKETS
+#include "core/backends/aetherd/RemoteEngineBackend.h"  // remote aetherd engines (family "aetherd")
+#endif
 #include "core/backends/icom/IcomCredentials.h"  // password: keychain, never settings
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
 #ifdef AETHER_BACKEND_RTL
@@ -766,7 +769,8 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     // framing and the 1364/556 packet split must scale with the rate first.
 }
 
-std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
+std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family,
+                                                       QString* unavailableReason)
 {
     if (family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0)
         return std::make_unique<hl2::Hl2Backend>();
@@ -793,14 +797,30 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
     // same way it does for Flex (see the dynamic_cast below).
     if (family.compare(QLatin1String("sim"), Qt::CaseInsensitive) == 0)
         return std::make_unique<SimBackend>();
+    // A remote aetherd (docs/aetherd-remote-backend.md): the "radio" is another
+    // engine, reached over its WebSocket listener. Receive-only; it declares
+    // no ClientSettingsDomains and never asks the engine to connect or release
+    // a radio. Without Qt WebSockets there is no backend, never a FlexBackend.
+    if (family.compare(QLatin1String("aetherd"), Qt::CaseInsensitive) == 0) {
+#ifdef HAVE_WEBSOCKETS
+        return std::make_unique<aetherd::RemoteEngineBackend>();
+#else
+        qWarning() << "RadioModel: remote-engine backend requested but this build has no Qt WebSockets";
+        *unavailableReason = tr("This build has no Qt WebSockets, so it cannot reach a remote engine.");
+        return nullptr;
+#endif
+    }
     if (family.compare(QLatin1String("rtl"), Qt::CaseInsensitive) == 0) {
 #ifdef AETHER_BACKEND_RTL
         return std::make_unique<rtl::RtlSdrBackend>();
 #else
         qWarning() << "RadioModel: RTL-SDR backend requested but RTL support is disabled";
+        *unavailableReason = tr("This build has no RTL-SDR support — librtlsdr or fftw3f "
+                                "was unavailable when AetherSDR was compiled.");
         return nullptr;
 #endif
     }
+    Q_UNUSED(unavailableReason);
     return std::make_unique<FlexBackend>();
 }
 
@@ -977,11 +997,10 @@ void RadioModel::setupBackend(const QString& family)
         // construction wiring below is
         // guarded by a dynamic_cast so the Flex path stays byte-identical and a
         // non-Flex backend simply skips it (it owns its own wire objects).
-        m_backend = makeBackend(m_family);
+        QString unavailableReason;
+        m_backend = makeBackend(m_family, &unavailableReason);
         if (!m_backend) {
-            emit connectionError(
-                tr("This build has no RTL-SDR support — librtlsdr or fftw3f "
-                   "was unavailable when AetherSDR was compiled."));
+            emit connectionError(unavailableReason);
             return;
         }
         connect(m_backend.get(), &IRadioBackend::daxTxStreamChanged, this,

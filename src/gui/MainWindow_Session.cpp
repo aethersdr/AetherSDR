@@ -706,6 +706,8 @@ void MainWindow::wireDiscovery()
     // ── Wire up discovery ──────────────────────────────────────────────────
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(m_connPanel, &ConnectionPanel::remoteEngineRestored,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
 
     // aetherd Gap B (Step 2b-2): Hermes-Lite 2 radios answer HPSDR discovery on
     // UDP/1024, which the Flex discovery above never sees. Feed them into the

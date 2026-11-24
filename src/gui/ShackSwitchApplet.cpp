@@ -3,7 +3,9 @@
 #include "models/AntennaGeniusModel.h"
 #include "core/AppSettings.h"
 
+#include <QAccessible>
 #include <QPushButton>
+#include <QTimer>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -25,6 +27,8 @@ static constexpr const char* kCardStyle =
 
 static constexpr const char* kLabelMuted =
     "QLabel { color: #6b8099; font-size: 10px; font-weight: bold; letter-spacing: 0.06em; }";
+
+static constexpr int kSelectionRefusalMessageMs = 2500;
 
 static constexpr const char* kStatusStyle =
     "QLabel { color: #6b8099; font-size: 10px; }";
@@ -100,6 +104,7 @@ void ShackSwitchApplet::buildUI()
 
     // ── Status row ───────────────────────────────────────────────────────────
     m_statusLabel = new QLabel("Not connected");
+    m_statusLabel->setObjectName(QStringLiteral("ssConnectionStatus"));
     m_statusLabel->setStyleSheet(kStatusStyle);
     vbox->addWidget(m_statusLabel);
 
@@ -313,7 +318,9 @@ void ShackSwitchApplet::setModel(AntennaGeniusModel* model)
 
         QString ip = dev.ip.toString();
         if (ip.isEmpty()) ip = m_model->peerAddress();
-        m_statusLabel->setText(ip + " • v" + dev.version);
+        m_connectedText = ip + " • v" + dev.version;
+        ++m_refusalGeneration;
+        m_statusLabel->setText(m_connectedText);
 
         const bool dual = dev.radioPorts >= 2;
         m_inputBCard->setVisible(dual);
@@ -325,12 +332,37 @@ void ShackSwitchApplet::setModel(AntennaGeniusModel* model)
         m_conflictAntId    = -1;
         m_intendedBAntId   = -1;
         m_autoRoutedToDummy = false;
+        m_dummyRouteRequested = false;
         m_blinkState       = false;
+        m_connectedText.clear();
+        ++m_refusalGeneration;
         m_statusLabel->setText("Not connected");
         m_inputABandLabel->setText("—");
         m_inputAAntLabel->setText("—");
         m_inputBBandLabel->setText("—");
         m_inputBAntLabel->setText("—");
+    });
+
+    // A pick refused while the switch reports tx=1: say so, and announce it,
+    // since a label text change is not announced (as the AG applet does).
+    connect(m_model, &AntennaGeniusModel::antennaSelectionRefused, this,
+            [this](const QString& msg) {
+        if (!m_model->isConnected()
+            || !AntennaGeniusModel::isShackSwitch(m_model->connectedDevice()))
+            return;
+        const quint64 generation = ++m_refusalGeneration;
+        m_statusLabel->setText(msg);
+        if (QAccessible::isActive()) {
+            QAccessibleAnnouncementEvent announcement(m_statusLabel, msg);
+            announcement.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+            QAccessible::updateAccessibility(&announcement);
+        }
+        QTimer::singleShot(kSelectionRefusalMessageMs, this, [this, msg, generation] {
+            if (generation != m_refusalGeneration || !m_model || !m_model->isConnected()
+                || m_statusLabel->text() != msg)
+                return;
+            m_statusLabel->setText(m_connectedText);
+        });
     });
 
     connect(m_model, &AntennaGeniusModel::antennasChanged, this,
@@ -394,6 +426,7 @@ void ShackSwitchApplet::rebuildAntennaRows()
             if (!m_model) return;
             // Manual B selection clears any auto-reroute state
             m_autoRoutedToDummy = false;
+            m_dummyRouteRequested = false;
             m_conflictAntId    = -1;
             m_intendedBAntId   = -1;
             m_model->selectAntenna(2, antId);
@@ -457,8 +490,15 @@ void ShackSwitchApplet::checkConflict(int rxA, int rxB)
         m_conflictAntId    = -1;
         m_intendedBAntId   = -1;
         m_autoRoutedToDummy = false;
+        m_dummyRouteRequested = false;
         m_blinkState       = false;
         return;
+    }
+
+    // The reroute counts only once the switch reports B on the dummy load.
+    if (m_dummyRouteRequested && m_dummyLoadAntId > 0 && rxB == m_dummyLoadAntId) {
+        m_dummyRouteRequested = false;
+        m_autoRoutedToDummy = true;
     }
 
     // If we auto-routed B to dummy and user has since manually moved B elsewhere, clear state
@@ -467,6 +507,7 @@ void ShackSwitchApplet::checkConflict(int rxA, int rxB)
         m_conflictAntId    = -1;
         m_intendedBAntId   = -1;
         m_autoRoutedToDummy = false;
+        m_dummyRouteRequested = false;
         m_blinkState       = false;
         return;
     }
@@ -474,11 +515,14 @@ void ShackSwitchApplet::checkConflict(int rxA, int rxB)
     if (rxA > 0 && rxA == rxB) {
         // Direct conflict: both ports on the same antenna
         m_conflictAntId = rxA;
-        if (m_dummyLoadAntId > 0 && !m_autoRoutedToDummy) {
-            // Auto-route B to dummy load; guard prevents re-entry on the resulting update
-            m_intendedBAntId    = rxA;
-            m_autoRoutedToDummy = true;
-            m_model->selectAntenna(2, m_dummyLoadAntId);
+        if (m_dummyLoadAntId > 0 && !m_autoRoutedToDummy && !m_dummyRouteRequested) {
+            // Auto-route B to dummy load once per conflict. While B reports tx=1
+            // the switch would refuse it, so wait: the tx=0 status re-runs this.
+            m_intendedBAntId = rxA;
+            if (!m_model->portB().transmitting) {
+                m_dummyRouteRequested = true;
+                m_model->selectAntenna(2, m_dummyLoadAntId);
+            }
         }
         if (!m_blinkTimer.isActive())
             m_blinkTimer.start(600);
@@ -493,6 +537,7 @@ void ShackSwitchApplet::checkConflict(int rxA, int rxB)
         m_conflictAntId    = -1;
         m_intendedBAntId   = -1;
         m_autoRoutedToDummy = false;
+        m_dummyRouteRequested = false;
         m_blinkState       = false;
     }
 }

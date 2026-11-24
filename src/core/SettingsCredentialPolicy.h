@@ -58,7 +58,11 @@ struct ScopedCredential {
 };
 inline constexpr ScopedCredential kSmartLinkCredential{"smartlink/", "/refresh_token"};
 inline constexpr ScopedCredential kIcomCredential{"icom/", "/password"};
-inline constexpr ScopedCredential kScopedCredentials[] = {kSmartLinkCredential, kIcomCredential};
+// A remote aetherd's bearer token, keyed by the engine's certificate
+// fingerprint (docs/aetherd-remote-backend.md, *Storage*).
+inline constexpr ScopedCredential kAetherdCredential{"aetherd/", "/token"};
+inline constexpr ScopedCredential kScopedCredentials[] = {kSmartLinkCredential, kIcomCredential,
+                                                          kAetherdCredential};
 
 inline QString scopedCredentialKey(const ScopedCredential& type, const QString& id)
 {
@@ -74,6 +78,11 @@ inline QString smartLinkCredentialKey(const QString& id)
 inline QString icomCredentialKey(const QString& id)
 {
     return scopedCredentialKey(kIcomCredential, id);
+}
+
+inline QString aetherdCredentialKey(const QString& engineId)
+{
+    return scopedCredentialKey(kAetherdCredential, engineId);
 }
 
 inline bool isScopedCredentialKey(const QString& key)
