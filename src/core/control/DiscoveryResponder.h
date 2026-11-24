@@ -86,6 +86,7 @@ private:
     Config m_config;
     std::unique_ptr<QUdpSocket> m_socket;
     std::deque<qint64> m_recentReplies;
+    bool m_readScheduled{false};
 };
 
 } // namespace AetherSDR::control

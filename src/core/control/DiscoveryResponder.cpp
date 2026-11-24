@@ -2,6 +2,7 @@
 
 #include <QElapsedTimer>
 #include <QJsonDocument>
+#include <QMetaObject>
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
 #include <QUdpSocket>
@@ -11,6 +12,7 @@ namespace AetherSDR::control {
 namespace {
 
 constexpr QLatin1StringView kProbe{"AETHERD-DISCOVER 1"};
+constexpr int kDatagramsPerTurn = 64;
 
 QString bounded(const QString& text)
 {
@@ -138,7 +140,8 @@ bool DiscoveryResponder::takeReplySlot(qint64 nowMs)
 
 void DiscoveryResponder::readPending()
 {
-    while (m_socket && m_socket->hasPendingDatagrams()) {
+    if (m_readScheduled || !m_socket) { return; }
+    for (int i = 0; i < kDatagramsPerTurn && m_socket->hasPendingDatagrams(); ++i) {
         // Larger than any probe, so an oversized datagram reads as "not a probe".
         const QNetworkDatagram datagram = m_socket->receiveDatagram(64);
         if (!datagram.isValid() || !isProbe(datagram.data())) { continue; }
@@ -158,6 +161,14 @@ void DiscoveryResponder::readPending()
             m_config.wssUrl, m_config.certificateSha256);
         if (reply.isEmpty()) { continue; }
         m_socket->writeDatagram(reply, datagram.senderAddress(), quint16(datagram.senderPort()));
+    }
+    // Yield to the engine's control and shutdown events under sustained traffic.
+    if (m_socket->hasPendingDatagrams()) {
+        m_readScheduled = true;
+        QMetaObject::invokeMethod(this, [this] {
+            m_readScheduled = false;
+            readPending();
+        }, Qt::QueuedConnection);
     }
 }
 
