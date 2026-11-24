@@ -1,6 +1,7 @@
 // Inject pending work directly. No socket is bound, connected or serviced.
 #include "TestSettingsProfile.h"
 #include "core/Kpa1500Connection.h"
+#include "core/PeripheralSettings.h"
 
 #include <QCoreApplication>
 #include <QThread>
@@ -66,6 +67,17 @@ struct Kpa1500TrackingTestAccess {
         antenna.lastSent.start();
         connection.m_pending.push_back(std::move(antenna));
         QThread::msleep(650);
+        connection.retryPendingControls();
+        for (const auto& control : connection.m_pending) {
+            if (control.group == QLatin1String("AN")) {
+                return control.attempts;
+            }
+        }
+        return -1;
+    }
+
+    static int retryAttemptsNow(Kpa1500Connection& connection)
+    {
         connection.retryPendingControls();
         for (const auto& control : connection.m_pending) {
             if (control.group == QLatin1String("AN")) {
@@ -171,6 +183,29 @@ int main(int argc, char** argv)
         check(refusals == 1, "sleep after TX, and wake during TX, are not refused");
         qInstallMessageHandler(previous);
         check(Kpa1500TrackingTestAccess::socketsUnopened(connection), "retry test opens no transport");
+    }
+    {
+        // UNKEY_REQUESTED clears m_transmitting while RF may still be up; a
+        // held control must not repeat on the first poll after that edge.
+        Kpa1500Connection connection;
+        connection.setTxFrequency(14074, false, true);
+        check(Kpa1500TrackingTestAccess::retryAttemptsAfterWait(connection) == 0,
+              "a pending AN is held while TX lasts longer than the retry interval");
+        connection.setTxFrequency(14074, false, false);
+        check(Kpa1500TrackingTestAccess::retryAttemptsNow(connection) == 0,
+              "a held AN waits a full retry interval after unkey");
+        check(Kpa1500TrackingTestAccess::socketsUnopened(connection),
+              "unkey retry test opens no transport");
+    }
+    {
+        PeripheralSettings::setDeviceString(QStringLiteral("Kpa1500"), QStringLiteral("Transport"),
+                                            QStringLiteral("udp"));
+        PeripheralSettings::setDeviceString(QStringLiteral("Kpa1500"), QStringLiteral("ManualIp"),
+                                            QStringLiteral("192.0.2.15"));
+        PeripheralSettings::clearDeviceConnection(QStringLiteral("Kpa1500"));
+        check(PeripheralSettings::deviceString(QStringLiteral("Kpa1500"),
+                                               QStringLiteral("Transport")).isEmpty(),
+              "Remove clears the saved KPA1500 transport");
     }
     return failures == 0 ? 0 : 1;
 }

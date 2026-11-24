@@ -48,9 +48,9 @@ const QStringList& slowPollCommands()
     return kSlow;
 }
 
-// Asked once per connection: identity that does not change while connected.
-// Both answer while the amp sleeps, which is also what lets a sleeping amp's
-// link come up over UDP.
+// Asked once per connection, after the link is up: identity that does not
+// change while connected. Both answer while the amp sleeps. A sleeping amp's
+// UDP link comes up when poll()'s slow rotation reaches ^ON, not on these.
 const QStringList& identityCommands()
 {
     static const QStringList kIdentity{
@@ -661,6 +661,14 @@ void Kpa1500Connection::setTxFrequency(std::optional<int> khz, bool localTransmi
     const bool txEnded = m_transmitting && !transmitting;
     const bool txStarted = !m_transmitting && transmitting;
     m_transmitting = transmitting;
+    if (txEnded) {
+        // Give the radio's unkey sequencing a full retry interval before a
+        // held control repeats: m_transmitting drops at UNKEY_REQUESTED (and
+        // at an optimistic local MOX release), while RF may still be up.
+        for (auto& p : m_pending) {
+            p.lastSent.start();
+        }
+    }
     if (txStarted) {
         // A ^FR still awaiting confirmation must not be resent under RF;
         // forget it and send it again once transmit ends.

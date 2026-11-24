@@ -130,7 +130,9 @@ frequency (TX-flagged slice, FM offset, XIT) the KAT500 and KPA500 follow.
 Fast tuning is coalesced to one `^FR` per 300 ms; nothing is sent while the
 radio transmits, including another client's transmission. An unconfirmed `^FR`
 is dropped (not resent) when TX starts, then sent again after unkey, because
-a band change under RF would hot-switch the amp's relays. Off by default (applet **TRACK**), since an amp
+a band change under RF would hot-switch the amp's relays. Other unconfirmed UDP controls are held, not dropped, while TX lasts, and
+their retry clock restarts at unkey so a held control repeats no sooner than
+`kControlRetryMs` after the TX edge. Off by default (applet **TRACK**), since an amp
 fed by a radio cable already has a frequency source.
 Losing the TX slice, disconnecting the radio, or moving outside the amplifier's
 coverage cancels queued and unconfirmed frequency commands.

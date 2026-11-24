@@ -392,9 +392,14 @@ QString attenuatorReason(int code)
         case 0x00: return {};
         case 0x20: return QStringLiteral("PA CURRENT");
         case 0x60: return QStringLiteral("INPUT POWER");
+        case 0x61: return QStringLiteral("GAIN LOW");
+        case 0x80: return QStringLiteral("50V SUPPLY");
         case 0x90: return QStringLiteral("REFLECTED POWER");
+        case 0x91: return QStringLiteral("SWR VERY HIGH");
+        case 0xB0: return QStringLiteral("DISSIPATION");
         case 0xC0: return QStringLiteral("FORWARD POWER");
         case 0xC1: return QStringLiteral("POWER HIGH FOR ATU SETTING");
+        case 0xF0: return QStringLiteral("GAIN HIGH");
         default: break;
     }
     return QStringLiteral("%1").arg(code, 2, 16, QLatin1Char('0')).toUpper();

@@ -358,6 +358,11 @@ int main()
         report("^AS20; -> attenuator code 0x20", apply("^AS20;", s) && s.attenuatorCode == 0x20);
         report("attenuatorReason(0x20) == PA CURRENT", attenuatorReason(0x20) == "PA CURRENT");
         report("attenuatorReason(0) is empty", attenuatorReason(0).isEmpty());
+        report("attenuatorReason(0x61) == GAIN LOW", attenuatorReason(0x61) == "GAIN LOW");
+        report("attenuatorReason(0x80) == 50V SUPPLY", attenuatorReason(0x80) == "50V SUPPLY");
+        report("attenuatorReason(0x91) == SWR VERY HIGH", attenuatorReason(0x91) == "SWR VERY HIGH");
+        report("attenuatorReason(0xB0) == DISSIPATION", attenuatorReason(0xB0) == "DISSIPATION");
+        report("attenuatorReason(0xF0) == GAIN HIGH", attenuatorReason(0xF0) == "GAIN HIGH");
         report("attenuatorReason(unknown) shows hex", attenuatorReason(0x42) == "42");
         report("^FR14074; -> 14074 kHz", apply("^FR14074;", s) && s.frequencyKhz == 14074);
         report("^FR00000; is not a frequency", !apply("^FR00000;", s) && s.frequencyKhz == 14074);

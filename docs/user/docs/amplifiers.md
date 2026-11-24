@@ -373,7 +373,8 @@ The amplifier serves the same commands over TCP and UDP on that one port:
   retried until it takes; if the amplifier never reports the requested state,
   the applet shows, for example, `Operate not confirmed by the amplifier`.
   Retries pause while the radio transmits, so an antenna or ATU change is
-  never repeated under RF; they resume after transmit ends.
+  never repeated under RF; they resume one retry interval (0.6 s) after
+  transmit ends.
   **TUNE** is sent once and never repeated. The amplifier accepts any number
   of UDP clients, so AetherSDR can run alongside Elecraft's KPA1500 Remote.
 
@@ -530,8 +531,9 @@ AetherSDR sent queries but nothing came back within 8 seconds.
 ### Find does not locate the KPA1500
 
 1. Make sure the computer and the amplifier are on the same network. **Find**
-   searches the computer's own networks only (at most 1,022 addresses each)
-   and cannot cross a router or VPN.
+   searches the computer's own networks only (at most 1,022 addresses each),
+   including the local side of any VPN or virtual adapter, and cannot reach
+   an amplifier behind a router or at the far end of a VPN.
 2. Check the **Port**: it must match the amplifier's, which the KPA1500
    Utility's **Network** tab shows.
 3. Allow AetherSDR through the computer's firewall for UDP, or enter the
