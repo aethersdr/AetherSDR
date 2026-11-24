@@ -4,11 +4,13 @@
 #include <QStringList>
 
 // Which pans a smaller layout closes, and which layout the survivors get.
-// The layout keeps the first pans, so candidates are tried from the end.
+// The layout keeps the first pans, so candidates are tried from the end. A
+// close the model refuses (keyed TX pan, last pan, a pan another client owns)
+// leaves that pan open, and the next earlier candidate is tried instead.
 namespace AetherSDR::PanLayoutShrinkPolicy {
 
 struct Outcome {
-    QStringList closed;   // candidates the close was requested for
+    QStringList closed;   // closes the model accepted, in call order
     int survivors{0};     // pans left once those closes complete
 };
 
@@ -23,9 +25,10 @@ Outcome closeFromEnd(const QStringList& candidates, int existing, int needed,
         if (panId == notAPan) {
             continue;
         }
-        close(panId);
-        outcome.closed.append(panId);
-        --toRemove;
+        if (close(panId)) {
+            outcome.closed.append(panId);
+            --toRemove;
+        }
     }
     outcome.survivors = existing - static_cast<int>(outcome.closed.size());
     return outcome;
@@ -45,9 +48,11 @@ inline QString defaultLayoutForCount(int panCount)
     }
 }
 
-inline QString reflowLayout(const QString& requested, int /*needed*/, int /*survivors*/)
+// The requested layout when its count was reached, else the default layout
+// for the pans that are left: never cells for a count that does not exist.
+inline QString reflowLayout(const QString& requested, int needed, int survivors)
 {
-    return requested;
+    return survivors == needed ? requested : defaultLayoutForCount(survivors);
 }
 
 } // namespace AetherSDR::PanLayoutShrinkPolicy
