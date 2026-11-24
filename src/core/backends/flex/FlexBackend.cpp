@@ -1,4 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/flex/FlexLanSession.h"
 #include "FlexSessionControls.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include "core/AppActivity.h"
@@ -114,16 +115,15 @@ FlexBackend::FlexBackend(QObject* parent)
     connect(&m_statusIngress, &FlexStatusIngress::cwStreamRemoved, this,
             [this](quint32 streamId) { if (m_cwControls) { m_cwControls->observeStreamRemoved(streamId); } });
 
-    // Observe wire lifecycle and re-emit as the interface's own signals. Queued
-    // (auto) connections: the connection lives on its worker thread.
-    connect(m_connection, &RadioConnection::connected,
-            this, &IRadioBackend::connected);
-    // Receive data retires with the session that ends (RadioModel::onDisconnected),
-    // not with this transport: a late disconnect must not end a newer session's.
-    connect(m_connection, &RadioConnection::disconnected,
-            this, &IRadioBackend::disconnected);
-    connect(m_connection, &RadioConnection::errorOccurred,
-            this, &IRadioBackend::connectionError);
+    m_lanSession = std::make_unique<FlexLanSession>(m_connection, m_panStream, &m_statusIngress);
+    connect(m_lanSession.get(), &FlexLanSession::starting, this, &IRadioBackend::connectionSessionStarting);
+    connect(m_lanSession.get(), &FlexLanSession::connected, this, &IRadioBackend::connected);
+    connect(m_lanSession.get(), &FlexLanSession::disconnected, this, [this] {
+        retireReceiveData();
+        emit disconnected();
+    });
+    connect(m_lanSession.get(), &FlexLanSession::errorOccurred, this, &IRadioBackend::connectionError);
+    connect(m_lanSession.get(), &FlexLanSession::versionReceived, this, &IRadioBackend::connectionVersionReceived);
     connect(m_connection, &RadioConnection::independentPttStopped,
             this, [this](const TxStopEvidence& evidence) {
         if (isConnected() && evidence.valid()) {
@@ -134,6 +134,7 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    m_lanSession.reset();
     m_receiveData->close();
     m_cwControls.reset();
     // Sever our own lifecycle observation of the connection FIRST — as the old
@@ -1048,22 +1049,35 @@ RadioCapabilities FlexBackend::capabilities() const
     return caps;
 }
 
-void FlexBackend::connectRadio(const RadioConnectRequest& /*request*/)
+void FlexBackend::connectRadio(const RadioConnectRequest& request)
 {
-    // RadioModel still orchestrates connect (RadioInfo assembly, WAN/SmartLink
-    // duality, auto-reconnect); the backend owns the objects but not yet the
-    // connect flow — that adaptation moves behind the seam in a later increment.
+    m_lanSession->connectRadio(request);
 }
 
 void FlexBackend::disconnectRadio()
 {
-    // RadioModel still orchestrates the staged gracefulDisconnect
-    // (handle/streamId/seq). Owned by the backend later.
+    disconnectRadio({});
+}
+
+void FlexBackend::disconnectRadio(const RadioDisconnectRequest& request)
+{
+    const quint32 sequence = request.receiveStreamId && m_sequenceProvider ? m_sequenceProvider() : 0;
+    m_lanSession->disconnectRadio(request, sequence);
+}
+
+std::optional<ConnectionSession> FlexBackend::connectionSession() const
+{
+    return m_lanSession->snapshot();
+}
+
+ReceiveTransportResult FlexBackend::startReceiveTransport(bool rebind)
+{
+    return m_lanSession->startReceiveTransport(rebind);
 }
 
 bool FlexBackend::isConnected() const
 {
-    return m_connection && m_connection->isConnected();
+    return m_connection && !m_lanSession->closing() && m_connection->isConnected();
 }
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)

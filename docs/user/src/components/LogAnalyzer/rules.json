@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7892,
+          "line": 7840,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7813,
+          "line": 7770,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7864,
+          "line": 7812,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7720,
+          "line": 7679,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -150,7 +150,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 657,
+          "line": 661,
           "text": "RadioConnection: socket error:"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 9075,
+          "line": 9038,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -188,7 +188,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 718,
+          "line": 722,
           "text": "qCDebug(lcConnection) << \"RX:\" << line;"
         },
         {
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8111,
+          "line": 8064,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,17 +227,17 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8089,
+          "line": 8042,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 258,
+          "line": 267,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8168,
+          "line": 8118,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -354,12 +354,12 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4294,
+          "line": 4327,
           "text": "AudioEngine: failed to open RX audio sink on any negotiated format"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4330,
+          "line": 4363,
           "text": "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
         }
       ]
@@ -376,17 +376,17 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 8975,
+          "line": 9038,
           "text": "AudioEngine: no audio input device available"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9206,
+          "line": 9269,
           "text": "AudioEngine: failed to open audio source at"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9258,
+          "line": 9321,
           "text": "AudioEngine: all TX source formats failed"
         }
       ]
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1524,
+          "line": 1526,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 2215,
+          "line": 2226,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12872,
+          "line": 12862,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -713,7 +713,7 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 7807,
+          "line": 7870,
           "text": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 3030,
+          "line": 3040,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -978,12 +978,12 @@
       "source": [
         {
           "file": "src/core/backends/icom/IcomSession.cpp",
-          "line": 184,
+          "line": 193,
           "text": "session failed:"
         },
         {
           "file": "src/core/backends/icom/IcomSession.cpp",
-          "line": 262,
+          "line": 271,
           "text": "the radio rejected the username or password"
         }
       ]
@@ -1000,7 +1000,7 @@
       "source": [
         {
           "file": "src/core/backends/icom/IcomSession.cpp",
-          "line": 401,
+          "line": 410,
           "text": "the radio released the serial and audio streams; "
         }
       ]
