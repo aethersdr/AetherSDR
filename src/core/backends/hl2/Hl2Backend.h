@@ -821,6 +821,9 @@ private:
     [[nodiscard]] double rxTunedHz(const Receiver& r) const noexcept;
     // Re-run one receiver's tune after its RIT changed.
     void retuneReceiver(int ddc);
+    // After transmit moved without setTxSlice(): the new owner's tune, mode and
+    // TX passband reach the transmitter.
+    void handTransmitToOwner();
     // The offset clamped to kRitXitMaxHz, logging when the clamp bites.
     [[nodiscard]] static int clampRitXit(const char* what, int hz);
     // qCInfo naming the receiver and slice an RIT/XIT change landed on.

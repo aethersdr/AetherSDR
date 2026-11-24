@@ -1413,7 +1413,7 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
         }
         publishIoDsps();
         if (txWasHere) {
-            retuneReceiver(m_txDdc);
+            handTransmitToOwner();
         }
         emit sliceLifecycleFailed(QStringLiteral("create"), removedUi,
                                   QString::fromStdString(error));
@@ -1591,22 +1591,27 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // Closing one can take the set back onto a single band.
     applyBandFilter("close receiver");
     publishWideState();
-    // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
-    // TX register (with the new owner's XIT) leaves the closed receiver.
-    // Its mode and passband too, or the new TX slice shows one mode while the
-    // modulator sends the closed receiver's.
     if (txMoved) {
-        retuneReceiver(m_txDdc);
-        if (const Receiver* owner = rx(m_txDdc); owner && m_txDsp) {
-            QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
-                Q_ARG(WdspChannel::Mode, modeFromString(owner->mode)));
-            pushTxPassband(owner->mode);
-        }
+        handTransmitToOwner();
     }
     // The TX slice may have moved; republish so the indicator follows.
     emitAllSliceState();
     notifyOperatingStateChanged();
     return true;
+}
+
+// Transmit moved to m_txDdc without setTxSlice() (its receiver closed or its
+// DSP build failed): re-run the new owner's tune, so the TX register (with its
+// XIT) leaves the old receiver, and push its mode and passband, or the new TX
+// slice shows one mode while the modulator sends the old receiver's (#7586).
+void Hl2Backend::handTransmitToOwner()
+{
+    retuneReceiver(m_txDdc);
+    if (const Receiver* owner = rx(m_txDdc); owner && m_txDsp) {
+        QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
+            Q_ARG(WdspChannel::Mode, modeFromString(owner->mode)));
+        pushTxPassband(owner->mode);
+    }
 }
 
 void Hl2Backend::publishWideState()
