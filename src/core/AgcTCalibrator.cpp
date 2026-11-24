@@ -102,6 +102,8 @@ void AgcTCalibrator::applyValue(int value)
         return;
     }
     value = std::clamp(value, 0, 100);
+    // Before the write: an immediate echo re-enters onValueChanged from it.
+    m_ownWriteValue = m_auto ? -1 : value;
     if (useOffLevel()) {
         m_slice->setAgcOffLevel(value);
     } else {
@@ -113,6 +115,12 @@ float AgcTCalibrator::currentRmsDb() const
 {
     const float rms = std::max(m_rmsEma, kRmsFloor);
     return 20.0f * std::log10(rms);
+}
+
+void AgcTCalibrator::resetLevel()
+{
+    m_rmsEma = 0.0f;
+    m_haveRms = false;
 }
 
 // ---- live inputs ----------------------------------------------------------
@@ -174,14 +182,28 @@ void AgcTCalibrator::onValueChanged(int value)
     if (m_auto) {
         return; // the sweep drives the value itself
     }
-    // Debounce: record once the value has settled.
+    // Debounce: record once the value has settled. Snapshot the level count
+    // so onManualSettle can detect a silent audio source (same guard as sweep).
+    // A value other than our own last write means that echo is not coming.
+    m_pendingIsOwnEcho = m_ownWriteValue >= 0 && value == m_ownWriteValue;
+    m_ownWriteValue = -1;
     m_pendingManualValue = std::clamp(value, 0, 100);
+    m_levelCountAtManual = m_levelCount;
     m_manualTimer.start(std::max(120, m_settleMs));
 }
 
 void AgcTCalibrator::onManualSettle()
 {
     if (!canWrite() || m_auto || m_pendingManualValue < 0) {
+        return;
+    }
+    // No audio level since the slider settled: recording would use a stale RMS
+    // (silent TCI source or PC Audio off). Skip the point and signal the dialog.
+    if (m_levelCount == m_levelCountAtManual) {
+        m_pendingManualValue = -1;
+        if (!m_pendingIsOwnEcho) {
+            emit manualNoAudio();
+        }
         return;
     }
     recordPoint(m_pendingManualValue);
@@ -256,7 +278,9 @@ void AgcTCalibrator::onSweepStep()
         // and emits a second finished(false).
         // This assumes the restore echoes at once, as it does on every backend
         // but RTL-SDR (ReceiveControlPolicy::Confirmed). There the echo comes
-        // later and records one point, which cannot reach a recommendation:
+        // later and starts a manual settle. With no audio it records nothing,
+        // and as the calibrator's own write it raises no notice. If audio has
+        // returned it records one point, which cannot reach a recommendation:
         // recompute() needs three.
         m_manualTimer.stop();
         m_pendingManualValue = -1;
