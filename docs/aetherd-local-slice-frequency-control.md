@@ -100,7 +100,7 @@ undo an already accepted command. No TX lease is created or implied.
 the older UI `tuningRangeHz` convention (zero means unconstrained) is not reused.
 A nonempty `declaredBands` list further restricts requests to its inclusive union.
 Malformed bounds fail closed. The simulator declares a 1 Hz–1 THz API domain,
-not physical RF coverage. All six backends explicitly declare this metadata;
+not physical RF coverage. All seven backends declare this metadata (the remote-engine backend mirrors its engine's);
 see the [capability map](architecture/radio-capabilities-map.md#local-slice-frequency-control).
 
 `capabilities.get` advertises `slice.setFrequency` only to controllers and only
