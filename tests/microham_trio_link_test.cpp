@@ -238,16 +238,18 @@ void testImplicitSplit()
                    R"({"a": "set_value", "gid": "antenna", "txv": "tx_ant3", "id": ")"));
     rig.replySplit("ant3", "ant1");
 
-    report("RX pick equal to TX ends split",
+    report("RX pick equal to TX ends split, RX half first",
            rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant3"), false).isEmpty()
                && rig.commands() == 4
-               && rig.lastCommand().startsWith(R"({"a": "set_value", "gid": "split", "v": false, "id": ")"));
-    rig.replySplitOff();
-    report("split off lands on the former RX half, so `v` follows to Antenna3",
-           rig.commands() == 5
-               && rig.lastCommand().startsWith(R"({"a": "set_value", "gid": "antenna", "v": "ant3")"),
+               && rig.lastCommand().startsWith(
+                   R"({"a": "set_value", "gid": "antenna", "rxv": "rx_ant3", "id": ")"),
            rig.lastCommand().toStdString());
-    rig.reply("ant3");
+    rig.replySplit("ant3", "ant3");
+    report("first the RX half to the TX port, then split off",
+           rig.commands() == 5
+               && rig.lastCommand().startsWith(R"({"a": "set_value", "gid": "split", "v": false, "id": ")"),
+           rig.lastCommand().toStdString());
+    rig.replySplitOff();
     report("done: split off, TX and RX on Antenna3",
            rig.commands() == 5 && !rig.trio.pickUnderWay()
                && trioViewOf(rig.radio).txCurrent == QStringLiteral("TRIO:ant3")
@@ -294,6 +296,67 @@ void testImplicitSplit()
     report("but can be the RX half (split on)",
            marked.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant4"), false).isEmpty()
                && marked.commands() == 1);
+}
+
+// Ending split from an RX pick: TX stays on its port at every step. TX on the
+// Dummy, RX on EFHW, RX pick Dummy; split off first would land TX on EFHW.
+void testSplitOffKeepsTx()
+{
+    Rig rig;
+    QStringList txSeen;
+    const auto seeTx = [&rig, &txSeen]() { txSeen << trioViewOf(rig.radio).txCurrent; };
+    rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant6"), true);
+    rig.reply("ant6");
+    rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant1"), false);
+    rig.replySplit("ant6", "ant6");
+    rig.replySplit("ant6", "ant1");
+    const int sent = rig.commands();
+    report("set up: split, TX Dummy, RX EFHW",
+           sent == 3 && trioViewOf(rig.radio).txCurrent == QStringLiteral("TRIO:ant6")
+               && trioViewOf(rig.radio).rxCurrent == QStringLiteral("TRIO:ant1"));
+    report("RX pick Dummy: first the RX half to the Dummy",
+           rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant6"), false).isEmpty()
+               && rig.commands() == sent + 1
+               && rig.lastCommand().startsWith(
+                   R"({"a": "set_value", "gid": "antenna", "rxv": "rx_ant6", "id": ")"),
+           rig.lastCommand().toStdString());
+    if (rig.lastCommand().contains(R"("rxv")")) {
+        rig.replySplit("ant6", "ant6");
+    } else {
+        rig.replySplitOff();
+    }
+    seeTx();
+    report("then split off", rig.commands() == sent + 2
+               && rig.lastCommand().startsWith(R"({"a": "set_value", "gid": "split", "v": false, "id": ")"),
+           rig.lastCommand().toStdString());
+    if (rig.trio.pickUnderWay()) {
+        if (rig.lastCommand().contains(R"("gid": "split")")) {
+            rig.replySplitOff();
+        } else {
+            rig.reply("ant6");
+        }
+        seeTx();
+    }
+    report("done in two commands: split off, TX and RX on the Dummy",
+           rig.commands() == sent + 2 && !rig.trio.pickUnderWay()
+               && trioViewOf(rig.radio).txCurrent == QStringLiteral("TRIO:ant6")
+               && trioViewOf(rig.radio).rxCurrent == QStringLiteral("TRIO:ant6"));
+    report("at no step was TX on EFHW", !txSeen.contains(QStringLiteral("TRIO:ant1")),
+           txSeen.join(QLatin1Char(' ')).toStdString());
+
+    // The TX port marked RX only between the two commands: split off is not sent.
+    Rig marked;
+    marked.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant1"), false);
+    marked.replySplit("ant2", "ant2");
+    marked.replySplit("ant2", "ant1");
+    marked.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant2"), false);
+    const int before = marked.commands();
+    QByteArray doc = splitDoc("radio2", "ant2", "ant2", marked.lastId());
+    doc.replace(R"("l":"Fan Dipole","e":true)", R"("l":"Fan Dipole","e":false)");
+    marked.peer.push(doc);
+    report("TX port marked RX only mid-pick: split off is not sent",
+           marked.commands() == before && !marked.trio.pickUnderWay(),
+           marked.lastCommand().toStdString());
 }
 
 // The registry holds one entry per device; a pick reaches only the device it
@@ -580,6 +643,7 @@ int main(int argc, char** argv)
     testView();
     testPick();
     testImplicitSplit();
+    testSplitOffKeepsTx();
     testRefusedWhileTransmitting();
     testRadioModelRefusesOnItsOwn();
     testRefusedInEveryInterlockStateButIdle();

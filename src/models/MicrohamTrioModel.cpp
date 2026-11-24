@@ -565,7 +565,12 @@ std::optional<MicrohamTrioModel::Step> MicrohamTrioModel::nextStep(const Antenna
 {
     using MicrohamTrio::AntennaField;
     if (!goal.split) {
+        // Split off puts `v` on the RX half (d184, d288), so the RX half goes
+        // to the TX port first: TX never passes through another port.
         if (s.split.on) {
+            if (s.antennaRx != goal.tx) {
+                return Step{AntennaField::RxHalf, goal.tx};
+            }
             return Step{AntennaField::Split, QLatin1String(MicrohamTrio::kToggleOff)};
         }
         if (s.antenna.selected != goal.tx) {
@@ -633,6 +638,14 @@ void MicrohamTrioModel::continuePick()
     if (m_switchBlocked && m_switchBlocked()) {
         stopPickSaying(stationAntennaTransmitRefusal());
         return;
+    }
+    // An RX half may be an RX-only port; the port split off lands TX on may not.
+    if (!m_goal->split) {
+        const MicrohamTrio::Button* port = m_snapshot->antenna.find(m_goal->tx);
+        if (port != nullptr && !port->enabled) {
+            stopPick(tr("the Trio marks %1 as receive only").arg(antennaLabel(*m_snapshot, m_goal->tx)));
+            return;
+        }
     }
     if (m_goal->writesLeft <= 0) {
         stopPick(tr("the Trio did not reach it in three commands"));
