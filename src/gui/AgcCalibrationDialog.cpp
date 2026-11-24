@@ -402,6 +402,13 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
         }
     });
 
+    // A TCI client connecting, disconnecting or starting or stopping audio
+    // (and the server stopping) can change the source. updateModeUi() rewires
+    // only while idle, so a running sweep keeps the source it latched.
+    if (m_tci) {
+        connect(m_tci, &TciServer::clientsChanged, this, &AgcCalibrationDialog::updateModeUi);
+    }
+
     // S-meter feed is always from the radio model regardless of audio source.
     if (m_radio) {
         connect(&m_radio->meterModel(), &MeterModel::sLevelChanged,
@@ -543,7 +550,30 @@ bool AgcCalibrationDialog::isTciMode() const
         return false;
     }
     const QString& m = m_slice->mode();
-    return m == QStringLiteral("DIGU") || m == QStringLiteral("DIGL");
+    return (m == QStringLiteral("DIGU") || m == QStringLiteral("DIGL"))
+        && tciAudioAvailable();
+}
+
+bool AgcCalibrationDialog::tciDeliversAudio(bool running,
+                                            const QVector<TciClientInfo>& clients)
+{
+    return running
+        && std::any_of(clients.cbegin(), clients.cend(),
+                       [](const TciClientInfo& client) { return client.audio; });
+}
+
+void AgcCalibrationDialog::setTciAudioProbe(TciAudioProbe probe)
+{
+    m_tciAudioProbe = std::move(probe);
+    updateModeUi();
+}
+
+bool AgcCalibrationDialog::tciAudioAvailable() const
+{
+    if (m_tciAudioProbe) {
+        return m_tciAudioProbe();
+    }
+    return m_tci && tciDeliversAudio(m_tci->isRunning(), m_tci->connectedClients());
 }
 
 void AgcCalibrationDialog::rewireAudioSource()
@@ -555,7 +585,13 @@ void AgcCalibrationDialog::rewireAudioSource()
     // just during sweeps.
     // m_tciActive latches the result so labels name the wired source, not the
     // live mode (which can change mid-sweep without rewiring). (#7263)
+    const bool wasTci = m_tciActive;
     m_tciActive = isTciMode();
+    if (m_tciActive != wasTci) {
+        // PC Audio is post-volume and TCI is pre-AF-gain: do not let the old
+        // source's average carry into the new source's first points.
+        m_engine.resetLevel();
+    }
     disconnect(m_audioConn);
     m_audioConn = {};
     if (m_tciActive) {
@@ -649,6 +685,12 @@ void AgcCalibrationDialog::updateModeUi()
                        || m_slice->mode() == QStringLiteral("DIGL"))) {
             // Already in DIGU/DIGL but no DAX channel assigned — TCI can't fire.
             m_sourceLabel->setText(tr("Audio source: PC Audio (TCI needs a DAX channel in DIGU/DIGL)"));
+        } else if (m_tci && m_slice
+                   && (m_slice->mode() == QStringLiteral("DIGU")
+                       || m_slice->mode() == QStringLiteral("DIGL"))) {
+            // DIGU/DIGL with a DAX channel, but TCI is off or no client
+            // streams receive audio.
+            m_sourceLabel->setText(tr("Audio source: PC Audio (no TCI client is receiving audio)"));
         } else if (m_tci) {
             m_sourceLabel->setText(tr("Audio source: PC Audio (switch to DIGU/DIGL with a DAX channel for TCI)"));
         } else {
@@ -700,7 +742,7 @@ void AgcCalibrationDialog::updateModeUi()
             m_modeLabel->setText(tr(
                 "Calibrating radio AGC-T (agc_threshold) via PC Audio (%1) — "
                 "finding the knee just above the noise floor.")
-                .arg(m_slice->agcMode().toUpper()));
+                .arg(m_slice->mode()));
         }
     }
 

@@ -163,7 +163,8 @@ measured noise floor on the active slice. It does not transmit.
 when Auto Sweep starts. In **DIGU** or **DIGL** with a DAX channel assigned, it
 measures the TCI audio for that channel — a TCI client (for example WSJT-X over
 TCI) must be receiving on the slice; no PC Audio required. In every other mode,
-and in DIGU/DIGL with no DAX channel assigned, it measures this computer's audio,
+in DIGU/DIGL with no DAX channel assigned, and while no TCI client streams
+receive audio, it measures this computer's audio,
 so turn **PC Audio** on first. If no audio arrives, Auto Sweep stops at its first
 step, puts the setting back and reports which source was silent. A slider move
 with no audio records no point and says which source is silent, unless a

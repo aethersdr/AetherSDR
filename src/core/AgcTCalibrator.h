@@ -42,6 +42,11 @@ public:
     // Per-step settle time for the auto sweep (radio AGC needs time to react).
     void setSettleMs(int ms) { m_settleMs = ms; }
 
+    // Forget the averaged audio level. The caller switched audio sources
+    // (PC Audio is post-volume, TCI is pre-AF-gain DAX), so the average must
+    // restart from the new source's first level rather than blend the two.
+    void resetLevel();
+
     bool             isRunning() const { return m_running; }
     bool             isAuto() const { return m_auto; }
     Strategy         strategy() const;
@@ -133,6 +138,12 @@ private:
     // Manual record (settle after the user moves the slider).
     QTimer m_manualTimer;
     int    m_pendingManualValue{-1};
+    // The value the calibrator itself last wrote outside a sweep (Stop's
+    // restore, Apply). Its echo comes back through onValueChanged as if the
+    // operator had moved the slider; that settle must not raise the manual
+    // no-audio notice over the stop or apply message.
+    int    m_ownWriteValue{-1};
+    bool   m_pendingIsOwnEcho{false};
 
     // AGC-off comfortable-noise target (dB). Tunable; sensible default.
     float  m_targetDb{-28.0f};

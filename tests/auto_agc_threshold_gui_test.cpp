@@ -50,6 +50,7 @@
 #include <QVector>
 #include <QtTest>
 
+#include <cmath>
 #include <memory>
 #include <cstdlib>
 #include <optional>
@@ -488,6 +489,7 @@ private slots:
         TciServer tci(&fixture.radio);
         AudioEngine audio;
         AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setTciAudioProbe([] { return true; }); // a TCI client is streaming
         dialog.setSlice(fixture.radio.slice(0));
         dialog.show();
         settle();
@@ -506,10 +508,21 @@ private slots:
             settle();
         };
 
+        QLabel* modeLabel = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("mode")) {
+                modeLabel = label;
+            }
+        }
+        QVERIFY(modeLabel);
+
         // 1. DIGU + daxChannel=1 + agcMode="med" → TCI
         setMode(QStringLiteral("DIGU"), QStringLiteral("med"), 1);
         QCOMPARE(source->text(),
             QStringLiteral("Audio source: TCI (DIGU/DIGL)"));
+        // Both sources name the slice mode in the heading's parenthesis.
+        QVERIFY2(modeLabel->text().contains(QStringLiteral("via TCI audio (DIGU)")),
+                 qPrintable(modeLabel->text()));
 
         // 1a. Mode-only flip: DIGU → USB (daxChannel and agcMode unchanged).
         //     Triggers a single modeChanged signal, so updateModeUi() runs once.
@@ -519,6 +532,8 @@ private slots:
         setMode(QStringLiteral("USB"), QStringLiteral("med"), 1);
         QCOMPARE(source->text(),
             QStringLiteral("Audio source: PC Audio (switch to DIGU/DIGL with a DAX channel for TCI)"));
+        QVERIFY2(modeLabel->text().contains(QStringLiteral("via PC Audio (USB)")),
+                 qPrintable(modeLabel->text()));
 
         // 2. DIGL + daxChannel=1 + agcMode="slow" → TCI
         setMode(QStringLiteral("DIGL"), QStringLiteral("slow"), 1);
@@ -561,6 +576,7 @@ private slots:
         TciServer tci(&fixture.radio);
         AudioEngine audio;
         AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setTciAudioProbe([] { return true; }); // a TCI client is streaming
         dialog.setSlice(fixture.radio.slice(0));
         dialog.show();
         fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
@@ -605,6 +621,7 @@ private slots:
         TciServer tci(&fixture.radio);
         AudioEngine audio;
         AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setTciAudioProbe([] { return true; }); // a TCI client is streaming
         dialog.setSlice(fixture.radio.slice(0));
         dialog.show();
         fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
@@ -628,10 +645,19 @@ private slots:
         QCOMPARE(startStop->text(), QStringLiteral("Stop"));
 
         // DIGU -> USB mid-sweep. No TCI level arrives, so the first step
-        // (280 ms) stops the sweep for want of audio.
-        fixture.backend->modeStatus(0, QStringLiteral("USB"), QStringLiteral("med"), 1);
+        // (280 ms) stops the sweep for want of audio. The status also carries
+        // the sweep's first write (100) landing, so the restore is a change.
+        fixture.backend->modeStatus(0, QStringLiteral("USB"), QStringLiteral("med"), 1, 100);
         settle();
         QTRY_COMPARE_WITH_TIMEOUT(startStop->text(), QStringLiteral("Auto Sweep"), 2000);
+        QCOMPARE(result->text(),
+            QStringLiteral("Stopped: no TCI audio. Is your TCI client receiving on this slice?"));
+
+        // A late echo of the restore (as on a Confirmed backend such as
+        // RTL-SDR) is the calibrator's own write: its silent settle must not
+        // replace the stop message.
+        fixture.backend->modeStatus(0, QStringLiteral("USB"), QStringLiteral("med"), 1, 65);
+        QTest::qWait(600);
         QCOMPARE(result->text(),
             QStringLiteral("Stopped: no TCI audio. Is your TCI client receiving on this slice?"));
 #else
@@ -705,6 +731,7 @@ private slots:
         audio.setNr2Enabled(true);
         QVERIFY(audio.nr2Enabled());
         AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setTciAudioProbe([] { return true; }); // a TCI client is streaming
         dialog.setSlice(fixture.radio.slice(0));
         dialog.show();
         fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
@@ -745,6 +772,156 @@ private slots:
 #endif
     }
 
+    void tciDeliversAudioNeedsARunningServerAndAnAudioClient()
+    {
+#ifdef HAVE_WEBSOCKETS
+        TciClientInfo idle;
+        TciClientInfo streaming;
+        streaming.audio = true;
+        QVERIFY(!AgcCalibrationDialog::tciDeliversAudio(true, {}));
+        QVERIFY(!AgcCalibrationDialog::tciDeliversAudio(true, {idle}));
+        QVERIFY(!AgcCalibrationDialog::tciDeliversAudio(false, {streaming}));
+        QVERIFY(AgcCalibrationDialog::tciDeliversAudio(true, {idle, streaming}));
+#else
+        QSKIP("HAVE_WEBSOCKETS not set; TciClientInfo requires TciServer");
+#endif
+    }
+
+    void calibrationDialogTciNeedsAReceivingClient()
+    {
+        // DIGU with a DAX channel picks TCI only while a client streams
+        // receive audio, and follows clientsChanged() while idle. A running
+        // sweep keeps the source it latched.
+#ifdef HAVE_WEBSOCKETS
+        Fixture fixture;
+        TciServer tci(&fixture.radio);
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        bool receiving = false;
+        dialog.setTciAudioProbe([&receiving] { return receiving; });
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
+        settle();
+
+        QLabel* source = nullptr;
+        QPushButton* startStop = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("source")) {
+                source = label;
+            }
+        }
+        for (QPushButton* button : dialog.findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("Auto Sweep")) {
+                startStop = button;
+            }
+        }
+        QVERIFY(source && startStop);
+        const QString pcNoClient =
+            QStringLiteral("Audio source: PC Audio (no TCI client is receiving audio)");
+        const QString tciSource = QStringLiteral("Audio source: TCI (DIGU/DIGL)");
+        QCOMPARE(source->text(), pcNoClient);
+
+        receiving = true;
+        emit tci.clientsChanged();
+        settle();
+        QCOMPARE(source->text(), tciSource);
+
+        // The client stops mid-sweep: the sweep stays on TCI.
+        startStop->click();
+        settle();
+        QCOMPARE(startStop->text(), QStringLiteral("Stop"));
+        receiving = false;
+        emit tci.clientsChanged();
+        settle();
+        QCOMPARE(startStop->text(), QStringLiteral("Stop"));
+        QCOMPARE(source->text(), tciSource);
+
+        // Stopped, it falls back to PC Audio.
+        startStop->click();
+        settle();
+        QCOMPARE(startStop->text(), QStringLiteral("Auto Sweep"));
+        QCOMPARE(source->text(), pcNoClient);
+#else
+        QSKIP("HAVE_WEBSOCKETS not set; TCI availability test requires TciServer");
+#endif
+    }
+
+    void calibrationDialogSourceSwitchResetsLevel()
+    {
+        // PC Audio is post-volume and TCI is pre-AF-gain DAX. After a switch,
+        // the first point must be the new source's level, not a blend.
+#ifdef HAVE_WEBSOCKETS
+        Fixture fixture;
+        TciServer tci(&fixture.radio);
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setTciAudioProbe([] { return true; });
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        fixture.backend->modeStatus(0, QStringLiteral("USB"), QStringLiteral("med"), 1);
+        settle();
+        for (int i = 0; i < 20; ++i) {
+            emit audio.levelChanged(1.0f); // PC Audio near 0 dB
+        }
+
+        fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1, 40);
+        settle();
+        emit tci.rxLevel(1, 0.01f); // TCI at -40 dB
+        QTest::qWait(600);
+        const QVector<AgcTCalibrator::Point> curve = dialog.calibrator().curve();
+        QCOMPARE(curve.size(), 1);
+        // 20 log10(0.01) = -40 dB, from the TCI level alone.
+        QVERIFY2(std::abs(curve.constFirst().rmsDb + 40.0f) < 1.0f,
+                 qPrintable(QString::number(curve.constFirst().rmsDb)));
+#else
+        QSKIP("HAVE_WEBSOCKETS not set; source switch test requires TciServer");
+#endif
+    }
+
+    void calibrationDialogStopEchoKeepsStopMessage()
+    {
+        // Stop restores the AGC-T it started from. That write's echo is the
+        // calibrator's own, so its silent settle must not replace
+        // "Calibration stopped." with the manual no-audio notice.
+        Fixture fixture;
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, nullptr, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        settle();
+        QLabel* result = nullptr;
+        QPushButton* startStop = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("result")) {
+                result = label;
+            }
+        }
+        for (QPushButton* button : dialog.findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("Auto Sweep")) {
+                startStop = button;
+            }
+        }
+        QVERIFY(result && startStop);
+        startStop->click();
+        settle();
+        QCOMPARE(startStop->text(), QStringLiteral("Stop"));
+        // The sweep's first write lands, so the restore is a real change.
+        fixture.backend->status(0, AgcThresholdMode::Manual, 100);
+        settle();
+        startStop->click();
+        settle();
+        QCOMPARE(result->text(), QStringLiteral("Calibration stopped."));
+        fixture.backend->status(0, AgcThresholdMode::Manual, 65); // the restore's echo
+        QTest::qWait(600);
+        QCOMPARE(result->text(), QStringLiteral("Calibration stopped."));
+
+        // An operator move afterwards still gets the notice.
+        fixture.backend->status(0, AgcThresholdMode::Manual, 40);
+        QTRY_COMPARE_WITH_TIMEOUT(result->text(),
+            QStringLiteral("No audio on this computer yet. Is PC Audio on?"), 2000);
+    }
+
     void calibrationDialogDestroyedMidSweepRestoresWhileSourcesLive()
     {
         // ~MainWindow deletes this dialog before it frees TciServer and
@@ -757,6 +934,7 @@ private slots:
         auto audio = std::make_unique<AudioEngine>();
         auto dialog = std::make_unique<AgcCalibrationDialog>(
             &fixture.radio, audio.get(), tci.get(), AgcCalibrationDialog::NoiseFloorFn{});
+        dialog->setTciAudioProbe([] { return true; });
         dialog->setSlice(fixture.radio.slice(0));
         dialog->show();
         fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);

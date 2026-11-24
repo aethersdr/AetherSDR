@@ -22,6 +22,7 @@ class RadioModel;
 class SliceModel;
 class AudioEngine;
 class TciServer;
+struct TciClientInfo;
 
 // AgcCurveWidget — lightweight 2D plot of post-AGC audio noise (y, dB) versus
 // the AGC-T value (x, 0..100). Markers: current value, detected knee /
@@ -67,6 +68,18 @@ public:
                          QWidget* parent = nullptr);
     ~AgcCalibrationDialog() override;
 
+    // TCI is the calibration source only while it can deliver audio: the
+    // server is running and a connected client streams receive audio. The
+    // public client list names a client's TCI receiver, not its DAX channel,
+    // so this cannot tell which slice the client listens to.
+    static bool tciDeliversAudio(bool running, const QVector<TciClientInfo>& clients);
+    // Replaces the live TciServer query above. The live query needs a bound
+    // socket and a real client, so the GUI tests drive this one instead.
+    using TciAudioProbe = std::function<bool()>;
+    void setTciAudioProbe(TciAudioProbe probe);
+    // Read-only view of the engine, for the tests' curve checks.
+    const AgcTCalibrator& calibrator() const { return m_engine; }
+
     // Every close path (the close button, Escape, Ctrl+W) ends here: a running
     // sweep stops and the AGC-T it found goes back, as Stop does.
     void done(int result) override;
@@ -98,8 +111,10 @@ private:
     // slices without a DAX channel assigned fall back to PC Audio rather than
     // producing a channel-match that can never fire. Also returns false when
     // agcMode() == "off": TargetLevel always uses PC Audio (the reference was
-    // calibrated on that path).
+    // calibrated on that path). Also false while TCI cannot deliver audio
+    // (tciAudioAvailable()).
     bool isTciMode() const;
+    bool tciAudioAvailable() const;
     // Connect (or reconnect) the appropriate audio source to the calibration
     // engine based on the current slice mode. Keeps audio live at all times —
     // not just during auto sweeps — so the manual slider path always has fresh
@@ -117,6 +132,7 @@ private:
     RadioModel*  m_radio{nullptr};
     AudioEngine* m_audio{nullptr};
     TciServer*   m_tci{nullptr};
+    TciAudioProbe m_tciAudioProbe;
     NoiseFloorFn m_noiseFloorFn;
     // Connection to whichever audio source (PC Audio or TCI) is active.
     // Live while the dialog is open; rewired on mode/DAX change and at sweep
