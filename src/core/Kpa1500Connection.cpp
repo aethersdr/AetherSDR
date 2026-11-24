@@ -462,13 +462,21 @@ bool Kpa1500Connection::sendRaw(const QByteArray& frame)
     return writeFrame(frame);
 }
 
-void Kpa1500Connection::sendControl(PendingControl control)
+bool Kpa1500Connection::sendControl(PendingControl control)
 {
+    // The antenna and ATU in-line/bypass relays must never switch under RF.
+    // This refuses the first send; retryPendingControls() holds a retry.
+    if (m_transmitting
+        && (control.group == QLatin1String("AN") || control.group == QLatin1String("AI"))) {
+        qCWarning(lcTuner) << "Kpa1500Connection: refusing" << control.label << "while transmitting";
+        emit controlRefused(tr("%1 refused while transmitting").arg(control.label));
+        return false;
+    }
     if (!sendRaw(control.frame)) {
-        return;
+        return false;
     }
     if (m_activeTransport != Kpa1500::Transport::Udp) {
-        return;
+        return true;
     }
     m_pending.erase(std::remove_if(m_pending.begin(), m_pending.end(),
                                    [&control](const PendingControl& p) {
@@ -478,7 +486,7 @@ void Kpa1500Connection::sendControl(PendingControl control)
     writeFrame(Kpa1500::buildQuery(control.readback));
     control.attempts = 1;
     control.lastSent.start();
-    m_pending.push_back(std::move(control));
+    m_pending.push_back(std::move(control));    return true;
 }
 
 void Kpa1500Connection::checkPendingControls(const Kpa1500::Message& message)
@@ -638,6 +646,7 @@ void Kpa1500Connection::setPower(bool on)
 {
     if (!on && m_transmitting) {
         qCWarning(lcTuner) << "Kpa1500Connection: refusing sleep while transmitting";
+        emit controlRefused(tr("Sleep refused while transmitting"));
         return;
     }
     PendingControl c;
@@ -775,9 +784,14 @@ void Kpa1500Connection::sendTrack()
     c.satisfied = [khz](const Kpa1500::Message& m, const Kpa1500::Status& s) {
         return m.cmd == QLatin1String("FR") && s.frequencyKhz == khz;
     };
-    m_trackSentKhz = khz;
     m_trackLastSent.start();
-    sendControl(std::move(c));
+    if (!sendControl(std::move(c))) {
+        // Not on the wire, so not sent: try again after the rate limit
+        // rather than leaving the amp on its old band until the next QSY.
+        m_trackTimer.start(kTrackIntervalMs);
+        return;
+    }
+    m_trackSentKhz = khz;
 }
 
 void Kpa1500Connection::key()

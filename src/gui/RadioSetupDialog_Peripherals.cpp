@@ -2164,6 +2164,12 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
         findHint->show();
         discovery->start(static_cast<quint16>(u->portSpin->value()));
     });
+    connect(discovery, &Kpa1500Discovery::failed, findButton,
+            [findButton, findHint, updateFindAvailability](const QString& error) {
+        findButton->setText(tr("Find"));
+        updateFindAvailability();
+        findHint->setText(tr("Find could not open a UDP socket: %1").arg(error));
+    });
     connect(discovery, &Kpa1500Discovery::finished, findButton,
             [findButton, findHint, discovery, u, updateFindAvailability](int count) {
         findButton->setText(tr("Find"));

@@ -37,6 +37,8 @@ public:
     void setConnected(bool connected);
     // A control the amp never confirmed (UDP); shown for kNoticeMs.
     void showControlUnconfirmed(const QString& control);
+    // Any short control notice (e.g. a refusal), in the same transient label.
+    void showControlNotice(const QString& text);
 
     // TX frequency tracking is an operator preference kept by the applet
     // (not amp state), so it is latched here and persisted.

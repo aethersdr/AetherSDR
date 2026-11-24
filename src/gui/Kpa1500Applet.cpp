@@ -587,8 +587,13 @@ void Kpa1500Applet::setConnected(bool connected)
 
 void Kpa1500Applet::showControlUnconfirmed(const QString& control)
 {
-    m_noticeLabel->setText(tr("%1 not confirmed by the amplifier").arg(control));
-    m_noticeLabel->setAccessibleName(m_noticeLabel->text());
+    showControlNotice(tr("%1 not confirmed by the amplifier").arg(control));
+}
+
+void Kpa1500Applet::showControlNotice(const QString& text)
+{
+    m_noticeLabel->setText(text);
+    m_noticeLabel->setAccessibleName(text);
     m_noticeLabel->show();
     m_noticeTimer.start();
 }

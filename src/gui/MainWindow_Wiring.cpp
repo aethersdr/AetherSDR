@@ -7527,6 +7527,10 @@ void MainWindow::wireMeters()
             [this](const QString& control) {
         m_appletPanel->kpa1500Applet()->showControlUnconfirmed(control);
     });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::controlRefused, this,
+            [this](const QString& message) {
+        m_appletPanel->kpa1500Applet()->showControlNotice(message);
+    });
 
     // Startup auto-connect from saved Peripherals settings — same reasoning
     // as ACOM/VK3AMP above: the Flex radio has no idea this amplifier

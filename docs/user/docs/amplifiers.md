@@ -397,14 +397,18 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
 - The internal ATU: **ATU IN / ATU BYP**, and **TUNE**, which reads
   `TUNING` while a tune runs; press it again to cancel. A full-search tune
   needs RF, so key the radio's own TUNE: nothing in this applet keys the
-  radio.
+  radio. **ATU IN / ATU BYP** switches a relay, so it is refused while the
+  radio transmits, and the applet shows, for example, `ATU bypass refused
+  while transmitting`. **TUNE** is not refused.
 - **ANT** **1** / **2**, the amplifier's two antenna connectors. An `ANT n`
   label appears when an external antenna switch reports an antenna number
-  from 3 to 32.
+  from 3 to 32. An antenna change is refused while the radio transmits, and
+  the applet shows, for example, `Antenna 2 refused while transmitting`.
 - **POWER**, which puts the amplifier to sleep; it reads `ASLEEP` while the
   amplifier sleeps, and pressing it then wakes the amplifier. Putting it to
   sleep asks for confirmation first, because waking it over the network is
-  not yet proven, and is refused while the radio transmits. While asleep,
+  not yet proven, and is refused while the radio transmits: the applet then
+  shows `Sleep refused while transmitting`. Waking is never refused. While asleep,
   every other control is dimmed.
 - **FAN MIN**, the lowest speed the fans run at, 0 (off) to 5 (full). The
   amplifier raises the speed further as it heats up; **FAN** shows the speed
@@ -532,8 +536,11 @@ AetherSDR sent queries but nothing came back within 8 seconds.
 
 1. Make sure the computer and the amplifier are on the same network. **Find**
    searches the computer's own networks only (at most 1,022 addresses each),
-   including the local side of any VPN or virtual adapter, and cannot reach
-   an amplifier behind a router or at the far end of a VPN.
+   skipping VPN tunnels and other point-to-point links, so it cannot reach an
+   amplifier behind a router or at the far end of a VPN. Virtual adapters
+   that are not point-to-point, such as container bridges, are searched.
+   If it reports `Find could not open a UDP socket`, the computer refused
+   AetherSDR a UDP socket, and the text after the colon says why.
 2. Check the **Port**: it must match the amplifier's, which the KPA1500
    Utility's **Network** tab shows.
 3. Allow AetherSDR through the computer's firewall for UDP, or enter the

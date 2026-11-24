@@ -124,6 +124,9 @@ signals:
     // UDP only: the amp never reported the state a control command asked
     // for. `control` is a short user-facing name such as "Operate".
     void controlUnconfirmed(const QString& control);
+    // A control refused before anything was sent, e.g. a relay change while
+    // the radio transmits. `message` is the full user-facing notice.
+    void controlRefused(const QString& message);
 
 private slots:
     void onReadyRead();
@@ -156,7 +159,8 @@ private:
         QElapsedTimer lastSent;
         std::function<bool(const Kpa1500::Message&, const Kpa1500::Status&)> satisfied;
     };
-    void sendControl(PendingControl control);
+    // False when nothing went out: refused, not connected, or the write failed.
+    bool sendControl(PendingControl control);
     void checkPendingControls(const Kpa1500::Message& message);
     void retryPendingControls();
     void scheduleTrack();

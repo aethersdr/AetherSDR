@@ -147,7 +147,15 @@ read back, polling drops to `^ON` alone, which also keeps the UDP link alive.
 **Discovery.** The amp has no discovery protocol; `Kpa1500Discovery` sends
 `^SN;` over UDP to each local IPv4 subnet's broadcast address and every host
 (whole subnet up to /22, otherwise the /24 around the computer; 4096 cap),
-then `^RV;` to each responder. Queries only.
+then `^RV;` to each responder. Queries only. Loopback and point-to-point
+interfaces (VPN tunnels, PPP) are skipped (`Kpa1500Discovery::probesInterface`).
+A bind failure emits `failed(error)`, not `finished(0)`, so the dialog does not
+report it as "no amplifier answered".
+
+**Relay controls under TX.** `sendControl()` refuses `AN` (antenna) and `AI`
+(ATU in-line/bypass) while local or observed TX holds, and `setPower(false)`
+refuses sleep; each emits `controlRefused` with the notice the applet shows.
+ATU tune and wake are not refused.
 
 Still open for hardware validation: whether the amp ever packs several
 replies into one datagram (handled either way), whether it answers to the

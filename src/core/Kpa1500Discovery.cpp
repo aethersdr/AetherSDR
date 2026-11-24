@@ -65,9 +65,7 @@ void Kpa1500Discovery::start(quint16 port)
     };
     const auto interfaces = QNetworkInterface::allInterfaces();
     for (const QNetworkInterface& iface : interfaces) {
-        const auto flags = iface.flags();
-        if (!flags.testFlag(QNetworkInterface::IsUp) || !flags.testFlag(QNetworkInterface::IsRunning)
-            || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+        if (!probesInterface(iface.flags())) {
             continue;
         }
         for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
@@ -99,7 +97,7 @@ void Kpa1500Discovery::startWithTargets(const QList<QHostAddress>& targets, quin
     if (m_socket.state() != QAbstractSocket::BoundState
         && !m_socket.bind(QHostAddress::AnyIPv4, 0)) {
         qCWarning(lcTuner) << "Kpa1500Discovery: cannot open a UDP socket:" << m_socket.errorString();
-        emit finished(0);
+        emit failed(m_socket.errorString());
         return;
     }
     m_running = true;

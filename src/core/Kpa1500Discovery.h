@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QHostAddress>
 #include <QList>
+#include <QNetworkInterface>
 #include <QObject>
 #include <QString>
 #include <QTimer>
@@ -45,6 +46,16 @@ public:
     // excluded. Empty for anything that is not a usable IPv4 address.
     static QList<QHostAddress> sweepTargets(const QHostAddress& local, int prefixLength);
 
+    // Whether an interface with these flags is swept: up, running, and
+    // neither loopback nor point-to-point (VPN tunnels, PPP), whose far side
+    // is not this computer's local network.
+    static bool probesInterface(QNetworkInterface::InterfaceFlags flags)
+    {
+        return flags.testFlag(QNetworkInterface::IsUp) && flags.testFlag(QNetworkInterface::IsRunning)
+            && !flags.testFlag(QNetworkInterface::IsLoopBack)
+            && !flags.testFlag(QNetworkInterface::IsPointToPoint);
+    }
+
     static constexpr int kSendBatch = 32;
     static constexpr int kSendIntervalMs = 15;
     static constexpr int kReplyGraceMs = 1500;
@@ -52,6 +63,9 @@ public:
 signals:
     void found(const AetherSDR::Kpa1500Discovery::Found& amp);
     void finished(int count);
+    // The sweep could not start: no UDP socket could be opened. `error` is
+    // the socket's own description. finished() is not emitted.
+    void failed(const QString& error);
 
 private:
     void sendNextBatch();
