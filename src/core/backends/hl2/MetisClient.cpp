@@ -1756,10 +1756,15 @@ void MetisClient::scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Oper
 {
     if (target < m_cwFrameSample) {
         // A late key-up is applied at once: the element runs long, never short.
+        // The fall it starts holds its completion until it reaches zero, as a
+        // written key-up's does; a release carries none to hold.
         ++m_cwLateKeyUps;
         m_cwKeyDown = false;
         m_cwForceUpSample = -1;
         m_cwOperation = operation;
+        if (!release && m_cwMode && m_cwEnvelope > 0.0) {
+            m_cwFallCompletion = completion;
+        }
         return;
     }
     if (!insertCwEdge(CwScheduledEdge{target, false, operation, release, completion})) {
