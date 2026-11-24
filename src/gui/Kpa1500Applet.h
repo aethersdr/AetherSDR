@@ -58,6 +58,8 @@ signals:
 private:
     void updateValueLabels();
     void refreshControls();
+    // NET WAKE on and the MAC known: POWER's Wake-on-LAN packet can wake it.
+    bool canWakeOverNetwork() const;
 
     HGauge* m_pwrGauge{nullptr};
     HGauge* m_refGauge{nullptr};

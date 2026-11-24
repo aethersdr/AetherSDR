@@ -6,11 +6,13 @@
 #include "core/PeripheralSettings.h"
 
 #include <QCoreApplication>
+#include <QNetworkAddressEntry>
 #include <QThread>
 
 #include <algorithm>
 #include <functional>
 #include <cstdio>
+#include <string>
 #include <optional>
 #include <utility>
 
@@ -60,7 +62,112 @@ struct Kpa1500TrackingTestAccess {
     static bool socketsUnopened(const Kpa1500Connection& connection)
     {
         return connection.m_socket.state() == QAbstractSocket::UnconnectedState
-            && connection.m_udp.state() == QAbstractSocket::UnconnectedState;
+            && connection.m_udp.state() == QAbstractSocket::UnconnectedState
+            && connection.m_wakeSocket.state() == QAbstractSocket::UnconnectedState;
+    }
+
+    struct TxRetry {
+        int standbyAfterFirst{-1};
+        int standbyAfterSecond{-1};   // -1: expired and removed
+        int tuneCancel{-1};
+        int faultClear{-1};
+        int operate{-1};
+        int atu{-1};
+        int antenna{-1};
+        QStringList unconfirmed;
+    };
+
+    // Under TX, two retry intervals: STANDBY starts one attempt short of the
+    // limit, so it is resent on the first and expires on the second.
+    static TxRetry retriesUnderTx(Kpa1500Connection& c)
+    {
+        TxRetry out;
+        const auto link = QObject::connect(&c, &Kpa1500Connection::controlUnconfirmed,
+                                           [&out](const QString& l) { out.unconfirmed.append(l); });
+        c.setTxFrequency(14074, false, true);
+        auto add = [&c](Kpa1500Connection::PendingControl p, int attempts) {
+            p.attempts = attempts;
+            p.lastSent.start();
+            c.m_pending.push_back(std::move(p));
+        };
+        add(Kpa1500Connection::operateControl(false), Kpa1500Connection::kMaxControlAttempts - 1);
+        add(Kpa1500Connection::cancelTuneControl(), 1);
+        add(Kpa1500Connection::clearFaultControl(), 1);
+        add(Kpa1500Connection::atuInlineControl(false), 1);
+        Kpa1500Connection::PendingControl antenna;
+        antenna.group = QStringLiteral("AN");
+        antenna.frame = QByteArrayLiteral("^AN2;");
+        antenna.readback = QStringLiteral("AN");
+        add(std::move(antenna), 1);
+        auto attempts = [&c](const QString& group, const QString& label = QString()) {
+            for (const auto& p : c.m_pending) {
+                if (p.group == group && (label.isEmpty() || p.label == label)) {
+                    return p.attempts;
+                }
+            }
+            return -1;
+        };
+        QThread::msleep(650);
+        c.retryPendingControls();
+        out.standbyAfterFirst = attempts(QStringLiteral("OS"));
+        // OPERATE (^OS1) replaces nothing here: it is checked on its own below.
+        QThread::msleep(650);
+        c.retryPendingControls();
+        out.standbyAfterSecond = attempts(QStringLiteral("OS"));
+        out.tuneCancel = attempts(QStringLiteral("TUNE"));
+        out.faultClear = attempts(QStringLiteral("FL"));
+        out.atu = attempts(QStringLiteral("AI"));
+        out.antenna = attempts(QStringLiteral("AN"));
+        c.m_pending.clear();
+        add(Kpa1500Connection::operateControl(true), 1);
+        QThread::msleep(650);
+        c.retryPendingControls();
+        out.operate = attempts(QStringLiteral("OS"));
+        c.m_pending.clear();
+        c.setTxFrequency(14074, false, false);
+        QObject::disconnect(link);
+        return out;
+    }
+
+    struct Probe {
+        int disconnects{0};
+        int connects{0};
+        bool downButOpen{false};
+        bool reconnectArmed{true};
+        bool statusCleared{false};
+        bool upAgain{false};
+    };
+
+    // A UDP link that went silent: no socket is opened (writes fail), the
+    // link state is injected.
+    static Probe silenceThenReply(Kpa1500Connection& c, bool autoReconnect)
+    {
+        Probe out;
+        const auto down = QObject::connect(&c, &Kpa1500Connection::disconnected,
+                                           [&out]() { ++out.disconnects; });
+        const auto up = QObject::connect(&c, &Kpa1500Connection::connected, [&out]() { ++out.connects; });
+        c.m_activeTransport = Kpa1500::Transport::Udp;
+        c.m_udpOpen = true;
+        c.m_connected = true;
+        c.m_autoReconnect = autoReconnect;
+        c.m_status.powerOn = true;
+        c.m_status.serialNumber = QStringLiteral("00123");
+        c.m_pollTimer.start();
+        c.dropSilentUdpLink();
+        out.downButOpen = !c.m_connected && c.m_udpOpen && c.m_pollTimer.isActive();
+        out.reconnectArmed = c.m_reconnectTimer.isActive();
+        out.statusCleared = !c.m_status.powerOn && !c.m_status.serialNumber;
+        c.onMessage(*Kpa1500::parseMessage("^ON1;"));
+        out.upAgain = c.m_connected && c.m_status.powerOn == true;
+        QObject::disconnect(down);
+        QObject::disconnect(up);
+        c.m_pollTimer.stop();
+        c.m_paceTimer.stop();
+        c.m_reconnectTimer.stop();
+        c.m_udpOpen = false;
+        c.m_connected = false;
+        c.m_activeTransport = Kpa1500::Transport::Tcp;
+        return out;
     }
 
     static int retryAttemptsAfterWait(Kpa1500Connection& connection)
@@ -402,6 +509,56 @@ int main(int argc, char** argv)
         check(A::socketsUnopened(c), "refusal tests open no transport");
     }
     {
+        // Finding 1: STANDBY, tune cancel and fault clear keep retrying (and
+        // can expire) under TX; relay controls and OPERATE are held.
+        Kpa1500Connection c;
+        const auto r = Kpa1500TrackingTestAccess::retriesUnderTx(c);
+        check(r.standbyAfterFirst == 5,   // kMaxControlAttempts
+              "a pending STANDBY (^OS0) is resent while transmitting");
+        check(r.standbyAfterSecond == -1 && r.unconfirmed == QStringList{QStringLiteral("Standby")},
+              "a pending STANDBY expires under TX with \"Standby not confirmed\"");
+        check(r.tuneCancel == 3 && r.faultClear == 3,
+              "a pending tune cancel and fault clear are resent while transmitting");
+        check(r.atu == 1 && r.antenna == 1, "a pending ATU in-line/bypass or antenna change is held under TX");
+        check(r.operate == 1, "a pending OPERATE (^OS1) is held under TX");
+        check(Kpa1500TrackingTestAccess::socketsUnopened(c), "TX retry test opens no transport");
+    }
+    for (const bool autoReconnect : {false, true}) {
+        // Finding 3: UDP keeps probing after the silence drop.
+        Kpa1500Connection c;
+        const auto p = Kpa1500TrackingTestAccess::silenceThenReply(c, autoReconnect);
+        const char* const suffix = autoReconnect ? " (auto-reconnect on)" : " (auto-reconnect off)";
+        check(p.disconnects == 1 && p.downButOpen,
+              (std::string("UDP silence reports the link down and keeps probing") + suffix).c_str());
+        check(!p.reconnectArmed, (std::string("UDP silence does not arm a reconnect") + suffix).c_str());
+        check(p.statusCleared, (std::string("UDP silence forgets the old link's readings") + suffix).c_str());
+        check(p.upAgain && p.connects == 1,
+              (std::string("the first reply after UDP silence brings the link back up") + suffix).c_str());
+        check(Kpa1500TrackingTestAccess::socketsUnopened(c), "UDP silence test opens no transport");
+    }
+    {
+        // Wake-on-LAN targets: the amp's subnet broadcast, then the amp.
+        QNetworkAddressEntry lan;
+        lan.setIp(QHostAddress(QStringLiteral("192.168.1.10")));
+        lan.setPrefixLength(24);
+        lan.setBroadcast(QHostAddress(QStringLiteral("192.168.1.255")));
+        QNetworkAddressEntry other;
+        other.setIp(QHostAddress(QStringLiteral("10.0.0.5")));
+        other.setPrefixLength(8);
+        other.setBroadcast(QHostAddress(QStringLiteral("10.255.255.255")));
+        const QList<QNetworkAddressEntry> entries{lan, other, lan};
+        check(Kpa1500Connection::wakeTargets(QHostAddress(QStringLiteral("192.168.1.60")), entries)
+                  == QList<QHostAddress>{QHostAddress(QStringLiteral("192.168.1.255")),
+                                         QHostAddress(QStringLiteral("192.168.1.60"))},
+              "Wake-on-LAN goes to the amp's subnet broadcast and to the amp");
+        check(Kpa1500Connection::wakeTargets(QHostAddress(QStringLiteral("172.16.0.9")), entries)
+                  == QList<QHostAddress>{QHostAddress(QStringLiteral("172.16.0.9"))},
+              "an amp on no local subnet gets the unicast packet only");
+        check(Kpa1500Connection::wakeTargets(QHostAddress(), entries).isEmpty()
+                  && Kpa1500Connection::wakeTargets(QHostAddress(QStringLiteral("fe80::1")), entries).isEmpty(),
+              "no Wake-on-LAN target without an IPv4 address for the amp");
+    }
+    {
         using F = QNetworkInterface;
         const F::InterfaceFlags lan = F::IsUp | F::IsRunning | F::CanBroadcast;
         check(Kpa1500Discovery::probesInterface(lan), "Find sweeps an up, running LAN interface");
@@ -419,6 +576,12 @@ int main(int argc, char** argv)
         check(PeripheralSettings::deviceString(QStringLiteral("Kpa1500"),
                                                QStringLiteral("Transport")).isEmpty(),
               "Remove clears the saved KPA1500 transport");
+        PeripheralSettings::setDeviceString(QStringLiteral("Kpa1500"), QStringLiteral("MacAddress"),
+                                            QStringLiteral("54:10:EC:14:75:22"));
+        PeripheralSettings::clearDeviceConnection(QStringLiteral("Kpa1500"));
+        check(PeripheralSettings::deviceString(QStringLiteral("Kpa1500"),
+                                               QStringLiteral("MacAddress")).isEmpty(),
+              "Remove clears the saved KPA1500 MAC address");
     }
     return failures == 0 ? 0 : 1;
 }

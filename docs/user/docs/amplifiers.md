@@ -367,14 +367,21 @@ The amplifier serves the same commands over TCP and UDP on that one port:
   amplifier accepts only one TCP client at a time, so Elecraft's KPA1500
   Remote and AetherSDR cannot both use TCP.
 - **UDP**: one command per datagram, so a lost packet never stalls the
-  meters, which refresh every 250 ms. The link reads as connected once the
-  amplifier answers, and as disconnected after 3 seconds without a reply.
-  Every control is confirmed by reading the amplifier's state back and is
-  retried until it takes; if the amplifier never reports the requested state,
-  the applet shows, for example, `Operate not confirmed by the amplifier`.
-  Retries pause while the radio transmits, so an antenna or ATU change is
-  never repeated under RF; they resume at least 0.6 s after transmit ends.
-  **TUNE** is sent once and never repeated. The amplifier accepts any number
+  meters, which refresh about every 250 ms. AetherSDR waits for each answer
+  (or a short timeout) before asking the next question, so a slow link
+  refreshes more slowly rather than flooding the amplifier. The link reads as
+  connected once the amplifier answers, and as disconnected after 3 seconds
+  without a reply. While disconnected AetherSDR keeps asking, and the link
+  comes back by itself on the first answer, whether or not **Reconnect
+  automatically** is on. Every control is confirmed by reading the
+  amplifier's state back and is retried until it takes; if the amplifier
+  never reports the requested state, the applet shows, for example,
+  `Operate not confirmed by the amplifier`. While the radio transmits,
+  antenna, ATU in-line/bypass and OPERATE retries pause, so a relay is never
+  switched again under RF; they resume at least 0.6 s after transmit ends.
+  **STANDBY**, cancelling a tune and **CLR FAULT** keep retrying while the
+  radio transmits, and you are told if they are not confirmed. **TUNE** is
+  sent once and never repeated. The amplifier accepts any number
   of UDP clients, so AetherSDR can run alongside Elecraft's KPA1500 Remote.
 
 The transport can be changed only while disconnected.
@@ -405,11 +412,17 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   from 3 to 32. An antenna change is refused while the radio transmits and
   for 0.6 s after, and the applet shows, for example, `Antenna 2 refused while transmitting`.
 - **POWER**, which puts the amplifier to sleep; it reads `ASLEEP` while the
-  amplifier sleeps, and pressing it then wakes the amplifier. Putting it to
-  sleep asks for confirmation first, because waking it over the network is
-  not yet proven, and is refused while the radio transmits: the applet then
-  shows `Sleep refused while transmitting`. Waking is never refused. While asleep,
-  every other control is dimmed.
+  amplifier sleeps, and pressing it then wakes the amplifier. Waking sends the
+  amplifier's power-on command and a Wake-on-LAN packet, which the amplifier
+  answers only when its **NET WAKE on LAN** menu item is on. AetherSDR reads
+  that setting and the amplifier's MAC address while it is awake, and keeps the
+  MAC address so it can wake the amplifier after AetherSDR restarts. Putting it
+  to sleep asks for confirmation first, and the question says whether NET WAKE
+  is on. If it is off or not reported, the amplifier may not wake again over
+  the network. Sleep is refused while the radio transmits: the applet then
+  shows `Sleep refused while transmitting`. Waking is never refused. While
+  asleep, every other control is dimmed, and hovering over one says whether
+  POWER can wake the amplifier.
 - **FAN MIN**, the lowest speed the fans run at, 0 (off) to 5 (full). The
   amplifier raises the speed further as it heats up; **FAN** shows the speed
   it is actually running.
@@ -420,7 +433,8 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   wait until the radio stops transmitting, including transmissions owned by
   another client. Losing the transmit slice or disconnecting the radio cancels
   pending frequency updates. Slices outside 160–6 m are not tracked, and no
-  frequency is sent until the amplifier has reported that it is awake. **TRACK**
+  frequency is sent until the amplifier has reported that it is awake; until
+  then **FREQ** shows `Waiting for the amplifier's power state`. **TRACK**
   is off by default and is remembered; turn it off if the amplifier already gets
   frequency from a radio cable.
 
@@ -545,6 +559,16 @@ AetherSDR sent queries but nothing came back within 8 seconds.
    Utility's **Network** tab shows.
 3. Allow AetherSDR through the computer's firewall for UDP, or enter the
    address by hand.
+
+### The KPA1500 does not wake when I press POWER
+
+1. On the amplifier, turn on the **NET WAKE on LAN** menu item. Without it the
+   amplifier ignores the Wake-on-LAN packet.
+2. Connect once while the amplifier is awake, so AetherSDR can read its MAC
+   address. The packet is not sent until the MAC address is known.
+3. The packet goes to the amplifier's address and to the broadcast address of
+   the local network it is on. A router does not forward it, so an amplifier
+   on another network may not wake. Use the front panel **ON** switch instead.
 
 ### KPA1500 controls show "not confirmed by the amplifier" over UDP
 

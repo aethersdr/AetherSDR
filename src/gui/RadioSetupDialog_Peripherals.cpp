@@ -2097,7 +2097,7 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
 
     ui.connectButton = makeConnectButton(ui);
     ui.connectButton->setAccessibleName(tr("Connect or disconnect the Elecraft KPA1500"));
-    connect(ui.connectButton, &QPushButton::clicked, this, [u, refresh]() {
+    connect(ui.connectButton, &QPushButton::clicked, this, [this, u, refresh]() {
         if (u->isConnected()) {
             u->disconnectNow();
             return;
@@ -2110,6 +2110,14 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
             return;
         }
         const int port = u->portSpin->value();
+        if (ip != PeripheralSettings::deviceString("Kpa1500", "ManualIp")) {
+            // A saved MAC belongs to the amp at the old address; Wake-on-LAN
+            // must not be aimed at it. The new amp's ^MA replaces it.
+            PeripheralSettings::clearDeviceField("Kpa1500", "MacAddress");
+            if (m_kpa1500) {
+                m_kpa1500->setWakeMacAddress(QString());
+            }
+        }
         PeripheralSettings::setDeviceString("Kpa1500", "ManualIp", ip);
         PeripheralSettings::setDeviceInt("Kpa1500", "ManualPort", port);
         PeripheralSettings::setDeviceString("Kpa1500", "Transport",
@@ -2216,6 +2224,7 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
         }
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualIp");
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualPort");
+        PeripheralSettings::clearDeviceField("Kpa1500", "MacAddress");
         // Connected or still retrying: a reconnect loop aimed at the cleared
         // address would otherwise keep dialing it until restart.
         if (u->description().startsWith(savedIp + ":")) {

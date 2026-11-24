@@ -2,6 +2,7 @@
 #include "LogManager.h"
 
 #include <QNetworkDatagram>
+#include <QNetworkInterface>
 #include <QStringList>
 
 #include <algorithm>
@@ -27,8 +28,10 @@ const QStringList& fastPollCommands()
 }
 
 // One of these per tick, round-robin. Configuration readbacks: they change
-// only when the operator (or the radio's band data) changes them, so a
-// ~3.5s full cycle is plenty and it keeps the wire quiet.
+// only when the operator (or the radio's band data) changes them, so a full
+// cycle of ~3.5 s on UDP and ~7 s on TCP is plenty (a control's own readback
+// goes out with it, so a click does not wait for this). ^MA is skipped once
+// known.
 const QStringList& slowPollCommands()
 {
     static const QStringList kSlow{
@@ -44,18 +47,22 @@ const QStringList& slowPollCommands()
         QStringLiteral("AS"),
         QStringLiteral("FR"),
         QStringLiteral("DA"),
+        QStringLiteral("WL"),
+        QStringLiteral("MA"),
     };
     return kSlow;
 }
 
-// Asked once per connection, after the link is up: identity that does not
-// change while connected. Both answer while the amp sleeps. A sleeping amp's
-// UDP link comes up when poll()'s slow rotation reaches ^ON, not on these.
+// Asked once per link-up: identity, and what Wake-on-LAN needs (^MA, ^WL).
+// ^RV and ^SN answer while the amp sleeps; ^MA and ^WL are asked again on
+// the wake edge in case they do not.
 const QStringList& identityCommands()
 {
     static const QStringList kIdentity{
         QStringLiteral("RV"),
         QStringLiteral("SN"),
+        QStringLiteral("MA"),
+        QStringLiteral("WL"),
     };
     return kIdentity;
 }
@@ -66,7 +73,7 @@ Kpa1500Connection::Kpa1500Connection(QObject* parent)
     : QObject(parent)
 {
     connect(&m_socket, &QTcpSocket::connected, this, &Kpa1500Connection::onTransportUp);
-    connect(&m_socket, &QTcpSocket::disconnected, this, &Kpa1500Connection::onTransportDown);
+    connect(&m_socket, &QTcpSocket::disconnected, this, [this]() { onTransportDown(); });
     connect(&m_socket, &QTcpSocket::readyRead, this, &Kpa1500Connection::onReadyRead);
     connect(&m_socket, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
         onTransportError(m_socket.errorString());
@@ -115,6 +122,10 @@ Kpa1500Connection::Kpa1500Connection(QObject* parent)
 
     m_pollTimer.setInterval(kPollIntervalMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &Kpa1500Connection::poll);
+
+    m_clock.start();
+    m_paceTimer.setSingleShot(true);
+    connect(&m_paceTimer, &QTimer::timeout, this, &Kpa1500Connection::pumpQueries);
 
     m_trackTimer.setSingleShot(true);
     connect(&m_trackTimer, &QTimer::timeout, this, &Kpa1500Connection::sendTrack);
@@ -183,6 +194,9 @@ void Kpa1500Connection::connectNetwork(const QString& host, quint16 port)
     }
     m_udpLastError.clear();
     m_pending.clear();
+    m_pacer.clear();
+    m_paceTimer.stop();
+    m_pollDeferred = false;
     m_trackSentKhz.reset();
     m_trackTimer.stop();
     m_parser.reset();
@@ -245,6 +259,9 @@ void Kpa1500Connection::disconnect()
     m_udp.abort();
     m_udpOpen = false;
     m_pending.clear();
+    m_pacer.clear();
+    m_paceTimer.stop();
+    m_pollDeferred = false;
     m_trackTimer.stop();
     m_trackSentKhz.reset();
     m_parser.reset();
@@ -260,28 +277,49 @@ void Kpa1500Connection::disconnect()
 void Kpa1500Connection::onTransportUp()
 {
     m_connected = true;
+    ++m_connectEpoch;  // the connect timeout must not abort a later probe of this link
     m_lastFaultCode = 0;
-    m_slowPollIndex = 0;
     m_lastRx.start();
     m_trackSentKhz.reset();
     qCInfo(lcTuner) << "Kpa1500Connection: connected to" << description();
-    m_pollTimer.start();
-    for (const QString& cmd : identityCommands()) {
-        writeFrame(Kpa1500::buildQuery(cmd));
-    }
     // TRACK waits for a known power state (scheduleTrack), so ask for it now
     // rather than when the slow rotation next reaches ^ON.
-    writeFrame(Kpa1500::buildQuery(QStringLiteral("ON")));
-    poll();  // don't make the applet wait a full interval for its first reading
+    queueQuery(QStringLiteral("ON"), true);
+    for (const QString& cmd : identityCommands()) {
+        queueQuery(cmd);
+    }
+    if (m_activeTransport == Kpa1500::Transport::Tcp) {
+        m_slowPollIndex = 0;
+        m_pollTimer.start();
+        poll();  // don't make the applet wait a full interval for its first reading
+    }
+    // On UDP the probe poll that drew this reply is already in flight.
     emit connected();
     scheduleTrack();
 }
 
-void Kpa1500Connection::onTransportDown()
+void Kpa1500Connection::dropSilentUdpLink()
+{
+    qCWarning(lcTuner) << "Kpa1500Connection: no UDP reply from" << description()
+                       << "for" << kUdpSilenceMs << "ms — treating the link as down";
+    onTransportDown(true);
+}
+
+void Kpa1500Connection::onTransportDown(bool keepProbing)
 {
     const bool wasConnected = m_connected;
     m_connected = false;
-    m_pollTimer.stop();
+    if (keepProbing) {
+        // The next reply is a fresh link: nothing read on this one carries over.
+        m_status = {};
+        m_trackSentKhz.reset();
+        m_lastFaultCode = 0;
+    } else {
+        m_pollTimer.stop();
+        m_pacer.clear();
+        m_paceTimer.stop();
+        m_pollDeferred = false;
+    }
     // The link is gone, so the key can no longer be refreshed OR released.
     // Clearing the flag here is what makes the amp's own `^TX` timeout the
     // fail-safe rather than something this class is still pretending to
@@ -299,7 +337,7 @@ void Kpa1500Connection::onTransportDown()
         qCDebug(lcTuner) << "Kpa1500Connection: disconnected";
         emit disconnected();
     }
-    if (!m_deliberateDisconnect && m_autoReconnect) {
+    if (!keepProbing && !m_deliberateDisconnect && m_autoReconnect) {
         armReconnect();
     }
     m_deliberateDisconnect = false;
@@ -348,8 +386,12 @@ void Kpa1500Connection::onMessage(const Kpa1500::Message& message)
             return;
         }
         m_lastRx.start();
+        const bool released = m_pacer.replied(message.cmd);
         if (!m_connected) {
             onTransportUp();
+        }
+        if (released) {
+            pumpQueries();
         }
     }
 
@@ -385,6 +427,16 @@ void Kpa1500Connection::onMessage(const Kpa1500::Message& message)
         // link: give it the frequency (again).
         m_trackSentKhz.reset();
         scheduleTrack();
+        if (!m_status.macAddress) {
+            queueQuery(QStringLiteral("MA"));
+        }
+        if (!m_status.netWake) {
+            queueQuery(QStringLiteral("WL"));
+        }
+    }
+    if (message.cmd == QLatin1String("MA") && m_status.macAddress) {
+        m_wakeMac = *m_status.macAddress;
+        emit macAddressReported(*m_status.macAddress);
     }
 
     const int fault = m_status.faultCode.value_or(0);
@@ -403,37 +455,87 @@ void Kpa1500Connection::poll()
 {
     if (!linkOpen()) { return; }
 
-    if (m_activeTransport == Kpa1500::Transport::Udp && m_connected
-        && m_lastRx.elapsed() > kUdpSilenceMs) {
-        qCWarning(lcTuner) << "Kpa1500Connection: no UDP reply from" << description()
-                           << "for" << kUdpSilenceMs << "ms — treating the link as down";
-        m_udp.abort();
-        m_udpOpen = false;
-        onTransportDown();
+    const bool udp = m_activeTransport == Kpa1500::Transport::Udp;
+    if (udp && m_connected && m_lastRx.elapsed() > kUdpSilenceMs) {
+        dropSilentUdpLink();
         return;
     }
+
+    if (udp && !m_pacer.drained()) {
+        // The last cycle is still waiting on replies: start the next one when
+        // it drains (pumpQueries), not on top of it.
+        m_pollDeferred = true;
+        retryPendingControls();
+        return;
+    }
+    m_pollDeferred = false;
 
     // A sleeping amp answers only ^ON (and identity); polling the meters
     // would just be unanswered traffic until it wakes.
     if (m_status.powerOn == false) {
-        writeFrame(Kpa1500::buildQuery(QStringLiteral("ON")));
+        queueQuery(QStringLiteral("ON"));
         retryPendingControls();
         return;
     }
 
     for (const QString& cmd : fastPollCommands()) {
-        writeFrame(Kpa1500::buildQuery(cmd));
+        queueQuery(cmd);
     }
     if (m_keyed) {
-        writeFrame(Kpa1500::buildKeyStateQuery());
+        queueQuery(QStringLiteral("TQ"));
     }
     const QStringList& slow = slowPollCommands();
-    if (!slow.isEmpty()) {
-        writeFrame(Kpa1500::buildQuery(slow.at(m_slowPollIndex % slow.size())));
+    if (m_status.macAddress && slow.at(m_slowPollIndex % slow.size()) == QLatin1String("MA")) {
         m_slowPollIndex = (m_slowPollIndex + 1) % slow.size();
     }
+    queueQuery(slow.at(m_slowPollIndex % slow.size()));
+    m_slowPollIndex = (m_slowPollIndex + 1) % slow.size();
 
     retryPendingControls();
+}
+
+void Kpa1500Connection::queueQuery(const QString& cmd, bool urgent)
+{
+    if (m_activeTransport != Kpa1500::Transport::Udp) {
+        writeFrame(Kpa1500::buildQuery(cmd));
+        return;
+    }
+    m_pacer.enqueue(cmd, urgent);
+    pumpQueries();
+}
+
+void Kpa1500Connection::pumpQueries()
+{
+    if (m_activeTransport != Kpa1500::Transport::Udp) {
+        return;
+    }
+    if (!linkOpen()) {
+        // Closed under us (connect timeout, host not found): nothing to wait for.
+        m_pacer.clear();
+        m_paceTimer.stop();
+        m_pollDeferred = false;
+        return;
+    }
+    while (linkOpen()) {
+        const std::optional<QString> next = m_pacer.takeNext(m_clock.elapsed());
+        if (!next) {
+            break;
+        }
+        if (writeFrame(Kpa1500::buildQuery(*next))) {
+            break;  // one query outstanding until its reply or the timeout
+        }
+        m_pacer.replied(*next);  // nothing went out, so nothing to wait for
+    }
+    const qint64 wait = m_pacer.msUntilTimeout(m_clock.elapsed());
+    if (wait >= 0) {
+        m_paceTimer.start(static_cast<int>(wait) + 1);
+    } else {
+        m_paceTimer.stop();
+    }
+    if (m_pacer.drained() && m_pollDeferred) {
+        m_pollDeferred = false;
+        poll();
+    }
 }
 
 bool Kpa1500Connection::writeFrame(const QByteArray& frame)
@@ -479,6 +581,9 @@ bool Kpa1500Connection::sendControl(PendingControl control)
         return false;
     }
     if (m_activeTransport != Kpa1500::Transport::Udp) {
+        // SETs get no reply; ask now so the applet shows the result at once
+        // rather than when the slow rotation reaches it.
+        writeFrame(Kpa1500::buildQuery(control.readback));
         return true;
     }
     m_pending.erase(std::remove_if(m_pending.begin(), m_pending.end(),
@@ -486,7 +591,7 @@ bool Kpa1500Connection::sendControl(PendingControl control)
                                        return p.group == control.group;
                                    }),
                     m_pending.end());
-    writeFrame(Kpa1500::buildQuery(control.readback));
+    queueQuery(control.readback, true);
     control.attempts = 1;
     control.lastSent.start();
     m_pending.push_back(std::move(control));
@@ -516,8 +621,8 @@ void Kpa1500Connection::retryPendingControls()
             ++it;
             continue;
         }
-        if (m_transmitting && it->resend) {
-            // Never repeat a control under RF; resume once transmit ends.
+        if (m_transmitting && it->resend && !it->retryUnderTx) {
+            // Never repeat a relay control under RF; resume once transmit ends.
             ++it;
             continue;
         }
@@ -531,7 +636,7 @@ void Kpa1500Connection::retryPendingControls()
         if (it->resend) {
             writeFrame(it->frame);
         }
-        writeFrame(Kpa1500::buildQuery(it->readback));
+        queueQuery(it->readback, true);
         ++it->attempts;
         it->lastSent.start();
         ++it;
@@ -541,17 +646,23 @@ void Kpa1500Connection::retryPendingControls()
     }
 }
 
-void Kpa1500Connection::setOperate(bool operate)
+Kpa1500Connection::PendingControl Kpa1500Connection::operateControl(bool operate)
 {
     PendingControl c;
     c.group = QStringLiteral("OS");
     c.label = operate ? tr("Operate") : tr("Standby");
     c.frame = Kpa1500::buildSetOperate(operate);
     c.readback = QStringLiteral("OS");
+    c.retryUnderTx = !operate;
     c.satisfied = [operate](const Kpa1500::Message& m, const Kpa1500::Status& s) {
         return m.cmd == QLatin1String("OS") && s.operate == operate;
     };
-    sendControl(std::move(c));
+    return c;
+}
+
+void Kpa1500Connection::setOperate(bool operate)
+{
+    sendControl(operateControl(operate));
 }
 
 void Kpa1500Connection::startTune()
@@ -571,21 +682,27 @@ void Kpa1500Connection::startTune()
     sendControl(std::move(c));
 }
 
-void Kpa1500Connection::cancelTune()
+Kpa1500Connection::PendingControl Kpa1500Connection::cancelTuneControl()
 {
     PendingControl c;
     c.group = QStringLiteral("TUNE");
     c.label = tr("Tune cancel");
     c.frame = Kpa1500::buildCancelTune();
     c.readback = QStringLiteral("TP");
+    c.retryUnderTx = true;
     c.satisfied = [](const Kpa1500::Message& m, const Kpa1500::Status& s) {
         return m.cmd == QLatin1String("FT")
             || (m.cmd == QLatin1String("TP") && s.tuning == false);
     };
-    sendControl(std::move(c));
+    return c;
 }
 
-void Kpa1500Connection::setAtuInline(bool inLine)
+void Kpa1500Connection::cancelTune()
+{
+    sendControl(cancelTuneControl());
+}
+
+Kpa1500Connection::PendingControl Kpa1500Connection::atuInlineControl(bool inLine)
 {
     PendingControl c;
     c.group = QStringLiteral("AI");
@@ -595,7 +712,12 @@ void Kpa1500Connection::setAtuInline(bool inLine)
     c.satisfied = [inLine](const Kpa1500::Message& m, const Kpa1500::Status& s) {
         return m.cmd == QLatin1String("AI") && s.atuInline == inLine;
     };
-    sendControl(std::move(c));
+    return c;
+}
+
+void Kpa1500Connection::setAtuInline(bool inLine)
+{
+    sendControl(atuInlineControl(inLine));
 }
 
 void Kpa1500Connection::selectAntenna(int port)
@@ -616,17 +738,23 @@ void Kpa1500Connection::selectAntenna(int port)
     sendControl(std::move(c));
 }
 
-void Kpa1500Connection::clearFault()
+Kpa1500Connection::PendingControl Kpa1500Connection::clearFaultControl()
 {
     PendingControl c;
     c.group = QStringLiteral("FL");
     c.label = tr("Fault clear");
     c.frame = Kpa1500::buildClearFault();
     c.readback = QStringLiteral("FL");
+    c.retryUnderTx = true;
     c.satisfied = [](const Kpa1500::Message& m, const Kpa1500::Status& s) {
         return m.cmd == QLatin1String("FL") && s.faultCode == 0;
     };
-    sendControl(std::move(c));
+    return c;
+}
+
+void Kpa1500Connection::clearFault()
+{
+    sendControl(clearFaultControl());
 }
 
 void Kpa1500Connection::setFanMinimum(int level)
@@ -652,6 +780,9 @@ void Kpa1500Connection::setPower(bool on)
         qCWarning(lcTuner) << "Kpa1500Connection: refusing sleep while transmitting";
         emit controlRefused(tr("Sleep refused while transmitting"));
         return;
+    }
+    if (on) {
+        sendWakeOnLan();
     }
     PendingControl c;
     c.group = QStringLiteral("ON");
@@ -697,7 +828,7 @@ void Kpa1500Connection::setTxFrequency(std::optional<int> khz, bool localTransmi
         // MOX release), while RF may still be up.
         m_txEndedAt.start();
         for (auto& p : m_pending) {
-            if (p.resend) {
+            if (p.resend && !p.retryUnderTx) {
                 p.lastSent.start();
             }
         }
@@ -811,6 +942,69 @@ void Kpa1500Connection::sendTrack()
     }
     m_trackWriteFailures = 0;
     m_trackSentKhz = khz;
+}
+
+QList<QHostAddress> Kpa1500Connection::wakeTargets(const QHostAddress& amp,
+                                                  const QList<QNetworkAddressEntry>& localEntries)
+{
+    QList<QHostAddress> targets;
+    if (amp.protocol() != QAbstractSocket::IPv4Protocol) {
+        return targets;
+    }
+    for (const QNetworkAddressEntry& entry : localEntries) {
+        if (entry.ip().protocol() != QAbstractSocket::IPv4Protocol || entry.broadcast().isNull()
+            || !amp.isInSubnet(entry.ip(), entry.prefixLength()) || targets.contains(entry.broadcast())) {
+            continue;
+        }
+        targets.append(entry.broadcast());
+    }
+    targets.append(amp);
+    return targets;
+}
+
+void Kpa1500Connection::sendWakeOnLan()
+{
+    if (m_status.netWake == false) {
+        qCInfo(lcTuner) << "Kpa1500Connection: NET WAKE is off on the amp — no Wake-on-LAN packet";
+        return;
+    }
+    const std::optional<QByteArray> mac =
+        Kpa1500::parseMacAddress(m_status.macAddress.value_or(m_wakeMac));
+    if (!mac) {
+        qCInfo(lcTuner) << "Kpa1500Connection: MAC address not known — no Wake-on-LAN packet";
+        return;
+    }
+    QHostAddress amp(m_lastHost);
+    if (amp.isNull()) {
+        amp = m_activeTransport == Kpa1500::Transport::Udp ? m_udp.peerAddress() : m_socket.peerAddress();
+    }
+    QList<QNetworkAddressEntry> entries;
+    const auto interfaces = QNetworkInterface::allInterfaces();
+    for (const QNetworkInterface& iface : interfaces) {
+        const auto flags = iface.flags();
+        if (flags.testFlag(QNetworkInterface::IsUp) && flags.testFlag(QNetworkInterface::IsRunning)
+            && !flags.testFlag(QNetworkInterface::IsLoopBack)) {
+            entries.append(iface.addressEntries());
+        }
+    }
+    const QList<QHostAddress> targets = wakeTargets(amp, entries);
+    if (targets.isEmpty()) {
+        qCWarning(lcTuner) << "Kpa1500Connection: no IPv4 address for" << m_lastHost
+                           << "— no Wake-on-LAN packet";
+        return;
+    }
+    const QByteArray packet = Kpa1500::buildWakeOnLanPacket(*mac);
+    for (const QHostAddress& target : targets) {
+        m_wakeSocket.writeDatagram(packet, target, Kpa1500::kWakeOnLanPort);
+    }
+    qCInfo(lcTuner).noquote() << "Kpa1500Connection: Wake-on-LAN for" << Kpa1500::formatMacAddress(*mac)
+                              << "sent to" << [&targets]() {
+                                     QStringList list;
+                                     for (const QHostAddress& t : targets) {
+                                         list << t.toString();
+                                     }
+                                     return list.join(QStringLiteral(", "));
+                                 }();
 }
 
 void Kpa1500Connection::key()

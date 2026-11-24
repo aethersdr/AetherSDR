@@ -372,10 +372,19 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
     connect(m_powerBtn, &QPushButton::clicked, this, [this]() {
         const bool on = !m_status.powerOn.value_or(true);
         if (!on) {
-            // Waking over Ethernet is unproven; a stray click must not strand
-            // a remote amp asleep. Same pattern as RfkitApplet's reset confirm.
-            const auto reply = QMessageBox::question(this, tr("Put Amplifier to Sleep"),
-                tr("Put the KPA1500 to sleep? It may not wake again over the network."),
+            // A stray click must not strand a remote amp asleep: say whether
+            // POWER can wake it again. Same pattern as RfkitApplet's reset confirm.
+            QString question;
+            if (canWakeOverNetwork()) {
+                question = tr("Put the KPA1500 to sleep? NET WAKE is on, so POWER wakes it again "
+                              "with a Wake-on-LAN packet.");
+            } else if (m_status.netWake == false) {
+                question = tr("Put the KPA1500 to sleep? NET WAKE is off on the amplifier, so it "
+                              "may not wake again over the network.");
+            } else {
+                question = tr("Put the KPA1500 to sleep? It may not wake again over the network.");
+            }
+            const auto reply = QMessageBox::question(this, tr("Put Amplifier to Sleep"), question,
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
             if (reply != QMessageBox::Yes) {
                 return;
@@ -524,7 +533,9 @@ void Kpa1500Applet::refreshControls()
 
     // Asleep: only POWER (and TRACK, a local preference) can do anything.
     const QString offline = tr("Not connected to the amplifier");
-    const QString sleeping = tr("The amplifier is asleep; press POWER to wake it");
+    const QString sleeping = canWakeOverNetwork()
+        ? tr("The amplifier is asleep; POWER sends a Wake-on-LAN packet to wake it")
+        : tr("The amplifier is asleep and may not wake over the network");
     const QString reason = !m_connected ? offline : sleeping;
     for (QWidget* w : std::initializer_list<QWidget*>{m_operateBtn, m_tuneBtn, m_atuInlineBtn,
                                                       m_ant1Btn, m_ant2Btn}) {
@@ -548,6 +559,11 @@ void Kpa1500Applet::refreshControls()
     setBtnState(m_powerBtn, on && m_connected ? QStringLiteral("on") : QString());
 
     setBtnState(m_trackBtn, m_followTx ? QStringLiteral("active") : QString());
+}
+
+bool Kpa1500Applet::canWakeOverNetwork() const
+{
+    return m_status.netWake == true && m_status.macAddress.has_value();
 }
 
 void Kpa1500Applet::setConnected(bool connected)
@@ -582,6 +598,7 @@ void Kpa1500Applet::setConnected(bool connected)
         m_valuesDirty = true;
         updateValueLabels();
     }
+    m_valuesDirty = true;   // e.g. TRACK's wait for the power state, from link-up
     refreshControls();
 }
 
@@ -636,9 +653,28 @@ void Kpa1500Applet::updateValueLabels()
     m_fanLabel->setText(m_status.fanSpeed
         ? QStringLiteral("FAN  %1").arg(*m_status.fanSpeed)
         : QStringLiteral("FAN  —"));
+    // TRACK sends nothing until the amp has answered ^ON on this link.
+    const bool trackWaiting = m_followTx && m_connected && !m_status.powerOn.has_value();
+    const QString trackWait = tr("Waiting for the amplifier's power state");
+    QString trackSuffix;
+    if (trackWaiting) {
+        trackSuffix = QStringLiteral("  · ") + trackWait;
+    } else if (m_followTx) {
+        trackSuffix = QStringLiteral("  · TRACKING TX");
+    }
     m_freqLabel->setText(QStringLiteral("FREQ  %1 kHz%2")
         .arg(m_status.frequencyKhz ? QString::number(*m_status.frequencyKhz) : QStringLiteral("—"),
-             m_followTx ? QStringLiteral("  · TRACKING TX") : QString()));
+             trackSuffix));
+    const QString freqName = trackWaiting
+        ? tr("Frequency the amplifier is set to. %1").arg(trackWait)
+        : tr("Frequency the amplifier is set to");
+    if (m_freqLabel->accessibleName() != freqName) {
+        m_freqLabel->setAccessibleName(freqName);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_freqLabel, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
 
     const QString atuDetail = m_status.atuSetting.value_or(QString());
     m_atuDetailLabel->setText(atuDetail);

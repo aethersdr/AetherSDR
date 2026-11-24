@@ -109,7 +109,18 @@ command whose delivery matters and UDP gives no delivery signal. So on UDP:
 - Each `^CMD;` goes in its own datagram, and each received datagram is parsed
   on its own, so a lost datagram cannot splice two replies together.
 - The link is declared up on the first well-formed reply (8 s connect
-  timeout) and down after 3 s without one; auto-reconnect then applies.
+  timeout) and down after 3 s without one. A link that went silent stays
+  open and keeps polling, so the first reply brings it back up; the
+  Auto-reconnect setting is not involved (it governs TCP, and a UDP attempt
+  that never got a reply).
+- Queries are paced (`Kpa1500::QueryPacer`): at most one is outstanding, and
+  the next goes when the amp answers that command or after 120 ms. A poll
+  tick that finds the previous cycle still in flight starts the next cycle
+  when it drains, so the meter cadence stays at 250 ms when replies allow
+  and stretches, rather than piling up, when they don't. The reference asks
+  a client to "wait for the corresponding RESPONSE before sending more
+  commands". SETs are not paced (they get no reply), and a control's
+  readback query goes to the head of the queue.
 - Every control is **confirmed by readback**: the SET is followed by its
   query (`^OS`, `^AI`, `^AN`, `^FL`, `^TP`) and resent every 600 ms until the
   reply shows the requested state, at most five times, after which
@@ -134,15 +145,33 @@ after unkey (the TX flag drops at `UNKEY_REQUESTED`, before RF is down), because
 a band change under RF would hot-switch the amp's relays. `^FR` is sent only
 once `^ON1` has been read back on the current link (the link-up queries
 include `^ON`), so an amp whose power state is unknown or asleep is not tracked.
-Other unconfirmed UDP controls are held, not dropped, while TX lasts, and
-their retry clock restarts at unkey so a held control repeats no sooner than
-`kControlRetryMs` after the TX edge. Off by default (applet **TRACK**), since an amp
+Other unconfirmed UDP relay controls (antenna, ATU in-line/bypass, and
+OPERATE) are held, not dropped, while TX lasts, and their retry clock
+restarts at unkey so a held control repeats no sooner than `kControlRetryMs`
+after the TX edge. STANDBY (`^OS0`), tune cancel (`^FE`) and fault clear
+(`^FLC`) take power off rather than switching a relay into the RF path, so
+they keep retrying under TX and still expire with `controlUnconfirmed`
+(`PendingControl::retryUnderTx`). Off by default (applet **TRACK**), since an amp
 fed by a radio cable already has a frequency source.
 Losing the TX slice, disconnecting the radio, or moving outside the amplifier's
 coverage cancels queued and unconfirmed frequency commands.
 
-**Sleep.** `^ON`, `^RV` and `^SN` answer while the amp sleeps. When `^ON0` is
-read back, polling drops to `^ON` alone, which also keeps the UDP link alive.
+**Sleep and wake.** `^ON`, `^RV` and `^SN` answer while the amp sleeps. When
+`^ON0` is read back, polling drops to `^ON` alone, which also keeps the UDP
+link alive. The reference's wake sources (Programming Reference rev. 5/5/2024,
+firmware 03.02, "Wakeup", p. 8) are the power button, REMOTE, an ACC
+pull-down, characters on the USB host port, and, with the NET WAKE on LAN menu
+item enabled (`^WL1`, new in 01.67), a Wake-on-LAN magic packet: "6 bytes of
+255 followed by 16 repetitions of the KPA1500's MAC address". The MAC comes
+from `^MA` (`^MA54:10:EC:14:75:22;`). Both are asked at link-up and on the wake
+edge, `^WL` stays in the slow rotation, and `^MA` is asked there until known.
+POWER on an asleep amp sends `^ON1` and, unless `^WL0` was read, the magic
+packet to UDP port 9 on the broadcast address of each local network holding
+the amp's address, and to the amp itself (`Kpa1500Connection::wakeTargets`).
+The MAC is persisted as `PeripheralSettings` device `"Kpa1500"` field
+`MacAddress`, so wake works after a restart; Remove and a changed address
+clear it. The sleep dialog and the asleep tooltip say whether NET WAKE is on;
+off or unknown reads "may not wake over the network".
 
 **Discovery.** The amp has no discovery protocol; `Kpa1500Discovery` sends
 `^SN;` over UDP to each local IPv4 subnet's broadcast address and every host
@@ -163,8 +192,9 @@ the track interval and, after `kMaxControlAttempts` failures, reported through
 Still open for hardware validation: whether the amp ever packs several
 replies into one datagram (handled either way), whether it answers to the
 sender's source port (assumed), whether its network servers stay reachable
-while asleep (POWER wake depends on it), and whether it answers the subnet
-broadcast (the per-host sweep covers it if not).
+while asleep (if not, the link drops and the applet, with its POWER button,
+goes with it), whether the magic packet wakes it, and whether it answers the
+subnet broadcast (the per-host sweep covers it if not).
 
 ### 3.3 Command set used
 
@@ -180,6 +210,7 @@ broadcast (the per-host sweep covers it if not).
 | ATU summary | `^DA` |
 | Sleep / wake | `^ON` |
 | Identity | `^RV`, `^SN` |
+| Wake-on-LAN | `^MA` (MAC address), `^WL` (NET WAKE on LAN) |
 | Fault, and clearing it | `^FL` (two hex digits), `^FLC;` |
 | Operate / standby | `^OS` |
 | ATU mode / in-line | `^AM` (`I`/`B`), `^AI` |
@@ -227,16 +258,19 @@ as expected input, not an error path:
 
 ## 4. Polling model
 
-Because the amp never pushes, `Kpa1500Connection` drives a 500 ms poll split in
-two:
+Because the amp never pushes, `Kpa1500Connection` drives a poll (500 ms on
+TCP, 250 ms on UDP, paced as in §3.2) split in two:
 
-- **fast set, every tick:** `^PWF`, `^PWR`, `^SW`, `^TM`, `^TP` — the values
-  that move while the operator is transmitting or tuning (plus `^TQ` while
-  keyed, §6.2);
+- **fast set, every tick:** `^PWF`, `^PWR`, `^SW`, `^TM`, `^TP`, `^PWI`, `^VI`
+  — the values that move while the operator is transmitting or tuning (plus
+  `^TQ` while keyed, §6.2);
 - **slow set, one per tick round-robin:** `^FL`, `^OS`, `^BN`, `^AN`, `^AM`,
-  `^AI` — configuration readbacks that change only when someone changes them. A
-  full cycle is 3 s, which keeps the wire quiet without making the panel feel
-  stale.
+  `^AI`, `^ON`, `^FC`, `^FS`, `^AS`, `^FR`, `^DA`, `^WL`, and `^MA` until it is
+  known — configuration readbacks that change only when someone changes them.
+  A full cycle is about 3.5 s on UDP and 7 s on TCP. A control does not wait
+  for it: `sendControl()` asks the control's readback right after the SET, on
+  both transports, since the reference says SETs "do not generally result in
+  a RESPONSE message".
 
 `Status` holds every field as a `std::optional`. A field stays unset until its
 own reply lands, so the applet renders `—` rather than a confident `0` for
@@ -354,13 +388,13 @@ only a physical unit can confirm:
 
 | File | Role |
 |---|---|
-| `src/core/Kpa1500Protocol.h/.cpp` | Framing parser, `Status` decode, command builders. No Qt GUI, no sockets — unit-testable in isolation. |
-| `src/core/Kpa1500Connection.h/.cpp` | TCP transport, reconnect, poll loop, keying refresh. `peripheral(kpa1500)`. |
+| `src/core/Kpa1500Protocol.h/.cpp` | Framing parser, `Status` decode, command builders, the Wake-on-LAN packet and the UDP query pacer. No Qt GUI, no sockets — unit-testable in isolation. |
+| `src/core/Kpa1500Connection.h/.cpp` | TCP and UDP transport, reconnect, poll loop, control confirmation, Wake-on-LAN, keying refresh. `peripheral(kpa1500)`. |
 | `src/gui/Kpa1500Applet.h/.cpp` | The panel. |
 | `tests/kpa1500_protocol_test.cpp` | Framing/boundary tests, decode and command spellings against the reference's examples, and the keying-builder safety invariant. |
 | `src/gui/RadioSetupDialog_Peripherals.cpp` | Peripherals device (`PeripheralSettings` device `"Kpa1500"`). |
 | `src/gui/MainWindow_Wiring.cpp` | Signal wiring and startup auto-connect. |
 
-Settings live under `PeripheralSettings` device `"Kpa1500"`, fields `ManualIp`
-and `ManualPort` — the nested per-feature object Principle V requires, not new
-flat keys.
+Settings live under `PeripheralSettings` device `"Kpa1500"`, fields `ManualIp`,
+`ManualPort`, `Transport` and `MacAddress` — the nested per-feature object
+Principle V requires, not new flat keys.

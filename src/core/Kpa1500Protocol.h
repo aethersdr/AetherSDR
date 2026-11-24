@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <functional>
 #include <optional>
 
@@ -141,6 +142,8 @@ struct Status {
     std::optional<QString> atuSetting;    // ^DA the amp's own ATU summary text
     std::optional<QString> firmware;      // ^RV e.g. "03.10"
     std::optional<QString> serialNumber;  // ^SN e.g. "00022"
+    std::optional<QString> macAddress;    // ^MA normalized "54:10:EC:14:75:22"
+    std::optional<bool>  netWake;         // ^WL, NET WAKE on LAN enabled
 };
 
 // Folds one decoded message into `status`, returning true if it changed
@@ -212,6 +215,54 @@ QByteArray buildKeyStateQuery();                // ^TQ
 
 inline constexpr int kMinKeyTimeoutSec = 1;
 inline constexpr int kMaxKeyTimeoutSec = 99;
+
+// ── Wake-on-LAN ──────────────────────────────────────────────────────────
+//
+// Programming Reference (rev. 5/5/2024, firmware 03.02): "Wakeup" (p. 8) and
+// ^WL (new in 01.67): with NET WAKE on, a sleeping amp wakes on a magic
+// packet of "6 bytes of 255 followed by 16 repetitions of the KPA1500's MAC
+// address"; ^MA answers the MAC as ^MA54:10:EC:14:75:22;.
+inline constexpr quint16 kWakeOnLanPort = 9;
+inline constexpr int kMacBytes = 6;
+
+// Six colon-separated hex octets, either case. Anything else is nullopt.
+std::optional<QByteArray> parseMacAddress(const QString& text);
+QString formatMacAddress(const QByteArray& mac);   // "54:10:EC:14:75:22"
+// 102 bytes; empty unless `mac` is exactly kMacBytes long.
+QByteArray buildWakeOnLanPacket(const QByteArray& mac);
+
+// ── UDP query pacing ─────────────────────────────────────────────────────
+//
+// The reference asks a client to "wait for the corresponding RESPONSE
+// before sending more commands". At most one query is outstanding: the next
+// goes out when the amp answers that command, or after kReplyTimeoutMs.
+// Pure state; the caller supplies a monotonic clock in ms and does the I/O.
+class QueryPacer {
+public:
+    static constexpr qint64 kReplyTimeoutMs = 120;
+
+    // A query already queued or outstanding is not queued twice. `urgent`
+    // puts it at the head (a control's readback).
+    void enqueue(const QString& cmd, bool urgent = false);
+    // The query to write now, or nullopt while one is outstanding and not yet
+    // timed out, or when the queue is empty.
+    std::optional<QString> takeNext(qint64 nowMs);
+    // True when `cmd` was the outstanding query, which is then released.
+    bool replied(const QString& cmd);
+    // ms until the outstanding query times out; -1 when none is outstanding.
+    qint64 msUntilTimeout(qint64 nowMs) const;
+    bool drained() const { return m_queue.empty() && !m_outstanding; }
+    bool outstanding() const { return m_outstanding.has_value(); }
+    int queued() const { return static_cast<int>(m_queue.size()); }
+    int timeouts() const { return m_timeouts; }
+    void clear();
+
+private:
+    std::deque<QString> m_queue;
+    std::optional<QString> m_outstanding;
+    qint64 m_sentAtMs{0};
+    int m_timeouts{0};
+};
 
 }  // namespace Kpa1500
 }  // namespace AetherSDR

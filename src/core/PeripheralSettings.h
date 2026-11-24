@@ -173,7 +173,8 @@ public:
                                      QStringLiteral("ManualPort"),
                                      QStringLiteral("SerialPort"),
                                      QStringLiteral("RadioCable"),
-                                     QStringLiteral("Transport")}) {
+                                     QStringLiteral("Transport"),
+                                     QStringLiteral("MacAddress")}) {
             connection.remove(field);
         }
         if (connection.isEmpty()) {

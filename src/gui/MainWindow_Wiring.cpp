@@ -7531,6 +7531,13 @@ void MainWindow::wireMeters()
             [this](const QString& message) {
         m_appletPanel->kpa1500Applet()->showControlNotice(message);
     });
+    // The MAC Wake-on-LAN needs, kept with the device's peripheral record so
+    // POWER can wake an amp that was already asleep when this run started.
+    connect(&m_kpa1500Conn, &Kpa1500Connection::macAddressReported, this, [](const QString& mac) {
+        if (PeripheralSettings::deviceString("Kpa1500", "MacAddress") != mac) {
+            PeripheralSettings::setDeviceString("Kpa1500", "MacAddress", mac);
+        }
+    });
 
     // Startup auto-connect from saved Peripherals settings — same reasoning
     // as ACOM/VK3AMP above: the Flex radio has no idea this amplifier
@@ -7541,6 +7548,7 @@ void MainWindow::wireMeters()
             "Kpa1500", "ManualPort", AetherSDR::Kpa1500::kDefaultPort);
         m_kpa1500Conn.setTransport(AetherSDR::Kpa1500::transportFromSettingValue(
             PeripheralSettings::deviceString("Kpa1500", "Transport")));
+        m_kpa1500Conn.setWakeMacAddress(PeripheralSettings::deviceString("Kpa1500", "MacAddress"));
         if (!ip.isEmpty()) {
             m_kpa1500Conn.connectNetwork(ip, static_cast<quint16>(port));
         }

@@ -396,6 +396,86 @@ int main()
     report("an unrecognized transport setting keeps TCP",
            transportFromSettingValue(QStringLiteral("serial")) == Transport::Tcp);
 
+    // ── Wake-on-LAN (Programming Reference rev. 5/5/2024: Wakeup p. 8, ^MA, ^WL) ──
+    {
+        const QByteArray mac = QByteArray::fromHex("5410EC147522");
+        report("parseMacAddress(^MA example) -> 6 bytes",
+               parseMacAddress(QStringLiteral("54:10:EC:14:75:22")) == mac);
+        report("parseMacAddress accepts lower-case hex",
+               parseMacAddress(QStringLiteral("54:10:ec:14:75:22")) == mac);
+        report("parseMacAddress rejects 5 octets, a bad octet, or another separator",
+               !parseMacAddress(QStringLiteral("54:10:EC:14:75"))
+                   && !parseMacAddress(QStringLiteral("54:10:EC:14:75:2G"))
+                   && !parseMacAddress(QStringLiteral("54:10:EC:14:75:225"))
+                   && !parseMacAddress(QStringLiteral("54-10-EC-14-75-22"))
+                   && !parseMacAddress(QString()));
+        report("formatMacAddress round-trips", formatMacAddress(mac) == QStringLiteral("54:10:EC:14:75:22"));
+
+        const QByteArray packet = buildWakeOnLanPacket(mac);
+        bool shape = packet.size() == 6 + 16 * 6 && packet.left(6) == QByteArray(6, char(0xFF));
+        for (int i = 0; shape && i < 16; ++i) {
+            shape = packet.mid(6 + i * 6, 6) == mac;
+        }
+        report("magic packet: 6 x 0xFF, then 16 copies of the MAC", shape);
+        report("magic packet refuses a MAC that is not 6 bytes",
+               buildWakeOnLanPacket(QByteArray::fromHex("5410EC1475")).isEmpty()
+                   && buildWakeOnLanPacket(QByteArray()).isEmpty());
+
+        auto apply = [](const char* frame, Status& s) {
+            const auto m = parseMessage(QByteArray(frame));
+            return m && applyMessage(*m, s);
+        };
+        Status s;
+        report("^MA54:10:EC:14:75:22; -> MAC", apply("^MA54:10:EC:14:75:22;", s)
+                   && s.macAddress == QStringLiteral("54:10:EC:14:75:22"));
+        report("^MA reply in lower case is normalized, not a change",
+               !apply("^MA54:10:ec:14:75:22;", s) && s.macAddress == QStringLiteral("54:10:EC:14:75:22"));
+        report("a malformed ^MA leaves the MAC untouched",
+               !apply("^MA54:10:EC;", s) && s.macAddress == QStringLiteral("54:10:EC:14:75:22"));
+        report("^MAAC:... (MAC starting with a letter) is still ^MA",
+               apply("^MAAC:DE:48:00:11:22;", s) && s.macAddress == QStringLiteral("AC:DE:48:00:11:22"));
+        report("^WL1; -> NET WAKE on", apply("^WL1;", s) && s.netWake == true);
+        report("^WL0; -> NET WAKE off", apply("^WL0;", s) && s.netWake == false);
+        report("^WL2; is rejected", !apply("^WL2;", s) && s.netWake == false);
+    }
+
+    // ── UDP query pacing ─────────────────────────────────────────────────
+    {
+        QueryPacer p;
+        p.enqueue(QStringLiteral("PWF"));
+        p.enqueue(QStringLiteral("PWR"));
+        p.enqueue(QStringLiteral("SW"));
+        report("pacer: the first query goes out", p.takeNext(0) == QStringLiteral("PWF"));
+        report("pacer: nothing more while one is outstanding", !p.takeNext(10) && p.queued() == 2);
+        report("pacer: another command's reply does not release it",
+               !p.replied(QStringLiteral("SW")) && !p.takeNext(20));
+        report("pacer: its own reply releases the next", p.replied(QStringLiteral("PWF"))
+                   && p.takeNext(30) == QStringLiteral("PWR"));
+        report("pacer: msUntilTimeout counts down from the send",
+               p.msUntilTimeout(30 + 20) == QueryPacer::kReplyTimeoutMs - 20);
+        report("pacer: still held one ms before the timeout",
+               !p.takeNext(30 + QueryPacer::kReplyTimeoutMs - 1));
+        report("pacer: an unanswered query is given up at the timeout",
+               p.takeNext(30 + QueryPacer::kReplyTimeoutMs) == QStringLiteral("SW") && p.timeouts() == 1);
+        p.enqueue(QStringLiteral("SW"));
+        p.enqueue(QStringLiteral("TM"));
+        p.enqueue(QStringLiteral("TM"));
+        report("pacer: a query outstanding or queued is not queued twice", p.queued() == 1);
+        p.enqueue(QStringLiteral("AN"), true);
+        report("pacer: an urgent readback jumps the queue",
+               p.replied(QStringLiteral("SW")) && p.takeNext(200) == QStringLiteral("AN"));
+        report("pacer: not drained while one is outstanding or queued", !p.drained());
+        p.replied(QStringLiteral("AN"));
+        report("pacer: drains after the last reply", p.takeNext(210) == QStringLiteral("TM")
+                   && p.replied(QStringLiteral("TM")) && p.drained() && !p.takeNext(220)
+                   && p.msUntilTimeout(220) == -1);
+        p.enqueue(QStringLiteral("ON"));
+        p.takeNext(300);
+        p.clear();
+        report("pacer: clear() forgets the queue and the outstanding query",
+               p.drained() && !p.replied(QStringLiteral("ON")));
+    }
+
     if (g_failed == 0) {
         std::printf("\nAll KPA1500 protocol tests passed.\n");
     } else {

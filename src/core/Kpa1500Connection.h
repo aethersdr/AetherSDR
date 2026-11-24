@@ -2,6 +2,9 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QHostAddress>
+#include <QList>
+#include <QNetworkAddressEntry>
 #include <QObject>
 #include <QString>
 #include <QTcpSocket>
@@ -31,7 +34,9 @@ namespace AetherSDR {
 //   UDP — one `^CMD;` frame per datagram to the amp's UDP server, which
 //         accepts the identical command set. There is no connection, so the
 //         link is declared up on the first well-formed reply and down after
-//         kUdpSilenceMs without one. Because a datagram can be lost, every
+//         kUdpSilenceMs without one; while down it keeps probing and comes
+//         back up on the next reply. Queries are paced, one outstanding at a
+//         time (Kpa1500::QueryPacer). Because a datagram can be lost, every
 //         control command is confirmed by readback: it is resent with a
 //         query until the amp reports the requested state, and after
 //         kMaxControlAttempts without that, controlUnconfirmed() fires.
@@ -70,7 +75,21 @@ public:
     void selectAntenna(int port);  // ANT1/ANT2; out of range is a no-op, logged
     void clearFault();
     void setFanMinimum(int level);  // 0-5; out of range is a no-op, logged
-    void setPower(bool on);         // ^ON1 wakes a sleeping amp; ^ON0 puts it to sleep
+    // ^ON1 wakes a sleeping amp; ^ON0 puts it to sleep. Waking also sends a
+    // Wake-on-LAN magic packet (wakeTargets()) when the MAC is known and the
+    // amp has not reported NET WAKE off.
+    void setPower(bool on);
+
+    // MAC for Wake-on-LAN when the amp has not answered ^MA on this link (it
+    // may be asleep since before this run); the owner restores it from the
+    // saved peripheral settings.
+    void setWakeMacAddress(const QString& mac) { m_wakeMac = mac; }
+
+    // Where the magic packet goes, UDP port Kpa1500::kWakeOnLanPort: the
+    // broadcast address of each local network that contains `amp`, then
+    // `amp` itself. Empty for a null or non-IPv4 address.
+    static QList<QHostAddress> wakeTargets(const QHostAddress& amp,
+                                           const QList<QNetworkAddressEntry>& localEntries);
 
     // ── TX frequency tracking (^FR) ──────────────────────────────────────
     //
@@ -127,6 +146,9 @@ signals:
     // A control refused before anything was sent, e.g. a relay change while
     // the radio transmits. `message` is the full user-facing notice.
     void controlRefused(const QString& message);
+    // The amp reported a MAC address different from the last one on this
+    // link. The owner persists it for Wake-on-LAN after a restart.
+    void macAddressReported(const QString& mac);
 
 private slots:
     void onReadyRead();
@@ -136,7 +158,14 @@ private:
     friend struct Kpa1500TrackingTestAccess;
 
     void onTransportUp();
-    void onTransportDown();
+    // `keepProbing`: a UDP link that went silent stays open and is polled,
+    // so the first reply brings it back up (auto-reconnect is not involved).
+    void onTransportDown(bool keepProbing = false);
+    void dropSilentUdpLink();
+    // UDP queries go through m_pacer; TCP writes them at once.
+    void queueQuery(const QString& cmd, bool urgent = false);
+    void pumpQueries();
+    void sendWakeOnLan();
     void onTransportError(const QString& errorString);
     void onMessage(const Kpa1500::Message& message);
     void poll();
@@ -155,21 +184,34 @@ private:
         QByteArray frame;
         QString readback;
         bool resend{true};
+        // Retried and expired even while transmitting: STANDBY, tune cancel
+        // and fault clear take power off; relay controls are held instead.
+        bool retryUnderTx{false};
         int attempts{0};
         QElapsedTimer lastSent;
         std::function<bool(const Kpa1500::Message&, const Kpa1500::Status&)> satisfied;
     };
+    static PendingControl operateControl(bool operate);
+    static PendingControl cancelTuneControl();
+    static PendingControl atuInlineControl(bool inLine);
+    static PendingControl clearFaultControl();
     // False when nothing went out: refused, not connected, or the write failed.
     bool sendControl(PendingControl control);
     void checkPendingControls(const Kpa1500::Message& message);
     void retryPendingControls();
     void scheduleTrack();
     void sendTrack();
-    qint64 trackWaitMs() const;
-    bool inUnkeySettle() const;   // within kControlRetryMs after a TX end   // ms until the rate limit and the unkey settle both allow ^FR
+    qint64 trackWaitMs() const;   // ms until the rate limit and the unkey settle both allow ^FR
+    bool inUnkeySettle() const;   // within kControlRetryMs after a TX end
 
     QTcpSocket m_socket;
     QUdpSocket m_udp;
+    QUdpSocket m_wakeSocket;   // unconnected: the magic packet goes to broadcast and unicast
+    QString m_wakeMac;
+    Kpa1500::QueryPacer m_pacer;
+    QElapsedTimer m_clock;     // monotonic ms for m_pacer
+    QTimer m_paceTimer;        // fires when the outstanding query times out
+    bool m_pollDeferred{false};   // a tick found the last poll cycle still in flight
     Kpa1500::Transport m_transport{Kpa1500::Transport::Tcp};
     // Transport of the current/last attempt; m_transport may change under it.
     Kpa1500::Transport m_activeTransport{Kpa1500::Transport::Tcp};

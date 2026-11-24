@@ -379,6 +379,13 @@ bool applyMessage(const Message& message, Status& status)
     if (cmd == QLatin1String("SN")) {
         return assignIfChanged(status.serialNumber, decodeText(arg));
     }
+    if (cmd == QLatin1String("MA")) {
+        const auto mac = parseMacAddress(arg);
+        return mac && assignIfChanged(status.macAddress, std::optional<QString>(formatMacAddress(*mac)));
+    }
+    if (cmd == QLatin1String("WL")) {
+        return assignIfChanged(status.netWake, decodeBool(arg));
+    }
     // Unrecognized command — deliberately not an error. The amp answers
     // several queries this integration does not send (and future firmware
     // will add more); dropping them keeps the parser forward-compatible
@@ -520,6 +527,98 @@ QByteArray buildUnkey()
 QByteArray buildKeyStateQuery()
 {
     return buildMessage(QStringLiteral("TQ"));
+}
+
+std::optional<QByteArray> parseMacAddress(const QString& text)
+{
+    const QStringList octets = text.trimmed().split(QLatin1Char(':'));
+    if (octets.size() != kMacBytes) {
+        return std::nullopt;
+    }
+    QByteArray mac;
+    for (const QString& octet : octets) {
+        bool ok = false;
+        const int value = octet.toInt(&ok, 16);
+        if (octet.size() != 2 || !ok) {
+            return std::nullopt;
+        }
+        mac.append(static_cast<char>(value));
+    }
+    return mac;
+}
+
+QString formatMacAddress(const QByteArray& mac)
+{
+    QStringList octets;
+    for (const char byte : mac) {
+        octets << QStringLiteral("%1").arg(static_cast<quint8>(byte), 2, 16, QLatin1Char('0')).toUpper();
+    }
+    return octets.join(QLatin1Char(':'));
+}
+
+QByteArray buildWakeOnLanPacket(const QByteArray& mac)
+{
+    if (mac.size() != kMacBytes) {
+        return {};
+    }
+    QByteArray packet(kMacBytes, static_cast<char>(0xFF));
+    for (int i = 0; i < 16; ++i) {
+        packet.append(mac);
+    }
+    return packet;
+}
+
+void QueryPacer::enqueue(const QString& cmd, bool urgent)
+{
+    if (m_outstanding == cmd || std::find(m_queue.begin(), m_queue.end(), cmd) != m_queue.end()) {
+        return;
+    }
+    if (urgent) {
+        m_queue.push_front(cmd);
+    } else {
+        m_queue.push_back(cmd);
+    }
+}
+
+std::optional<QString> QueryPacer::takeNext(qint64 nowMs)
+{
+    if (m_outstanding) {
+        if (nowMs - m_sentAtMs < kReplyTimeoutMs) {
+            return std::nullopt;
+        }
+        ++m_timeouts;
+        m_outstanding.reset();
+    }
+    if (m_queue.empty()) {
+        return std::nullopt;
+    }
+    m_outstanding = m_queue.front();
+    m_queue.pop_front();
+    m_sentAtMs = nowMs;
+    return m_outstanding;
+}
+
+bool QueryPacer::replied(const QString& cmd)
+{
+    if (m_outstanding != cmd) {
+        return false;
+    }
+    m_outstanding.reset();
+    return true;
+}
+
+qint64 QueryPacer::msUntilTimeout(qint64 nowMs) const
+{
+    if (!m_outstanding) {
+        return -1;
+    }
+    return std::max<qint64>(0, kReplyTimeoutMs - (nowMs - m_sentAtMs));
+}
+
+void QueryPacer::clear()
+{
+    m_queue.clear();
+    m_outstanding.reset();
 }
 
 }  // namespace Kpa1500
