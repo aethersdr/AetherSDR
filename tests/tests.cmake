@@ -634,6 +634,14 @@ target_link_libraries(local_control_server_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME local_control_server_test COMMAND local_control_server_test)
 
+# The app serving aetherd's local control endpoint (--control-socket,
+# docs/aetherd-app-control-socket.md). Binds a current-user QLocalServer named
+# app-ctl-<random> and fails immediately if the endpoint cannot be reserved.
+add_executable(app_control_host_test tests/app_control_host_test.cpp)
+target_include_directories(app_control_host_test PRIVATE src tests)
+target_link_libraries(app_control_host_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME app_control_host_test COMMAND app_control_host_test)
+
 # Opaque byte relay pump/state machine (CTR2 TCP proxy prototype) with
 # injected scripted transports; binds no sockets.
 add_executable(byte_relay_test tests/byte_relay_test.cpp)
@@ -6094,6 +6102,37 @@ target_include_directories(acom_protocol_test PRIVATE src)
 target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
 add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
 
+# HF Gateway host interface (RFC #7296): pure framing, parsing and
+# formatting. No sockets, no settings.
+add_executable(modem_host_protocol_test
+    tests/modem_host_protocol_test.cpp
+    src/core/hfgateway/ModemHostProtocol.cpp
+)
+target_include_directories(modem_host_protocol_test PRIVATE src)
+target_link_libraries(modem_host_protocol_test PRIVATE Qt6::Core)
+add_test(NAME modem_host_protocol_test COMMAND modem_host_protocol_test)
+
+# HF Gateway client logic (RFC #7296): positional reply matching and the
+# transmit permission, with no sockets.
+add_executable(modem_host_session_test
+    tests/modem_host_session_test.cpp
+    src/core/hfgateway/ModemHostSession.cpp
+    src/core/hfgateway/ModemHostProtocol.cpp
+)
+target_include_directories(modem_host_session_test PRIVATE src)
+target_link_libraries(modem_host_session_test PRIVATE Qt6::Core)
+add_test(NAME modem_host_session_test COMMAND modem_host_session_test)
+
+# HF Gateway configuration (RFC #7296): the pure JSON round trip and the
+# validation of stored documents. No AppSettings.
+add_executable(hf_gateway_config_test
+    tests/hf_gateway_config_test.cpp
+    src/core/hfgateway/HfGatewayConfig.cpp
+)
+target_include_directories(hf_gateway_config_test PRIVATE src)
+target_link_libraries(hf_gateway_config_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hf_gateway_config_test COMMAND hf_gateway_config_test)
+
 add_executable(lp100a_protocol_test
     tests/lp100a_protocol_test.cpp
     src/core/LpMeterProtocol.cpp
@@ -10934,6 +10973,16 @@ add_executable(hl2_auto_gain_replay_d245_test
     src/core/backends/hl2/MetisProtocol.cpp)
 target_include_directories(hl2_auto_gain_replay_d245_test PRIVATE src tests)
 add_test(NAME hl2_auto_gain_replay_d245_test COMMAND hl2_auto_gain_replay_d245_test)
+# Both replay headers still come out of their recorded inputs
+# (tests/fixtures/hl2-autogain-replay/), byte for byte.
+if(PYTHON3_EXECUTABLE)
+    add_test(NAME hl2_auto_gain_replay_d168_header_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_hl2_autogain_replay_d168.py --check)
+    add_test(NAME hl2_auto_gain_replay_d245_header_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_hl2_autogain_replay_d245.py --check)
+endif()
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -12337,6 +12386,7 @@ set(AETHER_SETTINGS_CONSUMERS
     flex_display_observation_test
     control_slice_frequency_test
     control_receive_test
+    app_control_host_test
     control_telemetry_test
     control_front_end_overload_test
     aetherd_discovery_startup_test

@@ -1,0 +1,56 @@
+[22:20:30.148] INF aether.hl2: HL2 auto RF gain: wideband bandscope enabled for the measured release
+[22:20:30.148] INF aether.hl2: HL2 auto RF gain: ARMED at baseline 20 dB, floor 24 dB below
+[22:20:39.294] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 1 / 152 , headroom "3.5"
+[22:21:18.329] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 153 , headroom "12.5"
+[22:21:18.431] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 2 / 152 , headroom "12.5"
+[22:22:19.390] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 153 , headroom "12.9"
+[22:22:19.490] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 8 / 152 , headroom "12.9"
+[22:24:22.391] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 153 , headroom "14.7"
+[22:24:22.491] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 9 / 152 , headroom "14.7"
+[22:25:35.651] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 12 dB, window 152 / 152 , headroom "10.7"
+[22:25:35.846] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 18 dB, window 152 / 152 , headroom "10.7"
+[22:25:36.046] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 152 / 152 , headroom "10.7"
+[22:29:35.563] INF aether.hl2: HL2 auto RF gain: wideband bandscope released for the measured release
+[22:29:35.563] INF aether.hl2: HL2 auto RF gain: disarmed, baseline 48 dB restored
+[22:32:37.278] INF aether.hl2: HL2 auto RF gain: wideband bandscope enabled for the measured release
+[22:32:37.278] INF aether.hl2: HL2 auto RF gain: ARMED at baseline 20 dB, floor 24 dB below
+[22:32:37.278] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 69 / 152 , headroom "absent"
+[22:33:58.751] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 12 dB, window 1 / 152 , headroom "6.5"
+[22:34:29.368] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 6 dB, window 0 / 152 , headroom "15.1"
+[22:35:04.699] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 12 dB, window 4 / 153 , headroom "2.9"
+[22:35:34.721] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 6 dB, window 0 / 152 , headroom "12.1"
+[22:35:46.335] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 153 , headroom "12.1"
+[22:35:46.451] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 11 / 152 , headroom "12.1"
+[22:36:32.071] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 12 dB, window 1 / 152 , headroom "7.6"
+[22:37:32.125] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 6 dB, window 0 / 152 , headroom "19.0"
+[22:37:38.430] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 12 dB, window 3 / 153 , headroom "3.5"
+[22:37:42.924] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 18 dB, window 152 / 152 , headroom "15.9"
+[22:37:43.125] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 152 / 152 , headroom "15.9"
+[22:41:42.794] INF aether.hl2: HL2 auto RF gain: wideband bandscope released for the measured release
+[22:41:42.794] INF aether.hl2: HL2 auto RF gain: disarmed, baseline 48 dB restored
+[22:44:46.790] INF aether.hl2: HL2 auto RF gain: wideband bandscope enabled for the measured release
+[22:44:46.790] INF aether.hl2: HL2 auto RF gain: ARMED at baseline 20 dB, floor 24 dB below
+[22:45:11.892] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 37 / 152 , headroom "1.3"
+[22:45:42.821] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 152 , headroom "11.8"
+[22:45:49.237] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 1 / 153 , headroom "7.5"
+[22:46:19.359] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 152 , headroom "13.6"
+[22:46:24.550] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 1 / 153 , headroom "3.6"
+[22:46:55.897] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 153 , headroom "13.1"
+[22:46:58.192] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 3 / 153 , headroom "4.6"
+[22:47:58.337] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 152 , headroom "15.2"
+[22:48:28.570] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 10 / 152 , headroom "3.7"
+[22:48:58.592] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 153 , headroom "17.0"
+[22:49:02.482] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 8 / 153 , headroom "4.8"
+[22:49:36.825] DBG aether.hl2: HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 153 , headroom "12.6"
+[22:49:49.128] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 1 / 152 , headroom "7.5"
+[22:49:52.338] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 12 dB, window 152 / 152 , headroom "12.1"
+[22:49:52.526] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 18 dB, window 152 / 152 , headroom "12.1"
+[22:49:52.738] DBG aether.hl2: HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 152 / 152 , headroom "12.1"
+[22:53:52.267] INF aether.hl2: HL2 auto RF gain: wideband bandscope released for the measured release
+[22:53:52.267] INF aether.hl2: HL2 auto RF gain: disarmed, baseline 48 dB restored
+[23:02:38.033] INF aether.hl2: HL2 auto RF gain: wideband bandscope enabled for the measured release
+[23:02:38.033] INF aether.hl2: HL2 auto RF gain: ARMED at baseline 20 dB, floor 24 dB below
+[23:04:09.173] INF aether.hl2: HL2 auto RF gain: wideband bandscope released for the measured release
+[23:04:09.173] INF aether.hl2: HL2 auto RF gain: disarmed, baseline 48 dB restored
+[23:04:14.368] INF aether.hl2: HL2 auto RF gain: wideband bandscope enabled for the measured release
+[23:04:14.368] INF aether.hl2: HL2 auto RF gain: ARMED at baseline 20 dB, floor 24 dB below

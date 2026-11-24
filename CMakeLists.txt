@@ -902,6 +902,7 @@ set(CORE_SOURCES
     src/core/control/RadioConnectionTarget.h  # socket-free connection intent seam
     src/core/backends/ModelRadioConnectionTarget.cpp # native translation and lifecycle
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
+    src/core/control/AppControlHost.cpp # the app serving the local endpoint (--control-socket)
     src/core/control/RadioTelemetryAdapter.cpp # bounded read-only telemetry
     src/core/control/ModelSliceFrequencyTarget.cpp # validated non-keying intents
     src/core/control/ModelReceiveControlTarget.cpp # typed receive operations
@@ -1275,6 +1276,11 @@ set(CORE_SOURCES
     src/core/tnc/KissFraming.cpp
     src/core/tnc/KissTncServer.cpp
     src/core/tnc/TncTerminal.cpp
+    src/core/hfgateway/ModemHostProtocol.cpp
+    src/core/hfgateway/ModemHostSession.cpp
+    src/core/hfgateway/ModemHostClient.cpp
+    src/core/hfgateway/HfGatewayConfig.cpp
+    src/core/hfgateway/HfGatewaySettings.cpp
     src/core/pms/PmsMailbox.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsStationList.cpp
