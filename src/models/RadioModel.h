@@ -2130,7 +2130,8 @@ private:
     // supersedes it later. Flex-specific construction wiring (command sinks,
     // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
     // in the ctor, so a non-Flex backend simply skips it.
-    static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
+    static std::unique_ptr<IRadioBackend> makeBackend(const QString& family,
+                                                     QString* unavailableReason);
     void handRestoredStateToBackend();  // RFC #4603
     // Put the remembered "Show TX in Waterfall" back into the transmit model
     // on connect, where the backend declares the client its owner.
