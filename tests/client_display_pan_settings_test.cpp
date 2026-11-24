@@ -505,6 +505,12 @@ int main(int argc, char** argv)
         check(followsWithin(wiring, "scheduleClientWaterfallRateSave(tsw->panIndex(), clampedRate);",
                             "if (m_adaptiveThrottleActive) {\n                continue;", 300),
               "the waterfall rate saves before the adaptive-throttle return");
+        // Link Rates (#6799): only a refused turn-on reloads from the store. A
+        // failed turn-off must hold for the session, or the operator could not
+        // unlink while the store is failing.
+        check(followsWithin(wiring, "void MainWindow::setLinkPanDisplayRates(bool on)",
+                            "if (on && !saved && scope.hasRadioIdentity()) {\n        reloadLinkPanDisplayRates();", 700),
+              "a refused Link Rates turn-on reloads from the store; a failed turn-off holds");
         // Link Rates (#6799): both operator handlers go through the target list,
         // so a refactor cannot quietly drop the fan-out from one of them.
         check(followsWithin(wiring, "connect(menu, &SpectrumOverlayMenu::fftFpsChanged,",

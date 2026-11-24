@@ -3315,11 +3315,13 @@ void MainWindow::reloadLinkPanDisplayRates()
 void MainWindow::setLinkPanDisplayRates(bool on)
 {
     const RadioSettingsScope scope = m_radioModel.settingsScope();
-    if (!ClientDisplaySettings::saveLinkPanDisplayRates(scope, on)
-        && scope.hasRadioIdentity()) {
-        // The store refused (a corrupt or newer document): show and use what
-        // it holds, so the toggle cannot read on for a session and then
-        // silently revert at the next connection.
+    const bool saved = ClientDisplaySettings::saveLinkPanDisplayRates(scope, on);
+    // Turning the link on when the store refuses it (a corrupt or newer
+    // document, or a failed write): show and use what the store holds, so the
+    // toggle cannot read on for a session and then silently revert at the next
+    // connection. Turning it off always holds for the session, so the operator
+    // can always unlink.
+    if (on && !saved && scope.hasRadioIdentity()) {
         reloadLinkPanDisplayRates();
         return;
     }
