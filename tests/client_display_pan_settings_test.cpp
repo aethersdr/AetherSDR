@@ -620,8 +620,10 @@ int main(int argc, char** argv)
 
         // 2. Per-pan isolation: the setter emits a signal and the wiring
         //    connects it to the per-pan save, not a broadcast.
-        check(widget.contains(QStringLiteral(
-                  "emit spotMarkersOnPanChanged(on);")),
+        // Exactly one emit: the setter's. The restore (loadSpotMarkersOnPan)
+        // must not emit, or a reconnect would schedule a save of what it read.
+        check(widget.count(QStringLiteral(
+                  "emit spotMarkersOnPanChanged(on);")) == 1,
               "spot markers: setter emits spotMarkersOnPanChanged");
         check(wiring.contains(QStringLiteral(
                   "connect(sw, &SpectrumWidget::spotMarkersOnPanChanged")),
@@ -638,11 +640,13 @@ int main(int argc, char** argv)
                   && followsWithin(wiring, "sw->loadSpotMarkersOnPan(",
                                    "sw->panIndex()).value_or(true));", 150),
               "spot markers: restore uses loadSpotMarkersOnPan with value_or(true)");
-        // The rate-shaping block's last request must precede the restore, so
-        // the restore cannot slip back inside that block undetected.
-        check(precedes(wiring,
-                       "m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());",
-                       "sw->loadSpotMarkersOnPan("),
+        // The rate-shaping block closes between its last request and the
+        // restore, so the restore cannot slip back inside that block.
+        const qsizetype rateBlockLast = wiring.indexOf(QStringLiteral(
+            "m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());"));
+        const qsizetype spotRestore = wiring.indexOf(QStringLiteral("sw->loadSpotMarkersOnPan("));
+        check(rateBlockLast >= 0 && spotRestore > rateBlockLast
+                  && wiring.mid(rateBlockLast, spotRestore - rateBlockLast).contains(QLatin1Char('}')),
               "spot markers: restore is outside the shapesDisplayRatesLocally() block");
     }
 
