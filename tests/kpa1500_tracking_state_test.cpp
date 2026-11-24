@@ -297,6 +297,37 @@ struct Kpa1500TrackingTestAccess {
         return out;
     }
 
+    // TCP: the handshake alone is not a link; the first bytes are.
+    static std::pair<bool, bool> tcpUpOnFirstBytes(Kpa1500Connection& c)
+    {
+        int ups = 0;
+        const auto link = QObject::connect(&c, &Kpa1500Connection::connected, [&ups]() { ++ups; });
+        c.m_activeTransport = Kpa1500::Transport::Tcp;
+        c.onTcpOpen();
+        const bool notYet = !c.m_connected && ups == 0;
+        c.onTcpBytes(QByteArrayLiteral("^ON1;"));
+        const bool up = c.m_connected && ups == 1 && c.m_status.powerOn == true;
+        QObject::disconnect(link);
+        c.disconnect();
+        return {notYet, up};
+    }
+
+    // A sleep is sent, the amp then reads ^ON1 (refused, or woken), then the
+    // link drops: not asleep.
+    static bool awakeAfterSleepThenDrop(Kpa1500Connection& c)
+    {
+        c.m_activeTransport = Kpa1500::Transport::Tcp;
+        c.m_connected = true;
+        c.m_status.powerOn = true;
+        c.m_sleepSentMs = c.m_clock.elapsed() - 1000;
+        c.onMessage(*Kpa1500::parseMessage("^ON1;"));
+        c.onTransportDown();
+        const bool asleep = c.isAsleepOffline();
+        c.m_reconnectTimer.stop();
+        c.disconnect();
+        return asleep;
+    }
+
     // A ^ON0 sent `agoMs` ago, never confirmed (power still reads on), then
     // the link drops.
     static bool unconfirmedSleepThenDrop(Kpa1500Connection& c, qint64 agoMs)
@@ -315,12 +346,14 @@ struct Kpa1500TrackingTestAccess {
 
     // No link to the saved address has come up in this run and the attempt
     // fails: with a saved MAC, the ASLEEP/POWER wake offer appears.
-    static bool startupFailureOffersWake(Kpa1500Connection& c, const QString& mac, bool linkSeen)
+    static bool startupFailureOffersWake(Kpa1500Connection& c, const QString& mac, bool linkSeen,
+                                         bool mayBeAsleep = true,
+                                         const QString& host = QStringLiteral("192.0.2.15"))
     {
-        c.m_lastHost = QStringLiteral("192.0.2.15");
+        c.m_lastHost = host;
         c.setWakeMacAddress(mac);
         c.m_linkUpSeen = linkSeen;
-        c.onTransportError(QStringLiteral("Connection timed out"));
+        c.onTransportError(QStringLiteral("Connection timed out"), mayBeAsleep);
         const bool offered = c.isAsleepOffline();
         c.m_reconnectTimer.stop();
         c.disconnect();
@@ -797,8 +830,23 @@ int main(int argc, char** argv)
         Kpa1500Connection s3;
         check(!A::startupFailureOffersWake(s3, QStringLiteral("54:10:EC:14:75:22"), true),
               "after a link came up this run, a failed reconnect offers no wake (an awake drop hides)");
+        Kpa1500Connection s4;
+        check(!A::startupFailureOffersWake(s4, QStringLiteral("54:10:EC:14:75:22"), false, false),
+              "a refused connect (another TCP client holds the amp) offers no wake");
+        Kpa1500Connection s5;
+        check(!A::startupFailureOffersWake(s5, QStringLiteral("54:10:EC:14:75:22"), false, true,
+                                           QStringLiteral("kpa1500.lan")),
+              "a host name never resolved this run has no wake target, so no wake is offered");
+        Kpa1500Connection u3;
+        check(!A::awakeAfterSleepThenDrop(u3), "an ^ON1 read after a sleep was sent cancels the unconfirmed sleep");
+        Kpa1500Connection t4;
+        const auto [notYet, up] = A::tcpUpOnFirstBytes(t4);
+        check(notYet, "TCP: the handshake alone does not report the link up");
+        check(up, "TCP: the first reply brings the link up");
         check(A::socketsUnopened(t1) && A::socketsUnopened(t2) && A::socketsUnopened(t3)
-                  && A::socketsUnopened(u1) && A::socketsUnopened(s1),
+                  && A::socketsUnopened(t4) && A::socketsUnopened(u1) && A::socketsUnopened(u2)
+                  && A::socketsUnopened(u3) && A::socketsUnopened(s1) && A::socketsUnopened(s2)
+                  && A::socketsUnopened(s3) && A::socketsUnopened(s4) && A::socketsUnopened(s5),
               "silence, unconfirmed-sleep and startup-wake tests open no transport");
     }
     for (const bool autoReconnect : {false, true}) {

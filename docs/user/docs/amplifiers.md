@@ -364,8 +364,8 @@ only and changes nothing on the amplifier.
 The amplifier serves the same commands over TCP and UDP on that one port:
 
 - **TCP** (default): a stream connection; meters refresh every 500 ms. The
-  connection reads as lost after 3 seconds without a reply, even if the
-  network never closes it. The amplifier accepts only one TCP client at a
+  connection reads as connected once the amplifier answers, and as lost
+  after 3 seconds without a reply, even if the network never closes it. The amplifier accepts only one TCP client at a
   time, so Elecraft's KPA1500 Remote and AetherSDR cannot both use TCP.
 - **UDP**: one command per datagram, so a lost packet never stalls the
   meters, which refresh about every 250 ms. AetherSDR waits for each answer
@@ -425,12 +425,15 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   asleep, every other control is dimmed, and hovering over one says whether
   POWER can wake the amplifier. If the connection drops while the amplifier is asleep, or
   just after you put it to sleep (its network may sleep with it), the applet
-  stays open and shows `ASLEEP`. The same happens when AetherSDR cannot reach
-  the amplifier at startup and has its MAC address from an earlier session,
-  since it may have been left asleep.
+  stays open and shows `ASLEEP`. The same happens when AetherSDR gets no answer
+  from the amplifier at startup and has its MAC address from an earlier
+  session, since it may have been left asleep. A refused connection (for
+  example while Elecraft's KPA1500 Remote holds the one TCP slot) does not
+  count.
   **POWER** then sends the Wake-on-LAN packet and AetherSDR keeps trying to
   reach the amplifier until it answers. **POWER** is dimmed in that state if
-  AetherSDR has never read the amplifier's MAC address. Pressing **Disconnect**
+  AetherSDR has never read the amplifier's MAC address, or if the amplifier is
+  entered by host name and AetherSDR has not reached it during this session. Pressing **Disconnect**
   on the amplifier's Peripherals row, or
   removing the amplifier or changing its address, closes the applet.
 - **FAN MIN**, the lowest speed the fans run at, 0 (off) to 5 (full). The

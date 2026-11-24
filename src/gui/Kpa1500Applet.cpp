@@ -551,8 +551,8 @@ void Kpa1500Applet::refreshControls()
 
     if (m_asleepOffline) {
         setAvailable(m_powerBtn, m_offlineCanWake,
-                     tr("The amplifier's MAC address is not known, so POWER cannot wake it over "
-                        "the network"));
+                     tr("The amplifier's MAC address or IP address is not known, so POWER cannot "
+                        "wake it over the network"));
     } else {
         setAvailable(m_powerBtn, m_connected && m_status.powerOn.has_value(),
                      m_connected ? tr("Waiting for the amplifier to report its power state")

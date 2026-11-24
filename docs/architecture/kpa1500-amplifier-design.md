@@ -177,6 +177,11 @@ The MAC is persisted as `PeripheralSettings` device `"Kpa1500"` field
 clear it. The sleep dialog and the asleep tooltip say whether NET WAKE is on;
 off or unknown reads "may not wake over the network".
 
+**TCP link-up.** As on UDP, a TCP link is up on the amp's first reply, not on
+the handshake (`onTcpOpen()` starts the poll; `onTcpBytes()` declares the link
+up), so a peer that accepts and never answers fails at the 8 s connect
+timeout instead of flapping.
+
 **TCP silence.** A TCP link that receives no bytes for `kLinkSilenceMs` (3 s)
 is closed and takes the normal drop path (reconnect, and the asleep-offline
 state below), since a peer whose network went quiet without FIN or RST would
@@ -195,8 +200,12 @@ attempt that timed out) it dials again and keeps dialing for 60 s after the
 wake, whatever the Auto-reconnect setting. The packet goes out even after
 `^WL0`, and a host-name address uses the one resolved at link-up. The
 Peripherals row offers Disconnect in this state. The same
-state is offered when an attempt fails before any link to the address came up
-in this run and a MAC is saved: the amp may have been left asleep. The
+state is offered when an attempt gets no answer at all (connect timeout,
+network error) before any link to the address came up in this run, and a MAC
+and an IPv4 target are known: the amp may have been left asleep. A refused
+connection or an unknown host name does not count, and an `^ON1` read more
+than one poll interval after a sleep was sent cancels the unconfirmed-sleep
+rule. The
 state ends when the link comes back, on `disconnect()` (operator disconnect
 or Remove), or on `connectNetwork()` to another address. A drop while the amp
 was awake hides the applet as before.

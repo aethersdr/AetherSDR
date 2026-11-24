@@ -3,6 +3,7 @@
 
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
+#include <QSignalBlocker>
 #include <QStringList>
 
 #include <algorithm>
@@ -72,11 +73,16 @@ const QStringList& identityCommands()
 Kpa1500Connection::Kpa1500Connection(QObject* parent)
     : QObject(parent)
 {
-    connect(&m_socket, &QTcpSocket::connected, this, &Kpa1500Connection::onTransportUp);
+    // Like UDP, a TCP link is up on the amp's first reply, not on the
+    // handshake: a peer that accepts and never answers is a failed connect.
+    connect(&m_socket, &QTcpSocket::connected, this, &Kpa1500Connection::onTcpOpen);
     connect(&m_socket, &QTcpSocket::disconnected, this, [this]() { onTransportDown(); });
     connect(&m_socket, &QTcpSocket::readyRead, this, &Kpa1500Connection::onReadyRead);
-    connect(&m_socket, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
-        onTransportError(m_socket.errorString());
+    connect(&m_socket, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError err) {
+        // No answer at all fits an amp whose network sleeps; a refusal (one
+        // TCP client already holds it) or an unknown name does not.
+        onTransportError(m_socket.errorString(), err == QAbstractSocket::SocketTimeoutError
+                                                     || err == QAbstractSocket::NetworkError);
     });
 
     // A connected QUdpSocket only accepts datagrams from the amp's address
@@ -178,6 +184,7 @@ void Kpa1500Connection::reconnect()
 
 void Kpa1500Connection::connectNetwork(const QString& host, quint16 port)
 {
+    m_sleepSentMs.reset();
     if (m_asleepOffline && (host != m_lastHost || port != m_lastPort)) {
         setAsleepOffline(false);   // another amplifier: the sleeping one is not ours to wake
     }
@@ -232,7 +239,6 @@ void Kpa1500Connection::connectNetwork(const QString& host, quint16 port)
         // Epoch guard: a timeout armed for attempt N must never abort
         // attempt N+1, which may already have succeeded (#2380).
         if (epoch != m_connectEpoch || m_connected) { return; }
-        if (!udp && m_socket.state() == QAbstractSocket::ConnectedState) { return; }
         qCWarning(lcTuner) << "Kpa1500Connection: connect to" << description()
                            << "timed out after" << kConnectTimeoutMs << "ms";
         if (udp) {
@@ -242,11 +248,17 @@ void Kpa1500Connection::connectNetwork(const QString& host, quint16 port)
             onTransportError(m_udpLastError.isEmpty()
                 ? tr("No reply from the amplifier on UDP port %1").arg(m_lastPort)
                 : tr("No reply from the amplifier on UDP port %1 (%2)")
-                      .arg(m_lastPort).arg(m_udpLastError));
+                      .arg(m_lastPort).arg(m_udpLastError), true);
             return;
         }
-        m_socket.abort();
-        onTransportError(tr("Connection timed out"));
+        const bool opened = m_socket.state() == QAbstractSocket::ConnectedState;
+        {
+            const QSignalBlocker quiet(m_socket);   // this attempt's failure is reported once, below
+            m_socket.abort();
+        }
+        m_pollTimer.stop();
+        onTransportError(opened ? tr("No reply from the amplifier on TCP port %1").arg(m_lastPort)
+                                : tr("Connection timed out"), true);
     });
 }
 
@@ -307,7 +319,12 @@ void Kpa1500Connection::setAsleepOffline(bool on)
 
 bool Kpa1500Connection::canWakeFromSleep() const
 {
-    return Kpa1500::parseMacAddress(m_wakeMac).has_value();
+    // A MAC, and an IPv4 address to aim at: a host name with no link this
+    // run has none (wakeTargets() would be empty).
+    const QHostAddress host(m_lastHost);
+    const bool target = host.protocol() == QAbstractSocket::IPv4Protocol
+        || m_peerAddress.protocol() == QAbstractSocket::IPv4Protocol;
+    return Kpa1500::parseMacAddress(m_wakeMac).has_value() && target;
 }
 
 void Kpa1500Connection::wakeFromSleep()
@@ -326,10 +343,19 @@ void Kpa1500Connection::wakeFromSleep()
     }
 }
 
+void Kpa1500Connection::onTcpOpen()
+{
+    qCDebug(lcTuner) << "Kpa1500Connection: TCP open to" << description() << "— waiting for a reply";
+    m_slowPollIndex = 0;
+    m_pollTimer.start();
+    poll();
+}
+
 void Kpa1500Connection::onTransportUp()
 {
     m_connected = true;
     m_linkUpSeen = true;
+    m_sleepSentMs.reset();
     setAsleepOffline(false);
     m_peerAddress = m_activeTransport == Kpa1500::Transport::Udp ? m_udp.peerAddress()
                                                                  : m_socket.peerAddress();
@@ -346,12 +372,10 @@ void Kpa1500Connection::onTransportUp()
     for (const QString& cmd : identityCommands()) {
         queueQuery(cmd);
     }
-    if (m_activeTransport == Kpa1500::Transport::Tcp) {
-        m_slowPollIndex = 0;
+    // The probe poll that drew this reply (onTcpOpen, or UDP's) is in flight.
+    if (!m_pollTimer.isActive()) {
         m_pollTimer.start();
-        poll();  // don't make the applet wait a full interval for its first reading
     }
-    // On UDP the probe poll that drew this reply is already in flight.
     emit connected();
     scheduleTrack();
 }
@@ -366,11 +390,12 @@ void Kpa1500Connection::dropSilentLink()
         return;
     }
     // A peer that went quiet without FIN/RST leaves the socket connected
-    // until the kernel gives up; close it and take the normal drop path.
-    m_socket.abort();
-    if (m_connected) {
-        onTransportDown();
+    // until the kernel gives up; close it and take the normal drop path once.
+    {
+        const QSignalBlocker quiet(m_socket);
+        m_socket.abort();
     }
+    onTransportDown();
 }
 
 bool Kpa1500Connection::sleepJustSent() const
@@ -434,12 +459,12 @@ bool Kpa1500Connection::wakeReconnecting() const
     return m_asleepOffline && m_wakeSentAt.isValid() && m_wakeSentAt.elapsed() < kWakeReconnectWindowMs;
 }
 
-void Kpa1500Connection::onTransportError(const QString& errorString)
+void Kpa1500Connection::onTransportError(const QString& errorString, bool mayBeAsleep)
 {
     qCWarning(lcTuner) << "Kpa1500Connection: transport error" << errorString;
     emit connectionFailed(errorString);
-    if (!m_deliberateDisconnect && !m_connected && !m_linkUpSeen && !m_asleepOffline
-        && canWakeFromSleep() && !m_lastHost.isEmpty()) {
+    if (mayBeAsleep && !m_deliberateDisconnect && !m_connected && !m_linkUpSeen && !m_asleepOffline
+        && canWakeFromSleep()) {
         // No link, but a saved MAC: the amp may be asleep since before this
         // run. Offer POWER (Wake-on-LAN) in the applet's ASLEEP state.
         qCInfo(lcTuner) << "Kpa1500Connection: no link to" << description()
@@ -460,9 +485,17 @@ void Kpa1500Connection::armReconnect()
 
 void Kpa1500Connection::onReadyRead()
 {
-    const QByteArray bytes = m_socket.readAll();
-    if (!bytes.isEmpty()) {
-        m_lastRxMs = m_clock.elapsed();
+    onTcpBytes(m_socket.readAll());
+}
+
+void Kpa1500Connection::onTcpBytes(const QByteArray& bytes)
+{
+    if (bytes.isEmpty()) {
+        return;
+    }
+    m_lastRxMs = m_clock.elapsed();
+    if (!m_connected) {
+        onTransportUp();
     }
     m_parser.feed(bytes);
 }
@@ -517,6 +550,11 @@ void Kpa1500Connection::applyReply(const Kpa1500::Message& message)
     }
 
     checkPendingControls(message);
+
+    if (message.cmd == QLatin1String("ON") && m_status.powerOn == true && m_sleepSentMs
+        && m_clock.elapsed() - *m_sleepSentMs > kPollIntervalMs) {
+        m_sleepSentMs.reset();   // awake after the sleep: refused, or woken at the panel
+    }
 
     if (!changed) {
         return;

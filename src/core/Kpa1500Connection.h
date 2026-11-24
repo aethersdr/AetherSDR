@@ -183,7 +183,11 @@ private:
     void setAsleepOffline(bool on);
     void reconnect();   // the reconnect timer's attempt: same address, state kept
     bool wakeReconnecting() const;   // TCP: within kWakeReconnectWindowMs of a wake
-    void onTransportError(const QString& errorString);
+    // `mayBeAsleep`: no answer at all (timeout, unreachable), which a
+    // sleeping amp's network gives; not a refusal or an unknown host name.
+    void onTransportError(const QString& errorString, bool mayBeAsleep = false);
+    void onTcpOpen();   // handshake done; the link is up on the first reply
+    void onTcpBytes(const QByteArray& bytes);
     void onMessage(const Kpa1500::Message& message);
     void applyReply(const Kpa1500::Message& message);
     void poll();
@@ -295,13 +299,14 @@ private:
     // while asleep, so an answering amp is never this quiet; slow-rotation
     // gaps do not matter.
     static constexpr int kLinkSilenceMs = 3000;
-    // A sleep sent this recently, unconfirmed when the link drops, counts as
-    // confirmed: the drop lands at most kLinkSilenceMs plus a poll tick after
-    // the last reply, and the sleep's own confirmation runs for
-    // kControlRetryMs * kMaxControlAttempts (kSleepDropWindowMs, below).
     static constexpr int kMaxDatagramBytes = 1024;
     static constexpr int kControlRetryMs = 600;
     static constexpr int kMaxControlAttempts = 5;
+    // A sleep sent this recently, unconfirmed when the link drops, counts as
+    // confirmed: the drop lands at most kLinkSilenceMs plus a poll tick after
+    // the last reply, and the sleep's own confirmation runs for
+    // kControlRetryMs * kMaxControlAttempts. An ^ON1 read more than a poll
+    // interval after the send (not an answer already in flight) cancels it.
     static constexpr int kSleepDropWindowMs = kLinkSilenceMs + kControlRetryMs * kMaxControlAttempts;
     // Rotates one slow query per tick alongside the fast set, so the meters
     // stay at the full poll rate while the configuration readbacks (band,
