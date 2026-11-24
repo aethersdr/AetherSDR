@@ -2331,13 +2331,15 @@ void TciServer::reapCreatedVfoBSlice(int sliceId)
         m_model->removeCreatedSlice(m_createdVfoBSlices.take(sliceId));
         return;
     }
-    const CreatedVfoBPan created = m_createdVfoBPans.take(sliceId);
+    const CreatedVfoBPan created = m_createdVfoBPans.value(sliceId);
     if (created.slice && created.pan && m_model->controlSessionCurrent(created.session)
         && m_model->slice(sliceId) == created.slice
         && m_model->panadapter(created.pan->panId()) == created.pan
-        && m_model->sliceOwnedByUs(sliceId)) {
-        m_model->removePanadapter(created.pan->panId());
+        && m_model->sliceOwnedByUs(sliceId)
+        && !m_model->removePanadapter(created.pan->panId())) {
+        return;   // not closed (a keyed TX pan is refused): keep it to reap later
     }
+    m_createdVfoBPans.remove(sliceId);
 }
 
 void TciServer::reportVfoBRouteFailure(TciClient* client,

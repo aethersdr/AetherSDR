@@ -3,6 +3,7 @@
 #include "TestSettingsProfile.h"
 #include "PanControlTestFixture.h"
 #include "gui/PanSpanControlGate.h"
+#include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QFile>
@@ -41,8 +42,58 @@ public:
         if (!deferCreate) { emit panCenterBandwidthChanged(QStringLiteral("native-new"), 7.1, 0.384); }
         return true;
     }
-    bool removePanadapter(const QString&) override { return !refuseClose; }
+    int removeCalls{0};
+    bool removePanadapter(const QString&) override { ++removeCalls; return !refuseClose; }
 };
+// #7553: a keyed close of the pan hosting the TX slice, through each family's
+// real capability record. A Refused declaration (HL2) refuses it in the model
+// before panAboutToRemove, with the transmit-change Notice, and reaches no
+// backend; unkeyed it proceeds. An Allowed one (Flex) is unaffected keyed.
+void keyedTxPanClose(const QString& family, bool keyed, bool expectRefused, const char* what)
+{
+    RadioModel specimen;
+    if (!specimen.rebuildBackendForTest(family)) { check(false, what); return; }
+    RadioModel radio;
+    auto owned = std::make_unique<NativeBackend>();
+    NativeBackend* backend = owned.get();
+    backend->caps = specimen.backendCapabilities();
+    backend->caps.maxPanadapters = 2;
+    radio.setBackendForTest(std::move(owned), family);
+    emit backend->panCenterBandwidthChanged(QStringLiteral("native-first"), 14.1, 0.384);
+    emit backend->panCenterBandwidthChanged(QStringLiteral("native-tx"), 7.1, 0.384);
+    SliceDelta delta;
+    delta.inUse = true; delta.frequency = 7.1; delta.mode = QStringLiteral("USB");
+    delta.filterLow = 300; delta.filterHigh = 2700;
+    delta.panId = QStringLiteral("native-tx"); delta.txSlice = true;
+    emit backend->sliceChanged(0, delta);
+    const QString txPan = RadioModel::neutralPanIdStringForTest(1);
+    const SliceModel* tx = radio.slice(0);
+    TransmitDelta transmit;
+    transmit.mox = keyed;
+    radio.applyBackendTransmitDeltaForTest(transmit);
+    int aboutToRemove = 0;
+    QStringList notices;
+    QObject::connect(&radio, &RadioModel::panAboutToRemove, &radio, [&](const QString&) { ++aboutToRemove; });
+    QObject::connect(&radio, &RadioModel::interlockNotificationRequested, &radio,
+                     [&](const QString& message, const QString&, const QString& panId) {
+                         notices << message + QLatin1Char('@') + panId;
+                     });
+    const bool gated = radio.keyedTxPanCloseRefused(txPan);
+    const bool closed = radio.removePanadapter(txPan);
+    const bool ok = tx && tx->isTxSlice() && tx->panId() == txPan && radio.isRadioTransmitting() == keyed
+        && (expectRefused
+                ? gated && !closed && aboutToRemove == 0 && backend->removeCalls == 0
+                      && notices == QStringList{QStringLiteral("TX panadapter can't close while transmitting.@") + txPan}
+                      && radio.panadapter(txPan) != nullptr
+                : !gated && closed && aboutToRemove == 1 && backend->removeCalls == 1 && notices.isEmpty());
+    if (!ok) {
+        std::printf("  tx=%d txPan=%s slicePan=%s keyed=%d gated=%d closed=%d about=%d removes=%d notices=%s\n",
+                    tx != nullptr, qPrintable(txPan), tx ? qPrintable(tx->panId()) : "-",
+                    radio.isRadioTransmitting(), gated, closed, aboutToRemove, backend->removeCalls,
+                    qPrintable(notices.join(QLatin1Char('|'))));
+    }
+    check(ok, what);
+}
 void native(const QString& family)
 {
     RadioModel specimen;
@@ -129,6 +180,22 @@ int main(int argc, char** argv)
         check(!spanFixedOnPan(true, flexDisplay.has_value(),
                   flexDisplay && flexDisplay->declaresSpan(), false),
               "Flex declares its span, so its -/+ pair stays live");
+    }
+    keyedTxPanClose(QStringLiteral("hl2"), true, true,
+                    "HL2 caps, keyed: the TX pan's close is refused in the model before panAboutToRemove, with the Notice");
+    keyedTxPanClose(QStringLiteral("hl2"), false, false,
+                    "HL2 caps, unkeyed: the TX pan's close proceeds");
+    keyedTxPanClose(QStringLiteral("flex"), true, false,
+                    "Flex caps (Allowed), keyed: the TX pan's close proceeds unchanged");
+    {
+        // The two GUI closes clear a pan's center lock (and its saved intent)
+        // before the close; a refused keyed close must keep it.
+        QFile actions(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_ControlActions.cpp"));
+        QFile wiring(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Wiring.cpp"));
+        const QByteArray gate = "if (!m_radioModel.keyedTxPanCloseRefused(panId)) clearCenterLockForPan(panId, true);";
+        check(actions.open(QIODevice::ReadOnly) && wiring.open(QIODevice::ReadOnly)
+                  && actions.readAll().count(gate) == 1 && wiring.readAll().count(gate) == 1,
+              "pan_close and the title-bar X keep the center lock when the model refuses the close");
     }
     QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Wiring.cpp"));
     check(source.open(QIODevice::ReadOnly), "GUI dimension source readable");

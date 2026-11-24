@@ -1193,6 +1193,11 @@ public:
                                        bool initializeDisplay = true);
     bool createPanadapter();
     bool removePanadapter(const QString& panId, PanCloseIntent intent = PanCloseIntent::Ordinary);
+    // True when removePanadapter(panId) would be refused because the pan hosts
+    // the TX slice, the radio is transmitting and the backend declares
+    // PanLifecycleControl::TxPanCloseWhileKeyed::Refused. A caller that tears
+    // down its own state for the pan first (a center lock) checks this.
+    bool keyedTxPanCloseRefused(const QString& panId) const;
     ReceiveDispatch requestPanDisplay(PanadapterModel* pan, const PanDisplayRequest& request,
         const RadioControlCompletion& completion = {}, bool announce = true);
     ReceiveDispatch requestPanDimensions(PanadapterModel* pan, int width, int height, int localPoints);
@@ -2919,6 +2924,10 @@ private:
     bool m_cwPracticeKeyDown{false};
     quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;
+    // A transmit-setup change refused while keyed, as a panadapter Notice.
+    void noticeTransmitChangeRefused(int sliceId, const QString& message);
+    // The TX slice on panId when its keyed close is refused; nullptr otherwise.
+    SliceModel* txSliceRefusingKeyedPanClose(const QString& panId) const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,
                                    const QString& panId = QString());

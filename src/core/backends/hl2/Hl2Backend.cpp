@@ -2442,6 +2442,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     c.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Native,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    // removePanadapter() refuses closing the TX pan while keyed (D1, #7553).
+    c.panLifecycleControl->txPanCloseWhileKeyed = PanLifecycleControl::TxPanCloseWhileKeyed::Refused;
     // No Flex stream plane: receive audio is native and graphic EQ is host-side.
     c.audioStreamControl = std::nullopt;
     c.radioGraphicEqControl = std::nullopt;
