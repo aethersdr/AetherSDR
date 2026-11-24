@@ -573,7 +573,8 @@ private slots:
             }
         }
         QVERIFY(result);
-        const QString noTci = QStringLiteral("no TCI audio");
+        const QString noTci =
+            QStringLiteral("No TCI audio yet. Is your TCI client receiving on this slice?");
 
         // A level on the slice's DAX channel after the move: the point records.
         // The manual settle is 280 ms, so wait past it before checking.
@@ -587,9 +588,161 @@ private slots:
         fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1, 30);
         settle();
         emit tci.rxLevel(2, 0.3f);
-        QTRY_VERIFY_WITH_TIMEOUT(result->text().contains(noTci), 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(result->text(), noTci, 2000);
 #else
         QSKIP("HAVE_WEBSOCKETS not set; TCI wiring test requires TciServer");
+#endif
+    }
+
+    void calibrationDialogSweepNoAudioNamesLatchedSource()
+    {
+        // The sweep latches TCI at start. A mode change mid-sweep must not
+        // change the source its "Stopped:" message names: onFinished()
+        // re-latches m_tciActive from the live mode (USB, PC Audio) before
+        // noAudio arrives.
+#ifdef HAVE_WEBSOCKETS
+        Fixture fixture;
+        TciServer tci(&fixture.radio);
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
+        settle();
+
+        QLabel* result = nullptr;
+        QPushButton* startStop = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("result")) {
+                result = label;
+            }
+        }
+        for (QPushButton* button : dialog.findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("Auto Sweep")) {
+                startStop = button;
+            }
+        }
+        QVERIFY(result && startStop);
+        startStop->click();
+        settle();
+        QCOMPARE(startStop->text(), QStringLiteral("Stop"));
+
+        // DIGU -> USB mid-sweep. No TCI level arrives, so the first step
+        // (280 ms) stops the sweep for want of audio.
+        fixture.backend->modeStatus(0, QStringLiteral("USB"), QStringLiteral("med"), 1);
+        settle();
+        QTRY_COMPARE_WITH_TIMEOUT(startStop->text(), QStringLiteral("Auto Sweep"), 2000);
+        QCOMPARE(result->text(),
+            QStringLiteral("Stopped: no TCI audio. Is your TCI client receiving on this slice?"));
+#else
+        QSKIP("HAVE_WEBSOCKETS not set; latched-source test requires TciServer");
+#endif
+    }
+
+    void calibrationDialogManualNoAudioWording()
+    {
+        // A manual move that settles with no audio stopped nothing, so the
+        // notice drops "Stopped:" and says what to check.
+        Fixture fixture;
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, nullptr, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        settle();
+        QLabel* result = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("result")) {
+                result = label;
+            }
+        }
+        QVERIFY(result);
+        fixture.backend->status(0, AgcThresholdMode::Manual, 40);
+        QTRY_COMPARE_WITH_TIMEOUT(result->text(),
+            QStringLiteral("No audio on this computer yet. Is PC Audio on?"), 2000);
+    }
+
+    void calibrationDialogManualNoAudioKeepsRecommendation()
+    {
+        // A silent manual move records nothing, so the recommendation on show
+        // stays valid and its line must survive the no-audio notice.
+        Fixture fixture;
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, nullptr, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        settle();
+        QLabel* result = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("result")) {
+                result = label;
+            }
+        }
+        QVERIFY(result);
+        for (const int value : {20, 50, 80}) {
+            fixture.backend->status(0, AgcThresholdMode::Manual, value);
+            emit audio.levelChanged(static_cast<float>(value) / 100.0f);
+            QTest::qWait(400);
+        }
+        QVERIFY2(result->text().startsWith(QStringLiteral("Recommended AGC-T")),
+                 qPrintable(result->text()));
+        const QString recommendation = result->text();
+
+        // No level after this move: the settle (280 ms) reports no audio.
+        fixture.backend->status(0, AgcThresholdMode::Manual, 35);
+        QTest::qWait(600);
+        QCOMPARE(result->text(), recommendation);
+    }
+
+    void calibrationDialogNrCheckReadsLatchedSource()
+    {
+        // Client NR2 runs in AudioEngine, which the TCI tap never passes
+        // through. A sweep latched on TCI keeps judging that tap after a
+        // mid-sweep switch to USB; the live mode would say PC Audio and warn.
+#ifdef HAVE_WEBSOCKETS
+        Fixture fixture;
+        TciServer tci(&fixture.radio);
+        AudioEngine audio;
+        audio.setNr2Enabled(true);
+        QVERIFY(audio.nr2Enabled());
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, &tci, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        fixture.backend->modeStatus(0, QStringLiteral("DIGU"), QStringLiteral("med"), 1);
+        settle();
+
+        QLabel* hint = nullptr;
+        QPushButton* startStop = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("hint")
+                && label->text().startsWith(QStringLiteral("Tune to a clear spot"))) {
+                hint = label;
+            }
+        }
+        for (QPushButton* button : dialog.findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("Auto Sweep")) {
+                startStop = button;
+            }
+        }
+        QVERIFY(hint && startStop);
+        const QString nrWarning = QStringLiteral("⚠ Disable");
+
+        startStop->click();
+        settle();
+        QCOMPARE(startStop->text(), QStringLiteral("Stop"));
+        fixture.backend->modeStatus(0, QStringLiteral("USB"), QStringLiteral("med"), 1);
+        settle();
+        QVERIFY(dialog.isVisible());
+        QCOMPARE(startStop->text(), QStringLiteral("Stop"));
+        QVERIFY2(!hint->text().startsWith(nrWarning), qPrintable(hint->text()));
+
+        // Stopped, the dialog rewires to the live source, PC Audio, and NR2
+        // now masks its tap.
+        startStop->click();
+        settle();
+        QCOMPARE(startStop->text(), QStringLiteral("Auto Sweep"));
+        QVERIFY2(hint->text().startsWith(nrWarning), qPrintable(hint->text()));
+#else
+        QSKIP("HAVE_WEBSOCKETS not set; latched NR test requires TciServer");
 #endif
     }
 

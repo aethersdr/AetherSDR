@@ -215,10 +215,12 @@ void staleManualCurve()
     QObject::connect(s, &SliceModel::agcThresholdChanged, &calibrator, &AgcTCalibrator::onValueChanged);
     // Pin the guard: a settle with no new audio since the move records nothing.
     QSignalSpy noAudio(&calibrator, &AgcTCalibrator::noAudio);
+    QSignalSpy manualNoAudio(&calibrator, &AgcTCalibrator::manualNoAudio);
     calibrator.onValueChanged(10);
     QTest::qWait(140);
-    check(calibrator.curve().isEmpty() && noAudio.size() == 1,
-          "a manual settle with no audio since the move records no point and reports no audio");
+    check(calibrator.curve().isEmpty() && manualNoAudio.size() == 1 && noAudio.isEmpty(),
+          "a manual settle with no audio since the move records no point and reports "
+          "manualNoAudio, not the sweep's noAudio");
     for (const int value : {20, 50, 80}) {
         calibrator.onValueChanged(value);
         calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);

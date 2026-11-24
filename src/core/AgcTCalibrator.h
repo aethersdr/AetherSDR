@@ -70,11 +70,13 @@ signals:
     void recommendation(int value, bool isKnee);
     void quietSpotStatus(bool quiet, float marginDb); // S-meter vs noise floor
     void finished(bool applied);
-    // No audio level arrived while a step (auto sweep) or slider settle
-    // (manual path) waited. Auto sweep: emitted after finished(false), which
-    // has already restored the original value. Manual path: the point is
-    // silently dropped and the caller shows a source-specific message.
+    // The auto sweep stopped and restored the original value because no audio
+    // level arrived while a step settled (PC Audio off: nothing to measure).
+    // Emitted after finished(false).
     void noAudio();
+    // A manual AGC-T move settled with no audio level since the move, so no
+    // point was recorded. Nothing stopped: the operator can move it again.
+    void manualNoAudio();
 
 private:
     int   currentValue() const;          // read the active knob from the slice

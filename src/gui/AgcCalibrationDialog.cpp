@@ -378,12 +378,25 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     connect(&m_engine, &AgcTCalibrator::quietSpotStatus, this, &AgcCalibrationDialog::onQuietSpot);
     connect(&m_engine, &AgcTCalibrator::finished, this, &AgcCalibrationDialog::onFinished);
     connect(&m_engine, &AgcTCalibrator::noAudio, this, [this] {
-        // After onFinished(), which set "Calibration stopped." The message is
-        // source-aware: TCI operators never use PC Audio for calibration.
-        if (m_tciActive) {
+        // After onFinished(), which set "Calibration stopped." and re-latched
+        // m_tciActive from the live mode. Name the source the sweep used.
+        m_recShowsRecommendation = false;
+        if (m_sweepTciActive) {
             m_recLabel->setText(tr("Stopped: no TCI audio. Is your TCI client receiving on this slice?"));
         } else {
             m_recLabel->setText(tr("Stopped: no audio on this computer. Is PC Audio on?"));
+        }
+    });
+    connect(&m_engine, &AgcTCalibrator::manualNoAudio, this, [this] {
+        // A manual move recorded nothing. Nothing stopped, and the point it
+        // skipped leaves any recommendation on show still valid.
+        if (m_recShowsRecommendation && m_engine.hasRecommendation()) {
+            return;
+        }
+        if (m_tciActive) {
+            m_recLabel->setText(tr("No TCI audio yet. Is your TCI client receiving on this slice?"));
+        } else {
+            m_recLabel->setText(tr("No audio on this computer yet. Is PC Audio on?"));
         }
     });
 
@@ -741,6 +754,7 @@ void AgcCalibrationDialog::onStartStop()
         boxOwner.get()->exec();
         return;
     }
+    m_sweepTciActive = m_tciActive;
     m_curve->clear();
     m_applyBtn->setEnabled(false);
     m_engine.startAutoSweep();
@@ -757,12 +771,14 @@ void AgcCalibrationDialog::onStarted(AgcTCalibrator::Strategy strategy, int orig
     m_curve->setStrategy(strategy);
     m_startStopBtn->setText(QStringLiteral("Stop"));
     m_applyBtn->setEnabled(false);
+    m_recShowsRecommendation = false;
     m_recLabel->setText(QStringLiteral("Sweeping…"));
 }
 
 void AgcCalibrationDialog::onProgress(int currentValue, int percent)
 {
     m_curve->setCurrentValue(currentValue);
+    m_recShowsRecommendation = false;
     m_recLabel->setText(QStringLiteral("Sweeping… %1%").arg(percent));
 }
 
@@ -776,6 +792,7 @@ void AgcCalibrationDialog::onPointAdded(int value, float rmsDb)
 void AgcCalibrationDialog::onRecommendation(int value, bool isKnee)
 {
     m_curve->setRecommended(value, isKnee);
+    m_recShowsRecommendation = true;
     m_recLabel->setText(isKnee
         ? QStringLiteral("Recommended AGC-T (knee): %1").arg(value)
         : QStringLiteral("Recommended AGC-T (target): %1").arg(value));
@@ -804,6 +821,7 @@ void AgcCalibrationDialog::onFinished(bool applied)
     m_startStopBtn->setText(QStringLiteral("Auto Sweep"));
     if (applied) {
         m_applyBtn->setEnabled(false);
+        m_recShowsRecommendation = false;
         m_recLabel->setText(m_engine.hasRecommendation()
             ? QStringLiteral("Applied AGC-T = %1.").arg(m_engine.recommendedValue())
             : QStringLiteral("Applied."));
@@ -813,6 +831,7 @@ void AgcCalibrationDialog::onFinished(bool applied)
     } else {
         m_applyBtn->setEnabled(false);
         m_curve->clear();
+        m_recShowsRecommendation = false;
         m_recLabel->setText(tr("Calibration stopped."));
     }
     updateModeUi();

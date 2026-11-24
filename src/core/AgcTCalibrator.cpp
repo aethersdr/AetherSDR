@@ -190,7 +190,7 @@ void AgcTCalibrator::onManualSettle()
     // (silent TCI source or PC Audio off). Skip the point and signal the dialog.
     if (m_levelCount == m_levelCountAtManual) {
         m_pendingManualValue = -1;
-        emit noAudio();
+        emit manualNoAudio();
         return;
     }
     recordPoint(m_pendingManualValue);

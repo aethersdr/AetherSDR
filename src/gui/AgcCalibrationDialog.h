@@ -126,6 +126,13 @@ private:
     // Labels read this so they name the source that is actually feeding the
     // engine, not the live mode (which can change mid-sweep). (#7263)
     bool m_tciActive{false};
+    // m_tciActive as the sweep latched it in onStartStop(). onFinished()
+    // re-latches m_tciActive from the live mode before noAudio arrives, so the
+    // sweep's "Stopped:" message reads this to name the source it swept.
+    bool m_sweepTciActive{false};
+    // m_recLabel shows a "Recommended AGC-T" line. The manual no-audio notice
+    // must not overwrite it: a skipped point leaves the recommendation valid.
+    bool m_recShowsRecommendation{false};
     // QPointer so slice removal mid-calibration doesn't dangle through the
     // polling timer or noise-floor lookup callback.
     QPointer<SliceModel> m_slice;
