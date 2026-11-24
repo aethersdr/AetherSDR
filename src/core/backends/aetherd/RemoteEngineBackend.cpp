@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QLoggingCategory>
 #include <QNetworkInterface>
+#include <QNetworkProxy>
 #include <QSslCertificate>
 #include <QSslConfiguration>
 #include <QSslError>
@@ -26,18 +27,16 @@ namespace {
 const QString kRadioSession = QStringLiteral("radio-1");
 constexpr qsizetype kRecentMethodLimit = 512;
 
-QList<NetworkInterfaceRecord> upNetworkInterfaces()
+QList<RemoteEngineBackend::InterfaceAddress> upNetworkInterfaces()
 {
-    QList<NetworkInterfaceRecord> records;
+    QList<RemoteEngineBackend::InterfaceAddress> addresses;
     for (const QNetworkInterface& candidate : QNetworkInterface::allInterfaces()) {
         if (!candidate.flags().testFlag(QNetworkInterface::IsUp)) { continue; }
-        NetworkInterfaceRecord record{candidate.name(), candidate.humanReadableName(), {}};
         for (const QNetworkAddressEntry& entry : candidate.addressEntries()) {
-            record.addresses.append(entry.ip());
+            addresses.append({candidate.name(), candidate.humanReadableName(), entry.ip(), entry.prefixLength()});
         }
-        records.append(std::move(record));
     }
-    return records;
+    return addresses;
 }
 
 // The certificate problems a self-made, pinned certificate always has. Any
@@ -123,16 +122,19 @@ bool RemoteEngineBackend::tailnetSerial(const QString& serial)
 }
 
 bool RemoteEngineBackend::tailnetPathAdmitted(const QHostAddress& localAddress,
-    InterfaceNaming naming, const QList<NetworkInterfaceRecord>& interfaces)
+    const QHostAddress& peerAddress, InterfaceNaming naming, const QList<InterfaceAddress>& interfaces)
 {
-    if (localAddress.isNull()) { return false; }
-    for (const NetworkInterfaceRecord& candidate : interfaces) {
-        for (const QHostAddress& address : candidate.addresses) {
-            if (address.isEqual(localAddress, QHostAddress::ConvertV4MappedToIPv4)) {
-                return (naming == InterfaceNaming::Linux && candidate.name.startsWith(QLatin1String("wg")))
-                    || isTailscaleInterface(naming, candidate.name, candidate.humanReadableName, address);
-            }
+    if (localAddress.isNull() || peerAddress.isNull()) { return false; }
+    for (const InterfaceAddress& candidate : interfaces) {
+        if (!candidate.address.isEqual(localAddress, QHostAddress::ConvertV4MappedToIPv4)) { continue; }
+        if (isTailscaleInterface(naming, candidate.name, candidate.humanReadableName, candidate.address)) {
+            // A Tailscale exit node also carries traffic to off-tailnet destinations.
+            return isTailnetAddress(peerAddress);
         }
+        return naming == InterfaceNaming::Linux && candidate.name.startsWith(QLatin1String("wg"))
+            && candidate.prefixLength > 0 && peerAddress.protocol() == candidate.address.protocol()
+            && !peerAddress.isEqual(candidate.address, QHostAddress::ConvertV4MappedToIPv4)
+            && peerAddress.isInSubnet(candidate.address, candidate.prefixLength);
     }
     return false;
 }
@@ -194,6 +196,7 @@ void RemoteEngineBackend::openSocket(const RemoteEngineRecord& record, bool tail
     m_scheduler.setLimits({});
     m_socket = std::make_unique<QWebSocket>(QStringLiteral("aethersdr"), QWebSocketProtocol::VersionLatest);
     QWebSocket* socket = m_socket.get();
+    if (tailnet) { socket->setProxy(QNetworkProxy::NoProxy); }
     socket->setMaxAllowedIncomingFrameSize(control::ProtocolLimits::kMaxMessageBytes);
     socket->setMaxAllowedIncomingMessageSize(control::ProtocolLimits::kMaxMessageBytes);
     connect(socket, &QWebSocket::connected, this, [this, generation] {
@@ -231,10 +234,10 @@ void RemoteEngineBackend::openSocket(const RemoteEngineRecord& record, bool tail
 void RemoteEngineBackend::onSocketConnected()
 {
     if (m_tailnet) {
-        if (!tailnetPathAdmitted(m_socket->localAddress(), hostInterfaceNaming(),
-                                 m_options.networkInterfaces())) {
-            fail(tr("A ws:// tailnet address is used only over a WireGuard (Tailscale) interface; "
-                    "this connection is not. Nothing was sent."));
+        if (!tailnetPathAdmitted(m_socket->localAddress(), m_socket->peerAddress(),
+                                 hostInterfaceNaming(), m_options.networkInterfaces())) {
+            fail(tr("The address is outside the connected Tailscale or WireGuard network. "
+                    "The token was not sent."));
             return;
         }
     } else {

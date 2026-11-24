@@ -37,11 +37,18 @@ class RemoteEngineBackend final : public IRadioBackend {
 public:
     static constexpr const char* kFamily = "aetherd";
 
+    struct InterfaceAddress {
+        QString name;
+        QString humanReadableName;
+        QHostAddress address;
+        int prefixLength{-1};
+    };
+
     struct Options {
         // Milliseconds from a monotonic origin, for the client bucket.
         std::function<qint64()> clockMs;
         // Up interfaces, injected for socket-free route admission tests.
-        std::function<QList<NetworkInterfaceRecord>()> networkInterfaces;
+        std::function<QList<InterfaceAddress>()> networkInterfaces;
     };
 
     explicit RemoteEngineBackend(QObject* parent = nullptr);
@@ -78,9 +85,9 @@ public:
     static constexpr const char* kTailnetSuffix = "/tailnet";
     [[nodiscard]] static QString engineIdOf(const QString& serial);
     [[nodiscard]] static bool tailnetSerial(const QString& serial);
-    // ws:// is admitted only when our end is on an up Tailscale or WireGuard interface.
+    // Credentials travel only to a peer address inside the selected tunnel.
     [[nodiscard]] static bool tailnetPathAdmitted(const QHostAddress& localAddress,
-        InterfaceNaming naming, const QList<NetworkInterfaceRecord>& interfaces);
+        const QHostAddress& peerAddress, InterfaceNaming naming, const QList<InterfaceAddress>& interfaces);
     // The lowercase hex SHA-256 the pin compares.
     [[nodiscard]] static QString fingerprintOf(const QByteArray& certificateDer);
 

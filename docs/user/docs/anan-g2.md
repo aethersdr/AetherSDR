@@ -46,7 +46,7 @@ When AetherSDR's radio engine already controls the G2, use its remote engine ent
 1. Join the G2's local network. On the G2's screen, open **Settings → Remote clients → Pair a device** to get the ten-digit code.
 2. On the desktop, open **File → Connect to Radio... → Nearby radios**. Under **Remote engine**, choose the advertised engine in **Address** or enter its `wss://<IP address>:<port>`.
 3. Enter the code and click **Pair**. Select the remote engine entry in **Nearby radios** and click **Connect Selected Radio**. Disconnecting the desktop leaves the G2 connected to its engine.
-4. To connect later through a configured Tailnet listener, right-click the engine and choose **Set Tailnet Address…**. Enter its `ws://<IP address>:<port>` and select the **(tailnet)** entry when connecting over Tailscale or WireGuard.
+4. To connect later through a configured Tailnet listener, right-click the engine and choose **Set Tailnet Address…**. Enter its `ws://<IP address>:<port>` and select the **(tailnet)** entry when connecting over Tailscale or a Linux WireGuard subnet.
 
 The desktop saves the token in the OS keychain when available. If the keychain cannot save it, pair again at the next launch. **Forget This Engine** removes the pairing from the desktop. To revoke the token on the G2, remove the desktop from **Remote clients** on the G2's screen.
 
