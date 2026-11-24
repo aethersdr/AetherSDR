@@ -125,7 +125,7 @@ struct Fixture {
             const LicenseFeatureState license = radio.licenseFeature(QStringLiteral("NOISE_REDUCTION"));
             return license.seen ? std::optional<bool>(license.enabled) : std::nullopt;
         });
-        backend->setSliceCommandSink([this](const QString& command) { commands.append(command); });
+        backend->setSliceCommandSinkForTest([this](const QString& command) { commands.append(command); });
         RadioModelSliceLifecycleTestAccess::identity(radio, QStringLiteral("FLEX-8600"), QStringLiteral("4.3.16.42034"));
         SliceDelta delta;
         delta.panId = QStringLiteral("0x40000000");
@@ -235,7 +235,7 @@ void productionProviders()
     check(backend != nullptr, "production setup selects Flex backend");
     if (!backend) { return; }
     QStringList commands;
-    backend->setSliceCommandSink([&](const QString& command) { commands.append(command); });
+    backend->setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
     check(backend->requestDspParameterReset(0, DspParameterResetTarget::Nr) == ReceiveDispatch::Unsupported,
           "production license provider starts unknown");
     RadioModelSliceLifecycleTestAccess::license(radio, QStringLiteral("1"));
@@ -461,7 +461,7 @@ int bridgeFixture(QApplication& app)
     log->setObjectName(QStringLiteral("fixtureCommandLog"));
     log->setWordWrap(true);
     layout->addWidget(log);
-    f.backend->setSliceCommandSink([&](const QString& command) {
+    f.backend->setSliceCommandSinkForTest([&](const QString& command) {
         f.commands.append(command);
         log->setText(f.commands.join(QStringLiteral("\n")));
     });

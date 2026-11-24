@@ -38,8 +38,8 @@ public:
     Backend()
     {
         setModelProvider([] { return QStringLiteral("FLEX-6700"); });
-        setSliceCommandSink([this](const QString& c) { commands << c; });
-        setSetupCommandSink([](const QString&, const RadioSetupCompletion&) { return true; });
+        setSliceCommandSinkForTest([this](const QString& c) { commands << c; });
+        setSetupCommandSinkForTest([](const QString&, const RadioSetupCompletion&) { return true; });
     }
     bool isConnected() const override { return true; }
     RadioCapabilities capabilities() const override

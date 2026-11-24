@@ -81,7 +81,7 @@ public:
     {
         auto* backend = new FlexBackend(&transfer);
         backend->setModelProvider([] { return QStringLiteral("FLEX-6700"); });
-        backend->setTransferCommandSink([&sent, &replies](const QString& command,
+        backend->setTransferCommandSinkForTest([&sent, &replies](const QString& command,
             const FileTransferGuard&, const RadioControlCompletion& completion) {
             sent << command;
             replies.push_back([completion](int code, const QString& body) {

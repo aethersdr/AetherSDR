@@ -172,7 +172,7 @@ void queueFencing()
     enqueue("FIRST"); enqueue("STALE"); enqueue("TAIL");
     const QList<QueuedSpotRequest> batch = queue.takeBatch(2, radio.controlSession(), radio.spotRequestEpoch());
     bool cleared = false;
-    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+    backend->setSetupCommandSinkForTest([&](const QString& command, const RadioSetupCompletion&) {
         backend->commands.append(command);
         if (!cleared && command.startsWith(QLatin1String("spot add"))) {
             cleared = true;
@@ -207,7 +207,7 @@ void queueFencing()
     check(backend->commands.isEmpty(), "an already detached old-session entry cannot dispatch");
 
     bool nested = false;
-    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+    backend->setSetupCommandSinkForTest([&](const QString& command, const RadioSetupCompletion&) {
         backend->commands.append(command);
         if (!nested && command.startsWith(QLatin1String("spot add"))) {
             nested = true;
@@ -276,7 +276,7 @@ void stationOwnership()
     check(stale && !radio.restoreTemporaryStation(*stale) && backend->commands.isEmpty(),
           "restoration never crosses reconnect");
     bool nested = false;
-    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+    backend->setSetupCommandSinkForTest([&](const QString& command, const RadioSetupCompletion&) {
         backend->commands.append(command);
         if (!nested) {
             nested = true;
@@ -297,7 +297,7 @@ void savedStationIntent()
     AppSettings::instance().setValue("StationName", QStringLiteral("Before"));
     std::optional<RadioStationOverride> agent;
     bool nested = false;
-    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+    backend->setSetupCommandSinkForTest([&](const QString& command, const RadioSetupCompletion&) {
         backend->commands.append(command);
         if (!nested) {
             nested = true;
@@ -315,7 +315,7 @@ void savedStationIntent()
           "override cleanup restores the operator edit made around its admission");
 
     nested = false;
-    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+    backend->setSetupCommandSinkForTest([&](const QString& command, const RadioSetupCompletion&) {
         backend->commands.append(command);
         if (!nested) {
             nested = true;
@@ -363,7 +363,7 @@ void physicalOutputs()
     radio.requestRadioSetup({RadioSetupField::LineoutGain, 62});
     check(radio.lineoutGain() == 37, "controller gain requests leave radio readback authoritative");
     bool nested = false;
-    backend->setSetupCommandSink([&](const QString&, const RadioSetupCompletion&) {
+    backend->setSetupCommandSinkForTest([&](const QString&, const RadioSetupCompletion&) {
         if (!nested) { nested = true; radio.setLineoutMute(false); }
         return true;
     });

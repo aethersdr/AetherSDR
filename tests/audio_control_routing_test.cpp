@@ -36,7 +36,7 @@ struct AudioFixture : PanControlFixture {
     std::vector<AudioControlGuard> guards;
     AudioFixture()
     {
-        backend->setAudioCommandSink([this](const QString& command, FlexBackend::CommandReply reply,
+        backend->setAudioCommandSinkForTest([this](const QString& command, FlexBackend::CommandReply reply,
                                            const AudioControlGuard& guard) {
             if (!backend->admit || !guard.permits()) { return false; }
             guards.push_back(guard);
@@ -103,7 +103,7 @@ void encoding()
     check(f.backend->commands().last() == QStringLiteral("eq TXsc mode=True"), "EQ enable uses FlexLib boolean spelling");
     check(f.radio.requestGraphicEq({GraphicEqRequest::Path::Receive, GraphicEqRequest::Field::BandGain, 8, 1})
         == ReceiveDispatch::Unsupported, "invalid EQ band refused before indexing");
-    f.backend->setAudioCommandSink([](const QString&, FlexBackend::CommandReply reply, const AudioControlGuard&) {
+    f.backend->setAudioCommandSinkForTest([](const QString&, FlexBackend::CommandReply reply, const AudioControlGuard&) {
         reply(0, QStringLiteral("0x100"));
         return false;
     });
@@ -292,6 +292,7 @@ void iqAndBinding()
 void terminalWriter()
 {
     AudioFixture f;
+    PanadapterModel* pan = f.publish(QStringLiteral("0x40000001"));
     QStringList writes;
     TxOperationIntegrationTestAccess::audioTransport(f.radio, f.identity, *f.backend,
         [&writes](quint32, const QString& command) { writes.append(command); });
@@ -304,7 +305,6 @@ void terminalWriter()
     cancelled.guard.revoke();
     f.radio.requestGraphicEq({GraphicEqRequest::Path::Receive, GraphicEqRequest::Field::Enabled, 0, 1});
     f.radio.requestGraphicEq({GraphicEqRequest::Path::Receive, GraphicEqRequest::Field::Enabled, 0, 0});
-    PanadapterModel* pan = f.publish(QStringLiteral("0x40000001"));
     f.radio.requestPanIqBinding(pan, 1);
     pan->setClientHandle(QStringLiteral("72"));
     f.radio.requestAudioStream({AudioStreamKind::RemoteTransmit});
@@ -315,6 +315,10 @@ void terminalWriter()
     worker.start();
     check(worker.wait(5000), "unopened transport worker drains within its deadline");
     events();
+    if (writes != QStringList{QStringLiteral("eq RXsc mode=False"),
+                              QStringLiteral("stream create type=remote_audio_tx compression=opus")}) {
+        std::fprintf(stderr, "terminal writer observed: %s\n", qPrintable(writes.join(QStringLiteral("; "))));
+    }
     check(writes == QStringList{QStringLiteral("eq RXsc mode=False"),
                                QStringLiteral("stream create type=remote_audio_tx compression=opus")},
         "production queued writer drops canceled creates, superseded EQ and retired pan binding");
