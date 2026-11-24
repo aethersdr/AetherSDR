@@ -4,9 +4,11 @@
 // See docs/HERMES.md §22.4 for the production contract.
 
 #include "core/backends/SliceDelta.h"
+#include "core/backends/TransmitDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "models/MeterModel.h"
 #include "models/SliceModel.h"
@@ -26,8 +28,13 @@
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
+#include <QVariant>
+#include <QVariantMap>
 
 #include <atomic>
+#include <optional>
+#include <string>
+#include <utility>
 #include <cmath>
 #include <vector>
 #include <cstdio>
@@ -145,6 +152,44 @@ struct Hl2PanCreateTestAccess {
     static void restoreCommittedRate(Hl2Backend& backend, int rateHz)
     {
         backend.m_rateLedger.commit(rateHz);
+    }
+
+    // The modulator, socket-free: configured in `mode` with the passband the
+    // backend publishes for it. Everything already posted to the I/O thread
+    // has run when these return.
+    static bool configureTx(Hl2Backend& backend, WdspChannel::Mode mode, const QString& name)
+    {
+        const auto [lo, hi] = backend.effectiveTxPassband(name);
+        bool ok = false;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&ok, dsp = backend.m_txDsp, mode, lo, hi] {
+            Hl2TxDsp::Config cfg;
+            cfg.mode = mode;
+            cfg.filterLowHz = lo;
+            cfg.filterHighHz = hi;
+            std::string err;
+            ok = dsp->configure(cfg, &err);
+        }, Qt::BlockingQueuedConnection);
+        return ok;
+    }
+    static Hl2TxDsp::Config txConfig(Hl2Backend& backend)
+    {
+        Hl2TxDsp::Config c;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&c, dsp = backend.m_txDsp] { c = dsp->config(); },
+                                  Qt::BlockingQueuedConnection);
+        return c;
+    }
+    static std::optional<WdspChannel::Mode> txChannelMode(Hl2Backend& backend)
+    {
+        std::optional<WdspChannel::Mode> m;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&m, dsp = backend.m_txDsp] {
+            if (const WdspChannel::Config* c = dsp->channelConfig())
+                m = c->mode;
+        }, Qt::BlockingQueuedConnection);
+        return m;
+    }
+    static std::pair<int, int> txPassbandFor(const Hl2Backend& backend, const QString& mode)
+    {
+        return backend.effectiveTxPassband(mode);
     }
 };
 
@@ -775,6 +820,84 @@ void aFailedBuildLeavesTheRolesOnALiveReceiver()
           "a fixture that had stopped working");
 }
 
+// #7586: transmit on a new DIGU receiver whose build fails, receiver 0 in LSB.
+// Transmit falls back to receiver 0, and the modulator must follow it to LSB
+// with LSB's passband, as removePanadapter()'s hand-off does.
+void aFailedTxBuildHandsTheModulatorTheNewOwnersMode()
+{
+    using Mode = WdspChannel::Mode;
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend, Mode::Lsb, QStringLiteral("LSB"))) {
+        check(false, "the backend's modulator configures");
+        return;
+    }
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+    std::optional<std::pair<int, int>> txFilterEcho;
+    QObject::connect(&backend, &IRadioBackend::transmitChanged, &backend,
+                     [&txFilterEcho](const AetherSDR::TransmitDelta& d) {
+                         if (d.txFilterLow && d.txFilterHigh)
+                             txFilterEcho = std::make_pair(*d.txFilterLow, *d.txFilterHigh);
+                     });
+
+    ThreadHold hold(Access::buildContext(backend));
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setTxSlice(ui);
+    backend.setSliceMode(ui, QStringLiteral("DIGU"));
+    const auto digu = Access::txPassbandFor(backend, QStringLiteral("DIGU"));
+    const AetherSDR::hl2::Hl2TxDsp::Config before = Access::txConfig(backend);
+    check(Access::txDdc(backend) == 1 && before.mode == Mode::Digu
+              && before.filterLowHz == digu.first && before.filterHighHz == digu.second,
+          "setup: transmit is on the new DIGU receiver and the modulator runs DIGU");
+
+    txFilterEcho.reset();
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+    check(lifecycleFailures == 1 && Access::txDdc(backend) == 0,
+          "the build fails and transmit falls back to receiver 0");
+
+    const auto lsb = Access::txPassbandFor(backend, QStringLiteral("LSB"));
+    const AetherSDR::hl2::Hl2TxDsp::Config after = Access::txConfig(backend);
+    std::fprintf(stderr, "     after the failure: modulator mode %d, %g..%g Hz (LSB is %d..%d)\n",
+                 static_cast<int>(after.mode), after.filterLowHz, after.filterHighHz,
+                 lsb.first, lsb.second);
+    check(after.mode == Mode::Lsb && after.filterLowHz == lsb.first
+              && after.filterHighHz == lsb.second,
+          "the modulator follows receiver 0: LSB with LSB's passband");
+#if AETHER_HL2_TX_TXA
+    check(Access::txChannelMode(backend) == Mode::Lsb, "the TX channel runs LSB");
+#endif
+    check(txFilterEcho == lsb, "the published TX passband follows: LSB's pair is announced");
+
+    std::optional<std::pair<double, double>> published;
+    backend.settleDspChainsForTest();
+    for (const QVariant& v : backend.dspChains()) {
+        const QVariantMap e = v.toMap();
+        if (e.value(QStringLiteral("chain")).toString() == QLatin1String("hl2-tx"))
+            published = std::make_pair(e.value(QStringLiteral("filterLowHz")).toDouble(),
+                                       e.value(QStringLiteral("filterHighHz")).toDouble());
+    }
+    // TXA publishes the channel's signed pair: LSB is the negative mirror.
+    std::fprintf(stderr, "     published hl2-tx passband: %g..%g Hz\n",
+                 published ? published->first : 0.0, published ? published->second : 0.0);
+#if AETHER_HL2_TX_TXA
+    const std::pair<double, double> expected(-lsb.second, -lsb.first);
+#else
+    const std::pair<double, double> expected(lsb.first, lsb.second);
+#endif
+    check(published == expected, "the TX chain's published passband is LSB's");
+}
+
 }   // namespace
 
 // Swallows the retired chain's DeferredDelete so it is still alive when its
@@ -930,6 +1053,7 @@ int main(int argc, char** argv)
     aRetiredBuildDoesNotCompleteAgainstReconstructedReceivers(true);
     aFailedBuildLeavesTheRolesOnALiveReceiver();
     aFailedBuildWithdrawsItsSMeter();
+    aFailedTxBuildHandsTheModulatorTheNewOwnersMode();
     aStaleSpectrumFrameDoesNotPublishOnTheReuser(false);
     aStaleSpectrumFrameDoesNotPublishOnTheReuser(true);
     std::fprintf(stderr, "hl2_pan_create_async_test: %d failure(s)\n", g_failures);
