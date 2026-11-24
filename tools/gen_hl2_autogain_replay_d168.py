@@ -19,10 +19,16 @@ What it writes, per leg:
            earlier: the loop would have attacked sooner; nor later: it would
            have attacked again). Each clip carries the offset the radio held
            BEFORE that attack, for both ticks: the second tick is the window in
-           flight when the gain write went out.
+           flight when the gain write went out. "window K / N" is a sliding
+           window, so the K of two close attacks can count the same
+           observations: on the 30 m leg the assigned count (103) exceeds the
+           series' totO rise (34); the stderr summary prints both. The counts
+           are kept as recorded so the header merged with #7511 stays
+           unchanged; the d245 generator avoids the overlap with a `used` set.
   blocks   every bandscope block in the series: arrival in ms after arming
            (poll time minus blockAgeMs) and the peak code recomputed from the
-           two-decimal headroom, round(2048 / 10^(headroom/20)). 0 = no reading.
+           two-decimal headroom, round(2048 / 10^(headroom/20)); 2047 when
+           railN (a running total) rose since the previous poll. 0 = no reading.
 
 The log's times are the recording host's wall clock, CEST (UTC+2); the series'
 are Unix time. The offset is fixed here so the output does not depend on the
@@ -85,15 +91,17 @@ def leg(name, arm_s, end_s):
     rise = s[-1]['totO'] - s[0]['totO']
     print(f'# {name}: {len(changes)} changes, clipped obs assigned {assigned}, series totO rise {rise:.0f}',
           file=sys.stderr)
-    blocks, seen = [], None
+    blocks, seen, rail = [], None, None
     for p in s:
+        railed = rail is not None and (p['railN'] or 0) > rail
+        rail = p['railN'] or 0
         if p['blocks'] != seen:
             seen = p['blocks']
             a = p['t'] - p['blockAgeMs'] / 1000.0
             if a > end:
                 continue
             hr = p['headroom']
-            if (p['railN'] or 0) > 0:
+            if railed:
                 peak = 2047
             elif hr is None:
                 peak = 0
@@ -111,6 +119,9 @@ def rows(items, fmt, per):
 
 
 def emit(tag, ticks, changes, clips, blocks):
+    # No empty-array sentinel, on purpose: tests/hl2_auto_gain_replay_test.cpp
+    # does not strip one, so a leg with no changes or clips fails to compile
+    # (an empty constexpr array) instead of replaying a {-1, 0} row.
     out = [f'inline constexpr int k{tag}Ticks = {ticks};',
            f'inline constexpr Change k{tag}Changes[] = {{']
     out += rows(changes, lambda ms, off: f'{{{ms}, {off}}},', 6)

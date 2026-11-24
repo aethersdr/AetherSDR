@@ -150,14 +150,14 @@ def leg(name):
             blocks.append((int(round((a - arm) * 1000)), peak))
         rail = p['railN'] or 0
     first = max([i for i, b in enumerate(blocks) if b[0] <= 0] or [0])
-    spt = sorted(dens)[len(dens) // 2] if dens else 19
+    spt = sorted(dens)[len(dens) // 2] if dens else None
     print(f'# {name}: arm {datetime.datetime.fromtimestamp(arm, TZ).strftime("%H:%M:%S.%f")[:-3]}, '
           f'{len(changes)} changes, {len(merged)} clip ticks, clipped obs from the log '
           f'{sum(c[1] for c in clips) - extra}, from the series outside attacks {extra} '
           f'({extra_below} of them below 24 dB), series totO rise '
-          f'{s[-1]["totO"] - s[0]["totO"]:.0f}, {len(blocks) - first} blocks, window N median {spt}',
+          f'{s[-1]["totO"] - s[0]["totO"]:.0f}, {len(blocks) - first} blocks, window N median {spt if spt is not None else "n/a"}',
           file=sys.stderr)
-    return ticks, changes, merged, blocks[first:], spt
+    return ticks, changes, merged, blocks[first:], spt, dens
 
 
 def rows(items, fmt, per):
@@ -204,9 +204,27 @@ struct Block  { int arrivalMs; int peakCode; };       // 0 = no reading
 '''
 
 
+def samples_per_tick(legs):
+    # The log's "window K / N" alternates between 19 and 20 observations per
+    # 123 ms window, so the per-leg medians land on 19 on some legs and 20 on
+    # others. The replay steps every leg with one constant, so it takes the
+    # median over every logged window of every leg; the assert keeps that one
+    # value inside the per-leg medians' range.
+    pooled = sorted(n for r in legs for n in r[5])
+    assert pooled, 'no attack/release line in any leg'
+    spt = pooled[len(pooled) // 2]
+    medians = [r[4] for r in legs if r[4] is not None]
+    assert min(medians) <= spt <= max(medians), (spt, medians)
+    print(f'# kSamplesPerTick {spt}: median of {len(pooled)} logged windows, '
+          f'per-leg medians {sorted(set(medians))}', file=sys.stderr)
+    return spt
+
+
 def generate():
-    out = [emit(tag, *leg(name)[:4]) for tag, name in LEGS]
-    return '\n'.join([HEADER % 19, '\n\n'.join(out), '\n}  // namespace d245']) + '\n'
+    legs = [leg(name) for _, name in LEGS]
+    out = [emit(tag, *r[:4]) for (tag, _), r in zip(LEGS, legs)]
+    return '\n'.join([HEADER % samples_per_tick(legs), '\n\n'.join(out),
+                      '\n}  // namespace d245']) + '\n'
 
 
 def main():
