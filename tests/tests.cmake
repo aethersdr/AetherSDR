@@ -187,11 +187,11 @@ get_property(_aether_targets_before_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS
 
 # ── aether_non_test_targets: everything the root declared before this file ───
 # Built from the same baseline, so the production/test boundary has one
-# definition. ci.yml builds this instead of `all`, on pull requests and main:
-# it runs none of the tests, and compiling and linking them was most of its build
-# time. Every default-built executable and library the root CMakeLists.txt
-# declares above include(tests/tests.cmake) joins without a CI edit. Custom
-# targets and targets from add_subdirectory() build only when a collected
+# definition. CI's Linux PR job builds this target. CI's macOS job builds it
+# alongside its gate tests on PRs and main. Full Suite builds the Linux
+# default graph on main. Default-built executables and libraries the root
+# CMakeLists.txt declares above include(tests/tests.cmake) join without a CI
+# edit. Custom targets and targets from add_subdirectory() build only when a collected
 # target depends on them; everything declared in this file, tests and tools
 # such as kiwi_directory_poc alike, is left out.
 add_custom_target(aether_non_test_targets)
