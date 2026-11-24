@@ -2808,6 +2808,18 @@ its waterfall may appear later. Unknown outcomes are not automatically retried.
 Each close entry reports `requested`; the compatibility field `closed` names the
 request list, not confirmed removals. An aggregate `ok:true` means at least one
 close request was dispatched, so inspect every entry after a partial refusal.
+A refused entry also carries `reason`: `transmitting` (the pan hosts the TX
+slice while keyed, on a backend that refuses that close, such as the HL2),
+`last-panadapter`, `not-owned`, `remove-not-supported`, `inventory-uncertain`,
+`not-connected`, `stale-session`, `no-such-pan`, `pan-replaced`, or
+`backend-refused` (the backend declined after the model's own checks).
+
+```json
+→ {"cmd":"pan","action":"close","value":"all"}
+← {"ok":true,"pan":"close","requested":true,
+   "closed":[{"panId":"0x40000000","resolved":true,"requested":true},
+             {"panId":"0x40000001","resolved":true,"requested":false,"reason":"transmitting"}]}
+```
 Every `pan` action is RX/config only; none keys the transmitter.
 
 Floating and docking use the production pan title-bar control rather than a

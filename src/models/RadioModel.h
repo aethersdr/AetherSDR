@@ -1193,6 +1193,15 @@ public:
                                        bool initializeDisplay = true);
     bool createPanadapter();
     bool removePanadapter(const QString& panId, PanCloseIntent intent = PanCloseIntent::Ordinary);
+    // Why removePanadapter(panId, intent) refuses before reaching the backend,
+    // in the order it checks; None when it would go on (the backend can still
+    // refuse). Transmitting is the keyed TX-pan refusal below.
+    enum class PanCloseRefusal {
+        None, InventoryUncertain, NoSuchPan, NotConnected, StaleSession,
+        RemoveNotSupported, NotOwned, LastPan, Transmitting,
+    };
+    PanCloseRefusal panCloseRefusal(const QString& panId,
+                                    PanCloseIntent intent = PanCloseIntent::Ordinary) const;
     // True when removePanadapter(panId) would be refused because the pan hosts
     // the TX slice, the radio is transmitting and the backend declares
     // PanLifecycleControl::TxPanCloseWhileKeyed::Refused. A caller that tears

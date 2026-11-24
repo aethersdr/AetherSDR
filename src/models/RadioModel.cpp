@@ -6051,22 +6051,41 @@ bool RadioModel::createPanadapter()
     }) != ReceiveDispatch::Unsupported;
 }
 
+RadioModel::PanCloseRefusal RadioModel::panCloseRefusal(const QString& panId,
+                                                        PanCloseIntent intent) const
+{
+    const PanadapterModel* pan = panadapter(panId);
+    const auto control = backendCapabilities().panLifecycleControl;
+    if (m_displayInventoryUncertain) { return PanCloseRefusal::InventoryUncertain; }
+    if (!pan) { return PanCloseRefusal::NoSuchPan; }
+    if (!m_backend) { return PanCloseRefusal::NotConnected; }
+    if (!controlSessionCurrent(controlSession())) { return PanCloseRefusal::StaleSession; }
+    if (!control || !control->supports(PanLifecycleAction::Remove)) {
+        return PanCloseRefusal::RemoveNotSupported;
+    }
+    if (!pan->ownedByClient(clientHandle())) { return PanCloseRefusal::NotOwned; }
+    if (intent == PanCloseIntent::Ordinary && m_panadapters.size() <= 1) {
+        return PanCloseRefusal::LastPan;
+    }
+    if (txSliceRefusingKeyedPanClose(panId)) { return PanCloseRefusal::Transmitting; }
+    return PanCloseRefusal::None;
+}
+
 bool RadioModel::removePanadapter(const QString& panId, PanCloseIntent intent)
 {
     const QPointer<PanadapterModel> original(panadapter(panId));
     const RadioControlSession session = controlSession();
-    const auto control = backendCapabilities().panLifecycleControl;
-    if (m_displayInventoryUncertain || !original || !m_backend || !controlSessionCurrent(session) || !control
-        || !control->supports(PanLifecycleAction::Remove)
-        || !original->ownedByClient(clientHandle())
-        || (intent == PanCloseIntent::Ordinary && m_panadapters.size() <= 1)) { return false; }
     // Before panAboutToRemove: a refused close must leave every listener's
     // state for the pan (its throttle rates) as it was. The backend refuses
-    // the same close too; this only makes the refusal arrive first.
-    if (const SliceModel* tx = txSliceRefusingKeyedPanClose(panId)) {
-        noticeTransmitChangeRefused(tx->sliceId(), tr("TX panadapter can't close while transmitting."));
+    // a keyed TX-pan close too; this only makes the refusal arrive first.
+    const PanCloseRefusal refusal = panCloseRefusal(panId, intent);
+    if (refusal == PanCloseRefusal::Transmitting) {
+        if (const SliceModel* tx = txSliceRefusingKeyedPanClose(panId)) {
+            noticeTransmitChangeRefused(tx->sliceId(), tr("TX panadapter can't close while transmitting."));
+        }
         return false;
     }
+    if (refusal != PanCloseRefusal::None) { return false; }
     // Before the fence below snapshots the pan's revision: a listener may
     // still write to this pan (the adaptive-throttle restore does, so the
     // radio doesn't keep the cap for the next pan it opens in this slot).
