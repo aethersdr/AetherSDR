@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <utility>
 
 Q_LOGGING_CATEGORY(lcAnanP2, "aether.anan.p2")
 
@@ -84,23 +85,14 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
 
     // Resolve the session's DDC list ONCE, before anything is sent: the
     // caller's explicit list, or RX1 alone on its routed DDC. See
-    // Params::activeDdcs for why these are not merged. Entries the codec would
-    // ignore are dropped here, so the list, the enable mask and the link DDC
-    // all describe the DDCs the radio is actually asked for.
+    // Params::activeDdcs for why these are not merged.
     const std::vector<DdcConfig> requested = params.activeDdcs.empty()
         ? std::vector<DdcConfig>{DdcConfig{.ddc = kRx1Route.ddc,
                                            .rateKsps = params.rx1RateKsps,
                                            .adcIndex = params.rx1AdcIndex}}
         : params.activeDdcs;
-    std::vector<DdcConfig> ddcs;
-    std::uint8_t enabledDdcs = 0;
-    for (const DdcConfig& ddc : requested) {
-        if (ddc.ddc < 0 || ddc.ddc >= kMaxDdcs || (enabledDdcs & (1u << ddc.ddc)) != 0)
-            continue;
-        enabledDdcs |= static_cast<std::uint8_t>(1u << ddc.ddc);
-        ddcs.push_back(ddc);
-    }
-    if (ddcs.empty())
+    ActiveDdcSet resolved = resolveActiveDdcs(requested);
+    if (resolved.ddcs.empty())
         return false;   // no DDC to run, so the radio would never send a frame
 
     m_ddcFreqWords.fill(0);
@@ -156,11 +148,11 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     sendTo(*m_socket, buildDiscovery(), m_host, kRadioPort, m_txBytes);
     sendTo(*m_socket, buildGeneral(), m_host, kRadioPort, m_txBytes);
 
-    m_enabledDdcs = enabledDdcs;
-    m_linkDdc = ddcs.front().ddc;
+    m_enabledDdcs = resolved.mask;
+    m_linkDdc = resolved.ddcs.front().ddc;
     // Retained for setDdcRateLive() -- see its own comment for why the whole
     // list (not just the mask) has to survive start().
-    m_activeDdcs = ddcs;
+    m_activeDdcs = std::move(resolved.ddcs);
     m_ditherEnabled = params.ditherEnabled;
     m_randomEnabled = params.randomEnabled;
 
@@ -478,18 +470,16 @@ HighPriorityOptions P2Client::highPriorityOptions() const
     HighPriorityOptions opts;
     opts.muteSpeakerAmp = m_speakerAmpMuted;
     if (m_bandFiltersEnabled) {
-        // Both banks follow the link DDC's frequency, as deskHPSDR's do with one
-        // receiver: an unset bank would keep whatever the last session
-        // energised. The selection replaces the bypass flags; they are the
-        // same relay bit.
+        // Each bank follows the receiver on its ADC, and a bank with none
+        // follows RX1, so neither keeps what the last session energised. The
+        // selection replaces the bypass flags; they are the same relay bit.
         //
         // The relays switch only when the tuned frequency crosses a band
         // edge, and AnanBackend throttles retunes before they reach here
         // (scheduleTuneApply()), so a drag across bands sends a few packets.
-        const AlexRxFilter filter =
-            alexRxFilterFor(m_ddcFreqHz[static_cast<std::size_t>(m_linkDdc)]);
-        opts.adc0Filter = filter;
-        opts.adc1Filter = filter;
+        const std::array<double, 2> hz = bandFilterFrequenciesHz(m_activeDdcs, m_ddcFreqHz);
+        opts.adc0Filter = alexRxFilterFor(hz[0]);
+        opts.adc1Filter = alexRxFilterFor(hz[1]);
     }
     return opts;
 }
@@ -541,6 +531,43 @@ bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
     if (rateChanged) {
         m_expectedSeq[static_cast<std::size_t>(ddcIndex)].reset();
     }
+    return true;
+}
+
+bool P2Client::setActiveDdcsLive(const std::vector<DdcConfig>& ddcs)
+{
+    if (!m_running || !m_socket)
+        return false;
+    // A DDC already running keeps its rate: setDdcRateLive() changes that, and
+    // AnanBackend records a zoom's new rate before the zoom's channel is built.
+    ActiveDdcSet resolved = resolveLiveDdcs(ddcs, m_activeDdcs);
+    if (resolved.ddcs.empty() || resolved.ddcs.front().ddc != m_linkDdc)
+        return false;
+    const std::uint8_t wasMask = m_enabledDdcs;
+
+    for (int ddc = 0; ddc < kMaxDdcs; ++ddc) {
+        const auto slot = static_cast<std::size_t>(ddc);
+        const bool wasOn = isEnabledDdc(ddc);
+        const bool isOn = (resolved.mask & (1u << ddc)) != 0;
+        if (isOn && !wasOn) {
+            // Its own sequence starts with its first frame, not a gap.
+            m_expectedSeq[slot].reset();
+        } else if (wasOn && !isOn) {
+            // No word for a receiver nobody runs, and the frames still in
+            // flight from it are expected, not a source-port mismatch.
+            m_ddcFreqWords[slot] = 0;
+            m_ddcFreqHz[slot] = 0.0;
+            m_warnedUnexpectedPorts.insert(static_cast<quint16>(kDdc0DefaultPort + ddc));
+        }
+    }
+    m_enabledDdcs = resolved.mask;
+    m_activeDdcs = std::move(resolved.ddcs);
+    // The enable bitmap is in DDC-Specific; the band filters, which follow the
+    // receivers on each ADC, are in High Priority. A DDC this enables has no
+    // frequency yet, so its High Priority waits for the frequency.
+    sendTo(*m_socket, ddcSpecificPacket(), m_host, kDdcSpecificPort, m_txBytes);
+    if (highPriorityWithDdcChange(wasMask, m_enabledDdcs, m_ddcFreqHz))
+        sendRunningHighPriority();
     return true;
 }
 

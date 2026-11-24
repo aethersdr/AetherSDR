@@ -70,7 +70,12 @@ private:
     bool   m_blinkState{false};
     int    m_conflictAntId{-1};    // antenna ID where A==B conflict; -1 = none
     int    m_intendedBAntId{-1};   // where B was trying to go before DL reroute
-    bool   m_autoRoutedToDummy{false};
+    bool   m_autoRoutedToDummy{false};   // set once the switch reports B on the dummy load
+    bool   m_dummyRouteRequested{false}; // reroute sent, not yet confirmed
+
+    // Transient refusal text on the status line.
+    QString m_connectedText;
+    quint64 m_refusalGeneration{0};
 };
 
 } // namespace AetherSDR

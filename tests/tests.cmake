@@ -612,6 +612,17 @@ target_include_directories(control_remote_pairing_test PRIVATE src)
 target_link_libraries(control_remote_pairing_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME control_remote_pairing_test COMMAND control_remote_pairing_test)
 
+# aetherd's LAN advertisement (aetherd-remote-backend.md §1): the probe format,
+# the reply's contents and size, the rate bound, and the source-address and
+# WireGuard-interface filters, socket-free; then one probe over 127.0.0.1 to a
+# responder bound on an EPHEMERAL port (never the fixed 4996). Skips (77) when
+# it cannot bind.
+add_executable(aetherd_discovery_responder_test tests/aetherd_discovery_responder_test.cpp)
+target_include_directories(aetherd_discovery_responder_test PRIVATE src)
+target_link_libraries(aetherd_discovery_responder_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME aetherd_discovery_responder_test COMMAND aetherd_discovery_responder_test)
+set_tests_properties(aetherd_discovery_responder_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
 # grants observation only; no control or transmit capability may appear.
@@ -1584,12 +1595,22 @@ target_link_libraries(anan_rxdsp_fm_limiter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME anan_rxdsp_fm_limiter_test COMMAND anan_rxdsp_fm_limiter_test)
 
 # ANAN backend -- IRadioBackend implementor. Pieces testable without a live
-# radio: capabilities() defaults, mode-string parsing, CW BFO math, and the
-# passband-reset-only-on-actual-mode-change idempotence rule.
+# radio: capabilities() defaults, mode-string parsing, CW BFO math, the
+# passband-reset-only-on-actual-mode-change idempotence rule, and RX2's open,
+# close and restore with its DSP builds held (no socket, no WDSP build).
 add_executable(anan_backend_test tests/anan_backend_test.cpp)
 target_include_directories(anan_backend_test PRIVATE src tests)
 target_link_libraries(anan_backend_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_backend_test COMMAND anan_backend_test)
+
+# The speaker mix of host-demodulated receivers (ANAN's RX1 + RX2): one
+# receiver passed through untouched, the aligned sum and its clamp, the stall
+# lag, whole frames, activation. Pure: no Qt, no DSP.
+add_executable(receiver_audio_mixer_test
+    tests/receiver_audio_mixer_test.cpp
+    src/core/ReceiverAudioMixer.cpp)
+target_include_directories(receiver_audio_mixer_test PRIVATE src)
+add_test(NAME receiver_audio_mixer_test COMMAND receiver_audio_mixer_test)
 
 # Socket-free NB publication/readback: actual backend and DSP, injected model
 # connection receipts and direct bridge dispatch; no transport is started.
@@ -1998,6 +2019,13 @@ add_executable(hl2_rxdsp_channel_nr_anf_test tests/hl2_rxdsp_channel_nr_anf_test
 target_include_directories(hl2_rxdsp_channel_nr_anf_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_channel_nr_anf_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_channel_nr_anf_test COMMAND hl2_rxdsp_channel_nr_anf_test)
+
+# The HL2 receive panel is mono (L == R) in every mode, including AM/SAM under
+# ANR or ANF, and stays so across a mode change and a rebuild.
+add_executable(hl2_rxdsp_panel_mono_test tests/hl2_rxdsp_panel_mono_test.cpp)
+target_include_directories(hl2_rxdsp_panel_mono_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_panel_mono_test COMMAND hl2_rxdsp_panel_mono_test)
 
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
@@ -6834,7 +6862,8 @@ target_link_libraries(peripheral_auth_dialog_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 set_target_properties(peripheral_auth_dialog_test PROPERTIES AUTOMOC ON)
 foreach(_case IN ITEMS automatic removal auth-read manual-recovery external-ag
-        discovery availability discovered-recovery interaction)
+        discovery availability discovered-recovery interaction ag-antenna-status
+        ag-antenna-selection-mode ss-antenna-refusal)
     add_test(NAME peripheral_auth_dialog_${_case}_test
         COMMAND peripheral_auth_dialog_test --case=${_case})
     set_tests_properties(peripheral_auth_dialog_${_case}_test PROPERTIES
@@ -8426,6 +8455,36 @@ if(Qt6WebSockets_FOUND)
     add_test(NAME remote_control_loopback_test COMMAND remote_control_loopback_test)
     set_tests_properties(remote_control_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
+    # Socket-owning test: the remote-engine backend (family "aetherd",
+    # aetherd-remote-backend.md) against an in-process aetherd on 127.0.0.1 and
+    # an EPHEMERAL port, with a fake receive target and in-process clients only:
+    # the silent connect (also through a real RadioModel), disconnect sending
+    # nothing, intents paced 1/ms for 3 s inside the client bucket, a conflict
+    # retried, slice add/remove and resync, the certificate pin. Skips (77)
+    # without the openssl tool or when it cannot bind.
+    add_executable(aetherd_remote_engine_loopback_test tests/aetherd_remote_engine_loopback_test.cpp)
+    target_include_directories(aetherd_remote_engine_loopback_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_engine_loopback_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets Qt6::Test)
+    add_test(NAME aetherd_remote_engine_loopback_test COMMAND aetherd_remote_engine_loopback_test)
+    set_tests_properties(aetherd_remote_engine_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
+    add_executable(aetherd_remote_pairing_policy_test tests/aetherd_remote_pairing_policy_test.cpp)
+    target_include_directories(aetherd_remote_pairing_policy_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_pairing_policy_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME aetherd_remote_pairing_policy_test COMMAND aetherd_remote_pairing_policy_test)
+
+    # Socket-owning test: desktop pairing with our own in-process engine.
+    # A QLocalServer uses a unique name, and a QWebSocketServer binds a TCP
+    # ephemeral port on 127.0.0.1. Skips (77) without openssl or on bind failure.
+    add_executable(aetherd_remote_pairing_client_test tests/aetherd_remote_pairing_client_test.cpp)
+    target_include_directories(aetherd_remote_pairing_client_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_pairing_client_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME aetherd_remote_pairing_client_test COMMAND aetherd_remote_pairing_client_test)
+    set_tests_properties(aetherd_remote_pairing_client_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
     # Socket-owning test: our own TCI server is the subject, so this is inside
     # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
     # via TciServer::start(0)) on QHostAddress::Any, with local 127.0.0.1 clients to
@@ -9001,6 +9060,14 @@ add_executable(backend_family_switch_test tests/backend_family_switch_test.cpp)
 target_include_directories(backend_family_switch_test PRIVATE src tests)
 target_link_libraries(backend_family_switch_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME backend_family_switch_test COMMAND backend_family_switch_test)
+
+# The remote-engine backend's socket-free pieces (aetherd-remote-backend.md §2):
+# the client bucket and its size, latest-wins per resource and method, the
+# resource -> seam mapping, and the ws:// WireGuard admission check.
+add_executable(aetherd_remote_engine_test tests/aetherd_remote_engine_test.cpp)
+target_include_directories(aetherd_remote_engine_test PRIVATE src)
+target_link_libraries(aetherd_remote_engine_test PRIVATE aethercore Qt6::Core)
+add_test(NAME aetherd_remote_engine_test COMMAND aetherd_remote_engine_test)
 
 add_executable(demo_applet_tooltip_test
     tests/demo_applet_tooltip_test.cpp
@@ -10848,6 +10915,19 @@ add_executable(hl2_auto_gain_policy_test
 )
 target_include_directories(hl2_auto_gain_policy_test PRIVATE src)
 add_test(NAME hl2_auto_gain_policy_test COMMAND hl2_auto_gain_policy_test)
+# The same law fed two recorded on-air legs (tests/Hl2AutoGainReplayD168.h).
+# MetisProtocol.cpp for Ep4Stats::peakDbfs(); no Qt, no socket.
+add_executable(hl2_auto_gain_replay_test
+    tests/hl2_auto_gain_replay_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_auto_gain_replay_test PRIVATE src tests)
+add_test(NAME hl2_auto_gain_replay_test COMMAND hl2_auto_gain_replay_test)
+# The +48 dB legs of a second evening (tests/Hl2AutoGainReplayD245.h).
+add_executable(hl2_auto_gain_replay_d245_test
+    tests/hl2_auto_gain_replay_d245_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_auto_gain_replay_d245_test PRIVATE src tests)
+add_test(NAME hl2_auto_gain_replay_d245_test COMMAND hl2_auto_gain_replay_d245_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -11301,6 +11381,8 @@ target_include_directories(auto_agc_threshold_gui_test PRIVATE src tests)
 target_link_libraries(auto_agc_threshold_gui_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test
 )
+target_compile_definitions(auto_agc_threshold_gui_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME auto_agc_threshold_gui_test
          COMMAND auto_agc_threshold_gui_test)
 set_tests_properties(auto_agc_threshold_gui_test PROPERTIES

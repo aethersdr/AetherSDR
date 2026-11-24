@@ -165,6 +165,10 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(
     // process-global FFTW lock.
     wc.minimumPhase = rxMinimumPhaseFor(config.mode);
     wc.rxPanelGain = kRxPanelGain;
+    // Mono, as Thetis, piHPSDR and deskHPSDR run it (binaural off): a consumer
+    // that averages L and R gets L's full level, and the Q that ANR/ANF zero
+    // in AM/SAM is replaced by I.
+    wc.rxPanelMono = true;
     // FM bypasses the AGC; the limiter bounds it in every build, since setMode()
     // enters FM live without a rebuild (#7222).
     wc.fmLimiter = true;

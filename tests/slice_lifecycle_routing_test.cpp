@@ -178,6 +178,23 @@ public:
         ++refreshes;
         return ReceiveDispatch::Dispatched;
     }
+    // A paired receiver/pan backend's native open: its pan and slice are
+    // published before this returns. Reached only with panLifecycleControl set.
+    int panCreates{0};
+    bool createPanadapter() override
+    {
+        ++panCreates;
+        emit panCenterBandwidthChanged(QStringLiteral("capture/two"), 14.25, 0.1);
+        SliceDelta delta;
+        delta.panId = QStringLiteral("capture/two");
+        delta.frequency = 14.25;
+        delta.mode = QStringLiteral("USB");
+        delta.filterLow = 150;
+        delta.filterHigh = 2700;
+        delta.inUse = true;
+        emit sliceChanged(1, delta);
+        return true;
+    }
 };
 
 struct Fixture {
@@ -852,6 +869,42 @@ void tciCancellation()
           "TCI discards cleanup receipts when their receiver is authoritatively removed");
 #endif
 }
+
+// VFO B on a backend whose receivers open through the pan lifecycle. Its TX
+// selection is the route's point, so a backend that cannot transmit opens no
+// receiver for it; one that can keeps the route it had.
+void tciVfoBOnPairedReceivers()
+{
+#ifdef HAVE_WEBSOCKETS
+    for (const bool canTransmit : {false, true}) {
+        Fixture f;
+        f.backend->caps.canCreateSlices = false;
+        f.backend->caps.maxSlices = 2;
+        f.backend->caps.maxPanadapters = 2;
+        f.backend->caps.canTransmit = canTransmit;
+        f.backend->caps.panLifecycleControl = PanLifecycleControl{
+            PanLifecycleControl::Creation::Native,
+            {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+        TciServer server(&f.radio);
+        TciClient client;
+        TciSliceLifecycleTestAccess::create(server, client, f.radio.slice(0));
+        settle();
+        if (!canTransmit) {
+            check(f.backend->panCreates == 0 && f.radio.slices().size() == 1
+                      && f.backend->selections.empty(),
+                  "VFO B on a receive-only paired backend opens no receiver: the layout stays");
+            check(!TciSliceLifecycleTestAccess::pending(server)
+                      && !TciSliceLifecycleTestAccess::ownsRoute(server),
+                  "and leaves no route or create behind");
+        } else {
+            check(f.backend->panCreates == 1 && f.radio.slices().size() == 2
+                      && f.backend->selections.size() == 1
+                      && f.backend->selections.front() == std::make_pair(1, true),
+                  "a paired backend that can transmit still opens VFO B's receiver and selects it for TX");
+        }
+    }
+#endif
+}
 }
 
 int main(int argc, char** argv)
@@ -873,5 +926,6 @@ int main(int argc, char** argv)
     duplexAndRefresh();
     rigctlCorrelation();
     tciCancellation();
+    tciVfoBOnPairedReceivers();
     return failures == 0 ? 0 : 1;
 }
