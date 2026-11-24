@@ -104,7 +104,8 @@ QString RadioModel::txTimeoutKeyingSource() const
     case TransmitModel::PttSource::TciHardware: return QStringLiteral("TCI");
     case TransmitModel::PttSource::Footswitch: return QStringLiteral("footswitch");
     case TransmitModel::PttSource::Tune: return QStringLiteral("TUNE");
-    case TransmitModel::PttSource::Dax: return QStringLiteral("DAX/CAT");
+    case TransmitModel::PttSource::Dax: return QStringLiteral("DAX");
+    case TransmitModel::PttSource::Cat: return QStringLiteral("CAT");
     case TransmitModel::PttSource::Atu: return QStringLiteral("ATU");
     case TransmitModel::PttSource::Wspr: return QStringLiteral("WSPR");
     }

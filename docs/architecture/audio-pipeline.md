@@ -884,7 +884,7 @@ The interlock code distinguishes **PTT source** from **audio route**:
 
 | PTT/audio case | Local preflight behavior | Notes |
 | --- | --- | --- |
-| Local MOX/PTT, PC mic voice path | Blocks `DIGU`/`DIGL` with `You cannot transmit voice in DIGU/DIGL mode.` and checks TX filter overlap before `xmit 1` | This is treated as local voice intent. |
+| Local MOX/PTT | Applies the `DIGU`/`DIGL` voice preflight and checks TX filter overlap before `xmit 1`. On Flex, `TransmitInhibitPolicy::moxKeysRadioDax` exempts MOX from the digital-mode voice preflight. | On Flex, `transmit dax=1` routes the selected DAX TX stream and `transmit dax=0` routes the configured mic input. |
 | Local TUNE/two-tone | Bypasses the `DIGU`/`DIGL` voice warning and local TX-filter-overlap check | The radio can still report frequency or tuner interlocks after tune is requested. |
 | rigctl CAT PTT and TCI `trx` PTT | Bypasses all local PTT preflight | These callers are ACKed before the queued model path runs, so the radio must be authoritative for any resulting interlock. |
 | DAX/TCI audio in `feedDaxTxAudio()` | Bypasses client voice DSP | The audio path alone does not change a local MOX request into a CAT/DAX PTT source. |

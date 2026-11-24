@@ -290,7 +290,7 @@ RigctlProtocol::~RigctlProtocol()
     if (m_model) {
         QMetaObject::invokeMethod(m_model, [model = m_model, request = m_pttRequest, cwx = m_cwxRequest,
                                             hostCwText = std::move(m_hostCwText)] {
-            (void)model->setProducerTransmit(request, false);
+            (void)model->setProducerTransmit(request, false, TransmitModel::PttSource::Cat);
             model->abortProducerCwx(cwx);
             if (hostCwText) {
                 hostCwText->close();
@@ -1053,7 +1053,7 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
             if (slice && !slice->isTxSlice())
                 slice->setTxSlice(true);
         }
-        (void)model->setProducerTransmit(request, tx, TransmitModel::PttSource::Dax);
+        (void)model->setProducerTransmit(request, tx, TransmitModel::PttSource::Cat);
     }, Qt::QueuedConnection);
     return rprt(0);
 }

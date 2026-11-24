@@ -1574,6 +1574,7 @@ bool TransmitModel::txOffDelayApplies() const
     return m_txOffDelayMs > 0
         && m_activePttSource != PttSource::Wspr
         && m_activePttSource != PttSource::Dax
+        && m_activePttSource != PttSource::Cat
         && isPhoneModeForQuindar();
 }
 
