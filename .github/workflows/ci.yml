@@ -491,7 +491,8 @@ jobs:
       # Restored BEFORE sccache first runs, so the server sees a populated
       # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
       # since it survives the key drift that made the exact-key GHA backend
-      # miss 100%. Same save-on-main split as the Linux ccache step.
+      # miss 100%. Same save-on-main split as the Linux compiler cache, whose
+      # main save is Full Suite's "Save ccache objects" step (full-suite.yml).
       #
       # The key carries the MSVC toolset version because sccache hashes the
       # compiler, so objects from another MSVC are a 100% miss. GitHub rolls a
@@ -999,9 +1000,10 @@ jobs:
         with:
           key: ccache-macos-ci
           max-size: 500M
-          # Same save-on-main split as the Linux and Windows jobs, expressed
-          # through this action's own `save` input rather than a restore/save
-          # pair. Restore stays on (default) so PRs read main's entry.
+          # Same save-on-main split as the Windows job and the Linux compiler
+          # cache (saved on main by full-suite.yml's "Save ccache objects"),
+          # expressed through this action's own `save` input rather than a
+          # restore/save pair. Restore stays on (default) so PRs read main's entry.
           #
           # append-timestamp stays at its default (true) deliberately: the
           # action needs a unique key per save because actions/cache entries are
