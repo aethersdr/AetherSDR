@@ -17,36 +17,6 @@ const TnfEntry* TnfModel::tnf(int id) const
 
 // ── Status parsing ──────────────────────────────────────────────────────────
 
-void TnfModel::applyTnfStatus(int id, const QMap<QString, QString>& kvs)
-{
-    auto& t = m_tnfs[id];
-    t.id = id;
-
-    if (kvs.contains("freq"))
-        t.freqMhz = kvs["freq"].toDouble();
-    if (kvs.contains("width")) {
-        // Firmware v1.4.0.0 reports width in Hz ("width=100"), but tolerate
-        // older fractional-MHz forms defensively.
-        const double rawWidth = kvs["width"].toDouble();
-        if (rawWidth > 0.0 && rawWidth < 1.0) {
-            t.widthHz = static_cast<int>(rawWidth * 1.0e6 + 0.5);
-        } else {
-            t.widthHz = static_cast<int>(rawWidth + 0.5);
-        }
-        if (t.widthHz < 10) {
-            t.widthHz = 100;
-        }
-    }
-    if (kvs.contains("depth"))
-        t.depthDb = kvs["depth"].toInt();
-    if (kvs.contains("permanent"))
-        t.permanent = kvs["permanent"] == "1";
-
-    qCDebug(lcProtocol) << "TnfModel: TNF" << id << "freq=" << t.freqMhz
-             << "width=" << t.widthHz << "depth=" << t.depthDb;
-    emit tnfChanged(id);
-}
-
 void TnfModel::applyNotchDelta(int id, const NotchDelta& delta)
 {
     auto& t = m_tnfs[id];

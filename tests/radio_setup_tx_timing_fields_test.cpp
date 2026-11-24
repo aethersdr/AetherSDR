@@ -2,7 +2,10 @@
 // production dialog. Injected Flex transport and socket-free Demo; no RF.
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
+#include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
+#include "core/RadioSettingsScope.h"
+#include "core/TxKeyingMarker.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "gui/RadioSetupDialog.h"
@@ -11,8 +14,10 @@
 #include "models/TransmitModel.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QGridLayout>
 #include <QHostAddress>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -21,7 +26,9 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QSignalSpy>
+#include <QSpinBox>
 #include <QStringList>
+#include <QTreeWidget>
 #include <QtTest>
 
 #include <memory>
@@ -162,6 +169,17 @@ void connectDemo(RadioModel& model)
     model.connectToRadio(demo);
 }
 
+template <typename W>
+W* findByAccessibleName(QWidget& root, const QString& name)
+{
+    for (W* w : root.findChildren<W*>()) {
+        if (w->accessibleName() == name) {
+            return w;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 class RadioSetupTxTimingFieldsTest : public QObject {
@@ -279,6 +297,114 @@ private slots:
         }
     }
 
+    // The host time-out group (RFC #7021) writes this radio's TxTimeout
+    // document on an edit, and a new session on the same radio reads it back.
+    void txTimeoutGroupWritesTheDocument()
+    {
+        {
+            RadioModel model;
+            connectDemo(model);
+            QTRY_VERIFY_WITH_TIMEOUT(model.isConnected(), 5000);
+            const RadioSettingsScope scope = model.settingsScope();
+            QVERIFY2(scope.hasRadioIdentity(), "the demo has a radio identity");
+            RadioSetupDialog dialog(&model);
+            dialog.show();
+            dialog.selectTab(QStringLiteral("Transmit"));
+            QCheckBox* enable = nullptr;   // by its text, independent of the name checked below
+            for (QCheckBox* box : dialog.findChildren<QCheckBox*>()) {
+                if (box->text() == QStringLiteral("Stop transmitting after")) {
+                    enable = box;
+                }
+            }
+            auto* timeout = findByAccessibleName<QSpinBox>(dialog, QStringLiteral("Transmit time-out (seconds)"));
+            auto* warning = findByAccessibleName<QSpinBox>(
+                dialog, QStringLiteral("Transmit time-out warning (seconds before)"));
+            QVERIFY(enable && timeout && warning);
+            QVERIFY2(enable->isEnabled() && enable->isChecked(), "connected, on by default");
+            int version = 0;
+            QVERIFY2(scope.featureExact(QStringLiteral("TxTimeout"), &version).isEmpty(), "nothing stored yet");
+
+            enable->setChecked(false);
+            QJsonObject doc = scope.featureExact(QStringLiteral("TxTimeout"), &version);
+            QCOMPARE(version, 1);
+            QCOMPARE(doc.value(QStringLiteral("enabled")).toBool(true), false);
+            QVERIFY(!model.txTimeoutSettings().enabled);
+
+            enable->setChecked(true);
+            timeout->setValue(300);
+            emit timeout->editingFinished();
+            warning->setValue(20);
+            emit warning->editingFinished();
+            doc = scope.featureExact(QStringLiteral("TxTimeout"), &version);
+            QCOMPARE(version, 1);
+            QCOMPARE(doc.value(QStringLiteral("enabled")).toBool(false), true);
+            QCOMPARE(doc.value(QStringLiteral("timeoutS")).toInt(), 300);
+            QCOMPARE(doc.value(QStringLiteral("warningS")).toInt(), 20);
+            QCOMPARE(model.txTimeoutSettings().timeoutS, 300);
+        }
+        RadioModel again;
+        // The document loads on connectionStateChanged(true), which can follow
+        // isConnected() by an event-loop turn: wait for the signal itself.
+        QSignalSpy connected(&again, &RadioModel::connectionStateChanged);
+        connectDemo(again);
+        QTRY_VERIFY_WITH_TIMEOUT(again.isConnected() && !connected.isEmpty()
+                                     && connected.last().at(0).toBool(), 5000);
+        const TxTimeoutSettings loaded = again.txTimeoutSettings();
+        QVERIFY(loaded.enabled);
+        QCOMPARE(loaded.timeoutS, 300);
+        QCOMPARE(loaded.warningS, 20);
+    }
+
+    // The enable checkbox only ever stops transmission: the TX guard (bridge
+    // and Space activation) must not take it for a keying control. Found by its
+    // visible text, so the check does not depend on the name it checks.
+    void txTimeoutEnableIsNotAKeyingControl()
+    {
+        RadioModel model;
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        dialog.selectTab(QStringLiteral("Transmit"));
+        QCheckBox* enable = nullptr;
+        for (QCheckBox* box : dialog.findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("Stop transmitting after")) {
+                enable = box;
+            }
+        }
+        QVERIFY(enable);
+        QCOMPARE(enable->accessibleName(), QStringLiteral("Time-out enabled, stops transmission"));
+        QVERIFY2(transmitControlMatch(enable) == TransmitControlMatch::None,
+                 qPrintable(enable->accessibleName()));
+    }
+
+    // A Radio Setup search for the setting finds the Transmit page.
+    void txTimeoutIsFoundBySearch()
+    {
+        RadioModel model;
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        auto* search = dialog.findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
+        QVERIFY(search);
+        for (const QString& term : {QStringLiteral("time-out"), QStringLiteral("timeout"),
+                                    QStringLiteral("tot")}) {
+            search->setText(term);
+            bool transmitShown = false;
+            bool audioShown = false;
+            for (QTreeWidget* nav : dialog.findChildren<QTreeWidget*>()) {
+                for (int i = 0; i < nav->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem* category = nav->topLevelItem(i);
+                    for (int j = 0; j < category->childCount(); ++j) {
+                        QTreeWidgetItem* page = category->child(j);
+                        transmitShown |= page->text(0) == QStringLiteral("Transmit") && !page->isHidden();
+                        audioShown |= page->text(0) == QStringLiteral("Audio") && !page->isHidden();
+                    }
+                }
+            }
+            QVERIFY2(transmitShown, qPrintable(term));
+            QVERIFY2(!audioShown, "the filter ran: an unrelated page is hidden");
+        }
+        search->clear();
+    }
+
     // PTT Mic Override (#6442) shows the RADIO's value: unreported (firmware
     // before 4.3) it is dimmed with a reason; a click sends the request but
     // snaps back until the echo; and a session reset clears an open page.
@@ -342,6 +468,7 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("radio-setup-tx-timing-fields"));
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    AppSettings::instance().load();   // as the app does at startup: the feature store opens
     RadioSetupTxTimingFieldsTest test;
     return QTest::qExec(&test, argc, argv);
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/FileTransferRequest.h"
+
 #include <QObject>
 #include <QByteArray>
 #include <QList>
@@ -14,7 +16,7 @@
 #include <utility>
 
 class QFile;
-class QSaveFile;
+class QTemporaryFile;
 class QTcpServer;
 class QTcpSocket;
 class QTimer;
@@ -154,48 +156,6 @@ inline int compareFirmwareVersions(const QString& lhs, const QString& rhs)
     return 0;
 }
 
-inline std::optional<quint16> parseTransferPort(const QString& replyBody)
-{
-    const QString trimmed = replyBody.trimmed();
-
-    static const QRegularExpression keyedRe(
-        QStringLiteral(R"((?:^|[\s,;|])(?:port|transfer_port|tcp_port)\s*[=:]?\s*(\d{2,5})(?=$|[^\d]))"),
-        QRegularExpression::CaseInsensitiveOption);
-    const auto keyed = keyedRe.match(trimmed);
-    if (keyed.hasMatch()) {
-        bool ok = false;
-        const int port = keyed.captured(1).toInt(&ok);
-        if (ok && port > 0 && port <= 65535)
-            return static_cast<quint16>(port);
-    }
-
-    bool bareOk = false;
-    const int barePort = trimmed.toInt(&bareOk);
-    if (bareOk && barePort > 0 && barePort <= 65535)
-        return static_cast<quint16>(barePort);
-
-    static const QRegularExpression endpointRe(QStringLiteral(R"(:(\d{2,5})(?=$|[^\d]))"));
-    const auto endpoint = endpointRe.match(trimmed);
-    if (endpoint.hasMatch()) {
-        bool ok = false;
-        const int port = endpoint.captured(1).toInt(&ok);
-        if (ok && port > 0 && port <= 65535)
-            return static_cast<quint16>(port);
-    }
-
-    static const QRegularExpression re(QStringLiteral(R"((?:^|[^\d])(\d{2,5})(?:[^\d]|$))"));
-    auto it = re.globalMatch(trimmed);
-    std::optional<quint16> lastPort;
-    while (it.hasNext()) {
-        const auto match = it.next();
-        bool ok = false;
-        const int port = match.captured(1).toInt(&ok);
-        if (ok && port > 0 && port <= 65535)
-            lastPort = static_cast<quint16>(port);
-    }
-    return lastPort;
-}
-
 class ProfileTransfer : public QObject {
     Q_OBJECT
 
@@ -210,10 +170,11 @@ public:
     explicit ProfileTransfer(RadioModel* model, QObject* parent = nullptr);
     ~ProfileTransfer() override;
 
-    bool isBusy() const { return m_busy; }
+    bool isBusy() const { return m_busy || m_cleaningUp; }
 
-    void exportDatabase(const ExportSelection& selection, const QString& destinationPath);
-    void importDatabase(const QString& ssdrCfgPath);
+    void exportDatabase(const ExportSelection& selection, const QString& destinationPath,
+                        std::optional<RadioControlSession> session = {});
+    void importDatabase(const QString& ssdrCfgPath, std::optional<RadioControlSession> session = {});
     void cancel();
 
 signals:
@@ -223,6 +184,7 @@ signals:
     void failed(AetherSDR::ProfileTransfer::Operation operation, QString error);
 
 private:
+    bool m_uploadConnected{false};
     enum class Phase {
         Idle,
         UploadMetaSubset,
@@ -254,11 +216,11 @@ private:
     bool validateExportDestination(const QString& path, QString* error) const;
     bool validateImportFile(const QString& path, QString* error) const;
 
-    void requestUploadPort(const QByteArray& payload, const QString& uploadKind);
-    std::function<void(int, const QString&)> makeUploadPortCallback(
+    void requestUploadPort(const QByteArray& payload, FileTransferPurpose purpose);
+    FileTransferCompletion makeUploadPortCallback(
         quint64 generation, Phase expectedPhase, quint64 requestId);
     void handleUploadPortReceived(quint64 generation, Phase expectedPhase, quint64 requestId,
-                                  int code, const QString& body);
+                                  const FileTransferReply& reply);
     void connectUploadSocket(quint16 port);
     std::function<void()> makeUploadConnectCallback(quint64 generation, Phase expectedPhase,
                                                     QTcpSocket* socket,
@@ -274,10 +236,10 @@ private:
     void handleUploadError(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
 
     void requestPackageDownload();
-    std::function<void(int, const QString&)> makeDownloadPortCallback(
+    FileTransferCompletion makeDownloadPortCallback(
         quint64 generation, Phase expectedPhase, quint64 requestId);
     void handleDownloadPortReceived(quint64 generation, Phase expectedPhase, quint64 requestId,
-                                    int code, const QString& body);
+                                    const FileTransferReply& reply);
     void startDownloadServer(quint16 port);
     void handleDownloadConnection(quint64 generation, Phase expectedPhase, QTcpServer* server);
     void handleDownloadReadyRead(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
@@ -292,6 +254,7 @@ private:
     bool commitExportFile(QString* error);
 
     QPointer<RadioModel> m_model;
+    FileTransferHandle m_transfer;
     Operation m_operation{Operation::ExportDatabase};
     Phase m_phase{Phase::Idle};
     quint64 m_operationGeneration{0};
@@ -304,6 +267,7 @@ private:
     Phase m_commandTimeoutPhase{Phase::Idle};
     Phase m_idleTimeoutPhase{Phase::Idle};
     bool m_busy{false};
+    bool m_cleaningUp{false};
     bool m_cancelled{false};
     bool m_usedFallbackPort{false};
     bool m_downloadFinalized{false};
@@ -318,7 +282,7 @@ private:
 
     QTcpSocket* m_socket{nullptr};
     QTcpServer* m_server{nullptr};
-    QSaveFile* m_saveFile{nullptr};
+    QTemporaryFile* m_saveFile{nullptr};
     QTimer* m_timeout{nullptr};
     QTimer* m_idleTimer{nullptr};
     QTimer* m_overallTimer{nullptr};

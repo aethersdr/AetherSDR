@@ -114,6 +114,7 @@ bool Hl2TxDsp::buildModulator(std::string* error)
         return false;
     }
 
+    ++m_modulatorGeneration;
     m_zeroQ.assign(c.inputBlockSize, 0.0f);
     m_outI.assign(m_channel->outputBlockSize(), 0.0f);
     m_outQ.assign(m_channel->outputBlockSize(), 0.0f);
@@ -204,7 +205,7 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     // A caller faster than real time on average shows as queue depth and
     // latency, not faults: warn once per excursion.
     const std::size_t depth = m_exchangePending.size() / block;
-    if (depth > kPendingWarnBlocks && !m_pendingWarned) {
+    if (m_exchangePending.size() > kPendingWarnSamples && !m_pendingWarned) {
         m_pendingWarned = true;
         qCWarning(lcTxMod).nospace()
             << "HL2 TXA modulator: " << depth << " blocks waiting for the "
@@ -216,13 +217,15 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     exchangeDueBlocks();
 }
 
-// How long the head block may wait for the worker before it is dropped: one
-// block period from when it reached the head. The worker turns a TXA block
-// round in well under a millisecond, so a whole period without output is a
-// stall (preempted, or held by a control operation).
+// How long the head block may wait for the worker before it is dropped, from
+// when it reached the head: kExchangeStallSamples, or one block period if
+// longer. The worker turns a TXA block round in well under a millisecond, so
+// that long without output is a stall (preempted, or held by a control operation).
 qint64 Hl2TxDsp::exchangeStallNs() const noexcept
 {
-    return static_cast<qint64>(static_cast<double>(m_config.dspBlockSize) * 1e9
+    const std::size_t samples =
+        std::max(kExchangeStallSamples, static_cast<std::size_t>(std::max(0, m_config.dspBlockSize)));
+    return static_cast<qint64>(static_cast<double>(samples) * 1e9
                                / static_cast<double>(std::max(1, m_config.inputSampleRateHz)));
 }
 
@@ -329,7 +332,7 @@ void Hl2TxDsp::exchangeDueBlocks()
         connect(m_exchangeTimer, &QTimer::timeout, this, &Hl2TxDsp::onExchangeTimer);
     }
     // 1 ms retry: the worker needs well under a millisecond per block, and the
-    // burst's first block already queued 21.3 ms of IQ, so the host FIFO does
+    // burst's first block already queued one block of IQ, so the host FIFO does
     // not run dry while the rest wait.
     if (!m_exchangeTimer->isActive()) {
         m_exchangeTimer->start(1);
@@ -358,6 +361,11 @@ const char* Hl2TxDsp::modulatorName() noexcept { return "wdsp-txa"; }
 int Hl2TxDsp::wdspChannelId() const noexcept
 {
     return m_channel ? m_channel->channelIdForTest() : -1;
+}
+
+WdspChannel* Hl2TxDsp::pureSignalChannel() noexcept
+{
+    return m_channel.get();
 }
 
 const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept
@@ -501,6 +509,7 @@ bool Hl2TxDsp::isLowerSideband() const
 
 const char* Hl2TxDsp::modulatorName() noexcept { return "phasing"; }
 int Hl2TxDsp::wdspChannelId() const noexcept { return -1; }
+WdspChannel* Hl2TxDsp::pureSignalChannel() noexcept { return nullptr; }
 const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept { return nullptr; }
 // Arithmetic cannot starve. Always zero, so a health snapshot reports the same
 // field in both builds rather than omitting it in one.
@@ -632,7 +641,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // m_micGain (up to 40 dB apart). AudioEngine should never interleave
     // sources in one transmission (startWsprPump sets DAX TX mode; feedDaxTxAudio
     // returns while the beacon is active), but if it does, the residue
-    // (<= dspBlockSize-1 samples, ~21 ms) is dropped rather than mislevelled.
+    // (<= dspBlockSize-1 samples, ~11 ms) is dropped rather than mislevelled.
     if (source != m_lastSource && !m_inBuffer.empty()) {
         // Once per transmission, not once per block: this runs on the DSP
         // worker, and a sustained interleave would alternate every block.

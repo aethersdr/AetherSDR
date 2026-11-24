@@ -1300,3 +1300,30 @@ stop-and-flush wait". With the patch, all of `wdsp_channel_test` passes.
 
 Drop this if upstream narrows the condition itself, or if `WdspChannel` ever
 clocks a stopping channel's ramp out before handing control to WDSP.
+
+## Patch 24 — the FM squelch publishes whether its gate is open (#6552)
+
+`fmsq` keeps its gate in `a->state` and exposes no getter, so a host that
+wants to show the operator whether the FM squelch is open has nothing to
+read. Reading `state` from another thread would be a data race.
+
+The patch adds `long gatePublished` to `struct _fmsq` (`upstream/fmsq.h`).
+`xfmsq()` stores `state != MUTED` into it with `InterlockedExchange` once per
+processed block, after the per-sample loop; `flush_fmsq()` stores 0. The new
+`GetRXAFMSQGateOpen(channel)` (`upstream/fmsq.c`, declared in `upstream/wdsp.h`,
+`upstream/fmsq.h` and `include/aether_wdsp.h`) reads it with the port's
+`InterlockedAnd(&x, ~0L)` atomic-load idiom, the same as
+`GetRXAWBFMStereoIndicator`, and takes no lock. INCREASE, UNMUTED, TAIL and
+DECREASE all pass audio and count as open. A stage that is not running does
+not update the value, so the caller reads it only while it has the stage
+running. `create_fmsq()` allocates with `malloc0`, so a new stage reads 0.
+
+Marked `// AetherSDR patch 24` in `upstream/fmsq.c` and `upstream/fmsq.h`.
+
+**Covered by** `wdsp_channel_test` (the FM squelch gate checks): noise alone
+closes the gate at level 100 and opens it at level 1, read through this
+getter.
+
+**Upstream status.** Not reported.
+
+Drop this if upstream adds an equivalent getter.

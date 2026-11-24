@@ -1,6 +1,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "FrontEndOverloadIndicator.h"
 #include "core/TxKeyingMarker.h"
+#include "ActivePlanBand.h"
 #include "AntennaChoiceGate.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "DisplaySettings.h"
@@ -357,52 +358,6 @@ static constexpr BandGridEntry BAND_GRID[] = {
     {"2",    "2m",  144.200,  "USB"},   // 17 — FLEX-6700
 };
 
-// Broad, non-regulatory grouping windows map a frequency that is already
-// proven to lie inside the active BandPlanManager to the matching menu key.
-// Actual membership and gaps come only from the active regional plan.
-struct BandPlanLookup {
-    const char* bandName;
-    double searchLowMhz;
-    double searchHighMhz;
-};
-
-static constexpr BandPlanLookup kBandPlanLookup[] = {
-    {"2200m", 0.1, 0.2}, {"630m", 0.4, 0.5},
-    {"160m", 1.7, 2.1}, {"80m", 3.4, 4.1}, {"60m", 5.2, 5.5},
-    {"40m", 6.9, 7.4}, {"30m", 10.0, 10.2}, {"20m", 13.9, 14.5},
-    {"17m", 18.0, 18.3}, {"15m", 20.9, 21.6}, {"12m", 24.8, 25.1},
-    {"10m", 27.9, 30.0}, {"6m", 49.0, 54.5}, {"4m", 69.0, 71.0},
-    {"2m", 143.0, 149.0}, {"1.25m", 221.0, 226.0},
-    {"440", 419.0, 451.0}, {"33cm", 901.0, 929.0},
-    {"23cm", 1239.0, 1301.0},
-};
-
-static QString activePlanBandForFrequency(const BandPlanManager* manager,
-                                          double freqMhz)
-{
-    if (!manager) {
-        return QStringLiteral("GEN");
-    }
-
-    bool inActivePlan = false;
-    for (const BandPlanManager::Segment& segment : manager->segments()) {
-        if (freqMhz >= segment.lowMhz && freqMhz <= segment.highMhz) {
-            inActivePlan = true;
-            break;
-        }
-    }
-    if (!inActivePlan) {
-        return QStringLiteral("GEN");
-    }
-
-    for (const BandPlanLookup& lookup : kBandPlanLookup) {
-        if (freqMhz >= lookup.searchLowMhz && freqMhz <= lookup.searchHighMhz) {
-            return QString::fromLatin1(lookup.bandName);
-        }
-    }
-    return QStringLiteral("GEN");
-}
-
 // Indices into BAND_GRID for the built-in transverter bands.  Used by
 // the conditional VHF row in setXvtrBands().
 constexpr int kBandIdxXvtr = 15;
@@ -507,9 +462,8 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     m_wheelGuard->guardTree(
         m_memoryPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
 
-    // The panel can be opened before the panadapter reaches its restored
-    // height. Re-clamp it whenever that host subsequently resizes so the
-    // QScrollArea retains a real scroll range instead of extending off-screen.
+    // An open Display or Memory panel must follow the panadapter height
+    // as it resizes so its last row stays reachable by scrolling.
     if (parentWidget()) {
         parentWidget()->installEventFilter(this);
     }
@@ -934,11 +888,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_wnbBtn = new QPushButton("WNB");
     m_wnbBtn->setCheckable(true);
     m_wnbBtn->setFixedSize(48, 22);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wnbBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 2px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"
-        "QPushButton:checked { background: {{color.background.2}}; color: {{color.text.primary}}; "
-        "border: 1px solid {{color.accent.dim}}; }"
-        "QPushButton:hover { border: 1px solid {{color.accent.dim}}; }");
+    applyToggleButtonStyle(m_wnbBtn, ToggleTribe::Success);
     wnbRow->addWidget(m_wnbBtn);
     m_wnbSlider = new GuardedSlider(Qt::Horizontal);
     m_wnbSlider->setRange(0, 100);
@@ -1316,7 +1266,7 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
             append(token);
         }
         if (m_radioModel) {
-            for (const QString& token : m_radioModel->knownAntennaTokens()) {
+            for (const QString& token : m_radioModel->rxAntennaMenuTokens()) {
                 append(token);
             }
         }
@@ -1573,19 +1523,30 @@ void SpectrumOverlayMenu::toggleMemoryPanel()
     hideAllSubPanels();
     if (!wasVisible && m_memoryPanel) {
         m_memoryPanelVisible = true;
-        const int panelH = m_memoryPanel->sizeHint().height();
-        int panelY = y();
-        if (auto* parent = parentWidget())
-            panelY = std::clamp(panelY, m_topLimit,
-                                qMax(m_topLimit, parent->height() - panelH));
-        else
-            panelY = std::max(m_topLimit, panelY);
-        m_memoryPanel->move(x() + width(), panelY);
+        layoutMemoryPanel();
         m_memoryPanel->raise();
         m_memoryPanel->show();
         m_menuBtns[kBtnMemoryBrowse]->setStyleSheet(kMenuBtnActive);
         m_memoryPanel->focusClosestToFrequency(m_slice ? m_slice->frequency() : -1.0);
     }
+}
+
+void SpectrumOverlayMenu::layoutMemoryPanel()
+{
+    if (!m_memoryPanel) {
+        return;
+    }
+
+    constexpr int kPreferredHeight = 460;
+    const QWidget* host = m_memoryPanel->parentWidget();
+    const int hostHeight = host ? host->height() : m_topLimit + kPreferredHeight;
+    const int panelHeight = std::min(kPreferredHeight, std::max(0, hostHeight - m_topLimit));
+    // Pin only the current available height so layout minimum hints cannot
+    // expand the table beyond the host and hide its scrollbar.
+    m_memoryPanel->setFixedHeight(panelHeight);
+    const int panelY = std::clamp(y(), m_topLimit,
+                                 std::max(m_topLimit, hostHeight - panelHeight));
+    m_memoryPanel->move(x() + width(), panelY);
 }
 
 // ── Sub-panel toggle helpers ──────────────────────────────────────────────────
@@ -3934,9 +3895,13 @@ void SpectrumOverlayMenu::updateActiveBandHighlight()
 
 bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
 {
-    if (obj == parentWidget() && event->type() == QEvent::Resize
-        && m_displayPanelVisible) {
-        layoutDisplayPanel();
+    if (obj == parentWidget() && event->type() == QEvent::Resize) {
+        if (m_displayPanelVisible) {
+            layoutDisplayPanel();
+        }
+        if (m_memoryPanelVisible) {
+            layoutMemoryPanel();
+        }
     }
     return QWidget::eventFilter(obj, event);
 }

@@ -10,8 +10,11 @@
 
 #include "core/backends/sim/DemoRadioConstants.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/flex/FlexStatusIngress.h"
 #include "core/backends/sim/NoiseMixer.h"
 #include "core/backends/sim/SimSignalSource.h"
+
+#include <utility>
 
 class QThread;
 
@@ -110,6 +113,9 @@ public:
     // The synthetic RX worker, so sim_backend_test can inject a spectrum row
     // into the forward on the owner thread (#6084).
     SimSignalSource*  signalSourceForTest() const { return m_signalSource; }
+    // The synthetic connection's lines reach the model through the same
+    // status ingress as a radio's (see FlexBackend::statusIngress()).
+    FlexStatusIngress* statusIngress() { return &m_statusIngress; }
 
 private:
     bool createPanadapterWithId(QString* createdId);
@@ -159,17 +165,19 @@ private:
     // connect; the rest are minted by createPanadapter(). The set tracks
     // pans whose wire status is injected but whose normalized geometry has
     // not been emitted yet — geometry must land AFTER RadioModel claims the
-    // pan (see the ctor's statusReceived listener).
+    // pan (see the ctor's status-ingress listener).
     QStringList m_wirePanIds;
     QSet<QString> m_pansAwaitingGeometry;
     static QString wirePanIdFor(int index);
     static QString wireWfIdFor(int index);
     static int wirePanIndexOf(const QString& panId);
     void pushPanIndicesToSource();
+    void pushPanCenterToSource(double mhz);
     double m_sliceFreqMhz{14.100};   // default: 20 m, a lively demo band
     QString m_sliceMode{QStringLiteral("USB")};
     int    m_filterLowHz{100};
     int    m_filterHighHz{2900};
+    std::pair<int, int> m_preRttyFilter{100, 2900};   // restored on leaving RTTY (#7420)
     // Slice AGC (#4448 seam addition). Defaults mirror the slice model's own so
     // the first echo reports what the UI already shows.
     QString m_agcMode{QStringLiteral("med")};
@@ -212,6 +220,7 @@ private:
     // getters connection()/panStream() delegate to them. The demo behaviour is
     // driven entirely through these — SimBackend's own delta emission above is
     // the pure-Path-A skeleton kept for the unit tests, dormant on the live path.
+    FlexStatusIngress m_statusIngress;
     RadioConnection*  m_connection{nullptr};   // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};
     PanadapterStream* m_panStream{nullptr};    // owned; lives on m_networkThread

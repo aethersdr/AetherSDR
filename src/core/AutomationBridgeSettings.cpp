@@ -104,6 +104,14 @@ bool AutomationBridgeSettings::envForced()
     return qEnvironmentVariableIsSet("AETHER_AUTOMATION");
 }
 
+bool AutomationBridgeSettings::launchTxAllowed()
+{
+    if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX")) {
+        return false;
+    }
+    return qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX") || txAllowed();
+}
+
 bool AutomationBridgeSettings::recordStartOutcome(bool ok, bool forced)
 {
     if (forced) {

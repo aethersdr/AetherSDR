@@ -23,6 +23,7 @@ const sidebars = {
         "your-first-session",
         "installation",
         "first-connection",
+        "station-profiles",
         "before-you-transmit"
       ]
     },

@@ -610,7 +610,7 @@ class MacOSPayload(Base):
                        "--dax-driver-source", self.DAX,
                        "--assets", f"v26.10.4={dirs['v26.10.4']}", "--assets", f"v26.10.3={dirs['v26.10.3']}"])
         self.assertEqual(rc, 0)
-        (p,) = json.loads((out / "manifest.json").read_text())["payloads"]
+        (p,) = json.loads((out / "manifest-v2.json").read_text())["payloads"]
         self.assertEqual((p["platform"], p["arch"]), ("macos", "arm64"))
         name = "AetherSDR-v26.10.4-macOS-apple-silicon.app.tar.zst"
         self.assertEqual(p["full"]["asset"], name)
@@ -693,7 +693,7 @@ class Manifest(Base):
                        "--assets", f"v26.10.3={dirs['v26.10.3']}",
                        "--assets", f"v26.10.2={dirs['v26.10.2']}"])
         self.assertEqual(rc, 0)
-        m = json.loads((out / "manifest.json").read_text())
+        m = json.loads((out / "manifest-v2.json").read_text())
         self.assertEqual(m["schema"], 1)
         self.assertEqual(m["version"], "26.10.3")
         self.assertRegex(m["key_id"], r"^[0-9a-f]{16}$")
@@ -712,6 +712,44 @@ class Manifest(Base):
         apply_patch_set(old, bundle, patch, p["files"], self.tmp / "applied")
         self.assertTrue((dirs["v26.10.2"] / "AetherSDR-v26.10.2-Windows-x64-portable.zip").exists(),
                         "local assets are never deleted")
+        self.assertTrue(patch["bundle"]["url"].startswith(bum.DOWNLOAD_BASE + "v26.10.3/"),
+                        "the default payload base is the release page")
+
+        # The legacy manifest (RFC #6964): what copies without the R2 bridge
+        # read. While the bundles are on the release page it is manifest-v2
+        # itself, patches included, so those copies keep patch updates; every
+        # URL is a GitHub download of this tag.
+        legacy = json.loads((out / "manifest.json").read_text())
+        self.assertEqual(legacy, m)
+        self.assertEqual(legacy["generated_at"], m["generated_at"])
+        (lp,) = legacy["payloads"]
+        self.assertEqual(lp["patches"], p["patches"])
+        self.assertTrue(lp["patches"], "a github base keeps the patches in the legacy manifest")
+        self.assertEqual(lp["full"], p["full"])
+        self.assertEqual(lp["files"], p["files"])
+        self.assertTrue(lp["full"]["url"].startswith(bum.DOWNLOAD_BASE + "v26.10.3/"))
+
+        # With --payload-base r2 only the bundle URLs move; the bundle and
+        # every full download stay the same, and the legacy manifest, which
+        # those copies read GitHub-only, drops to full downloads.
+        out2 = self.tmp / "out-r2"
+        rc = bum.main(["--tag", "v26.10.3", "--out", str(out2), "--work", str(self.tmp / "w2"),
+                       "--public-key", str(pub), "--payload-base", "r2",
+                       "--assets", f"v26.10.3={dirs['v26.10.3']}",
+                       "--assets", f"v26.10.2={dirs['v26.10.2']}"])
+        self.assertEqual(rc, 0)
+        (p2,) = json.loads((out2 / "manifest-v2.json").read_text())["payloads"]
+        (patch2,) = p2["patches"]
+        self.assertEqual(patch2["bundle"]["url"],
+                         bum.R2_BASE + "v26.10.3/" + patch["bundle"]["asset"])
+        self.assertEqual(patch2["bundle"]["sha256"], patch["bundle"]["sha256"])
+        self.assertEqual(p2["full"], p["full"], "full stays on the release page")
+        (lp2,) = json.loads((out2 / "manifest.json").read_text())["payloads"]
+        self.assertEqual(lp2["patches"], [])
+        self.assertEqual({k: v for k, v in lp2.items() if k != "patches"},
+                         {k: v for k, v in lp.items() if k != "patches"})
+        with self.assertRaises(SystemExit):
+            bum.main(["--tag", "v26.10.3", "--out", str(self.tmp / "o3"), "--payload-base", "s3"])
 
 
 if __name__ == "__main__":

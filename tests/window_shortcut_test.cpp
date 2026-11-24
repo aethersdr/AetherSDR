@@ -2,7 +2,6 @@
 #include "core/ShortcutManager.h"
 #include "gui/PttHoldKeyStep.h"
 #include "gui/ShortcutRefusalNotice.h"
-#include "gui/StatusBarNotice.h"
 #include "gui/TxKeyActivationGuard.h"
 
 #include <QAccessible>
@@ -537,70 +536,5 @@ int main(int argc, char** argv)
                "refusal: no receiver or no window is not noticed");
     }
 
-    // The notice sits in a permanent label, so the status bar's other widgets
-    // stay on screen; showMessage() hides them, which the control shows.
-    {
-        QWidget host;
-        auto* layout = new QVBoxLayout(&host);
-        auto* bar = new QStatusBar;
-        bar->setSizeGripEnabled(false);
-        auto* indicator = new QLabel(QStringLiteral("TX"));
-        bar->addWidget(indicator, 1);
-        layout->addStretch(1);
-        layout->addWidget(bar);
-        host.resize(900, 120);
-        focus(host);
-        const int barHeight = bar->height();
-        const int hostMinWidth = host.minimumSizeHint().width();
-
-        AetherSDR::StatusBarNoticeLabel notice(bar);
-        QApplication::processEvents();
-        expect(!notice.isVisible() && indicator->isVisible(),
-               "notice: the label is hidden until a notice is shown");
-        expect(host.minimumSizeHint().width() <= hostMinWidth + 16,
-               "notice: the hidden label does not widen the window");
-
-        const QString text = QStringLiteral("Keyboard shortcuts are off");
-        notice.showNotice(text, 150);
-        QApplication::processEvents();
-        expect(notice.isVisible() && notice.text() == text,
-               "notice: the label shows the text");
-        expect(notice.accessibleName() == text,
-               "notice: the label's accessible name is the same text");
-        expect(indicator->isVisible() && bar->currentMessage().isEmpty(),
-               "notice: the status bar's other widgets stay visible");
-        expect(bar->height() == barHeight,
-               "notice: the status bar keeps its height");
-        expect(host.minimumSizeHint().width() <= hostMinWidth + 16,
-               "notice: the shown label does not widen the window");
-        expect(notice.geometry().right() <= bar->width()
-                   && notice.geometry().left() >= indicator->geometry().right(),
-               "notice: the label sits beside the indicator, inside the bar");
-        QTest::qWait(400);
-        expect(!notice.isVisible() && notice.text().isEmpty()
-                   && notice.accessibleName().isEmpty(),
-               "notice: the label hides and clears when its time is up");
-
-        // A notice wider than the bar is clipped; it never resizes the window.
-        host.resize(hostMinWidth + 40, 120);
-        QApplication::processEvents();
-        const int narrowWidth = host.width();
-        notice.showNotice(text.repeated(8), 150);
-        QApplication::processEvents();
-        expect(host.width() == narrowWidth && indicator->isVisible()
-                   && indicator->width() >= indicator->minimumSizeHint().width(),
-               "notice: a notice wider than the bar leaves the window and indicator alone");
-        notice.clearNotice();
-
-        // Positive control: the same bar, with showMessage(), loses the indicator.
-        bar->showMessage(text, 150);
-        QApplication::processEvents();
-        expect(!indicator->isVisible(),
-               "notice control: showMessage() hides the indicator");
-        bar->clearMessage();
-        QApplication::processEvents();
-        expect(indicator->isVisible(), "notice control: the indicator returns");
-        bar->removeWidget(&notice);
-    }
     return failures == 0 ? 0 : 1;
 }

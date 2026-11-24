@@ -272,6 +272,18 @@ void LocalVoiceKeyer::setTransmitter(GeneratedAudioTransmitter* transmitter)
 
 void LocalVoiceKeyer::playbackStart(int id)
 {
+    startPlayback(id, nullptr);
+}
+
+// Admitted under the outside input's request, so closing that device fences
+// the key the transmitter takes after its stream wait and settle hop.
+void LocalVoiceKeyer::playbackStartFrom(int id, const TxCoordinator::Request& origin)
+{
+    startPlayback(id, &origin);
+}
+
+void LocalVoiceKeyer::startPlayback(int id, const TxCoordinator::Request* origin)
+{
     const QString verb = QStringLiteral("playback_start");
     if (!validSlot(id) || busyRefusal(verb, id))
         return;
@@ -292,7 +304,8 @@ void LocalVoiceKeyer::playbackStart(int id)
         refuse(verb, id, error);
         return;
     }
-    if (!m_transmitter->start(VoiceKeyerWavDecoder::toTxStereo24k(mono, rate), error)) {
+    const QByteArray pcm = VoiceKeyerWavDecoder::toTxStereo24k(mono, rate);
+    if (!(origin ? m_transmitter->start(pcm, error, *origin) : m_transmitter->start(pcm, error))) {
         refuse(verb, id, error);
         return;
     }

@@ -22,7 +22,7 @@ static AmpDelta decode(FlexBackend& b, const QString& handle, const QString& mod
                        const QMap<QString, QString>& kvs, bool removed)
 {
     QSignalSpy spy(&b, &IRadioBackend::amplifierChanged);
-    b.decodeAmplifierStatus(handle, model, kvs, removed);
+    b.statusIngress()->decodeAmplifierStatus(handle, model, kvs, removed);
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<AmpDelta>();
 }
@@ -95,7 +95,7 @@ int main(int argc, char** argv)
     {
         FlexBackend g;
         // Establish the tuner handle (#4198 encode-path cache).
-        g.decodeTunerStatus("0x2000", {{"model", "TunerGeniusXL"}});
+        g.statusIngress()->decodeTunerStatus("0x2000", {{"model", "TunerGeniusXL"}});
         // Model-less TGXL status that falls through to decodeAmplifierStatus (the
         // pre-existing routing edge: model empty AND handle == known tuner handle).
         (void)decode(g, "0x2000", QString(), {{"state", "OPERATE"}}, false);

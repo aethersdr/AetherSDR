@@ -199,6 +199,51 @@ static void midiCases()
     }
 }
 
+// The ControlActionRegistry's keying MIDI entries share this dispatcher:
+// a press acts on the device's own input, a release or a foreign controller
+// is consumed with no call.
+static void registryKeyingCases()
+{
+    const auto cw = [](const QString&, bool, const std::shared_ptr<TxController>&) {};
+    Fixture f(false, true);
+    QObject device;
+    const auto controller = TxController::forNativeDevice(&f.radio, &device);
+    const auto captured = TxController::captureInputScope(controller, controller->captureRawInput());
+
+    check(dispatchMidiTxInput("tx.atuBypass", 0.0f, f.radio, captured, cw)
+              && f.backend->commands.isEmpty(),
+          "registry: ATU Bypass release is consumed with no call");
+    check(dispatchMidiTxInput("tx.atuBypass", 1.0f, f.radio, captured, cw)
+              && f.backend->commands == QStringList{"atu:off"},
+          "registry: ATU Bypass press reaches the ATU bypass call");
+    f.backend->commands.clear();
+
+    int firedIndex = -1;
+    bool firedOnThisRadio = false;
+    const auto macro = [&](int index, const TxController::Input& input) {
+        firedIndex = index;
+        // CwxPanel::sendMacro refuses an input that is not this radio's.
+        firedOnThisRadio = input.valid() && input.belongsTo(&f.radio.cwxModel());
+    };
+    check(dispatchMidiTxInput("cwx.macro3", 1.0f, f.radio, captured, cw, {}, macro)
+              && firedIndex == 2 && firedOnThisRadio,
+          "registry: CWX Macro F3 fires index 2 on this radio's input");
+    firedIndex = -1;
+    check(dispatchMidiTxInput("cwx.macro3", 0.0f, f.radio, captured, cw, {}, macro)
+              && firedIndex == -1,
+          "registry: CWX macro release is consumed with no call");
+    check(!dispatchMidiTxInput("cwx.macro13", 1.0f, f.radio, captured, cw, {}, macro)
+              && firedIndex == -1,
+          "registry: an out-of-range macro id is not consumed");
+
+    Fixture other(false, true);
+    QObject otherDevice;
+    const auto foreign = TxController::forNativeDevice(&other.radio, &otherDevice);
+    check(dispatchMidiTxInput("cwx.macro1", 1.0f, f.radio, foreign, cw, {}, macro)
+              && firedIndex == -1 && f.backend->commands.isEmpty(),
+          "registry: another radio's controller is consumed with no call");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("two-tone-tune-gate-test"));
@@ -210,6 +255,7 @@ int main(int argc, char** argv)
     menuCases();
     predicateCases();
     midiCases();
+    registryKeyingCases();
 
     std::printf("two_tone_tune_gate_test: %s\n", g_failures == 0 ? "PASS" : "FAIL");
     return g_failures == 0 ? 0 : 1;

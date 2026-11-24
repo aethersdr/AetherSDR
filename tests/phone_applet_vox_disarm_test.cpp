@@ -230,7 +230,7 @@ int main(int argc, char** argv)
         window.show();
         bool dispatched = false;
         bool permission = true;
-        server.setShortcutAutomationHandler([&](const QString& id, bool allowTx,
+        server.setShortcutAutomationHandler([&](const QString& id, bool allowTx, bool,
                                                 const std::shared_ptr<TxController>&) {
             dispatched = id == QStringLiteral("vox_toggle");
             permission = allowTx;

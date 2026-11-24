@@ -11,6 +11,22 @@
 
 namespace AetherSDR {
 
+// Live Rx/Tx state from one WSJT-X instance's Status (type 1) message,
+// resolved to absolute frequencies (#4526). WSJT-X reports the dial
+// frequency plus separate Rx/Tx AUDIO offsets (Hz within the passband);
+// this is dial + offset for each, matching the addition parseDecode() has
+// always used for spot placement — WSJT-X's audio-offset convention adds
+// unconditionally regardless of the reported sideband, so there is no
+// LSB/USB special case here.
+struct WsjtxStatus {
+    QString id;
+    double  dialFreqHz{0.0};  // raw radio dial frequency, no audio offset
+    double  rxFreqHz{0.0};    // dial + Rx audio offset (full RF)
+    double  txFreqHz{0.0};    // dial + Tx audio offset (full RF)
+    bool    transmitting{false};
+    QString mode;
+};
+
 // WSJT-X UDP multicast client — listens for Decode messages (type 2)
 // from WSJT-X and emits spotReceived() for each decoded station.
 // Protocol: binary QDataStream on 224.0.0.1:2237 (default).
@@ -36,7 +52,21 @@ signals:
     void stopped();
     void spotReceived(const DxSpot& spot);
     void rawLineReceived(const QString& line);
-    void statusReceived(const QString& id, double dialFreqHz, const QString& mode);
+    // Was (id, dialFreqHz, mode); widened to WsjtxStatus for the Rx/Tx
+    // frequency overlay (#4526) rather than growing the signal's argument
+    // list further. Previously emitted with no consumer connected — see
+    // MainWindow_Spots.cpp for the wiring this enables.
+    void statusReceived(const WsjtxStatus& status);
+    // Close (type 6): this instance is exiting cleanly. Lets a consumer drop
+    // its marker immediately instead of waiting out an activity-timeout
+    // sweep (RFC #4526 review item 3).
+    void instanceClosed(const QString& id);
+    // Heartbeat (type 0, ~15s, no frequency data): evidence this instance is
+    // still alive even during a quiet spell in Status traffic — e.g. WSJT-X
+    // decoding is running but Monitor is off, so nothing new to report.
+    // Refreshes an activity timeout without asserting a frequency (RFC #4526
+    // review item 4).
+    void instanceHeartbeat(const QString& id);
 
 private slots:
     void onReadyRead();
@@ -44,11 +74,8 @@ private slots:
 private:
     static constexpr quint32 WsjtxMagic = 0xadbccbda;
 
-    // QDataStream helpers — parse big-endian Qt-serialized types
-    static bool readQString(QDataStream& ds, QString& out);
-    static bool readBool(QDataStream& ds, bool& out);
-
     void parseMessage(const QByteArray& data);
+    void parseHeartbeat(QDataStream& ds);
     void parseStatus(QDataStream& ds);
     void parseDecode(QDataStream& ds);
     void parseClose(QDataStream& ds);
@@ -68,3 +95,12 @@ private:
 };
 
 } // namespace AetherSDR
+
+// WsjtxClient lives on the SpotClients worker thread (#1929); statusReceived()
+// crosses to the GUI thread as a queued connection, so WsjtxStatus needs a
+// registered metatype or QObject::connect fails at RUNTIME with an
+// unregistered-type warning and the signal silently never arrives — no
+// compile error, no crash, just a marker that never appears (RFC #4526
+// review). Declared here, at file scope, matching the house pattern
+// (RecordStartDecision in QsoRecorder.h, etc.).
+Q_DECLARE_METATYPE(AetherSDR::WsjtxStatus)

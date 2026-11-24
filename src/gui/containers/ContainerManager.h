@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 
@@ -117,7 +118,10 @@ public:
     // A version mismatch skips restore. Floating geometry is stored separately under
     // geometryKeyFor(id).
     void saveState() const;
-    void restoreState();
+    // `retiredIds`: containers this build no longer has. A saved layout may
+    // still list them; they are skipped, not recreated as empty shells, and
+    // the next saveState() leaves them out.
+    void restoreState(const QStringList& retiredIds = {});
 
 signals:
     void containerCreated(const QString& id);

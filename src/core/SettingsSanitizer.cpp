@@ -63,6 +63,56 @@ bool valueContainsSecretField(const QJsonValue& value)
     return false;
 }
 
+// Account identities are not secrets, but a support bundle is attached to
+// public issues, so the dump masks them as well.
+bool isPersonalKey(const QString& key)
+{
+    static const QRegularExpression personalPattern(
+        QStringLiteral("email|user_?name"), QRegularExpression::CaseInsensitiveOption);
+    return personalPattern.match(key).hasMatch();
+}
+
+QJsonValue maskPersonal(const QJsonValue& value);
+
+}  // namespace
+
+QJsonValue maskPersonalFields(const QJsonValue& value) { return maskPersonal(value); }
+
+namespace {
+
+QJsonValue maskPersonal(const QJsonValue& value)
+{
+    if (value.isObject()) {
+        QJsonObject out;
+        const QJsonObject in = value.toObject();
+        for (auto it = in.constBegin(); it != in.constEnd(); ++it) {
+            out.insert(it.key(), isPersonalKey(it.key()) && !it.value().toString().isEmpty()
+                ? QJsonValue(kRedacted) : maskPersonal(it.value()));
+        }
+        return out;
+    }
+    if (value.isArray()) {
+        QJsonArray out;
+        for (const QJsonValue& element : value.toArray()) { out.append(maskPersonal(element)); }
+        return out;
+    }
+    return value;
+}
+
+QString dumpValue(const QString& key, const QString& value)
+{
+    if (isPersonalKey(key) && !value.isEmpty()) { return kRedacted; }
+    const QString redacted = redactedValue(key, value);
+    const QByteArray raw = redacted.toUtf8().trimmed();
+    if (!raw.startsWith('{') && !raw.startsWith('[')) { return redacted; }
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
+    if (parseError.error != QJsonParseError::NoError || doc.isNull()) { return redacted; }
+    const QJsonValue masked = maskPersonal(doc.isArray() ? QJsonValue(doc.array()) : QJsonValue(doc.object()));
+    return QString::fromUtf8((masked.isArray() ? QJsonDocument(masked.toArray()) : QJsonDocument(masked.toObject()))
+        .toJson(QJsonDocument::Compact));
+}
+
 } // namespace
 
 bool containsSecretField(const QJsonObject& doc)
@@ -135,7 +185,7 @@ QString dump()
     }();
     for (const QString& key : keys) {
         out += key + QLatin1Char('\t')
-               + redactedValue(key, s.value(key).toString()) + QLatin1Char('\n');
+               + dumpValue(key, s.value(key).toString()) + QLatin1Char('\n');
     }
 
     const QStringList stationKeys = [&s] {
@@ -147,7 +197,7 @@ QString dump()
         out += QStringLiteral("## station_settings (%1)\n").arg(s.stationName());
         for (const QString& key : stationKeys) {
             out += key + QLatin1Char('\t')
-                   + redactedValue(key, s.stationValue(key).toString())
+                   + dumpValue(key, s.stationValue(key).toString())
                    + QLatin1Char('\n');
         }
     }
@@ -159,7 +209,7 @@ QString dump()
         out += QStringLiteral("## radio_settings\n");
         for (const auto& row : radioRows) {
             out += row.first + QLatin1Char('\t')
-                   + redactedValue(row.first, row.second) + QLatin1Char('\n');
+                   + dumpValue(row.first, row.second) + QLatin1Char('\n');
         }
     }
     return out;

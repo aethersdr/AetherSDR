@@ -1,6 +1,7 @@
 // DvkModel as a VoiceKeyer — the radio DVK behind the keyer interface.
 // Run: ./build/voice_keyer_dvk_model_test
 
+#include "FlexTransmitServiceStatusTestSupport.h"
 #include "models/DvkModel.h"
 
 #include <QCoreApplication>
@@ -30,37 +31,35 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
 
-    // Driven through the interface, every command keeps its exact SmartSDR
-    // wire text — the split must not change what reaches the radio.
+    // The existing VoiceKeyer interface produces typed backend intent.
     {
         DvkModel model;
         VoiceKeyer* keyer = &model;
-        QStringList sent;
-        QObject::connect(&model, &DvkModel::replyCommandReady,
-                         [&](const QString& cmd, const QString&, int) { sent << cmd; });
+        QList<DvkRequest> sent;
+        QObject::connect(&model, &DvkModel::controlRequested,
+                         [&](const DvkRequest& request, quint64) { sent << request; });
         keyer->recStart(3);
         keyer->recStop(3);
+        applyDvkStatus(model, "dvk", {{"status", "recording"}, {"id", "3"}});
+        applyDvkStatus(model, "dvk", {{"status", "idle"}});
         keyer->previewStart(4);
         keyer->previewStop(4);
+        applyDvkStatus(model, "dvk", {{"status", "preview"}, {"id", "4"}});
+        applyDvkStatus(model, "dvk", {{"status", "idle"}});
         keyer->playbackStart(5);
         keyer->playbackStop(5);
         keyer->clear(6);
         keyer->remove(7);
         keyer->setName(8, QStringLiteral("CQ Test"));
-        // The stop verbs carry NO id: that is the radio's wire format per the
-        // wiki, and dvk_model_status_test asserts it directly. The interface
-        // names a slot on its stop calls because a client-side keyer's
-        // operations are per-slot, but DvkModel does not put that id on the
-        // wire — it reports the slot it has in flight to the reply instead.
-        const QStringList expected = {
-            "dvk rec_start id=3",      "dvk rec_stop",
-            "dvk preview_start id=4",  "dvk preview_stop",
-            "dvk playback_start id=5", "dvk playback_stop",
-            "dvk clear id=6",          "dvk remove id=7",
-            "dvk set_name name=\"CQ Test\" id=8",
+        using Operation = DvkRequest::Operation;
+        const QList<DvkRequest> expected{
+            {Operation::RecordStart, 3, {}}, {Operation::RecordStop, 3, {}},
+            {Operation::PreviewStart, 4, {}}, {Operation::PreviewStop, 4, {}},
+            {Operation::PlaybackStart, 5, {}}, {Operation::PlaybackStop, 5, {}},
+            {Operation::Clear, 6, {}}, {Operation::Remove, 7, {}},
+            {Operation::Name, 8, QStringLiteral("CQ Test")}
         };
-        report("commands_emit_unchanged_wire_text", sent == expected,
-               sent.join(QStringLiteral(" | ")).toStdString());
+        report("interface emits typed controls", sent == expected);
     }
 
     // Radio status reaches a listener that only knows the interface.
@@ -74,9 +73,9 @@ int main(int argc, char** argv)
                          [&](VoiceKeyer::Status s, int id) { seen = s; seenId = id; });
         QObject::connect(keyer, &VoiceKeyer::recordingChanged,
                          [&](int id) { changed << id; });
-        model.applyStatus(QStringLiteral("dvk"),
+        applyDvkStatus(model, QStringLiteral("dvk"),
                           {{"id", "2"}, {"name", "\"CQ\""}, {"duration", "4200"}});
-        model.applyStatus(QStringLiteral("dvk"),
+        applyDvkStatus(model, QStringLiteral("dvk"),
                           {{"status", "playback"}, {"id", "2"}, {"enabled", "1"}});
         const auto& recs = keyer->recordings();
         const bool recordingOk = recs.size() == 1 && recs[0].id == 2
@@ -97,7 +96,12 @@ int main(int argc, char** argv)
                          [&](const QString& v, int i, uint, const QString& m) {
                              verb = v; id = i; message = m;
                          });
-        model.handleCommandResponse(QStringLiteral("rec_start"), 1, 0x500000A9u, QString());
+        quint64 requestId = 0;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+            [&](const DvkRequest&, quint64 token) { requestId = token; });
+        model.recStart(1);
+        model.handleControlReply(requestId, {TransmitServiceReply::Outcome::Rejected, 0x500000A9u, {}});
+
         report("refusal_reaches_interface_listeners",
                verb == QLatin1String("rec_start") && id == 1
                    && message == QLatin1String("port already in use on radio"),

@@ -2,12 +2,14 @@
 // listener, network peer, discovery, or radio is used by this test.
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/FlexPttWireSession.h"
+#include "core/LogManager.h"
 
 #include <QSignalSpy>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QNetworkProxy>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QtTest>
 #include <algorithm>
 #include <cstring>
@@ -90,9 +92,75 @@ public:
 };
 }
 
+// Status lines among the transport's lineReceived emissions.
+static int statusLines(const QSignalSpy& spy)
+{
+    int count = 0;
+    for (const QList<QVariant>& args : spy) {
+        count += args.at(0).value<AetherSDR::ParsedMessage>().type == AetherSDR::MessageType::Status;
+    }
+    return count;
+}
+
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    // A pan status carrying only WNB keys stays out of the RX log but still
+    // reaches status ingress; every other line keeps its RX log entry (#6069).
+    void wnbOnlyPanStatusSkipsRxLog()
+    {
+        // Force aether.connection debug on for this case only; reinstalling the
+        // previous filter re-applies whatever rules were in force before.
+        static QLoggingCategory::CategoryFilter previousFilter = nullptr;
+        previousFilter = QLoggingCategory::installFilter([](QLoggingCategory* category) {
+            if (previousFilter) { previousFilter(category); }
+            if (qstrcmp(category->categoryName(), "aether.connection") == 0) {
+                category->setEnabled(QtDebugMsg, true);
+            }
+        });
+        const auto restoreFilter = qScopeGuard([] { QLoggingCategory::installFilter(previousFilter); });
+        QVERIFY(lcConnection().isDebugEnabled());
+
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        QSignalSpy lines(&connection, &RadioConnection::lineReceived);
+        static QStringList captured;
+        const auto handler = [](QtMsgType type, const QMessageLogContext& context, const QString& text) {
+            if (type == QtDebugMsg && qstrcmp(context.category, "aether.connection") == 0
+                && text.startsWith(QStringLiteral("RX:"))) {
+                captured.append(text);
+            }
+        };
+        const auto capture = [&](const QByteArray& bytes) {
+            captured.clear();
+            const QtMessageHandler previous = qInstallMessageHandler(handler);
+            RadioConnectionSessionTestAccess::feed(connection, *socket, bytes);
+            qInstallMessageHandler(previous);
+            return captured;
+        };
+
+        QVERIFY(capture("S0|display pan 0x40000000 wnb=1 wnb_level=50 wnb_updating=1\n"
+                        "S0|display pan 0x40000000 wnb=1 wnb_level=50 wnb_updating=0\n"
+                        "S0|display pan 0x40000000 wnb_updating=1\n").isEmpty());
+        QCOMPARE(statusLines(lines), 3);
+        const ParsedMessage second = lines.at(1).at(0).value<ParsedMessage>();
+        QCOMPARE(second.object, QStringLiteral("display pan 0x40000000"));
+        QCOMPARE(second.kvs.value(QStringLiteral("wnb_level")), QStringLiteral("50"));
+        QCOMPARE(second.kvs.value(QStringLiteral("wnb_updating")), QStringLiteral("0"));
+
+        const QStringList logged = capture(
+            "S0|display pan 0x40000000 center=14.225 wnb_updating=1\n"
+            "S0|display pan 0x40000000 removed\n"
+            "S0|display pan 0x40000000 removed wnb=0\n"
+            "S0|display pan 0x40000000 wnb_future=1 wnb_updating=0\n"
+            "R17|0|wnb_updating=1\n"
+            "S0|slice 0 wnb_updating=1\n");
+        QCOMPARE(logged.size(), 6);
+        QVERIFY(logged.at(0).contains(QStringLiteral("center=14.225")));
+        QVERIFY(logged.at(1).contains(QStringLiteral("removed")));
+        QCOMPARE(lines.size(), 9);
+    }
+
     void wrongFamilyExplicitSourceFailsBeforeDial()
     {
         RadioConnection connection;
@@ -172,7 +240,7 @@ private slots:
         RadioConnection connection;
         MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
         QSignalSpy connected(&connection, &RadioConnection::connected);
-        QSignalSpy statuses(&connection, &RadioConnection::statusReceived);
+        QSignalSpy statuses(&connection, &RadioConnection::lineReceived);
         RadioInfo info;
         // Independent compatibility expectation: do not obtain the input from
         // the production constant, which would hide an accidental serial change.
@@ -180,7 +248,7 @@ private slots:
         info.address = QHostAddress(QHostAddress::LocalHost);
         connection.connectToRadio(info);
         QTRY_COMPARE_WITH_TIMEOUT(connected.size(), 1, 1000);
-        QTRY_VERIFY_WITH_TIMEOUT(statuses.size() >= 4, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(statusLines(statuses) >= 4, 1000);
         QCOMPARE(socket->connectAttempts, 0);
         QCOMPARE(socket->socketDescriptor(), qintptr(-1));
         QVERIFY(connection.isSyntheticDemo());
@@ -188,8 +256,9 @@ private slots:
         int waterfalls = 0;
         int pans = 0;
         for (const QList<QVariant>& status : statuses) {
-            const QString line = status.at(0).toString();
-            const QMap<QString, QString> fields = status.at(1).value<QMap<QString, QString>>();
+            const ParsedMessage message = status.at(0).value<ParsedMessage>();
+            const QString line = message.object;
+            const QMap<QString, QString> fields = message.kvs;
             if (line.startsWith(QStringLiteral("display waterfall "))) {
                 // 100 is a rate; replacing it with Demo's 48 ms cadence must fail.
                 QCOMPARE(fields.value(QStringLiteral("line_duration")), QStringLiteral("100"));
@@ -240,7 +309,7 @@ private slots:
         MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
         QStringList writes;
         RadioConnectionSessionTestAccess::beginPtt(connection, writes);
-        QSignalSpy messages(&connection, &RadioConnection::messageReceived);
+        QSignalSpy messages(&connection, &RadioConnection::lineReceived);
         RadioConnectionSessionTestAccess::feed(connection, *socket, "\n\r\n \n\t\r\n \t \n");
         QCOMPARE(messages.count(), 0);
         RadioConnectionSessionTestAccess::feed(connection, *socket,
@@ -414,7 +483,7 @@ private slots:
         QSignalSpy versions(&connection, &RadioConnection::versionReceived);
         QSignalSpy connected(&connection, &RadioConnection::connected);
         QSignalSpy responses(&connection, &RadioConnection::commandResponse);
-        QSignalSpy statuses(&connection, &RadioConnection::statusReceived);
+        QSignalSpy statuses(&connection, &RadioConnection::lineReceived);
         QSignalSpy pings(&connection, &RadioConnection::pingRttMeasured);
         feed(partial);
         if (boundary == 0) {
@@ -436,7 +505,7 @@ private slots:
         QCOMPARE(connected.size(), 1);
         QCOMPARE(connection.clientHandle(), 0x00ABCDEFu);
         QCOMPARE(responses.size(), 0);
-        QCOMPARE(statuses.size(), 0);
+        QCOMPARE(statusLines(statuses), 0);
         feed("R42|0|late\n");
         QCOMPARE(pings.size(), 0); // an old ping must not measure the new session
         QCOMPARE(socket->socketDescriptor(), qintptr(-1));

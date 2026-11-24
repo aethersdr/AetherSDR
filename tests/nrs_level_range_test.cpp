@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // Firmware identity, operator requests and passive NRS readback through the
 // production model/backend/widget bindings. No peer, socket dial or radio.
 #include "TestSettingsProfile.h"
@@ -135,7 +136,7 @@ struct Fixture {
             commands.append(command);
         });
         RadioNicknameTestAccess::firmware(radio, version);
-        radio.handleSliceStatusForTest(0, sliceStatus());
+        applyFlexSliceStatus(radio, 0, sliceStatus());
         commands.clear();
         return radio.slice(0) != nullptr;
     }
@@ -245,7 +246,7 @@ private slots:
         Fixture f;
         QVERIFY(f.init());
         SliceModel* slice = f.radio.slice(0);
-        f.backend->decodeSliceStatus(0, sliceStatus(80));
+        publishFlexSliceStatus(*f.backend, 0, sliceStatus(80));
         VfoWidget vfo;
         vfo.setHasExtendedDsp(true);
         vfo.setRadioModel(&f.radio);
@@ -270,7 +271,7 @@ private slots:
         QVERIFY(requests.isEmpty());
         QVERIFY(f.commands.isEmpty());
         for (const int reported : {50, 80}) {
-            f.backend->decodeSliceStatus(0, sliceStatus(reported));
+            publishFlexSliceStatus(*f.backend, 0, sliceStatus(reported));
             QCOMPARE(slice->nrsLevel(), reported);
             QCOMPARE(label->text(), QString::number(reported));
             QCOMPARE(slider->maximum(), 50);
@@ -314,7 +315,7 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.radio.handleSliceStatusForTest(1, sliceStatus());
+        applyFlexSliceStatus(f.radio, 1, sliceStatus());
         SliceModel* first = f.radio.slice(0);
         SliceModel* second = f.radio.slice(1);
         QVERIFY(first);
@@ -337,7 +338,7 @@ private slots:
         vfo.setSlice(second);
         QVERIFY(!nr->isChecked());
         for (const bool on : {true, false}) {
-            f.backend->decodeSliceStatus(1, {{QStringLiteral("nr"), on ? "1" : "0"}});
+            publishFlexSliceStatus(*f.backend, 1, {{QStringLiteral("nr"), on ? "1" : "0"}});
             QCOMPARE(nr->isChecked(), on);
             QVERIFY(firstRequests.isEmpty());
             QVERIFY(secondRequests.isEmpty());
@@ -434,13 +435,13 @@ private slots:
         QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 0 speex_nr_level=50")});
 
         f.commands.clear();
-        f.backend->decodeSliceStatus(0, sliceStatus(17));
+        publishFlexSliceStatus(*f.backend, 0, sliceStatus(17));
         const QJsonObject readback = capture(QStringLiteral("readback"));
         QVERIFY(!readback.isEmpty());
         QCOMPARE(readback.value(QStringLiteral("value")).toString(), QStringLiteral("17"));
         QCOMPARE(slice->nrsLevel(), 17);
         QVERIFY(f.commands.isEmpty());
-        f.backend->decodeSliceStatus(0, sliceStatus(50));
+        publishFlexSliceStatus(*f.backend, 0, sliceStatus(50));
         QCOMPARE(slice->nrsLevel(), 50);
         QVERIFY(f.commands.isEmpty());
 
@@ -454,7 +455,7 @@ private slots:
         QCOMPARE(legacy.value(QStringLiteral("value")).toString(), QStringLiteral("100"));
         QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 0 speex_nr_level=100")});
         f.commands.clear();
-        f.backend->decodeSliceStatus(0, sliceStatus(80));
+        publishFlexSliceStatus(*f.backend, 0, sliceStatus(80));
         QVERIFY(f.commands.isEmpty());
         RadioNicknameTestAccess::firmware(f.radio, QStringLiteral("4.3.16.42034"));
         const QJsonObject changed = capture(QStringLiteral("range-change"));
@@ -537,12 +538,13 @@ private slots:
         RadioNicknameTestAccess::disconnect(f.radio);
         QVERIFY(f.radio.softwareVersion().isEmpty());
         f.radio.stageSessionModelsForReconnectForTest();
+        beginFlexStatusSession(f.radio);
         RadioNicknameTestAccess::retryWithoutTransport(f.radio);
         RadioNicknameTestAccess::protocol(f.radio);
         RadioConnectionSessionTestAccess::connected(*f.backend->connection(), true);
         emit f.radio.connectionStateChanged(true);
         f.commands.clear();
-        f.radio.handleSliceStatusForTest(0, sliceStatus(80));
+        applyFlexSliceStatus(f.radio, 0, sliceStatus(80));
         QCOMPARE(f.radio.slice(0), original);
         QCOMPARE(original->nrsLevelMaximum(), 50);
         QCOMPARE(original->nrsLevel(), 80);
@@ -576,7 +578,7 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(slider->isVisible());
         for (int gesture = 0; gesture < 3; ++gesture) {
-            f.backend->decodeSliceStatus(0, sliceStatus(80));
+            publishFlexSliceStatus(*f.backend, 0, sliceStatus(80));
             QCOMPARE(slider->value(), 50);
             QCOMPARE(slice->nrsLevel(), 80);
             f.commands.clear();
@@ -613,10 +615,11 @@ private slots:
         for (const auto& entry : {std::pair{QStringLiteral("4.3.16.42034"), 50},
                                   std::pair{QStringLiteral("4.2.20.41343"), 100}}) {
             f.radio.stageSessionModelsForReconnectForTest();
+            beginFlexStatusSession(f.radio);
             QVERIFY(f.radio.slice(0) == nullptr);
             RadioNicknameTestAccess::firmware(f.radio, entry.first);
             f.commands.clear();
-            f.radio.handleSliceStatusForTest(0, sliceStatus(80));
+            applyFlexSliceStatus(f.radio, 0, sliceStatus(80));
             QCOMPARE(f.radio.slice(0), original);
             QCOMPARE(original->nrsLevelMaximum(), entry.second);
             QCOMPARE(original->nrsLevel(), 80);

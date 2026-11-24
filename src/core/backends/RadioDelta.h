@@ -8,7 +8,7 @@
 namespace AetherSDR {
 
 // Normalized radio-global status delta (aetherd RFC 2.3), present-only like the
-// sub-model deltas: FlexBackend::decodeRadioStatus fills only reported fields and
+// sub-model deltas: the Flex boundary fills only reported fields and
 // RadioModel::applyRadioChanges applies those plus its own orchestration. The
 // Flex-specific fields (MultiFlex, radio_options, freq calibration, rtty default)
 // are simply absent on a backend with no analog.
@@ -41,6 +41,8 @@ struct RadioDelta {
     // Calibration / defaults
     std::optional<int>     freqErrorPpb;
     std::optional<double>  calFreqMhz;            // cal_freq
+    // pll_done: false while the PLL calibrates, true (any nonzero byte) when done.
+    std::optional<bool>    pllDone;
     std::optional<int>     rttyMarkDefault;
 
     // Audio outputs

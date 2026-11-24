@@ -1,3 +1,4 @@
+#include "FlexSetupStatusTestSupport.h"
 // #5896 — Radio Setup's caption labels and line edits follow a LIVE theme switch.
 //
 // Radio Setup is a canon window: its body carries one sheet built from
@@ -278,7 +279,7 @@ private slots:
 
         RadioModel model;
         // A disabled CAT cable, injected as the radio's status would report it.
-        model.usbCableModel().applyStatus(QStringLiteral("SNTHEME1"),
+        applyCableStatus(model.usbCableModel(), QStringLiteral("SNTHEME1"),
                                           {{QStringLiteral("type"), QStringLiteral("cat")},
                                            {QStringLiteral("enable"), QStringLiteral("0")},
                                            {QStringLiteral("plugged_in"), QStringLiteral("1")}});

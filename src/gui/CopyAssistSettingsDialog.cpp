@@ -1,5 +1,7 @@
 #include "CopyAssistSettingsDialog.h"
 
+#include "core/ThemeManager.h"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
@@ -9,6 +11,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QStandardItemModel>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -23,6 +26,13 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     setObjectName(QStringLiteral("CopyAssistSettingsDialog"));
 
     auto* root = new QVBoxLayout(bodyWidget());
+    // A text colour inherited from the main window's sheet holds in every
+    // state, so a disabled control would keep full ink. Grey it explicitly,
+    // as Radio Setup does (the None model greys Label speakers and its row).
+    ThemeManager::instance().applyStyleSheet(
+        bodyWidget(),
+        QStringLiteral("QLabel:disabled, QCheckBox:disabled, QLineEdit:disabled,"
+                       " QPushButton:disabled { color: {{color.control.unavailable}}; }"));
     auto* form = new QFormLayout;
     form->setLabelAlignment(Qt::AlignRight);
 
@@ -114,6 +124,36 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     logHint->setEnabled(false); // dimmed, informational
     form->addRow(QString(), logHint);
 
+    // Provisional gray text from a streaming recogniser while the selected model
+    // waits for its segment to close. The controller sets availability.
+    m_livePreview = new QCheckBox(tr("Show a live preview while the model decodes"), this);
+    m_livePreview->setObjectName(QStringLiteral("CopyAssistLivePreview"));
+    m_livePreviewToolTip = tr(
+        "Gray text appears within about a second of speech and is replaced by the "
+        "selected model's text when each segment is decoded. The preview is less "
+        "accurate than the model and is only a first look.");
+    m_livePreview->setToolTip(m_livePreviewToolTip);
+    connect(m_livePreview, &QCheckBox::toggled, this, [this](bool on) {
+        m_livePreviewWanted = on;
+        emit livePreviewToggled(on);
+    });
+    form->addRow(m_livePreview);
+
+    // Which recogniser draws that preview. The controller lists them and marks
+    // the ones this computer cannot run.
+    m_previewRecognizer = new QComboBox(this);
+    m_previewRecognizer->setObjectName(QStringLiteral("CopyAssistLivePreviewRecognizer"));
+    m_previewRecognizer->setAccessibleName(tr("Live preview recognizer"));
+    m_previewRecognizerToolTip = tr(
+        "The speech recognizer that draws the live preview. It runs on this computer, "
+        "so audio never leaves it.");
+    m_previewRecognizer->setToolTip(m_previewRecognizerToolTip);
+    connect(m_previewRecognizer, &QComboBox::currentIndexChanged, this, [this](int) {
+        updatePreviewRecognizerDescription();
+        emit livePreviewRecognizerChanged(currentLivePreviewRecognizer());
+    });
+    form->addRow(tr("Preview recognizer:"), m_previewRecognizer);
+
     // Where in the RX chain Copy Assist listens (RFC #4861). Unchecked is the
     // historical behaviour and the default: the recogniser hears what the
     // speaker plays. The operator's audio is unaffected either way.
@@ -178,12 +218,12 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
 
     // Per-utterance speaker labeling (A/B/C…) via a speaker-embedding model.
     m_labelSpeakers = new QCheckBox(tr("Label speakers (A/B/C…)"), this);
-    m_labelSpeakers->setToolTip(tr("Tag each utterance with a speaker label using an "
-                                   "ONNX speaker-embedding model"));
+    m_labelSpeakers->setObjectName(QStringLiteral("CopyAssistLabelSpeakers"));
+    m_labelSpeakersToolTip = tr("Tag each utterance with a speaker label using an "
+                                "ONNX speaker-embedding model");
+    m_labelSpeakers->setToolTip(m_labelSpeakersToolTip);
     connect(m_labelSpeakers, &QCheckBox::toggled, this, [this](bool on) {
-        m_spkPath->setEnabled(on);
-        m_spkBrowse->setEnabled(on);
-        m_spkThreshold->setEnabled(on);
+        refreshSpeakerLabels();
         emit labelSpeakersToggled(on);
     });
     form->addRow(m_labelSpeakers);
@@ -417,6 +457,117 @@ void CopyAssistSettingsDialog::setNativeAudioRoute(bool native)
     }
 }
 
+void CopyAssistSettingsDialog::setLivePreviewChecked(bool on)
+{
+    m_livePreviewWanted = on;
+    refreshLivePreview();
+}
+
+bool CopyAssistSettingsDialog::livePreviewChecked() const
+{
+    return m_livePreviewWanted;
+}
+
+void CopyAssistSettingsDialog::setLivePreviewAvailable(bool available, const QString& reason)
+{
+    m_livePreviewAvailable = available;
+    m_livePreviewUnavailableReason = reason;
+    refreshLivePreview();
+}
+
+void CopyAssistSettingsDialog::setLivePreviewRequired(bool required, const QString& reason)
+{
+    m_livePreviewRequired = required;
+    m_livePreviewRequiredReason = reason;
+    refreshLivePreview();
+}
+
+void CopyAssistSettingsDialog::refreshLivePreview()
+{
+    {
+        // Seeding from the store must not echo back as an operator edit.
+        const QSignalBlocker block(m_livePreview);
+        m_livePreview->setChecked(m_livePreviewRequired || m_livePreviewWanted);
+    }
+    m_livePreview->setEnabled(m_livePreviewAvailable && !m_livePreviewRequired);
+    // No recognizer at all: the choice between them is moot too.
+    m_previewRecognizer->setEnabled(m_livePreviewAvailable);
+    const QString reason = !m_livePreviewAvailable ? m_livePreviewUnavailableReason
+                           : m_livePreviewRequired ? m_livePreviewRequiredReason
+                                                   : QString();
+    m_livePreview->setAccessibleDescription(reason);
+    m_livePreview->setToolTip(reason.isEmpty()
+                                  ? m_livePreviewToolTip
+                                  : m_livePreviewToolTip + QStringLiteral("\n\n") + reason);
+}
+
+QWidget* CopyAssistSettingsDialog::livePreviewControl() const
+{
+    return m_livePreview;
+}
+
+void CopyAssistSettingsDialog::addLivePreviewRecognizer(const QString& id, const QString& label)
+{
+    const QSignalBlocker block(m_previewRecognizer);
+    m_previewRecognizer->addItem(label, id);
+    updatePreviewRecognizerDescription();
+}
+
+void CopyAssistSettingsDialog::setLivePreviewRecognizerAvailable(const QString& id,
+                                                                 bool available,
+                                                                 const QString& reason)
+{
+    const int index = m_previewRecognizer->findData(id);
+    auto* model = qobject_cast<QStandardItemModel*>(m_previewRecognizer->model());
+    if (index < 0 || model == nullptr) {
+        return;
+    }
+    QStandardItem* item = model->item(index);
+    // Dimmed and unselectable, but still listed so the operator learns it exists
+    // and why it is off. The reason goes where a screen reader reads it on the
+    // item, not only in a tooltip (docs/a11y.md).
+    item->setEnabled(available);
+    item->setData(available ? QVariant() : QVariant(reason), Qt::ToolTipRole);
+    item->setData(available ? QVariant() : QVariant(reason), Qt::AccessibleDescriptionRole);
+    updatePreviewRecognizerDescription();
+}
+
+void CopyAssistSettingsDialog::setCurrentLivePreviewRecognizer(const QString& id)
+{
+    const int index = m_previewRecognizer->findData(id);
+    if (index < 0) {
+        return;
+    }
+    const QSignalBlocker block(m_previewRecognizer);
+    m_previewRecognizer->setCurrentIndex(index);
+    updatePreviewRecognizerDescription();
+}
+
+QString CopyAssistSettingsDialog::currentLivePreviewRecognizer() const
+{
+    return m_previewRecognizer->currentData().toString();
+}
+
+QWidget* CopyAssistSettingsDialog::livePreviewRecognizerControl() const
+{
+    return m_previewRecognizer;
+}
+
+void CopyAssistSettingsDialog::updatePreviewRecognizerDescription()
+{
+    // The current choice can be one this computer cannot run (a setting carried
+    // over from another machine). Say why on the combo itself.
+    const int index = m_previewRecognizer->currentIndex();
+    const QString reason =
+        index >= 0 ? m_previewRecognizer->itemData(index, Qt::AccessibleDescriptionRole).toString()
+                   : QString();
+    m_previewRecognizer->setAccessibleDescription(reason);
+    m_previewRecognizer->setToolTip(reason.isEmpty()
+                                        ? m_previewRecognizerToolTip
+                                        : m_previewRecognizerToolTip + QStringLiteral("\n\n")
+                                              + reason);
+}
+
 QWidget* CopyAssistSettingsDialog::rawAudioControl() const
 {
     return m_rawAudio;
@@ -451,6 +602,30 @@ void CopyAssistSettingsDialog::setLabelSpeakers(bool on)
 bool CopyAssistSettingsDialog::labelSpeakers() const
 {
     return m_labelSpeakers->isChecked();
+}
+
+void CopyAssistSettingsDialog::setSpeakerLabelsUnavailable(bool unavailable,
+                                                           const QString& reason)
+{
+    m_speakerLabelsUnavailable = unavailable;
+    m_speakerLabelsUnavailableReason = reason;
+    refreshSpeakerLabels();
+}
+
+void CopyAssistSettingsDialog::refreshSpeakerLabels()
+{
+    // Greyed, not cleared: the check mark is the operator's choice and stays.
+    const bool usable = !m_speakerLabelsUnavailable;
+    const bool on = usable && m_labelSpeakers->isChecked();
+    m_labelSpeakers->setEnabled(usable);
+    m_spkPath->setEnabled(on);
+    m_spkBrowse->setEnabled(on);
+    m_spkThreshold->setEnabled(on);
+    const QString reason = usable ? QString() : m_speakerLabelsUnavailableReason;
+    m_labelSpeakers->setAccessibleDescription(reason);
+    m_labelSpeakers->setToolTip(reason.isEmpty()
+                                    ? m_labelSpeakersToolTip
+                                    : m_labelSpeakersToolTip + QStringLiteral("\n\n") + reason);
 }
 
 void CopyAssistSettingsDialog::setSpeakerModelPath(const QString& path)

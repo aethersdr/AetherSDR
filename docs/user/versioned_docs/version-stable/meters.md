@@ -80,7 +80,9 @@ The geometry behind the curves is documented in [docs/cross-needle-meter-math.md
 
 ### Radio Vitals (MTR)
 
-Gauges for the radio's hardware: **PA Temp**, **Supply Voltage** and **Main Fan**, each with its live value printed on the gauge. The **°C / °F** button in the "Radio Hardware" header switches the temperature unit and is remembered. On radios that report PA current, that gauge reads **PA Current** instead and the °C/°F button is hidden. The supply-voltage row is hidden on radios that do not report it.
+Gauges for the radio's hardware: **PA Temp**, **Supply Voltage** and **Main Fan**, each with its live value printed on the gauge. The **°C / °F** button in the "Radio Hardware" header switches the temperature unit and is remembered. On radios that report PA current, that gauge reads **PA Current** instead and the °C/°F button is hidden.
+
+While connected to a radio without supply-voltage telemetry, **Supply Voltage** stays visible and dimmed. Its tooltip and screen-reader description say "This radio does not report its supply voltage." Radios that report supply voltage show the live reading; disconnecting clears the previous radio's reading.
 
 <img src="/img/screens/radio-vitals.png" width="248" alt="Radio Vitals applet headed Radio Hardware, with a °C unit button. Three bar gauges read the PA temperature, about 20°C on a 0 to 120 scale, the supply voltage, about 13.7 V on a 10.5 to 15 scale, and the fan speed, about 1100 rpm on a 0 to 3k scale." />
 

@@ -124,6 +124,10 @@ int main(int argc, char** argv)
     EXPECT_COLOR(tm.color(QStringLiteral("color.highlight.rx")), "#379baf");
     EXPECT_COLOR(tm.color(QStringLiteral("color.button.foreground.disabled")),
                  "#506070");
+    // A closed squelch gate looks like a disabled fill today, under its own name.
+    EXPECT_COLOR(tm.color(QStringLiteral("color.slider.foreground.gateClosed")), "#3a4a5a");
+    EXPECT_TRUE(tm.color(QStringLiteral("color.slider.foreground.gateClosed"))
+                == tm.color(QStringLiteral("color.slider.foreground.disabled")));
 
     // ── Gradient tokens survive the emit → QVariant → ThemeGradient round trip ──
     // Every waterfall colormap must round-trip; a missing one gives the

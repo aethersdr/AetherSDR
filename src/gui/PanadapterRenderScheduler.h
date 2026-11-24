@@ -1,11 +1,16 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
 #include <QVariantMap>
 #include <QVector>
+
+#include "WindowRepaintScheduler.h"
+
+class QWidget;
 
 namespace AetherSDR {
 
@@ -26,6 +31,8 @@ private:
     QTimer m_flushTimer;
     QElapsedTimer m_presentClock;
     QVector<QPointer<SpectrumWidget>> m_dirtyWidgets;
+    // Top-level window -> its scheduler; dies with the window, pruned on miss.
+    QHash<const QWidget*, QPointer<WindowRepaintScheduler>> m_windowSchedulers;
 
     quint64 m_requests{0};
     quint64 m_coalescedRequests{0};

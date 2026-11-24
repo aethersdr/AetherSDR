@@ -23,7 +23,7 @@ Building from source: the `ENABLE_RTL` option is on by default and takes effect 
 ## Setup
 
 1. Plug in the dongle.
-2. Open **File → Connect to Radio...** → **On This Network**. Supported dongles on USB are listed with the network radios.
+2. Open **File → Connect to Radio...** → **Nearby radios**. Supported dongles on USB are listed with the network radios.
 3. Select the dongle and click **Connect Selected Radio**.
 
 The radio tab shows **Connected** with a green status dot once the USB connection is established. Amber indicates discovery; a USB receiver does not need a network heartbeat to show its connected state.
@@ -122,6 +122,10 @@ Frequency, mode, passband, sample rate and RF gain are saved per dongle, keyed b
 - DX cluster, RBN, WSJT-X, POTA and manual spots are never drawn on the panadapter ([#6039](https://github.com/aethersdr/AetherSDR/issues/6039)).
 
 ## Troubleshooting
+
+### The app closes during an RTL retune or disconnect
+
+Update to a build that includes the [RTL transfer cancellation fix](https://github.com/aethersdr/AetherSDR/issues/7397). Older builds could release USB transfers while cancellation callbacks were still pending; the crashes were seen on Windows. If the problem continues after updating, include the AetherSDR version and the Windows crash report when filing an issue.
 
 ### No dongle in the list and no RTL-SDR (USB) radio type
 

@@ -33,6 +33,10 @@ IQ channels belong to panadapters, not slices. In the panadapter overlay, open t
 2. Choose a rate for the channel.
 3. Press **On** for that channel.
 
+The button follows the radio's stream status, not just acceptance of the request.
+Turning a channel off cancels an unanswered create. A quick **On → Off → On**
+waits for the old allocation to settle before requesting its replacement.
+
 ## Using DAX IQ
 
 ### Getting IQ into other programs
@@ -54,6 +58,9 @@ AetherSDR can FM-demodulate a panadapter's DAX IQ stream on the computer, for G3
 3. The first time, a **Select WFM Audio Output Device** dialog asks for the output. Choose a virtual cable (for example Hi-Fi Cable, BlackHole or a PipeWire null sink) and optionally remember the choice.
 
 WFM needs a radio with DAX IQ; on other radios it is refused with a notice.
+WFM needs channel 1 to be free; it does not borrow a stream
+already used by the DAX IQ applet or TCI. Stopping WFM releases only its original
+IQ allocation, not a replacement stream created after a reconnect.
 
 ## Reference
 
@@ -101,6 +108,19 @@ The device only exists on Linux, and only while that channel's stream is on.
 The connected radio has no DAX IQ.
 
 1. Use a FlexRadio, which supplies DAX IQ.
+
+If the status bar says **WFM needs DAX IQ channel 1 to be free**, stop the
+channel's existing applet or TCI consumer and wait for its removal before
+starting WFM.
+
+### A channel stays Off after a stream request times out
+
+An unanswered allocation is not automatically retried: the radio may have
+created it without returning a usable reply.
+
+1. Check the connection and logs for the stream request's result.
+2. Reconnect to clear the previous session's unconfirmed requests.
+3. Enable the channel again once the radio is connected and identified.
 
 ## See also
 

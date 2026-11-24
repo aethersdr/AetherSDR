@@ -26,7 +26,6 @@
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
-#include "ClientChainApplet.h"
 #include "CwxPanel.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
@@ -35,6 +34,7 @@
 #include "PersistentDialog.h"
 #include "RC28MappingDialog.h"
 #include "ShortcutDialog.h"
+#include "ShortcutTooltips.h"
 #include "RadioHealthDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "SpectrumWidget.h"
@@ -363,15 +363,6 @@ void MainWindow::buildMenuBar()
         openRadioSetupPage();
     });
 
-    // The keyer-source chooser is otherwise only on the DVK indicator's
-    // right-click, which no keyboard or screen-reader operator can reach
-    // (docs/a11y.md: every interactive widget needs a non-mouse activation
-    // path). Same menu, same handler.
-    auto* voiceKeyerSourceAct = settingsMenu->addAction("Voice Keyer Source...");
-    connect(voiceKeyerSourceAct, &QAction::triggered, this, [this] {
-        showVoiceKeyerSourceMenu(voiceKeyerSourceMenuAnchor());
-    });
-
     // Every controller's settings in one submenu, so the Settings menu does
     // not grow by one entry per supported device.
     auto* controllersMenu = settingsMenu->addMenu("Controllers");
@@ -587,7 +578,8 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_MIDI
     auto* midiAction = controllersMenu->addAction("MIDI Mapping...");
     connect(midiAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_midiDialog, m_midiControl);
+        showOrRaiseCanon(m_midiDialog,
+                         [this] { return new MidiMappingDialog(m_midiControl, this); });
     });
 #endif
 #ifdef HAVE_HIDAPI
@@ -632,7 +624,7 @@ void MainWindow::buildMenuBar()
         // Frameless Window, which a CanonWindow does not follow.
         if (!m_ulanziMapperDialog) {
             auto* dlg = new UlanziDialMapperDialog(m_dialBackend, &m_shortcutManager,
-                                                   midi, this);
+                                                   midi, this, &m_controlActions);
             dlg->setAttribute(Qt::WA_DeleteOnClose);
             m_ulanziMapperDialog = dlg;
         }
@@ -656,6 +648,9 @@ void MainWindow::buildMenuBar()
         m_keyboardShortcutsEnabled = on;
         s_keyboardShortcutsEnabled = on;
         syncOperatingShortcutsEnabled();
+        if (m_shortcutTooltips) {
+            m_shortcutTooltips->setShortcutsEnabled(on);
+        }
         AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
         AppSettings::instance().save();
     });
@@ -1017,31 +1012,13 @@ void MainWindow::buildMenuBar()
     connect(&m_radioModel, &RadioModel::tuneOutputControlChanged, this,
             syncTuneOutputOwnership);
 
-    auto* dspAction = settingsMenu->addAction("AetherRX...");
-    dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
-    connect(dspAction, &QAction::triggered, this, [this] {
-        ensureAetherRxDialog();
-    });
-
     auto* settingsBrowserAction = settingsMenu->addAction("Settings Browser...");
     settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
                                                           // title — macOS #883
     connect(settingsBrowserAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_settingsBrowserDialog);
+        showOrRaiseCanon(m_settingsBrowserDialog,
+                         [this] { return new SettingsBrowserDialog(this); });
     });
-    // RX chain DSP tile double-click also opens the full AetherDSP
-    // Settings dialog — same entry point as the Settings menu action.
-    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxDspEditRequested,
-                this, [dspAction]() { dspAction->trigger(); });
-        // Single-click re-enable of NR2 from LastClientNr also runs
-        // through enableNr2WithWisdom (#2275 — direct enable can crash).
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxNr2EnableWithWisdomRequested,
-                this, &MainWindow::enableNr2WithWisdom);
-    }
-
     settingsMenu->addSeparator();
 
     // CAT: unified port manager (rigctld / TS-2000 / FlexCAT per port)
@@ -1129,11 +1106,13 @@ void MainWindow::buildMenuBar()
     m_profilesMenu = menuBar()->addMenu("&Profiles");
     auto* profileMgrAct = m_profilesMenu->addAction("Profile Manager...");
     connect(profileMgrAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
+        showOrRaiseCanon(m_profileManagerDialog,
+                         [this] { return new ProfileManagerDialog(&m_radioModel, this); });
     });
     auto* profileImportExportAct = m_profilesMenu->addAction("Import/Export Profiles...");
     connect(profileImportExportAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_profileImportExportDialog, &m_radioModel);
+        showOrRaiseCanon(m_profileImportExportDialog,
+                         [this] { return new ProfileImportExportDialog(&m_radioModel, this); });
     });
     m_profilesMenu->addSeparator();
 
@@ -1588,6 +1567,14 @@ void MainWindow::buildMenuBar()
     connect(addPanAction, &QAction::triggered,
             this, &MainWindow::showAddPanadapterDialog);
 
+    // AetherRX and AetherTX sit together (#7384). AetherRX opens a dialog and
+    // is not checkable.
+    auto* dspAction = toolsMenu->addAction("AetherRX...");
+    dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
+    connect(dspAction, &QAction::triggered, this, [this] {
+        ensureAetherRxDialog();
+    });
+
     // The three checkable panel toggles re-read their own state after the
     // handler runs: triggered() fires *after* Qt has flipped the check mark, and
     // every one of these handlers can legitimately decline (no active pan, keyer
@@ -1620,6 +1607,16 @@ void MainWindow::buildMenuBar()
         updateToolsMenuState();
     });
 #endif
+
+    // Outside the ASR guard: without Copy Assist it follows CW Keyer.
+    auto* voiceKeyerAction = toolsMenu->addAction("Digital Voice Keyer");
+    m_voiceKeyerAction = voiceKeyerAction;
+    voiceKeyerAction->setCheckable(true);
+    voiceKeyerAction->setEnabled(false);
+    connect(voiceKeyerAction, &QAction::triggered, this, [this] {
+        toggleVoiceKeyerPanel();
+        updateToolsMenuState();
+    });
 
     viewMenu->removeAction(packetDecoderAction);
     toolsMenu->addAction(packetDecoderAction);
@@ -1720,12 +1717,8 @@ void MainWindow::buildMenuBar()
 
     toolsMenu->addSeparator();
     toolsMenu->addAction("Radio Health...", this, [this] {
-        auto* dlg = new RadioHealthDialog(&m_radioModel, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showOrRaiseCanon(m_radioHealthDialog,
+                         [this] { return new RadioHealthDialog(&m_radioModel, this); });
     });
     auto* gpsDashboardAction = toolsMenu->addAction("AetherGPS...", this, [this] {
         showGpsLocationDialog();
@@ -1750,7 +1743,7 @@ void MainWindow::buildMenuBar()
         const auto shortcutText = [this](const QString& id) {
             const ShortcutManager::Action* action = m_shortcutManager.action(id);
             return action
-                ? action->currentKey.toString(QKeySequence::NativeText)
+                ? shortcutKeyText(action->currentKey, QKeySequence::NativeText)
                 : QString();
         };
         populateWindowMenu(windowMenu, this,
@@ -1781,16 +1774,10 @@ void MainWindow::buildMenuBar()
         showHelpGuide(QStringLiteral("AetherSDR Help"), QStringLiteral(":/help/aethersdr-help.md"));
     });
     helpMenu->addAction("What's New...", this, [this]() {
-        if (m_whatsNewDialog) {
-            m_whatsNewDialog->show();
-            m_whatsNewDialog->raise();
-            m_whatsNewDialog->activateWindow();
-            return;
-        }
-        m_whatsNewDialog = WhatsNewDialog::showAll(this);
-        m_whatsNewDialog->setFramelessMode(
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-        trackPersistentDialog(m_whatsNewDialog);
+        showOrRaiseCanon(m_whatsNewDialog, [this] {
+            return new WhatsNewDialog(QString(), QCoreApplication::applicationVersion(), this,
+                                      false, true);
+        });
     });
     helpMenu->addSeparator();
 
@@ -2024,26 +2011,40 @@ void MainWindow::buildMenuBar()
 
         // Rich-text link colours are baked into the HTML, so the footer is
         // rewritten when the theme changes while the window is open.
-        auto* footer = new QLabel;
+        auto* footer = new QLabel(dlg->bodyWidget());
         auto setFooterText = [footer] {
             auto& tm = AetherSDR::ThemeManager::instance();
             footer->setText(QStringLiteral(
                 "<div style='text-align:center;'>"
                 "<p style='margin:0 0 6px 0;'>&copy; 2026 AetherSDR Contributors &middot; Licensed under "
-                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1; text-decoration:none;'>GPLv3</a></p>"
-                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1; text-decoration:none;'>"
+                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1;'>GPLv3</a></p>"
+                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1;'>"
                 "github.com/aethersdr/AetherSDR</a></p>"
                 "<p style='font-size:10px; margin:0;'>SmartSDR protocol &copy; FlexRadio Systems<br>"
                 "D-STAR is a registered trademark of Icom Inc.<br>"
-                "AetherSDR is not affiliated with or endorsed by Icom Inc.<br>"
-                "HF propagation forecasts provided by "
-                "<a href='https://www.hamqsl.com/' style='color:%1; text-decoration:none;'>hamqsl.com</a></p>"
+                "AetherSDR is not affiliated with or endorsed by Icom Inc.</p>"
+                "<p style='margin:6px 0;'><a href='https://www.hamqsl.com/solar.html' "
+                "style='color:%1;'>HamQSL/N0NBH</a> supplies HF/VHF band conditions.<br>"
+                "<a href='https://www.swpc.noaa.gov/' style='color:%1;'>NOAA SWPC</a> supplies K/A/SFI, "
+                "forecasts, solar indices and GOES X-ray data.<br>"
+                "Solar images from <a href='https://sdo.gsfc.nasa.gov/' style='color:%1;'>NASA&nbsp;SDO</a> "
+                "and lunar data from <a href='https://svs.gsfc.nasa.gov/gallery/moonphase/' "
+                "style='color:%1;'>NASA&nbsp;SVS</a>.</p>"
+                "<p style='margin:0;'>AetherMap city lights: 2016 composite from "
+                "<a href='https://science.nasa.gov/earth/earth-observatory/earth-at-night/maps/' "
+                "style='color:%1;'>NASA/GSFC</a>.<br>"
+                "US backup radar and station locations from "
+                "<a href='https://radar.weather.gov/' style='color:%1;'>NOAA/NWS</a>.<br>"
+                "See Sources &amp; licenses in AetherMap for more credits.</p>"
                 "</div>").arg(tm.color(footer, QStringLiteral("color.canon.cyan")).name()));
         };
         setFooterText();
         connect(&tm, &AetherSDR::ThemeManager::themeChanged, footer, setFooterText);
         footer->setAlignment(Qt::AlignCenter);
         footer->setOpenExternalLinks(true);
+        // Tab reaches the links and Enter opens one; mouse access is unchanged.
+        footer->setTextInteractionFlags(Qt::LinksAccessibleByMouse
+                                        | Qt::LinksAccessibleByKeyboard);
         footer->setWordWrap(true);
         tm.applyStyleSheet(footer, "QLabel { color: {{color.canon.muted}}; font-size: 11px; background: transparent; }");
         // A wrapped rich-text label under-reports its height in a fixed-width
@@ -2178,7 +2179,7 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     // be told there is nothing to hold until they bind one.
     QString keyText;
     if (auto* act = m_shortcutManager.action(QLatin1String(kSplitMonitorActionId)))
-        keyText = act->currentKey.toString(QKeySequence::NativeText);
+        keyText = shortcutKeyText(act->currentKey, QKeySequence::NativeText);
     QAction* keyRow = monitorMenu->addAction(
         keyText.isEmpty() ? tr("Not bound — set a key in Keyboard Shortcuts")
                           : tr("Hold %1").arg(keyText));

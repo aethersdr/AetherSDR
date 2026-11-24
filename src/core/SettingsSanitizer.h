@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonValue>
 #include <QString>
 
 class QJsonObject;
@@ -36,6 +37,10 @@ QString redactedValue(const QString& key, const QString& value);
 // scopes), one "key<TAB>value" per line under "## section" headers. Diagnostic
 // output — NOT a restorable backup.
 QString dump();
+
+// Replaces account identities (email, user name) at any depth with
+// "[REDACTED]". Not secrets, but never for public bundles or observers.
+QJsonValue maskPersonalFields(const QJsonValue& value);
 
 } // namespace SettingsSanitizer
 

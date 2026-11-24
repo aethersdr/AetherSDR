@@ -1,0 +1,134 @@
+name: Release Offload
+
+# Moves the release files people don't download off the GitHub release page,
+# to updates.aethersdr.com/releases/<tag>/ (RFC #6964): the per-file .asc
+# signatures, the debug-symbol archives and the .msixupload. The installers,
+# the manual, the source, SHA256SUMS.txt and its signature, and the full
+# update tarballs stay on the page. tools/offload_release_assets.py holds the
+# rules, and copies, checks and only then deletes. If any copy or check
+# fails, nothing is deleted.
+#
+# plan     reads only, with no secrets. A signing run's head branch is the
+#          default branch, whatever tag it signed, so the tag comes from the
+#          releases themselves: the newest one from v26.11.4 on that still has
+#          files to move. It is ready once every build, Docs run and signing
+#          run for it has finished and SHA256SUMS.txt is newer than every
+#          build artifact it signed. Until then each signing run's plan stops
+#          here, without asking for an approval.
+# offload  runs in the update-signing environment (maintainer approval), the
+#          only place the bucket's token lives. It checks the release is
+#          ready again before it copies anything.
+#
+# A dispatch with dry_run=true plans and lists, for any release tag, and
+# writes nothing. A throwaway release exercises the whole path. It needs:
+# - an offload-test-N tag, never a v* tag, which would start the builds and
+#   Store publishing (Docs starts, but every one of its release jobs needs
+#   a v* tag and skips);
+# - --prerelease, so it never becomes GitHub's latest release, which copies
+#   of the app compare every manifest's tag with;
+# - dummy files named AetherSDR-offload-test-N-*, a SHA256SUMS.txt and its
+#   .asc. Delete the release, its tag, and releases/offload-test-N/ on the
+#   bucket afterwards.
+
+on:
+  # No `branches:` filter: see sign-release.yml. Only a signing run that
+  # succeeded can have changed a release; one skipped for a main build, or
+  # cancelled while pending, can't.
+  workflow_run:
+    workflows: ["Sign Release Artifacts"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v26.11.4), or offload-test-N'
+        required: true
+      dry_run:
+        description: 'List and check only (true), or move the files (false)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ready: ${{ steps.plan.outputs.ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          sparse-checkout: |
+            tools/offload_release_assets.py
+            tools/publish_update_manifest.py
+            tools/build_update_manifest.py
+            tools/release_manual_signing.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            args=(--tag "$INPUT_TAG")
+            if [ "$DRY_RUN" = true ]; then
+              args+=(--dry-run)
+            fi
+          fi
+          python3 tools/offload_release_assets.py plan "${args[@]}" --github-output "$GITHUB_OUTPUT"
+
+  offload:
+    needs: plan
+    if: ${{ needs.plan.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: update-signing
+    permissions:
+      contents: write
+      actions: read
+    # One at a time across all tags. A second run for the same tag, queued
+    # behind the first, finds nothing left to move and stops.
+    concurrency:
+      group: release-offload
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          sparse-checkout: |
+            tools/offload_release_assets.py
+            tools/publish_update_manifest.py
+            tools/build_update_manifest.py
+            tools/release_manual_signing.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # R2's S3 API with the token scoped to the one bucket, signed by curl
+      # (tools/publish_update_manifest.py's S3Store, the same writer Update
+      # Manifest uses).
+      - name: Copy, check, then delete
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.UPDATES_R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.UPDATES_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.UPDATES_R2_SECRET_ACCESS_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          python3 tools/offload_release_assets.py offload --tag "$TAG" --work "$RUNNER_TEMP/offload"

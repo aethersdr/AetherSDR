@@ -31,7 +31,6 @@ public:
 
     // ── Status parsing (called from RadioModel) ─────────────────────────
     // The Flex path: raw `tnf <id> …` status keys off the command plane.
-    void applyTnfStatus(int id, const QMap<QString, QString>& kvs);
     // The typed path, for a backend whose notches live in this process and are
     // reported through IRadioBackend::notchChanged rather than as wire text.
     // Creates the entry if the id is new, which is how an HL2 notch first
@@ -59,7 +58,7 @@ signals:
     // Typed intents, routed by RadioModel to IRadioBackend (FlexBackend builds the
     // SmartSDR `tnf …` text; a host-DSP backend implements them in software).
     // Create carries no id: the backend assigns it (a Flex mints it in the radio)
-    // and the notch arrives back through applyTnfStatus/applyNotchDelta.
+    // and the notch arrives back through applyNotchDelta.
     void notchCreateRequested(double centerHz, double widthHz);
     void notchChangeRequested(int id, const NotchDelta& delta);
     void notchRemoveRequested(int id);

@@ -22,6 +22,7 @@ fetch libusb
 fetch rtl
 USB="$WORK/$(field libusb directory)"
 RTL="$WORK/$(field rtl directory)"
+python3 "$SCRIPT_DIR/apply-rtl-patches.py" "$RTL"
 cmake_args=()
 if [ "$(uname -s)" = Darwin ]; then
     : "${MACOS_DEPLOYMENT_TARGET:?Set the deployment target explicitly}"
@@ -59,4 +60,5 @@ fi
 cp "$RTL/COPYING" "$SOURCES/RTL-SDR-COPYING"
 cp "$USB/COPYING" "$SOURCES/libusb-COPYING"
 cp "$SCRIPT_DIR/rtl-dependencies.json" "$SCRIPT_DIR/setup-rtl-deps.sh" "$SCRIPT_DIR/_verify_sha256.sh" "$SOURCES/"
+cp "$SCRIPT_DIR/apply-rtl-patches.py" "$SCRIPT_DIR/rtl-async-cancellation.patch" "$SOURCES/"
 echo "RTL dependency sources and recipes: $SOURCES"

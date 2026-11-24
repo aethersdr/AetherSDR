@@ -230,11 +230,40 @@ static void testUsbMultiDivision()
         check(!d.feed(makeContinuation(div, 11, chunk)).has_value(),
               "middle divisions accumulate");
 
-    auto last = d.feed(makeContinuation(11, 11, chunk));
+    auto last = d.feed(makeContinuation(11, 11, std::vector<std::uint8_t>(25, 0x20)));
     check(last.has_value(), "division 11 completes the sweep");
     check(last->raw.size() == static_cast<std::size_t>(kScopePointsIc705),
-          "and is padded/trimmed to the geometry");
+          "and contains exactly the native geometry");
     check(last->startHz == 14'000'000, "the header from division 1 survived");
+}
+
+static void testMalformedGeometry()
+{
+    for (int points : {475, 689}) {
+        ScopeDecoder decoder(ScopeGeometry{points});
+        for (int received : {points - 1, points + 1}) {
+            const std::vector<std::uint8_t> wave(received, 40);
+            check(!decoder.feed(makeFirst(1, 1, ScopeMode::Fixed, 7'000'000, 7'200'000, false, wave)),
+                  "short and oversized LAN sweeps are rejected deliberately");
+            const auto rejection = decoder.rejection();
+            check(rejection && rejection->kind == ScopeDecoder::Rejection::Kind::Size
+                      && rejection->expected == static_cast<std::size_t>(points)
+                      && rejection->received == static_cast<std::size_t>(received),
+                  "rejected LAN geometry reports expected and received byte counts");
+            (void)decoder.feed(makeFirst(1, 2, ScopeMode::Fixed, 7'000'000, 7'200'000, false, {}));
+            check(!decoder.feed(makeContinuation(2, 2, wave)),
+                  "short and oversized multi-division sweeps are rejected deliberately");
+            check(decoder.rejection() && decoder.rejection()->received == static_cast<std::size_t>(received),
+                  "multi-division rejection preserves the received count");
+        }
+        check(!decoder.feed(makeFirst(1, 1, static_cast<ScopeMode>(4),
+                                     7'000'000, 7'200'000, false, {}))
+                  && decoder.rejection() && decoder.rejection()->kind == ScopeDecoder::Rejection::Kind::Mode,
+              "invalid scope mode is rejected with a diagnostic");
+        check(decoder.feed(makeFirst(1, 1, ScopeMode::Fixed, 7'000'000, 7'200'000, false,
+                                    std::vector<std::uint8_t>(points, 40))).has_value()
+                  && !decoder.rejection(), "valid sweep recovers and clears the stale diagnostic");
+    }
 }
 
 static void testDivisionGapIsAbandoned()
@@ -379,6 +408,7 @@ int main()
     testScrollModesAndNegativeEdge();
     testOutOfRange();
     testUsbMultiDivision();
+    testMalformedGeometry();
     testDivisionGapIsAbandoned();
     testNonScopeFramesIgnored();
     testDbmMapping();

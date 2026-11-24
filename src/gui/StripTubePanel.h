@@ -80,6 +80,7 @@ private:
     QPushButton*           m_modelC{nullptr};
     QButtonGroup*          m_modelGroup{nullptr};
     QPushButton*           m_bypass{nullptr};
+    QPushButton*           m_rn2Btn{nullptr};   // TX only
     QTimer*                m_syncTimer{nullptr};   // mirror engine → knobs
     bool                   m_restoring{false};
 };

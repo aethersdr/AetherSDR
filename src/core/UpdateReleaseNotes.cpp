@@ -23,6 +23,14 @@ constexpr int kMaxChapters = 12;
 constexpr int kMaxAssets = 64;
 
 const QString kDownloadPathPrefix = QStringLiteral("/aethersdr/AetherSDR/releases/download/");
+const QString kPayloadHost = QStringLiteral("updates.aethersdr.com");
+const QString kPayloadPathPrefix = QStringLiteral("/releases/");
+
+bool plainHttps(const QUrl& url)
+{
+    return url.isValid() && url.scheme() == QLatin1String("https") && url.port() == -1
+           && url.userInfo().isEmpty() && !url.hasQuery() && !url.hasFragment();
+}
 
 // Release-prep boilerplate, not a chapter of what changed.
 bool isBoilerplateHeading(const QString& heading)
@@ -107,9 +115,7 @@ ReleaseInfo UpdateChecker::parseRelease(const QByteArray& json)
 
 bool UpdateChecker::isTrustedDownloadUrl(const QUrl& url)
 {
-    if (!url.isValid() || url.scheme() != QLatin1String("https")
-        || url.host() != QLatin1String("github.com") || url.port() != -1
-        || !url.userInfo().isEmpty() || url.hasQuery() || url.hasFragment()) {
+    if (!plainHttps(url) || url.host() != QLatin1String("github.com")) {
         return false;
     }
     const QString path = url.path(QUrl::FullyDecoded);
@@ -119,6 +125,29 @@ bool UpdateChecker::isTrustedDownloadUrl(const QUrl& url)
     // .../download/<tag>/<file>: exactly two segments after the prefix.
     const QStringList rest = path.mid(kDownloadPathPrefix.size()).split(QLatin1Char('/'));
     return rest.size() == 2 && !rest[0].isEmpty() && !rest[1].isEmpty();
+}
+
+bool UpdateChecker::isTrustedPayloadUrl(const QUrl& url, const QString& tag)
+{
+    if (!plainHttps(url) || tag.isEmpty() || tag.contains(QLatin1Char('/'))) {
+        return false;
+    }
+    QString prefix;
+    if (url.host() == QLatin1String("github.com")) {
+        prefix = kDownloadPathPrefix;
+    } else if (url.host() == kPayloadHost) {
+        prefix = kPayloadPathPrefix;
+    } else {
+        return false;
+    }
+    // Decoded, so an encoded '/' or '..' counts as the character it spells.
+    const QString path = url.path(QUrl::FullyDecoded);
+    const QString release = prefix + tag + QLatin1Char('/');
+    if (!path.startsWith(release) || path.contains(QLatin1String(".."))) {
+        return false;
+    }
+    const QString file = path.mid(release.size());
+    return !file.isEmpty() && !file.contains(QLatin1Char('/'));
 }
 
 int UpdateChecker::pickAsset(const QList<ReleaseAsset>& assets, const QString& os,

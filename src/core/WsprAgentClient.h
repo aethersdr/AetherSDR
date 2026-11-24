@@ -14,6 +14,8 @@ class QTimer;
 
 namespace AetherSDR {
 
+class RadioModel;
+
 // Talks to the WSPR receiver on the radio (WsprAgent.h): its status with the
 // spots since a time, and its settings. Plain HTTP to AetherSDR's own
 // service on the radio, not SmartSDR wire. The receiver is reached at the
@@ -106,6 +108,10 @@ private:
 namespace wspr {
 WsprSpotHubSettings loadSpotHubSettings();
 void saveSpotHubSettings(const WsprSpotHubSettings& settings);
+// Every status the feed reads reserves the slice the receiver names (#7139),
+// so a missed read after a new slice heals on the next poll.
+QMetaObject::Connection reserveReceiverSlice(WsprSpotFeed* feed, RadioModel* radio,
+                                             const QString& label);
 }  // namespace wspr
 
 }  // namespace AetherSDR

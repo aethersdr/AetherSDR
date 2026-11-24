@@ -1,4 +1,5 @@
 #include "core/backends/icom/IcomSession.h"
+#include "core/backends/icom/IcomModels.h"
 
 #include <QDateTime>
 
@@ -67,7 +68,12 @@ bool IcomSession::start(const Params& params)
     m_ignoredAuthReplies = 0;
     m_ignoredControlPackets = 0;
     m_tx = TxPacketizer(params.codec);
-    m_rx = RxAssembler(params.codec);
+    m_rxCodec = params.codec;
+    m_rx = RxAssembler(m_rxCodec);
+    m_rxReceivedPackets = 0;
+    m_rxReceivedFrames = 0;
+    m_rxConcealedFrames = 0;
+    m_rxConcealmentBlocks = 0;
 
     if (!codecSupported(params.codec)) {
         // Refusing here rather than at decode time is deliberate: a codec we
@@ -102,15 +108,18 @@ bool IcomSession::start(const Params& params)
     connect(m_audio, &IcomStream::ready, this, &IcomSession::onAudioReady);
     connect(m_audio, &IcomStream::payloadReady, this, &IcomSession::onAudioPayload);
     connect(m_audio, &IcomStream::failed, this, &IcomSession::fail);
-    // Loss is CONCEALED, not just counted: the fill goes out through audioReady so
-    // the RX timeline stays continuous; audioLost still fires for gap counting.
+    // Mono retains its legacy estimate. Stereo fills only proven media gaps
+    // below: outer gaps can be idles and are not an audio duration.
     connect(m_audio, &IcomStream::packetsLost, this, [this](int packets) {
         emit audioLost(packets);
         if (packets <= 0)
             return;
         auto fill = m_rx.concealLoss(packets, m_params.sampleRateHz);
-        if (!fill.empty())
+        if (!fill.empty()) {
+            m_rxConcealedFrames += fill.size() / rxChannels();
+            ++m_rxConcealmentBlocks;
             emit audioReady(fill);
+        }
     });
 
     m_control = new IcomStream(this);
@@ -456,7 +465,12 @@ void IcomSession::requestStreamsIfReady()
     req.radioId   = m_radioId;
     req.radioName = m_radioName.toStdString();
     req.username  = m_params.username.toStdString();
-    req.rxCodec   = m_params.codec;
+    const bool stereoRx = m_params.rxChannels == 2
+        || (m_params.rxChannels == 0
+            && preferredRxChannelsForModelHint(m_advertisedCivAddress) == 2);
+    m_rxCodec = stereoRx ? AudioCodec::Lpcm2ch16 : m_params.codec;
+    m_rx = RxAssembler(m_rxCodec);
+    req.rxCodec   = m_rxCodec;
     req.txCodec   = m_params.codec;
     req.sampleRateHz = m_params.sampleRateHz;
     // The ports we ACTUALLY bound, not the defaults. This is why the media
@@ -654,9 +668,20 @@ void IcomSession::onAudioPayload(const QByteArray& packet)
     const auto payload = audioPayload(asSpan(packet));
     if (payload.empty())
         return;
+    const auto bytes = asSpan(packet);
+    const auto mediaSequence = static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(bytes[0x12]) << 8) | bytes[0x13]);
+    for (const auto& silence : m_rx.concealBefore(payload, mediaSequence)) {
+        m_rxConcealedFrames += silence.size() / rxChannels();
+        ++m_rxConcealmentBlocks;
+        emit audioReady(silence);
+    }
     auto samples = m_rx.accept(payload);
-    if (!samples.empty())
+    if (!samples.empty()) {
+        ++m_rxReceivedPackets;
+        m_rxReceivedFrames += samples.size() / rxChannels();
         emit audioReady(samples);
+    }
 }
 
 void IcomSession::onTxPump()
@@ -856,6 +881,13 @@ QVariantMap IcomSession::transportDiagnostics() const
     out.insert(QStringLiteral("control"), streamMap(snapshot.control));
     out.insert(QStringLiteral("serial"), streamMap(snapshot.serial));
     out.insert(QStringLiteral("audio"), streamMap(snapshot.audio));
+    out.insert(QStringLiteral("media"), QVariantMap{
+        {QStringLiteral("rxChannels"), rxChannels()},
+        {QStringLiteral("sampleRateHz"), m_params.sampleRateHz},
+        {QStringLiteral("receivedPackets"), QVariant::fromValue<qulonglong>(m_rxReceivedPackets)},
+        {QStringLiteral("receivedFrames"), QVariant::fromValue<qulonglong>(m_rxReceivedFrames)},
+        {QStringLiteral("concealedFrames"), QVariant::fromValue<qulonglong>(m_rxConcealedFrames)},
+        {QStringLiteral("concealmentBlocks"), QVariant::fromValue<qulonglong>(m_rxConcealmentBlocks)}});
     return out;
 }
 

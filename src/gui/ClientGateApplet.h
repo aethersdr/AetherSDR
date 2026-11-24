@@ -20,12 +20,10 @@ class ClientGateApplet : public QWidget {
     Q_OBJECT
 
 public:
-    enum class Side { Tx, Rx };
-
-    explicit ClientGateApplet(Side side = Side::Tx, QWidget* parent = nullptr);
+    // AetherRX's gate: AetherTX has none (RN2 replaces it).
+    explicit ClientGateApplet(QWidget* parent = nullptr);
 
     void setAudioEngine(AudioEngine* engine);
-    Side side() const { return m_side; }
 
     // Pull the Enable toggle state from the bound ClientGate.  Called
     // by MainWindow after the floating editor toggles its bypass button
@@ -42,7 +40,6 @@ private:
     void tickMeter();
 
     AudioEngine*           m_audio{nullptr};
-    const Side             m_side{Side::Tx};
     class ClientGate*      gate() const;
     void                   saveGateSettings() const;
     QPushButton*           m_enable{nullptr};

@@ -184,6 +184,47 @@ int lowestClosedLevel(int lo, int hi, ClosedAt&& closedAt)
     return lo;
 }
 
+// One gate probe, approached from a gate heard closed. A squelch that was open
+// can hold its audio for a tail after the level rises past the signal (WDSP's
+// amsq: up to 1.5 s), so a probe that follows an open one hears the tail and
+// reads open at a level that is closed. Setting `topLevel` and listening until
+// the audio stops first makes every probe read the same gate whatever came
+// before it. closedOver(ms) listens for ms and says whether the gate was shut.
+struct GateProbeTiming {
+    int settleMs = 900;
+    int listenMs = 700;
+    int closePollMs = 200;
+    int closeMaxMs = 4000;
+};
+
+struct GateProbe {
+    bool closed = false;
+    // False when the gate never shut at topLevel within closeMaxMs, so this
+    // probe could follow an open gate.
+    bool fromClosed = true;
+};
+
+template <typename SetLevel, typename Wait, typename ClosedOver>
+GateProbe probeFromClosedGate(int level, int topLevel, const GateProbeTiming& t,
+                              SetLevel&& setLevel, Wait&& wait, ClosedOver&& closedOver)
+{
+    GateProbe r;
+    if (level < topLevel) {
+        setLevel(topLevel);
+        r.fromClosed = false;
+        for (int waited = 0; waited < t.closeMaxMs; waited += t.closePollMs) {
+            if (closedOver(t.closePollMs)) {
+                r.fromClosed = true;
+                break;
+            }
+        }
+    }
+    setLevel(level);
+    wait(t.settleMs);
+    r.closed = closedOver(t.listenMs);
+    return r;
+}
+
 // Strongest bin within +/- spanHz of targetHz, on a pan whose bins spread
 // evenly over [lowHz, highHz). NaN when the window is off the pan or holds no
 // finite bin. The bins are on the pan's own dBm axis, where the SQL line is drawn.
@@ -219,6 +260,89 @@ inline double median(std::vector<double> values)
     std::sort(values.begin(), values.end());
     const std::size_t n = values.size();
     return n % 2 ? values[n / 2] : 0.5 * (values[n / 2 - 1] + values[n / 2]);
+}
+
+// ---- receive sidebands (docs/HERMES.md 15.3, 15.4) ----
+
+// How far the reference tone stands above everything else the mode delivered,
+// in dB of rms against rms. Relative on purpose: an absolute floor reads a
+// mode that runs quieter BY DESIGN as deaf. The HL2 runs DIGU/DIGL with AGC
+// off (#5629), 29-41 dB below USB/LSB at the same tone-to-rest ratio, and an
+// absolute floor of -55 dB would call DIGU "not recovered" at -75.7 dB while
+// it carried the tone exactly as well as USB did.
+//
+// `tone` is tonePowerNear()'s figure, |sum x e^-jwn| / N, which is half a
+// sinusoid's amplitude; its rms is therefore tone * sqrt(2). The background is
+// what remains of the overall rms once that tone is taken out.
+inline double toneAboveBackgroundDb(double tone, double overallRms)
+{
+    const double toneRms = tone * std::sqrt(2.0);
+    const double rest2 = overallRms * overallRms - toneRms * toneRms;
+    const double floorRms = 1e-12;   // db()'s own floor: a pure tone reads high, not inf
+    return db(toneRms) - db(std::sqrt(std::max(rest2, floorRms * floorRms)));
+}
+
+// A mode recovered the reference when its tone stands no further than this
+// below the rest of its audio. Measured on the HL2 (1.5 s, 48 kHz tap): a
+// recovered WWV carrier sits at about 0 dB on two hosts, band noise alone at
+// -28 to -31 dB (the strongest bin of the search span), and the opposite
+// sideband at -38 to -59 dB. -15 dB is midway between recovered and noise.
+inline constexpr double kRecoveredToneAboveBackgroundDb = -15.0;
+
+inline bool toneRecovered(double tone, double overallRms)
+{
+    // Both energies must exceed db()'s floor; flooring silence on both sides
+    // of the ratio would otherwise make it indistinguishable from a tone.
+    return std::isfinite(tone) && tone > 1e-12
+        && std::isfinite(overallRms) && overallRms > 1e-12
+        && toneAboveBackgroundDb(tone, overallRms) > kRecoveredToneAboveBackgroundDb;
+}
+
+// What the four modes' recoveries say together. With the carrier ABOVE the
+// dial (offset > 0) USB and DIGU should hear it and LSB and DIGL should not;
+// below the dial, the reverse.
+enum class RxSidebandPattern {
+    NoneRecovered,    // no carrier, or no antenna: inconclusive, not a pass
+    AllRecovered,     // the dial is probably not where the stage thinks
+    PairsDisagree,    // USB vs DIGU, or LSB vs DIGL, differ: a per-mode fault
+    Inverted,         // only the wrong pair recovered: a handedness inversion
+    Expected,
+};
+
+inline RxSidebandPattern rxSidebandPattern(bool usb, bool lsb, bool digu, bool digl,
+                                           bool carrierAboveDial)
+{
+    if (!usb && !lsb && !digu && !digl)
+        return RxSidebandPattern::NoneRecovered;
+    if (usb && lsb && digu && digl)
+        return RxSidebandPattern::AllRecovered;
+    if (usb != digu || lsb != digl)
+        return RxSidebandPattern::PairsDisagree;
+    // Each pair agrees and exactly one pair recovered.
+    return usb == carrierAboveDial ? RxSidebandPattern::Expected
+                                   : RxSidebandPattern::Inverted;
+}
+
+// ---- mode map (docs/HERMES.md 15.7) ----
+
+// How a mode that did not come back as written behaved when it was asked for
+// again from a different, known mode. A refusal leaves the slice where it was;
+// an alias lands on the same other spelling again. Readback alone cannot tell
+// them apart, because the mode before an alias in the list is often its twin
+// (CW before CWU, FM before NFM).
+enum class ModeReadback { Retained, Alias, Refused, Unstable };
+
+inline ModeReadback classifyModeReadback(bool firstReadbackIsRequested,
+                                         bool reprobeKeptBaseline,
+                                         bool reprobeMatchesFirstReadback)
+{
+    if (firstReadbackIsRequested)
+        return ModeReadback::Retained;
+    if (reprobeKeptBaseline)
+        return ModeReadback::Refused;
+    if (reprobeMatchesFirstReadback)
+        return ModeReadback::Alias;
+    return ModeReadback::Unstable;
 }
 
 }  // namespace AetherSDR::certmath

@@ -1,4 +1,5 @@
 #include "PanadapterStream.h"
+#include "core/backends/flex/FlexReceiveData.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/LogManager.h"
@@ -15,8 +16,10 @@
 #include <QtEndian>
 #include <QSet>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -86,16 +89,25 @@ QHostAddress chooseLanBindAddress(RadioConnection* conn,
 //   0x03E3 IF_NARROW float32 stereo BE   0x0123 NARROW_REDUCED_BW int16 mono BE
 //   0x8005 Opus   0x8003 panadapter FFT   0x8004 waterfall tile   0x8002 meters
 
-PanadapterStream::PanadapterStream(QObject* parent)
-    : QObject(parent)
+PanadapterStream::PanadapterStream(QObject* parent, std::shared_ptr<FlexReceiveData> receiveData)
+    : QObject(parent), m_receiveData(std::move(receiveData))
 {
     m_pcmProducer.start();
+    m_rxReorderClock.start();
     // Socket and timer connections are deferred to init() which runs
     // on the network thread after moveToThread(). (#561)
 }
 
+PanadapterStream::~PanadapterStream() = default;
+
 void PanadapterStream::init()
 {
+    if (m_receiveData) {
+        QTimer* telemetryTimer = new QTimer(this);
+        telemetryTimer->setInterval(250);
+        connect(telemetryTimer, &QTimer::timeout, this, &PanadapterStream::publishReceiveTelemetry);
+        telemetryTimer->start();
+    }
     if (!m_socket) {
         m_socket = new QUdpSocket(this);
     }
@@ -107,6 +119,13 @@ void PanadapterStream::init()
     }
     if (!m_lanKeepaliveTimer) {
         m_lanKeepaliveTimer = new QTimer(this);
+    }
+
+    if (!m_rxReorderTimer) {
+        m_rxReorderTimer = new QTimer(this);
+        m_rxReorderTimer->setSingleShot(true);
+        m_rxReorderTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_rxReorderTimer, &QTimer::timeout, this, &PanadapterStream::flushRxReorder);
     }
 
     // Pick up the persisted PLC toggle. Default true — strictly better in
@@ -514,6 +533,13 @@ void PanadapterStream::confirmWanRegistration(const QByteArray& data)
 
 void PanadapterStream::stop()
 {
+    if (m_rxReorderTimer) {
+        m_rxReorderTimer->stop();
+    }
+    m_audioPlc.clear();
+    m_audioPlcGenerations.clear();
+    m_opusCodecs.clear();
+    restartAllStreamSequences();
     m_pcmProducer.invalidate();
     {
         QMutexLocker lock(&m_streamMutex);
@@ -547,9 +573,40 @@ void PanadapterStream::stop()
 
 // ─── Datagram reception ───────────────────────────────────────────────────────
 
+void PanadapterStream::publishReceiveTelemetry()
+{
+    if (!m_receiveData) { return; }
+    ReceiveTelemetry snapshot;
+    snapshot.lease = m_receiveData->sessionLease();
+    if (!snapshot.current()) { return; }
+    snapshot.receipt = ReceiveReceipt::now();
+    snapshot.rxBytes = totalRxBytes();
+    snapshot.txBytes = totalTxBytes();
+    snapshot.packets = packetTotalCount();
+    snapshot.errors = packetErrorCount();
+    snapshot.breaks = packetSequenceBreakCount();
+    snapshot.gapMs = audioPacketGapMs();
+    snapshot.gapMaxMs = audioPacketGapMaxMs();
+    snapshot.jitterMs = audioPacketJitterMs();
+    snapshot.firstPacketSeen = hasReceivedPackets();
+    if (!m_localAddress.isNull() && m_localPort != 0) {
+        const QString address = m_localAddress.toString();
+        snapshot.localEndpoint = m_localAddress.protocol() == QAbstractSocket::IPv6Protocol
+            ? QStringLiteral("[%1]:%2").arg(address).arg(m_localPort)
+            : QStringLiteral("%1:%2").arg(address).arg(m_localPort);
+    }
+    for (int i = 0; i < CatCount; ++i) {
+        const CategoryStats counters = categoryStats(static_cast<StreamCategory>(i));
+        snapshot.categories[i] = {counters.bytes, counters.packets, counters.errors,
+                                  counters.late, counters.reordered, counters.breaks};
+    }
+    m_receiveData->telemetry(std::move(snapshot));
+}
+
 void PanadapterStream::registerPanStream(quint32 streamId)
 {
     QMutexLocker lock(&m_streamMutex);
+    if (m_receiveData) { m_receiveData->registerStream(streamId, false); }
     m_knownPanStreams.insert(streamId);
     m_everRegisteredPanStreams.insert(streamId);   // arms leak detection (#3856)
     m_orphanStreams.remove(streamId);              // reclaim drops stale orphan
@@ -559,6 +616,7 @@ void PanadapterStream::registerPanStream(quint32 streamId)
 void PanadapterStream::registerWfStream(quint32 streamId)
 {
     QMutexLocker lock(&m_streamMutex);
+    if (m_receiveData) { m_receiveData->registerStream(streamId, true); }
     m_knownWfStreams.insert(streamId);
     m_everRegisteredWfStreams.insert(streamId);    // arms leak detection (#3856)
     m_orphanStreams.remove(streamId);              // reclaim drops stale orphan
@@ -569,13 +627,11 @@ void PanadapterStream::unregisterPanStream(quint32 streamId)
 {
     {
         QMutexLocker lock(&m_streamMutex);
+        if (m_receiveData) { m_receiveData->unregisterStream(streamId, false); }
         m_knownPanStreams.remove(streamId);
         m_dbmRanges.remove(streamId);
         m_dbmRangeGenerations.remove(streamId);
         m_pendingDbmRanges.remove(streamId);
-    }
-    {
-        QMutexLocker frameLock(&m_frameMutex);
         m_frames.remove(streamId);
     }
     restartStreamSequence(streamId);
@@ -585,42 +641,49 @@ void PanadapterStream::unregisterWfStream(quint32 streamId)
 {
     {
         QMutexLocker lock(&m_streamMutex);
+        if (m_receiveData) { m_receiveData->unregisterStream(streamId, true); }
         m_knownWfStreams.remove(streamId);
-    }
-    {
-        QMutexLocker frameLock(&m_frameMutex);
         m_wfFrames.remove(streamId);
     }
     restartStreamSequence(streamId);
 }
 
+void PanadapterStream::restartStreamLocked(quint32 streamId, StreamStats& stats)
+{
+    m_pendingRxStreams.remove(streamId);
+    m_queuedAudioBytes -= stats.reorder.queuedBytes();
+    stats.reorder.reset();
+    ++stats.generation;
+    stats.lastSeq = -1;
+    stats.started = false;
+}
+
 void PanadapterStream::restartStreamSequence(quint32 streamId)
 {
     QMutexLocker statsLock(&m_statsMutex);
+    m_audioStreamStats.remove(streamId);
+    m_pendingRxStreams.remove(streamId);
     const auto it = m_streamStats.find(streamId);
     if (it != m_streamStats.end()) {
-        it->lastSeq = -1;
-        it->started = false;
+        restartStreamLocked(streamId, it.value());
     }
 }
 
 void PanadapterStream::restartAllStreamSequences()
 {
     QMutexLocker statsLock(&m_statsMutex);
+    m_pendingRxStreams.clear();
     for (auto it = m_streamStats.begin(); it != m_streamStats.end(); ++it) {
-        it->lastSeq = -1;
-        it->started = false;
+        restartStreamLocked(it.key(), it.value());
     }
 }
 
 void PanadapterStream::clearRegisteredStreams()
 {
-    {
-        QMutexLocker frameLock(&m_frameMutex);
-        m_frames.clear();
-        m_wfFrames.clear();
-    }
     QMutexLocker lock(&m_streamMutex);
+    m_frames.clear();
+    m_wfFrames.clear();
+    if (m_receiveData) { m_receiveData->clearStreams(); }
     m_knownPanStreams.clear();
     m_knownWfStreams.clear();
     m_dbmRanges.clear();
@@ -631,10 +694,8 @@ void PanadapterStream::clearRegisteredStreams()
     m_iqStreamIds.clear();
     m_loggedDaxPacketStreams.clear();
     m_loggedIqPacketStreams.clear();
-    // Drop PLC state alongside the rest of the per-stream tables — this is
-    // the disconnect-time reset hook, so anything keyed by VITA-49 stream
-    // id can be cleared safely (#2738).
-    m_audioPlc.clear();
+    // PLC is worker-owned; sequence generations retire its state on the next
+    // delivery, and stop() clears it on the worker during disconnect.
     m_orphanStreams.clear();
     m_everRegisteredPanStreams.clear();   // new session — re-arm from scratch (#3856)
     m_everRegisteredWfStreams.clear();
@@ -902,20 +963,31 @@ void PanadapterStream::processDatagram(const QByteArray& data)
 
     // Per-category byte/packet/sequence tracking.
     // Only track owned/routed streams — skip uncategorized packets. (#455)
-    bool sequenceError = false;
-    int  audioMissedThisPacket = 0;
-    // Filled under the stats lock; formatted and logged after it is released.
-    bool reportSequenceLoss = false;
-    int lossHeldBackErrors = 0;
-    int lossErrors = 0;
-    qint64 lossWindowMs = 0;
-    int lossStreamErrors = 0;
-    int lossStreamPackets = 0;
+    VitaRxReorder::Result reordered;
+    quint64 audioGeneration = 0;
+    QStringList sequenceWarnings;
+    if (cat == CatAudio) {
+        const int payloadBytes = data.size() - VITA49_HEADER_BYTES - (hasTrailer ? 4 : 0);
+        if (data.size() > VitaRxReorder::kMaxPacketBytes || payloadBytes <= 0
+            || (pcc == PCC_IF_NARROW && (payloadBytes % 8 != 0
+                || payloadBytes / 8 > PcmFrame::kMaxFrames))
+            || (pcc == PCC_IF_NARROW_REDUCED && (payloadBytes % 2 != 0
+                || payloadBytes / 2 > PcmFrame::kMaxFrames))) {
+            return;
+        }
+    }
     if (cat != CatCount) {
         QMutexLocker statsLock(&m_statsMutex);
         m_catStats[cat].bytes += data.size();
         m_catStats[cat].packets++;
         auto& stats = m_streamStats[streamId];
+        if (stats.packetClassCode != 0
+            && (stats.packetClassCode != pcc || stats.category != cat)) {
+            m_audioStreamStats.remove(streamId);
+            restartStreamLocked(streamId, stats);
+        }
+        stats.packetClassCode = pcc;
+        stats.category = cat;
         stats.totalCount++;
         if (!stats.started) {
             stats.started = true;
@@ -926,37 +998,9 @@ void PanadapterStream::processDatagram(const QByteArray& data)
             }
             stats.lossLog.start(m_seqLossClock.elapsed());
         }
-        if (stats.lastSeq >= 0) {
-            const int expected = (stats.lastSeq + 1) & 0x0F;
-            if (vitaSeq != expected) {
-                sequenceError = true;
-                stats.errorCount++;
-                m_catStats[cat].errors++;
-                if (cat == CatAudio) {
-                    // 4-bit modular distance, minus the one packet we just got. (#2731)
-                    audioMissedThisPacket =
-                        ((vitaSeq - stats.lastSeq - 1) & 0x0F);
-                }
-                // The shared budget is asked only when this stream's line is
-                // due; when it says no, the error stays held for the next line.
-                const qint64 nowMs = m_seqLossClock.elapsed();
-                const bool mayReport =
-                    !stats.lossLog.due(nowMs) || m_seqLossBudget.allow(nowMs);
-                if (stats.lossLog.recordError(nowMs, mayReport)) {
-                    reportSequenceLoss = true;
-                    lossHeldBackErrors = m_seqLossBudget.takeSuppressed();
-                    lossErrors = stats.lossLog.reportErrors();
-                    lossWindowMs = stats.lossLog.reportWindowMs();
-                    lossStreamErrors = stats.errorCount - stats.startErrorCount;
-                    lossStreamPackets = stats.totalCount - stats.startTotalCount;
-                }
-            }
-        }
-        stats.lastSeq = vitaSeq;
-
         if (cat == CatAudio) {
             const int payloadBytes = data.size() - VITA49_HEADER_BYTES - (hasTrailer ? 4 : 0);
-            recordAudioStreamPacketLocked(streamId, pcc, payloadBytes, sequenceError);
+            recordAudioStreamPacketLocked(streamId, pcc, payloadBytes);
             if (m_audioPacketTimerStarted) {
                 const int gapMs = static_cast<int>(m_audioPacketTimer.restart());
                 m_audioPacketGapMs.store(gapMs);
@@ -974,20 +1018,46 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                 m_audioPacketTimerStarted = true;
             }
         }
-    }
-    if (reportSequenceLoss) {
-        if (lossHeldBackErrors > 0) {
-            qCWarning(lcVita49).noquote() << formatVitaSequenceLossSuppressed(lossHeldBackErrors);
+        if (cat == CatDAX) {
+            // DAX is delivered in arrival order, so a break remains a disruption.
+            if (stats.lastSeq >= 0 && vitaSeq != ((stats.lastSeq + 1) & 0x0F)) {
+                reordered.lost = 1;
+                reordered.breaks = 1;
+            }
+            stats.lastSeq = vitaSeq;
+        } else {
+            const qsizetype queuedBefore = stats.reorder.queuedBytes();
+            reordered = stats.reorder.add(vitaSeq, rxPacketKey(data, pcc), rxReorderNowMs(),
+                cat == CatAudio ? data : QByteArray{},
+                std::max(qsizetype{0}, kMaxQueuedAudioBytes - m_queuedAudioBytes + queuedBefore));
+            if (stats.reorder.deadlineMs() >= 0) {
+                m_pendingRxStreams.insert(streamId);
+            } else {
+                m_pendingRxStreams.remove(streamId);
+            }
+            m_queuedAudioBytes += stats.reorder.queuedBytes() - queuedBefore;
+            m_catStats[cat].reordered += reordered.reordered ? 1 : 0;
         }
-        qCWarning(lcVita49).noquote()
-            << formatVitaSequenceLoss(streamCategoryName(cat), streamId, lossErrors,
-                                      lossWindowMs, lossStreamErrors, lossStreamPackets);
+        audioGeneration = stats.generation;
+        recordRxLossLocked(stats, streamId, reordered.lost, reordered.breaks,
+                           m_seqLossClock.elapsed(), sequenceWarnings);
+    }
+    for (const QString& warning : sequenceWarnings) {
+        qCWarning(lcVita49).noquote() << warning;
+    }
+    if (cat == CatAudio) {
+        deliverRxAudio(streamId, audioGeneration, reordered);
+        scheduleRxReorderFlush();
+        return;
+    }
+    if (cat != CatDAX && cat != CatCount) {
+        scheduleRxReorderFlush();
     }
     if ((cat == CatFFT || cat == CatWaterfall) && PerfTelemetry::instance().enabled()) {
         PerfTelemetry::instance().recordStreamPacket(
             cat == CatWaterfall ? PerfTelemetry::FrameKind::Waterfall
                                 : PerfTelemetry::FrameKind::Panadapter,
-            sequenceError);
+            reordered.lost);
     }
 
     if (daxChannel >= 0) {
@@ -1058,25 +1128,8 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         return;
     }
 
-    // Accumulate PLC pending-missed count before dispatching the audio
-    // decoder, so it can prepend concealment to the new packet's PCM. (#2731)
-    if (audioMissedThisPacket > 0 && m_plcEnabled.load()) {
-        auto& plc = m_audioPlc[streamId];
-        plc.pendingMissed =
-            std::min(plc.pendingMissed + audioMissedThisPacket, kMaxConcealPackets);
-    }
-
-    // Route by PacketClassCode
+    // Display assembly already accepts fragments in any arrival order.
     switch (pcc) {
-    case PCC_IF_NARROW:
-        decodeNarrowAudio(raw, data.size(), hasTrailer, streamId);
-        return;
-    case PCC_IF_NARROW_REDUCED:
-        decodeReducedBwAudio(raw, data.size(), hasTrailer, streamId);
-        return;
-    case PCC_OPUS:
-        decodeOpusAudio(raw, data.size(), hasTrailer, streamId);
-        return;
     case PCC_FFT:
         if (!isPan) return;
         decodeFFT(raw, data.size(), hasTrailer, streamId);
@@ -1091,6 +1144,176 @@ void PanadapterStream::processDatagram(const QByteArray& data)
     default:
         break;
     }
+}
+
+qint64 PanadapterStream::rxReorderNowMs() const
+{
+    return m_rxReorderNowForTest >= 0 ? m_rxReorderNowForTest : m_rxReorderClock.elapsed();
+}
+
+VitaRxReorder::Key PanadapterStream::rxPacketKey(const QByteArray& data, quint16 pcc)
+{
+    const auto* raw = reinterpret_cast<const uchar*>(data.constData());
+    if (pcc == PCC_OPUS) {
+        const quint32 word0 = qFromBigEndian<quint32>(raw);
+        const quint32 seconds = qFromBigEndian<quint32>(raw + 16);
+        const quint64 fraction = qFromBigEndian<quint64>(raw + 20);
+        // FlexLib RXAudioStream orders Opus by its VITA timestamp. PCM firmware
+        // can repeat placeholder timestamps, so its ordering uses only the count.
+        return {seconds, fraction, ((word0 >> 22) & 3) != 0
+            && ((word0 >> 20) & 3) != 0 && (seconds != 0 || fraction != 0), true,
+            VitaRxReorder::Key::Kind::OpusTimestamp};
+    }
+    if (pcc == PCC_FFT && data.size() >= VITA49_HEADER_BYTES + 12) {
+        return {qFromBigEndian<quint32>(raw + VITA49_HEADER_BYTES + 8),
+                qFromBigEndian<quint16>(raw + VITA49_HEADER_BYTES), true, false,
+                VitaRxReorder::Key::Kind::DisplayFrame};
+    }
+    if (pcc == PCC_WATERFALL && data.size() >= VITA49_HEADER_BYTES + 36) {
+        return {qFromBigEndian<quint32>(raw + VITA49_HEADER_BYTES + 24),
+                qFromBigEndian<quint16>(raw + VITA49_HEADER_BYTES + 34), true, false,
+                VitaRxReorder::Key::Kind::DisplayFrame};
+    }
+    return {};
+}
+
+void PanadapterStream::recordRxLossLocked(StreamStats& stats, quint32 streamId,
+                                          int lost, int breaks, qint64 nowMs,
+                                          QStringList& warnings)
+{
+    if (lost <= 0) {
+        return;
+    }
+    const StreamCategory category = static_cast<StreamCategory>(stats.category);
+    stats.errorCount += lost;
+    stats.breakCount += breaks;
+    m_catStats[category].errors += lost;
+    m_catStats[category].breaks += breaks;
+    if (category == CatAudio) {
+        m_audioStreamStats[streamId].sequenceErrors += lost;
+    }
+    const bool mayReport = !stats.lossLog.due(nowMs) || m_seqLossBudget.allow(nowMs);
+    if (stats.lossLog.recordError(nowMs, mayReport, lost)) {
+        const int heldBack = m_seqLossBudget.takeSuppressed();
+        if (heldBack > 0) {
+            warnings.append(formatVitaSequenceLossSuppressed(heldBack));
+        }
+        warnings.append(formatVitaSequenceLoss(streamCategoryName(category), streamId,
+            stats.lossLog.reportErrors(), stats.lossLog.reportWindowMs(),
+            stats.errorCount - stats.startErrorCount, stats.totalCount - stats.startTotalCount));
+    }
+}
+
+void PanadapterStream::deliverRxAudio(quint32 streamId, quint64 generation,
+                                      const VitaRxReorder::Result& result)
+{
+    for (int i = 0; i < result.count; ++i) {
+        {
+            QMutexLocker lock(&m_statsMutex);
+            const auto current = m_streamStats.constFind(streamId);
+            if (current == m_streamStats.cend() || current->generation != generation) {
+                return;
+            }
+        }
+        if (m_audioPlcGenerations.value(streamId) != generation) {
+            m_audioPlc.remove(streamId);
+            m_opusCodecs.erase(streamId);
+            m_audioPlcGenerations[streamId] = generation;
+        }
+        const auto& delivery = result.ready[i];
+        if (delivery.missed > 0 && m_plcEnabled.load()) {
+            auto& plc = m_audioPlc[streamId];
+            plc.pendingMissed = std::min(plc.pendingMissed + delivery.missed, kMaxConcealPackets);
+        }
+        const QByteArray& packet = delivery.packet;
+        const auto* raw = reinterpret_cast<const uchar*>(packet.constData());
+        const quint16 pcc = static_cast<quint16>(qFromBigEndian<quint32>(raw + 12) & 0xFFFFu);
+        const bool trailer = (qFromBigEndian<quint32>(raw) & 0x04000000u) != 0;
+        switch (pcc) {
+        case PCC_IF_NARROW: decodeNarrowAudio(raw, packet.size(), trailer, streamId); break;
+        case PCC_IF_NARROW_REDUCED: decodeReducedBwAudio(raw, packet.size(), trailer, streamId); break;
+        case PCC_OPUS: decodeOpusAudio(raw, packet.size(), trailer, streamId); break;
+        default: break;
+        }
+    }
+}
+
+void PanadapterStream::scheduleRxReorderFlush()
+{
+    if (!m_rxReorderTimer) {
+        return;
+    }
+    qint64 next = -1;
+    {
+        QMutexLocker lock(&m_statsMutex);
+        for (quint32 streamId : std::as_const(m_pendingRxStreams)) {
+            const auto stats = m_streamStats.constFind(streamId);
+            if (stats == m_streamStats.cend()) {
+                continue;
+            }
+            const qint64 deadline = stats->reorder.deadlineMs();
+            if (deadline >= 0 && (next < 0 || deadline < next)) {
+                next = deadline;
+            }
+        }
+    }
+    if (next < 0) {
+        m_rxReorderTimer->stop();
+        return;
+    }
+    const int delay = static_cast<int>(std::max(qint64{1}, next - rxReorderNowMs()));
+    if (!m_rxReorderTimer->isActive() || m_rxReorderTimer->remainingTime() > delay) {
+        m_rxReorderTimer->start(delay);
+    }
+}
+
+void PanadapterStream::flushRxReorder()
+{
+    struct ReadyAudio {
+        quint32 streamId;
+        quint64 generation;
+        VitaRxReorder::Result result;
+    };
+    QVector<ReadyAudio> audio;
+    QStringList warnings;
+    std::array<int, 2> displayLosses{};
+    {
+        QMutexLocker lock(&m_statsMutex);
+        for (auto pending = m_pendingRxStreams.begin(); pending != m_pendingRxStreams.end();) {
+            const auto it = m_streamStats.find(*pending);
+            if (it == m_streamStats.end()) {
+                pending = m_pendingRxStreams.erase(pending);
+                continue;
+            }
+            const qsizetype queuedBefore = it->reorder.queuedBytes();
+            VitaRxReorder::Result result = it->reorder.expire(rxReorderNowMs());
+            m_queuedAudioBytes += it->reorder.queuedBytes() - queuedBefore;
+            if (it->reorder.deadlineMs() < 0) {
+                pending = m_pendingRxStreams.erase(pending);
+            } else {
+                ++pending;
+            }
+            if (result.count == 0) {
+                continue;
+            }
+            recordRxLossLocked(it.value(), it.key(), result.lost, result.breaks,
+                               m_seqLossClock.elapsed(), warnings);
+            if (it->category == CatAudio) {
+                audio.append({it.key(), it->generation, std::move(result)});
+            } else if (it->category == CatFFT || it->category == CatWaterfall) {
+                displayLosses[it->category == CatWaterfall ? 1 : 0] += result.lost;
+            }
+        }
+    }
+    PerfTelemetry::instance().recordStreamLoss(PerfTelemetry::FrameKind::Panadapter, displayLosses[0]);
+    PerfTelemetry::instance().recordStreamLoss(PerfTelemetry::FrameKind::Waterfall, displayLosses[1]);
+    for (const QString& warning : warnings) {
+        qCWarning(lcVita49).noquote() << warning;
+    }
+    for (const ReadyAudio& ready : audio) {
+        deliverRxAudio(ready.streamId, ready.generation, ready.result);
+    }
+    scheduleRxReorderFlush();
 }
 
 // ─── FFT decode ──────────────────────────────────────────────────────────────
@@ -1120,13 +1343,16 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
 
     const uchar* binData = raw + binDataOffset;
 
+    QMutexLocker streamLock(&m_streamMutex);
+    if (m_receiveData && !m_knownPanStreams.contains(streamId)) { return; }
+    const ReceiveDataLease lease = m_receiveData ? m_receiveData->streamLease(streamId, false) : ReceiveDataLease{};
+    const ReceiveReceipt receipt = ReceiveReceipt::now();
     // Per-stream frame assembly. A completed frame is copied out so the
     // lock is not held for the dBm conversion or the emit.
     QVector<quint16> frameBins;
     int floorFilledSuffixStart = -1;
     bool latePacket = false;
     {
-        QMutexLocker frameLock(&m_frameMutex);
         auto& frame = m_frames[streamId];
         // A late packet from an already-replaced frame must not restart
         // assembly and throw away the frame now in progress; FlexLib drops it
@@ -1187,7 +1413,6 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     SpectrumDecodeScale decodeScale;
     int yPixVal;
     {
-        QMutexLocker lock(&m_streamMutex);
         dbmRange = m_dbmRanges.value(streamId, {-130.0f, -40.0f});
         // A stream whose range was never written (status matched the -130/-40
         // default) still needs a nonzero generation, or its frames can't be told
@@ -1199,6 +1424,7 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
         decodeScale = {dbmRange.first, dbmRange.second, generation};
         yPixVal = m_yPixels.value(streamId, 700);
     }
+    streamLock.unlock();
     auto [minDbm, maxDbm] = dbmRange;
     const float range = maxDbm - minDbm;
     if (range <= 0.0f) return;
@@ -1228,7 +1454,11 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     }
 
     const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
-    emit spectrumReady(streamId, bins, emittedNs, decodeScale);
+    if (m_receiveData) {
+        m_receiveData->spectrum({streamId, std::move(bins), decodeScale, emittedNs, receipt, lease});
+    } else {
+        emit spectrumReady(streamId, bins, emittedNs, decodeScale);
+    }
 }
 
 // Waterfall tile sub-header (36 bytes, big-endian, at byte 28):
@@ -1292,11 +1522,14 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     // relative to the bounds calculation below, and the inner write loop
     // then writes past the buffer's end with attacker-chosen bytes.
     // See GHSA-7gvg-x594-pprq.
+    QMutexLocker streamLock(&m_streamMutex);
+    if (m_receiveData && !m_knownWfStreams.contains(streamId)) { return; }
+    const ReceiveDataLease lease = m_receiveData ? m_receiveData->streamLease(streamId, true) : ReceiveDataLease{};
+    const ReceiveReceipt receipt = ReceiveReceipt::now();
     const uchar* tilePayload = raw + payloadOffset;
     WaterfallFrame row;
     bool latePacket = false;
     {
-        QMutexLocker frameLock(&m_frameMutex);
         auto& wfFrame = m_wfFrames[streamId];
         // A late tile from an already-replaced row is dropped rather than
         // restarting assembly and losing the row in progress (#6883).
@@ -1339,10 +1572,16 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     }
 
     const double frameHighMhz = row.lowFreqMhz + row.binBwMhz * row.totalBins;
-    emit waterfallAutoBlackLevel(streamId, row.autoBlack);
     const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
-    emit waterfallRowReady(streamId, row.buf, row.lowFreqMhz, frameHighMhz,
-                           row.timecode, emittedNs);
+    ReceiveWaterfallRow observation{streamId, row.buf, row.lowFreqMhz, frameHighMhz,
+        row.timecode, row.autoBlack, emittedNs, receipt, lease};
+    streamLock.unlock();
+    if (m_receiveData) {
+        m_receiveData->waterfall(std::move(observation));
+    } else {
+        emit waterfallAutoBlackLevel(streamId, row.autoBlack);
+        emit waterfallRowReady(streamId, observation.intensity, observation.lowMhz, observation.highMhz, row.timecode, emittedNs);
+    }
 }
 
 // ─── Audio decode ─────────────────────────────────────────────────────────────
@@ -1501,13 +1740,19 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
     if (payloadBytes <= 0) return;
 
-    // Lazy-init Opus decoder on first packet
-    if (!m_opusCodec) {
-        m_opusCodec = new OpusCodec();
-        if (!m_opusCodec->isValid()) {
+    // Decoder history belongs to each Opus stream, independently of PCM/DAX.
+    // A stream that ends sends nothing more to retire its decoder, so keep
+    // only a few; the lowest id is the oldest the radio allocated.
+    constexpr std::size_t kMaxOpusDecoders = 4;
+    if (!m_opusCodecs.count(streamId) && m_opusCodecs.size() >= kMaxOpusDecoders) {
+        m_opusCodecs.erase(m_opusCodecs.begin());
+    }
+    std::unique_ptr<OpusCodec>& codec = m_opusCodecs[streamId];
+    if (!codec) {
+        codec = std::make_unique<OpusCodec>();
+        if (!codec->isValid()) {
             qCWarning(lcVita49) << "PanadapterStream: Opus codec init failed";
-            delete m_opusCodec;
-            m_opusCodec = nullptr;
+            m_opusCodecs.erase(streamId);
             return;
         }
         qCDebug(lcVita49) << "PanadapterStream: Opus decoder initialized";
@@ -1522,7 +1767,7 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
     if (m_plcEnabled.load() && plc.pendingMissed > 0) {
         const int n = std::min(plc.pendingMissed, kMaxConcealPackets);
         for (int i = 0; i < n; ++i) {
-            QByteArray frame = m_opusCodec->concealLost();
+            QByteArray frame = codec->concealLost();
             if (frame.isEmpty()) break;
             int16Concealed.append(frame);
         }
@@ -1531,7 +1776,7 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
 
     // Opus payload is raw bytes — no byte-swapping needed
     QByteArray opusFrame(reinterpret_cast<const char*>(raw + payloadStart), payloadBytes);
-    QByteArray int16pcm = m_opusCodec->decode(opusFrame);
+    QByteArray int16pcm = codec->decode(opusFrame);
     if (int16pcm.isEmpty()) return;
 
     QByteArray combined = int16Concealed;
@@ -1558,6 +1803,8 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
 
 void PanadapterStream::decodeMeterData(const uchar* raw, int totalBytes, bool hasTrailer)
 {
+    const ReceiveReceipt receipt = ReceiveReceipt::now();
+    const ReceiveDataLease session = m_receiveData ? m_receiveData->sessionLease() : ReceiveDataLease{};
     const int payloadStart = VITA49_HEADER_BYTES;
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
     if (payloadBytes < 4) return;
@@ -1573,7 +1820,11 @@ void PanadapterStream::decodeMeterData(const uchar* raw, int totalBytes, bool ha
         vals[i] = qFromBigEndian<qint16>(payload + i * 4 + 2);
     }
 
-    emit meterDataReady(ids, vals);
+    if (m_receiveData) {
+        if (session) { m_receiveData->meters(ids, vals, receipt, session); }
+    } else {
+        emit meterDataReady(ids, vals);
+    }
 }
 
 int PanadapterStream::audioPayloadFrames(quint16 pcc, int payloadBytes)
@@ -1614,8 +1865,7 @@ void PanadapterStream::resetAudioStreamDiagnostics()
 
 void PanadapterStream::recordAudioStreamPacketLocked(quint32 streamId,
                                                      quint16 pcc,
-                                                     int payloadBytes,
-                                                     bool sequenceError)
+                                                     int payloadBytes)
 {
     const int frames = audioPayloadFrames(pcc, payloadBytes);
     if (frames <= 0) {
@@ -1631,9 +1881,6 @@ void PanadapterStream::recordAudioStreamPacketLocked(quint32 streamId,
     tracker.packetClassCode = pcc;
     ++tracker.packets;
     tracker.frames += frames;
-    if (sequenceError) {
-        ++tracker.sequenceErrors;
-    }
 
     tracker.expectedPacketMs = frames * 1000.0 / kAudioSampleRate;
     if (tracker.lastArrivalMs >= 0) {
@@ -1672,6 +1919,16 @@ int PanadapterStream::packetErrorCount() const
     int total = 0;
     for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it)
         total += it->errorCount;
+    return total;
+}
+
+int PanadapterStream::packetSequenceBreakCount() const
+{
+    QMutexLocker lock(&m_statsMutex);
+    int total = 0;
+    for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it) {
+        total += it->breakCount;
+    }
     return total;
 }
 
@@ -1763,7 +2020,11 @@ void PanadapterStream::registerDaxStream(quint32 streamId, int channel)
     if (m_daxStreamIds.value(streamId, -1) != channel) {
         m_daxPcm.erase(streamId);
     }
+    const bool changesRoute = !m_daxStreamIds.contains(streamId);
     m_daxStreamIds[streamId] = channel;
+    if (changesRoute) {
+        restartStreamSequence(streamId);
+    }
     m_loggedDaxPacketStreams.remove(streamId);
     // Ownership table (#3305): the create we requested has materialized (or a
     // leftover stream from a previous arm was adopted). If nobody holds the

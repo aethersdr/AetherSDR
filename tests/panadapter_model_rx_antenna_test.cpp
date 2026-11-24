@@ -1,3 +1,4 @@
+#include "FlexDisplayStatusTestSupport.h"
 #include "models/PanadapterModel.h"
 
 #include <QCoreApplication>
@@ -65,9 +66,9 @@ int main(int argc, char** argv)
     // out-of-range value must NOT silently overwrite a prior true with false.
     {
         auto apply = [&pan](const QString& key, const QString& val) {
-            QVariantMap m;
+            QMap<QString, QString> m;
             m.insert(key, val);
-            pan.applyStateExtension(m);
+            applyPanReport(pan, m);
         };
 
         // wide: reject non-numeric and > 1, keep prior state.
@@ -159,7 +160,7 @@ int main(int argc, char** argv)
     }
 
     // Socket-free reproduction of the no-echo setter case and reconciliation.
-    pan.applyStateExtension({{"average", "50"}, {"fps", "25"}});
+    applyPanReport(pan, {{"average", "50"}, {"fps", "25"}});
     QSignalSpy averageReported(&pan, &PanadapterModel::averageReported);
     QSignalSpy fpsReported(&pan, &PanadapterModel::fpsReported);
     pan.setRequestedFftSettings(17, 15);
@@ -171,12 +172,12 @@ int main(int argc, char** argv)
     EXPECT_EQ(pan.fpsIsRequest(), true);
     EXPECT_EQ(averageReported.count(), 0);
     EXPECT_EQ(fpsReported.count(), 0);
-    pan.applyStateExtension({{"average", "bad"}, {"fps", "bad"}});
+    applyPanReport(pan, {{"average", "bad"}, {"fps", "bad"}});
     EXPECT_EQ(pan.averageIsRequest(), true);
     EXPECT_EQ(pan.fpsIsRequest(), true);
     // The old value is still authoritative when published again, even after
     // a newer intent. There is no stale-value hold or deferred replay here.
-    pan.applyStateExtension({{"average", "50"}, {"fps", "25"}});
+    applyPanReport(pan, {{"average", "50"}, {"fps", "25"}});
     EXPECT_EQ(pan.average(), 50);
     EXPECT_EQ(pan.fps(), 25);
     EXPECT_EQ(pan.averageIsRequest(), false);
@@ -184,7 +185,7 @@ int main(int argc, char** argv)
     EXPECT_EQ(averageReported.count(), 1);
     EXPECT_EQ(fpsReported.count(), 1);
     pan.setRequestedFftSettings(0, 30);
-    pan.applyStateExtension({{"average", "0"}, {"fps", "30"}});
+    applyPanReport(pan, {{"average", "0"}, {"fps", "30"}});
     EXPECT_EQ(pan.average(), 0);
     EXPECT_EQ(pan.radioReportedAverage(), 0);
     EXPECT_EQ(pan.averageIsRequest(), false);

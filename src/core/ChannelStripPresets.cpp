@@ -2,7 +2,6 @@
 
 #include "AudioEngine.h"
 #include "ClientComp.h"
-#include "ClientDeEss.h"
 #include "ClientEq.h"
 #include "ClientFinalLimiter.h"
 #include "ClientGate.h"
@@ -43,18 +42,6 @@ QString stageEnumToName(AudioEngine::TxChainStage s)
         case AudioEngine::TxChainStage::None:   return "";
     }
     return "";
-}
-
-AudioEngine::TxChainStage stageNameToEnum(const QString& n)
-{
-    if (n == "Gate")   return AudioEngine::TxChainStage::Gate;
-    if (n == "Eq")     return AudioEngine::TxChainStage::Eq;
-    if (n == "DeEss")  return AudioEngine::TxChainStage::DeEss;
-    if (n == "Comp")   return AudioEngine::TxChainStage::Comp;
-    if (n == "Tube")   return AudioEngine::TxChainStage::Tube;
-    if (n == "Enh")    return AudioEngine::TxChainStage::Enh;
-    if (n == "Reverb") return AudioEngine::TxChainStage::Reverb;
-    return AudioEngine::TxChainStage::None;
 }
 
 // RX-side enum↔name mapping (#2425).  Only stages that exist in
@@ -690,20 +677,7 @@ QJsonObject ChannelStripPresets::captureTxJson(AudioEngine* engine)
         preset["chain"] = chain;
     }
 
-    // Gate.
-    if (auto* g = engine->clientGateTx()) {
-        QJsonObject o;
-        o["enabled"]      = g->isEnabled();
-        o["mode"]         = gateModeName(g->mode());
-        o["thresholdDb"]  = g->thresholdDb();
-        o["ratio"]        = g->ratio();
-        o["releaseMs"]    = g->releaseMs();
-        o["holdMs"]       = g->holdMs();
-        o["floorDb"]      = g->floorDb();
-        o["returnDb"]     = g->returnDb();
-        o["lookaheadMs"]  = g->lookaheadMs();
-        preset["gate"] = o;
-    }
+    // No "gate": AetherTX's gate is retired (RN2, "rn2" below, replaces it).
 
     // EQ.
     if (auto* e = engine->clientEqTx()) {
@@ -745,18 +719,7 @@ QJsonObject ChannelStripPresets::captureTxJson(AudioEngine* engine)
         preset["comp"] = o;
     }
 
-    // De-Esser.
-    if (auto* d = engine->clientDeEssTx()) {
-        QJsonObject o;
-        o["enabled"]     = d->isEnabled();
-        o["frequencyHz"] = d->frequencyHz();
-        o["q"]           = d->q();
-        o["thresholdDb"] = d->thresholdDb();
-        o["amountDb"]    = d->amountDb();
-        o["attackMs"]    = d->attackMs();
-        o["releaseMs"]   = d->releaseMs();
-        preset["deess"] = o;
-    }
+    // No "deess": AetherTX's de-esser is retired; an old profile's is ignored.
 
     // Tube.
     if (auto* t = engine->clientTubeTx()) {
@@ -817,6 +780,7 @@ QJsonObject ChannelStripPresets::captureTxJson(AudioEngine* engine)
         QJsonObject o;
         o["enabled"]      = lim->isEnabled();
         o["ceilingDb"]    = lim->ceilingDb();
+        o["lookaheadMs"]  = lim->lookaheadMs();
         o["outputTrimDb"] = lim->outputTrimDb();
         o["dcBlock"]      = lim->dcBlockEnabled();
         preset["finalLimiter"] = o;
@@ -831,27 +795,20 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
     if (!engine) return;
     // Chain order.
     if (preset.contains("chain") && preset.value("chain").isArray()) {
-        QVector<AudioEngine::TxChainStage> stages;
+        QStringList names;
         for (const auto& v : preset.value("chain").toArray()) {
-            const auto s = stageNameToEnum(v.toString());
-            if (s != AudioEngine::TxChainStage::None) stages.append(s);
+            names.append(v.toString());
         }
+        const auto stages = AudioEngine::txChainFromNames(names);
         if (!stages.isEmpty()) engine->setTxChainStages(stages);
     }
 
-    // Gate.
-    if (auto* g = engine->clientGateTx();
-        g && preset.contains("gate") && preset.value("gate").isObject()) {
-        const auto o = preset.value("gate").toObject();
-        g->setEnabled(jbool(o, "enabled", g->isEnabled()));
-        g->setMode(gateModeFromName(jstr(o, "mode", gateModeName(g->mode()))));
-        g->setThresholdDb(jnum(o, "thresholdDb", g->thresholdDb()));
-        g->setRatio(jnum(o, "ratio", g->ratio()));
-        g->setReleaseMs(jnum(o, "releaseMs", g->releaseMs()));
-        g->setHoldMs(jnum(o, "holdMs", g->holdMs()));
-        g->setFloorDb(jnum(o, "floorDb", g->floorDb()));
-        g->setReturnDb(jnum(o, "returnDb", g->returnDb()));
-        g->setLookaheadMs(jnum(o, "lookaheadMs", g->lookaheadMs()));
+    // A profile saved before the TX gate was retired may carry "gate". Its
+    // settings have nowhere to go; when the profile does not say what RN2
+    // should be, RN2 takes the gate's place, on or off, so loading the profile
+    // still reproduces it.
+    if (!preset.contains("rn2") && preset.value("gate").isObject()) {
+        engine->setRn2TxEnabled(jbool(preset.value("gate").toObject(), "enabled", false));
     }
 
     // EQ.
@@ -905,19 +862,6 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
             0.0, 6.0)));
     }
 
-    // De-Esser.
-    if (auto* d = engine->clientDeEssTx();
-        d && preset.contains("deess") && preset.value("deess").isObject()) {
-        const auto o = preset.value("deess").toObject();
-        d->setEnabled(jbool(o, "enabled", d->isEnabled()));
-        d->setFrequencyHz(jnum(o, "frequencyHz", d->frequencyHz()));
-        d->setQ(jnum(o, "q", d->q()));
-        d->setThresholdDb(jnum(o, "thresholdDb", d->thresholdDb()));
-        d->setAmountDb(jnum(o, "amountDb", d->amountDb()));
-        d->setAttackMs(jnum(o, "attackMs", d->attackMs()));
-        d->setReleaseMs(jnum(o, "releaseMs", d->releaseMs()));
-    }
-
     // Tube.
     if (auto* t = engine->clientTubeTx();
         t && preset.contains("tube") && preset.value("tube").isObject()) {
@@ -966,6 +910,7 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
         const auto o = preset.value("finalLimiter").toObject();
         lim->setEnabled(jbool(o, "enabled", lim->isEnabled()));
         lim->setCeilingDb(jnum(o, "ceilingDb", lim->ceilingDb()));
+        lim->setLookaheadMs(jnum(o, "lookaheadMs", lim->lookaheadMs()));
         lim->setOutputTrimDb(jnum(o, "outputTrimDb", lim->outputTrimDb()));
         lim->setDcBlockEnabled(jbool(o, "dcBlock", lim->dcBlockEnabled()));
     }
@@ -983,10 +928,8 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
 
     // Persist what the setters above only put in memory. TX only: a caller
     // applying just this half must not write the RX modules back out.
-    engine->saveClientGateSettings();
     engine->saveClientEqSettings();
     engine->saveClientCompSettings();
-    engine->saveClientDeEssSettings();
     engine->saveClientTubeSettings();
     engine->saveClientPuduSettings();
     engine->saveClientReverbSettings();

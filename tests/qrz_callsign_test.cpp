@@ -55,6 +55,23 @@ int main(int argc, char** argv)
     check(!Callsigns::isLikelyCallsign(""),        "empty rejected");
     check(Callsigns::normalized(" ki6bcj ") == "KI6BCJ", "normalized trims + uppercases");
 
+    // ── callsignAt: the callsign under a text cursor ────────────────────
+    // CONSTRUCTED text: it exercises the word boundaries only.
+    {
+        const QString text = QStringLiteral("CQ DE k1abc/p K1ABC/P? 5NN  TU");
+        //                                   0123456789...  "k1abc/p" is 6..12
+        check(Callsigns::callsignAt(text, 6) == "K1ABC/P", "cursor at the start of a call picks it");
+        check(Callsigns::callsignAt(text, 9) == "K1ABC/P", "cursor inside a call picks the whole word, '/' included");
+        check(Callsigns::callsignAt(text, 13) == "K1ABC/P", "cursor at the end of a call picks it");
+        check(Callsigns::callsignAt(text, 17) == "K1ABC/P", "punctuation after a call is not part of it");
+        check(Callsigns::callsignAt(text, 1).isEmpty(), "a word that is not a callsign picks nothing");
+        check(Callsigns::callsignAt(text, 24).isEmpty(), "a report (5NN) picks nothing");
+        check(Callsigns::callsignAt(text, 27).isEmpty(), "a cursor between two spaces picks nothing");
+        check(Callsigns::callsignAt(text, -1).isEmpty() && Callsigns::callsignAt(text, 99).isEmpty()
+                  && Callsigns::callsignAt(QString(), 0).isEmpty(),
+              "an out-of-range cursor or empty text picks nothing");
+    }
+
     // ── Spotter: basic doubled-call detection ───────────────────────────
     {
         CwCallsignSpotter spotter;

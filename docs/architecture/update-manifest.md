@@ -4,45 +4,68 @@
 app's `UpdateStager` (`src/core/UpdateStager.{h,cpp}`) reads and applies it
 into a staging copy. Swapping the staged tree in is the platform phases'.
 
-Each release publishes one signed manifest that names, for each updatable
-payload, every file of the new tree and the patch bundles that turn each of
-the last four releases' trees into it. `tools/build_update_manifest.py`
-writes it and `.github/workflows/update-manifest.yml` signs and publishes it.
+Each release publishes two signed manifests in this schema. Each names, for
+each updatable payload, every file of the new tree and the patch bundles that
+turn each of the last four releases' trees into it (RFC #6964):
+
+- **`manifest-v2.json`** is what the app reads. Its patch bundles are on the
+  release's GitHub page or, from the release after the bridge
+  (`UPDATE_PAYLOAD_BASE=r2`), under `updates.aethersdr.com/releases/<tag>/`.
+- **`manifest.json`** is for copies from before the bridge (v26.11.1,
+  v26.11.2), which read only this path and accept only GitHub URLs. While the
+  bundles are on GitHub it is the same document as `manifest-v2.json`. Once they
+  are on R2 it lists full downloads only (`patches: []`). It is published for
+  every release, so its tag always matches GitHub's latest.
+
+`tools/build_update_manifest.py` writes both, and
+`.github/workflows/update-manifest.yml` signs and publishes them.
 
 ## Where it lives
 
 | Object | Location |
 |---|---|
-| Manifest, newest release | `https://updates.aethersdr.com/latest/manifest.json` |
-| Its signature | `https://updates.aethersdr.com/latest/manifest.json.sig` |
-| Manifest, any release | `https://updates.aethersdr.com/releases/<tag>/manifest.json` (and `.sig`) |
-| Patch bundles, full payloads | GitHub release assets of the new release |
+| Manifest the app reads, newest release | `https://updates.aethersdr.com/latest/manifest-v2.json` (and `.sig`) |
+| Legacy manifest, newest release | `https://updates.aethersdr.com/latest/manifest.json` (and `.sig`) |
+| Either manifest, any release | `https://updates.aethersdr.com/releases/<tag>/manifest-v2.json` / `manifest.json` (and `.sig`) |
+| Full payloads | GitHub release assets of the new release |
+| Patch bundles | GitHub release assets, or `https://updates.aethersdr.com/releases/<tag>/` once `UPDATE_PAYLOAD_BASE=r2` |
 
 The R2 bucket behind `updates.aethersdr.com` is written only by the release
 workflow's `publish` job (`tools/publish_update_manifest.py`), with a token
 scoped to that bucket.
 
 A release counts as **published** only when everything a client reads is
-served and verifies: `releases/<tag>/` holds the manifest and a signature that
-checks against the committed key, and, when the tag is GitHub's latest
-release, `latest/` holds a verifying pair naming that release or a newer one.
-A run that finds anything less publishes again, which repairs a partial
-upload. `latest/` is promoted only over an older release, re-read just before
-the write, and the publish job runs one at a time across tags, so an older
-release's run can never roll it back.
+served and verifies:
 
-Bundles and full payloads stay on GitHub Releases, so every URL the manifest
-names is under `https://github.com/aethersdr/AetherSDR/releases/download/<tag>/`,
-inside the prefix the app's download allowlist already enforces
-(`UpdateChecker::isTrustedDownloadUrl`). The publish job refuses to sign a
-manifest that names anything else, or another release.
+- `releases/<tag>/` holds both manifests, each with a signature that checks
+  against the committed key;
+- any patch bundle on R2 is served at its size;
+- when the tag is GitHub's latest release, `latest/` holds verifying pairs of
+  both manifests, naming that release or a newer one.
+
+A run that finds anything less publishes again, which repairs a partial
+upload. Bundles go up and are read back before either manifest is written.
+The two `latest/` pairs are promoted together, only over an older release,
+re-read just before the write. The publish job runs one at a time across tags,
+so an older release's run can never roll either one back.
+
+Every URL a manifest names is one file of the release it describes, under
+`https://github.com/aethersdr/AetherSDR/releases/download/<tag>/` or
+`https://updates.aethersdr.com/releases/<tag>/`, with no query, fragment or
+further path segment. `UpdateChecker::isTrustedPayloadUrl` enforces this in the
+app, for any payload, full or patch, and one URL outside it rejects the whole
+manifest. Where each payload actually lives is the publisher's choice: it
+keeps full payloads on GitHub, puts patch bundles on R2 only with
+`UPDATE_PAYLOAD_BASE=r2`, and names GitHub files only in `manifest.json`. The publish job refuses to sign a manifest that names
+anything else, or another release.
 
 **Telemetry boundary.** RFC #5304 asked that no project-owned endpoint see
 clients. The update check still goes only to `api.github.com`; this host is
-the one exception, ruled in Phase 2. `updates.aethersdr.com` sees a client's
-IP address when, and only when, the client fetches a manifest to install an
-update. Nothing else is sent: the request carries no identifier, and the
-client sends nothing back.
+the one exception, ruled in Phase 2 and widened by RFC #6964.
+`updates.aethersdr.com` sees a client's IP address only while it installs an
+update: when it fetches a manifest, and, once patch bundles move there, when
+it downloads its patch bundle. Nothing else is sent: the requests carry no
+identifier, and the client sends nothing back.
 
 ## Signature
 

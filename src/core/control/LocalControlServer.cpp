@@ -1,6 +1,7 @@
 #include "LocalControlServer.h"
 #include "ControlInputPump.h"
 #include "ControlCredentialVault.h"
+#include "LocalSocketPath.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -58,10 +59,25 @@ LocalControlServer::LocalControlServer(QObject* parent, Limits limits,
                                      bool allowLocalControl)
     // Mirror bindConnectionTarget(): a target is only installed when local
     // control is granted, so an observer-only server never carries one.
-    : QObject(parent), m_resources(),
-      m_service(&m_resources, allowLocalControl ? connectionTarget : nullptr), m_limits(limits),
+    : QObject(parent),
+      m_ownedEngine(std::make_unique<ControlEngine>(allowLocalControl ? connectionTarget : nullptr)),
+      m_resources(m_ownedEngine->resources), m_service(m_ownedEngine->service), m_limits(limits),
       m_localAuthorization(allowLocalControl ? SessionAuthorization::ObserverController
                                             : SessionAuthorization::Observer)
+{
+    init();
+}
+
+LocalControlServer::LocalControlServer(ControlEngine& engine, QObject* parent, Limits limits,
+                                     bool allowLocalControl)
+    : QObject(parent), m_resources(engine.resources), m_service(engine.service), m_limits(limits),
+      m_localAuthorization(allowLocalControl ? SessionAuthorization::ObserverController
+                                            : SessionAuthorization::Observer)
+{
+    init();
+}
+
+void LocalControlServer::init()
 {
     m_resources.upsert(
         {QStringLiteral("server"), {}, {}},
@@ -125,6 +141,7 @@ std::unique_ptr<QLockFile> LocalControlServer::reserveCredentialAuthority(const 
 
 bool LocalControlServer::listen(const QString& name, ListenMode mode)
 {
+    m_listenError.clear();
     if (m_server.isListening() || m_lock || m_limits.maxClients < 1
         || m_limits.handshakeTimeoutMs < 1 || m_limits.maxQueuedOutputBytes < 1) {
         return false;
@@ -133,6 +150,10 @@ bool LocalControlServer::listen(const QString& name, ListenMode mode)
     QString endpointName;
     QString lockPath;
     if (!resolveEndpoint(name, &endpointName, &lockPath)) {
+        return false;
+    }
+    m_listenError = localSocketPathTooLong(endpointName, localSocketPathLimit());
+    if (!m_listenError.isEmpty()) {
         return false;
     }
 
@@ -166,11 +187,18 @@ bool LocalControlServer::listen(const QString& name, ListenMode mode)
     return mode == ListenMode::ReserveEndpoint || startServing();
 }
 
-QString LocalControlServer::clientEndpoint(const QString& logicalName)
+QString LocalControlServer::clientEndpoint(const QString& logicalName, QString* pathError)
 {
     QString endpoint;
     QString lock;
-    return resolveEndpoint(logicalName, &endpoint, &lock) ? endpoint : QString{};
+    if (!resolveEndpoint(logicalName, &endpoint, &lock)) {
+        return {};
+    }
+    const QString tooLong = localSocketPathTooLong(endpoint, localSocketPathLimit());
+    if (pathError) {
+        *pathError = tooLong;
+    }
+    return tooLong.isEmpty() ? endpoint : QString{};
 }
 
 bool LocalControlServer::startServing()

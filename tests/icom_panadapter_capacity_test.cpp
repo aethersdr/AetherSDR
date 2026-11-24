@@ -63,7 +63,7 @@ int main(int argc, char** argv)
         const int before = publications;
         IcomCivBackendTestAccess::selectModel(backend, model);
         const RadioCapabilities caps = backend.capabilities();
-        const int expected = model.hasScope ? 1 : 0;
+        const int expected = model.hasScope ? (profileFor(model).dualReceiver ? 2 : 1) : 0;
         dualScopeModels += model.hasScope && model.receivers > 1;
         noScopeModels += !model.hasScope;
         const bool backendCorrect = caps.maxPanadapters == expected
@@ -88,10 +88,11 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "FAIL: need both multi-receiver scope and no-scope profiles\n");
         ++failures;
     }
-    // Other families declare a positive capacity even before connection.
+    // Other families declare a positive capacity even before connection. ANAN's
+    // is one pan per receiver route (RX1, RX2).
     for (const auto& [family, expected] : std::vector<std::pair<QString, int>>{
              {QStringLiteral("sim"), 4}, {QStringLiteral("hl2"), 1},
-             {QStringLiteral("anan"), 1}, {QStringLiteral("rtl"), 1}}) {
+             {QStringLiteral("anan"), 2}, {QStringLiteral("rtl"), 1}}) {
         if (!radio.rebuildBackendForTest(family)) {
 #ifndef AETHER_BACKEND_RTL
             if (family == QLatin1String("rtl")) {

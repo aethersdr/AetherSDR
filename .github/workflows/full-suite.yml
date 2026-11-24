@@ -72,19 +72,19 @@ jobs:
       - name: Ensure RTL-SDR build dependency is present
         run: dpkg -s librtlsdr-dev >/dev/null 2>&1 || (apt-get update && apt-get install -y librtlsdr-dev)
 
-      # RESTORE only, never save. ci.yml's build job is the single writer for
-      # this key; this job reads whatever the prefix currently resolves to —
-      # usually the objects that job saved for a recent commit, not
-      # necessarily this one, since both are triggered by the same push and
-      # the restore is a prefix match. That is a hit-rate question, never a
-      # correctness one: ccache is content-addressed, so a stale entry is a
-      # miss rather than a wrong object.
+      # This job is the only one that compiles the test tree on main (ci.yml's
+      # build job stops at aether_non_test_targets), so it keeps its own cache
+      # of those objects and saves it below. The ccache-linux-build- fallback
+      # covers a first run or an evicted entry: same flags, so its non-test
+      # objects hit. ccache is content-addressed, so a stale entry is a miss
+      # rather than a wrong object.
       - name: Restore ccache objects
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: /ccache
-          key: ccache-linux-build-
+          key: ccache-linux-full-
           restore-keys: |
+            ccache-linux-full-
             ccache-linux-build-
 
       - name: Cache DeepFilterNet3
@@ -101,8 +101,8 @@ jobs:
       - name: Configure
         id: configure
         run: |
-          # -g1 to match ci.yml's build job, whose ccache this restores; the
-          # reason is there.
+          # -g1 to match ci.yml's build job, whose ccache this falls back to;
+          # the reason is there.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             -DAETHER_SHARED_CORE=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
@@ -144,6 +144,16 @@ jobs:
 
       - name: ccache stats
         run: ccache --show-stats
+
+      # Saved once the build is green, before the tests run, so a red test
+      # still leaves a warm cache. Key on run_id (entries are immutable);
+      # cache-cleanup.yml prunes superseded ccache-linux-full- entries.
+      - name: Save ccache objects
+        if: github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          key: ccache-linux-full-${{ github.run_id }}
 
       # Unfiltered, serial, and the exit code is the verdict. Serial because
       # several tests bind fixed ports or Unix sockets (the reason ci.yml's

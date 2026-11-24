@@ -92,5 +92,44 @@ int main(int argc, char** argv)
     check(!apply.isEnabled() && !ip.isEnabled() && ip.text() == QStringLiteral("192.0.2.4"),
           "radio transition clears Apply and replaces stale Flex values");
 
+    // The reason names whichever condition failed; unsupported wins.
+    check(ipConfigUnavailableReason(true, false).isEmpty(),
+          "a supported local session has no unavailable reason");
+    check(ipConfigUnavailableReason(false, false).contains(QStringLiteral("not supported")),
+          "an unsupported radio is named as unsupported");
+    check(ipConfigUnavailableReason(true, true).contains(QStringLiteral("local network")),
+          "a remote session points the operator at the local network");
+    check(ipConfigUnavailableReason(false, true).contains(QStringLiteral("not supported")),
+          "unsupported outranks remote");
+
+    // Remote reason is mirrored to every dimmed control's accessible description.
+    {
+        IpConfigPresentationState remoteState;
+        QPushButton d("DHCP"), s("Static"), a("Apply");
+        d.setCheckable(true);
+        s.setCheckable(true);
+        QLineEdit i, m, g;
+        const QString reason = ipConfigUnavailableReason(true, true);
+        applyIpConfigPresentation(remoteState, QStringLiteral("flex:R"), false, false,
+                                  QStringLiteral("100.64.1.2"), {}, {},
+                                  &d, &s, &i, &m, &g, &a, reason);
+        check(!d.isEnabled() && !s.isEnabled() && !a.isEnabled(),
+              "remote session dims DHCP, Static and Apply");
+        check(d.accessibleDescription() == reason && s.accessibleDescription() == reason
+                  && a.accessibleDescription() == reason,
+              "remote reason is mirrored to the accessible descriptions");
+        check(i.toolTip() == reason && m.toolTip() == reason && g.toolTip() == reason
+                  && i.accessibleDescription() == reason && m.accessibleDescription() == reason
+                  && g.accessibleDescription() == reason,
+              "the dimmed address fields carry the reason too");
+
+        applyIpConfigPresentation(remoteState, QStringLiteral("flex:R"), true, false,
+                                  QStringLiteral("192.0.2.4"), {}, {},
+                                  &d, &s, &i, &m, &g, &a, QString());
+        check(i.toolTip().isEmpty() && i.accessibleDescription().isEmpty()
+                  && d.toolTip().isEmpty(),
+              "a configurable session clears the reason");
+    }
+
     return ok ? 0 : 1;
 }

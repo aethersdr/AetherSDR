@@ -37,6 +37,23 @@ inline void applyCapabilityClusterVisibility(QWidget* cluster,
     cluster->setVisible(!connected || supported);
 }
 
+// Why the IP configuration is unavailable, or empty when it is available. An
+// unsupported radio is named first: a remote session is moot there. `remote`
+// is isRemoteForIpConfiguration(): SmartLink, routed, or a confirmed Tailscale
+// session. A radio reached over a WireGuard or OpenVPN relay is local.
+inline QString ipConfigUnavailableReason(bool supported, bool remote)
+{
+    if (!supported) {
+        return QObject::tr("Changing the radio's IP configuration is not supported by this radio.");
+    }
+    if (remote) {
+        return QObject::tr("Connect from the radio's local network to change its network "
+                           "settings. They can't be changed over SmartLink, a manual-IP "
+                           "connection or Tailscale.");
+    }
+    return {};
+}
+
 inline void applyIpConfigPresentation(
     IpConfigPresentationState& state,
     const QString& sessionKey,
@@ -73,9 +90,15 @@ inline void applyIpConfigPresentation(
     if (!canConfigure) {
         applyButton->setEnabled(false);
     }
+    // Every dimmed control carries the reason, the address fields included.
+    // On the configurable path the caller's validation re-fills the fields'
+    // tips after this clears them.
     for (QWidget* control : {static_cast<QWidget*>(dhcpButton),
                              static_cast<QWidget*>(staticButton),
-                             static_cast<QWidget*>(applyButton)}) {
+                             static_cast<QWidget*>(applyButton),
+                             static_cast<QWidget*>(ipEdit),
+                             static_cast<QWidget*>(maskEdit),
+                             static_cast<QWidget*>(gatewayEdit)}) {
         control->setToolTip(canConfigure ? QString() : unavailableTip);
         control->setAccessibleDescription(control->toolTip());
     }

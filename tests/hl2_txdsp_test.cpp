@@ -593,19 +593,26 @@ int main(int argc, char** argv)
                 captured.insert(captured.end(), iq.begin(), iq.end());
             });
             const int channelId = tx.wdspChannelId();
-            std::vector<float> audio(512);
+            // One DSP block per call, a little slower than real time: this
+            // loop runs no event loop, so the stage's 1 ms retry never fires.
+            const int block = cfg.dspBlockSize;
+            const int toneCalls = 16384 / block;     // 0.68 s at 24 kHz
+            const int silenceCalls = 8192 / block;   // 0.34 s
+            std::vector<float> audio(static_cast<std::size_t>(block));
+            const auto period = std::chrono::microseconds(
+                1000000LL * block / cfg.inputSampleRateHz + 667);
             auto clockBlock = [&] {
                 tx.processAudioBlock(audio, TxAudioSource::Microphone, authority.context);
                 if (AETHER_HL2_TX_TXA) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(22));
+                    std::this_thread::sleep_for(period);
                 }
             };
             for (const int gapMs : {0, 500, 0}) {
                 captured.clear();
-                for (int block = 0; block < 32; ++block) {
-                    for (int n = 0; n < 512; ++n) {
+                for (int call = 0; call < toneCalls; ++call) {
+                    for (int n = 0; n < block; ++n) {
                         audio[static_cast<std::size_t>(n)] = static_cast<float>(
-                            0.5 * std::sin(2.0 * M_PI * kTone * (block * 512 + n)
+                            0.5 * std::sin(2.0 * M_PI * kTone * (call * block + n)
                                            / cfg.inputSampleRateHz));
                     }
                     clockBlock();
@@ -622,7 +629,7 @@ int main(int argc, char** argv)
                 std::this_thread::sleep_for(std::chrono::milliseconds(gapMs));
                 captured.clear();
                 std::fill(audio.begin(), audio.end(), 0.0f);
-                for (int block = 0; block < 16; ++block) {
+                for (int call = 0; call < silenceCalls; ++call) {
                     clockBlock();
                 }
                 double stalePeak = 0.0;
@@ -631,7 +638,8 @@ int main(int argc, char** argv)
                 }
                 std::fprintf(stderr, "reset [%s] gap=%d ms: head-inclusive peak %.9g, faults %llu\n",
                              tx.modulatorName(), gapMs, stalePeak, tx.modulatorFaultBlocks());
-                check(captured.size() == 16 * 1024,
+                check(captured.size() == static_cast<std::size_t>(silenceCalls) * block
+                                            * (cfg.outputSampleRateHz / cfg.inputSampleRateHz),
                       "post-reset silence preserves the complete output stream");
                 check(stalePeak < 1e-6, "reset drops the previous over from the FIRST output sample");
                 check(tx.modulatorFaultBlocks() == 0, "reset regression has no underruns");

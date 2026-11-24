@@ -1,6 +1,6 @@
 // Socket-free: the VPN source-path picker keeps the address the operator chose
-// while the radio address is edited through other families. Reads this host's
-// interface list; skips (77) without an adapter carrying two IPv6 addresses.
+// while the radio address is edited through other families. Interface snapshots
+// make the same selection rules run on hosts with and without IPv6 adapters.
 #include "TestSettingsProfile.h"
 #include "core/NetworkPathResolver.h"
 #include "gui/ConnectionPanel.h"
@@ -13,16 +13,28 @@
 
 using namespace AetherSDR;
 
+namespace AetherSDR {
+struct ConnectionPanelSmartLinkTestAccess {
+    static void setSourcePaths(ConnectionPanel& panel, const QList<NetworkPathCandidate>& paths)
+    {
+        panel.m_manualSourceCandidates = [paths](QAbstractSocket::NetworkLayerProtocol family) {
+            QList<NetworkPathCandidate> matching;
+            for (const auto& path : paths) {
+                if (path.address.protocol() == family) { matching.append(path); }
+            }
+            return matching;
+        };
+        panel.refreshManualSourceOptions();
+    }
+};
+}
+
 namespace {
 int failures = 0;
 void check(bool ok, const char* claim)
 {
     std::printf("%s %s\n", ok ? "PASS" : "FAIL", claim);
     failures += !ok;
-}
-bool isUla(const QHostAddress& address)
-{
-    return address.isInSubnet(QHostAddress(QStringLiteral("fc00::")), 7);
 }
 }
 
@@ -36,22 +48,11 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
 
     // A GUA and a ULA on one adapter, as an IPv6 LAN gives.
-    const auto v6 = NetworkPathResolver::enumerateCandidates(QAbstractSocket::IPv6Protocol);
-    NetworkPathCandidate gua, ula;
-    for (const auto& c : v6) {
-        for (const auto& other : v6) {
-            if (c.interfaceId == other.interfaceId && !isUla(c.address) && isUla(other.address)) {
-                gua = c;
-                ula = other;
-            }
-        }
-    }
-    if (!gua.isValid()) {
-        std::fprintf(stderr, "SKIP: no adapter with both an IPv6 GUA and a ULA\n");
-        return 77;
-    }
+    const NetworkPathCandidate gua{"test-vpn", "VPN", QHostAddress("2001:db8:1::20")};
+    const NetworkPathCandidate ula{"test-vpn", "VPN", QHostAddress("fd58:eee:46e8::20")};
 
     ConnectionPanel panel;
+    ConnectionPanelSmartLinkTestAccess::setSourcePaths(panel, {gua, ula});
     auto* ip = panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIp"));
     auto* source = panel.findChild<QComboBox*>(QStringLiteral("connectionManualSourcePath"));
     if (!ip || !source) {

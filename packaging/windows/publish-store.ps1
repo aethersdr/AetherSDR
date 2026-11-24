@@ -23,10 +23,11 @@
 
     Behavior on a missing package is deliberate: the MSIX build step in CI is
     `continue-on-error`, so a flaky package build leaves no `.msixupload`. In
-    that case this script warns and exits 0 rather than turning an
+    that case a draft upload warns and exits 0 rather than turning an
     already-completed release red — the missing-package failure is already
-    surfaced by the MSIX step's own annotation. A genuine publish API failure
-    still exits non-zero so it is visible.
+    surfaced by the MSIX step's own annotation. With -Commit the run was meant
+    to submit, so a missing package fails instead of finishing green with
+    nothing submitted. A genuine publish API failure always exits non-zero.
 
 .PARAMETER ProductId
     The 12-character Microsoft Store product Id for the AetherSDR listing.
@@ -58,7 +59,8 @@
 
 .PARAMETER CommitProduction
     Explicit second opt-in for -Commit without a flight. Cannot be used with a
-    flight or without -Commit; ordinary tag builds pass neither switch.
+    flight or without -Commit. The production workflow passes both switches
+    when AETHERSDR_STORE_AUTO_PUBLISH is true.
 #>
 
 [CmdletBinding()]
@@ -93,6 +95,9 @@ $uploads = @(Get-ChildItem -LiteralPath $SearchDir -Filter $UploadGlob -File -Er
     Sort-Object LastWriteTime -Descending)
 
 if ($uploads.Count -eq 0) {
+    if ($Commit) {
+        throw "No '$UploadGlob' found in '$SearchDir'; a committed Store submission was requested but there is no package to submit."
+    }
     Write-Warning ("No '$UploadGlob' found in '$SearchDir'; nothing to publish. " +
         "The MSIX packaging step likely did not produce an upload package " +
         "(it is continue-on-error). Skipping Store submission.")

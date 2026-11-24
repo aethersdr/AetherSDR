@@ -1,3 +1,4 @@
+#include "FlexRadioStatusTestSupport.h"
 // #5594 (#5262 M1, #5554 §2.4): backends must ANNOUNCE capability revisions.
 //
 // The capability descriptor is what the aetherd control protocol's `welcome`
@@ -11,7 +12,7 @@
 //
 //   flex — the whole Flex capability table is derived from the model name
 //          (capabilities() runs capabilitiesFor(caps.model)), and the model name
-//          arrives in a `radio ...` status AFTER connect. decodeRadioStatus() is
+//          arrives in a `radio ...` status AFTER connect. The typed status observation is
 //          the decode it lands in and is public, so it is driven directly here:
 //          no socket, no fake radio, no timing.
 //
@@ -90,16 +91,17 @@ int main(int argc, char** argv)
     {
         FlexBackend backend;
         QSignalSpy caps(&backend, &IRadioBackend::capabilitiesChanged);
-        QSignalSpy radio(&backend, &IRadioBackend::radioChanged);
+        QSignalSpy radio(&backend, &IRadioBackend::radioStatusObserved);
 
         // Mirror RadioModel's same-thread delta application and model provider.
         // Capture inside the notification: reading afterwards would miss an
-        // emission moved ahead of radioChanged, which exposes the old table.
+        // emission moved ahead of model application, which exposes the old table.
         QString model;
         QVector<RadioCapabilities> observed;
         backend.setModelProvider([&model] { return model; });
-        QObject::connect(&backend, &IRadioBackend::radioChanged, &backend,
-                         [&model](const RadioDelta& delta) {
+        QObject::connect(&backend, &IRadioBackend::radioStatusObserved, &backend,
+                         [&model](const RadioStatusObservation& observation) {
+            const RadioDelta& delta = observation.radio;
             if (delta.model) {
                 model = *delta.model;
             }
@@ -113,7 +115,7 @@ int main(int argc, char** argv)
         // a live radio — `radio ...` repeats for callsign, nickname and the
         // audio gains — and it must stay silent or a zoom-sweep-shaped storm
         // comes back as a typing-shaped one.
-        backend.decodeRadioStatus(radioStatus({{"callsign", "KK7GWY"},
+        observeRadioStatus(backend, radioStatus({{"callsign", "KK7GWY"},
                                                {"nickname", "shack"}}));
         check(radio.count() == 1, "a radio status without a model still decodes");
         check(caps.count() == 0,
@@ -121,7 +123,7 @@ int main(int argc, char** argv)
 
         // The model arrives. THIS is the revision the whole issue is about: the
         // seeded table (built before the name was known) is now wrong.
-        backend.decodeRadioStatus(radioStatus({{"model", "FLEX-8600"}}));
+        observeRadioStatus(backend, radioStatus({{"model", "FLEX-8600"}}));
         check(caps.count() == 1, "the first model announces exactly one revision");
         check(observed.size() == 1 && observed[0].model == QStringLiteral("FLEX-8600")
                   && observed[0].maxSlices == 4 && observed[0].hasExtendedDsp,
@@ -129,13 +131,13 @@ int main(int argc, char** argv)
 
         // The radio repeats the same model on an unrelated edit. Nothing about
         // the capability table changed, so nothing may be announced.
-        backend.decodeRadioStatus(radioStatus({{"model", "FLEX-8600"},
+        observeRadioStatus(backend, radioStatus({{"model", "FLEX-8600"},
                                                {"nickname", "shack-2"}}));
         check(caps.count() == 1,
               "a repeated model announces nothing (change-guarded, not presence-guarded)");
 
         // A genuinely different model is a genuinely different table.
-        backend.decodeRadioStatus(radioStatus({{"model", "FLEX-6400"}}));
+        observeRadioStatus(backend, radioStatus({{"model", "FLEX-6400"}}));
         check(caps.count() == 2, "a changed model announces again");
         check(observed.size() == 2 && observed[1].model == QStringLiteral("FLEX-6400")
                   && observed[1].maxSlices == 2 && !observed[1].hasExtendedDsp,
@@ -146,7 +148,7 @@ int main(int argc, char** argv)
         // and the same radio has to be announced again.
         backend.clearExtensionHandles();
         model.clear();
-        backend.decodeRadioStatus(radioStatus({{"model", "FLEX-6400"}}));
+        observeRadioStatus(backend, radioStatus({{"model", "FLEX-6400"}}));
         check(caps.count() == 3,
               "after a disconnect the same model announces again");
         check(observed.size() == 3 && observed[2].model == QStringLiteral("FLEX-6400")

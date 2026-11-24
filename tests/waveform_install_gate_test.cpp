@@ -109,6 +109,36 @@ int main()
     report("health: a non-LAN address (e.g. a tailnet) -> NotLan",
            radioHealthBlocker(true, true, false, false) == H::NotLan);
 
+    // ── AetherGPS: legacy on a FLEX-6000, else a container under the Docker gate ──
+    using G = AetherGpsBlocker;
+    using D = DockerWaveformInstallBlocker;
+    report("gps: a connected FLEX-6000 takes the legacy package -> None",
+           aetherGpsBlocker(true, true, true, D::UnsupportedPlatform) == G::None);
+    report("gps: a container radio with its WFP ready -> None",
+           aetherGpsBlocker(true, true, false, D::None) == G::None);
+    report("gps: a container radio whose WFP isn't ready -> Container",
+           aetherGpsBlocker(true, true, false, D::WfpNotReady) == G::Container
+               && aetherGpsBlocker(true, true, false, D::RuntimeStatusUnknown) == G::Container);
+    report("gps: not connected wins",
+           aetherGpsBlocker(false, true, false, D::NotConnected) == G::NotConnected);
+    report("gps: a radio family without waveforms -> NoWaveforms",
+           aetherGpsBlocker(true, false, true, D::None) == G::NoWaveforms);
+
+    // ── Restart: FLEX-6000 firmware refuses `waveform restart` (#6990) ──────
+    report("restart: a FLEX-6300/6500/6700 (Microburst) gives a reason",
+           !waveformRestartUnavailableReason(RadioPlatform::Microburst).isEmpty());
+    report("restart: a FLEX-6400/6600 (DeepEddy) gives a reason",
+           !waveformRestartUnavailableReason(RadioPlatform::DeepEddy).isEmpty());
+    report("restart: the reason names the radio family",
+           waveformRestartUnavailableReason(RadioPlatform::Microburst)
+               .contains(QStringLiteral("FLEX-6000")));
+    report("restart: a FLEX-8000 / Aurora (BigBend) keeps Restart",
+           waveformRestartUnavailableReason(RadioPlatform::BigBend).isEmpty());
+    report("restart: DragonFire keeps Restart",
+           waveformRestartUnavailableReason(RadioPlatform::DragonFire).isEmpty());
+    report("restart: a radio that has not identified itself keeps Restart",
+           waveformRestartUnavailableReason(RadioPlatform::Unknown).isEmpty());
+
     if (g_failed == 0) {
         std::printf("\nAll %d waveform-install-gate tests passed.\n", g_total);
         return 0;

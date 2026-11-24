@@ -32,6 +32,9 @@ struct ProtocolRequest {
     QJsonObject params;
 
     [[nodiscard]] bool isHello() const { return method == QStringLiteral("hello"); }
+    // Sent instead of hello, so like hello it carries no sessionId
+    // (aetherd-remote-clients.md §3).
+    [[nodiscard]] bool isPairingComplete() const { return method == QStringLiteral("pairing.complete"); }
 };
 
 struct ParseResult {

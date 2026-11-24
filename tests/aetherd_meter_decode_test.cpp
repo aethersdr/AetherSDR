@@ -23,7 +23,7 @@ static int g_failures = 0;
 static MeterDef decode1(FlexBackend& b, const QString& body)
 {
     QSignalSpy def(&b, &IRadioBackend::meterDefined);
-    b.decodeMeterStatus(body);
+    b.statusIngress()->decodeMeterStatus(body);
     if (def.count() != 1) return {};
     return def.takeFirst().at(0).value<MeterDef>();
 }
@@ -52,7 +52,7 @@ int main(int argc, char** argv)
     {
         FlexBackend backend;
         QSignalSpy rem(&backend, &IRadioBackend::meterRemoved);
-        backend.decodeMeterStatus(QStringLiteral("7 removed"));
+        backend.statusIngress()->decodeMeterStatus(QStringLiteral("7 removed"));
         CHECK(rem.count() == 1);
         CHECK(rem.takeFirst().at(0).toInt() == 7);
     }
@@ -61,7 +61,7 @@ int main(int argc, char** argv)
     {
         FlexBackend backend;
         QSignalSpy def(&backend, &IRadioBackend::meterDefined);
-        backend.decodeMeterStatus(QStringLiteral(
+        backend.statusIngress()->decodeMeterStatus(QStringLiteral(
             "1.src=TX#1.nam=FWDPWR#1.unit=Watts#2.src=TX#2.nam=SWR#2.unit=SWR"));
         CHECK(def.count() == 2);
         const MeterDef a = def.takeFirst().at(0).value<MeterDef>();
@@ -80,7 +80,7 @@ int main(int argc, char** argv)
         QObject::connect(&backend, &IRadioBackend::meterDefined,
                          &model, &MeterModel::defineMeter);
         QSignalSpy definitions(&backend, &IRadioBackend::meterDefined);
-        backend.decodeMeterStatus(QStringLiteral(
+        backend.statusIngress()->decodeMeterStatus(QStringLiteral(
             "50.src=SLC#50.num=0#50.nam=LEVEL#50.unit=dBm#"
             "20.src=TX-#20.num=0#20.nam=ALC#20.unit=dBFS#"
             "70.src=SLC#70.num=1#70.nam=LEVEL#70.unit=dBm#"
@@ -99,7 +99,7 @@ int main(int argc, char** argv)
         model.setActiveTxSlice(1);
         model.updateValues({20, 40}, {-768, -1536});
         CHECK(model.swAlc() == -12.0f);
-        backend.decodeMeterStatus(QStringLiteral(
+        backend.statusIngress()->decodeMeterStatus(QStringLiteral(
             "20.src=TX-#20.num=0#20.nam=ALC#20.unit=dBFS"));
         model.updateValues({20, 40}, {-768, -1536});
         CHECK(model.swAlc() == -12.0f);
@@ -154,7 +154,7 @@ int main(int argc, char** argv)
     {
         FlexBackend backend;
         QSignalSpy def(&backend, &IRadioBackend::meterDefined);
-        backend.decodeMeterStatus(QStringLiteral("x.src=SLC#x.nam=LEVEL"));
+        backend.statusIngress()->decodeMeterStatus(QStringLiteral("x.src=SLC#x.nam=LEVEL"));
         CHECK(def.count() == 0);
     }
 

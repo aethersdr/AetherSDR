@@ -4,15 +4,35 @@
 
 | Platform | Signing Method |
 |----------|---------------|
-| Linux AppImage | GPG detached signature (`.asc`) |
-| Windows .exe | Authenticode + GPG detached signature (`.asc`) |
-| Windows .zip | Authenticode (every exe/dll inside) + GPG detached signature (`.asc`) |
-| Source archive | GPG detached signature (`.asc`) |
+| Linux AppImage | Listed in signed `SHA256SUMS.txt` + GPG detached signature (`.asc`) |
+| Windows .exe | Authenticode + listed in signed `SHA256SUMS.txt` + GPG detached signature (`.asc`) |
+| Windows .zip | Authenticode (every exe/dll inside) + listed in signed `SHA256SUMS.txt` + GPG detached signature (`.asc`) |
+| Source archive | Listed in signed `SHA256SUMS.txt` + GPG detached signature (`.asc`) |
 | macOS DMG | Apple codesign + notarization |
 | macOS .pkg | Apple codesign + notarization |
+| PDF manual | Listed in `SHA256SUMS.txt`, whose signature `SHA256SUMS.txt.asc` covers it |
 
-Each release also includes a GPG-signed `SHA256SUMS.txt` covering all
-Linux and source artifacts.
+Each release page also carries `SHA256SUMS.txt`, covering the Linux, Windows
+and source artifacts, the macOS app tarballs and the PDF manual, and its GPG
+signature `SHA256SUMS.txt.asc`. That one signature covers every file listed,
+so checking it is the recommended way to verify those files.
+Releases through v26.11.2 instead sign the manual with its own
+`AetherSDR-Manual-vX.Y.Z.pdf.asc`.
+
+From v26.11.4, the per-file `.asc` signatures are not on the release page.
+They are at `https://updates.aethersdr.com/releases/vX.Y.Z/`, under the same
+file names. Releases through v26.11.3 keep them on the release page. They
+move there a short while after a release is published, so a release from
+the last few hours may still have them on its page.
+
+## Verify the PDF Manual
+
+```bash
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c --ignore-missing SHA256SUMS.txt
+```
+
+The `AetherSDR-Manual-vX.Y.Z.pdf` line must read `OK`.
 
 ## GPG Key Fingerprint
 
@@ -34,18 +54,27 @@ gpg --keyserver keys.openpgp.org --recv-keys <KEY_ID>
 
 ## Verify a Linux Download
 
-### Option 1: Verify the artifact directly
+### Option 1: Verify the checksums, then check the file (recommended)
 
-```bash
-gpg --verify AetherSDR-v1.0.0-x86_64.AppImage.asc AetherSDR-v1.0.0-x86_64.AppImage
-```
-
-### Option 2: Verify checksums first, then check the file
+Download `SHA256SUMS.txt` and `SHA256SUMS.txt.asc` from the release page into
+the folder that holds your download, then:
 
 ```bash
 gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
-sha256sum -c SHA256SUMS.txt
+sha256sum -c --ignore-missing SHA256SUMS.txt
 ```
+
+Your download's line must read `OK`.
+
+### Option 2: Verify the artifact's own signature
+
+```bash
+curl -O https://updates.aethersdr.com/releases/vX.Y.Z/AetherSDR-vX.Y.Z-x86_64.AppImage.asc
+gpg --verify AetherSDR-vX.Y.Z-x86_64.AppImage.asc AetherSDR-vX.Y.Z-x86_64.AppImage
+```
+
+For a release through v26.11.3, download the `.asc` from its release page
+instead.
 
 Expected output should show **"Good signature from AetherSDR Release Signing"**.
 
@@ -82,11 +111,14 @@ Get-AuthenticodeSignature .\AetherSDR-vX.Y.Z-Windows-x64-setup.exe | Format-List
 until it builds download reputation; signing every release with the same
 identity is what lets that reputation carry over.
 
-The setup `.exe` and `.zip` are also GPG-signed:
+The setup `.exe` and `.zip` are also GPG-signed. Their `.asc` signatures are
+at `https://updates.aethersdr.com/releases/vX.Y.Z/` from v26.11.4, and on the
+release page through v26.11.3:
 
 ```powershell
 # Install Gpg4win from https://gpg4win.org/
 gpg --import RELEASE-SIGNING-KEY.pub.asc
+curl.exe -O https://updates.aethersdr.com/releases/vX.Y.Z/AetherSDR-vX.Y.Z-Windows-x64-setup.exe.asc
 gpg --verify AetherSDR-vX.Y.Z-Windows-x64-setup.exe.asc AetherSDR-vX.Y.Z-Windows-x64-setup.exe
 ```
 

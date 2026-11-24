@@ -66,6 +66,7 @@ private:
     void updateAvailability();
     void setMessage(const QString& text, const QString& tone);
     void onApply();
+    bool confirmShimRecreate();
     void onRadioEnvironmentChanged();
     void onClearStaging();
     bool hasRows() const;

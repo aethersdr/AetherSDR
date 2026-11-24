@@ -109,9 +109,11 @@ QString PerfTelemetry::msValue(double value)
 
 QString PerfTelemetry::pctValue(int errors, int packets)
 {
-    if (packets <= 0)
+    const double expected = static_cast<double>(packets) + errors;
+    if (expected <= 0) {
         return QStringLiteral("0.00");
-    return QString::number((100.0 * static_cast<double>(errors)) / static_cast<double>(packets), 'f', 2);
+    }
+    return QString::number(100.0 * errors / expected, 'f', 2);
 }
 
 QString PerfTelemetry::keyValue(const QString& key, const QString& value)
@@ -181,7 +183,7 @@ void PerfTelemetry::recordUdpBatch(int datagrams, qint64 bytes, double drainMs)
     maybeLogSummary(now);
 }
 
-void PerfTelemetry::recordStreamPacket(FrameKind kind, bool sequenceError)
+void PerfTelemetry::recordStreamPacket(FrameKind kind, int missingPackets)
 {
     const qint64 now = nowNs();
     if (!beginRecord(now))
@@ -191,15 +193,33 @@ void PerfTelemetry::recordStreamPacket(FrameKind kind, bool sequenceError)
         QMutexLocker lock(&m_mutex);
         if (kind == FrameKind::Waterfall) {
             m_window.waterfallPackets++;
-            if (sequenceError)
-                m_window.waterfallErrors++;
+            m_window.waterfallErrors += std::max(0, missingPackets);
         } else {
             m_window.fftPackets++;
-            if (sequenceError)
-                m_window.fftErrors++;
+            m_window.fftErrors += std::max(0, missingPackets);
         }
     }
 
+    maybeLogSummary(now);
+}
+
+void PerfTelemetry::recordStreamLoss(FrameKind kind, int missingPackets)
+{
+    if (missingPackets <= 0) {
+        return;
+    }
+    const qint64 now = nowNs();
+    if (!beginRecord(now)) {
+        return;
+    }
+    {
+        QMutexLocker lock(&m_mutex);
+        if (kind == FrameKind::Waterfall) {
+            m_window.waterfallErrors += missingPackets;
+        } else {
+            m_window.fftErrors += missingPackets;
+        }
+    }
     maybeLogSummary(now);
 }
 

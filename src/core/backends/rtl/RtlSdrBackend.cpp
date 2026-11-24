@@ -216,6 +216,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // ownership changes only after a successful accepted-state migration.
     RadioCapabilities c;
     c.cwTextControl = std::nullopt;
+    c.hostCwKeyingControl = std::nullopt;   // receive-only
     // THE dBm AXIS IS UNCALIBRATED, and on this backend that is not a nuance:
     // RtlSdrDdc's FFT path computes `20 * log10(mag / kFftSize)` on raw ADC
     // magnitudes and emits that straight out as the spectrum frame. There is no
@@ -247,7 +248,11 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
+    // No Flex stream plane: receive audio is native and graphic EQ is host-side.
+    c.audioStreamControl = std::nullopt;
+    c.radioGraphicEqControl = std::nullopt;
     c.model  = m_modelName;
     c.manufacturer = m_vendor.isEmpty() ? QStringLiteral("Realtek") : m_vendor;
 
@@ -261,6 +266,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.hasFmRepeaterOffset = false;
     c.hasCwTune = false;
     c.twoToneGenerator = std::nullopt;  // receive only; there is no transmitter.
+    c.boardIdentity = std::nullopt;     // a USB dongle reports no gateware.
     c.firmwareUpdateSource = std::nullopt;  // no published firmware list is read.
     c.panZoomModes = std::nullopt;      // no command plane, no per-pan zoom flags.
     c.hasAmCarrierLevel = false;
@@ -271,7 +277,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.txWaterfallClientFlag = std::nullopt;  // receive only; no owner declared
     c.hasAgcThreshold = true;
     c.hasHostNoiseBlanker = true;
-    c.receiveCwPitchControl = ReceiveCwPitchControl{100, 6000, 10};
+    c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine, 100, 6000, 10};
     c.receiveDspControl = ReceiveDspControl{
         {QStringLiteral("AM"), QStringLiteral("SAM"), QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("CW"), QStringLiteral("CWR")},
         {ReceiveDspControl::Feature::Agc, ReceiveDspControl::Feature::Nb,
@@ -334,6 +340,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     }
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = ReceiveAudioExport{{24000, 48000}, m_receiverCapacity};
+    c.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     c.dspParameterReset = std::nullopt;
     c.panSpanModel = PanSpanModel{false, false};
     if (m_lastPublished && hasReceivingDcSensitive(*m_lastPublished)) {

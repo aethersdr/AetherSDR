@@ -4,6 +4,7 @@
 
 #include "core/dsp/WdspChannel.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace AetherSDR::hl2 {
@@ -40,6 +41,13 @@ Hl2Spectrum::Hl2Spectrum(int fftSize, double sampleRateHz)
     // and setAverageFrames() must not allocate either, since the alternative
     // is a first-frame malloc on whichever thread happens to change the depth.
     m_avgPower.assign(static_cast<std::size_t>(m_fftSize), 0.0);
+    // Per-sample weight of the DC estimate: time constant kDcTimeConstantS at
+    // the IQ rate, or kDcFramesWithoutRate frames when no rate is known.
+    const double dcTauSamples = m_sampleRateHz > 0.0
+        ? kDcTimeConstantS * m_sampleRateHz
+        : static_cast<double>(kDcFramesWithoutRate) * m_fftSize;
+    m_dcAlpha = -std::expm1(-1.0 / dcTauSamples);
+    m_dcOnsetRatio = std::pow(10.0, kDcOnsetDb / 10.0);
 
     {
         // FFTW's planner is process-global and not thread-safe, and this runs on
@@ -71,6 +79,7 @@ int Hl2Spectrum::process(std::span<const std::complex<float>> iq, std::vector<fl
 {
     int frames = 0;
     for (const auto& s : iq) {
+        trackDc(s);
         m_acc.push_back(s);
         ++m_samplesSinceFrame;
         if (static_cast<int>(m_acc.size()) == m_fftSize) {
@@ -151,6 +160,9 @@ void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
 {
     // Time passes whether or not these samples survive the cap below.
     m_samplesSinceFrame += iq.size();
+    for (const auto& s : iq) {
+        trackDc(s);
+    }
     m_acc.insert(m_acc.end(), iq.begin(), iq.end());
     // Hold at most fftSize - 1: see the header for why exactly-full would wedge
     // process()'s boundary check.
@@ -161,20 +173,130 @@ void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
     }
 }
 
+void Hl2Spectrum::setTransmitting(bool on, double releaseHoldMs) noexcept
+{
+    if (on) {
+        if (m_dcState == DcState::Rx) {
+            m_dcState = DcState::Armed;
+            m_dcOnsetRun = 0;
+        } else if (m_dcState == DcState::Releasing) {
+            m_dcState = DcState::Tx;   // a re-key inside the hold cancels the release
+            m_dcReleaseIn = 0;
+        }
+        return;
+    }
+    if (m_dcState == DcState::Armed) {
+        m_dcState = DcState::Rx;       // the keyed IQ never arrived: nothing switched
+        return;
+    }
+    if (m_dcState != DcState::Tx) {
+        return;
+    }
+    const double hold = m_sampleRateHz > 0.0 && releaseHoldMs > 0.0
+        ? std::round(releaseHoldMs * m_sampleRateHz / 1000.0) : 0.0;
+    if (hold < 1.0) {
+        m_dcState = DcState::Rx;
+    } else {
+        m_dcState = DcState::Releasing;
+        m_dcReleaseIn = static_cast<std::uint64_t>(hold);
+        m_dcOnsetRun = 0;
+    }
+}
+
+void Hl2Spectrum::restartRxDc() noexcept
+{
+    m_rxDc = {};
+    m_rxPower = 0.0;
+    m_dcSamples = 0;
+}
+
+void Hl2Spectrum::restartDc() noexcept
+{
+    restartRxDc();
+    m_txDc = {};
+    m_txDcSeeded = dcTransmitting();   // mid-key: the transmit estimate starts from zero
+}
+
+void Hl2Spectrum::carryDcFrom(const Hl2Spectrum& old) noexcept
+{
+    m_rxDc = old.m_rxDc;
+    m_txDc = old.m_txDc;
+    m_rxPower = old.m_rxPower;
+    m_txDcSeeded = old.m_txDcSeeded;
+    m_dcState = old.m_dcState;
+    m_dcOnsetRun = old.m_dcOnsetRun;
+    m_dcReleaseIn = old.m_dcReleaseIn;   // a pending hold, in old-rate samples
+    m_dcSamples = old.m_dcSamples;
+}
+
+void Hl2Spectrum::trackDc(std::complex<float> s) noexcept
+{
+    // A one-pole low-pass over every sample: a tone f Hz off centre leaks in at
+    // about 1/(2*pi*f*tau) of its amplitude. The receive estimate starts with
+    // growing memory (weight >= 1/n), which removes a constant offset at once.
+    const double re = static_cast<double>(s.real());
+    const double im = static_cast<double>(s.imag());
+    switch (m_dcState) {
+    case DcState::Releasing:
+        // The T/R turnaround: track nothing. Receive resumes where the keyed IQ
+        // ends (a run back at receive level), or when the hold runs out.
+        if (re * re + im * im <= m_rxPower * m_dcOnsetRatio) {
+            if (++m_dcOnsetRun >= kDcOnsetRun) {
+                m_dcState = DcState::Rx;
+                return;
+            }
+        } else {
+            m_dcOnsetRun = 0;
+        }
+        if (--m_dcReleaseIn == 0) {
+            m_dcState = DcState::Rx;
+        }
+        return;
+    case DcState::Tx:
+        m_txDc.re += m_dcAlpha * (re - m_txDc.re);
+        m_txDc.im += m_dcAlpha * (im - m_txDc.im);
+        return;
+    case DcState::Armed:
+        // Still receive IQ until the keyed IQ arrives: a run of samples far over
+        // the receive power, which our own TX is and a noise sample is not.
+        if (re * re + im * im > m_rxPower * m_dcOnsetRatio) {
+            if (++m_dcOnsetRun >= kDcOnsetRun) {
+                if (!m_txDcSeeded) {
+                    m_txDc = m_rxDc;
+                    m_txDcSeeded = true;
+                }
+                m_dcState = DcState::Tx;
+                return;
+            }
+        } else {
+            m_dcOnsetRun = 0;
+        }
+        break;
+    case DcState::Rx:
+        break;
+    }
+    double alpha = m_dcAlpha;
+    if (static_cast<double>(m_dcSamples) * alpha < 1.0) {
+        ++m_dcSamples;
+        alpha = std::max(alpha, 1.0 / static_cast<double>(m_dcSamples));
+    }
+    m_rxDc.re += alpha * (re - m_rxDc.re);
+    m_rxDc.im += alpha * (im - m_rxDc.im);
+    m_rxPower += alpha * (re * re + im * im - m_rxPower);
+}
+
 void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
 {
-    // Remove the frame's DC offset (the ADC offset lives on I in direct
-    // sampling), then apply the window.
-    double meanRe = 0.0, meanIm = 0.0;
-    for (const auto& s : m_acc) { meanRe += s.real(); meanIm += s.imag(); }
-    meanRe /= m_fftSize;
-    meanIm /= m_fftSize;
-
+    // Subtract the running DC estimate, not this frame's own mean: a strong
+    // off-bin tone has a non-zero frame mean, which would draw a centre line.
+    // One estimate per frame: a T/R switch falls inside the TX envelope's ramp,
+    // where the DC is in transition anyway.
+    const Dc& dc = dcTransmitting() ? m_txDc : m_rxDc;
     auto* in = static_cast<fftw_complex*>(m_in);
     for (int n = 0; n < m_fftSize; ++n) {
         const double w = m_window[static_cast<std::size_t>(n)];
-        in[n][0] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].real()) - meanRe) * w;
-        in[n][1] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].imag()) - meanIm) * w;
+        in[n][0] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].real()) - dc.re) * w;
+        in[n][1] = (static_cast<double>(m_acc[static_cast<std::size_t>(n)].imag()) - dc.im) * w;
     }
 
     fftw_execute(static_cast<fftw_plan>(m_plan));

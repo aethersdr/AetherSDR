@@ -216,6 +216,9 @@ IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
                              : QVariant());
         reading("forwardPowerRaw", QStringLiteral("Forward (raw counts)"),     r.forwardPowerRaw);
         reading("reversePowerRaw", QStringLiteral("Reverse (raw counts)"),     r.reversePowerRaw);
+        put("paCurrentA", QStringLiteral("PA current (A)"),
+            r.biasCurrentRaw ? QVariant(hl2PaCurrentAmps(*r.biasCurrentRaw))
+                             : QVariant());
         reading("biasCurrentRaw",  QStringLiteral("PA bias (raw counts)"),     r.biasCurrentRaw);
         reading("txFifoFillMsbs",  QStringLiteral("TX FIFO fill (0-127, coarse)"),
                 r.txFifoFillMsbs);

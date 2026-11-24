@@ -126,7 +126,7 @@ Make some noise, add a voice to listen to, then let AetherSDR's noise reduction 
 
    **You should hear** a voice in the noise. Hover over any source for a tooltip that explains the real-world cause.
 
-3. Choose **Settings → AetherRX...**. On the **AetherNR** tab, click **NNR**.
+3. Choose **Tools → AetherRX...**. On the **AetherNR** tab, click **NNR**.
 
    **You should see** the **NNR** button light and the **AetherNR** stage's tick box become ticked. **You should hear** the noise drop behind the voice.
 
@@ -156,9 +156,9 @@ See [Panadapter Controls](./panadapter-controls.md) and [Themes and Theme Editor
 
 *The Save Memory dialog, opened with Add Memory on the Memory panel.*
 
-<img src="/img/screens/first-session-saved-status.png" width="520" alt="The left end of the status bar reading Saved &quot;My first memory&quot; to memories." />
+<img src="/img/screens/first-session-saved-status.png" width="520" alt="A Saved &quot;My first memory&quot; to memories notice above the visible status-bar controls." />
 
-*After Save, the status bar confirms the memory.*
+*After Save, a small notice confirms the memory above the status bar.*
 
 1. In the same button column, click **Memory**, then **Add Memory**.
 

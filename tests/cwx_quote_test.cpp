@@ -1,6 +1,7 @@
 // Socket-free behavioral checks against the published FlexLib 4.3.16 CWX.cs:
 // Send/Insert/SaveMacro substitute quotes with 0x1e; StatusUpdate reverses it.
 // AetherSDR currently exposes send and macro operations, but no insert verb.
+#include "core/backends/flex/FlexCwxStatus.h"
 #include "models/CwxModel.h"
 #include "CwxControlTestFixture.h"
 #include "core/backends/flex/CommandParser.h"
@@ -35,7 +36,7 @@ void feedStatus(CwxModel& model, const QByteArray& payload)
         QString::fromUtf8(QByteArray("S12345678|cwx ") + payload + '\n'));
     check(message.type == MessageType::Status && message.object == "cwx",
           "real command parser routes CWX status");
-    model.applyStatus(message.kvs);
+    model.applyStatusDelta(flexCwxStatus(message.kvs));
 }
 }
 
@@ -139,7 +140,7 @@ int main(int argc, char** argv)
     }
     for (bool denyAvailability : {true, false}) {
         CwxModel model;
-        model.applyStatus({{"macro1", "\"CQ\""}});
+        model.applyStatusDelta(flexCwxStatus({{"macro1", "\"CQ\""}}));
         if (denyAvailability) {
             model.setSendAvailability([] { return false; });
         } else {
@@ -167,7 +168,7 @@ int main(int argc, char** argv)
         auto model = std::make_unique<CwxModel>();
         const QPointer<CwxModel> original(model.get());
         QObject::connect(model.get(), &CwxModel::charSent, [&] { model.reset(); });
-        original->applyStatus({{"sent", "1"}, {"wpm", "30"}});
+        original->applyStatusDelta(flexCwxStatus({{"sent", "1"}, {"wpm", "30"}}));
         check(!original, "progress notification may retire its model before more status fields");
     }
     return failures == 0 ? 0 : 1;

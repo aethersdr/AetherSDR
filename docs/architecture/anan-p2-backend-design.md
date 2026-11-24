@@ -304,7 +304,9 @@ every client, needing a physical power cycle, reproduced three times with
 `kill` on the client process. Whether `p2app` behaves the same way when its peer vanishes is
 **not yet established**. Phase 1a should determine it deliberately rather than by
 accident, and if it does, P2 needs an async-signal-safe stop path of its own — a
-High Priority packet with `run` clear, sent from a signal handler.
+High Priority packet with `run` clear, sent from a signal handler. Both app
+shells install that handler already (`core/FatalSignalRelease.h`, #7163); the
+backend registers its stop there, as the HL2 does when it arms.
 
 ### 2.9 Clean-room provenance
 

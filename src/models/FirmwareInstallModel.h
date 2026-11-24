@@ -58,19 +58,33 @@ public:
         QString hidPath;   // running firmware: its USB HID device
     };
 
+    // Devices in download mode (serial ports).
+    using LoaderSource = std::function<QList<Loader>()>;
+    // Controllers running firmware: by default the relay's own device list
+    // (it rescans while stopped), so there is one enumeration and one
+    // selected device; with no relay, hidapi's.
+    using HidSource = std::function<QList<Ctr2HidPort::DeviceInfo>()>;
+    struct DeviceSources {
+        LoaderSource loaders;
+        HidSource hid;
+    };
+    // Tests: the sources the two-argument constructor uses from now on in
+    // place of the system's serial port list and hidapi (the relay's list is
+    // still used when there is a relay), so a test that forgets to inject its
+    // own never enumerates a real device.
+    static void setDefaultDeviceSourcesForTesting(DeviceSources sources);
+
+    // With the system's device lists (or the ones set for tests).
     explicit FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* parent = nullptr);
+    // With these sources from the start: no poll ever uses another.
+    FirmwareInstallModel(Ctr2ProxyModel* relay, DeviceSources sources, QObject* parent = nullptr);
     ~FirmwareInstallModel() override;
 
     // Fetches the release list and starts watching for the device.
     void begin();
 
-    // Tests: the devices found, and the device a job opens.
-    using LoaderSource = std::function<QList<Loader>()>;
-    // Controllers running firmware: by default the relay's own device list
-    // (it rescans while stopped), so there is one enumeration and one
-    // selected device.
-    using HidSource = std::function<QList<Ctr2HidPort::DeviceInfo>()>;
-    // Tests: also forgets any CTR2-Max seen through the sources it replaces.
+    // Tests: the devices found, and the device a job opens. Also forgets any
+    // CTR2-Max seen through the sources it replaces.
     void setDeviceSources(LoaderSource loaders, HidSource hid);
     void setJobTargetOpener(EspFirmwareJob::TargetOpener opener);
     void setReleaseForTesting(const EspFirmwareManifest& manifest,

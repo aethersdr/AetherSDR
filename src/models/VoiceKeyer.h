@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/TxCoordinator.h"
+
 #include <QObject>
 #include <QString>
 #include <QVector>
@@ -20,7 +22,7 @@ struct VoiceKeyerRecording {
 // DvkModel ("Core: voice-keyer slots/status + rec/preview/playback intent").
 // DvkModel is the radio-hosted implementation — SmartSDR `dvk` verbs,
 // recordings stored on the radio, SmartSDR+ required. RFC #4214's client-side
-// keyer is the second — recordings stored on this computer, no licence. The
+// keyer is the second — recordings stored on this computer, no license. The
 // panel sees only this interface, so one surface serves both.
 class VoiceKeyer : public QObject {
     Q_OBJECT
@@ -40,6 +42,11 @@ public:
     virtual void previewStart(int id) = 0;
     virtual void previewStop(int id) = 0;
     virtual void playbackStart(int id) = 0;  // on-air
+    // On-air playback started by an outside input (a MIDI or keyboard "Macro
+    // N"), carrying the request that input captured. The default — a keyer
+    // whose start is one immediate command — checks the request is still live
+    // and starts; a keyer that keys after a delay admits under it.
+    virtual void playbackStartFrom(int id, const TxCoordinator::Request& origin);
     virtual void playbackStop(int id) = 0;
     virtual void clear(int id) = 0;
     virtual void remove(int id) = 0;
@@ -49,6 +56,7 @@ public:
     // transferStatusChanged / transferFinished.
     virtual void importWav(int id, const QString& path) = 0;
     virtual void exportWav(int id, const QString& path) = 0;
+    virtual quint64 transferRevision() const { return 0; }
     virtual bool canTransferWav() const = 0;  // false: import/export unavailable
     virtual bool isTransferring() const = 0;
 

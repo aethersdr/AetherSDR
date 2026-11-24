@@ -4,27 +4,28 @@
 #include "core/backends/RadioCapabilities.h"
 
 #include <QHash>
+#include <QStringList>
 #include <QWidget>
 
+#include <array>
 #include <functional>
 
 class QCheckBox;
 class QComboBox;
 class QGroupBox;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QPushButton;
-class QTableWidget;
+class QTabBar;
 
 namespace AetherSDR {
 
 class ControlAvailabilityRegistry;
 class RadioModel;
 
-// Radio Setup → Time: the radio's own NTP time sources (SmartSDR 4.3.16 on the
-// BigBend platform: FLEX-8400/8600, Aurora, ML-9600/MLS-9601, CL-9300/CLS-9301).
-// Every row is what the radio last reported; Add, Edit, Remove and the Enabled
-// box send a request and the table follows the radio's status (Principle II). Unavailable radios keep the page, dimmed with a reason.
+// Radio Setup → Time: radio-authoritative monitoring and ten configuration slots.
+// Slot numbers are local navigation, never radio source identifiers.
 class NtpSourcesPage final : public QWidget {
     Q_OBJECT
 public:
@@ -50,6 +51,10 @@ public:
 private:
     void rebuild();
     void updateButtons();
+    void selectTab();
+    bool hasAddDraft() const;
+    bool editorHasChanges() const;
+    void updateDashboard();
     void setMessage(const QString& text, const QString& token);
     QString selectedId() const;
     const NtpSourceState* source(const QString& id) const;
@@ -70,10 +75,20 @@ private:
     RadioModel& m_model;
     ControlAvailabilityRegistry* m_availability;
     QWidget* m_body;
-    QTableWidget* m_table;
+    QTabBar* m_tabs;
+    QStringList m_slots;
+    QLabel* m_serviceState;
+    QLabel* m_activeSource;
+    QLabel* m_health;
+    QLabel* m_gps;
+    QLabel* m_gpsDetails;
+    QFrame* m_gpsCard{nullptr};
+    QLabel* m_sourceState;
+    QLabel* m_stratum;
+    QLabel* m_reach;
+    std::array<QLabel*, 8> m_polls{};
+    QCheckBox* m_enabled;
     QLabel* m_count;
-    QPushButton* m_add;
-    QPushButton* m_edit;
     QPushButton* m_remove;
     QGroupBox* m_editor;
     QLineEdit* m_id;
@@ -83,7 +98,7 @@ private:
     QCheckBox* m_prefer;
     QLabel* m_editorIssue;
     QPushButton* m_save;
-    QPushButton* m_cancel;
+    QPushButton* m_reset;
     QLabel* m_message;
     QLabel* m_reason;
     Confirm m_confirm;
@@ -93,7 +108,17 @@ private:
     std::function<bool()> m_editorSessionCurrent;
     bool m_adding{false};
     bool m_rebuilding{false};
-    QString m_pendingSelection;
+    QString m_editorId;
+    NtpSourceDefinition m_editorBaseline;
+    int m_editorTab{0};
+    struct EditorDraft {
+        NtpSourceDefinition definition;
+        bool adding{false};
+    };
+    QHash<int, EditorDraft> m_drafts;
+    // Accepted commands do not establish live state: hold the slot until status.
+    QHash<QString, NtpSourceDefinition> m_creates;
+    std::function<bool()> m_sessionCurrent;
 };
 
 } // namespace AetherSDR

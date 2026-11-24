@@ -22,8 +22,13 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QMetaObject>
 #include <QProcess>
 #include <QSignalSpy>
+#include <QTest>
+#include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -32,6 +37,8 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace AetherSDR::anan {
 // AnanBackend's friend: drives the client-snapshot handler with no client and
@@ -52,6 +59,55 @@ public:
 
 // AnanBackend's friend: the supply rail's meter definition and its averaging
 // window, against an injected clock rather than a status packet every 200 ms.
+// A probe that records its start and opens nothing.
+class RecordingProbe : public ReconnectBusyProbe {
+public:
+    using ReconnectBusyProbe::ReconnectBusyProbe;
+    int starts = 0;
+    void start(const QHostAddress&, quint16, const QByteArray&, Parse, Done done) override
+    {
+        ++starts;
+        armForTest(std::move(done));
+    }
+};
+
+struct P2ClientTestAccess {
+    static void setRunning(P2Client& client, bool running) { client.m_running = running; }
+    static void setLinkUp(P2Client& client, bool up) { client.m_linkUp = up; }
+    static void silence(P2Client& client, qint64 ms) { client.checkStreamSilence(ms); }
+    static quint64 txBytes(const P2Client& client) { return client.m_txBytes; }
+    static constexpr int kSilenceMs = P2Client::kStreamSilenceMs;
+};
+
+// The automatic-reconnect busy probe without a socket: arm it as connectRadio()
+// would, then hand it the radio's answer.
+class AnanBusyProbeTestAccess {
+public:
+    static void arm(AnanBackend& backend, const RadioConnectRequest& request)
+    {
+        if (!backend.m_busyProbe)
+            backend.m_busyProbe = new ReconnectBusyProbe(&backend);
+        backend.m_busyProbeRequest = request;
+        backend.m_busyProbe->armForTest(
+            [&backend](std::optional<bool> streaming) { backend.finishBusyProbe(streaming); });
+    }
+    static void answer(AnanBackend& backend, std::optional<bool> streaming)
+    {
+        backend.m_busyProbe->answerForTest(streaming);
+    }
+    static RecordingProbe* installRecordingProbe(AnanBackend& backend)
+    {
+        delete backend.m_busyProbe;
+        auto* probe = new RecordingProbe(&backend);
+        backend.m_busyProbe = probe;
+        return probe;
+    }
+    static bool probing(const AnanBackend& backend)
+    {
+        return backend.m_busyProbe && backend.m_busyProbe->active();
+    }
+};
+
 class AnanSupplyRailTestAccess {
 public:
     static void defineMeters(AnanBackend& backend) { backend.defineMeters(); }
@@ -61,6 +117,69 @@ public:
     }
     static P2Client* client(AnanBackend& backend) { return backend.m_client; }
     static int samples(const AnanBackend& backend) { return backend.m_supplyRailSamples; }
+};
+
+// AnanBackend's friend: a receiver's open without a radio or a real DSP build.
+// holdDspBuilds() stops the build thread before anything is queued on it, so a
+// build is never run (cold FFTW planning takes seconds); finishOpen() stands in
+// for its completion, which is what the backend acts on.
+class AnanReceiverTestAccess {
+public:
+    static void holdDspBuilds(AnanBackend& backend)
+    {
+        backend.m_dspBuildThread->quit();
+        backend.m_dspBuildThread->wait();
+    }
+    static quint64 openBuild(const AnanBackend& backend, int receiver)
+    {
+        return backend.m_receivers[static_cast<std::size_t>(receiver)].openBuild;
+    }
+    static void finishOpen(AnanBackend& backend, int receiver, quint64 build, bool ok,
+                           const QString& error = {})
+    {
+        backend.finishReceiverOpen(receiver, build, ok, error);
+    }
+    static bool isOpen(const AnanBackend& backend, int receiver)
+    {
+        return backend.m_receivers[static_cast<std::size_t>(receiver)].open;
+    }
+    static bool rateChanging(const AnanBackend& backend) { return backend.m_rateChanging; }
+    // A zoom's chain build ending, as the build thread would end it.
+    static void finishZoom(AnanBackend& backend, int receiver, bool ok)
+    {
+        backend.finishRateChange(receiver, backend.m_connectGeneration, ok,
+                                 ok ? QString() : QStringLiteral("no channel"));
+    }
+    static int liveSettleMs() { return AnanBackend::kRateChangeLiveSettleMs; }
+    // A connect's build of a restored receiver failing while RX1's is still
+    // pending, so the session is not started (it would open a socket).
+    static void failReopenAtConnect(AnanBackend& backend, int receiver, const QString& error)
+    {
+        backend.m_dspSetupPending = 2;
+        backend.finishDspSetup(receiver, backend.m_connectGeneration, false, error);
+    }
+    static void feedMeter(AnanBackend& backend, int receiver, float dbfs)
+    {
+        backend.onDspMeter(receiver, dbfs);
+    }
+    static int attenuationDb(const AnanBackend& backend, int adc)
+    {
+        return backend.attenuationDbForAdc(adc);
+    }
+    // A receiver's RIT (on, offset) and NR (on, level), as the backend holds them.
+    static std::pair<std::pair<bool, int>, std::pair<bool, int>> ritAndNr(
+        const AnanBackend& backend, int receiver)
+    {
+        const auto& rx = backend.m_receivers[static_cast<std::size_t>(receiver)];
+        return {{rx.ritEnabled, rx.ritOffsetHz}, {rx.nrEnabled, rx.nrLevel}};
+    }
+    // Every DSP lives on the I/O thread, so one blocking no-op there runs
+    // whatever an open or a zoom queued ahead of it, including the hand-off
+    // to the build thread, before the backend is destroyed.
+    static void settle(AnanBackend& backend)
+    {
+        QMetaObject::invokeMethod(backend.rx1().dsp, [] {}, Qt::BlockingQueuedConnection);
+    }
 };
 }  // namespace AetherSDR::anan
 
@@ -81,6 +200,12 @@ namespace {
 class ConnectedAnan : public AnanBackend {
 public:
     bool isConnected() const override { return true; }
+};
+// Records each connect request and opens nothing.
+class RecordingAnan : public AnanBackend {
+public:
+    std::vector<RadioConnectRequest> requests;
+    void connectRadio(const RadioConnectRequest& request) override { requests.push_back(request); }
 };
 }  // namespace
 
@@ -114,6 +239,9 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(40)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(35),
               "the AGC mode, AGC-T and AGC-off level survive a process boundary");
+        check(backend.ritForTest() == std::make_pair(true, -350)
+                  && backend.noiseReductionForTest() == std::make_pair(true, 70),
+              "RIT and NR survive a process boundary");
         return g_failures == 0 ? 0 : 1;
     }
 
@@ -151,6 +279,24 @@ int main(int argc, char** argv)
         check(!AnanBackend::isKnownModeString("bogus"),
               "a mode modeFromString() does not map is REFUSED, not silently demodulated as SSB");
         check(!AnanBackend::isKnownModeString(""), "an empty mode is not a mode");
+        for (const char* m : {"WBFM", "WFM", "DRM", "bogus", ""})
+            check(!AnanBackend::isOfferedModeString(QString::fromLatin1(m)),
+                  "a known mode no record offers (WBFM, DRM) is not accepted");
+        for (const char* m : {"LSB", "usb", "NFM", "CWU", "RTTY", "DIGL"})
+            check(AnanBackend::isOfferedModeString(QString::fromLatin1(m)),
+                  "an offered mode or its alias is accepted");
+        {
+            AnanBackend live;
+            live.setSliceMode(0, QStringLiteral("LSB"));
+            live.setSliceMode(0, QStringLiteral("WBFM"));
+            check(live.modeForTest() == QStringLiteral("LSB"),
+                  "setSliceMode() refuses WBFM and keeps the receiver's mode");
+            RestoredRadioState wbfm;
+            wbfm.mode = QStringLiteral("WFM");
+            live.applyRestoredState(wbfm);
+            check(live.restoredModeForTest().isEmpty(),
+                  "a saved WBFM session is not restored: the first-connect default stands");
+        }
     }
 
     // ---- restorable frequency: bounded by the DDS encoding, Nyquist ----
@@ -206,7 +352,13 @@ int main(int argc, char** argv)
         check(!c.canCreateSlices, "ANAN fixed receiver does not expose independent slice creation");
         check(c.family == QStringLiteral("anan"), "family is anan");
         check(c.model == QStringLiteral("ANAN-G2"), "model is ANAN-G2");
-        check(c.maxSlices == 1 && c.maxPanadapters == 1, "single slice, single pan in this phase");
+        check(c.maxSlices == 2 && c.maxPanadapters == 2,
+              "two receivers, a slice and a pan each: RX1 and RX2");
+        check(c.panLifecycleControl
+                  && c.panLifecycleControl->creation == PanLifecycleControl::Creation::Native
+                  && c.panLifecycleControl->supports(PanLifecycleAction::Create)
+                  && c.panLifecycleControl->supports(PanLifecycleAction::Remove),
+              "RX2 opens and closes with its pan, published before createPanadapter() returns");
         check(!c.canTransmit, "canTransmit is false -- P2Client has no PTT capability");
         check(c.hostModulates, "hostModulates true -- client-side WDSP, like the HL2");
         check(!c.radioOwnsDbmScale, "client computes the dBm scale");
@@ -221,13 +373,59 @@ int main(int argc, char** argv)
                   && c.backendPanAveraging->msPerAverageStep == 10,
               "backendPanAveraging engaged, 10 ms per FFT AVG step -- the WDSP analyzer averages");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,
-              "tuning range not reported -- no verified G2 range yet, not a guess");
+              "desktop tuning range not reported -- sensitivity across the span is unmeasured");
+        check(c.sliceFrequencyControl.authority == SliceFrequencyControl::Authority::Engine
+                  && c.sliceFrequencyControl.minimumHz == 10'000
+                  && c.sliceFrequencyControl.maximumHz == 61'430'000,
+              "headless tuning bounds are the measured 10 kHz - 61.43 MHz span");
+        check(AnanBackend::isRestorableFrequencyHz(
+                  static_cast<double>(c.sliceFrequencyControl.minimumHz))
+                  && AnanBackend::isRestorableFrequencyHz(
+                      static_cast<double>(c.sliceFrequencyControl.maximumHz)),
+              "both headless edges are tunable: inside (0, Nyquist), below phaseWord() aliasing");
+        // The G2 front-panel verbs' declarations.
+        {
+            using Feature = ReceiveDspControl::Feature;
+            const auto& dsp = c.receiveDspControl;
+            bool everyMode = dsp.has_value();
+            for (const QString& mode : AnanBackend::publishedModeStrings()) {
+                for (const Feature f : {Feature::Agc, Feature::Nb, Feature::Nr, Feature::Rit})
+                    everyMode = everyMode && dsp->supports(f, mode);
+            }
+            check(everyMode && dsp->authority == SliceFrequencyControl::Authority::Engine
+                      && dsp->maximumRitOffsetHz == AnanBackend::kMaxRitOffsetHz,
+                  "ANAN declares AGC, NB, NR and RIT in every offered mode, engine authority");
+            check(!dsp->features.contains(Feature::Anf) && !dsp->features.contains(Feature::Apf)
+                      && !dsp->features.contains(Feature::ManualNotch),
+                  "and nothing it does not run: no ANF, APF or manual notch");
+            check(c.receivePanRfGainControl && c.receivePanRfGainControl->minimumDb == -kMaxStepAttenuationDb
+                      && c.receivePanRfGainControl->maximumDb == 0 && c.receivePanRfGainControl->stepDb == 1,
+                  "RF gain is the negated 0-31 dB step attenuator, 1 dB steps");
+            // The widest declared edge plus the BFO it carries (CW) and the
+            // largest RIT must stay inside the 48 kHz DSP rate's +-24 kHz.
+            int widestEdgeHz = 0;
+            for (const auto& f : c.receiveFilterControl->modes) {
+                const int bfo = (f.mode == QLatin1String("CW") || f.mode == QLatin1String("CWL"))
+                    ? c.cwPitchMaxHz : 0;
+                widestEdgeHz = std::max({widestEdgeHz, std::abs(f.minimumLowHz) + bfo,
+                                         std::abs(f.maximumHighHz) + bfo});
+            }
+            check(widestEdgeHz == 12'000 && widestEdgeHz + AnanBackend::kMaxRitOffsetHz < 24'000,
+                  "the RIT bound keeps the shifted passband inside the 48 kHz DSP rate");
+            check(AnanBackend::detectorShiftHz(QStringLiteral("USB"), 600, true, 500) == 500.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("USB"), 600, false, 500) == 0.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("CW"), 600, true, 500) == -100.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("CWL"), 600, true, -200) == 400.0,
+                  "the detector shift is RIT (when on) minus the CW BFO");
+        }
         check(c.clientSettingsDomains
                   == (RadioCapabilities::ClientSettingsDomain::RfGain
                       | RadioCapabilities::ClientSettingsDomain::Tuning
                       | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel
-                      | RadioCapabilities::ClientSettingsDomain::Agc),
-              "RF gain, tuning, radio output level AND AGC restore are declared -- "
+                      | RadioCapabilities::ClientSettingsDomain::Agc
+                      | RadioCapabilities::ClientSettingsDomain::Receivers),
+              "RF gain, tuning, radio output level, AGC AND the receivers (each one's "
+              "RIT/NR, RX2's own state) are declared -- "
               "this radio reports none of them, so the client is its only memory");
         bool scaleMatches = c.agcGainScale.has_value();
         for (const int knob : {0, 71, 100}) {
@@ -243,6 +441,175 @@ int main(int argc, char** argv)
               "hasHostNoiseBlanker true -- WDSP ANB runs in AnanRxDsp, so the "
               "VFO's NB button has something to drive");
         check(!backend.isConnected(), "not connected before connectRadio() is ever called");
+    }
+
+    // ---- RIT: one intent, echoed, clamped to the declared bound ----
+    {
+        AnanBackend backend;
+        SliceDelta seen;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&](int, const SliceDelta& d) { seen = d; });
+        backend.setSliceRit(0, true, -350);
+        check(seen.ritOn == true && seen.ritFreq == -350, "setSliceRit() echoes enable and offset together");
+        backend.setSliceRit(0, true, 50'000);
+        check(seen.ritFreq == AnanBackend::kMaxRitOffsetHz, "an offset past the bound is clamped, not honored");
+        check(backend.requestSliceControl(0, {SliceControlRequest::Field::Rit,
+                                              IncrementalTuning{false, -120}})
+                  == ReceiveDispatch::Dispatched
+                  && seen.ritOn == false && seen.ritFreq == -120,
+              "the typed RIT request (desktop and headless) reaches the same state");
+    }
+
+    // ---- an automatic reconnect never takes the radio from another client ----
+    // Protocol 2 obeys the last controller, so two at once chatter the relays.
+    // An unparseable host stands for the connect itself: startConnect() refuses
+    // it with an error at once, which is how "the connect ran" is observed here
+    // without opening a socket.
+    {
+        check(ReconnectBusyProbe::mayProceed(std::nullopt)
+                  && ReconnectBusyProbe::mayProceed(false)
+                  && !ReconnectBusyProbe::mayProceed(true),
+              "only a reply saying the radio is streaming stops a reconnect; silence never does");
+        check(!ReconnectBusyProbe::mayProceed(std::nullopt, ReconnectBusyProbe::Silence::Wait)
+                  && ReconnectBusyProbe::mayProceed(false, ReconnectBusyProbe::Silence::Wait)
+                  && !ReconnectBusyProbe::mayProceed(true, ReconnectBusyProbe::Silence::Wait),
+              "with Silence::Wait (the HL2's rule) only an idle reply proceeds");
+        AnanBackend backend;
+        QSignalSpy errors(&backend, &IRadioBackend::connectionError);
+        QSignalSpy warnings(&backend, &IRadioBackend::configurationWarning);
+        RadioConnectRequest retry;
+        retry.host = QStringLiteral("not-an-address");
+        retry.automaticReconnect = true;
+
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, true);
+        check(errors.isEmpty() && warnings.count() == 1 && !AnanBusyProbeTestAccess::probing(backend),
+              "a busy radio: no connect, and the operator is told once");
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, true);
+        check(errors.isEmpty() && warnings.count() == 1,
+              "still busy on the next retry: still no connect, and no second warning");
+        AnanBusyProbeTestAccess::answer(backend, false);
+        check(errors.isEmpty(), "a stale answer for a finished probe does nothing");
+
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, false);
+        check(errors.count() == 1, "a free radio: the reconnect goes ahead");
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, std::nullopt);
+        check(errors.count() == 2, "no reply in time: the reconnect goes ahead (fail open)");
+
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        backend.disconnectRadio();
+        AnanBusyProbeTestAccess::answer(backend, false);
+        check(errors.count() == 2 && !AnanBusyProbeTestAccess::probing(backend),
+              "a disconnect during the probe cancels the reconnect");
+
+        // The previous session stops before the probe: a client left running
+        // after a connect timeout would otherwise keep sending this radio its
+        // settings while a busy answer starts nothing new.
+        {
+            AnanBackend stale;
+            RecordingProbe* probe = AnanBusyProbeTestAccess::installRecordingProbe(stale);
+            P2Client* client = AnanSupplyRailTestAccess::client(stale);
+            P2ClientTestAccess::setRunning(*client, true);
+            RadioConnectRequest again;
+            again.host = QStringLiteral("192.0.2.10");   // TEST-NET-1, and the probe opens nothing
+            again.automaticReconnect = true;
+            stale.connectRadio(again);
+            check(probe->starts == 1 && !client->isRunning(),
+                  "an automatic reconnect stops the previous session before it probes");
+            probe->answerForTest(true);
+            check(!client->isRunning(), "and a busy answer leaves it stopped");
+        }
+
+        RadioConnectRequest manual = retry;
+        manual.automaticReconnect = false;
+        backend.connectRadio(manual);
+        check(errors.count() == 3 && !AnanBusyProbeTestAccess::probing(backend),
+              "an operator's connect is not probed");
+    }
+
+    // ---- a session that went silent ends, without stopping the new owner ----
+    // p2app sends everything to whichever client spoke last, so silence while
+    // our keepalives still go out means another client has the radio.
+    {
+        P2Client client;
+        QSignalSpy down(&client, &P2Client::linkDown);
+        P2ClientTestAccess::setRunning(client, true);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs + 500);
+        check(client.isRunning() && down.isEmpty(),
+              "a session that never came up is the connect timeout's, not the silence watchdog's");
+        P2ClientTestAccess::setLinkUp(client, true);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs - 1);
+        check(client.isRunning() && down.isEmpty(), "a shorter silence leaves a live session alone");
+        const quint64 sent = P2ClientTestAccess::txBytes(client);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs);
+        check(!client.isRunning() && down.count() == 1,
+              "3 s of silence on a live session ends it and reports the link down");
+        check(P2ClientTestAccess::txBytes(client) == sent,
+              "and sends the radio nothing: a stop now would stop the client that has it");
+    }
+
+    // ---- RadioModel marks its automatic retry, and only that ----
+    {
+        RadioModel radio;
+        auto owned = std::make_unique<RecordingAnan>();
+        RecordingAnan* backend = owned.get();
+        radio.setBackendForTest(std::move(owned), QStringLiteral("anan"));
+        RadioInfo info;
+        info.family = QStringLiteral("anan");
+        info.serial = QStringLiteral("ANAN-RECONNECT");
+        info.address = QHostAddress(QStringLiteral("192.0.2.10"));   // TEST-NET-1: never contacted
+        info.port = 1024;
+        radio.connectToRadio(info);
+        radio.triggerAutoReconnectForTest();
+        check(backend->requests.size() == 2 && !backend->requests[0].automaticReconnect
+                  && backend->requests[1].automaticReconnect
+                  && backend->requests[1].host == QStringLiteral("192.0.2.10"),
+              "the operator's connect is not marked; RadioModel's automatic retry is");
+    }
+
+    // ---- the G2's own speaker: declared, accepted, reported ----
+    {
+        AnanBackend backend;
+        check(backend.capabilities().radioSpeakerControl
+                  && backend.capabilities().radioSpeakerControl->authority
+                         == SliceFrequencyControl::Authority::Engine,
+              "ANAN declares its own speaker, engine authority");
+        std::optional<bool> reported;
+        QObject::connect(&backend, &IRadioBackend::radioSpeakerAudioReported,
+                         [&](bool on) { reported = on; });
+        check(backend.requestRadioSpeakerAudio(true) == ReceiveDispatch::Dispatched && reported == true,
+              "requestRadioSpeakerAudio(true) is taken and reported");
+        check(backend.requestRadioSpeakerAudio(false) == ReceiveDispatch::Dispatched && reported == false,
+              "and off again");
+    }
+
+    // ---- the speaker report survives a reconnect over a live session ----
+    // connectRadio() reports before the old session's queued linkDown lands, and
+    // RadioModel clears its report on disconnected() (onDisconnected); the next
+    // session's linkUp must report the speaker again.
+    {
+        AnanBackend backend;
+        P2Client* client = AnanSupplyRailTestAccess::client(backend);
+        backend.requestRadioSpeakerAudio(true);
+        QSignalSpy reports(&backend, &IRadioBackend::radioSpeakerAudioReported);
+        emit client->linkDown();   // the old session's, arriving late
+        emit client->linkUp();     // the new session
+        check(!reports.isEmpty() && reports.last().at(0).toBool(),
+              "the new session's linkUp reports the speaker state again");
+    }
+
+    // ---- the blanker publishes at once, like every other receive setter ----
+    {
+        AnanBackend backend;
+        std::optional<bool> nb;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&](int, const SliceDelta& d) { if (d.nb) nb = d.nb; });
+        backend.setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Impulse, 60,
+                                     AetherSDR::NoiseBlankerFill::Zero);
+        check(nb == true, "setSliceNoiseBlanker() echoes the blanker immediately");
     }
 
     // ---- setSliceNoiseBlanker: live state for connect and rate change ----
@@ -385,6 +752,530 @@ int main(int argc, char** argv)
                   && static_cast<int>(config.noiseBlankerFill)
                       == static_cast<int>(AetherSDR::NoiseBlankerFill::Interpolate),
               "and the live noise blanker");
+    }
+
+    // ---- each seam call reaches its own receiver, and no other ----
+    // Slice i and pan "anan-i" are receiver i, one per kReceiverRoutes entry.
+    // The first id past the table names no receiver, so a call addressed to
+    // it must change nothing. RX1's state is read back through its DSP
+    // config, the state a connect or a rate change would build from.
+    {
+        AnanBackend backend;
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+        backend.setSliceAgc(0, QStringLiteral("slow"), 40);
+        backend.setPanRfGain(QStringLiteral("anan-0"), -6);
+        const AnanRxDsp::Config before = backend.liveRxConfigForTest();
+
+        const int absent = static_cast<int>(kReceiverRoutes.size());
+        const QString absentPan = QStringLiteral("anan-%1").arg(absent);
+        backend.setSliceMode(absent, QStringLiteral("CWU"));
+        backend.setSliceFilter(absent, -50, 50);
+        backend.setSliceAgc(absent, QStringLiteral("fast"), 90);
+        backend.requestSliceAgc(absent, {SliceAgcRequest::Field::OffLevel, QStringLiteral("fast"),
+                                         90, 80, SliceAgcRequest::Origin::Operator});
+        backend.setSliceNoiseBlanker(absent, AetherSDR::NoiseBlankerKind::Impulse, 70,
+                                     AetherSDR::NoiseBlankerFill::Interpolate);
+        const double freqBefore = backend.currentOperatingState().rfFrequencyHz;
+        backend.setSliceFrequency(absent, 7'074'000.0);
+        backend.setPanCenter(absentPan, 7'074'000.0, IRadioBackend::PanCenterIntent::Range);
+        backend.setPanRfGain(absentPan, -20);
+
+        const AnanRxDsp::Config after = backend.liveRxConfigForTest();
+        check(backend.modeForTest() == QStringLiteral("LSB") && after.mode == before.mode
+                  && after.filterLowHz == before.filterLowHz
+                  && after.filterHighHz == before.filterHighHz,
+              "a mode or filter for a slice this backend does not have leaves RX1's alone");
+        check(after.agcMode == before.agcMode
+                  && after.maximumAgcGainDb == before.maximumAgcGainDb
+                  && after.agcFixedGainDb == before.agcFixedGainDb,
+              "an AGC edit for a missing slice leaves RX1's AGC alone");
+        check(!backend.noiseBlankerOnForTest(),
+              "a noise blanker for a missing slice leaves RX1's off");
+        check(backend.attenuationDbForTest() == 6,
+              "an RF gain for a pan this backend does not have leaves RX1's attenuator alone");
+        check(backend.currentOperatingState().rfFrequencyHz == freqBefore,
+              "a tune or pan center for a receiver this backend does not have leaves RX1's dial alone");
+        check(backend.requestSliceDsp(absent, {SliceDspRequest::Feature::Nb,
+                  SliceDspRequest::Field::Enabled, true, 80}) == ReceiveDispatch::Unsupported
+                  && backend.requestSliceAudio(absent, {SliceAudioRequest::Field::Gain, 37})
+                         == ReceiveDispatch::Unsupported,
+              "the typed DSP and audio routes refuse a slice this backend does not have");
+    }
+
+    // ---- the session asks the radio for one DDC per open receiver, RX1 first ----
+    // P2Client::Params::activeDdcs is authoritative when it is not empty, and
+    // its first entry is the link DDC that linkUp and the connect timeout key on.
+    {
+        AnanBackend backend;
+        const P2Client::Params params = backend.sessionParamsForTest();
+        check(params.activeDdcs.size() == 1,
+              "until RX2 opens, the session's DDC list is RX1's alone");
+        check(!params.activeDdcs.empty() && params.activeDdcs.front().ddc == kRx1Route.ddc
+                  && params.activeDdcs.front().adcIndex == kRx1Route.adc
+                  && params.activeDdcs.front().rateKsps == 48,
+              "RX1 comes first, on its routed DDC and ADC, at the first-connect rate");
+        check(kReceiverRoutes.size() == 2 && kReceiverRoutes[1].ddc == 3
+                  && kReceiverRoutes[1].adc == 1,
+              "RX2's route is DDC3 on ADC1, the RX2 jack");
+    }
+
+    // ---- a closed RX2 is not there: slice 1 and pan "anan-1" change nothing ----
+    {
+        AnanBackend backend;
+        int slice1Deltas = 0;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&slice1Deltas](int id, const SliceDelta&) { slice1Deltas += id == 1; });
+        QSignalSpy gains(&backend, &IRadioBackend::panRfGainChanged);
+        backend.setSliceMode(1, QStringLiteral("CWU"));
+        backend.setSliceFrequency(1, 3'700'000.0);
+        backend.setPanRfGain(QStringLiteral("anan-1"), -10);
+        backend.setCwPitch(700);
+        check(slice1Deltas == 0,
+              "no edit and no radio-wide push brings a closed RX2's slice back");
+        check(gains.isEmpty() && AnanReceiverTestAccess::attenuationDb(backend, 1) == 0,
+              "an RF gain for a closed RX2's pan leaves ADC1's attenuator alone");
+        check(!backend.createPanadapter(),
+              "no receiver opens before the radio is connected");
+    }
+
+    // ---- RX2 opens with its pan, on DDC3 and ADC1, where RX1 is ----
+    {
+        AnanBackend backend;
+        AnanReceiverTestAccess::holdDspBuilds(backend);
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+        backend.setSliceFrequency(0, 7'074'000.0);
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+
+        QSignalSpy pans(&backend, &IRadioBackend::panCenterBandwidthChanged);
+        QSignalSpy limits(&backend, &IRadioBackend::panBandwidthLimitsChanged);
+        std::optional<SliceDelta> rx2;
+        std::optional<MeterDef> rx2Meter;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&rx2](int id, const SliceDelta& d) { if (id == 1) rx2 = d; });
+        QObject::connect(&backend, &IRadioBackend::meterDefined,
+                         [&rx2Meter](const MeterDef& d) { if (d.sourceIndex == 1) rx2Meter = d; });
+        check(backend.createPanadapter(), "a connected backend opens RX2");
+
+        bool panSeen = false;
+        for (const auto& args : pans) {
+            panSeen = panSeen || (args.at(0).toString() == QStringLiteral("anan-1")
+                                  && qAbs(args.at(1).toDouble() - 7.074) < 1e-9);
+        }
+        check(panSeen, "pan anan-1 exists when createPanadapter() returns, centred where RX1 is");
+        check(!limits.isEmpty() && limits.last().at(0).toString() == QStringLiteral("anan-1"),
+              "and carries the DDC's zoom limits");
+        check(rx2 && rx2->panId == QStringLiteral("anan-1") && rx2->mode == QStringLiteral("LSB")
+                  && rx2->active == false,
+              "slice 1 is published on pan anan-1, in RX1's mode, and not active");
+        check(rx2Meter && rx2Meter->source == QStringLiteral("SLC")
+                  && rx2Meter->name == QStringLiteral("LEVEL") && rx2Meter->index == 3,
+              "RX2 gets its own level meter, SLC/LEVEL for slice 1");
+
+        check(backend.sessionParamsForTest().activeDdcs.size() == 1,
+              "RX2's DDC stays out of the session while its chain builds");
+        check(!backend.createPanadapter(),
+              "a second open is refused while RX2's chain builds, and there is no third route");
+
+        // A zoom asked for while RX2's chain builds waits for it, then runs.
+        backend.setPanBandwidth(QStringLiteral("anan-0"), 96'000.0);
+        check(!AnanReceiverTestAccess::rateChanging(backend),
+              "a zoom during RX2's open is held, not started on top of it");
+        AnanReceiverTestAccess::finishOpen(backend, 1,
+                                           AnanReceiverTestAccess::openBuild(backend, 1), true);
+        const P2Client::Params params = backend.sessionParamsForTest();
+        check(params.activeDdcs.size() == 2 && params.activeDdcs[0].ddc == 2
+                  && params.activeDdcs[1].ddc == 3 && params.activeDdcs[1].adcIndex == 1
+                  && params.activeDdcs[1].rateKsps == 48,
+              "once it is built, the session asks for DDC3 on ADC1 after RX1, at the rate "
+              "RX1 ran when RX2 opened");
+        check(AnanReceiverTestAccess::rateChanging(backend),
+              "and the held zoom starts once RX2's chain is in");
+        AnanReceiverTestAccess::settle(backend);
+    }
+
+    // ---- RX2 is its own receiver: slice, ADC, meter and active slice ----
+    {
+        AnanBackend backend;
+        AnanReceiverTestAccess::holdDspBuilds(backend);
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+        backend.createPanadapter();
+        AnanReceiverTestAccess::finishOpen(backend, 1,
+                                           AnanReceiverTestAccess::openBuild(backend, 1), true);
+
+        backend.setPanRfGain(QStringLiteral("anan-0"), -6);
+        QSignalSpy gains(&backend, &IRadioBackend::panRfGainChanged);
+        backend.setPanRfGain(QStringLiteral("anan-1"), -10);
+        check(AnanReceiverTestAccess::attenuationDb(backend, 1) == 10
+                  && backend.attenuationDbForTest() == 6,
+              "RX2's RF gain is ADC1's attenuator, and RX1's ADC0 keeps its own");
+        check(gains.count() == 1 && gains.at(0).at(0).toString() == QStringLiteral("anan-1"),
+              "and only RX2's pan reports it");
+
+        backend.setSliceMode(1, QStringLiteral("AM"));
+        check(backend.modeForTest() != QStringLiteral("AM"), "RX2's mode is not RX1's");
+
+        QSignalSpy meter(&backend, &IRadioBackend::meterUpdate);
+        AnanReceiverTestAccess::feedMeter(backend, 1, -90.0f);
+        check(meter.count() == 1 && meter.at(0).at(0).toString() == QStringLiteral("SLC1:LEVEL")
+                  && qAbs(meter.at(0).at(1).toDouble() + 80.0) < 1e-9,
+              "RX2's S-meter publishes as SLC1:LEVEL, with ADC1's 10 dB added back");
+
+        std::vector<std::pair<int, bool>> active;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&active](int id, const SliceDelta& d) {
+                             if (d.active) active.emplace_back(id, *d.active);
+                         });
+        backend.setActiveSlice(1);
+        check(active.size() == 2 && active[0] == std::make_pair(0, false)
+                  && active[1] == std::make_pair(1, true),
+              "selecting RX2 clears RX1's active flag itself, then sets RX2's");
+
+        // The app never calls setActiveSlice(): a click or `slice select`
+        // reaches the backend as SliceModel::setActive -> RadioModel::
+        // dispatchSliceControl -> requestSliceControl, which must clear the
+        // old receiver as setActiveSlice() does, or two slices read active.
+        using SF = SliceControlRequest::Field;
+        active.clear();
+        check(backend.requestSliceControl(0, {SF::ActiveSlice, true}) == ReceiveDispatch::LocalOnly
+                  && active.size() == 2 && active[0] == std::make_pair(1, false)
+                  && active[1] == std::make_pair(0, true),
+              "a selection through the seam clears the old receiver too, and sends nothing to the radio");
+        active.clear();
+        check(backend.requestSliceControl(1, {SF::ActiveSlice, true}) == ReceiveDispatch::LocalOnly
+                  && active.size() == 2 && active[0] == std::make_pair(0, false)
+                  && active[1] == std::make_pair(1, true),
+              "and back to RX2 the same way");
+        active.clear();
+        backend.setSliceFrequency(1, 3'701'000.0);
+        check(!active.empty() && active.back() == std::make_pair(1, true),
+              "RX2's next publish keeps it the active one");
+        active.clear();
+        check(backend.requestSliceControl(0, {SF::ActiveSlice, false}) == ReceiveDispatch::LocalOnly
+                  && active.empty(),
+              "a deselect request changes nothing");
+        AnanReceiverTestAccess::settle(backend);
+    }
+
+    // ---- RX2 closes with its pan; RX1's pan stays ----
+    {
+        AnanBackend backend;
+        AnanReceiverTestAccess::holdDspBuilds(backend);
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+        backend.setSliceFrequency(0, 7'074'000.0);
+        backend.createPanadapter();
+        AnanReceiverTestAccess::finishOpen(backend, 1,
+                                           AnanReceiverTestAccess::openBuild(backend, 1), true);
+        backend.setSliceFrequency(1, 3'700'000.0);
+        backend.setActiveSlice(1);
+
+        check(!backend.removePanadapter(QStringLiteral("anan-0")), "RX1's pan cannot be closed");
+        QSignalSpy slicesGone(&backend, &IRadioBackend::sliceRemoved);
+        QSignalSpy pansGone(&backend, &IRadioBackend::panRemoved);
+        QSignalSpy metersGone(&backend, &IRadioBackend::meterRemoved);
+        std::optional<bool> rx1Active;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&rx1Active](int id, const SliceDelta& d) {
+                             if (id == 0 && d.active) rx1Active = *d.active;
+                         });
+        check(backend.removePanadapter(QStringLiteral("anan-1")), "RX2's pan closes");
+        check(slicesGone.count() == 1 && slicesGone.at(0).at(0).toInt() == 1
+                  && pansGone.count() == 1 && pansGone.at(0).at(0).toString() == QStringLiteral("anan-1")
+                  && metersGone.count() == 1 && metersGone.at(0).at(0).toInt() == 3,
+              "closing RX2 withdraws slice 1, pan anan-1 and its level meter");
+        check(rx1Active == true, "the active slice falls back to RX1");
+        check(backend.sessionParamsForTest().activeDdcs.size() == 1,
+              "and the session is RX1's DDC alone again");
+
+        QSignalSpy meter(&backend, &IRadioBackend::meterUpdate);
+        AnanReceiverTestAccess::feedMeter(backend, 1, -90.0f);
+        check(meter.isEmpty(), "a closed RX2's late S-meter reading is dropped");
+
+        // Reopened, it keeps its own dial rather than RX1's.
+        backend.setSliceFrequency(0, 14'200'000.0);
+        QSignalSpy pans(&backend, &IRadioBackend::panCenterBandwidthChanged);
+        check(backend.createPanadapter(), "RX2 reopens");
+        bool ownDial = false;
+        for (const auto& args : pans) {
+            ownDial = ownDial || (args.at(0).toString() == QStringLiteral("anan-1")
+                                  && qAbs(args.at(1).toDouble() - 3.7) < 1e-9);
+        }
+        check(ownDial, "a reopened RX2 comes back on its own dial, not RX1's");
+        AnanReceiverTestAccess::settle(backend);
+    }
+
+    // ---- an open that does not finish, or fails ----
+    {
+        AnanBackend backend;
+        AnanReceiverTestAccess::holdDspBuilds(backend);
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+        backend.createPanadapter();
+        const quint64 first = AnanReceiverTestAccess::openBuild(backend, 1);
+        backend.removePanadapter(QStringLiteral("anan-1"));
+        backend.createPanadapter();
+        check(backend.sessionParamsForTest().activeDdcs.size() == 1,
+              "an RX2 closed and reopened waits for its new chain, so the close's "
+              "resends cannot enable its DDC early");
+        QSignalSpy slicesGone(&backend, &IRadioBackend::sliceRemoved);
+        AnanReceiverTestAccess::finishOpen(backend, 1, first, false, QStringLiteral("stale"));
+        check(slicesGone.isEmpty() && AnanReceiverTestAccess::isOpen(backend, 1),
+              "the build of an RX2 since closed and reopened finishes into nothing");
+
+        QSignalSpy failed(&backend, &IRadioBackend::sliceLifecycleFailed);
+        AnanReceiverTestAccess::finishOpen(backend, 1,
+                                           AnanReceiverTestAccess::openBuild(backend, 1), false,
+                                           QStringLiteral("no channel"));
+        check(failed.count() == 1 && failed.at(0).at(0).toString() == QStringLiteral("create")
+                  && failed.at(0).at(1).toInt() == 1,
+              "a failed build reports the create that failed");
+        check(slicesGone.count() == 1 && !AnanReceiverTestAccess::isOpen(backend, 1)
+                  && backend.sessionParamsForTest().activeDdcs.size() == 1,
+              "and closes RX2 again, leaving the session to RX1");
+        AnanReceiverTestAccess::settle(backend);
+    }
+
+    // ---- Add Panadapter during a zoom is held, then opens RX2 ----
+    // A refusal reaches the GUI as "Panadapter capacity is full".
+    const PanLifecycleRequest createPan{PanLifecycleAction::Create, {}, {}};
+    {
+        AnanBackend backend;
+        AnanReceiverTestAccess::holdDspBuilds(backend);
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+        backend.setPanBandwidth(QStringLiteral("anan-0"), 96'000.0);
+        check(AnanReceiverTestAccess::rateChanging(backend),
+              "precondition: RX1's zoom is rebuilding its chain");
+        const RadioControlFence current = [] { return true; };
+        check(backend.requestPanLifecycle(createPan, {}, current) == ReceiveDispatch::Dispatched
+                  && !AnanReceiverTestAccess::isOpen(backend, 1),
+              "Add Panadapter during a zoom is accepted and held, not refused");
+        check(backend.requestPanLifecycle(createPan, {}, current) == ReceiveDispatch::Unsupported,
+              "one create is held at a time");
+        AnanReceiverTestAccess::finishZoom(backend, 0, true);
+        check(!AnanReceiverTestAccess::isOpen(backend, 1),
+              "RX2 still waits while the zoom's new rate settles");
+        QTest::qWait(AnanReceiverTestAccess::liveSettleMs() + 250);
+        check(AnanReceiverTestAccess::isOpen(backend, 1),
+              "and opens once the zoom has landed");
+        AnanReceiverTestAccess::settle(backend);
+    }
+
+    // Exercise the operator request through RadioModel with the build held.
+    {
+        RadioModel radio;
+        auto owned = std::make_unique<AnanBackend>();
+        AnanBackend* backend = owned.get();
+        AnanReceiverTestAccess::holdDspBuilds(*backend);
+        AnanLinkStatsTestAccess::setConnected(*backend, true);
+        radio.setBackendForTest(std::move(owned), QStringLiteral("anan"));
+        backend->setPanCenter(QStringLiteral("anan-0"), 7.1e6, IRadioBackend::PanCenterIntent::Range);
+        backend->setPanBandwidth(QStringLiteral("anan-0"), 96'000.0);
+
+        int completions = 0;
+        PanadapterModel* created = nullptr;
+        check(radio.requestPanCreation(&radio, [&](const RadioControlReply& reply, PanadapterModel* pan) {
+            ++completions;
+            if (reply.kind == RadioControlReply::Kind::Accepted) {
+                created = pan;
+            }
+        }) == ReceiveDispatch::Dispatched, "RadioModel admits a create during the zoom");
+        if (QTimer* deadline = radio.findChild<QTimer*>(QStringLiteral("panCreationDeadline"))) {
+            // Deliver the shared firmware deadline without a ten-second sleep.
+            QMetaObject::invokeMethod(deadline, "timeout", Qt::DirectConnection);
+        }
+        check(completions == 0 && !AnanReceiverTestAccess::isOpen(*backend, 1),
+              "a pending local DSP build outlives the firmware deadline");
+        AnanReceiverTestAccess::finishZoom(*backend, 0, false);
+        check(completions == 1 && created == radio.panadapter(RadioModel::neutralPanIdStringForTest(1))
+                  && created,
+              "the held request completes once with RX2 when the build ends");
+        AnanReceiverTestAccess::settle(*backend);
+    }
+
+    // ---- a failed zoom ends the rebuild too; a stale held create opens nothing ----
+    {
+        AnanBackend backend;
+        AnanReceiverTestAccess::holdDspBuilds(backend);
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+        backend.setPanBandwidth(QStringLiteral("anan-0"), 96'000.0);
+        bool current = true;
+        const RadioControlFence fence = [&current] { return current; };
+        check(backend.requestPanLifecycle(createPan, {}, {}) == ReceiveDispatch::Unsupported,
+              "a create with no fence to check later is not held");
+        check(backend.requestPanLifecycle(createPan, {}, fence) == ReceiveDispatch::Dispatched,
+              "precondition: one with a fence is held");
+        AnanReceiverTestAccess::finishZoom(backend, 0, false);
+        check(!AnanReceiverTestAccess::rateChanging(backend)
+                  && AnanReceiverTestAccess::isOpen(backend, 1),
+              "a zoom that fails ends the rebuild at once, and the held create opens RX2");
+        AnanReceiverTestAccess::finishOpen(backend, 1,
+                                           AnanReceiverTestAccess::openBuild(backend, 1), true);
+        backend.removePanadapter(QStringLiteral("anan-1"));
+
+        backend.setPanBandwidth(QStringLiteral("anan-0"), 96'000.0);
+        check(backend.requestPanLifecycle(createPan, {}, fence) == ReceiveDispatch::Dispatched,
+              "precondition: held again behind a new zoom");
+        current = false;   // the requester or session is gone
+        AnanReceiverTestAccess::finishZoom(backend, 0, false);
+        check(!AnanReceiverTestAccess::rateChanging(backend)
+                  && !AnanReceiverTestAccess::isOpen(backend, 1),
+              "once the rebuild ends, a held create that is no longer current opens nothing");
+        current = true;
+        check(backend.requestPanLifecycle(createPan, {}, fence) == ReceiveDispatch::Dispatched
+                  && AnanReceiverTestAccess::isOpen(backend, 1),
+              "with no rebuild running, Add Panadapter opens RX2 at once, as before");
+        AnanReceiverTestAccess::settle(backend);
+    }
+
+    // ---- an RX2 the connect cannot rebuild: reported, and still remembered ----
+    {
+        AnanBackend backend;
+        AnanReceiverTestAccess::holdDspBuilds(backend);
+        RestoredRadioState remembered;
+        remembered.extension.insert(QStringLiteral("receivers"), QJsonArray{
+            QJsonObject{}, QJsonObject{{QStringLiteral("open"), true},
+                                       {QStringLiteral("freqHz"), 3'700'000.0},
+                                       {QStringLiteral("mode"), QStringLiteral("LSB")}}});
+        backend.applyRestoredState(remembered);
+        check(backend.sessionParamsForTest().activeDdcs.size() == 2,
+              "precondition: RX2 is restored open");
+        const auto savedRx2 = [&backend] {
+            return backend.currentOperatingState().extension.value(QStringLiteral("receivers"))
+                .toArray().at(1).toObject();
+        };
+        QSignalSpy failed(&backend, &IRadioBackend::sliceLifecycleFailed);
+        AnanReceiverTestAccess::failReopenAtConnect(backend, 1, QStringLiteral("no channel"));
+        check(failed.count() == 1 && failed.at(0).at(0).toString() == QStringLiteral("create")
+                  && failed.at(0).at(1).toInt() == 1,
+              "an RX2 whose chain fails at connect reports the create that failed");
+        check(!AnanReceiverTestAccess::isOpen(backend, 1)
+                  && backend.sessionParamsForTest().activeDdcs.size() == 1,
+              "and the session goes on with RX1 alone");
+        check(savedRx2().value(QStringLiteral("open")).toBool()
+                  && savedRx2().value(QStringLiteral("freqHz")).toDouble() == 3'700'000.0,
+              "but RX2 stays saved open, so the next connect tries it again");
+
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+        backend.createPanadapter();
+        AnanReceiverTestAccess::finishOpen(backend, 1,
+                                           AnanReceiverTestAccess::openBuild(backend, 1), true);
+        backend.removePanadapter(QStringLiteral("anan-1"));
+        check(!savedRx2().value(QStringLiteral("open")).toBool(),
+              "the operator's own close of it is saved as closed");
+        AnanReceiverTestAccess::settle(backend);
+    }
+
+    // ---- RX2 is remembered, and reopens at connect ----
+    // "receivers" is positional: entry i is receiver i. Entry 0 is RX1's RIT and
+    // NR alone (its dial, mode and AGC are the document's own fields); RX2's
+    // entry adds its dial, mode, AGC and whether it was open.
+    {
+        const auto receiversOf = [](const RestoredRadioState& state) {
+            return state.extension.value(QStringLiteral("receivers")).toArray();
+        };
+        AnanBackend backend;
+        AnanReceiverTestAccess::holdDspBuilds(backend);
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+        check(receiversOf(backend.currentOperatingState()).size() == 1,
+              "a radio whose RX2 was never opened keeps RX1's one entry");
+        backend.createPanadapter();
+        AnanReceiverTestAccess::finishOpen(backend, 1,
+                                           AnanReceiverTestAccess::openBuild(backend, 1), true);
+        backend.setSliceFrequency(1, 3'700'000.0);
+        backend.setSliceMode(1, QStringLiteral("LSB"));
+        backend.setSliceAgc(1, QStringLiteral("fast"), 60);
+        backend.requestSliceAgc(1, {SliceAgcRequest::Field::OffLevel, QStringLiteral("fast"),
+                                    60, 44, SliceAgcRequest::Origin::Operator});
+        backend.setSliceRit(1, true, 250);
+        backend.requestSliceDsp(1, {SliceDspRequest::Feature::Nr,
+                                    SliceDspRequest::Field::Level, false, 30});
+        backend.requestSliceDsp(1, {SliceDspRequest::Feature::Nr,
+                                    SliceDspRequest::Field::Enabled, true, 30});
+        const RestoredRadioState saved = backend.currentOperatingState();
+        const QJsonArray entries = receiversOf(saved);
+        const QJsonObject rx1Entry = entries.at(0).toObject();
+        const QJsonObject entry = entries.at(1).toObject();
+        check(entries.size() == 2 && entry.value(QStringLiteral("open")).toBool()
+                  && entry.value(QStringLiteral("freqHz")).toDouble() == 3'700'000.0
+                  && entry.value(QStringLiteral("mode")).toString() == QStringLiteral("LSB")
+                  && entry.value(QStringLiteral("agcMode")).toString() == QStringLiteral("fast")
+                  && entry.value(QStringLiteral("agcThreshold")).toInt() == 60,
+              "capture keeps RX2's dial, mode, AGC and that it is open, in entry 1");
+        check(entry.value(QStringLiteral("ritOn")).toBool()
+                  && entry.value(QStringLiteral("ritHz")).toInt() == 250
+                  && entry.value(QStringLiteral("nrOn")).toBool()
+                  && entry.value(QStringLiteral("nrLevel")).toInt() == 30,
+              "and RX2's own RIT and NR, under the same keys as RX1's");
+        check(rx1Entry.keys() == QStringList({QStringLiteral("nrLevel"), QStringLiteral("nrOn"),
+                                              QStringLiteral("ritHz"), QStringLiteral("ritOn")})
+                  && !rx1Entry.value(QStringLiteral("ritOn")).toBool(),
+              "RX1's entry stays RIT and NR alone, and RX2's settings stay out of it");
+        check(saved.agcOffLevels.size() == 2 && saved.agcOffLevels.at(1) == 44,
+              "and RX2's own AGC-off level, second");
+
+        AnanBackend next;
+        next.applyRestoredState(saved);
+        const P2Client::Params params = next.sessionParamsForTest();
+        check(params.activeDdcs.size() == 2 && params.activeDdcs[1].ddc == 3,
+              "a remembered open RX2 is in the next connect's session");
+        check(next.currentOperatingState().agcOffLevels.value(1) == 44,
+              "with its AGC-off level");
+        check(AnanReceiverTestAccess::ritAndNr(next, 1)
+                      == std::make_pair(std::make_pair(true, 250), std::make_pair(true, 30))
+                  && AnanReceiverTestAccess::ritAndNr(next, 0)
+                         == std::make_pair(std::make_pair(false, 0),
+                                           std::make_pair(false, AnanBackend::kDefaultNrLevel)),
+              "with its own RIT and NR, and RX1 keeps its own");
+        check(receiversOf(next.currentOperatingState()) == entries,
+              "restore then capture gives back the same receivers");
+
+        next.applyRestoredState({});
+        check(next.sessionParamsForTest().activeDdcs.size() == 1
+                  && receiversOf(next.currentOperatingState()).size() == 1
+                  && AnanReceiverTestAccess::ritAndNr(next, 1)
+                         == std::make_pair(std::make_pair(false, 0),
+                                           std::make_pair(false, AnanBackend::kDefaultNrLevel)),
+              "a radio with no document opens neither the last radio's RX2 nor its RIT and NR");
+
+        // Operator data from disk: each of these opens nothing.
+        const QJsonObject rx1Only{{QStringLiteral("ritOn"), false}};
+        const QList<QJsonArray> badDocs = {
+            // RX2's settings in RX1's slot: entry 0 is RX1, whatever it holds.
+            QJsonArray{QJsonObject{{QStringLiteral("open"), true},
+                                   {QStringLiteral("freqHz"), 7e6},
+                                   {QStringLiteral("mode"), QStringLiteral("USB")}}},
+            // No dial.
+            QJsonArray{rx1Only, QJsonObject{{QStringLiteral("open"), true},
+                                            {QStringLiteral("freqHz"), 0.0},
+                                            {QStringLiteral("mode"), QStringLiteral("USB")}}},
+            // A mode this radio does not have, and one it does not offer.
+            QJsonArray{rx1Only, QJsonObject{{QStringLiteral("open"), true},
+                                            {QStringLiteral("freqHz"), 7e6},
+                                            {QStringLiteral("mode"), QStringLiteral("bogus")}}},
+            QJsonArray{rx1Only, QJsonObject{{QStringLiteral("open"), true},
+                                            {QStringLiteral("freqHz"), 7e6},
+                                            {QStringLiteral("mode"), QStringLiteral("WBFM")}}},
+        };
+        int opened = 0;
+        for (const QJsonArray& doc : badDocs) {
+            RestoredRadioState bad = saved;
+            bad.extension.insert(QStringLiteral("receivers"), doc);
+            next.applyRestoredState(bad);
+            if (next.sessionParamsForTest().activeDdcs.size() != 1)
+                ++opened;
+        }
+        check(opened == 0,
+              "an RX2 entry in RX1's slot, or one without a dial or an offered mode, "
+              "opens nothing");
+
+        RestoredRadioState alias = saved;
+        alias.extension.insert(QStringLiteral("receivers"), QJsonArray{
+            rx1Only, QJsonObject{{QStringLiteral("open"), true}, {QStringLiteral("freqHz"), 7e6},
+                                 {QStringLiteral("mode"), QStringLiteral("RTTY")}}});
+        next.applyRestoredState(alias);
+        check(next.sessionParamsForTest().activeDdcs.size() == 2
+                  && receiversOf(next.currentOperatingState()).at(1).toObject()
+                             .value(QStringLiteral("mode")).toString() == QStringLiteral("DIGU"),
+              "an alias comes back under its offered spelling, as RX1's does");
+        AnanReceiverTestAccess::settle(backend);
     }
 
     // ---- the knob shows what the DSP runs, through RadioModel (#5988) ----
@@ -587,8 +1478,27 @@ int main(int argc, char** argv)
         {
             const RestoredRadioState live = backend.currentOperatingState();
             check(live.agcMode == QStringLiteral("slow") && live.agcThreshold == 40
-                      && live.agcOffLevels == QList<int>{35},
-                  "capture reports the live AGC mode, AGC-T and AGC-off level");
+                      && live.agcOffLevels
+                             == QList<int>({35, AnanBackend::kDefaultAgcOffLevel}),
+                  "capture reports the live AGC mode, AGC-T and AGC-off level, and "
+                  "RX2's own AGC-off level beside RX1's");
+        }
+        // RIT and NR (the Receivers domain), also before the store.
+        {
+            QSignalSpy receiverChanges(&backend, &IRadioBackend::operatingStateChanged);
+            backend.setSliceRit(0, true, -350);
+            backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                                        SliceDspRequest::Field::Level, false, 70});
+            backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                                        SliceDspRequest::Field::Enabled, true, 70});
+            check(receiverChanges.count() == 3, "a RIT or NR change announces itself for capture");
+            backend.setSliceRit(0, true, -350);
+            check(receiverChanges.count() == 3, "the same RIT again announces nothing");
+            const QJsonObject rx = backend.currentOperatingState().extension
+                                       .value(QStringLiteral("receivers")).toArray().at(0).toObject();
+            check(rx.value(QStringLiteral("ritOn")).toBool() && rx.value(QStringLiteral("ritHz")).toInt() == -350
+                      && rx.value(QStringLiteral("nrOn")).toBool() && rx.value(QStringLiteral("nrLevel")).toInt() == 70,
+                  "capture reports RX1's live RIT and NR");
         }
         // The level and its signal: nothing else tells the engine it moved.
         QSignalSpy levelChanges(&backend, &IRadioBackend::operatingStateChanged);
@@ -621,6 +1531,9 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcThreshold)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcOffLevel),
               "a radio with no document starts at the default AGC, not at the previous radio's");
+        check(backend.ritForTest() == std::make_pair(false, 0)
+                  && backend.noiseReductionForTest() == std::make_pair(false, AnanBackend::kDefaultNrLevel),
+              "a radio with no document starts with RIT and NR off, not the previous radio's");
         backend.setPanRfGain(QStringLiteral("anan-0"), -5);
         backend.setLineoutGain(20);
         backend.setSliceAgc(0, QStringLiteral("fast"), 60);
@@ -639,6 +1552,21 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(40)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(35),
               "radio A's AGC comes back after radio B stored its own");
+        check(backend.ritForTest() == std::make_pair(true, -350)
+                  && backend.noiseReductionForTest() == std::make_pair(true, 70),
+              "radio A's RIT and NR come back after radio B stored its own");
+        {
+            // Operator data from disk: a bad value is the default, not clamped.
+            AnanBackend fresh;
+            RestoredRadioState bad;
+            bad.extension = QJsonObject{{QStringLiteral("receivers"), QJsonArray{QJsonObject{
+                {QStringLiteral("ritOn"), true}, {QStringLiteral("ritHz"), 50'000},
+                {QStringLiteral("nrOn"), true}, {QStringLiteral("nrLevel"), 140}}}}};
+            fresh.applyRestoredState(bad);
+            check(fresh.ritForTest() == std::make_pair(false, 0)
+                      && fresh.noiseReductionForTest() == std::make_pair(true, AnanBackend::kDefaultNrLevel),
+                  "an out-of-range saved RIT or NR level is dropped to the default, never clamped");
+        }
         check(!AppSettings::instance().contains(QStringLiteral("Anan")),
               "live attenuation never writes the global connect-options document");
         QProcess child;

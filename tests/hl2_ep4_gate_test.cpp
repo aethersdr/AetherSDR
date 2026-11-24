@@ -102,6 +102,8 @@ struct MetisClientTestAccess {
     {
         return MetisClient::kMaxConsecutiveBandscopeTimeouts;
     }
+    static bool silenceProbeCleared(const MetisClient& client) { return client.m_silenceProbeCleared; }
+    static void askSilence(MetisClient& client) { client.m_silenceProbeAsking = true; }
 };
 }  // namespace AetherSDR::hl2
 
@@ -1044,5 +1046,37 @@ int main(int argc, char** argv)
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_ep4_gate_test: all checks passed\n");
+    // ---- silence recovery asks before re-sending run (#7270) ----
+    // From this session's socket: while running, the gateware answers only its
+    // stream host, so a reply means idle or ours, and silence means another host
+    // has the radio (or the link is gone).
+    {
+        MetisClient c;
+        QSignalSpy down(&c, &MetisClient::linkDown);
+        MetisClientTestAccess::setStreaming(c);
+        MetisClientTestAccess::setLinkUp(c);
+        MetisClientTestAccess::askSilence(c);
+        c.answerSilenceProbeForTest(false);
+        check(c.isRunning() && MetisClientTestAccess::silenceProbeCleared(c) && down.isEmpty(),
+              "an idle reply: the next watchdog tick re-sends run, as before");
+        MetisClient d;
+        MetisClientTestAccess::setStreaming(d);
+        MetisClientTestAccess::setLinkUp(d);
+        MetisClientTestAccess::askSilence(d);
+        d.answerSilenceProbeForTest(true);
+        check(d.isRunning() && MetisClientTestAccess::silenceProbeCleared(d),
+              "a 'sending' reply on our own socket is our stream: re-send run");
+        MetisClient e;
+        QSignalSpy downE(&e, &MetisClient::linkDown);
+        MetisClientTestAccess::setStreaming(e);
+        MetisClientTestAccess::setLinkUp(e);
+        MetisClientTestAccess::askSilence(e);
+        e.answerSilenceProbeForTest(std::nullopt);
+        check(!e.isRunning() && downE.count() == 1 && !MetisClientTestAccess::silenceProbeCleared(e),
+              "no answer: abandoned (no run, no metis-stop) and the link reported down");
+        e.answerSilenceProbeForTest(false);
+        check(!e.isRunning() && downE.count() == 1, "a late answer after the session ended does nothing");
+    }
+
     return g_failures == 0 ? 0 : 1;
 }

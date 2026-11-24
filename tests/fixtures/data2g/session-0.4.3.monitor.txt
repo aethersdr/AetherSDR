@@ -1,0 +1,45 @@
+0.5 s  qpsk-r1/5 x2  SNR 28.3 dB
+  BCAST "KISS 0": 1 frame(s)
+  frame 1 (AX.25 N0CALL>APRS, UI), 23 B:
+    <82><A0><A4><A6>@@`<9C>`<86><82><98><98>a<03><F0>!beacon
+
+4.5 s  qpsk-r1/5 x1  SNR 28.2 dB
+  CONNECT N0CALL>W1AW v5 nonce 4438 cap 2 t_turn 1.0 s -> key 922b
+
+6.5 s  qpsk-r1/5 x1  SNR 28.6 dB
+  CONNECT_ACK W1AW>N0CALL nonce 4438 cap 2
+
+8.5 s  ack-4f x2  SNR 28.3 dB
+  ARQ N0CALL>W1AW key 922b  b0 acted 7 cum 0 K 0 rec w48-256l-r5/8 max
+  ext: reply ack-1f
+
+10.5 s  w48-256l-r5/8 x1  SNR 43.1 dB
+  ARQ W1AW>N0CALL key 922b  b0 acted 0 cum 0 K 0 rec w48-256l-r5/8 max
+  ext: reply ack-1f, drained, inline
+  data: 0i ok
+  W1AW>N0CALL stream, 22 B:
+    Hello N0CALL, copied.<0D>
+
+11.6 s  w48-256l-r5/8 x1  SNR 43.3 dB
+  ARQ N0CALL>W1AW key 922b  b1 acted 0 cum 1 K 0 rec w48-256l-r5/8 max
+  ext: reply ack-1f, drained, inline
+  data: 0i ok
+  N0CALL>W1AW stream, 50 B:
+    Hello W1AW, this is the AetherSDR replay fixture.<0D>
+
+12.9 s  ack-1f x2  SNR 28.4 dB
+  ARQ W1AW>N0CALL key 922b  b1 acted 1 cum 1 K 0 rec w48-256l-r5/8 max
+  ext: reply ack-1f
+
+14.0 s  qpsk-r1/5 x1  SNR 28.3 dB
+  DISC N0CALL>W1AW key 922b
+
+16.0 s  qpsk-r1/5 x1  SNR 28.6 dB
+  DISC_ACK W1AW>N0CALL key 922b
+
+17.6 s  qpsk-r1/5 x1  SNR 28.0 dB
+  ID W1AW (session key 922b)
+
+20.4 s  qpsk-r1/5 x1  SNR 28.3 dB
+  ID N0CALL (session key 922b)
+

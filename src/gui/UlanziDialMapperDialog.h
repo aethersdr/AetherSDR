@@ -27,6 +27,8 @@ class UlanziDialCanvas;
 // This dialog owns capture + persistence; MainWindow dispatches. A canon
 // dialog (style guide, RFC #6226), opened from Settings → Controllers →
 // Ulanzi Dial Mapping...
+class ControlActionRegistry;
+
 class UlanziDialMapperDialog : public CanonWindow {
     Q_OBJECT
 
@@ -34,7 +36,8 @@ public:
     explicit UlanziDialMapperDialog(UlanziDialBackend* manager,
                                     ShortcutManager*     shortcuts,
                                     MidiControlManager*  midi,
-                                    QWidget*             parent = nullptr);
+                                    QWidget*             parent = nullptr,
+                                    const ControlActionRegistry* actions = nullptr);
 
     friend class UlanziDialCanvas;
 
@@ -122,6 +125,7 @@ private:
     UlanziDialBackend* m_manager{nullptr};
     ShortcutManager*     m_shortcuts{nullptr};
     MidiControlManager*  m_midi{nullptr};
+    const ControlActionRegistry* m_actions{nullptr};
     UlanziDialCanvas*    m_canvas{nullptr};
     QList<Pill> m_pills;
     bool m_isLoading{false};

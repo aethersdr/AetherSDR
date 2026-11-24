@@ -85,6 +85,42 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     auto* toolbar = new QHBoxLayout;
     toolbar->setSpacing(8);
 
+    // RN2 — the mic denoiser. It runs ahead of every chain stage, so the tube
+    // (the preamp, at the head of AetherTX's chain) colors denoised audio. It
+    // replaced the TX gate, whose page it used to sit on. TX only: showForTx()
+    // reveals it; RX has its own RN2 toggle elsewhere. (#2813)
+    m_rn2Btn = new QPushButton(QStringLiteral("RN2"));
+    m_rn2Btn->setObjectName(QStringLiteral("aetherTxRn2"));
+    m_rn2Btn->setAccessibleName(tr("Microphone noise reduction"));
+    m_rn2Btn->setCheckable(true);
+    m_rn2Btn->setFixedHeight(22);
+    m_rn2Btn->setVisible(false);
+    m_rn2Btn->setToolTip(tr(
+        "RNNoise neural denoiser on the mic input. Runs first, before the tube "
+        "and every other stage, so noise is removed before anything can "
+        "amplify it. Voice modes only: digital modes (RADE, DAX, RTTY, FT8, "
+        "FDV, CW) bypass it. Saved per AetherTX profile, and switched off by "
+        "BYPASS with every other voice stage."));
+    m_rn2Btn->setAccessibleDescription(m_rn2Btn->toolTip());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rn2Btn, kModelStyle);
+    connect(m_rn2Btn, &QPushButton::toggled, this, [this](bool on) {
+        // The engine is the single source of truth; it emits
+        // rn2TxEnabledChanged for any other observer.
+        if (m_audio && m_side == Side::Tx) m_audio->setRn2TxEnabled(on);
+    });
+    toolbar->addWidget(m_rn2Btn);
+    if (m_audio) {
+        // Follow the engine at once: a refused enable (RNNoise unavailable),
+        // a profile load or the gate migration must not wait for the poll,
+        // which only runs while this page is on screen.
+        connect(m_audio, &AudioEngine::rn2TxEnabledChanged, this, [this](bool on) {
+            if (m_side == Side::Tx && m_rn2Btn->isChecked() != on) {
+                const QSignalBlocker block(m_rn2Btn);
+                m_rn2Btn->setChecked(on);
+            }
+        });
+    }
+
     toolbar->addWidget(new QLabel("Model:"));
     {
         const auto addModelBtn = [&](const QString& label, int idx) {
@@ -282,6 +318,7 @@ void StripTubePanel::saveTubeSettings() const
 void StripTubePanel::showForTx()
 {
     m_side = Side::Tx;
+    m_rn2Btn->setVisible(true);
     if (m_curve && tube()) m_curve->setTube(tube());
     const QString title = QString::fromUtf8(
         "Aetherial Dynamic Tube Pre-Amp \xe2\x80\x94 TX");
@@ -303,6 +340,7 @@ void StripTubePanel::showForTx()
 void StripTubePanel::showForRx()
 {
     m_side = Side::Rx;
+    m_rn2Btn->setVisible(false);
     if (m_curve && tube()) m_curve->setTube(tube());
     const QString title = QString::fromUtf8(
         "Aetherial Dynamic Tube Pre-Amp \xe2\x80\x94 RX");
@@ -326,6 +364,11 @@ void StripTubePanel::syncControlsFromEngine()
     if (!m_audio || !tube()) return;
     ClientTube* t = tube();
     m_restoring = true;
+
+    if (m_side == Side::Tx && m_rn2Btn->isChecked() != m_audio->rn2TxEnabled()) {
+        const QSignalBlocker block(m_rn2Btn);
+        m_rn2Btn->setChecked(m_audio->rn2TxEnabled());
+    }
 
     {
         const int idx = static_cast<int>(t->model());

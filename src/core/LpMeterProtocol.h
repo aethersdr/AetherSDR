@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -190,7 +191,14 @@ class PollGate {
 public:
     // 10 Hz when we own the wire, which is also exactly the applet's label
     // throttle -- polling faster would produce readings the UI discards.
+    // The operator may slow it (setSoloIntervalMs): through a radio's USB
+    // passthrough every reply is broadcast to every client on the radio.
     static constexpr qint64 kSoloPollIntervalMs = 100;
+    static constexpr qint64 kMaxSoloPollIntervalMs = 1000;
+    static qint64 clampSoloIntervalMs(qint64 ms)
+    {
+        return std::clamp<qint64>(ms, kSoloPollIntervalMs, kMaxSoloPollIntervalMs);
+    }
 
     // Suppression threshold bounds, applied to 2x the observed foreign
     // cadence. Floor is above the measured worst-case foreign gap (121 ms) so
@@ -205,14 +213,14 @@ public:
 
     // Matching is by count, oldest first, so it bounds a number, not a
     // latency: steady reply latency of any size classifies correctly, and at
-    // most kMaxOutstandingPolls of our own replies can be absorbed in one
+    // most maxOutstandingPolls() of our own replies can be absorbed in one
     // burst -- more than that after a stall are misclassified as foreign. A
     // poll the meter ignores (or a failed write) leaves a slot that carries
     // forward while we keep polling and can absorb one later foreign record;
     // once we stop polling, slots older than kReplyExpiryMs are dropped.
     static constexpr qint64 kReplyExpiryMs = 1000;
-    static constexpr int kMaxOutstandingPolls =
-        static_cast<int>(kReplyExpiryMs / kSoloPollIntervalMs);
+    static_assert(kReplyExpiryMs >= kMaxSoloPollIntervalMs,
+                  "a reply must outlive the slowest poll interval's slot");
 
     // Consecutive foreign records, each within kMaxQuietMs of the last,
     // before we ride along. A real poller supplies them within a few of its
@@ -222,6 +230,15 @@ public:
     static constexpr int kConfirmRecords = 3;
 
     void reset();
+
+    // Clamped to [kSoloPollIntervalMs, kMaxSoloPollIntervalMs]. Survives reset().
+    void setSoloIntervalMs(qint64 ms);
+    qint64 soloIntervalMs() const { return m_soloIntervalMs; }
+    // Polls held unmatched at once: kReplyExpiryMs worth at the solo interval.
+    int maxOutstandingPolls() const
+    {
+        return static_cast<int>(kReplyExpiryMs / m_soloIntervalMs);
+    }
 
     // Call for every decoded record, before shouldPoll() for the same tick. Our
     // replies are matched against polls still outstanding (one record each,
@@ -265,7 +282,44 @@ private:
     qint64 m_lastForeignMs{-1};
     qint64 m_foreignIntervalMs{-1};
     bool   m_ridingAlong{false};
+    qint64 m_soloIntervalMs{kSoloPollIntervalMs};
 };
+
+// ---- Radio USB passthrough cable -----------------------------------------
+
+// A meter plugged into a FlexRadio's USB port is reached through the radio's
+// passthrough cable (reference/FlexLib/FlexLib/UsbPassthroughCable.cs,
+// v4.3.16): bytes go out as `usb_cable write`, replies come back in the
+// cable's status, and every client on the radio receives them. The radio
+// first claims the meter's FT232R as a CAT cable at 9600 baud, and changing
+// the type resets the speed to 9600 -- a speed sent while the cable is still
+// CAT is acknowledged and dropped (measured on a FLEX-8600, 4.3.16). So the
+// settings are walked one at a time, type first, each confirmed by status.
+struct CableSnapshot {
+    bool known{false};      // the radio reports this serial number
+    bool pluggedIn{false};
+    QString type;
+    int speed{0};
+    int dataBits{0};
+    QString parity;
+    int stopBits{0};
+    QString flowControl;
+};
+
+struct CableChange {
+    enum class Setting { Type, Speed, DataBits, Parity, StopBits, FlowControl };
+    Setting setting{Setting::Type};
+    QString text;   // Type, Parity, FlowControl
+    int number{0};  // Speed, DataBits, StopBits
+    bool operator==(const CableChange&) const = default;
+};
+
+// True when the cable is plugged in and set to passthrough 115200 8N1.
+bool cableReady(const CableSnapshot& cable);
+
+// The next setting that brings the cable to passthrough 115200 8N1, or none
+// when it is ready or cannot be configured (unknown or unplugged).
+std::optional<CableChange> nextCableChange(const CableSnapshot& cable);
 
 // ---- Power-range scaling -------------------------------------------------
 

@@ -64,6 +64,7 @@ The checks are written so you can do them without putting a signal on the air. W
   - CAT and TCI clients can key the radio. See [CAT Control](./cat-control.md) and [TCI Server](./tci-server.md).
   - The automation bridge cannot key the transmitter unless **Allow TX via MCP** is ticked, which is off by default. Leave it off unless you need it. See [Automation Bridge and MCP](./automation-bridge-and-mcp.md).
 - [ ] **(FlexRadio, firmware v4.3 and later)** **You know what your footswitch transmits.** A hardware PTT now sends the selected TX source, DAX or PC audio included, unless **PTT Mic Override** is on. See [Hardware PTT and the TX source](./tx-controls.md#hardware-ptt-and-the-tx-source).
+- [ ] **Your transmit time-out suits how you operate.** AetherSDR stops any transmission after **180 s** by default, whatever keyed it. Set it per radio in **Transmit time-out (this computer)** on the **Transmit** page of Radio Setup. See [Transmit time-out](./tx-controls.md#transmit-time-out).
 - [ ] **(FlexRadio)** **The radio's transmit time-out and interlocks are set:** **Timeout (sec):** and the **Interlocks - TX REQ** group on the **Transmit** page of Radio Setup. See [Radio Setup](./radio-setup.md).
 - [ ] **You can see when you are transmitting.** A green `M:SS` transmit timer appears in the title bar, just left of **PC Audio**, for each of your own transmissions, and the VFO marker turns orange/red. If an interlock blocks transmit, a notification says why. See [TX Controls](./tx-controls.md).
 
@@ -88,6 +89,13 @@ The computer's selected microphone is not your microphone, for example a virtual
 1. Open **Settings → Radio Setup... → Audio** and choose your real microphone as the **Input** device.
 2. Check that the **Mic level** gauge in the **P/CW** applet moves when you speak.
 
+### Voice transmits no RF and a notice says no audio input device was found
+
+The radio is modulated by this computer (a Hermes-Lite 2), and the computer has no microphone or other audio input device. The notice appears on the panadapter at the first voice transmission; the transmission itself goes ahead. Other radios do not show it.
+
+1. Connect a microphone to this computer, or make sure the operating system offers an audio input device.
+2. Reconnect the radio, then check that the **Mic level** gauge moves when you speak.
+
 ### Space or another key does not key the radio
 
 Operating keyboard shortcuts are off by default.
@@ -101,6 +109,7 @@ An interlock is holding transmit off, for example an amplifier warming up, the A
 
 1. Read the notification for the reason.
 2. Wait for the amplifier or ATU to finish, or move to a band you may transmit on, then key again.
+3. If it says **Transmit is held after a time-out**, release every PTT input: MOX, footswitch, the radio's own PTT, and any CAT or TCI program that is still keying. Then key again. See [Transmit time-out](./tx-controls.md#transmit-time-out).
 
 ## See also
 

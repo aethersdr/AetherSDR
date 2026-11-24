@@ -1,4 +1,4 @@
-.TH AETHERSDR "1" "2026-06-20" "AetherSDR" "User Commands"
+.TH AETHERSDR "1" "2026-11-13" "AetherSDR" "User Commands"
 .SH NAME
 AetherSDR \- FlexRadio transceiver client
 .SH SYNOPSIS
@@ -7,6 +7,9 @@ AetherSDR \- FlexRadio transceiver client
 .B aethersdr --config
 .I command
 .RI [ key ] " " [ value ]
+.br
+.B aethersdr --aetherd
+.RI [ options ]
 .SH DESCRIPTION
 AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines.
 Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol
@@ -34,5 +37,18 @@ not a restorable backup.
 .TP
 .B path
 Print the settings database path.
+.SH HEADLESS ENGINE
+\fB--aetherd\fR starts \fBaetherd\fR, AetherSDR's headless engine, in place of
+the application, with the remaining options passed to it (\fB--aetherd --help\fR
+lists them). The engine serves radio control to local clients over a
+current-user socket and shows no window. It ships in the ARM64 AppImage, beside
+the application; where it is absent, \fB--aetherd\fR exits with status 127.
+.PP
+Run from the AppImage under systemd, set \fBKillMode=mixed\fR and
+\fBPrivateTmp=yes\fR in the unit. The AppImage's mount process sits in the same
+control group and unmounts the image when it receives \fBSIGTERM\fR; \fBmixed\fR
+sends \fBSIGTERM\fR to the engine alone, so it can release the radio before the
+image goes away. \fBmixed\fR then kills the mount process, which can leave its
+mount behind; \fBPrivateTmp\fR keeps that mount inside the unit.
 .SH SEE ALSO
 Project homepage: https://github.com/aethersdr/AetherSDR

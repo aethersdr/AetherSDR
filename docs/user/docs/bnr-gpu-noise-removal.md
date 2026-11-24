@@ -35,7 +35,7 @@ If no runtime pack has been published for your GPU's architecture, BNR disables 
 
 *AetherRX with BNR selected on a computer without the NVIDIA AFX runtime installed.*
 
-1. Open **Settings → AetherRX...** (or click the **AetherRX** button on the VFO flag's DSP tab) and go to the **AetherNR** tab.
+1. Open **Tools → AetherRX...** (or click the **AetherRX** button on the VFO flag's DSP tab) and go to the **AetherNR** tab.
 2. Select **BNR** in the method row. The BNR page shows the **NVIDIA AFX** panel.
 3. Click **Download (~1 GB)**. AetherSDR detects your GPU's architecture and fetches the matching pack, verifying every file by SHA-256. The **Installed components** list shows progress, then the installed versions.
 4. The first time you turn BNR on, a one-time **NVIDIA Software License** dialog appears. Click **Accept** to use BNR; **Decline** leaves BNR off.

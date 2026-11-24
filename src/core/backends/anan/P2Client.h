@@ -77,8 +77,8 @@ public:
         // authoritative and those two fields are ignored. Each entry names its DDC;
         // one outside 0..kMaxDdcs-1, or repeating an earlier entry's DDC, is
         // dropped, and start() returns false if none is left. The FIRST entry is
-        // the session's link DDC: linkUp(), the connect timeout and the band
-        // filters key on it.
+        // the session's link DDC: linkUp() and the connect timeout key on it,
+        // and a band-pass bank with no DDC on its ADC follows it.
         std::vector<DdcConfig> activeDdcs;
     };
 
@@ -88,6 +88,10 @@ public:
     // the stop (AnanBackend::kRateChangeConnectTimeoutMs).
     Q_INVOKABLE bool start(const Params& params, int connectTimeoutMs = kConnectTimeoutMs);
     Q_INVOKABLE void stop();
+    // As stop(), but sends the radio nothing (no run=0): another client may have
+    // it now, and p2app would obey our stop. If the session was ours, p2app's
+    // own watchdog idles the radio about a second after our keepalives cease.
+    Q_INVOKABLE void abandon() { teardown(false); }
 
     // Retune one DDC. No frequency is set by start() itself (see the class
     // comment on connectRadio()/setSliceFrequency() being separate seam
@@ -112,6 +116,12 @@ public:
 
     // Mute or unmute the radio's speaker amplifier. Same cadence contract.
     Q_INVOKABLE void setSpeakerAmpMuted(bool on);
+
+    // Start or stop the speaker stream on a running session: on, the pacer and drain
+    // start from an empty queue, and the underflow count, overflow warning and FIFO
+    // reading start afresh, as start() does; off, they stop and the queue goes. The
+    // packet sequence carries on across the session, as the radio expects.
+    Q_INVOKABLE void setSpeakerAudioEnabled(bool on);
 
     // Hand over demodulated receiver audio for the radio's speaker: L,R,... int16 in
     // HOST order at kSpeakerSampleRateHz (buildSpeakerAudio() byte-swaps). One call
@@ -139,6 +149,16 @@ public:
     // caller still rebuilds its WdspChannel. Resends the whole packet, since it
     // carries the enable bitmap and every DDC's row.
     Q_INVOKABLE bool setDdcRateLive(int ddcIndex, int rateKsps);
+
+    // Replace the running session's DDC list, no restart: a receiver opened or
+    // closed. Refused (false, nothing sent) when not running, when no DDC is
+    // left, or when the first entry is not the link DDC start() chose. A DDC
+    // already running keeps its rate (resolveLiveDdcs()). Sends DDC-Specific,
+    // whose enable bitmap p2app applies on every packet (IncomingDDCSpecific.c),
+    // then High Priority unless a DDC it enables has no frequency yet
+    // (highPriorityWithDdcChange()); the caller retries for UDP loss. Not
+    // Q_INVOKABLE: called from a lambda on this object's thread.
+    bool setActiveDdcsLive(const std::vector<DdcConfig>& ddcs);
 
     [[nodiscard]] bool isRunning() const noexcept { return m_running; }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
@@ -172,7 +192,7 @@ public:
 
 signals:
     void linkUp();       // first valid frame from the session's link DDC
-    void linkDown();     // stop() called, or a link failure once that exists
+    void linkDown();     // stop() called, or the session went silent (checkStreamSilence())
     // No frame from the link DDC arrived within the connect-timeout window --
     // the radio is off, unreachable, or the port never saw a genuine frame
     // from it (only Mic Data / Status traffic, which onReadyRead() rejects and
@@ -206,6 +226,12 @@ signals:
 private slots:
     void onReadyRead();
     void onKeepaliveTick();
+    // Silence for kStreamSilenceMs on a live session ends it without the
+    // clean-stop packet: the radio now serves another client, and run=0 from us
+    // would stop that client's stream. If the network was at fault instead, the
+    // radio's own watchdog stops streaming once our keepalives cease.
+    void checkStreamSilence(qint64 silentMs);
+    void teardown(bool sendStopPacket);
     void onConnectTimeout();
     void onSpeakerDrainTick();
 
@@ -223,6 +249,10 @@ private:
     // radio in RUN drops to standby; buildGeneral() leaves that watchdog enabled.
     // Same cadence as anan/spike/phase1a.py's CC_KEEPALIVE_INTERVAL.
     static constexpr int kKeepaliveMs = 100;
+    // A live session from which nothing at all has arrived for this long has
+    // lost the radio: p2app sends everything to whichever client spoke last, so
+    // silence while our keepalives still go out means another client took it.
+    static constexpr int kStreamSilenceMs = 3000;
     // No genuine frame from the link DDC arrived within this long of
     // start() -- mirrors MetisClient's kConnectTimeoutMs.
     static constexpr int kConnectTimeoutMs = 2000;
@@ -289,11 +319,13 @@ private:
     // setDdcRateLive() can rebuild a complete DDC-Specific packet: that
     // packet carries every DDC's row plus the enable bitmap, so resending it
     // with only the changed rate known would disable every other DDC.
+    // setActiveDdcsLive() replaces it; the band filters read it per ADC.
     std::vector<DdcConfig> m_activeDdcs;
     bool m_ditherEnabled = true;
     bool m_randomEnabled = true;
 
     bool m_running = false;
+    QElapsedTimer m_lastRxClock;   // since the last datagram of this session
     bool m_linkUp = false;
 
     // Sequence-gap detection is PER DDC: every DDC runs its own independent

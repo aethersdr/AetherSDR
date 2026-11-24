@@ -13,6 +13,7 @@
 #include <QPainter>
 #include "core/ThemeManager.h"
 #include "core/TxKeyingMarker.h"
+#include "ShortcutActionMarker.h"
 
 #include <QPointer>
 
@@ -195,6 +196,7 @@ void PhoneApplet::buildUI()
         row->setSpacing(4);
 
         m_voxBtn = new QPushButton("VOX");
+        markShortcutAction(m_voxBtn, "vox_toggle");
         m_voxBtn->setCheckable(true);
         m_voxBtn->setFixedSize(52, 22);
         m_voxBtn->setAccessibleName("VOX voice-operated transmit");

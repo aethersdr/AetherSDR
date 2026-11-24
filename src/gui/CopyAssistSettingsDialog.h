@@ -74,6 +74,29 @@ public:
     // Learned Silero VAD (ONNX) in place of the energy VAD: a checkbox + an
     // .onnx path. The controller owns the file picker and rebuilds the engine.
     void setUseSileroVad(bool on);
+    // Grey provisional text while the model decodes. The checked state mirrors
+    // the stored setting; availability (with the reason shown when off) comes
+    // from the controller, since this dialog links no ASR code.
+    void setLivePreviewChecked(bool on);
+    bool livePreviewChecked() const;
+    void setLivePreviewAvailable(bool available, const QString& reason);
+    // The "None" model: the preview is the transcript, so the box shows
+    // checked and can't be cleared, with the reason. The operator's own choice
+    // (setLivePreviewChecked / livePreviewChecked) is kept underneath and
+    // comes back when another model is chosen.
+    void setLivePreviewRequired(bool required, const QString& reason);
+    QWidget* livePreviewControl() const;
+    // Which recogniser draws the preview (id + human label). An unavailable one
+    // stays listed but dimmed and unselectable, with its reason in the item's
+    // tooltip and accessible description; when it is the current choice anyway
+    // (a stored setting from another machine), the combo itself carries the
+    // reason. Setting the current id does not emit.
+    void addLivePreviewRecognizer(const QString& id, const QString& label);
+    void setLivePreviewRecognizerAvailable(const QString& id, bool available,
+                                           const QString& reason);
+    void setCurrentLivePreviewRecognizer(const QString& id);
+    QString currentLivePreviewRecognizer() const;
+    QWidget* livePreviewRecognizerControl() const;
     // Tap point for the ASR feed: unchecked = after client NR and the RX
     // effects chain (what every build before this did), checked = before them.
     void setRawAudio(bool on);
@@ -87,6 +110,11 @@ public:
     // Per-utterance speaker labeling (A/B/C…) via a speaker-embedding .onnx.
     void setLabelSpeakers(bool on);
     bool labelSpeakers() const;
+    // The "None" model has no segments to tell speakers apart: the speaker
+    // controls grey out, with the reason, but keep the operator's choice, so
+    // it is back as it was when another model is chosen. labelSpeakers() still
+    // reports that choice; the controller decides whether it applies.
+    void setSpeakerLabelsUnavailable(bool unavailable, const QString& reason);
     void setSpeakerModelPath(const QString& path);
     QString speakerModelPath() const;
     // Cosine match threshold as a percent 0–100 (higher = stricter → more, finer
@@ -112,6 +140,8 @@ signals:
     void browseLogFileRequested();
     void useSileroVadToggled(bool on);
     void rawAudioToggled(bool on);
+    void livePreviewToggled(bool on);
+    void livePreviewRecognizerChanged(const QString& id);
     void browseVadModelRequested();
     void labelSpeakersToggled(bool on);
     void browseSpeakerModelRequested();
@@ -131,11 +161,26 @@ private:
     QLineEdit* m_logPath = nullptr; // read-only display of the chosen path
     QPushButton* m_logBrowse = nullptr;
     QCheckBox* m_useSilero = nullptr;
+    QCheckBox* m_livePreview = nullptr;
+    QString m_livePreviewToolTip;
+    bool m_livePreviewWanted = false;    // the operator's choice
+    bool m_livePreviewAvailable = true;
+    QString m_livePreviewUnavailableReason;
+    bool m_livePreviewRequired = false;
+    QString m_livePreviewRequiredReason;
+    void refreshLivePreview();
+    QComboBox* m_previewRecognizer = nullptr;
+    QString m_previewRecognizerToolTip;
+    void updatePreviewRecognizerDescription();
     QCheckBox* m_rawAudio = nullptr;
     QString m_presentationAudioToolTip;
     QLineEdit* m_vadPath = nullptr;
     QPushButton* m_vadBrowse = nullptr;
     QCheckBox* m_labelSpeakers = nullptr;
+    QString m_labelSpeakersToolTip;
+    bool m_speakerLabelsUnavailable = false;
+    QString m_speakerLabelsUnavailableReason;
+    void refreshSpeakerLabels();
     QLineEdit* m_spkPath = nullptr;
     QPushButton* m_spkBrowse = nullptr;
     QSlider* m_spkThreshold = nullptr;

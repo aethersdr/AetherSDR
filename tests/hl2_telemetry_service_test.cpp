@@ -35,6 +35,7 @@
 #include <QCoreApplication>
 #include <QVariant>
 
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR::hl2;
@@ -207,6 +208,24 @@ int main(int argc, char** argv)
         Hl2TelemetryService cold;
         check(!rowValue(cold.healthRows(), "temperatureC").isValid(),
               "with nothing received, the degrees row is absent — not 0 °C");
+    }
+
+    // ---- 8. and the PA current IN AMPS, by the shared conversion ----
+    {
+        DiscoveryReply r;
+        r.biasCurrentRaw = 1000;
+        Hl2TelemetryService svc;
+        Hl2TelemetryServiceTestAccess::placeReply(svc, r);
+        const auto rows = svc.healthRows();
+        check(rowValue(rows, "biasCurrentRaw").toInt() == 1000,
+              "the raw PA bias count is still reported");
+        const QVariant amps = rowValue(rows, "paCurrentA");
+        check(amps.isValid() && amps.toDouble() == hl2PaCurrentAmps(1000)
+                  && std::abs(amps.toDouble() - 0.5053955078125) < 1e-9,
+              "the stream-free path fills PA current (A): 1000 counts is 0.5054 A");
+        Hl2TelemetryService cold;
+        check(!rowValue(cold.healthRows(), "paCurrentA").isValid(),
+              "with nothing received, the amps row is absent, not 0 A");
     }
 
     if (g_failures == 0)

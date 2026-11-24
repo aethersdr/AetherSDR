@@ -34,6 +34,11 @@ public:
     // operator cleared the field" and "the operator has a blank password" must
     // not be the same state.
     static void save(const QString& password);
+    // Saved connection credentials are isolated from the legacy default and
+    // from each other. Empty id reads the legacy credential for migration.
+    static void loadForConnection(const QString& id, QObject* context,
+                                  std::function<void(const QString&)> callback);
+    static void saveForConnection(const QString& id, const QString& password);
 
     // The session cache: what the connect path actually reads. Empty when
     // nothing has been loaded or typed this session.

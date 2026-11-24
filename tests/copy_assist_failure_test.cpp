@@ -3,14 +3,19 @@
 #include "AetherBuildIdentity.h"
 #include "asr/AsrCrashMarker.h"
 #include "asr/AsrEngine.h"
+#include "asr/AsrModelCatalog.h"
+#include "asr/LivePreview.h"
 #include "asr/AsrModelManager.h"
 #include "core/AppSettings.h"
 #include "gui/AsrAudioTap.h"
 #include "gui/CopyAssistController.h"
 #include "gui/CopyAssistPanel.h"
 #include "gui/CopyAssistSettings.h"
+#include "gui/CopyAssistSettingsDialog.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
@@ -105,5 +110,52 @@ int main(int argc, char** argv)
     app.processEvents();
     expect(status->text() == QStringLiteral("Disabled") && !engine->isEnabled()
                && busy->isHidden(), "manual disable retains its ordinary status and shutdown");
+
+    // The "None" model: no backend, the live preview is the transcript. Last,
+    // because switching models rebuilds the engine the pointers above name.
+    auto* dialog = panel.findChild<CopyAssistSettingsDialog*>();
+    auto* modelCombo =
+        dialog ? dialog->findChild<QComboBox*>(QStringLiteral("CopyAssistModelCombo")) : nullptr;
+    auto* previewBox =
+        dialog ? dialog->findChild<QCheckBox*>(QStringLiteral("CopyAssistLivePreview")) : nullptr;
+    const bool previewPossible = sherpaLivePreviewSupported() || appleLivePreviewSupported();
+    const int noneIndex = modelCombo ? modelCombo->findData(QStringLiteral("none")) : -1;
+    expect(modelCombo && previewBox && (noneIndex >= 0) == previewPossible,
+           "the model list offers None exactly where a preview recognizer can run");
+    auto* speakerBox =
+        dialog ? dialog->findChild<QCheckBox*>(QStringLiteral("CopyAssistLabelSpeakers")) : nullptr;
+    // Blocked so the controller never hears the toggle: it would fetch the
+    // speaker model. The box itself still updates.
+    const auto setSpeakerBoxQuietly = [&](bool on) {
+        const QSignalBlocker quiet(dialog);
+        dialog->setLabelSpeakers(on);
+    };
+    if (noneIndex >= 0 && speakerBox) {
+        CopyAssistSettings::setValue(QStringLiteral("AsrLivePreview"), QStringLiteral("False"));
+        dialog->setLivePreviewChecked(false);
+        setSpeakerBoxQuietly(true);
+        modelCombo->setCurrentIndex(noneIndex);
+        app.processEvents();
+        auto* noneEngine = controller.findChild<AsrEngine*>();
+        // The recognizer itself starts on Enable, once its model is verified.
+        expect(noneEngine && noneEngine->livePreviewTranscribes(),
+               "None builds an engine whose preview is the transcript");
+        expect(previewBox->isChecked() && !previewBox->isEnabled()
+                   && !previewBox->accessibleDescription().isEmpty(),
+               "None shows the preview setting on and locked, with the reason");
+        expect(noneEngine && !noneEngine->isSpeakerLabelingEnabled() && speakerBox->isChecked()
+                   && !speakerBox->isEnabled() && !speakerBox->accessibleDescription().isEmpty(),
+               "None labels no speakers, greying the box with the reason but keeping its check");
+        setSpeakerBoxQuietly(false); // so the next engine has no speaker model to load
+        modelCombo->setCurrentIndex(modelCombo->findData(AsrModelCatalog::defaultTierId()));
+        app.processEvents();
+        auto* whisperEngine = controller.findChild<AsrEngine*>();
+        expect(whisperEngine && !whisperEngine->livePreviewTranscribes()
+                   && !whisperEngine->isLivePreviewEnabled() && !previewBox->isChecked()
+                   && previewBox->isEnabled(),
+               "a model again gives back the operator's preview choice (off here)");
+        expect(speakerBox->isEnabled() && speakerBox->accessibleDescription().isEmpty(),
+               "a model again makes speaker labels available");
+    }
     return failures == 0 ? 0 : 1;
 }

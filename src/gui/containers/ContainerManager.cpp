@@ -532,7 +532,7 @@ void ContainerManager::saveState() const
     }
 }
 
-void ContainerManager::restoreState()
+void ContainerManager::restoreState(const QStringList& retiredIds)
 {
     // Suppress saveState()'s per-transition disk flush for the duration of the
     // replay (floatContainer() below calls saveState()); reset on any exit.
@@ -555,6 +555,9 @@ void ContainerManager::restoreState()
     // a child into them, regardless of the QJsonObject's key order.
     for (auto it = containers.constBegin(); it != containers.constEnd(); ++it) {
         const QString id = it.key();
+        if (retiredIds.contains(id)) {
+            continue;
+        }
         const QJsonObject entry = it.value().toObject();
         const QString contentType = entry.value("contentType").toString();
         const QString parentId    = entry.value("parent").toString();

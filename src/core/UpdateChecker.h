@@ -102,6 +102,10 @@ public:
     // reach the browser from a release's asset list.
     static bool isTrustedDownloadUrl(const QUrl& url);
 
+    // A file an update manifest for `tag` may name: one file of that tag's
+    // release, on its GitHub page or under updates.aethersdr.com/releases/.
+    static bool isTrustedPayloadUrl(const QUrl& url, const QString& tag);
+
     // The installer for an OS ("windows", "macos", "linux"), a CPU
     // architecture as QSysInfo names it, and
     // whether a Windows copy is the portable zip. Index into `assets`, or -1.

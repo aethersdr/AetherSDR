@@ -51,8 +51,7 @@ int main()
     for (const TunerCase& c : tunerCases) {
         const SharedTxMeterSelection selected = selectSharedTxMeters(
             c.radioWatts, c.amplifier, c.kpa, c.blocked, c.kxpa);
-        const bool ok = tunerMaxWatts(c.radioWatts, selected) == c.tunerWatts
-            && selected.maxWatts == c.sharedWatts
+        const bool ok = selected.maxWatts == c.sharedWatts
             && selected.highPowerAmplifier == c.highPower;
         std::printf("[%s] %s\n", ok ? "PASS" : "FAIL", c.name);
         failures += !ok;

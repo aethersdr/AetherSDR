@@ -29,7 +29,8 @@ public:
     bool enabled() const;
 
     void recordUdpBatch(int datagrams, qint64 bytes, double drainMs);
-    void recordStreamPacket(FrameKind kind, bool sequenceError);
+    void recordStreamPacket(FrameKind kind, int missingPackets);
+    void recordStreamLoss(FrameKind kind, int missingPackets);
     void recordFrameRestart(FrameKind kind);
     void recordFrameAge(FrameKind kind, double ageMs);
 

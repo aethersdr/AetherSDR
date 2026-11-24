@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QMap>
+#include <QMetaType>
 #include <QVariant>
 #include <optional>
 
@@ -40,3 +41,5 @@ public:
 };
 
 } // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::ParsedMessage)

@@ -20,7 +20,7 @@ namespace AetherSDR {
 // case in CopyAssistController's backend map, and a factory.
 enum class AsrModelFamily {
     Whisper,    // whisper.cpp / ggml (.bin/.gguf)
-    SherpaOnnx, // sherpa-onnx offline model bundle (a directory of .onnx + tokens)
+    SherpaOnnx, // sherpa-onnx model bundle (a directory of .onnx + tokens)
 };
 
 struct AsrModelTier {
@@ -45,6 +45,11 @@ const AsrModelTier* tierById(const QString& id);
 // (incl. ARM / Raspberry Pi); a GPU-backed build upgrades this to
 // "large-v3-turbo" once a GPU ggml backend is available. Operator-overridable.
 QString defaultTierId();
+
+// The default live-preview recogniser's model: sherpa-onnx's packaging of Banafo's
+// Kroko streaming zipformer (English), four files in one folder. Each file's
+// fileName carries the folder ("<folder>/encoder.onnx").
+const QVector<AsrModelTier>& sherpaLivePreviewModel();
 
 } // namespace AsrModelCatalog
 } // namespace AetherSDR

@@ -1,7 +1,10 @@
 name: Sign Release Artifacts
 
 # GPG signs Linux AppImages and release tarballs, Windows binaries, and source
-# archives.
+# archives. SHA256SUMS.txt also lists the PDF manual (Docs attaches it), which
+# is verified through SHA256SUMS.txt.asc rather than a signature of its own.
+# Docs completing triggers this too, so a manual attached or replaced after
+# signing is re-signed (tools/release_manual_signing.py decides).
 # macOS artifacts are signed via Apple codesign + notarization.
 
 on:
@@ -14,7 +17,7 @@ on:
   # remembered to run one.  The `if` is what restricts this to tags; a `main`
   # build still reaches it and is still skipped there.
   workflow_run:
-    workflows: ["AppImage", "Windows Installer", "macOS DMG"]
+    workflows: ["AppImage", "Windows Installer", "macOS DMG", "Docs"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -36,15 +39,97 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sign:
-    # A build of this repository's own tag, pushed or dispatched; a run from
-    # any other repository or event never reaches the release key.
+  # Runs only for Docs (on the release event), whatever its conclusion: the
+  # PDF may be attached even when a later Docs job (the site deploy) fails.
+  # It decides from what the release holds now whether this run signs. The
+  # run shares the per-tag concurrency group with the build-triggered runs,
+  # so it may have displaced a pending one. It signs when build artifacts are
+  # unsigned or newer than SHA256SUMS.txt, or when the signed sums don't
+  # cover the manual attached now. It skips before any build has attached
+  # anything, and for a tag whose Docs workflow signs the manual apart. No
+  # key, no approval, read-only token; the decision is
+  # tools/release_manual_signing.py from the default branch.
+  plan:
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.name == 'Docs' &&
+      github.event.workflow_run.event == 'release' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    outputs:
+      sign: ${{ steps.decide.outputs.sign }}
+    steps:
+      - name: Determine tag
+        id: tag
+        env:
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          tag="$RUN_HEAD_BRANCH"
+          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Not a release tag."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: The decision script (default branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: signer-tools
+          sparse-checkout: tools/release_manual_signing.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: The files at the tag that decide the manual's shape
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          path: tag-tree
+          sparse-checkout: |
+            .github/workflows/docs.yml
+            tools/docs/build_pdf.py
+            docs/user/sidebars.js
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Every read fails the job rather than reading as "absent": a
+          # transient error must not skip a re-sign quietly.
+          mkdir -p probe
+          gh release view "$TAG" --json assets > probe/assets.json
+          pdf="AetherSDR-Manual-${TAG}.pdf"
+          names=$(jq -r '.assets[].name' probe/assets.json)
+          for f in "$pdf" SHA256SUMS.txt; do
+            if grep -qxF -- "$f" <<<"$names"; then
+              gh release download "$TAG" --dir probe --pattern "$f"
+            fi
+          done
+          decision=$(python3 signer-tools/tools/release_manual_signing.py plan --tree tag-tree \
+            --assets probe/assets.json --name "$pdf" --pdf "probe/$pdf" --sums probe/SHA256SUMS.txt)
+          echo "$decision"
+          case "$decision" in
+            resign*) echo "sign=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "sign=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  sign:
+    # A build of this repository's own tag, pushed or dispatched, or a Docs
+    # run the plan above says must sign; a run from any other repository or
+    # event never reaches the release key. A build-triggered run skips plan
+    # and comes straight here.
+    needs: plan
+    if: >
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       (needs.plan.result == 'skipped' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        startsWith(github.event.workflow_run.head_branch, 'v')) ||
+       (needs.plan.result == 'success' && needs.plan.outputs.sign == 'true'))
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -81,6 +166,15 @@ jobs:
           ref: refs/tags/${{ steps.tag.outputs.tag }}
           persist-credentials: false
 
+      # The manual's shape rule, from the default branch (one copy of it:
+      # tools/release_manual_signing.py). Kept outside the tag's tree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: .signer-tools
+          sparse-checkout: tools/release_manual_signing.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       # The build that triggered this run must have been of the tag's commit.
       - name: Check the build was of the tag
         if: ${{ github.event_name == 'workflow_run' }}
@@ -101,6 +195,7 @@ jobs:
       # signed, so they are neither waited for nor signed here. The macOS app
       # tarballs (the in-app update's payload) are signed, like Linux's.
       - name: Wait for every signable artifact to be attached
+        id: wait
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -116,6 +211,15 @@ jobs:
           if grep -q -- '--app-tarball' .github/workflows/macos-dmg.yml; then
             app="macOS-apple-silicon.app.tar.zst macOS-intel.app.tar.zst"
           fi
+          # The PDF manual, when the tag has the docs site that renders it
+          # and the tag's own Docs workflow no longer signs it apart: the rule
+          # tools/release_manual_signing.py `shape` and check_release_assets.py
+          # share, so a dispatch for an older tag keeps that tag's shape.
+          pdf=
+          if [ "$(python3 .signer-tools/tools/release_manual_signing.py shape --tree .)" = sums ]; then
+            pdf="AetherSDR-Manual-${TAG}.pdf"
+          fi
+          echo "pdf=$pdf" >> "$GITHUB_OUTPUT"
           base="$want"
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
@@ -136,6 +240,25 @@ jobs:
                 esac
               done
             fi
+            # Docs attaches it after the release is published. It is waited
+            # for only while a Docs run for the tag can still attach it, the
+            # same rule as the macOS tarballs above.
+            if [ -n "$pdf" ]; then
+              case "$names" in
+                *"$pdf"*) want="$want $pdf" ;;
+                *) # A failed lookup keeps waiting; only a successful one that
+                   # finds no Docs run still able to attach it signs without.
+                   if docs=$(gh run list --workflow Docs --event release --branch "$TAG" --limit 1 --json status --jq '.[0].status // "none"'); then
+                     if [ "$docs" != none ] && [ "$docs" != completed ]; then
+                       want="$want $pdf"
+                     else
+                       echo "::warning::$pdf is not attached and no Docs run for $TAG can still attach it; SHA256SUMS.txt will not list it (a later Docs run re-signs)."
+                     fi
+                   else
+                     want="$want $pdf"
+                   fi ;;
+              esac
+            fi
             missing=
             for w in $want; do
               case "$names" in *"$w"*) ;; *) missing="$missing $w" ;; esac
@@ -155,11 +278,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
+          PDF: ${{ steps.wait.outputs.pdf }}
         run: |
           mkdir -p artifacts
           gh release download "$TAG" \
             --dir artifacts --pattern '*.AppImage' --pattern '*.tar.zst' \
             --pattern '*.exe' --pattern '*.zip'
+          # Only this tag's manual, by exact name, and only in the shape above.
+          if [ -n "$PDF" ]; then
+            gh release download "$TAG" --dir artifacts --pattern "$PDF" || \
+              echo "::warning::$PDF is not attached; SHA256SUMS.txt will not list it."
+          fi
 
       - name: Generate source archive
         env:
@@ -184,6 +313,8 @@ jobs:
         run: |
           sha256sum -- * > SHA256SUMS.txt
 
+      # Every file SHA256SUMS.txt lists gets a detached signature except the
+      # PDF manual, whose only signature is SHA256SUMS.txt.asc.
       - name: Sign artifacts (detached .asc)
         env:
           GNUPGHOME: ${{ runner.temp }}/gnupg

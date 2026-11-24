@@ -42,19 +42,18 @@ PC mic capture (QAudioSource)
 Canonical channel selection → float conversion → 48 kHz normalization
   │
   ▼
-Optional native-48 kHz RN2 → 48 kHz test tone
+Optional native-48 kHz RN2 (switch on the Tube page; replaced the TX gate)
+  → 48 kHz test tone
   │
   ▼
 ┌───────────────────────────────────────────────────────────────────┐
 │  CHAIN widget — drag-drop ordered 48 kHz float TX DSP pipeline     │
 │                                                                     │
-│  [GATE] → [EQ] → [DESS] → [COMP] → [TUBE] → [PUDU] → [VERB]        │
+│  [TUBE] → [EQ] → [COMP] → [PUDU] → [VERB]                          │
 │                                                                     │
-│  ClientGate    — downward expander / noise gate                     │
+│  ClientTube    — dynamic tube preamp/saturator (3 models)           │
 │  ClientEq      — 10-band parametric, 4 filter families, #1660      │
-│  ClientDeEss   — sidechain-filtered de-esser                        │
 │  ClientComp    — Pro-XL-style compressor + brickwall limiter, #1661 │
-│  ClientTube    — dynamic tube saturator (3 models)                  │
 │  ClientPudu    — exciter (Aphex-even / Behringer-odd harmonics)     │
 │  ClientReverb  — Freeverb (disabled by default)                     │
 │                                                                     │

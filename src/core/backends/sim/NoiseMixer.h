@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -40,6 +41,9 @@ public:
         Birdie,      // steady carrier heterodyne (a tone for notch tests)
         Hash,        // switching-supply broadband clumps
         Woodpecker,  // pulsed wideband rasp
+        // signal (wanted), appended so the existing values keep their numbers
+        Rtty,         // 45.45-baud RTTY, mark on the upper RF tone (#7420)
+        RttyReversed, // the same text with mark on the lower RF tone
     };
     // Voice plays a bundled public-domain speech clip (:/demo_voice.wav, Harvard
     // sentences, 24 kHz mono) looped — REAL words, so it exercises NR's voice
@@ -79,6 +83,16 @@ public:
     // sim knows them directly. Broadband/impulse noise is NOT returned.
     std::vector<Notch> autoNotchTones() const;
 
+    // RF-anchored signals are drawn where they are in RF (#7420): the owner
+    // passes each one's offset from the panadapter center. The birdie's pitch
+    // stays the "hz" knob; the RTTY station gets both tones' pitches (0 = not
+    // audible) and RF offsets.
+    void setBirdieRfOffsetHz(double hz) { m_birdieRfOffsetHz = hz; }   // unset: drawn at its pitch
+    void setRttyTones(double upperAudioHz, double lowerAudioHz,
+                      double upperRfOffsetHz, double lowerRfOffsetHz);
+    // The RTTY stations' shift: the lower tone sits this far below the upper in RF.
+    static constexpr double kRttyShiftHz = 170.0;
+
     // ---- generation ----
     // One 24 kHz mono float frame (kFrameLen samples) of the summed, notched,
     // soft-clipped mix. Advances internal phase/RNG state.
@@ -87,7 +101,8 @@ public:
     // The active scene rendered as per-bin dBm for the panadapter, so the
     // waterfall shows what the audio carries. Noise BOTTOMS OUT on floorDbm and
     // rises up (real noise is a floor, not a floating band); notches carve to
-    // the floor. centerBin is the VFO (audio 0 Hz); +Hz maps to the right.
+    // the floor. centerBin is pan 0's center: RF-anchored signals are drawn at
+    // their RF offset from it, the others at their audio pitch; +Hz is right.
     QVector<float> spectrum(int nBins, double floorDbm, double spanHz,
                             int centerBin);
 
@@ -113,6 +128,10 @@ private:
     void genBirdie(const ChannelState&, float* out);
     void genHash(const ChannelState&, float* out);
     void genWoodpecker(const ChannelState&, float* out);
+    void genRtty(const ChannelState&, float* out);
+    void genRttyReversed(const ChannelState&, float* out);
+    struct RttyKeyer { qint64 sample = 0; int segment = 0; double pos = 0.0; double phaseRad = 0.0; };
+    void keyRtty(RttyKeyer& keyer, bool markIsLower, float* out);
 
     double nextGauss();                 // Box-Muller, own RNG
     double nextUniform();               // [0,1) — AUDIO stream; see nextDisplayUniform
@@ -153,6 +172,10 @@ private:
     // Birdie phase as a CONTINUOUS RADIANS accumulator (not hz*absolute-time), so
     // changing the pitch (VFO tuning) doesn't teleport the phase and warble.
     double m_birdiePhaseRad = 0.0;
+    double m_birdieRfOffsetHz = std::numeric_limits<double>::quiet_NaN();   // NaN: no owner geometry
+    RttyKeyer m_rtty, m_rttyReversed;
+    double m_rttyUpperAudioHz = 0.0, m_rttyLowerAudioHz = 0.0;
+    double m_rttyUpperRfHz = 0.0, m_rttyLowerRfHz = -kRttyShiftHz;
     qint64 m_hashPhase = 0, m_woodPhase = 0;  // sample counters; long overflows in ~25 h on LLP64 (#4618)
 
     // RNG (own stream; Box-Muller spare)

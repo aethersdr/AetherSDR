@@ -19,6 +19,8 @@ foreach ($name in @('libusb','rtl','pthreads')) {
 $usb = Join-Path $work $pins.libusb.directory
 $rtl = Join-Path $work $pins.rtl.directory
 $pthreads = Join-Path $work $pins.pthreads.directory
+python "$PSScriptRoot\apply-rtl-patches.py" $rtl
+Check-Native 'RTL lifetime patch'
 msbuild "$usb\msvc\libusb_dll.vcxproj" /m:4 /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
 Check-Native 'libusb build'
 Push-Location $pthreads
@@ -43,4 +45,5 @@ Copy-Item "$rtl\include\rtl-sdr.h","$rtl\include\rtl-sdr_export.h" "$prefix\incl
 Copy-Item "$rtl\COPYING" "$sources\RTL-SDR-COPYING"
 Copy-Item "$usb\COPYING" "$sources\libusb-COPYING"
 Copy-Item "$PSScriptRoot\rtl-dependencies.json","$PSScriptRoot\setup-rtl-deps.ps1","$PSScriptRoot\_verify_sha256.ps1" "$sources\"
+Copy-Item "$PSScriptRoot\apply-rtl-patches.py","$PSScriptRoot\rtl-async-cancellation.patch" "$sources\"
 Write-Host "RTL libraries and corresponding sources ready at $prefix"

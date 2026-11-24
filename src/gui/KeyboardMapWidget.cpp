@@ -175,7 +175,7 @@ void KeyboardMapWidget::buildLayout()
 
     // Row 4: Bottom letter row
     float y4 = 4.25f;
-    m_keys.append({0, y4, 2.25f, 1, Qt::Key_Shift, "SHIFT", {}});
+    m_keys.append({0, y4, 2.25f, 1, kShortcutKeyLeftShift, "SHIFT", {}});
     m_keys.append({2.25f, y4, 1, 1, Qt::Key_Z, "Z", {}});
     m_keys.append({3.25f, y4, 1, 1, Qt::Key_X, "X", {}});
     m_keys.append({4.25f, y4, 1, 1, Qt::Key_C, "C", {}});
@@ -186,7 +186,7 @@ void KeyboardMapWidget::buildLayout()
     m_keys.append({9.25f, y4, 1, 1, Qt::Key_Comma, ",", "<"});
     m_keys.append({10.25f, y4, 1, 1, Qt::Key_Period, ".", ">"});
     m_keys.append({11.25f, y4, 1, 1, Qt::Key_Slash, "/", "?"});
-    m_keys.append({12.25f, y4, 2.75f, 1, Qt::Key_Shift, "SHIFT", {}});
+    m_keys.append({12.25f, y4, 2.75f, 1, kShortcutKeyRightShift, "SHIFT", {}});
 
     m_keys.append({16.5f, y4, 1, 1, Qt::Key_Up, "\xE2\x96\xB2", {}});  // ▲
 
@@ -198,14 +198,16 @@ void KeyboardMapWidget::buildLayout()
 
     // Row 5: Modifier row
     float y5 = 5.25f;
-    m_keys.append({0, y5, 1.5f, 1, Qt::Key_Control, "CTRL", {}});
+    // Each modifier key is its own side, so a Morse adapter's two Ctrl
+    // paddles can bind to dit and dah separately (#7354).
+    m_keys.append({0, y5, 1.5f, 1, kShortcutKeyLeftCtrl, "CTRL", {}});
     m_keys.append({1.5f, y5, 1.25f, 1, Qt::Key_Super_L, "WIN", {}});
-    m_keys.append({2.75f, y5, 1.25f, 1, Qt::Key_Alt, "ALT", {}});
+    m_keys.append({2.75f, y5, 1.25f, 1, kShortcutKeyLeftAlt, "ALT", {}});
     m_keys.append({4, y5, 6.25f, 1, Qt::Key_Space, "SPACE", {}});
-    m_keys.append({10.25f, y5, 1.25f, 1, Qt::Key_Alt, "ALT", {}});
+    m_keys.append({10.25f, y5, 1.25f, 1, kShortcutKeyRightAlt, "ALT", {}});
     m_keys.append({11.5f, y5, 1.25f, 1, Qt::Key_Super_R, "WIN", {}});
     m_keys.append({12.75f, y5, 1.25f, 1, Qt::Key_Menu, "MENU", {}});
-    m_keys.append({14, y5, 1, 1, Qt::Key_Control, "CTRL", {}});
+    m_keys.append({14, y5, 1, 1, kShortcutKeyRightCtrl, "CTRL", {}});
 
     m_keys.append({15.5f, y5, 1, 1, Qt::Key_Left, "\xE2\x97\x80", {}});   // ◀
     m_keys.append({16.5f, y5, 1, 1, Qt::Key_Down, "\xE2\x96\xBC", {}});   // ▼
@@ -487,9 +489,11 @@ void KeyboardMapWidget::announceKey(int idx)
     const KeyCap& k = m_keys[idx];
     QKeySequence seq(k.qtKey);
     const auto* act = m_mgr->actionForKey(seq);
+    // The cap reads "CTRL" on both sides; say which one.
+    const QString name = isShortcutSidedKey(k.qtKey) ? shortcutKeyText(seq) : k.label;
     QString desc = act
-        ? tr("%1: %2").arg(k.label, act->displayName)
-        : tr("%1: unbound").arg(k.label);
+        ? tr("%1: %2").arg(name, act->displayName)
+        : tr("%1: unbound").arg(name);
     setAccessibleDescription(desc);
     QAccessibleValueChangeEvent event(this, desc);
     QAccessible::updateAccessibility(&event);

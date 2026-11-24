@@ -1,5 +1,7 @@
 #include "ClientCompKnob.h"
 
+#include <QAccessible>
+#include <QAccessibleWidget>
 #include <QDoubleValidator>
 #include <QEvent>
 #include <QFocusEvent>
@@ -14,6 +16,9 @@
 #include <QPaintEvent>
 #include <QPen>
 #include <QPixmap>
+#include <QSignalBlocker>
+#include <QStringList>
+#include <QVariant>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
@@ -22,9 +27,94 @@
 namespace AetherSDR {
 
 namespace {
+constexpr float kWheelNormStep = 0.01f; // 1% per wheel notch or arrow key
+constexpr float kPageNormStep = 0.10f;  // 10% per Page Up/Page Down
+constexpr int kAccessibilitySettleMs = 250;
+}
+
+class ClientCompKnobAccessible : public QAccessibleWidget,
+                                 public QAccessibleValueInterface {
+public:
+    explicit ClientCompKnobAccessible(ClientCompKnob* knob)
+        // Slider, not Dial: Qt's Windows UIA bridge maps Dial to a custom
+        // control type, so JAWS and NVDA would not announce a slider.
+        : QAccessibleWidget(knob, QAccessible::Slider) {}
+
+    void* interface_cast(QAccessible::InterfaceType type) override
+    {
+        if (type == QAccessible::ValueInterface) {
+            return static_cast<QAccessibleValueInterface*>(this);
+        }
+        return QAccessibleWidget::interface_cast(type);
+    }
+
+    QString text(QAccessible::Text type) const override
+    {
+        if (type == QAccessible::Value) {
+            return knob()->formatValue();
+        }
+        return QAccessibleWidget::text(type);
+    }
+
+    QVariant currentValue() const override { return knob()->value(); }
+    QVariant minimumValue() const override { return knob()->m_minPhys; }
+    QVariant maximumValue() const override { return knob()->m_maxPhys; }
+    QVariant minimumStepSize() const override
+    {
+        const ClientCompKnob* k = knob();
+        if (k->m_physicalStep > 0.0f) {
+            return k->m_physicalStep;
+        }
+        const float next = k->m_norm <= 1.0f - kWheelNormStep
+            ? k->m_norm + kWheelNormStep : k->m_norm - kWheelNormStep;
+        const float physical = k->m_fromNorm ? k->m_fromNorm(next)
+            : k->m_minPhys + next * (k->m_maxPhys - k->m_minPhys);
+        return std::abs(physical - k->value());
+    }
+    void setCurrentValue(const QVariant& value) override
+    {
+        bool ok = false;
+        const float physical = value.toFloat(&ok);
+        if (ok && std::isfinite(physical) && knob()->isEnabled()) {
+            knob()->setValueFromUser(physical);
+        }
+    }
+
+    QStringList actionNames() const override
+    {
+        QStringList actions = QAccessibleWidget::actionNames();
+        actions << increaseAction() << decreaseAction();
+        return actions;
+    }
+    void doAction(const QString& action) override
+    {
+        if (!knob()->isEnabled()) {
+            return;
+        }
+        if (action == increaseAction() || action == decreaseAction()) {
+            knob()->stepBy(action == increaseAction() ? 1 : -1, false);
+        } else {
+            QAccessibleWidget::doAction(action);
+        }
+    }
+    QStringList keyBindingsForAction(const QString& action) const override
+    {
+        if (action == increaseAction()) {
+            return {QStringLiteral("Up"), QStringLiteral("Right")};
+        }
+        if (action == decreaseAction()) {
+            return {QStringLiteral("Down"), QStringLiteral("Left")};
+        }
+        return QAccessibleWidget::keyBindingsForAction(action);
+    }
+
+private:
+    ClientCompKnob* knob() const { return static_cast<ClientCompKnob*>(widget()); }
+};
+
+namespace {
 
 constexpr float kDragPxPerFullRange = 200.0f;  // 200 px vertical = 0..1
-constexpr float kWheelNormStep      = 0.01f;   // 1% per wheel notch
 constexpr float kFineMultiplier     = 0.25f;   // Shift-drag scales ×0.25
 constexpr float kArcStartDeg        = 225.0f;  // 7:30 clockwise to
 constexpr float kArcSpanDeg         = -270.0f; // 4:30  = 270° sweep
@@ -46,9 +136,35 @@ inline QColor kValueColor(const QWidget* w) { return AetherSDR::ThemeManager::in
 
 ClientCompKnob::ClientCompKnob(QWidget* parent) : QWidget(parent)
 {
+    static const bool factoryInstalled = [] {
+        QAccessible::installFactory([](const QString& key, QObject* object)
+            -> QAccessibleInterface* {
+            if (key == QLatin1String("AetherSDR::ClientCompKnob")) {
+                return new ClientCompKnobAccessible(static_cast<ClientCompKnob*>(object));
+            }
+            return nullptr;
+        });
+        return true;
+    }();
+    Q_UNUSED(factoryInstalled);
     setMinimumSize(58, 64);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent, false);
+    setAccessibleDescription(continuousKeyDescription());
+    m_accessibilityTimer.setSingleShot(true);
+    m_accessibilityTimer.setInterval(kAccessibilitySettleMs);
+    connect(&m_accessibilityTimer, &QTimer::timeout, this, [this] {
+        if (!hasFocus() || !QAccessible::isActive()) {
+            return;
+        }
+        const QString text = formatValue();
+        if (text == m_lastAccessibleText) {
+            return;
+        }
+        m_lastAccessibleText = text;
+        QAccessibleValueChangeEvent event(this, m_physical);
+        QAccessible::updateAccessibility(&event);
+    });
 
     // Inline value editor — child QLineEdit overlay positioned over the
     // value text the knob would otherwise paint.  Click to focus, type
@@ -85,7 +201,22 @@ ClientCompKnob::ClientCompKnob(QWidget* parent) : QWidget(parent)
 void ClientCompKnob::setLabel(const QString& text)
 {
     m_label = text;
+    if (m_accessibleLabel.isEmpty()) {
+        applyAccessibleLabel(text);
+    }
     update();
+}
+
+void ClientCompKnob::setAccessibleLabel(const QString& name)
+{
+    m_accessibleLabel = name;
+    applyAccessibleLabel(name.isEmpty() ? m_label : name);
+}
+
+void ClientCompKnob::applyAccessibleLabel(const QString& name)
+{
+    setAccessibleName(name);
+    m_valueEdit->setAccessibleName(tr("%1 value").arg(name));
 }
 
 void ClientCompKnob::setRange(float minPhysical, float maxPhysical)
@@ -130,12 +261,19 @@ void ClientCompKnob::setInlineEditEnabled(bool on)
 {
     if (m_inlineEdit == on) return;
     m_inlineEdit = on;
-    if (m_valueEdit) m_valueEdit->setVisible(on);
+    if (m_valueEdit) {
+        if (on) {
+            refreshValueEditDisplay();
+        }
+        m_valueEdit->setVisible(on);
+    }
     update();
 }
 
 void ClientCompKnob::setValue(float physical)
 {
+    const float previous = m_physical;
+    const float previousNorm = m_norm;
     m_physical = std::clamp(physical, m_minPhys, m_maxPhys);
     if (m_toNorm) {
         m_norm = std::clamp(m_toNorm(m_physical), 0.0f, 1.0f);
@@ -144,20 +282,167 @@ void ClientCompKnob::setValue(float physical)
         m_norm = std::clamp((m_physical - m_minPhys) / span, 0.0f, 1.0f);
     }
     refreshValueEditDisplay();
-    update();
+    if (m_physical != previous || m_norm != previousNorm) {
+        update();
+    }
+    if (m_physical != previous) {
+        scheduleAccessibleAnnouncement();
+    }
 }
 
 void ClientCompKnob::applyNorm(float norm)
 {
+    const float previous = m_physical;
     m_norm = std::clamp(norm, 0.0f, 1.0f);
     if (m_fromNorm) {
         m_physical = std::clamp(m_fromNorm(m_norm), m_minPhys, m_maxPhys);
     } else {
         m_physical = m_minPhys + m_norm * (m_maxPhys - m_minPhys);
     }
-    emit valueChanged(m_physical);
+    if (m_physical != previous) {
+        emit valueChanged(m_physical);
+        scheduleAccessibleAnnouncement();
+    }
     refreshValueEditDisplay();
     update();
+}
+
+void ClientCompKnob::setValueFromUser(float physical)
+{
+    const float previous = m_physical;
+    setValue(physical);
+    if (m_physical != previous) {
+        emit valueChanged(m_physical);
+    }
+}
+
+void ClientCompKnob::scheduleAccessibleAnnouncement()
+{
+    // Polling unchanged model values must not postpone the settled update.
+    if (hasFocus() && QAccessible::isActive()) {
+        m_accessibilityTimer.start();
+    }
+}
+
+void ClientCompKnob::focusInEvent(QFocusEvent* ev)
+{
+    m_lastAccessibleText = formatValue();
+    QWidget::focusInEvent(ev);
+}
+
+void ClientCompKnob::focusOutEvent(QFocusEvent* ev)
+{
+    m_accessibilityTimer.stop();
+    QWidget::focusOutEvent(ev);
+}
+
+void ClientCompKnob::setPhysicalStep(float step)
+{
+    m_physicalStep = std::max(step, 0.0f);
+    setAccessibleDescription(m_physicalStep > 0.0f
+        ? tr("Arrow keys and Page Up/Page Down step the value. "
+             "Home selects the minimum and End selects the maximum.")
+        : continuousKeyDescription());
+}
+
+QString ClientCompKnob::continuousKeyDescription()
+{
+    return tr("Arrow keys adjust the value; hold Shift for fine adjustment. "
+              "Page Up and Page Down make large steps. "
+              "Home selects the minimum and End selects the maximum.");
+}
+
+void ClientCompKnob::pageBy(int direction)
+{
+    if (m_physicalStep > 0.0f) {
+        stepBy(direction, false);
+        return;
+    }
+    applyNorm(m_norm + direction * kPageNormStep);
+}
+
+void ClientCompKnob::stepBy(int direction, bool fine)
+{
+    if (m_physicalStep > 0.0f) {
+        // Step from the nearest whole step: a drag can leave the knob between
+        // stages until the owner's refresh snaps it back.
+        const float base = m_minPhys
+            + std::round((m_physical - m_minPhys) / m_physicalStep) * m_physicalStep;
+        setValueFromUser(base + direction * m_physicalStep);
+        return;
+    }
+    applyNorm(m_norm + direction * kWheelNormStep * (fine ? kFineMultiplier : 1.0f));
+}
+
+bool ClientCompKnob::valueEditorHasFocus() const
+{
+    return m_valueEdit && m_valueEdit->hasFocus();
+}
+
+bool ClientCompKnob::event(QEvent* ev)
+{
+    // MainWindow binds the arrows as operating shortcuts (tune, AF gain), and
+    // an enabled QShortcut consumes its key before keyPressEvent (#5483).
+    // Claim the keys this knob documents for as long as it has focus.
+    // Not while the inline value editor has focus: it keeps Qt's own handling.
+    if (ev->type() == QEvent::ShortcutOverride && !valueEditorHasFocus()) {
+        auto* ke = static_cast<QKeyEvent*>(ev);
+        const auto mods = ke->modifiers() & ~(Qt::ShiftModifier | Qt::KeypadModifier);
+        switch (ke->key()) {
+        case Qt::Key_Up:
+        case Qt::Key_Down:
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+        case Qt::Key_Home:
+        case Qt::Key_End:
+        case Qt::Key_PageUp:
+        case Qt::Key_PageDown:
+            if (mods == Qt::NoModifier) {
+                ke->accept();
+                return true;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return QWidget::event(ev);
+}
+
+void ClientCompKnob::keyPressEvent(QKeyEvent* ev)
+{
+    if (valueEditorHasFocus()) {
+        // Propagated from the inline value editor: don't step mid-edit.
+        QWidget::keyPressEvent(ev);
+        return;
+    }
+    const bool fine = ev->modifiers() & Qt::ShiftModifier;
+    switch (ev->key()) {
+    case Qt::Key_Up:
+    case Qt::Key_Right:
+        stepBy(1, fine);
+        break;
+    case Qt::Key_Down:
+    case Qt::Key_Left:
+        stepBy(-1, fine);
+        break;
+    case Qt::Key_PageUp:
+        pageBy(1);
+        break;
+    case Qt::Key_PageDown:
+        pageBy(-1);
+        break;
+    case Qt::Key_Home:
+        applyNorm(0.0f);
+        break;
+    case Qt::Key_End:
+        applyNorm(1.0f);
+        break;
+    default:
+        QWidget::keyPressEvent(ev);
+        return;
+    }
+    ev->accept();
 }
 
 QString ClientCompKnob::formatValue() const
@@ -193,9 +478,15 @@ void ClientCompKnob::layoutValueEditor()
 
 void ClientCompKnob::refreshValueEditDisplay()
 {
-    if (!m_valueEdit || m_valueEdit->hasFocus()) return;  // don't fight active edit
+    if (!m_inlineEdit || !m_valueEdit || m_valueEdit->hasFocus()) return;
+    const QString text = formatValue();
+    // QLineEdit can send accessibility text events even for identical text;
+    // blocking QObject signals does not suppress those platform notifications.
+    if (m_valueEdit->text() == text) {
+        return;
+    }
     QSignalBlocker b(m_valueEdit);
-    m_valueEdit->setText(formatValue());
+    m_valueEdit->setText(text);
 }
 
 void ClientCompKnob::commitValueEdit()
@@ -394,6 +685,13 @@ void ClientCompKnob::mouseDoubleClickEvent(QMouseEvent* ev)
 void ClientCompKnob::wheelEvent(QWheelEvent* ev)
 {
     const int ticks = ev->angleDelta().y() / 120;
+    if (m_physicalStep > 0.0f) {
+        if (ticks != 0) {
+            stepBy(ticks, false);
+        }
+        ev->accept();
+        return;
+    }
     const float scale = (ev->modifiers() & Qt::ShiftModifier)
                           ? kFineMultiplier : 1.0f;
     applyNorm(m_norm + ticks * kWheelNormStep * scale);

@@ -8,6 +8,7 @@
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
 #include "core/backends/flex/CommandParser.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "gui/NtpSourcesPage.h"
 
 #include <QApplication>
@@ -18,7 +19,9 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSignalSpy>
-#include <QTableWidget>
+#include <QTabBar>
+#include <QCheckBox>
+#include <QGroupBox>
 
 #include <cstdio>
 #include <optional>
@@ -34,12 +37,23 @@ public:
 
 class NtpSourcesTestAccess {
 public:
+    static void gpsdo(RadioModel& radio, bool present, const QString& status, bool locked = false) {
+        radio.m_gpsdoPresent = present;
+        radio.m_gpsStatus = status;
+        radio.m_oscLocked = locked;
+        emit radio.oscillatorChanged();
+    }
     static void publish(RadioModel& radio) { radio.publishCapabilities(radio.isConnected()); }
     static void apply(RadioModel& radio, const NtpSourceDelta& d) { radio.applyNtpSourceChanges(d); }
-    static void message(RadioModel& radio, const QString& line, int generationsAgo = 0)
+    // Through the production transport signal and status ingress, tagged with
+    // the live session's epoch, or (previousSession) with the epoch a new
+    // connect has just retired.
+    static void message(RadioModel& radio, const QString& line, bool previousSession = false)
     {
-        radio.handleMessageReceived(CommandParser::parseLine(line),
-                                    radio.m_gpsSessionGeneration - quint64(generationsAgo));
+        if (previousSession) { radio.beginStatusSession(); }
+        emit radio.connection()->lineReceived(CommandParser::parseLine(line),
+                                              radio.m_statusEpoch - (previousSession ? 1 : 0));
+        QCoreApplication::sendPostedEvents();
     }
 };
 } // namespace AetherSDR
@@ -133,10 +147,20 @@ void flexDeclarationAndEncoding()
           "FLEX-8600 on 4.3.16 declares ten NTP sources");
     model = QStringLiteral("AU-520M");
     check(flex.capabilities().ntpSourceControl.has_value(), "Aurora declares them");
-    for (const QString& other : {QStringLiteral("FLEX-6700"), QStringLiteral("FLEX-6400M"), QString()}) {
-        model = other;
-        check(!flex.capabilities().ntpSourceControl, "6000-series and unknown models declare none");
+    // #7127: a FLEX-6300 on 4.3.16.42034 publishes ntp_sources, and FlexLib
+    // gates them on no platform, so the 6000 series declares them too.
+    for (const QString& sixK : {QStringLiteral("FLEX-6300"), QStringLiteral("FLEX-6700"),
+                                QStringLiteral("FLEX-6400M")}) {
+        model = sixK;
+        check(flex.capabilities().ntpSourceControl && flex.capabilities().ntpSourceControl->maxSources == 10,
+              "6000-series models on 4.3.16 declare ten NTP sources");
     }
+    model = QString();
+    check(!flex.capabilities().ntpSourceControl, "an unknown model declares none");
+    model = QStringLiteral("FLEX-6300");
+    firmware = QStringLiteral("4.3.15");
+    check(!flex.capabilities().ntpSourceControl, "a 6000-series radio on older firmware declares none");
+    firmware = QStringLiteral("4.3.16.42034");
     model = QStringLiteral("FLEX-8400");
     flex.requestNtpSource({Action::Subscribe, {}});
     flex.requestNtpSource({Action::Create, def(QStringLiteral("nist"))});
@@ -172,7 +196,7 @@ void statusDecode()
     QObject::connect(&flex, &IRadioBackend::ntpSourceChanged, [&seen](const NtpSourceDelta& d) { seen.append(d); });
     const ParsedMessage msg = CommandParser::parseLine(kMeasured);
     const QString body = msg.raw.mid(msg.raw.indexOf(QLatin1Char('|')) + 1).mid(12);
-    flex.decodeNtpSourceStatus(body);
+    flex.statusIngress()->decodeNtpSourceStatus(body);
     const NtpSourceDelta d = seen.value(0);
     check(seen.size() == 1 && d.id == QLatin1String("default-pool") && !d.removed
               && d.address == QStringLiteral("2.debian.pool.ntp.org") && d.directive == QStringLiteral("pool")
@@ -181,18 +205,29 @@ void statusDecode()
           "the measured line decodes every field it carries and nothing it does not");
     check(d.description == QStringLiteral("Debian NTP pool"), "the quoted description keeps its spaces");
 
-    flex.decodeNtpSourceStatus(QStringLiteral("id=x description=\"removed later\" stratum=2"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id=x description=\"removed later\" stratum=2"));
     check(seen.size() == 2 && !seen.at(1).removed && seen.at(1).description == QStringLiteral("removed later")
               && seen.at(1).stratum == 2,
           "only the word right after the id means removal");
-    flex.decodeNtpSourceStatus(QStringLiteral("id=x removed"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id=x removed"));
     check(seen.size() == 3 && seen.at(2).removed && seen.at(2).id == QLatin1String("x"), "a bare removed is a removal");
-    flex.decodeNtpSourceStatus(QStringLiteral("id=x reach=abc enabled=yes"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id=x reach=abc enabled=yes"));
     check(seen.size() == 4 && !seen.at(3).reach && !seen.at(3).enabled, "malformed numbers and flags are dropped");
-    flex.decodeNtpSourceStatus(QStringLiteral("address=y enabled=1"));
-    flex.decodeNtpSourceStatus(QStringLiteral("id= enabled=1"));
-    flex.decodeNtpSourceStatus(QStringLiteral("id=z"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("address=y enabled=1"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id= enabled=1"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id=z"));
     check(seen.size() == 4, "a line without a leading id, with an empty id or with nothing after it is ignored");
+
+    // Measured on a FLEX-6300, 4.3.16.42034 (#7127): the same shape, plus stratum.
+    const ParsedMessage sixK = CommandParser::parseLine(QStringLiteral(
+        "S17B07863|ntp_sources id=default-pool address=2.debian.pool.ntp.org enabled=1 directive=pool "
+        "selected=1 prefer=0 state=selected stratum=1 reach=255 description=\"Debian NTP pool\""));
+    flex.statusIngress()->decodeNtpSourceStatus(sixK.raw.mid(sixK.raw.indexOf(QLatin1Char('|')) + 1).mid(12));
+    const NtpSourceDelta s = seen.value(4);
+    check(seen.size() == 5 && s.id == QLatin1String("default-pool") && s.selected == true
+              && s.state == QStringLiteral("selected") && s.stratum == 1 && s.reach == 255
+              && s.description == QStringLiteral("Debian NTP pool"),
+          "the FLEX-6300's line decodes, stratum included");
 }
 
 struct Rig {
@@ -274,10 +309,10 @@ void productionRoute()
               && list.at(0).description == QLatin1String("Debian NTP pool") && list.at(0).inUse()
               && list.at(0).reach == 255,
           "the measured status line reaches the model through the production route");
-    NtpSourcesTestAccess::message(radio, QStringLiteral("S0|ntp_sources id=stale address=old.example enabled=1"), 1);
+    NtpSourcesTestAccess::message(radio, QStringLiteral("S0|ntp_sources id=stale address=old.example enabled=1"), true);
     check(radio.ntpSources().size() == 1, "a status queued from a previous session adds no row");
     FlexBackend flex;
-    check(!flex.decodeRawStatus(QStringLiteral("gps lat=1")) && flex.decodeRawStatus(QStringLiteral("ntp_sources id=a removed")),
+    check(!flex.statusIngress()->decodeRawStatus(QStringLiteral("gps lat=1")) && flex.statusIngress()->decodeRawStatus(QStringLiteral("ntp_sources id=a removed")),
           "the backend claims only the raw statuses it decodes");
 }
 
@@ -306,8 +341,8 @@ void subscription()
     Rig six;
     six.model = QStringLiteral("FLEX-6700");
     NtpSourcesTestAccess::publish(six.radio);
-    check(!six.backend->commands.contains(QStringLiteral("sub ntp_sources all")),
-          "a FLEX-6000 on 4.3.16 is never sent the subscription");
+    check(six.backend->commands.count(QStringLiteral("sub ntp_sources all")) == 1,
+          "a FLEX-6000 on 4.3.16 is sent the subscription once (#7127)");
 }
 
 void bridgeReadback()
@@ -596,63 +631,59 @@ struct PageRig : Rig {
         });
     }
     template <typename T> T* find(const char* name) { return page.findChild<T*>(QString::fromLatin1(name)); }
-    QTableWidget* table() { return find<QTableWidget>("ntpSourcesTable"); }
-    void select(int row) { table()->selectRow(row); }
+    QTabBar* tabs() { return find<QTabBar>("ntpServerTabs"); }
+    void select(int slot) {
+        tabs()->setCurrentIndex(slot);
+    }
+    QCheckBox* enabled() { return find<QCheckBox>("ntpSourceEnabled"); }
+    void add(const QString& id, int slot = 1) {
+        tabs()->setCurrentIndex(slot);
+        find<QLineEdit>("ntpSourceId")->setText(id);
+        find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("other.example"));
+        find<QPushButton>("ntpSourceSave")->click();
+    }
     void requestSecondSource(Action action)
     {
         if (action == Action::Enable) {
             source(QStringLiteral("b"), false);
-            table()->item(1, 6)->setCheckState(Qt::Checked);
+            select(1);
+            enabled()->click();
         } else {
-            find<QPushButton>("ntpAddSource")->click();
-            find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("b"));
-            find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("other.example"));
-            find<QPushButton>("ntpSourceSave")->click();
+            add(QStringLiteral("b"));
         }
+        select(0);
     }
 };
 
 void pagePendingPositiveRequests()
 {
     for (const Action action : {Action::Enable, Action::Create}) {
-        {
+        for (const bool accepted : {false, true}) {
             PageRig rig;
             rig.source(QStringLiteral("a"));
             rig.answer = false;
             rig.requestSecondSource(action);
             const RadioSetupCompletion reply = rig.backend->replies.back();
-            rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
+            if (accepted) { rig.accept(); }
+            rig.enabled()->click();
             check(rig.asked.size() == 1 && rig.asked.last().contains(QLatin1String("only enabled"))
                       && !rig.backend->commands.contains(QStringLiteral("ntp_sources disable id=a")),
-                  "a pending enable or create cannot waive the last-source disable confirmation");
-            rig.select(0);
+                  "pending/accepted enable or create needs status before waiving last-source warning");
             rig.find<QPushButton>("ntpRemoveSource")->click();
-            check(rig.asked.size() == 2 && rig.asked.last().contains(QLatin1String("only enabled"))
-                      && !rig.backend->commands.contains(QStringLiteral("ntp_sources remove id=a")),
-                  "a pending enable or create cannot hide the last-source removal warning");
-            reply({RadioSetupReply::Kind::Failed, static_cast<int>(0xE2000000u), QStringLiteral("refused")});
-            check(rig.table()->item(0, 6)->checkState() == Qt::Checked,
-                  "refusing the pending source leaves the confirmed source enabled after Cancel");
+            check(rig.asked.size() == 2 && !rig.backend->commands.contains(QStringLiteral("ntp_sources remove id=a")),
+                  "pending positive request cannot waive last-source removal warning");
+            if (!accepted) {
+                reply({RadioSetupReply::Kind::Failed, static_cast<int>(0xE2000000u), QStringLiteral("refused")});
+            }
+            check(rig.enabled()->isChecked(), "cancel preserves radio-reported enabled state");
         }
-        {
-            PageRig rig;
-            rig.source(QStringLiteral("a"));
-            rig.answer = false;
-            rig.requestSecondSource(action);
-            rig.accept();
-            rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
-            check(rig.asked.size() == 1 && !rig.backend->commands.contains(QStringLiteral("ntp_sources disable id=a")),
-                  "an accepted enable or create still needs its status before replacing the last enabled source");
-        }
-        {
-            PageRig rig;
-            rig.source(QStringLiteral("a"));
-            rig.requestSecondSource(action);
-            rig.source(QStringLiteral("b"));
-            rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
-            check(rig.asked.isEmpty() && rig.backend->commands.last() == QStringLiteral("ntp_sources disable id=a"),
-                  "a reported enabled source counts even while its enable or create reply is pending");
-        }
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.requestSecondSource(action);
+        rig.source(QStringLiteral("b"));
+        rig.enabled()->click();
+        check(rig.asked.isEmpty() && rig.backend->commands.last() == QStringLiteral("ntp_sources disable id=a"),
+              "reported enabled source counts while its positive reply is pending");
     }
 }
 
@@ -663,20 +694,21 @@ void page()
         plain.firmware = QStringLiteral("4.2.20.41343");
         NtpSourcesPage p(plain.radio);
         auto* reason = p.findChild<QLabel*>(QStringLiteral("ntpUnavailableReason"));
-        auto* table = p.findChild<QTableWidget*>(QStringLiteral("ntpSourcesTable"));
+        auto* tabs = p.findChild<QTabBar*>(QStringLiteral("ntpServerTabs"));
         check(reason && !reason->isHidden() && reason->text().contains(QLatin1String("4.3.16"))
-                  && table && !table->isEnabled() && !table->isHidden(),
-              "without the capability the page stays visible, dimmed, with the reason");
+                  && tabs && !tabs->isEnabled() && !tabs->isHidden(),
+              "unsupported radio keeps tabs visible, dimmed, with reason");
     }
     PageRig rig;
-    auto* add = rig.find<QPushButton>("ntpAddSource");
-    auto* edit = rig.find<QPushButton>("ntpEditSource");
     auto* remove = rig.find<QPushButton>("ntpRemoveSource");
     auto* count = rig.find<QLabel>("ntpSourceCount");
-    check(rig.table()->isEnabled() && add->isEnabled() && !edit->isEnabled() && !remove->isEnabled()
-              && count->text() == QLatin1String("0 of 10 sources"),
-          "a capable radio enables the table and Add; Edit and Remove wait for a selection");
-
+    auto* id = rig.find<QLineEdit>("ntpSourceId");
+    auto* address = rig.find<QLineEdit>("ntpSourceAddress");
+    auto* save = rig.find<QPushButton>("ntpSourceSave");
+    auto* issue = rig.find<QLabel>("ntpSourceIssue");
+    check(rig.tabs()->count() == 10 && rig.tabs()->isEnabled() && !remove->isEnabled()
+              && count->text() == QLatin1String("0 of 10 sources") && !save->isEnabled(),
+          "ten configuration tabs with empty validated editor and no source actions");
     NtpSourceDelta measured;
     measured.id = QStringLiteral("default-pool");
     measured.address = QStringLiteral("2.debian.pool.ntp.org");
@@ -687,160 +719,285 @@ void page()
     measured.state = QStringLiteral("selected");
     measured.reach = 255;
     NtpSourcesTestAccess::apply(rig.radio, measured);
-    check(rig.table()->rowCount() == 1 && rig.table()->item(0, 3)->text().contains(QLatin1String("In use"))
-              && rig.table()->item(0, 5)->text() == QLatin1String("8/8")
-              && rig.table()->item(0, 6)->checkState() == Qt::Checked,
-          "the measured source shows as in use, in words, with 8/8 reach");
-
-    rig.select(0);
-    check(edit->isEnabled() && remove->isEnabled(), "a selection enables Edit and Remove");
+    check(rig.find<QLabel>("ntpServiceState")->text() == QLatin1String("Reference selected")
+              && rig.find<QLabel>("ntpReachRegister")->text().contains(QStringLiteral("377 · 8/8"))
+              && rig.enabled()->isChecked() && id->text() == measured.id && id->isReadOnly(),
+          "source populates its tab with live reference, octal reach and immutable ID");
+    check(rig.find<QLabel>("ntpSourceStratum")->text() == QLatin1String("Not reported"),
+          "unknown source stratum is never inferred from selection");
+    address->setText(QStringLiteral("draft.example"));
     NtpSourceDelta reach;
-    reach.id = QStringLiteral("default-pool");
-    reach.reach = 0x0F;
+    reach.id = measured.id;
+    reach.reach = 15;
     NtpSourcesTestAccess::apply(rig.radio, reach);
-    check(rig.table()->item(0, 5)->text() == QLatin1String("4/8") && rig.table()->currentRow() == 0
-              && !rig.table()->selectedItems().isEmpty(),
-          "a live status refreshes the row in place and keeps the selection");
-
-    // Disabling the only enabled source asks first; Cancel sends nothing.
+    check(rig.find<QLabel>("ntpReachRegister")->text().contains(QStringLiteral("017 · 4/8"))
+              && rig.find<QLabel>("ntpPoll1")->accessibleName().contains(QLatin1String("no reply"))
+              && rig.find<QLabel>("ntpPoll8")->accessibleName().contains(QLatin1String("reply received"))
+              && address->text() == QLatin1String("draft.example"),
+          "poll strip orders bits oldest to newest and live status preserves edits");
+    rig.tabs()->setCurrentIndex(1);
+    rig.tabs()->setCurrentIndex(0);
+    check(address->text() == QLatin1String("draft.example"), "switching tabs preserves unsaved per-server drafts");
+    NtpSourcesTestAccess::gpsdo(rig.radio, true, QStringLiteral("Fine Lock"), true);
+    check(rig.find<QWidget>("ntpGpsCard")->property("ntpGold").toBool()
+              && rig.find<QLabel>("ntpGpsReference")->text() == QLatin1String("GPSDO locked")
+              && !rig.find<QLabel>("ntpSourceStratum")->text().contains(QLatin1String("1")),
+          "GPSDO lock gets gold chrome without inventing local stratum one");
+    NtpSourcesTestAccess::gpsdo(rig.radio, false, QStringLiteral("Not Present"));
+    check(!rig.find<QWidget>("ntpGpsCard")->property("ntpGold").toBool(), "gold clears when GPSDO is no longer present");
+    rig.find<QPushButton>("ntpSourceReset")->click();
+    check(address->text() == *measured.address && !save->isEnabled(), "Reset restores the radio definition");
     rig.answer = false;
-    rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
-    check(rig.asked.size() == 1 && rig.asked.last().contains(QLatin1String("only enabled"))
-              && !rig.backend->commands.contains(QStringLiteral("ntp_sources disable id=default-pool"))
-              && rig.table()->item(0, 6)->checkState() == Qt::Checked,
-          "disabling the last enabled source warns, and Cancel leaves the radio's state shown");
+    rig.enabled()->click();
+    check(rig.asked.size() == 1 && rig.enabled()->isChecked() && rig.backend->commands.isEmpty(),
+          "last enabled source asks; cancel sends nothing");
     rig.answer = true;
-    rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
-    check(rig.backend->commands.contains(QStringLiteral("ntp_sources disable id=default-pool"))
-              && rig.table()->item(0, 6)->checkState() == Qt::Checked,
-          "a confirmed toggle sends the request, and the box follows the radio, not the click");
-    check(!(rig.table()->item(0, 6)->flags() & Qt::ItemIsUserCheckable) && !remove->isEnabled(),
-          "while the radio has not answered, the row cannot be changed again");
+    rig.enabled()->click();
+    check(rig.enabled()->isChecked() && !rig.enabled()->isEnabled() && !remove->isEnabled()
+              && rig.backend->commands.last() == QStringLiteral("ntp_sources disable id=default-pool"),
+          "toggle waits for radio status and locks pending actions");
     rig.accept();
-
     remove->click();
     check(rig.asked.last().contains(QLatin1String("only enabled"))
               && rig.backend->commands.last() == QStringLiteral("ntp_sources remove id=default-pool"),
-          "removing the last enabled source warns, then sends the remove");
-
-    // Add: live validation, never sending an invalid definition.
-    add->click();
-    auto* id = rig.find<QLineEdit>("ntpSourceId");
-    auto* address = rig.find<QLineEdit>("ntpSourceAddress");
-    auto* save = rig.find<QPushButton>("ntpSourceSave");
-    auto* issue = rig.find<QLabel>("ntpSourceIssue");
+          "removing last enabled source confirms before sending");
+    rig.tabs()->setCurrentIndex(1);
     id->setText(QStringLiteral("default-pool"));
     address->setText(QStringLiteral("time.nist.gov"));
-    check(!save->isEnabled() && issue->text().contains(QLatin1String("already exists")),
-          "a duplicate id is refused with the reason");
+    check(!save->isEnabled() && issue->text().contains(QLatin1String("already exists")), "duplicate ID refused");
     id->setText(QStringLiteral("nist"));
     address->setText(QStringLiteral("time nist"));
-    check(!save->isEnabled() && issue->text().contains(QLatin1String("address")),
-          "an invalid address is refused with the reason");
+    check(!save->isEnabled(), "invalid address refused");
     address->setText(QStringLiteral("time.nist.gov"));
-    check(save->isEnabled() && issue->isHidden(), "a valid definition can be saved");
-    const qsizetype before = rig.backend->commands.size();
     save->click();
-    check(rig.backend->commands.size() == before + 1
-              && rig.backend->commands.last() == QStringLiteral("ntp_sources create id=nist address=time.nist.gov directive=server")
-              && rig.table()->rowCount() == 1,
-          "Add sends the create and adds no row until the radio reports it");
-
-    // Full: Add is dimmed with the reason.
-    for (int i = 0; i < 9; ++i) { rig.source(QStringLiteral("s%1").arg(i)); }
-    check(rig.radio.ntpSources().size() == 10 && !add->isEnabled() && add->toolTip().contains(QLatin1String("at most 10"))
-              && count->text() == QLatin1String("10 of 10 sources"),
-          "at ten sources Add is disabled with the reason");
+    check(rig.radio.ntpSources().size() == 1
+              && rig.backend->commands.last() == QStringLiteral("ntp_sources create id=nist address=time.nist.gov directive=server"),
+          "empty slot creates source without inventing reported state");
 }
 
 void pageSafeguards()
 {
-    auto* message = static_cast<QLabel*>(nullptr);
     {
-        // Two enabled sources, two unticks before either reply: the second asks.
         PageRig rig;
         rig.source(QStringLiteral("a"));
         rig.source(QStringLiteral("b"));
-        rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
-        rig.table()->item(1, 6)->setCheckState(Qt::Unchecked);
-        check(rig.asked.size() == 1 && rig.asked.last().contains(QLatin1String("only enabled"))
-                  && rig.backend->commands.count(QStringLiteral("ntp_sources disable id=b")) == 1,
-              "a disable still in flight counts toward the last-enabled-source warning");
+        rig.enabled()->click();
+        rig.select(1);
+        rig.enabled()->click();
+        check(rig.asked.size() == 1 && rig.asked.last().contains(QLatin1String("only enabled")),
+              "pending disable counts toward last-source warning across tabs");
     }
     {
-        // The session changes while the operator is asked: nothing is sent.
         PageRig rig;
         rig.source(QStringLiteral("a"));
         rig.duringConfirm = [&rig] { RadioSetupControlTestAccess::replaceConnectionGeneration(rig.radio); };
-        rig.select(0);
         rig.find<QPushButton>("ntpRemoveSource")->click();
-        message = rig.find<QLabel>("ntpSourcesMessage");
-        check(rig.asked.size() == 1 && rig.backend->commands.isEmpty()
-                  && message->text().contains(QLatin1String("Nothing was sent")),
-              "a remove confirmed after the session changed is not sent");
-        rig.asked.clear();
-        message->clear();
-        rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
-        check(rig.asked.size() == 1 && rig.backend->commands.isEmpty()
-                  && message->text().contains(QLatin1String("Nothing was sent")),
-              "nor is a disable");
+        check(rig.backend->commands.isEmpty()
+                  && rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("Nothing was sent")),
+              "session change during remove confirmation sends nothing");
+        rig.enabled()->click();
+        check(rig.backend->commands.isEmpty(), "session change during disable confirmation sends nothing");
     }
     {
         PageRig rig;
         rig.source(QStringLiteral("a"));
-        rig.select(0);
-        rig.find<QPushButton>("ntpEditSource")->click();
         auto* save = rig.find<QPushButton>("ntpSourceSave");
-        auto* issue = rig.find<QLabel>("ntpSourceIssue");
-        check(!save->isEnabled() && issue->text().contains(QLatin1String("Nothing has changed")),
-              "Save Changes with nothing changed sends no remove and create");
+        check(!save->isEnabled(), "unchanged definition sends no remove/create");
         rig.find<QLineEdit>("ntpSourceDescription")->setText(QStringLiteral("Shack GPS\n"));
-        check(!save->isEnabled() && issue->text().contains(QLatin1String("one line")),
-              "a pasted description ending in a newline cannot be saved");
+        check(!save->isEnabled(), "description with newline refused");
         rig.find<QLineEdit>("ntpSourceDescription")->setText(QStringLiteral("Shack GPS"));
-        check(save->isEnabled(), "a real change can be saved");
         save->click();
         check(rig.backend->commands == QStringList{QStringLiteral("ntp_sources remove id=a")},
-              "and starts the edit");
+              "saving modified definition starts guarded replacement");
     }
     {
-        // Another client fills the list while the Add form is open.
         PageRig rig;
-        rig.find<QPushButton>("ntpAddSource")->click();
+        rig.tabs()->setCurrentIndex(9);
         rig.find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("new"));
         rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("time.nist.gov"));
-        auto* save = rig.find<QPushButton>("ntpSourceSave");
-        check(save->isEnabled(), "the form is valid");
         for (int i = 0; i < 10; ++i) { rig.source(QStringLiteral("s%1").arg(i)); }
-        check(!save->isEnabled() && rig.find<QLabel>("ntpSourceIssue")->text().contains(QLatin1String("at most 10")),
-              "a list filled by another client disables Save with the reason");
+        check(!rig.find<QPushButton>("ntpSourceSave")->isEnabled()
+                  && rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("s9")
+                  && rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("draft was discarded")),
+              "a full radio inventory replaces a draft with the reported source and an explicit notice");
     }
     {
         PageRig rig;
-        auto* add = rig.find<QPushButton>("ntpAddSource");
-        auto* id = rig.find<QLineEdit>("ntpSourceId");
-        auto* address = rig.find<QLineEdit>("ntpSourceAddress");
-        auto* save = rig.find<QPushButton>("ntpSourceSave");
-        message = rig.find<QLabel>("ntpSourcesMessage");
-        add->click();
-        id->setText(QStringLiteral("nist"));
-        address->setText(QStringLiteral("time.nist.gov"));
-        save->click();
-        add->click();
-        id->setText(QStringLiteral("nist"));
-        check(!save->isEnabled() && rig.find<QLabel>("ntpSourceIssue")->text().contains(QLatin1String("being added")),
-              "an id whose create is still in flight cannot be added twice");
-        rig.find<QPushButton>("ntpSourceCancel")->click();
+        rig.add(QStringLiteral("nist"));
+        rig.tabs()->setCurrentIndex(2);
+        rig.find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("nist"));
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("time.nist.gov"));
+        check(!rig.find<QPushButton>("ntpSourceSave")->isEnabled()
+                  && rig.find<QLabel>("ntpSourceIssue")->text().contains(QLatin1String("being added")),
+              "pending create cannot be duplicated from another tab");
         rig.refuse(QString());
-        check(message->text() == QLatin1String("The radio did not add nist: no reason given"),
-              "a refusal without a reason does not end in a bare colon");
-        add->click();
-        id->setText(QStringLiteral("nist2"));
-        address->setText(QStringLiteral("time.nist.gov"));
-        save->click();
+        check(rig.find<QLabel>("ntpSourcesMessage")->text() == QLatin1String("The radio did not add nist: no reason given"),
+              "refusal includes explicit missing-reason text");
+        rig.add(QStringLiteral("nist2"), 3);
         rig.backend->replyLast({RadioSetupReply::Kind::Failed, -1, QStringLiteral("no radio response")});
-        check(message->text().contains(QLatin1String("did not answer")),
-              "a timeout says the radio did not answer, not that it refused");
+        check(rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("did not answer")),
+              "timeout is distinguished from refusal");
+    }
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.source(QStringLiteral("b"));
+        rig.select(1);
+        NtpSourceDelta gone; gone.id = QStringLiteral("a"); gone.removed = true;
+        NtpSourcesTestAccess::apply(rig.radio, gone);
+        check(rig.tabs()->currentIndex() == 1
+                  && rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("b"),
+              "removing another source preserves tab identity");
+    }
+}
+
+void pageReviewRegressions()
+{
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.select(1);
+        rig.backend->live = false;
+        NtpSourcesTestAccess::publish(rig.radio);
+        RadioSetupControlTestAccess::replaceConnectionGeneration(rig.radio);
+        rig.backend->live = true;
+        NtpSourcesTestAccess::publish(rig.radio);
+        rig.source(QStringLiteral("a"));
+        rig.find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("after-reconnect"));
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("clock.example"));
+        check(rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "reconnect refreshes the empty tab session without switching tabs or resetting");
+    }
+    {
+        PageRig rig;
+        rig.select(1);
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("draft.example"));
+        rig.select(0);
+        rig.select(1);
+        rig.find<QLineEdit>("ntpSourceAddress")->clear();
+        rig.select(0);
+        rig.select(1);
+        check(rig.find<QLineEdit>("ntpSourceAddress")->text().isEmpty(),
+              "clearing an add draft does not resurrect its parked text");
+    }
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.source(QStringLiteral("a"), true, QStringLiteral("changed.example"));
+        check(rig.find<QLineEdit>("ntpSourceAddress")->text() == QLatin1String("changed.example")
+                  && !rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "an untouched form follows reported definition changes without inventing an edit");
+        rig.select(1);
+        rig.source(QStringLiteral("a"), true, QStringLiteral("changed-again.example"));
+        rig.select(0);
+        check(rig.find<QLineEdit>("ntpSourceAddress")->text() == QLatin1String("changed-again.example")
+                  && !rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "visiting a source does not save a stale pristine form as a draft");
+    }
+    for (bool parked : {false, true}) {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.select(1);
+        // An address-only draft is still a draft, even before its ID is entered.
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("mine.example"));
+        if (parked) { rig.select(0); }
+        rig.source(QStringLiteral("theirs"), true, QStringLiteral("theirs.example"));
+        rig.select(1);
+        check(rig.find<QLineEdit>("ntpSourceAddress")->text() == QLatin1String("mine.example")
+                  && !rig.find<QPushButton>("ntpRemoveSource")->isEnabled()
+                  && !rig.enabled()->isEnabled()
+                  && rig.tabs()->tabToolTip(2).contains(QLatin1String("theirs.example")),
+              "another client skips both active and parked add drafts while a free slot exists");
+    }
+    for (bool parked : {false, true}) {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.source(QStringLiteral("b"));
+        rig.select(1);
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("edited.example"));
+        if (parked) { rig.select(0); }
+        rig.removed(QStringLiteral("b"));
+        rig.select(1);
+        check(rig.find<QLineEdit>("ntpSourceId")->text().isEmpty()
+                  && rig.find<QLineEdit>("ntpSourceAddress")->text().isEmpty()
+                  && !rig.find<QPushButton>("ntpSourceSave")->isEnabled()
+                  && rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("The radio no longer lists b")),
+              "removed-source edit drafts are discarded with a notice and cannot become an add");
+    }
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.source(QStringLiteral("b"));
+        rig.select(1);
+        rig.removed(QStringLiteral("b"));
+        const QString text = rig.find<QLabel>("ntpSourcesMessage")->text();
+        check(text.contains(QLatin1String("The radio no longer lists b")) && !text.contains(QLatin1String("draft")),
+              "removing a selected but untouched source reports the removal without claiming a discarded draft");
+    }
+    for (bool replyFirst : {false, true}) {
+        PageRig rig;
+        rig.add(QStringLiteral("mine"), 2);
+        check(rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("mine")
+                  && rig.find<QLabel>("ntpSelectionState")->text().contains(QLatin1String("Adding"))
+                  && !rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "an unreported create shows its definition and a pending state");
+        if (replyFirst) { rig.accept(); }
+        rig.select(1);
+        rig.find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("mine"));
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("duplicate.example"));
+        check(!rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "an accepted but unreported create still prevents duplicate IDs");
+        rig.source(QStringLiteral("mine"), true, QStringLiteral("other.example"));
+        if (!replyFirst) { rig.accept(); }
+        rig.select(2);
+        check(rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("mine")
+                  && rig.find<QLineEdit>("ntpSourceId")->isReadOnly()
+                  && rig.tabs()->tabToolTip(0).contains(QLatin1String("empty")),
+              "create keeps its requested tab with either reply/status ordering");
+    }
+    {
+        PageRig rig;
+        for (int i = 0; i < 9; ++i) { rig.source(QStringLiteral("s%1").arg(i)); }
+        rig.add(QStringLiteral("mine"), 9);
+        rig.accept();
+        rig.source(QStringLiteral("theirs"));
+        check(rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("theirs")
+                  && rig.find<QLineEdit>("ntpSourceId")->isReadOnly()
+                  && !rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("draft was discarded")),
+              "a full reported inventory outranks an unreported create without calling it a discarded draft");
+    }
+    {
+        PageRig rig;
+        rig.add(QStringLiteral("refused"), 2);
+        rig.refuse();
+        check(rig.find<QLineEdit>("ntpSourceId")->text().isEmpty(),
+              "failed create releases its reservation and returns to an empty form");
+        rig.add(QStringLiteral("unreported"), 2);
+        rig.accept();
+        rig.backend->live = false;
+        NtpSourcesTestAccess::publish(rig.radio);
+        RadioSetupControlTestAccess::replaceConnectionGeneration(rig.radio);
+        rig.backend->live = true;
+        NtpSourcesTestAccess::publish(rig.radio);
+        rig.select(2);
+        rig.find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("unreported"));
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("clock.example"));
+        check(rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "new session retires accepted but unreported create reservations");
+    }
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("hostile"), true, QStringLiteral("<b>spoof</b><img src='file:///tmp/x'>"));
+        check(!rig.tabs()->tabToolTip(0).contains(QLatin1String("<b>"))
+                  && rig.tabs()->tabToolTip(0).contains(QLatin1String("&lt;b&gt;")),
+              "radio addresses are escaped before they enter rich-text tooltips");
+        check(rig.tabs()->accessibleTabName(0).contains(QLatin1String("hostile"))
+                  && rig.tabs()->accessibleTabName(0).contains(QLatin1String("Server 1"))
+                  && rig.tabs()->accessibleTabName(1).contains(QLatin1String("empty")),
+              "screen readers receive source identity and state, including empty tabs");
+        NtpSourcesTestAccess::gpsdo(rig.radio, true, QStringLiteral("Locked"), false);
+        check(!rig.find<QWidget>("ntpGpsCard")->property("ntpGold").toBool(),
+              "GPSDO text alone cannot override an unlocked oscillator flag");
     }
 }
 
@@ -860,6 +1017,7 @@ int main(int argc, char** argv)
     replaceSequence();
     page();
     pageSafeguards();
+    pageReviewRegressions();
     pagePendingPositiveRequests();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ok", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

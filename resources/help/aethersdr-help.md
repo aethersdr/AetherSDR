@@ -77,7 +77,6 @@ This menu contains configuration that changes station behavior, control surfaces
 - `multiFLEX...`: opens the multi-operator dashboard.
 - `TX Band Settings...`: opens band-specific transmit settings such as RF power, tune power, and inhibit or interlock choices.
 - `Inhibit during TUNE` selects which integrations are held while the radio is tuning.
-- `AetherRX...` opens the receive chain: noise reduction, gate, EQ, compressor, tube, voice processor and output.
 - `Settings Browser...` exposes the stored application settings.
 - Autostart items for CAT, TCI, and DAX let you decide which services should come up automatically.
 - `Keyboard Shortcuts` enables or disables shortcut handling, and `Configure Shortcuts...` opens the shortcut editor.
@@ -98,6 +97,7 @@ This menu manages operating profiles.
 This is the everyday operations menu. Items appear or enable themselves according to the connected radio and features included in the build.
 
 - `Add Panadapter` creates another display when the connected radio has capacity.
+- `AetherRX...` opens the receive chain: noise reduction, gate, EQ, compressor, tube, voice processor and output.
 - `AetherTX...`, `CW Keyer`, and `Copy Assist` show their operating panels when available.
 - `AetherModem...` opens the packet-decoder workspace, while `Configure KiwiSDR...` jumps to KiwiSDR configuration.
 - `Start SWR Scan...`, `Pre-tune ATU Bands...`, and `Clear ATU Memories...` provide guarded tuner operations on supported radios.

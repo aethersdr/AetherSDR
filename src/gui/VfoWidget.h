@@ -197,14 +197,13 @@ public:
         return (gapLeft >= gapRight) ? ForceLeft : ForceRight;
     }
 
+    // Sort key for an attached diversity pair: the parent first, then the
+    // child, else the lower slice ID. diversity_index is the partner's slice
+    // index (FlexLib Slice.cs), not an order, so it is not used here (#7448).
     static int diversityPairOrderKey(bool diversityParent,
                                      bool diversityChild,
-                                     int diversityIndex,
                                      int sliceId)
     {
-        if (diversityIndex >= 0) {
-            return diversityIndex;
-        }
         if (diversityParent) {
             return 0;
         }
@@ -215,13 +214,34 @@ public:
     }
 
     // Locked flag side for an attached diversity pair member, by
-    // diversityPairOrderKey index. Index 0 is the DIV parent when the radio reports
-    // diversity_parent / diversity_index (else the lower slice ID) and locks RIGHT
-    // to match SmartSDR; index 1 locks LEFT. Lock*, not Force*, so the pair keeps
-    // opposite sides at a pan edge (#2663, #3880).
+    // diversityPairOrderKey position: position 0 (the DIV parent, else the
+    // lower slice ID) locks RIGHT to match SmartSDR; position 1 locks LEFT.
+    // Lock*, not Force*, so the pair keeps opposite sides at a pan edge
+    // (#2663, #3880).
     static FlagDir diversityPairFlagDir(int orderIndex)
     {
         return orderIndex == 0 ? LockRight : LockLeft;
+    }
+
+    // Side of an RTTY flag. RTTY puts a lone flag to the right of the
+    // passband, clear of the mark/space tone cues (#5097), but that default
+    // never replaces a side an earlier pass locked: a diversity or split pair
+    // in RTTY keeps its two flags on opposite sides. Applied unconditionally,
+    // it stacked a diversity pair's flags on the same spot (#7215).
+    static FlagDir rttyFlagDir(bool sideAlreadyLocked, FlagDir lockedDir)
+    {
+        return sideAlreadyLocked ? lockedDir : ForceRight;
+    }
+
+    // Marker x for an RTTY flag. A right-side flag starts just past the high
+    // filter edge, as before; a left-side flag ends just before the low edge,
+    // so it sits outside the passband instead of across the tone cues (#7215).
+    static constexpr int kRttyFlagEdgeGapPx = 4;
+    static int rttyFlagAnchorX(int lowEdgeX, int highEdgeX, FlagDir dir)
+    {
+        return (dir == ForceLeft || dir == LockLeft)
+            ? lowEdgeX - kRttyFlagEdgeGapPx
+            : highEdgeX + kRttyFlagEdgeGapPx;
     }
 
     static FlagPlacement placementForMarker(int markerX,
@@ -271,6 +291,7 @@ public:
     // on top of the slice markers. No-op unless the SmartMTR meter + value labels
     // are active and the flag is expanded. Coordinates are SpectrumWidget-local.
     void drawSmartMtrLabels(QPainter& p) const;
+    QRect smartMtrLabelsCoverageRect() const;
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) were
     // removed from the VFO DSP grid; that family lives in the spectrum
@@ -378,6 +399,7 @@ protected:
 
 private:
     void syncShadowGeometry();
+    void updateMeterIfPixelsChanged();
     void updateSignalMeterTarget();
     void animateSignalMeter();
     // Build and push the current MeterInput (RX signal vs the selected TX meter)
@@ -464,6 +486,9 @@ private:
     bool           m_receiveMeterReadingActive{false};
     QTimer         m_signalMeterAnimation;
     QElapsedTimer  m_signalMeterElapsed;
+    QRect          m_lastRequestedMeterBar;
+    int            m_lastRequestedMeterFill{-1};
+    bool           m_lastRequestedMeterRelative{false};
     float          m_signalMeterFraction{0.0f};
     float          m_targetSignalMeterFraction{0.0f};
     bool           m_collapsed{false};

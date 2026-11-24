@@ -1,3 +1,5 @@
+#include "FlexSliceStatusTestSupport.h"
+#include "FlexSetupStatusTestSupport.h"
 // #6506: production receive routing and firmware status, injected without sockets.
 #include "TestSettingsProfile.h"
 #include "core/AgcTCalibrator.h"
@@ -58,8 +60,7 @@ void license(RadioModel& radio, const QString& enabled)
     const Kvs kvs{{QStringLiteral("name"), QStringLiteral("auto_agc_t")},
                   {QStringLiteral("enabled"), enabled},
                   {QStringLiteral("reason"), QStringLiteral("PLUS")}};
-    QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
-                              Q_ARG(QString, QStringLiteral("license feature")), Q_ARG(Kvs, kvs));
+    FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("license feature"), kvs);
 }
 
 SliceDelta report(std::optional<AgcThresholdMode> mode = AgcThresholdMode::Manual)
@@ -120,16 +121,16 @@ void wireAndParser()
           "exact FlexLib mode commands carry no threshold, speed or off-level field");
     SliceModel slice(2);
     QSignalSpy requests(&slice, &SliceModel::receiveAgcThresholdModeRequested);
-    QObject::connect(&flex, &IRadioBackend::sliceChanged, &slice,
-                     [&](int, const SliceDelta& delta) { slice.applyChanges(delta); });
+    QObject::connect(&flex, &IRadioBackend::sliceObserved, &slice,
+                     [&](const SliceObservation& observation) { slice.applyChanges(observation.values); });
     for (const QString& invalid : {QStringLiteral("AUTO"), QStringLiteral("Manual"), QStringLiteral("1"),
                                   QStringLiteral("auto "), QString()}) {
-        flex.decodeSliceStatus(2, {{QStringLiteral("agc_threshold_mode"), invalid}});
+        publishFlexSliceStatus(flex, 2, {{QStringLiteral("agc_threshold_mode"), invalid}});
         check(!slice.agcThresholdMode(), "invalid mode status leaves observation unknown");
     }
-    flex.decodeSliceStatus(2, {{QStringLiteral("agc_threshold_mode"), QStringLiteral("auto")}});
+    publishFlexSliceStatus(flex, 2, {{QStringLiteral("agc_threshold_mode"), QStringLiteral("auto")}});
     check(slice.agcThresholdMode() == AgcThresholdMode::Automatic, "radio auto status is authoritative");
-    flex.decodeSliceStatus(2, {{QStringLiteral("agc_threshold_mode"), QStringLiteral("manual")}});
+    publishFlexSliceStatus(flex, 2, {{QStringLiteral("agc_threshold_mode"), QStringLiteral("manual")}});
     check(slice.agcThresholdMode() == AgcThresholdMode::Manual && requests.isEmpty() && commands.size() == 2,
           "radio manual status changes observation without command feedback");
 }
@@ -212,9 +213,17 @@ void staleManualCurve()
     calibrator.setSlice(s);
     calibrator.setSettleMs(1);
     QObject::connect(s, &SliceModel::agcThresholdChanged, &calibrator, &AgcTCalibrator::onValueChanged);
+    // Pin the guard: a settle with no new audio since the move records nothing.
+    QSignalSpy noAudio(&calibrator, &AgcTCalibrator::noAudio);
+    QSignalSpy manualNoAudio(&calibrator, &AgcTCalibrator::manualNoAudio);
+    calibrator.onValueChanged(10);
+    QTest::qWait(140);
+    check(calibrator.curve().isEmpty() && manualNoAudio.size() == 1 && noAudio.isEmpty(),
+          "a manual settle with no audio since the move records no point and reports "
+          "manualNoAudio, not the sweep's noAudio");
     for (const int value : {20, 50, 80}) {
-        calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);
         calibrator.onValueChanged(value);
+        calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);
         QTest::qWait(140);
     }
     check(calibrator.hasRecommendation() && calibrator.curve().size() == 3,
@@ -234,6 +243,34 @@ void staleManualCurve()
     calibrator.applyRecommendation();
     check(!calibrator.hasRecommendation() && f.backend->agcs.size() == writes,
           "automatic threshold reports cannot resurrect an old recommendation for later Manual apply");
+}
+
+void ownWriteEchoRaisesNoNotice()
+{
+    // Apply writes the recommendation. Its echo comes back through
+    // onValueChanged; with no audio, that settle must not raise the manual
+    // no-audio notice over "Applied AGC-T = N.". The echo is consumed once.
+    Fixture f;
+    license(f.radio, QStringLiteral("1"));
+    SliceModel* s = f.slice();
+    AgcTCalibrator calibrator;
+    calibrator.setSlice(s);
+    calibrator.setSettleMs(1);
+    for (const int value : {20, 50, 80}) {
+        calibrator.onValueChanged(value);
+        calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);
+        QTest::qWait(140);
+    }
+    check(calibrator.hasRecommendation(), "manual points establish a recommendation to apply");
+    const int applied = calibrator.recommendedValue();
+    QSignalSpy manualNoAudio(&calibrator, &AgcTCalibrator::manualNoAudio);
+    calibrator.applyRecommendation();
+    calibrator.onValueChanged(applied); // the apply's echo
+    QTest::qWait(140);
+    check(manualNoAudio.isEmpty(), "the echo of the calibrator's own apply raises no notice");
+    calibrator.onValueChanged(applied); // now the operator's own move
+    QTest::qWait(140);
+    check(manualNoAudio.size() == 1, "a later silent move to the same value still raises the notice");
 }
 
 void calibrationAuthorityTransitions()
@@ -259,8 +296,8 @@ void calibrationAuthorityTransitions()
     emit f.backend->sliceChanged(0, report());
     check(f.slice() == s, "reconnect reclaims the existing slice object");
     calibrator.setSlice(s);
-    calibrator.onAudioLevel(0.2f);
     calibrator.onValueChanged(40);
+    calibrator.onAudioLevel(0.2f);
     QTest::qWait(140);
     check(calibrator.curve().size() == 1,
           "explicit rebind of a reclaimed slice permits fresh manual recording");
@@ -320,6 +357,7 @@ int main(int argc, char** argv)
     gatesAndAuthority();
     reentrantPendingNotifications();
     staleManualCurve();
+    ownWriteEchoRaisesNoNotice();
     calibrationAuthorityTransitions();
     calibrationAndSession();
     return failures == 0 ? 0 : 1;

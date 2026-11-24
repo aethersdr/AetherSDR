@@ -17,9 +17,10 @@ Guards the dependency direction the aetherd RFC
 
   EB3  No file ABOVE the radio seam may include a VENDOR header —
        family-specific wire code kept *behind* IRadioBackend. "Above the
-       seam" is everything in src/gui/, src/core/, and src/models/ plus
-       app-shell files at the src/ root, EXCEPT the backend tree
-       (src/core/backends/) and the vendor translation units themselves.
+       seam" is everything in src/gui/, src/core/, src/models/ and the
+       aetherd shell (src/aetherd/) plus app-shell files at the src/ root,
+       EXCEPT the backend tree (src/core/backends/) and the vendor
+       translation units themselves.
        Today's coupling is frozen as a per-file
        baseline of the EXACT vendor headers each file may include
        (KNOWN_VENDOR_INCLUDE_BASELINE). A file may only SHRINK its set;
@@ -62,9 +63,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 ENGINE_DIRS = [REPO / "src" / "core", REPO / "src" / "models"]
 GUI_DIR = REPO / "src" / "gui"
-# EB3 scans a WIDER set than EB1/EB2: the radio seam lives below all three of
-# these, so gui/ is in scope for vendor-include leakage too.
-ABOVE_SEAM_DIRS = [REPO / "src" / "gui", REPO / "src" / "core", REPO / "src" / "models"]
+# EB3 scans a WIDER set than EB1/EB2: the radio seam lives below all of these,
+# so gui/ and the aetherd shell are in scope for vendor-include leakage too.
+ABOVE_SEAM_DIRS = [REPO / "src" / "gui", REPO / "src" / "core", REPO / "src" / "models",
+                   REPO / "src" / "aetherd"]
 # The app shell itself lives at the src/ root, outside every directory above.
 # Scan these explicitly instead of adding src/ and traversing gui/core/models
 # twice.
@@ -222,6 +224,9 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/Ax25HfPacketDecodeDialog.cpp": ["DaxTxPolicy"],
     "src/gui/ConnectionPanel.cpp": ["AnanDiscovery", "Hl2Discovery", "IcomModels", "MetisProtocol", "P2Protocol", "SimBackend"],
     "src/gui/ConnectionPanel.h": ["SmartLinkClient"],
+    # The AetherGPS window's Flex-only install/remove/installed-state code,
+    # quarantined here so the shared window stays vendor-free (#7271, KK7GWY).
+    "src/gui/AetherGpsTools.cpp": ["FlexWaveformModel", "WaveformInstaller"],
     "src/gui/DaxIqApplet.cpp": ["DaxIqModel"],
     "src/gui/DemoApplet.cpp": ["NoiseMixer"],
     # Relocated from RadioSetupDialog.cpp with the firmware flow (#6718).
@@ -230,7 +235,7 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/KiwiSdrApplet.h": ["KiwiSdrClient"],
     "src/gui/MainWindow.cpp": ["DvkWavTransfer", "Hl2Backend", "KiwiSdrManager", "PanadapterStream", "RadioStatusOwnership", "SimBackend", "StreamStatus"],
     "src/gui/MainWindow.h": ["AnanDiscovery", "Hl2Discovery", "RtlSdrDiscovery", "SmartLinkClient", "WanConnection"],
-    "src/gui/MainWindowHelpers.cpp": ["PanadapterStream", "SmartLinkClient"],
+    "src/gui/MainWindowHelpers.cpp": ["SmartLinkClient"],
     "src/gui/MainWindow_Controllers.cpp": ["KiwiSdrProtocol"],
     "src/gui/MainWindow_KiwiSdr.cpp": ["KiwiSdrClient", "KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/MainWindow_ReceiveSync.cpp": ["KiwiSdrManager"],
@@ -238,7 +243,6 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/MainWindow_Shortcuts.cpp": ["KiwiSdrProtocol"],
     "src/gui/MainWindow_Wiring.cpp": ["KiwiSdrManager", "KiwiSdrProtocol", "ProfileLoadCommand"],
     "src/gui/MemoryDialog.cpp": ["MemoryCsvCompat", "RadioConnection"],
-    "src/gui/NetworkDiagnosticsDialog.h": ["PanadapterStream"],
     "src/gui/ProfileImportExportDialog.h": ["ProfileTransfer"],
     "src/gui/RadioSetupDialog.cpp": ["Hl2Discovery", "KiwiSdrManager", "PanadapterStream", "WanConnection"],
     "src/gui/RxApplet.cpp": ["KiwiSdrManager", "KiwiSdrProtocol"],
@@ -249,7 +253,6 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/VfoWidget.cpp": ["KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/VfoWidget.h": ["KiwiSdrProtocol"],
     "src/gui/WaveformsDialog.cpp": ["FlexWaveformModel", "WaveformInstaller"],
-    "src/main.cpp": ["Hl2EmergencyStop"],
     "src/models/RadioModel.cpp": ["CommandParser", "Hl2Backend", "ProfileLoadCommand", "RadioStatusOwnership", "SimBackend", "StreamStatus"],
     "src/models/RadioModel.h": ["CommandParser", "DaxIqModel", "DaxTxPolicy", "FlexWaveformModel", "PanadapterStream", "RadioConnection", "RadioStatusOwnership", "WanConnection"],
     "src/models/SliceModel.cpp": ["KiwiSdrProtocol"],
@@ -261,6 +264,9 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
 # warning, and the gui ratchet silently disarms while CI stays green. Require
 # each above-seam dir to still yield at least this many files on a full scan.
 ABOVE_SEAM_DIR_FLOOR = 20
+# The aetherd shell is small by design (8 files today); half of that still
+# proves the scan found it.
+ABOVE_SEAM_DIR_FLOORS = {REPO / "src" / "aetherd": 4}
 
 # Matches gui includes in "..." OR <...>, optional space, optional gui/ prefix,
 # and SUBDIR paths (name group carries '/'), so angle-bracket, no-space, and
@@ -438,7 +444,7 @@ def collect_above_seam_files(args):
             p = (REPO / a) if not Path(a).is_absolute() else Path(a)
             if p.suffix in ENGINE_SUFFIXES and p.is_file():
                 rel = p.resolve().relative_to(REPO).as_posix()
-                if (any(rel.startswith(f"src/{d}/") for d in ("gui", "core", "models"))
+                if (any(rel.startswith(f"src/{d}/") for d in ("gui", "core", "models", "aetherd"))
                         or p.resolve() in {f.resolve() for f in ABOVE_SEAM_FILES}):
                     out.append(p.resolve())
         return out
@@ -500,10 +506,11 @@ def main():
     if not args.files:
         for d in ABOVE_SEAM_DIRS:
             n = sum(1 for p in d.rglob("*") if p.suffix in ENGINE_SUFFIXES)
-            if n < ABOVE_SEAM_DIR_FLOOR:
+            floor = ABOVE_SEAM_DIR_FLOORS.get(d, ABOVE_SEAM_DIR_FLOOR)
+            if n < floor:
                 annotate("error", "tools/check_engine_boundary.py", 1, "EB3-floor",
                          f"only {n} files under {d.relative_to(REPO)} "
-                         f"(floor {ABOVE_SEAM_DIR_FLOOR}) — the above-seam tree "
+                         f"(floor {floor}) — the above-seam tree "
                          "moved; the EB3 ratchet is disarmed for it. Fix "
                          "ABOVE_SEAM_DIRS.")
                 total += 1

@@ -77,8 +77,10 @@ void RadioModel::recallBandStack(SliceModel* target, BandStackEntry entry,
         }
     })) { return; }
     if (!apply([&] {
+        // An independent TX output (IndependentTxAntenna) moves only on an explicit choice.
         if (!entry.txAntenna.isEmpty() && entry.txAntenna != original->txAntenna()
-            && original->txAntennaList().contains(entry.txAntenna)) {
+            && original->txAntennaList().contains(entry.txAntenna)
+            && !backendCapabilities().independentTxAntenna) {
             const ReceiveDispatch result = m_backend->requestSliceControl(original->sliceId(),
                 {SliceControlRequest::Field::TxAntenna, entry.txAntenna});
             if (current()) { reportReceiveDispatch(result, QStringLiteral("bookmark TX antenna"), false); }
@@ -222,7 +224,8 @@ ReceiveDispatch RadioModel::requestPanControl(PanadapterModel* pan, const PanCon
         : caps.panControl && caps.panControl->supports(request.field)
             && (request.field == PanControlField::ReceiveAntenna || caps.panZoomModes);
     const bool available = m_backend && controlSessionCurrent(session) && request.valid()
-        && pan && panadapter(pan->panId()) == pan && declared;
+        && !m_displayInventoryUncertain && pan && panadapter(pan->panId()) == pan
+        && pan->ownedByClient(clientHandle()) && declared;
     const QPointer<RadioModel> alive(this);
     const ReceiveDispatch result = available
         ? m_backend->requestPanControl(pan->panId(), request) : ReceiveDispatch::Unsupported;

@@ -14,9 +14,9 @@ facing condensation.
 
 ---
 
-## Shared issue workflows
+## Shared workflows
 
-Two shared issue workflows live in `.claude/skills/`, alongside the
+Shared workflows live in `.claude/skills/`, alongside the
 maintainer-facing review skills:
 
 - [`/papercuts`](../.claude/skills/papercuts/SKILL.md) ranks open issues by
@@ -25,16 +25,20 @@ maintainer-facing review skills:
 - [`/fb`](../.claude/skills/fb/SKILL.md) takes a selected issue through root
   cause, an isolated worktree, implementation, validation, and a draft PR:
   `/fb ISSUE_NUMBER`.
+- [`/mergewatch`](../.claude/skills/mergewatch/SKILL.md) reports release-cycle
+  merge counts and compares CI build and test times with five merges from the
+  previous release. It is read-only: start with `/mergewatch`.
 
 Use them from Claude Code in this checkout. Other agents can read the linked
-`SKILL.md` files and their bundled resources directly. Each of the two also
+`SKILL.md` files and their bundled resources directly. Each of these three also
 carries an `agents/openai.yaml` manifest, read by the OpenAI Codex CLI to
 expose the skill as a named agent; Claude Code ignores it and reads `SKILL.md`.
 The maintainer-facing `pr-review` and `pr-land` skills have no manifest — they
 are not exposed that way. GitHub access uses the
 contributor's existing `gh` authentication; the papercuts helper also requires
 Bash and `jq` (Git Bash on Windows). Build and live-radio prerequisites apply
-when a chosen fix needs them; neither skill grants permission to transmit.
+to `/fb` when a chosen fix needs them; none of these skills grants permission
+to transmit.
 
 ---
 

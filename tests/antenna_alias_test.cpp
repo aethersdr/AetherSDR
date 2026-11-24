@@ -76,7 +76,7 @@ int main(int argc, char** argv)
     QObject::connect(&slice, &SliceModel::receiveRxAntennaRequested,
                      [&receiveAntennas](const QString& antenna) { receiveAntennas.append(antenna); });
     const auto wireEncoder1 = modelControlEncoder(&slice, [&commands](const QString& cmd) { commands.append(cmd); });
-    // aetherd RFC 2.3: antenna-list splitting moved to FlexBackend::decodeSliceStatus;
+    // aetherd RFC 2.3: antenna-list splitting moved to FlexSliceStatus::decodeValues;
     // the model now receives the already-split QStringList via a typed SliceDelta.
     {
         SliceDelta d;

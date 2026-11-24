@@ -67,7 +67,7 @@ ClientEqOutputFader::ClientEqOutputFader(QWidget* parent) : QWidget(parent)
     // type a dB value, Enter or focus-out to commit (clamped to range).
     // Looks identical to a label until focused; subtle inset + cyan
     // border on focus indicates edit mode (matches ClientCompKnob).
-    m_valueEdit = new QLineEdit;
+    m_valueEdit = new QLineEdit(this);
     m_valueEdit->setAlignment(Qt::AlignCenter);
     m_valueEdit->setFrame(false);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_valueEdit, "QLineEdit { color: {{color.text.primary}}; font-size: 10px; font-weight: bold;"
@@ -79,7 +79,7 @@ ClientEqOutputFader::ClientEqOutputFader(QWidget* parent) : QWidget(parent)
 
     // The reading, for strips that report rather than set. Centred in its own
     // cap so the digits sit still as the value changes width.
-    m_levelLabel = new QLabel;
+    m_levelLabel = new QLabel(this);
     m_levelLabel->setAlignment(Qt::AlignCenter);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_levelLabel,
         "QLabel { color: {{color.text.primary}}; font-size: 10px; font-weight: bold;"

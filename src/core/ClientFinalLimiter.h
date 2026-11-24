@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 
@@ -8,11 +9,27 @@
 namespace AetherSDR {
 
 // Final nonlinear stage of the 48 kHz TX chain: after every user stage and PC mic
-// gain, before the 48->24 kHz egress SRC. It bounds its own 48 kHz samples; SRC
-// reconstruction can still overshoot before final Int16 saturation. Feed-forward
-// peak limiter, smoothed per-block envelope, one channel-linked gain. UI thread
-// writes atomics + bumps a version; the audio thread recaches per block and
-// publishes gainReductionDb / active. No locks, allocations or exceptions.
+// gain, before the 48->24 kHz egress SRC. A look-ahead brickwall: no 48 kHz
+// sample leaves above the ceiling. SRC reconstruction can still overshoot
+// between samples before final Int16 saturation, and it bounds audio samples,
+// not the SSB RF envelope.
+//
+// The signal is delayed by the look-ahead L (0..5 ms). The gain each sample
+// needs (ceiling / |x|, channel-linked) is released toward 1, slid through a
+// minimum over L+1 samples and then a moving average over L+1 samples, so the
+// gain has ramped down to what a peak needs by the time that peak leaves the
+// delay. L = 0 is an instant hard limit. A hard clip after the gain is a safety
+// net only; safetyClipCount() counts the samples it touched. Under steady
+// parameters it never acts; a look-ahead, ceiling or on/off change while the
+// limiter is working can need it for up to one window.
+//
+// Changing L, or switching the limiter on or off, crossfades between the old
+// and new delay taps over kCrossfadeFrames; a change that arrives during a
+// fade waits for it to end. The fade covers the delay tap only: switching off
+// while limiting releases the gain at once.
+//
+// UI thread writes atomics + bumps a version; the audio thread recaches per
+// block and publishes the meters. No locks, allocations or exceptions.
 class ClientFinalLimiter {
 public:
     ClientFinalLimiter();
@@ -31,6 +48,18 @@ public:
     // need more than 12 dB of headroom shaving.
     void  setCeilingDb(float db) noexcept;
     float ceilingDb() const noexcept;
+
+    // Look-ahead in ms, clamped to [0, kMaxLookaheadMs]. It is also the delay
+    // the limiter adds while it is enabled.
+    static constexpr float kMaxLookaheadMs     = 5.0f;
+    static constexpr float kDefaultLookaheadMs = 1.5f;
+    static constexpr float kDefaultCeilingDb   = -0.5f;
+    void  setLookaheadMs(float ms) noexcept;
+    float lookaheadMs() const noexcept;
+
+    // Delay added, in frames at the prepared rate: the look-ahead while
+    // enabled, 0 while disabled. Any thread.
+    int latencyFrames() const noexcept;
 
     // Drive trim applied before the limiter. Positive values increase limiter
     // activity; negative values lower the signal below the ceiling. Range
@@ -65,13 +94,26 @@ public:
     // Fraction of samples in the trailing ~3 s where the limiter was
     // actively clamping.  Range [0, 1].
     float   limiterActivityPct() const noexcept;
+    // Samples the safety clip after the look-ahead gain had to touch.
+    // Monotonic. Stays 0 under steady parameters; a look-ahead, ceiling or
+    // on/off change while the limiter is working can need it.
+    quint64 safetyClipCount() const noexcept;
 
-    double sampleRate() const noexcept { return m_sampleRate; }
+    double sampleRate() const noexcept
+    {
+        return m_sampleRate.load(std::memory_order_relaxed);
+    }
+
+    // Capacity: 5 ms at 48 kHz, the TX DSP rate. A higher prepared rate
+    // caps the look-ahead at this many frames.
+    static constexpr int kMaxLookaheadFrames = 240;
+    static constexpr int kCrossfadeFrames    = 240;
 
 private:
     struct Atomics {
         std::atomic<bool>     enabled{true};
-        std::atomic<float>    ceilingDb{-1.0f};
+        std::atomic<float>    ceilingDb{kDefaultCeilingDb};
+        std::atomic<float>    lookaheadMs{kDefaultLookaheadMs};
         std::atomic<float>    outputTrimDb{0.0f};
         std::atomic<bool>     dcBlock{true};
         std::atomic<uint64_t> version{0};
@@ -79,10 +121,10 @@ private:
 
     struct Cached {
         bool  enabled{true};
-        float ceilingLin{0.891f};       // 10^(-1/20)
+        float ceilingLin{0.944f};       // 10^(-0.5/20)
+        int   lookaheadFrames{72};      // 1.5 ms at 48 kHz
         float trimLin{1.0f};            // 10^(0/20)
         bool  dcBlock{true};
-        float attackCoeff{0.0f};
         float releaseCoeff{0.0f};
         float rmsCoeff{0.0f};           // 300 ms one-pole RMS smoother
         float dcCoeff{0.0f};            // 25 Hz DC-block HPF coefficient
@@ -96,20 +138,45 @@ private:
         std::atomic<bool>    active{false};
         std::atomic<quint64> clipPreLimiterCount{0};
         std::atomic<float>   limiterActivityPct{0.0f};
+        std::atomic<quint64> safetyClipCount{0};
     };
 
     void recacheIfDirty() noexcept;
+    int  framesForMs(float ms, double rate) const noexcept;
+    // Restart the gain path for a window of `window` samples, every slot
+    // holding `gain`.
+    void resetGainPath(int window, float gain) noexcept;
 
     Atomics m_atomics;
     Cached  m_cached;
     Meters  m_meters;
     uint64_t m_cachedVersion{static_cast<uint64_t>(-1)};
-    double   m_sampleRate{24000.0};
+    std::atomic<double> m_sampleRate{24000.0};
 
-    // Single-channel-linked gain envelope.  Starts at 1.0 (no
-    // reduction); rises with peak overage; decays back to 1.0 at the
-    // release rate.
-    float m_envLin{1.0f};
+    // Delay ring, one slot per frame (L and R), indexed by m_sampleIndex.
+    static constexpr int kRing = kMaxLookaheadFrames + 1;
+    std::array<float, kRing> m_delayL{};
+    std::array<float, kRing> m_delayR{};
+    int64_t m_sampleIndex{0};
+
+    // The delay in use (L, or 0 while disabled), and the one being faded
+    // out of after a change.
+    int m_tap{-1};
+    int m_fadeFromTap{0};
+    int m_fadeLeft{0};
+
+    // Gain path: the released needed gain, its sliding minimum (a
+    // monotonic ring of (gain, index)) and the moving average of that
+    // minimum, all over m_window = L + 1 samples.
+    float m_held{1.0f};
+    int   m_window{1};
+    std::array<float, kRing>   m_qGain{};
+    std::array<int64_t, kRing> m_qIndex{};
+    int   m_qHead{0};
+    int   m_qSize{0};
+    std::array<float, kRing> m_avgRing{};
+    int    m_avgPos{0};
+    double m_avgSum{1.0};
 
     // Mean-square accumulator for the post-limiter RMS readout.
     // One-pole smoother: m_msAcc += rmsCoeff * (in² − m_msAcc).

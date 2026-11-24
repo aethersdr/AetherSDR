@@ -53,6 +53,10 @@ bool loadWav(const QString& path, std::vector<float>& samples, int& sampleRate, 
             format = readLe16(fmt);
             channels = readLe16(fmt + 2);
             sampleRate = static_cast<int>(readLe32(fmt + 4));
+            if (sampleRate < 10) {
+                err = QStringLiteral("invalid WAV sample rate: %1 Hz (minimum 10 Hz)").arg(sampleRate);
+                return false;
+            }
             bits = readLe16(fmt + 14);
         } else if (id == "data") {
             data = bytes.constData() + pos;

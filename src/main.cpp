@@ -28,7 +28,7 @@
 #include "MacStartupAbortGuard.h"
 #endif
 
-#include "core/backends/hl2/Hl2EmergencyStop.h"
+#include "core/FatalSignalRelease.h"
 
 #include <QApplication>
 #include <QGuiApplication>
@@ -38,6 +38,7 @@
 #include <optional>
 #include <QStyleFactory>
 #include <QDir>
+#include <QFileInfo>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QFile>
@@ -47,6 +48,7 @@
 #include <QTimer>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #ifdef _WIN32
 #include <io.h>
@@ -279,6 +281,35 @@ static int runInstallCli(int argc, char* argv[])
     }
     return EXIT_SUCCESS;
 }
+
+// ── `AetherSDR --aetherd [options]` — the headless engine of this release ─────
+// An AppImage only ever starts this binary, so a service that wants the engine
+// (aetherd) from the AppImage, or from an install, asks for it here. aetherd sits
+// beside this binary; exec replaces this process, so a service manager's signals
+// reach aetherd itself. Nothing of the app starts first: no Qt, no settings.
+static int runAetherd(int argc, char* argv[])
+{
+    // /proc/self/exe directly: binaryDir()'s fallback needs a QCoreApplication,
+    // and none exists here.
+    const QString exe = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
+    const QString dir = exe.isEmpty() ? QString() : QFileInfo(exe).absolutePath();
+    if (!QDir::isAbsolutePath(dir)) {
+        // No /proc/self/exe: never resolve "aetherd" against the working directory.
+        std::fprintf(stderr, "AetherSDR: cannot start the headless engine: this binary's directory is unknown\n");
+        return 127;
+    }
+    const QByteArray path = QDir(dir).filePath(QStringLiteral("aetherd")).toLocal8Bit();
+    std::vector<char*> args;
+    args.push_back(const_cast<char*>(path.constData()));
+    for (int i = 2; i < argc; ++i) {
+        args.push_back(argv[i]);
+    }
+    args.push_back(nullptr);
+    ::execv(path.constData(), args.data());
+    std::fprintf(stderr, "AetherSDR: cannot start the headless engine %s: %s\n",
+                 path.constData(), std::strerror(errno));
+    return 127;
+}
 #endif
 
 // The Qt platform-selection decision made on a Wayland session, recorded before
@@ -314,6 +345,15 @@ int main(int argc, char* argv[])
 #ifdef Q_OS_LINUX
     if (argc >= 2 && qstrcmp(argv[1], "--install") == 0) {
         return runInstallCli(argc, argv);
+    }
+    if (argc >= 2 && qstrcmp(argv[1], "--aetherd") == 0) {
+        return runAetherd(argc, argv);
+    }
+#else
+    if (argc >= 2 && qstrcmp(argv[1], "--aetherd") == 0) {
+        // Never start the app (and its radio auto-connect) in the engine's place.
+        std::fprintf(stderr, "AetherSDR: --aetherd is available only on Linux\n");
+        return 127;
     }
 #endif
 
@@ -476,12 +516,11 @@ int main(int argc, char* argv[])
     }
 #endif
 
-    // Release the Hermes-Lite 2 if this process is killed or crashes: a signal
-    // skips Hl2Backend's destructor, and an HL2 never told to stop keeps streaming,
-    // then ignores discovery until power-cycled. Installed after the macOS startup
-    // guard restores SIGABRT so the guard can't overwrite it. No-op while
-    // disconnected; see Hl2EmergencyStop.h for why it acts inside the handler.
-    AetherSDR::hl2::installEmergencyStopSignalHandlers();
+    // Release the radio if this process is killed: a signal skips every
+    // destructor (an HL2 never told to stop streams on, then ignores discovery
+    // until power-cycled). Installed after the macOS startup guard restores
+    // SIGABRT so the guard can't overwrite it. No-op while disconnected.
+    AetherSDR::installFatalSignalRelease();
 
     app.setApplicationName("AetherSDR");
     app.setApplicationVersion(AETHERSDR_VERSION);

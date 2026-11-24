@@ -433,10 +433,14 @@ void fmRepeaterAndTransmit()
     boundary("slice offset up inf", QStringLiteral("frequency"));
     boundary("slice offset down 5 typo", QStringLiteral("unexpected"));
 
-    check(errorOf(send("transmit rfpower 40")).contains(QStringLiteral("ALLOW_TX")),
-          "transmit rfpower is TX-gated");
-    check(errorOf(send("transmit rfpower 9999")).contains(QStringLiteral("ALLOW_TX")),
-          "the TX gate answers before value validation");
+    // Drive is not keying: without TX permission rfpower still sets the
+    // setpoint, bounded by the ceiling, never by permission (#5851).
+    {
+        const QJsonObject noPermission = send("transmit rfpower 40");
+        check(ok(noPermission) && radio.transmitModel().rfPower() == 40,
+              "transmit rfpower without TX permission sets drive", noPermission);
+    }
+    boundary("transmit rfpower 9999", QStringLiteral("0..100"));
     boundary("transmit wattage 5", QStringLiteral("rfpower|tunepower"));
     boundary("transmit", QStringLiteral("requires an action"));
 

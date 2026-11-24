@@ -9,7 +9,7 @@
 namespace AetherSDR {
 
 // Normalized power-amplifier status delta (aetherd 2.4, #4094), present-only.
-// FlexBackend::decodeAmplifierStatus translates the SmartSDR "amplifier" wire
+// FlexStatusIngress::decodeAmplifierStatus translates the SmartSDR "amplifier" wire
 // ("model"/"ip"/"state", the TunerGeniusXL discriminator) statelessly;
 // AmpModel::applyChanges owns the state machine. Command/encode is not here:
 // AmpModel::setOperate's operateRequested intent goes back via

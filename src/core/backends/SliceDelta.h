@@ -5,6 +5,7 @@
 
 #include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/ReceiveCommand.h"
+#include "core/backends/SquelchGate.h"
 
 #include <QMetaType>
 #include <QString>
@@ -112,6 +113,8 @@ struct SliceDelta {
     std::optional<int>         squelchLevel;
     std::optional<bool>        automaticSquelch;
     std::optional<int>         automaticSquelchMarginDb;
+    // Live: whether the gate passes audio (RadioCapabilities::squelchGateModes).
+    std::optional<SquelchGateState> squelchGate;
     std::optional<int>         wfmDeemphasisUs;
     std::optional<bool>        wfmForceMono;
     std::optional<WfmReceptionDiagnostics> wfmReceptionDiagnostics;

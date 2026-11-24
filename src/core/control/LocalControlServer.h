@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ControlEngine.h"
 #include "ControlService.h"
 
 #include <QJsonObject>
@@ -35,11 +36,18 @@ public:
     LocalControlServer(QObject* parent, Limits limits,
                        RadioConnectionTarget* connectionTarget = nullptr,
                        bool allowLocalControl = false);
+    // Serves sessions of a shared engine (aetherd: the same engine as the
+    // network listener). Targets are bound through bind*() as usual.
+    LocalControlServer(ControlEngine& engine, QObject* parent, Limits limits,
+                       bool allowLocalControl);
     ~LocalControlServer() override;
 
     // ReserveEndpoint claims the private endpoint but closes early arrivals.
     // Startup code must finish binding targets before calling startServing().
     [[nodiscard]] bool listen(const QString& name, ListenMode mode = ListenMode::Serve);
+    // Why the last listen() failed when the endpoint path is too long for a
+    // Unix socket; empty for every other failure.
+    [[nodiscard]] QString listenError() const { return m_listenError; }
     [[nodiscard]] bool startServing();
     // Startup-only binding; never changes grants or replaces a lost target.
     [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
@@ -50,7 +58,9 @@ public:
     // Current-user lock only (no additional listener), shared by serving and
     // offline provisioning across socket names. Hold through daemon shutdown.
     [[nodiscard]] static std::unique_ptr<QLockFile> reserveCredentialAuthority(const QString& authorityId);
-    [[nodiscard]] static QString clientEndpoint(const QString& logicalName);
+    // Empty when the endpoint cannot be resolved or is too long for a Unix
+    // socket; in the second case *pathError says why.
+    [[nodiscard]] static QString clientEndpoint(const QString& logicalName, QString* pathError = nullptr);
     void close();
     [[nodiscard]] bool isListening() const { return m_server.isListening(); }
     [[nodiscard]] QString fullServerName() const { return m_server.fullServerName(); }
@@ -59,6 +69,7 @@ public:
 private:
     struct Client;
 
+    void init();
     void acceptConnections();
     void readClient(QLocalSocket* socket);
     void dropClient(QLocalSocket* socket);
@@ -70,12 +81,14 @@ private:
         const QString& logicalName, QString* endpointName, QString* lockPath);
 
     QLocalServer m_server;
-    ControlResourceStore m_resources;
-    ControlService m_service;
+    std::unique_ptr<ControlEngine> m_ownedEngine;   // null when the engine is shared
+    ControlResourceStore& m_resources;
+    ControlService& m_service;
     Limits m_limits;
     const SessionAuthorization m_localAuthorization;
     std::unordered_map<QLocalSocket*, std::unique_ptr<Client>> m_clients;
     std::unique_ptr<QLockFile> m_lock;
+    QString m_listenError;
     bool m_serving{false};
     bool m_closing{false};
 };

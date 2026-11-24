@@ -47,6 +47,10 @@ public:
     // the audio rate -- see the note in configure() (mirrors Hl2RxDsp's
     // kWdspDspSampleRateHz exactly; this is a WDSP fact, not a radio fact).
     static constexpr int kWdspDspSampleRateHz = 48000;
+    // RXA panel gain in FM only: the panel runs after the FM limiter, and
+    // WDSP's 4.0 would take its ~0.9 bound past full scale. Other ANAN modes
+    // keep 4.0 (#7252).
+    static constexpr double kFmRxPanelGain = 1.0;
 
     struct Config {
         int inputSampleRateHz = 48000;   // the receiver's IQ sample rate
@@ -95,6 +99,9 @@ public:
         int noiseBlankerLevel = 50;
         WdspChannel::NoiseBlankerFill noiseBlankerFill =
             WdspChannel::NoiseBlankerFill::Zero;
+        // WDSP's ANR, carried like the blanker so a rebuild keeps it.
+        bool noiseReduction = false;
+        int noiseReductionLevel = 50;
     };
 
     // Synchronous convenience used by deterministic tests. Production first
@@ -157,6 +164,7 @@ public:
     // RX frequency shift in Hz relative to the NCO -- how a single-DDC
     // backend tunes the slice inside the passband without moving the DDC.
     Q_INVOKABLE void setShift(double shiftHz);
+    Q_INVOKABLE void setNoiseReduction(bool enabled, int level);
     // Which blanker, its level (0..100) and Advanced's fill. Deferred like
     // setMode() while a rebuild is in flight; installChannel() re-applies it at
     // the swap.

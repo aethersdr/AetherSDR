@@ -201,6 +201,27 @@ int main(int argc, char** argv)
               "a window of marked responses only: a skipped count, no kept sample, no peak");
     }
 
+    // ---- 6 · the reverse maximum rides the same emit and clears with the window ----
+    //
+    // Reverse power is DATA[31:16] of RADDR 2. The loudest word mid-window is
+    // the peak, not the last one; the next window starts without it.
+    {
+        const std::size_t before = emitted.size();
+        hold(raddr(0x02, (40u << 16) | 900u), fwd(3000));
+        hold(raddr(0x02, (220u << 16) | 5u), fwd(2000));
+        due(raddr(0x02, (60u << 16) | 900u), fwd(400));
+        check(emitted.size() == before + 1, "the reverse window emits once");
+        if (emitted.size() == before + 1) {
+            check(emitted.back().reversePowerPeakRaw.value_or(-1) == 220,
+                  "the emit carries the window's reverse PEAK (220), not the last (60)");
+            check(emitted.back().reversePowerRaw.value_or(-1) == 60,
+                  "reversePowerRaw keeps its last-value meaning beside the peak");
+        }
+        due(fwd(100), fwd(100));
+        check(emitted.size() == before + 2 && !emitted.back().reversePowerPeakRaw.has_value(),
+              "a window with no RADDR 2 response has no reverse peak");
+    }
+
     if (g_failures == 0)
         std::printf("hl2_fwd_window_wiring_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

@@ -1,10 +1,8 @@
 #include "TxVoiceProcessor.h"
 
 #include "ClientComp.h"
-#include "ClientDeEss.h"
 #include "ClientEq.h"
 #include "ClientFinalLimiter.h"
-#include "ClientGate.h"
 #include "ClientPudu.h"
 #include "ClientQuindarTone.h"
 #include "ClientReverb.h"
@@ -87,12 +85,6 @@ void TxVoiceProcessor::prepareProcessors()
     if (m_processors.comp) {
         m_processors.comp->prepare(kDspRate);
     }
-    if (m_processors.gate) {
-        m_processors.gate->prepare(kDspRate);
-    }
-    if (m_processors.deEss) {
-        m_processors.deEss->prepare(kDspRate);
-    }
     if (m_processors.tube) {
         m_processors.tube->prepare(kDspRate);
     }
@@ -132,12 +124,6 @@ void TxVoiceProcessor::reset()
     }
     if (m_processors.comp) {
         m_processors.comp->reset();
-    }
-    if (m_processors.gate) {
-        m_processors.gate->reset();
-    }
-    if (m_processors.deEss) {
-        m_processors.deEss->reset();
     }
     if (m_processors.tube) {
         m_processors.tube->reset();
@@ -472,8 +458,7 @@ void TxVoiceProcessor::processChannelStrip(QByteArray& float48Stereo) noexcept
     const int frames = float48Stereo.size()
         / (kChannels * static_cast<int>(sizeof(float)));
     for (int index = 0; index < kMaxStages; ++index) {
-        const Stage stage = static_cast<Stage>(
-            (m_packedStages >> (index * 8)) & 0xFF);
+        const Stage stage = TxChainLayout::slot<Stage>(m_packedStages, index);
         switch (stage) {
             case Stage::None:
                 return;
@@ -495,15 +480,9 @@ void TxVoiceProcessor::processChannelStrip(QByteArray& float48Stereo) noexcept
                 }
                 break;
             case Stage::Gate:
-                if (m_processors.gate && m_processors.gate->isEnabled()) {
-                    m_processors.gate->process(samples, frames, kChannels);
-                }
-                break;
+                break;  // retired: AetherTX has no gate
             case Stage::DeEss:
-                if (m_processors.deEss && m_processors.deEss->isEnabled()) {
-                    m_processors.deEss->process(samples, frames, kChannels);
-                }
-                break;
+                break;  // retired: AetherTX has no de-esser
             case Stage::Tube:
                 if (m_processors.tube && m_processors.tube->isEnabled()) {
                     m_processors.tube->process(samples, frames, kChannels);
@@ -557,17 +536,8 @@ int TxVoiceProcessor::latencyFrames() const noexcept
             && rnnoise->isValid()
         ? 480
         : 0;
-    for (int index = 0; index < kMaxStages; ++index) {
-        const Stage stage = static_cast<Stage>(
-            (m_packedStages >> (index * 8)) & 0xFF);
-        if (stage == Stage::None) {
-            break;
-        }
-        if (stage == Stage::Gate && m_processors.gate
-            && m_processors.gate->isEnabled()) {
-            frames += static_cast<int>(std::lround(
-                m_processors.gate->lookaheadMs() * kDspRate / 1000.0f));
-        }
+    if (m_processors.finalLimiter) {
+        frames += m_processors.finalLimiter->latencyFrames();
     }
     return frames;
 }

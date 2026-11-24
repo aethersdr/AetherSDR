@@ -108,6 +108,15 @@ public:
     CwxBubble* pendingBubble() const { return m_pendingBubble; }
     int        historyBubbleCount() const;
 
+    // Fire macro F1..F12 (index 0..11) on the given TX input under the
+    // panel's own F-key rules: only while the TX slice is in a CW mode and the
+    // keyer can send. History bubble included. False when those rules refuse
+    // it; a macro the model then refuses ({CALL} with no DX call) is still true.
+    bool fireMacro(int index, const TxController::Input& input);
+    // True while the panel's F1-F12 keys are armed (a CW TX slice whose
+    // radio stores CWX macros): the mode a "Macro N" action follows.
+    bool fKeysArmed() const;
+
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
 
@@ -128,10 +137,13 @@ private:
     void appendHistoryBubble(const QString& rawText);
     void onKeyPress(const QString& text);
     void sendMacro(int index, const TxController::Input* input = nullptr);
+    void syncDxCallEdit();
     std::function<std::shared_ptr<TxController>()> m_txControllerProvider;
 
     CwxModel*       m_model{nullptr};
     QLabel*         m_titleLabel{nullptr};
+    QLineEdit*      m_dxCallEdit{nullptr};
+    QPushButton*    m_dxCallClearBtn{nullptr};
 
     QStackedWidget* m_stack{nullptr};
 

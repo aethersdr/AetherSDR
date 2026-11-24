@@ -49,11 +49,11 @@ CW settings, kept as named profiles on radios running SmartSDR v4.3.16 or later.
 
 ## Using the Profile Manager
 
-**Profiles → Profile Manager...** opens a non-modal window that remembers its size and position. Tabs: **Global**, **Transmit**, **Microphone**, **CW**, **Auto-Save**.
+**Profiles → Profile Manager...** opens a window of its own that stays open while you operate and remembers its size and position. Drag any empty part of it to move it, or an edge to resize it. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux); choosing **Profile Manager...** while it is open brings it to the front. Tabs: **Global**, **Transmit**, **Microphone**, **CW**, **Auto-Save**.
 
 On each profile tab:
 
-<img src="/img/screens/profile-manager.png" width="460" alt="Profile Manager window with tabs Global, Transmit, Microphone and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF. A Close button sits at the bottom." />
+<img src="/img/screens/profile-manager.png" width="460" alt="Profile Manager window with a round close button in its top-right corner and tabs Global, Transmit, Microphone, CW and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF." />
 
 *The Profile Manager, listing the global profiles stored in the radio.*
 
@@ -62,8 +62,8 @@ On each profile tab:
 - **Save** (Global tab): save the current state to the selected profile, or to a new one using the name field
 - **Create** (Transmit and Microphone tabs): create a new profile. The radio cannot overwrite an existing TX or Mic profile directly; changes to the active one are captured by Auto-Save. If you try to create a name that already exists, AetherSDR tells you so and, if Auto-Save is off, offers **Enable Auto-Save**.
 - **Create** (CW tab): create a new CW profile. A name that already exists is refused with a status line.
-- **Reset** (CW tab): after confirmation, return the selected CW profile to the radio's built-in CW values. It does not copy the settings of the `Default` profile.
-- **Delete**: remove the selected profile, after confirmation
+- **Reset** (CW tab): after you confirm with **Reset**, return the selected CW profile to the radio's built-in CW values. It does not copy the settings of the `Default` profile.
+- **Delete**: remove the selected profile after you confirm with **Delete**. **Cancel** is the default in both confirmations, so pressing Return, **Esc** or the **✕** leaves the profile alone.
 
 When the radio reports edits to the active CW profile that are not saved yet, the CW tab shows **The active CW profile has unsaved changes.** The line clears when the profile is saved, or when the changed settings are put back to their saved values.
 
@@ -83,7 +83,9 @@ The **PROF** applet ("Profile Switcher", in the Station group of the applet butt
 
 **Profiles → Import/Export Profiles...** moves profile libraries between radios, and between SmartSDR for Windows and AetherSDR, using SmartSDR-compatible `.ssdr_cfg` backup packages. **Both directions are carried out by the radio**; AetherSDR transfers the package but never edits its contents.
 
-<img src="/img/screens/profile-import-export.png" width="560" alt="Import/Export Profiles window on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and Cancel and Close buttons." />
+It opens in a window of its own that remembers its size and position. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). **Cancel** at the bottom stops a transfer that is still in progress. Closing the window while a transfer runs asks first: **Keep Transferring** (the default) leaves it running, **Cancel Transfer** stops it and closes the window. Once an import package has finished uploading, the radio is applying it: cancelling then only stops AetherSDR from waiting, and the radio finishes the import anyway.
+
+<img src="/img/screens/profile-import-export.png" width="560" alt="Import/Export Profiles window, with a round close button in its top-right corner, on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and a Cancel button." />
 
 *The Import/Export Profiles window, on the Export tab. The destination path is blacked out.*
 
@@ -93,6 +95,16 @@ The **PROF** applet ("Profile Switcher", in the Station group of the applet butt
 2. Choose a **Destination** (default name `ASDR_Config_<timestamp>_v<version>.ssdr_cfg`).
 3. Click **Export**. The radio builds the package and AetherSDR saves it.
 
+AetherSDR accepts the download only from the connected radio and validates the
+complete ZIP package before replacing the destination. An invalid, truncated or
+oversized download leaves an existing backup intact. Packages are limited to
+250 MB. A transfer stays with the radio connection that started it; reconnecting
+requires starting the operation again.
+
+Firmware, waveform, profile and Radio DVK transfers share the radio's file
+server. If another transfer is running or the server is still settling, wait
+for it to finish before retrying.
+
 ### Import
 
 1. On the **Import** tab, choose the **Configuration Package** and click **Import**.
@@ -100,7 +112,7 @@ The **PROF** applet ("Profile Switcher", in the Station group of the applet butt
    - imported profiles, memories and other settings can replace matching items on the radio, including defaults;
    - packages from newer firmware may fail or leave the radio database in an unexpected state;
    - packages that include Preferences can close or reopen slices and panadapters.
-3. **Export Backup First** saves a backup of the radio before you go ahead; **Import** uploads the package and the radio applies it. Profile lists refresh when it finishes.
+3. **Export Backup First** saves a backup of the radio before you go ahead; **Import** uploads the package and the radio applies it. **Cancel** is the default, so pressing Return, **Esc** or the **✕** imports nothing. Profile lists refresh when it finishes.
 
 ## Workspaces and profiles
 

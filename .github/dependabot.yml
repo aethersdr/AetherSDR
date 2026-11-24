@@ -9,3 +9,9 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # init and analyze must run the same codeql-action version or the analyze
+    # step fails, so bump them in one PR.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"

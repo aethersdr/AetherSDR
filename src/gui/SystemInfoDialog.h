@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "core/SystemInfo.h"
 #include "core/SystemInfoCollector.h"
 #include "core/ThreadCpuRing.h"
@@ -35,7 +35,7 @@ class TimeSeriesGraphWidget;
 // thread saturating one core while the others idle (#2545), which the status
 // bar's single system-wide percentage cannot show — but knowing a thread is at
 // 98 % is only half a diagnosis without the log context beside it.
-class SystemInfoDialog : public PersistentDialog {
+class SystemInfoDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -98,6 +98,9 @@ private:
     QWidget* buildLogsTab();
 
     void applyAlertStyle();
+    // The charts paint their own chrome; give them the canon palette, and
+    // again on every theme change.
+    void applyCanonChartColors();
     void refreshMemoryChart();
     void refreshOverview();
     // The window-level timeframe both refreshes draw to (#5496).

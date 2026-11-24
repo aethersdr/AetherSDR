@@ -74,6 +74,13 @@ The token decides which client you have deliberately let in. It is not a wall ag
 
 It offers typed tools (`bridge_status`, `dump_tree`, `grab_widget`, `get_state`, `get_log`, `invoke`, `tune`, `slice`, `pan`, `record`, `menu`, `connect`, `capture_audio`, `wait_for`, `assert_state` and more), plus a raw `bridge_command` for everything else, a `validate_ui_change` prompt, and read-only state resources. The transmit verbs are deliberately reachable only through `bridge_command`.
 
+The `app_instance` tool can launch the build in a specified AetherSDR worktree.
+It preserves the selected saved profile, including an inherited
+`AETHER_SETTINGS_DIR`, and honors `AutoConnectToLastRadio`. The app can connect
+your saved radio during startup; use only a profile and connection authorized
+for the task. The launcher leaves saved preferences unchanged and pins TX
+automation off. It does not force simulator mode.
+
 ### Editing the radio nickname
 
 Open **Settings → Radio Setup... → Radio**. Use `invoke` with target
@@ -109,7 +116,7 @@ keys the transmitter.
 - The bridge refuses to operate any control that keys the transmitter (MOX/PTT, TUNE, ATU, CWX send, packet/APRS send) through its generic "click this control" path, whoever is asking.
 - The dedicated transmit verbs (`key`, `cwx`, `txtest`, `atu`, `transmit`, …) work only when you have allowed TX: tick **Allow TX via MCP**, or launch with `AETHER_AUTOMATION_ALLOW_TX=1`.
 - A force-unkey watchdog drops a bridge-started transmission that runs too long (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s). It does not affect your own, DAX or TCI transmissions.
-- `AETHER_AUTOMATION_NO_TX=1` pins TX off for that process even if you allowed it before.
+- `AETHER_AUTOMATION_NO_TX=1` pins TX off for that process even if you allowed it before. On a Hermes-Lite 2 in an automation run (`AETHER_AUTOMATION=1`) it also closes the radio's own transmit gate, so nothing in that process can key it.
 
 You remain responsible for every emission the bridge makes on your behalf. See [Before You Transmit](./before-you-transmit.md).
 

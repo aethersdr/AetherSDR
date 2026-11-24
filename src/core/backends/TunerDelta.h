@@ -8,7 +8,7 @@
 namespace AetherSDR {
 
 // Normalized antenna-tuner status delta (aetherd 2.4, #4092), present-only.
-// FlexBackend::decodeTunerStatus translates SmartSDR "atu"/"amplifier"
+// FlexStatusIngress::decodeTunerStatus translates SmartSDR "atu"/"amplifier"
 // (model=TunerGeniusXL); TunerModel::applyChanges applies it change-gated.
 // pttA/pttB drive TunerApplet's per-port keying lamps. Commands go back via
 // FlexBackend::invokeExtension("flex", "tuner.*", …); the port-9010 fast path and

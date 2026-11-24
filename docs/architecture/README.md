@@ -78,6 +78,11 @@ predate the backend live in `tools/hl2/`.
   preserved as the historical design record rather than kept in sync with the
   shipped code line-by-line — see the doc's own header note for what has and
   hasn't been resolved since it was written.
+- [`flex1500-backend-design.md`](flex1500-backend-design.md) — proposal (not
+  approved, queued behind the #5554 backend freeze) for a receive-only,
+  clean-room FLEX-1500 USB backend (`flex1500`): its protocol authority, the
+  opcode subset and tuning-word derivation from FlexRadio's GPL source and
+  public datasheets, and the capture program that must fill the transport gap.
 
 Code-level reviewers should also skim the corresponding header files
 in `src/core/` and `src/models/`.

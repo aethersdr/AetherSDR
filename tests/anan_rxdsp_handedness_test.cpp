@@ -47,6 +47,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
 #include <functional>
 #include <complex>
 #include <cstdio>
@@ -236,6 +237,32 @@ double runTone(AnanRxDsp& dsp, double wireOffsetHz, double shiftHz)
     check(exact && typedCount > 0 && typedCount == legacyCount,
           "ANAN typed output matches every legacy sample and actual producer rate");
     return dominantHz(audio, kAudioRate);
+}
+
+// Feed seeded complex white noise and return the recovered audio's RMS over
+// the measure window. Deterministic: the same seed gives the same input.
+double runNoiseRms(AnanRxDsp& dsp, unsigned seed)
+{
+    std::vector<float> audio;
+    const auto conn = QObject::connect(&dsp, &AnanRxDsp::audioReady,
+                     [&](const std::vector<float>& stereo) {
+        for (std::size_t k = 0; k + 1 < stereo.size(); k += 2)
+            audio.push_back(stereo[k]);
+    });
+    std::mt19937 rng(seed);
+    std::normal_distribution<float> gauss(0.0f, 0.05f);
+    constexpr int kWarmBlocks = 96;     // let the LMS adapt
+    constexpr int kMeasureBlocks = 48;
+    for (int b = 0; b < kWarmBlocks + kMeasureBlocks; ++b) {
+        std::vector<std::complex<float>> iq(kBlock);
+        for (auto& v : iq) v = {gauss(rng), gauss(rng)};
+        if (b == kWarmBlocks) audio.clear();
+        dsp.processIqBlock(iq);
+    }
+    QObject::disconnect(conn);
+    double sum = 0.0;
+    for (const float v : audio) sum += static_cast<double>(v) * v;
+    return audio.empty() ? 0.0 : std::sqrt(sum / static_cast<double>(audio.size()));
 }
 
 // ---- Group 3 helpers: AM DC pedestal ----
@@ -602,6 +629,36 @@ int main(int argc, char** argv)
         const double back = runTone(dsp, 800.0, 0.0);
         check(std::fabs(back - 800.0) < 120.0,
               "shift back to 0 restores the tone (stage is not accumulating)");
+    }
+
+    // ---- WDSP ANR on a running channel (slice.setNoiseReduction) ----
+    // ANR is an adaptive LMS line enhancer: it keeps periodic content and
+    // suppresses broadband noise, so noise-only audio must drop when it runs.
+    {
+        AnanRxDsp dsp;
+        AnanRxDsp::Config cfg;
+        cfg.inputSampleRateHz = kInputRate;
+        cfg.audioSampleRateHz = kAudioRate;
+        cfg.dspBlockSize = kBlock;
+        cfg.panPoints = 256;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.filterLowHz = 100.0;
+        cfg.filterHighHz = 2900.0;
+        cfg.agcMode = 0;                    // AGC off: output level tracks input
+        cfg.maximumAgcGainDb = 40.0;
+        cfg.blockForOutput = true;
+        std::string err;
+        check(dsp.configure(cfg, &err), err.empty() ? "AnanRxDsp configures for NR" : err.c_str());
+        const double off = runNoiseRms(dsp, 7);
+        dsp.setNoiseReduction(true, 50);
+        const double on = runNoiseRms(dsp, 7);
+        dsp.setNoiseReduction(false, 50);
+        const double offAgain = runNoiseRms(dsp, 7);
+        std::fprintf(stderr, "noise RMS: NR off %.6f, on %.6f, off again %.6f\n", off, on, offAgain);
+        check(off > 0.0 && on < 0.5 * off,
+              "enabling ANR on a live channel cuts broadband noise by more than 6 dB");
+        check(std::fabs(offAgain - off) < 0.2 * off,
+              "disabling it restores the unprocessed noise level (the stage is not latched)");
     }
 
     // ---- Group 3: AM DC-pedestal regression (confident -- a WDSP fact) ----

@@ -14,9 +14,9 @@ docs/user/static/img/screens/<id>.png. This script puts each one on its page
 
     *<caption>*
 
-The shots are captured on a HiDPI display, so each PNG is
-device_pixel_ratio (screens.json) times its logical size; the width attribute
-makes the browser show it at its logical size, sharp on HiDPI screens. (The
+Each PNG is device_pixel_ratio (screens.json) times its logical size;
+a shot can override the batch ratio for a native capture from another display.
+The width attribute makes the browser show it at its logical size, sharp on HiDPI screens. (The
 pages are CommonMark, format 'md', which Docusaurus renders HTML in;
 tools/docs/build_pdf.py turns the tag back into a Markdown image.)
 
@@ -221,7 +221,7 @@ def main() -> int:
     dpr = float(config.get("device_pixel_ratio", 1.0))
     by_page: dict[str, list[dict]] = {}
     for shot in shots:
-        shot["_dpr"] = dpr
+        shot["_dpr"] = float(shot.get("device_pixel_ratio", dpr))
         for key in ("id", "page", "alt", "caption"):
             if not shot.get(key):
                 fail(f"screens.json: shot {shot.get('id', '?')} has no {key!r}")

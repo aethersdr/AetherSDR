@@ -226,10 +226,19 @@ def check_changelog_shape(version: str, prev: str, base: str) -> str:
         report("PASS", "new section opens with a `### <headline>`", hl.group(1)[:120])
     else:
         report("FAIL", "new section opens with a `### <headline>`", "no `###` headline found before the first topical section")
-    if re.search(r"^\d+ merged changes from \d+ human contributors, AetherClaude and", section_text, re.M):
+    # The bots are named only when they have changes in the range: v26.11.1
+    # had none, v26.10.4 only Dependabot. release_contents.py prints the
+    # sentence for the range; --check holds its numbers to the mapping.
+    if re.search(r"^\d+ merged changes from \d+ human contributors"
+                 r"(\.|, AetherClaude and \w+ Dependabot updates? within that total\."
+                 r"| and AetherClaude within that total\."
+                 r"| and \w+ Dependabot updates? within that total\.)", section_text, re.M):
         report("PASS", "intro sentence has the house shape")
     else:
-        report("FAIL", "intro sentence has the house shape", "`N merged changes from M human contributors, AetherClaude and K Dependabot updates within that total.`")
+        report("FAIL", "intro sentence has the house shape",
+               "`N merged changes from M human contributors[, AetherClaude][ and K Dependabot updates] "
+               "within that total.` — the bots named only when the range has their changes; "
+               "release_contents.py prints the sentence")
     if "### Contributors" in section_text:
         report("PASS", "new section has a `### Contributors` block")
     else:

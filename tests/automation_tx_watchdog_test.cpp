@@ -4,6 +4,7 @@
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
+#include "core/backends/CwControlRequest.h"
 #include "core/RadioCertification.h"
 #include "models/PanadapterModel.h"
 #include <QJsonArray>
@@ -133,6 +134,16 @@ public:
     }
     void setAtu(bool on, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { commands << (on ? "atu:on" : "atu:off"); }
     void setCwKeying(bool on, bool, int, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { commands << (on ? "cw:on" : "cw:off"); }
+    ReceiveDispatch requestCwControl(const CwControlRequest& request,
+                                    const TxCoordinator::Command& command) override
+    {
+        if (request.kind == CwControlRequest::Kind::PttEnvelope) {
+            return IRadioBackend::requestCwControl(request, command);
+        }
+        setCwKeying(request.down, request.breakIn, request.breakInDelayMs,
+                   command.operation, command.completion);
+        return ReceiveDispatch::Dispatched;
+    }
     void abortCwText(const TxCoordinator::Operation&, const TxCoordinator::Completion&) override { commands << "cwx:abort"; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };

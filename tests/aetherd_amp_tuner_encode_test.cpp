@@ -41,11 +41,11 @@ static QVariant argOn(bool v)
 // is what invokeExtension now resolves the wire handle from.
 static void seedAmp(FlexBackend& b, const QString& handle)
 {
-    b.decodeAmplifierStatus(handle, QStringLiteral("PowerGeniusXL"), {}, /*removed=*/false);
+    b.statusIngress()->decodeAmplifierStatus(handle, QStringLiteral("PowerGeniusXL"), {}, /*removed=*/false);
 }
 static void seedTuner(FlexBackend& b, const QString& handle)
 {
-    b.decodeTunerStatus(handle, {});
+    b.statusIngress()->decodeTunerStatus(handle, {});
 }
 
 int main(int argc, char** argv)
@@ -111,7 +111,7 @@ int main(int argc, char** argv)
         // removal clears it → back to error
         errSpy.clear();
         sent.clear();
-        b.decodeAmplifierStatus("0x1abc", QString(), {}, /*removed=*/true);
+        b.statusIngress()->decodeAmplifierStatus("0x1abc", QString(), {}, /*removed=*/true);
         b.invokeExtension("flex", "amp.operate", 2, argOn(true));
         check(sent.isEmpty() && errSpy.count() == 1,
               "after removal the amp handle is cleared → error");
@@ -124,7 +124,7 @@ int main(int argc, char** argv)
         b.invokeExtension("flex", "tuner.bypass", 0, argOn(true));
         check(sent.value(0) == "tgxl set handle=0x2000 bypass=1",
               "tuner intent uses the decoded tuner handle");
-        b.decodeAmplifierStatus("0x2000", QString(), {}, /*removed=*/true);   // TGXL removed
+        b.statusIngress()->decodeAmplifierStatus("0x2000", QString(), {}, /*removed=*/true);   // TGXL removed
         sent.clear();
         b.invokeExtension("flex", "tuner.bypass", 3, argOn(true));
         check(sent.isEmpty() && errSpy.count() == 1,

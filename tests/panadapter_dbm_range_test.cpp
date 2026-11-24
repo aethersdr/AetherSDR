@@ -4,6 +4,7 @@
 #include "models/RadioModel.h"
 #include "models/PanadapterModel.h"
 #include "TestSettingsProfile.h"
+#include "PanControlTestFixture.h"
 
 #include <QCoreApplication>
 #include <QtEndian>
@@ -44,11 +45,13 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
 
     {
-        RadioModel radio;
+        PanControlFixture fixture;
+        RadioModel& radio = fixture.radio;
         const QString panId = QStringLiteral("0x40000011");
-        radio.handleStatusForTest(QStringLiteral("display pan ") + panId,
+        fixture.publish(panId);
+        fixture.status(QStringLiteral("display pan ") + panId,
             {{"client_handle", "0x0"}, {"min_dbm", "-130"}, {"max_dbm", "-40"}});
-        radio.handleStatusForTest(QStringLiteral("display pan ") + panId,
+        fixture.status(QStringLiteral("display pan ") + panId,
             {{"client_handle", "0xdeadbeef"}, {"min_dbm", "-130"}, {"max_dbm", "-40"}});
         const PanadapterModel* foreign = radio.panadapter(panId);
         CHECK(foreign && !foreign->ownedByClient(radio.ourClientHandle()));

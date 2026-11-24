@@ -45,7 +45,7 @@ int main(int argc, char** argv)
         }
     }
 
-    report("ten noise-source rows found", toggles.size() == 10,
+    report("twelve noise-source rows found", toggles.size() == 12,
            QStringLiteral("count=%1").arg(toggles.size()));
 
     QSet<QString> seen;

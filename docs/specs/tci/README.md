@@ -20,7 +20,8 @@ not copied here.
 
 Names AetherSDR accepts or sends that are not in 2.1, such as the
 `rx_ctun_ex` command and the `dsb` modulation, are extensions.
-`rx_ctun_ex` is described in `docs/user/docs/tci-server.md`.
+`rx_ctun_ex` is described in `docs/user/docs/tci-server.md`, as is the opt-in
+`aethersdr_` extension set.
 
 To update: download the new PDF from the upstream repository, replace the file,
 and update the commit, SHA-256 and version in this table and in

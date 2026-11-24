@@ -9,6 +9,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QJsonObject>
 #include <QComboBox>
 #include <QFont>
 #include <QFile>
@@ -102,6 +103,20 @@ bool expandManualAdvancedSection(ConnectionPanel& panel)
     section->setVisible(true);
     QApplication::processEvents();
     return true;
+}
+
+void checkExperimentalIcomModels()
+{
+    ConnectionPanel panel;
+    auto* chooser = panel.findChild<QComboBox*>(QStringLiteral("connectionManualIcomCivCombo"));
+    for (const QString& value : {QStringLiteral("98"), QStringLiteral("B2"), QStringLiteral("8E")}) {
+        const int index = chooser ? chooser->findData(value) : -1;
+        report(qPrintable(QStringLiteral("Icom %1 is labeled experimental in the CI-V chooser").arg(value)),
+               chooser && index >= 0 && chooser->itemText(index).contains(QStringLiteral("experimental"), Qt::CaseInsensitive));
+    }
+    const int supported = chooser ? chooser->findData(QStringLiteral("B6")) : -1;
+    report("supported IC-7300MK2 retains its supported chooser label",
+           chooser && supported >= 0 && !chooser->itemText(supported).contains(QStringLiteral("experimental"), Qt::CaseInsensitive));
 }
 
 void checkIcomManualGuidanceIsModelNeutral()
@@ -395,6 +410,8 @@ void checkFooterReachable(QApplication& app,
 void checkIcomUsesRoutedRetention()
 {
     auto& settings = AppSettings::instance();
+    const QJsonObject previousWorkspace = settings.radioFeatureExact("local", "", "ConnectionWorkspace");
+    settings.removeRadioFeature("local", "", "ConnectionWorkspace");
     const QString previousProfiles =
         settings.value(QStringLiteral("RoutedProfilesJson"), QStringLiteral("{}")).toString();
     settings.setValue(
@@ -445,6 +462,8 @@ void checkIcomUsesRoutedRetention()
     report("manual Icom carries the selected source-path settings",
            emitted && requested.bindSettings.mode == RadioBindMode::Auto);
 
+    settings.removeRadioFeature("local", "", "ConnectionWorkspace");
+    if (!previousWorkspace.isEmpty()) { settings.setRadioFeature("local", "", "ConnectionWorkspace", 1, previousWorkspace); }
     settings.setValue(QStringLiteral("RoutedProfilesJson"), previousProfiles);
     settings.save();
 }
@@ -810,6 +829,7 @@ int main(int argc, char** argv)
     }
 
     app.setFont(originalFont);
+    checkExperimentalIcomModels();
     checkIcomManualGuidanceIsModelNeutral();
     checkIcomCustomNatPorts();
     checkIcomUsesRoutedRetention();

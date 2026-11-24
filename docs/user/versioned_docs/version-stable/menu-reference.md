@@ -11,9 +11,9 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 - **Windows and Linux:** the menus sit behind the **☰** button at the far left of the title bar. Alt+letter mnemonics (Alt+F, Alt+S, …) still open each menu under the button, and every menu shortcut keeps working.
 - **macOS:** the menus are in the system menu bar at the top of the screen. **Radio Setup…** appears as **AetherSDR → Preferences…**.
 
-<img src="/img/screens/title-bar.png" width="1600" alt="The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimize, maximize and close buttons." />
+<img src="/img/screens/title-bar.png" width="1800" alt="The AetherSDR title bar with the connected simulator, a Home radio shortcut, More radios and audio controls." />
 
-*The title bar: the menu button, one tab per radio, PC Audio and volume controls, panel layout buttons and window controls.*
+*The title bar shows two recent radio shortcuts, More radios, PC Audio and volume controls.*
 
 ## File
 
@@ -39,7 +39,6 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 | **multiFLEX...** | The multi-client dashboard. See [Multi-Flex](./multi-flex.md). |
 | **TX Band Settings...** | Per-band RF power, tune power and inhibit choices. |
 | **Inhibit during TUNE ▸** | Selects ACC TX inhibition during TUNE. On Flex firmware 4.2 and older, also selects TX1/TX2/TX3. On 4.3 and later, the submenu contains **ACC TX** and **Configure RCA suppression…**, which opens **TX Band Settings** directly for per-band RCA suppression. |
-| **AetherRX...** | The receive audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **Settings Browser...** | Browse and edit stored settings. See [Settings and Backups](./settings-and-backups.md). |
 | **Autostart CAT with AetherSDR** / **Autostart TCI…** / **Autostart DAX…** | Start those services automatically. |
 | **Reset Settings...** | Restores application settings after confirmation. A backup is written first. |
@@ -65,6 +64,7 @@ See [Profile Management](./profile-management.md).
 | Item | What it does |
 |------|-------------|
 | **Add Panadapter...** | Opens the layout picker and adds a pan if the radio has capacity. |
+| **AetherRX...** | Opens the receive audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **AetherTX...** | Checkable. Shows the transmit audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **CW Keyer** | Checkable. Shows the CW keyer panel. See [CWX Panel](./cwx-panel.md). |
 | **Copy Assist** | Checkable. Speech-to-text panel (builds with speech-to-text only). See [Copy Assist](./copy-assist.md). |
@@ -79,9 +79,9 @@ See [Profile Management](./profile-management.md).
 | **FreeDV Reporter...** | FreeDV Reporter station list. |
 | **Net Scheduler...** | See [Net Scheduler](./net-scheduler.md). |
 | **Memory...** | See [Memory Channels](./memory-channels.md). |
-| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only), and edit a Docker container's [environment](./waveform-environment.md). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
+| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only), and edit a Docker container's [environment](./waveform-environment.md). **Install** adds the [WSPR receiver](./wspr-receiver.md). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
 | **Wideband Bandscope...** | The radio's converter view before tuning; dimmed on radios without one. See [Hermes-Lite 2](./hermes-lite-2.md). |
-| **Radio Health...** | Reachability, other clients holding the radio, PA temperature — works even with no session. |
+| **Radio Health...** | The health and status registers the radio reports, refreshed every 500 ms, with **Copy** for a bug report. A Hermes-Lite 2 shows reachability, other clients holding it and PA temperature even before you connect. See [Runtime Monitor](./runtime-monitor.md#using-radio-health). |
 | **AetherGPS...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |
 | **Network Diagnostics...** | Link quality, trends and logs. See [Troubleshooting](./troubleshooting.md). |
 | **Runtime Monitor...** | CPU, memory, threads and logs for the app itself. See [Runtime Monitor](./runtime-monitor.md). |
@@ -101,7 +101,7 @@ See [Profile Management](./profile-management.md).
 | **UI Scale ▸** | 75 % to 200 %, plus Zoom In (Ctrl+=), Zoom Out (Ctrl+-) and Reset (100 %) (Ctrl+0). Takes effect after a restart. |
 | **Reset Applet Order** | Restores the default applet order. |
 | **Minimal Mode** | Ctrl+Shift+M. Collapses the window to a narrow applet strip. See [Keyboard Shortcuts](./keyboard-shortcuts.md). |
-| **Frameless Window** | Ctrl+Shift+F. On by default. Turn it off to return the main window to the operating system's own title bar and borders. |
+| **Frameless Window** | Ctrl+Shift+F. On by default. On Windows, the frameless main window uses the app theme up to its border. On Windows 11, when maximized, the right-hand applet rail stays inside the Windows work area. Turn it off to return the main window to the operating system's own title bar and borders. |
 | **Propagation Conditions** | Shows the propagation forecast on the panadapters. Off by default. |
 | **Smart Spot Filtering** | Dims SSB spots with no detected voice signal nearby. Off by default; needs SpotHub Signal History. |
 | **Show live CW contacts** | Shows station information for callsigns the CW decoder hears in a separate **Live CW contacts** window, so it never covers decoded text. Off by default; closing the window turns it off. See [Callsign Lookup](./callsign-lookup.md). |
@@ -134,7 +134,8 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **AetherSDR Documentation** | Opens this documentation site in your browser. |
 | **Printable Manual (PDF)** | Downloads the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
 | **Log Analyzer** | Opens the [Log Analyzer](/log-analyzer), which checks a log or support bundle for known problems in your browser. |
-| **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. In **What's New...**, only web links (http and https) open; any other kind of link in the release notes is ignored. |
+| **Getting Started...**, **AetherSDR Help...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. Choosing an open guide restores it if minimized and brings it to the front. Close a guide with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). |
+| **What's New...** | Release notes fetched from GitHub. Switching themes keeps your reading position and Find selection. Choosing this entry again brings the open window to the front. Only web links (http and https) open; any other kind of link in the release notes is ignored. **Find** searches the notes, and the window closes with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). |
 | **Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...** | Topic guides, also offline. |
 | **AetherSDR Website**, **Donate to AetherSDR** | Open the web pages. |
 | **Submit your Idea... 💡** | The AI-assisted feature-request helper. |
@@ -172,14 +173,27 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 
 ### Radio tabs
 
-<img src="/img/screens/radio-list-popup.png" width="380" alt="Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom." />
+<img src="/img/screens/radio-recent-drawer.png" width="456" alt="Radio drawer with Home, POTA and Cabin connections, search, per-radio actions and Locations and connections." />
 
-*The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.*
+*More radios keeps all saved and nearby radios available beyond the two title-bar shortcuts.*
 
-- Line one is the radio's name; line two is its state in words (for example "Link lost"), so color is never the only signal.
-- The dot on the active tab is the **radio-link indicator**. It pulses once per discovery heartbeat, turns amber while discovering and red after three missed heartbeats (blinking, or solid if **View → Blink Status Indicator** is off). The alarm stays on the radio that dropped until you disconnect on purpose, start a new session or remove the tab. A deliberate disconnect never raises it. Right-click the tabs to toggle blinking.
-- When the tabs no longer fit, scroll them with the mouse wheel or drag them sideways.
-- **"+"** opens the radio list: search by name, model, address or status; a per-radio **Actions** menu (Disconnect, Rename…, Radio setup…, Remove from tabs / Add to tabs); **Connect manually…**; **Rescan radios**. Removing a tab only hides it; it does not forget the radio or its credentials. Selecting a radio opens the connection panel on it; nothing connects without your confirmation.
+<img src="/img/screens/radio-tab-context-menu-light.png" width="216" alt="Light-theme radio tab context menu with Rename highlighted and readable dark text on a light selection surface." />
+
+*Highlighted menu text uses the matching canon foreground and selection surface in the light theme.*
+
+<img src="/img/screens/radio-tab-context-menu.png" width="216" alt="A saved radio tab context menu with Connect or Switch, Disconnect, Rename, Connection settings and Remove from tabs actions." />
+
+*Each radio tab has a context menu. Unavailable actions remain visible with a reason.*
+
+- Up to two recent radio shortcuts appear in the title bar. The active radio remains visible; a pending connection uses the other slot. Saved radios remain in the drawer when discovery cannot find them. Line one shows the saved name; line two shows the state and Location in words.
+- Click a disconnected tab to connect through its preferred saved path. If another radio is live, confirm **Switch** before it disconnects. Clicking the active tab keeps the current view.
+- Right-click a tab, or focus it and press **Shift+F10**, for **Connect** / **Switch to this radio…**, **Disconnect**, **Rename…**, **Connection settings…**, **Move left** / **Move right**, and **Remove from tabs**. A pending connection offers **Cancel connection**. **Move left** and **Move right** reorder tabs from the keyboard, the same as dragging them. Removing a tab keeps its saved connection; restore it through **Radio options… → Add to tabs** in the connection window.
+- **⋯ More radios** opens the full saved/discovered radio drawer. **Locations and connections…** opens Locations at the browsed Location. Connection settings opens the matching saved radio and path. Browsing preserves the active connection; see [Location and Operator Profiles](./station-profiles.md#using-workspace-radio-tabs).
+- The dot on the active tab is the **radio-link indicator**. It pulses with discovery heartbeats and shows link loss in red. The tab also spells out **Link lost**. **View → Blink Status Indicator** controls blinking.
+- Drag tabs to reorder them; the order persists across restarts. **Esc** cancels a drag. When tabs no longer fit, drag near an edge to scroll while reordering, use the mouse wheel, or drag empty strip space.
+
+- An **AT** chip after the connected radio's name means the adaptive frame-rate throttle is on. The chip is outlined while the throttle is on standby. The tab expands for the chip and shrinks again when it disappears. It fills with the cap's quality color while a frame-rate cap is in force, and hovering the tab shows the cap (for example "Adaptive throttle: 8 fps cap"). See [Low Bandwidth Connections](./low-bandwidth-connections.md#adaptive-frame-rate-throttle).
+- While the AT chip is showing and the link is healthy, the connected radio's dot shows the network quality in the same colors as the status bar: green for Excellent or Very Good, blue for Good, amber for Fair and red for Poor. Hover the tab to see the quality in words. The quality colors follow the selected theme. With the throttle off, the dot stays the plain green "connected" color.
 
 ### Transmit timer
 

@@ -74,6 +74,11 @@ void SerialPortController::retireTxInputs()
     // thread must not key after close. Original releases still clear held
     // paddle state/TUNE exclusion (#5422) and straight-key sidetone.
     ++m_inputPortEpoch;
+    releaseHeldTxInputs();
+}
+
+void SerialPortController::releaseHeldTxInputs()
+{
     m_txProducer.discardInputs();
     emit txInputsCancelled();
     if (m_pttInputHeld) {
@@ -171,9 +176,7 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     bool cts = (modemStat & MS_CTS_ON)  != 0;
     bool dsr = (modemStat & MS_DSR_ON)  != 0;
     bool dcd = (modemStat & MS_RLSD_ON) != 0;   // RLSD = Receive Line Signal Detect = DCD
-    m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
-    m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
-    m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
+    baselineInputs(cts, dsr, dcd);
     m_debounceTimer.start();
 
     m_hWin        = static_cast<void*>(hPort);
@@ -308,65 +311,7 @@ void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw, bool dc
                                               const TxCoordinator::Request& input)
 {
     if (!isOpen()) return;
-    bool ctsActive = m_ctsActiveHigh ? ctsRaw : !ctsRaw;
-    bool dsrActive = m_dsrActiveHigh ? dsrRaw : !dsrRaw;
-    bool dcdActive = m_dcdActiveHigh ? dcdRaw : !dcdRaw;
-
-    bool debounceOk = m_debounceTimer.elapsed() >= DEBOUNCE_MS;
-
-    // ── PTT input ────────────────────────────────────────────────────────
-    if (m_ctsFn == InputFunction::PttInput && ctsActive != m_lastCtsActive && debounceOk) {
-        qCDebug(lcDevices) << "SerialPortController: CTS PTT edge →" << ctsActive;
-        m_lastCtsActive = ctsActive;
-        m_debounceTimer.restart();
-        publishPttInput(ctsActive, input);
-    }
-    if (m_dsrFn == InputFunction::PttInput && dsrActive != m_lastDsrActive && debounceOk) {
-        qCDebug(lcDevices) << "SerialPortController: DSR PTT edge →" << dsrActive;
-        m_lastDsrActive = dsrActive;
-        m_debounceTimer.restart();
-        publishPttInput(dsrActive, input);
-    }
-    if (m_dcdFn == InputFunction::PttInput && dcdActive != m_lastDcdActive && debounceOk) {
-        qCDebug(lcDevices) << "SerialPortController: DCD PTT edge →" << dcdActive;
-        m_lastDcdActive = dcdActive;
-        m_debounceTimer.restart();
-        publishPttInput(dcdActive, input);
-    }
-
-    // ── CW straight key ──────────────────────────────────────────────────
-    bool keyDown = false;
-    bool hasKey = false;
-    if (m_ctsFn == InputFunction::CwKeyInput) { keyDown = ctsActive; hasKey = true; }
-    if (m_dsrFn == InputFunction::CwKeyInput) { keyDown = dsrActive; hasKey = true; }
-    if (m_dcdFn == InputFunction::CwKeyInput) { keyDown = dcdActive; hasKey = true; }
-    if (hasKey && keyDown != m_lastKeyDown) {
-        m_lastKeyDown = keyDown;
-        publishKeyInput(keyDown, input);
-    }
-
-    // ── CW paddle (dit/dah) ──────────────────────────────────────────────
-    bool ditActive = false, dahActive = false;
-    bool hasPaddle = false;
-    if (m_ctsFn == InputFunction::CwDitInput) { ditActive = ctsActive; hasPaddle = true; }
-    if (m_dsrFn == InputFunction::CwDitInput) { ditActive = dsrActive; hasPaddle = true; }
-    if (m_dcdFn == InputFunction::CwDitInput) { ditActive = dcdActive; hasPaddle = true; }
-    if (m_ctsFn == InputFunction::CwDahInput) { dahActive = ctsActive; hasPaddle = true; }
-    if (m_dsrFn == InputFunction::CwDahInput) { dahActive = dsrActive; hasPaddle = true; }
-    if (m_dcdFn == InputFunction::CwDahInput) { dahActive = dcdActive; hasPaddle = true; }
-
-    // Track DCD edge even when it isn't driving paddle/key, so the
-    // close-time stuck-PTT check above and the polarity-flip rebaseline
-    // in loadSettings() both see the latest state.
-    m_lastDcdActive = dcdActive;
-
-    if (m_paddleSwap) std::swap(ditActive, dahActive);
-
-    if (hasPaddle && (ditActive != m_lastDitActive || dahActive != m_lastDahActive)) {
-        m_lastDitActive = ditActive;
-        m_lastDahActive = dahActive;
-        publishPaddleInput(ditActive, dahActive, input);
-    }
+    applyInputSample(ctsRaw, dsrRaw, dcdRaw, input);
 }
 
 #else  // ─────────────────────────────────────────────────────────────────────
@@ -407,9 +352,8 @@ bool SerialPortController::open(const QString& portName, int baudRate,
         bool cts = pinState.testFlag(QSerialPort::ClearToSendSignal);
         bool dsr = pinState.testFlag(QSerialPort::DataSetReadySignal);
         bool dcd = pinState.testFlag(QSerialPort::DataCarrierDetectSignal);
-        m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
-        m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
-        m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
+        baselineInputs(cts, dsr, dcd);
+        m_debounceTimer.start();
         qCDebug(lcDevices) << "SerialPortController: open() initial pin sample —"
                            << "raw=" << Qt::hex << static_cast<int>(pinState)
                            << "DSR=" << dsr << "CTS=" << cts << "DCD=" << dcd
@@ -421,7 +365,6 @@ bool SerialPortController::open(const QString& portName, int baudRate,
                            << "lastDcdActive=" << m_lastDcdActive;
     }
     m_pollLogged = false;
-    m_debounceTimer.start();
 
     updatePolling();
 
@@ -563,58 +506,7 @@ void SerialPortController::pollInputPins()
                            << "DSR=" << dsr << "CTS=" << cts << "DCD=" << dcd;
     }
 
-    // ── PTT input ────────────────────────────────────────────────────────
-    if (m_ctsFn == InputFunction::PttInput && ctsActive != m_lastCtsActive && debounceOk) {
-        qCDebug(lcDevices) << "SerialPortController: CTS PTT edge →" << ctsActive;
-        m_lastCtsActive = ctsActive;
-        m_debounceTimer.restart();
-        publishPttInput(ctsActive, input);
-    }
-    if (m_dsrFn == InputFunction::PttInput && dsrActive != m_lastDsrActive && debounceOk) {
-        qCDebug(lcDevices) << "SerialPortController: DSR PTT edge →" << dsrActive;
-        m_lastDsrActive = dsrActive;
-        m_debounceTimer.restart();
-        publishPttInput(dsrActive, input);
-    }
-    if (m_dcdFn == InputFunction::PttInput && dcdActive != m_lastDcdActive && debounceOk) {
-        qCDebug(lcDevices) << "SerialPortController: DCD PTT edge →" << dcdActive;
-        m_lastDcdActive = dcdActive;
-        m_debounceTimer.restart();
-        publishPttInput(dcdActive, input);
-    }
-
-    // ── CW straight key ──────────────────────────────────────────────────
-    bool keyDown = false;
-    bool hasKey = false;
-    if (m_ctsFn == InputFunction::CwKeyInput) { keyDown = ctsActive; hasKey = true; }
-    if (m_dsrFn == InputFunction::CwKeyInput) { keyDown = dsrActive; hasKey = true; }
-    if (m_dcdFn == InputFunction::CwKeyInput) { keyDown = dcdActive; hasKey = true; }
-    if (hasKey && keyDown != m_lastKeyDown) {
-        m_lastKeyDown = keyDown;
-        publishKeyInput(keyDown, input);
-    }
-
-    // ── CW paddle (dit/dah) ──────────────────────────────────────────────
-    bool ditActive = false, dahActive = false;
-    bool hasPaddle = false;
-    if (m_ctsFn == InputFunction::CwDitInput) { ditActive = ctsActive; hasPaddle = true; }
-    if (m_dsrFn == InputFunction::CwDitInput) { ditActive = dsrActive; hasPaddle = true; }
-    if (m_dcdFn == InputFunction::CwDitInput) { ditActive = dcdActive; hasPaddle = true; }
-    if (m_ctsFn == InputFunction::CwDahInput) { dahActive = ctsActive; hasPaddle = true; }
-    if (m_dsrFn == InputFunction::CwDahInput) { dahActive = dsrActive; hasPaddle = true; }
-    if (m_dcdFn == InputFunction::CwDahInput) { dahActive = dcdActive; hasPaddle = true; }
-
-    // Track DCD edge regardless of role so close-time stuck-PTT detection
-    // and polarity-flip rebaselines see fresh state.
-    m_lastDcdActive = dcdActive;
-
-    if (m_paddleSwap) std::swap(ditActive, dahActive);
-
-    if (hasPaddle && (ditActive != m_lastDitActive || dahActive != m_lastDahActive)) {
-        m_lastDitActive = ditActive;
-        m_lastDahActive = dahActive;
-        publishPaddleInput(ditActive, dahActive, input);
-    }
+    applyInputSample(cts, dsr, dcd, input);
 }
 #endif  // HAVE_SERIALPORT
 
@@ -623,6 +515,182 @@ void SerialPortController::pollInputPins()
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform-common: shared output control and settings persistence
 // ─────────────────────────────────────────────────────────────────────────────
+
+#if defined(HAVE_SERIALPORT) || defined(Q_OS_WIN)
+SerialPortController::CwLines SerialPortController::cwLines(bool ctsActive, bool dsrActive,
+                                                            bool dcdActive) const
+{
+    CwLines lines;
+    if (m_ctsFn == InputFunction::CwKeyInput) { lines.keyDown = ctsActive; lines.hasKey = true; }
+    if (m_dsrFn == InputFunction::CwKeyInput) { lines.keyDown = dsrActive; lines.hasKey = true; }
+    if (m_dcdFn == InputFunction::CwKeyInput) { lines.keyDown = dcdActive; lines.hasKey = true; }
+    if (m_ctsFn == InputFunction::CwDitInput) { lines.dit = ctsActive; lines.hasPaddle = true; }
+    if (m_dsrFn == InputFunction::CwDitInput) { lines.dit = dsrActive; lines.hasPaddle = true; }
+    if (m_dcdFn == InputFunction::CwDitInput) { lines.dit = dcdActive; lines.hasPaddle = true; }
+    if (m_ctsFn == InputFunction::CwDahInput) { lines.dah = ctsActive; lines.hasPaddle = true; }
+    if (m_dsrFn == InputFunction::CwDahInput) { lines.dah = dsrActive; lines.hasPaddle = true; }
+    if (m_dcdFn == InputFunction::CwDahInput) { lines.dah = dcdActive; lines.hasPaddle = true; }
+    if (m_paddleSwap) {
+        std::swap(lines.dit, lines.dah);
+    }
+    return lines;
+}
+
+void SerialPortController::baselineInputs(bool ctsRaw, bool dsrRaw, bool dcdRaw)
+{
+    m_lastCtsActive = m_ctsActiveHigh ? ctsRaw : !ctsRaw;
+    m_lastDsrActive = m_dsrActiveHigh ? dsrRaw : !dsrRaw;
+    m_lastDcdActive = m_dcdActiveHigh ? dcdRaw : !dcdRaw;
+    const CwLines lines = cwLines(m_lastCtsActive, m_lastDsrActive, m_lastDcdActive);
+    m_lastKeyDown = lines.keyDown;
+    m_lastDitActive = false;
+    m_lastDahActive = false;
+    m_ditHeldAtOpen = lines.dit;
+    m_dahHeldAtOpen = lines.dah;
+    recordBaselineSettings();
+}
+
+void SerialPortController::recordBaselineSettings()
+{
+    m_baseCtsFn = m_ctsFn;
+    m_baseDsrFn = m_dsrFn;
+    m_baseDcdFn = m_dcdFn;
+    m_baseCtsActiveHigh = m_ctsActiveHigh;
+    m_baseDsrActiveHigh = m_dsrActiveHigh;
+    m_baseDcdActiveHigh = m_dcdActiveHigh;
+    m_basePaddleSwap = m_paddleSwap;
+}
+
+void SerialPortController::rebaselineInPlace(bool ctsRaw, bool dsrRaw, bool dcdRaw)
+{
+    // Only a pin whose role or polarity changed (or the paddle swap) is acted
+    // on: a reload that changed nothing on a pin leaves its held input keyed.
+    // The port stays open, so the epoch is kept: the Win32 watcher captured it
+    // at start.
+    const bool ctsChanged = m_ctsFn != m_baseCtsFn || m_ctsActiveHigh != m_baseCtsActiveHigh;
+    const bool dsrChanged = m_dsrFn != m_baseDsrFn || m_dsrActiveHigh != m_baseDsrActiveHigh;
+    const bool dcdChanged = m_dcdFn != m_baseDcdFn || m_dcdActiveHigh != m_baseDcdActiveHigh;
+    const bool swapChanged = m_paddleSwap != m_basePaddleSwap;
+    if (!ctsChanged && !dsrChanged && !dcdChanged && !swapChanged) {
+        return;
+    }
+    // A role is touched when a changed pin had it before the reload or has it now.
+    const auto touched = [&](InputFunction a, InputFunction b) {
+        const auto has = [&](bool changed, InputFunction before, InputFunction now) {
+            return changed && (before == a || before == b || now == a || now == b);
+        };
+        return has(ctsChanged, m_baseCtsFn, m_ctsFn) || has(dsrChanged, m_baseDsrFn, m_dsrFn)
+            || has(dcdChanged, m_baseDcdFn, m_dcdFn);
+    };
+    const bool pttTouched = touched(InputFunction::PttInput, InputFunction::PttInput);
+    const bool keyTouched = touched(InputFunction::CwKeyInput, InputFunction::CwKeyInput);
+    const bool paddleTouched =
+        swapChanged || touched(InputFunction::CwDitInput, InputFunction::CwDahInput);
+
+    // Release what a touched role holds; a baseline alone would drop it without
+    // publishing the release and leave the radio keyed. When every held role is
+    // touched, cancel the producer's inputs too, as close() does.
+    const bool keepsAHold = (m_pttInputHeld && !pttTouched) || (m_keyInputHeld && !keyTouched)
+                         || (m_paddleInputHeld && !paddleTouched);
+    if (!keepsAHold) {
+        releaseHeldTxInputs();
+    } else {
+        if (pttTouched && m_pttInputHeld) {
+            publishPttInput(false);
+        }
+        if (keyTouched && m_keyInputHeld) {
+            publishKeyInput(false);
+        }
+        if (paddleTouched && m_paddleInputHeld) {
+            publishPaddleInput(false, false);
+        }
+    }
+
+    // Rebaseline the changed pins under their new polarity; an input active
+    // now keys nothing until it is released and pressed again.
+    if (ctsChanged) { m_lastCtsActive = m_ctsActiveHigh ? ctsRaw : !ctsRaw; }
+    if (dsrChanged) { m_lastDsrActive = m_dsrActiveHigh ? dsrRaw : !dsrRaw; }
+    if (dcdChanged) { m_lastDcdActive = m_dcdActiveHigh ? dcdRaw : !dcdRaw; }
+    const CwLines lines = cwLines(m_ctsActiveHigh ? ctsRaw : !ctsRaw,
+                                  m_dsrActiveHigh ? dsrRaw : !dsrRaw,
+                                  m_dcdActiveHigh ? dcdRaw : !dcdRaw);
+    if (keyTouched) {
+        m_lastKeyDown = lines.keyDown;
+    }
+    if (paddleTouched) {
+        m_lastDitActive = false;
+        m_lastDahActive = false;
+        m_ditHeldAtOpen = lines.dit;
+        m_dahHeldAtOpen = lines.dah;
+    }
+    recordBaselineSettings();
+}
+
+void SerialPortController::applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRaw,
+                                            const TxCoordinator::Request& input)
+{
+    const bool ctsActive = m_ctsActiveHigh ? ctsRaw : !ctsRaw;
+    const bool dsrActive = m_dsrActiveHigh ? dsrRaw : !dsrRaw;
+    const bool dcdActive = m_dcdActiveHigh ? dcdRaw : !dcdRaw;
+    const bool debounceOk = m_debounceTimer.elapsed() >= DEBOUNCE_MS;
+
+    // ── PTT input ────────────────────────────────────────────────────────
+    if (m_ctsFn == InputFunction::PttInput && ctsActive != m_lastCtsActive && debounceOk) {
+        qCDebug(lcDevices) << "SerialPortController: CTS PTT edge →" << ctsActive;
+        m_lastCtsActive = ctsActive;
+        m_debounceTimer.restart();
+        if (ctsActive || m_pttInputHeld) {
+            publishPttInput(ctsActive, input);
+        }
+    }
+    if (m_dsrFn == InputFunction::PttInput && dsrActive != m_lastDsrActive && debounceOk) {
+        qCDebug(lcDevices) << "SerialPortController: DSR PTT edge →" << dsrActive;
+        m_lastDsrActive = dsrActive;
+        m_debounceTimer.restart();
+        if (dsrActive || m_pttInputHeld) {
+            publishPttInput(dsrActive, input);
+        }
+    }
+    if (m_dcdFn == InputFunction::PttInput && dcdActive != m_lastDcdActive && debounceOk) {
+        qCDebug(lcDevices) << "SerialPortController: DCD PTT edge →" << dcdActive;
+        m_lastDcdActive = dcdActive;
+        m_debounceTimer.restart();
+        if (dcdActive || m_pttInputHeld) {
+            publishPttInput(dcdActive, input);
+        }
+    }
+
+    const CwLines lines = cwLines(ctsActive, dsrActive, dcdActive);
+    // ── CW straight key ──────────────────────────────────────────────────
+    if (lines.hasKey && lines.keyDown != m_lastKeyDown) {
+        m_lastKeyDown = lines.keyDown;
+        // A release of a key held at open was never published as down.
+        if (lines.keyDown || m_keyInputHeld) {
+            publishKeyInput(lines.keyDown, input);
+        }
+    }
+
+    // Track DCD for the other roles so close-time stuck-PTT detection sees
+    // fresh state. As the PTT input its baseline moves only with a published
+    // edge, or a release inside the debounce window would be lost for good.
+    if (m_dcdFn != InputFunction::PttInput) {
+        m_lastDcdActive = dcdActive;
+    }
+
+    // ── CW paddle (dit/dah) ──────────────────────────────────────────────
+    // A line active at open counts as open until it is released, so a paddle
+    // resting on one contact keys nothing when the other paddle is pressed.
+    if (!lines.dit) { m_ditHeldAtOpen = false; }
+    if (!lines.dah) { m_dahHeldAtOpen = false; }
+    const bool dit = lines.dit && !m_ditHeldAtOpen;
+    const bool dah = lines.dah && !m_dahHeldAtOpen;
+    if (lines.hasPaddle && (dit != m_lastDitActive || dah != m_lastDahActive)) {
+        m_lastDitActive = dit;
+        m_lastDahActive = dah;
+        publishPaddleInput(dit, dah, input);
+    }
+}
+#endif
 
 void SerialPortController::setTransmitting(bool tx)
 {
@@ -699,8 +767,8 @@ void SerialPortController::loadSettings()
 
         if (samePort) {
             // Port already open on the same port/baud — update settings in-place.
-            // Re-sample pin state with new polarity so next event/poll doesn't
-            // see a phantom edge from the polarity flip.
+            // rebaselineInPlace() acts only on pins whose role or polarity changed
+            // (or the paddle swap), so the next poll sees no phantom edge.
             qCDebug(lcDevices) << "SerialPortController::loadSettings: in-place update (no reopen)";
 #ifdef Q_OS_WIN
             {
@@ -709,9 +777,7 @@ void SerialPortController::loadSettings()
                 bool cts = (modemStat & MS_CTS_ON)  != 0;
                 bool dsr = (modemStat & MS_DSR_ON)  != 0;
                 bool dcd = (modemStat & MS_RLSD_ON) != 0;
-                m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
-                m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
-                m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
+                rebaselineInPlace(cts, dsr, dcd);
             }
 #else
 #  ifdef HAVE_SERIALPORT
@@ -720,9 +786,7 @@ void SerialPortController::loadSettings()
                 bool cts = pinState.testFlag(QSerialPort::ClearToSendSignal);
                 bool dsr = pinState.testFlag(QSerialPort::DataSetReadySignal);
                 bool dcd = pinState.testFlag(QSerialPort::DataCarrierDetectSignal);
-                m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
-                m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
-                m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
+                rebaselineInPlace(cts, dsr, dcd);
             }
             updatePolling();
 #  endif

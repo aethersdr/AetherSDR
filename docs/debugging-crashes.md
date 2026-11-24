@@ -1,17 +1,19 @@
 # Debugging crashes in release builds
 
-Release binaries ship without debug info. Every release also carries one
-debug-symbol archive per platform build, attached next to the installers:
+Release binaries ship without debug info. Every release also has one
+debug-symbol archive per platform build. From v26.11.4 the archives are at
+`https://updates.aethersdr.com/releases/vX.Y.Z/`. Releases through v26.11.3
+carry them on their GitHub release page, next to the installers:
 
-| Build | Release asset |
+| Build | Archive |
 |---|---|
 | Linux AppImage x86_64 / aarch64 | `AetherSDR-vX.Y.Z-x86_64-symbols.tar.xz`, `…-aarch64-symbols.tar.xz` |
 | macOS DMG Apple Silicon / Intel | `AetherSDR-vX.Y.Z-macOS-apple-silicon-symbols.tar.xz`, `…-macOS-intel-symbols.tar.xz` |
 | Windows x64 | `AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz` |
 
 A crash report from a user plus the archive for that exact version and
-platform is enough to get function names and source lines. Nothing has to be
-hosted anywhere else. Releases made before these archives existed have none.
+platform is enough to get function names and source lines. No symbol server is
+needed. Releases made before these archives existed have none.
 Builds from source or from a distribution package are not covered either.
 
 ## For users: what to attach to the issue
@@ -46,10 +48,21 @@ the crash report your operating system kept:
 
 ## For maintainers: symbolizing a report
 
-Download the archive for the reporter's version and platform:
+Download the archive for the reporter's version and platform. From v26.11.4:
+
+```sh
+curl -O https://updates.aethersdr.com/releases/vX.Y.Z/AetherSDR-vX.Y.Z-<platform>-symbols.tar.xz
+```
+
+Through v26.11.3:
 
 ```sh
 gh release download vX.Y.Z -R aethersdr/AetherSDR -p 'AetherSDR-vX.Y.Z-<platform>-symbols.tar.xz'
+```
+
+Then extract it:
+
+```sh
 mkdir symbols && tar -xJf AetherSDR-vX.Y.Z-<platform>-symbols.tar.xz -C symbols
 ```
 

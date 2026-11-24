@@ -339,7 +339,7 @@ gradually — over-processing can make voices sound robotic or hollow.
 ## Where to Find the Controls
 
 - **Client-side modes:** Open AetherRX — the `AetherRX` button on the VFO, or
-  `Settings → AetherRX...` — and select the **AetherNR** stage. Its method
+  `Tools → AetherRX...` — and select the **AetherNR** stage. Its method
   strip (NR2, NR4, MNR, DFNR, RN2, BNR, NNR) turns a mode on; click the lit
   one again to turn it off. The selected mode's settings appear below the
   strip.

@@ -45,28 +45,30 @@ SSTV and other modes.
 
 | Control | Options |
 |---|---|
-| Mark freq | Auto, 2125, 2210, 1700, 1275, 1000, 915, 850, 500 Hz |
+| Mark freq | 500, 850, 915, 1000, 1275, 1700, **2125**, 2210 Hz |
 | Shift | 45, 50, 75, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz |
 | Baud | **45.45**, 50, 75, 100, 110, 150, 300 |
 | REV | Space above mark (LSB / inverted polarity) |
-| Sens | 0–100 display squelch (#5028): drops decoded characters below a confidence threshold (0 = show everything, the default; ~38 filters what the stats bar calls UNLOCK; 100 = near-certain only). Mapping in `src/gui/RttyDecoderSensitivity.h` |
+| Sens | 0–100 display squelch (#5028): drops decoded characters below a confidence threshold (0 = show everything, the default; 23 hides the red letters, 45 the orange ones too, 78 keeps only the green ones). Mapping in `src/gui/RttyDecoderSensitivity.h` |
 
-Stats bar updates ~2×/second: `M:xx% S:xx% SNR:xxdB  LOCKED/UNLOCK`
+Stats bar updates ~2×/second: a 15-segment level bar, then `NdB LOCKED` or `NdB UNLOCK`, all from the average character score (#7422)
 
-Mark/Shift/Baud/REV persist to AppSettings as flat key names (grandfathered —
-see bug #4 below); Sens persists as one nested JSON object under the root key
+Baud/REV persist to AppSettings as flat key names (grandfathered —
+see bug #4 below); Mark and Shift are the slice's `rtty_mark` and `rtty_shift`
+and the client does not store them; Sens persists as one nested JSON object under the root key
 `RttyDecoder` per Constitution Principle V.
 
 ---
 
-## "Auto" Mark Frequency
+## Mark and Shift come from the slice
 
-When Mark combo = "Auto" (value 0), the decoder uses `SliceModel::rttyMark()`
-(the radio's mark setting).
-
-The decoder re-reads it live on the `rttyMarkChanged` and `rttyShiftChanged`
-signals, so tuning the radio's mark tone while decoding works without a mode
-cycle.
+The decoder uses `SliceModel::rttyMark()` and `SliceModel::rttyShift()`. A
+choice in the pane's Mark or Shift combo is sent to the slice
+(`setRttyMark()` / `setRttyShift()`). The slice's `rttyMarkChanged` and
+`rttyShiftChanged` run `refreshRttyDecodeState()`, which hands the values to
+the decoder and shows them in the combos, so a change on the VFO's DSP tab
+reaches the decoder while it runs. A value off a preset list gets its own
+entry.
 
 ---
 

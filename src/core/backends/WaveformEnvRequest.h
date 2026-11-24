@@ -13,7 +13,8 @@ namespace AetherSDR {
 // command (restart, remove, uninstall, recreate).
 inline bool waveformNameTokenValid(const QString& name)
 {
-    if (name.isEmpty() || name.size() > 64) { return false; }
+    if (name.isEmpty() || name.size() > 64 || name == QLatin1String(".")
+        || name == QLatin1String("..")) { return false; }
     for (const QChar ch : name) {
         const ushort c = ch.unicode();
         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')

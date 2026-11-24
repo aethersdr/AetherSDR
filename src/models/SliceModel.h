@@ -39,6 +39,11 @@ public:
         std::optional<int> filterHighHz;
         std::optional<int> gain;
         std::optional<bool> muted;
+        std::optional<int> agcThreshold;
+        std::optional<bool> noiseBlanker;
+        std::optional<bool> noiseReduction;
+        std::optional<bool> ritEnabled;
+        std::optional<int> ritOffsetHz;
         bool operator==(const ReceiveObservation&) const = default;
     };
     const ReceiveObservation& receiveObservation() const { return m_receiveObservation; }
@@ -215,6 +220,9 @@ public:
     bool wfmForceMono() const { return m_wfmForceMono; }
     const WfmReceptionDiagnostics& wfmReceptionDiagnostics() const { return m_wfmReceptionDiagnostics; }
     WfmStereoStatus wfmStereoStatus() const { return m_wfmStereoStatus; }
+    // The receiver's squelch gate as the backend last reported it; Unavailable
+    // until it reports one (RadioCapabilities::squelchGateModes).
+    SquelchGateState squelchGate() const { return m_squelchGate; }
     int     flexSquelchLevel() const { return m_squelchLevel; }
     int     receiveSquelchLevel() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveSquelchLevel
@@ -418,7 +426,7 @@ public:
 
     // Apply a normalized, typed slice delta from the backend
     // (IRadioBackend::sliceChanged). Vendor-neutral fields only — the Flex wire
-    // decode lives in FlexBackend::decodeSliceStatus. Applies only the fields the
+    // decode lives in FlexSliceStatus::decodeValues. Applies only the fields the
     // delta has engaged (present-only). (aetherd RFC 2.3.)
     void applyChanges(const SliceDelta& delta);
 
@@ -558,6 +566,7 @@ signals:
     void wfmForceMonoRequested(bool forceMono);
     void wfmReceptionDiagnosticsChanged(const AetherSDR::WfmReceptionDiagnostics& diagnostics);
     void wfmStereoStatusChanged(AetherSDR::WfmStereoStatus status);
+    void squelchGateChanged(AetherSDR::SquelchGateState state);
     void wfmDeemphasisRequested(int microseconds);
     void externalReceiveSquelchChanged(bool on, int level);
     void stepChanged(int hz, const QVector<int>& stepList);
@@ -783,6 +792,7 @@ private:
     bool m_wfmForceMono{false};
     WfmReceptionDiagnostics m_wfmReceptionDiagnostics;
     WfmStereoStatus m_wfmStereoStatus{WfmStereoStatus::Unavailable};
+    SquelchGateState m_squelchGate{SquelchGateState::Unavailable};
     int     m_manualSquelchLevel{20};
     bool    m_squelchEchoIsManual{true};
     int     m_stepHz{100};

@@ -134,6 +134,27 @@ void testSaveRestoreRoundTrip()
     report("beta hidden state restored",      beta  && !beta->isContainerVisible());
 }
 
+// A layout saved before a container was retired lists it; restore skips it
+// rather than recreating an empty shell, and the next save leaves it out.
+void testRetiredContainersAreNotRestored()
+{
+    AppSettings::instance().setValue("ContainerTree", "");
+    {
+        ContainerManager m;
+        m.createContainer("tx_dsp", "TX DSP", "");
+        m.createContainer("gate", "gate", "", "tx_dsp");
+        m.createContainer("eq", "eq", "", "tx_dsp");
+        m.saveState();
+    }
+    ContainerManager m2;
+    m2.restoreState({QStringLiteral("gate")});
+    report("a retired container is not recreated", m2.container("gate") == nullptr);
+    report("its siblings are", m2.container("eq") != nullptr && m2.container("tx_dsp") != nullptr);
+    m2.saveState();
+    const QString saved = AppSettings::instance().value("ContainerTree", "").toString();
+    report("the next save leaves it out", !saved.contains(QStringLiteral("\"gate\"")));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -151,6 +172,7 @@ int main(int argc, char** argv)
     testContentFactory();
     testFloatDockViaManager();
     testSaveRestoreRoundTrip();
+    testRetiredContainersAreNotRestored();
 
     std::printf("\n%s\n",
                 g_failed == 0

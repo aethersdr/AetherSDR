@@ -521,6 +521,7 @@ WDSP_API void SetRXAFMSQMP (int channel, int mp);
 WDSP_API void SetRXAFMSQNC (int channel, int nc);
 WDSP_API void SetRXAFMSQRun (int channel, int run);
 WDSP_API void SetRXAFMSQThreshold (int channel, double threshold);
+WDSP_API int GetRXAFMSQGateOpen (int channel);   // AetherSDR patch 24
 
 /*  ---- gain.c ------------------------------------------------------------ */
 

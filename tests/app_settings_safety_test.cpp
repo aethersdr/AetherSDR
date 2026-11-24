@@ -23,6 +23,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMap>
@@ -1097,6 +1098,21 @@ void testBrowserApi()
     expect(redacted.contains(QStringLiteral("[REDACTED]"))
                && !redacted.contains(QStringLiteral("SUPERSECRET")),
            "display redaction masks the nested field the predicate flagged");
+
+    // Support bundles are attached to public issues: account identities are
+    // masked in the dump even though they are not secrets.
+    settings.setValue(QStringLiteral("SmartLinkEmail"), QStringLiteral("op@example.invalid"));
+    expect(settings.setRadioFeature(QStringLiteral("local"), QString(), QStringLiteral("IdentityProbe"), 1,
+               QJsonObject{{QStringLiteral("accounts"), QJsonArray{QJsonObject{
+                   {QStringLiteral("label"), QStringLiteral("Home account")},
+                   {QStringLiteral("email"), QStringLiteral("op@example.invalid")}}}},
+                   {QStringLiteral("stations"), QJsonArray{QJsonObject{{QStringLiteral("connections"), QJsonArray{QJsonObject{
+                       {QStringLiteral("username"), QStringLiteral("rsba1-user")}}}}}}}}),
+           "an identity-bearing feature document can be staged");
+    const QString bundle = SettingsSanitizer::dump();
+    expect(!bundle.contains(QStringLiteral("op@example.invalid")) && !bundle.contains(QStringLiteral("rsba1-user"))
+               && bundle.contains(QStringLiteral("Home account")),
+           "the settings dump masks account emails and user names, keeping labels");
 
     // Cache-vs-disk verification (PR #4631 review, NF0T): a failed save()
     // deliberately KEEPS the change in memory for retry, so a cache re-read

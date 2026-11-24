@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QScopeGuard>
 #include <QPointer>
+#include <QRegularExpression>
 #include <algorithm>
 #include <iterator>
 #include <limits>
@@ -39,6 +40,89 @@ QString CwxModel::macro(int idx) const
 {
     if (idx < 0 || idx >= 12) return {};
     return m_macros[idx];
+}
+
+void CwxModel::setDxCall(const QString& call)
+{
+    QString kept;
+    for (const QChar ch : call.toUpper()) {
+        const ushort c = ch.unicode();
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/') {
+            kept += ch;
+            if (kept.size() == kMaxDxCallLength) { break; }
+        }
+    }
+    if (kept == m_dxCall) { return; }
+    m_dxCall = kept;
+    emit dxCallChanged(m_dxCall);
+}
+
+namespace {
+// {CALL} is the only placeholder. Any other {...} pair is text and is keyed
+// as typed, as is a brace without its partner.
+const QRegularExpression& callPlaceholder()
+{
+    static const QRegularExpression re(QStringLiteral("\\{\\s*CALL\\s*\\}"),
+                                       QRegularExpression::CaseInsensitiveOption);
+    return re;
+}
+}
+
+bool CwxModel::hasCallPlaceholder(const QString& text)
+{
+    return callPlaceholder().match(text).hasMatch();
+}
+
+QString CwxModel::withoutCallPlaceholder(const QString& text)
+{
+    QString out;
+    qsizetype copied = 0;
+    QRegularExpressionMatchIterator it = callPlaceholder().globalMatch(text);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        out += QStringView(text).mid(copied, match.capturedStart() - copied);
+        copied = match.capturedEnd();
+        const bool atEnd = copied >= text.size();
+        const bool spaceAfter = !atEnd && text[copied] == QLatin1Char(' ');
+        if (spaceAfter && (out.isEmpty() || out.endsWith(QLatin1Char(' ')))) {
+            ++copied;
+        } else if (atEnd && out.endsWith(QLatin1Char(' '))) {
+            out.chop(1);
+        }
+    }
+    out += QStringView(text).mid(copied);
+    return out;
+}
+
+std::optional<QString> CwxModel::resolvePlaceholders(const QString& text, QString* reason) const
+{
+    QString resolved;
+    qsizetype copied = 0;
+    QRegularExpressionMatchIterator it = callPlaceholder().globalMatch(text);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        if (m_dxCall.isEmpty()) {
+            if (reason) { *reason = tr("CWX send refused: {CALL} needs a DX call, and none is set."); }
+            return std::nullopt;
+        }
+        resolved += QStringView(text).mid(copied, match.capturedStart() - copied);
+        resolved += m_dxCall;
+        copied = match.capturedEnd();
+    }
+    if (copied == 0) { return text; }
+    resolved += QStringView(text).mid(copied);
+    return resolved;
+}
+
+std::optional<QString> CwxModel::resolveForSend(const QString& text)
+{
+    QString reason;
+    std::optional<QString> resolved = resolvePlaceholders(text, &reason);
+    if (!resolved) {
+        qCWarning(lcCw) << reason;
+        emit requestRejected(reason);
+    }
+    return resolved;
 }
 
 QVector<CwxModel::SpeedSegment>
@@ -353,11 +437,17 @@ void CwxModel::sendMacro(int idx)
 void CwxModel::sendMacro(int idx, const TransmissionRoute& route)
 {
     if (idx < 1 || idx > 12) return;
+    // Resolve before admission: a macro whose placeholder cannot be filled
+    // must not acquire TX.
+    const std::optional<QString> resolved = resolveForSend(m_macros[idx - 1]);
+    if (!resolved) {
+        return;
+    }
     const TransmissionPermit permit = admitTransmission(route);
     if (!permit) {
         return;
     }
-    const QString text = m_macros[idx - 1];
+    const QString text = *resolved;
     if (text.isEmpty()) {
         // Local copy not yet synced (the macroN= status is still pending in the
         // first seconds after connect) — fall back to radio-side expansion so an
@@ -392,7 +482,16 @@ void CwxModel::sendMacro(int idx, const TransmissionRoute& route)
 void CwxModel::saveMacro(int idx, const QString& text)
 {
     if (idx < 0 || idx >= 12) return;
-    m_macros[idx] = text;   // keep the raw +/- text for our own client-side expansion
+    m_macros[idx] = text;   // keep the raw +/- and {CALL} text for our own client-side expansion
+    const CwTextRequest request{CwTextRequest::Field::SaveMacro, idx, portableMacroText(text)};
+    if (m_macroTemplates.save && request.valid()) {
+        m_macroTemplates.save(idx, hasCallPlaceholder(text) ? text : QString());
+    }
+    dispatchRequest(request, m_drainEpoch, -1);
+}
+
+QString CwxModel::portableMacroText(const QString& typed) const
+{
     // Strip the client-only +/- speed-modifier prefixes before writing to the
     // radio's shared macro store. The +/- syntax is an AetherSDR extension; a
     // Multi-Flex peer (SmartSDR/Maestro) that plays this stored slot would key a
@@ -401,10 +500,25 @@ void CwxModel::saveMacro(int idx, const QString& text)
     // (Principle VII: sanitise at the boundary where the bytes leave.) The strip
     // reuses expandSpeedModifiers — its segment text has the modifier prefixes
     // already removed; joining the segments reconstructs the plain message.
+    // {CALL} goes the same way: another client would key it as characters.
     QString plain;
-    for (const auto& seg : expandSpeedModifiers(text, m_speed, m_speedStep))
+    for (const auto& seg : expandSpeedModifiers(typed, m_speed, m_speedStep))
         plain += seg.text;
-    dispatchRequest({CwTextRequest::Field::SaveMacro, idx, plain}, m_drainEpoch, -1);
+    return withoutCallPlaceholder(plain);
+}
+
+QString CwxModel::macroTextFor(int idx, const QString& reported)
+{
+    const QString typed = m_macroTemplates.load ? m_macroTemplates.load(idx) : QString();
+    if (typed.isEmpty() || !hasCallPlaceholder(typed)) { return reported; }
+    // A reported slot arrives with '*' read as '=' (the radio's BT alias), so
+    // the typed text is compared the same way.
+    QString expected = portableMacroText(typed);
+    expected.replace(QLatin1Char('*'), QLatin1Char('='));
+    // A slot that differs was changed elsewhere, or belongs to another client
+    // identity (the radio keeps a set of slots per GUI client): the radio's
+    // text stands. The saved text is left alone; only saveMacro() replaces it.
+    return expected == reported ? typed : reported;
 }
 
 void CwxModel::erase(int numChars)
@@ -572,98 +686,68 @@ void CwxModel::setLive(bool on)
     }
 }
 
-void CwxModel::applyStatus(const QMap<QString, QString>& kvs)
+void CwxModel::applyStatusDelta(const CwxStatusDelta& d)
 {
+    // Applied in the order the radio's keys sort, as the key/value loop did.
     const QPointer<CwxModel> self(this);
-    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
-        const QString& key = it.key();
-        const QString& val = it.value();
-
-        if (key == "sent") {
-            bool ok;
-            int idx = val.toInt(&ok);
-            if (ok) {
-                m_sentIndex = idx;
-                emit charSent(idx);
-                if (!self) { return; }
-                // Queue drain detection: radio_index captured from cwx send
-                // reply tells us the last char position of the queued batch.
-                // Fire queueEmpty() so RadioModel can release MOX. (#3949)
-                if (m_cwxEndIndex >= 0 && idx >= m_cwxEndIndex) {
-                    m_cwxEndIndex = -1;
-                    emit queueEmpty();
-                    if (!self) { return; }
-                }
-            }
-        } else if (key == "wpm") {
-            bool ok;
-            int v = val.toInt(&ok);
-            const auto echo = std::find_if(m_pendingWpmEchoes.cbegin(), m_pendingWpmEchoes.cend(),
-                [v](const std::shared_ptr<const int>& pending) { return *pending == v; });
-            if (ok && echo != m_pendingWpmEchoes.cend()) {
-                // A newer echo may skip superseded writes that never reached
-                // the terminal. Retain later tickets so an older operator or
-                // transient echo cannot retire the newest queued speed edit.
-                m_pendingWpmEchoes.erase(m_pendingWpmEchoes.cbegin(), std::next(echo));
-            } else if (ok && v != m_speed) {
-                retireSpeedIntent();
-                m_speed = v;
-                emit speedChanged(m_speed);
-                if (!self) { return; }
-            }
-        } else if (key == "break_in_delay") {
-            bool ok;
-            int v = val.toInt(&ok);
-            if (ok && v != m_delay) {
-                m_delay = v;
-                emit delayChanged(m_delay);
-                if (!self) { return; }
-            }
-        } else if (key == "qsk_enabled") {
-            bool on = (val == "1");
-            if (on != m_qsk) {
-                m_qsk = on;
-                emit qskChanged(m_qsk);
-                if (!self) { return; }
-            }
-        } else if (key == "erase") {
-            QStringList parts = val.split(',');
-            if (parts.size() == 2) {
-                bool ok1, ok2;
-                int start = parts[0].toInt(&ok1);
-                int stop  = parts[1].toInt(&ok2);
-                if (ok1 && ok2) {
-                    emit erased(start, stop);
-                    if (!self) { return; }
-                }
-            }
-        } else if (key == "queue") {
-            // Legacy path: an empty queue= would mean the radio's CWX buffer has
-            // drained. Firmware doesn't actually emit this (confirmed on FLEX-6500
-            // fw 4.2.20.41343 — the reply-radio_index watch exists precisely
-            // because queue= never arrives), so this is a belt-and-suspenders
-            // fallback should a future firmware start sending it. If it does, the
-            // reply-radio_index machinery can be retired in favour of this path —
-            // tracked in #4028 (protocol/upstream). (#3949)
-            if (val.isEmpty() || val == "0") {
-                emit queueEmpty();
-                if (!self) { return; }
-            }
-        } else if (key.startsWith("macro") && key.length() > 5) {
-            bool ok;
-            int idx = key.mid(5).toInt(&ok);
-            if (ok && idx >= 1 && idx <= 12) {
-                // Decode the quoted macro field using FlexLib CWX.cs substitutions.
-                QString decoded = val;
-                if (decoded.startsWith('"') && decoded.endsWith('"'))
-                    decoded = decoded.mid(1, decoded.length() - 2);
-                decoded.replace(QChar(0x7f), ' ');
-                decoded.replace(QChar(0x1e), '"');
-                decoded.replace('*', '=');
-                m_macros[idx - 1] = decoded;
-                emit macroChanged(idx - 1, decoded);
-                if (!self) { return; }
-            }
+    if (d.breakInDelay && *d.breakInDelay != m_delay) {
+        m_delay = *d.breakInDelay;
+        emit delayChanged(m_delay);
+        if (!self) { return; }
+    }
+    if (d.erase) {
+        emit erased(d.erase->first, d.erase->second);
+        if (!self) { return; }
+    }
+    for (const auto& [index, text] : d.macros) {
+        m_macros[index] = macroTextFor(index, text);
+        emit macroChanged(index, m_macros[index]);
+        if (!self) { return; }
+    }
+    if (d.qsk && *d.qsk != m_qsk) {
+        m_qsk = *d.qsk;
+        emit qskChanged(m_qsk);
+        if (!self) { return; }
+    }
+    if (d.queueDrained) {
+        // Legacy path: an empty queue= would mean the radio's CWX buffer has
+        // drained. Firmware doesn't actually emit this (confirmed on FLEX-6500
+        // fw 4.2.20.41343 — the reply-radio_index watch exists precisely
+        // because queue= never arrives), so this is a belt-and-suspenders
+        // fallback should a future firmware start sending it. If it does, the
+        // reply-radio_index machinery can be retired in favour of this path —
+        // tracked in #4028 (protocol/upstream). (#3949)
+        emit queueEmpty();
+        if (!self) { return; }
+    }
+    if (d.sent) {
+        const int idx = *d.sent;
+        m_sentIndex = idx;
+        emit charSent(idx);
+        if (!self) { return; }
+        // Queue drain detection: radio_index captured from cwx send
+        // reply tells us the last char position of the queued batch.
+        // Fire queueEmpty() so RadioModel can release MOX. (#3949)
+        if (m_cwxEndIndex >= 0 && idx >= m_cwxEndIndex) {
+            m_cwxEndIndex = -1;
+            emit queueEmpty();
+            if (!self) { return; }
+        }
+    }
+    if (d.wpm) {
+        const int v = *d.wpm;
+        const auto echo = std::find_if(m_pendingWpmEchoes.cbegin(), m_pendingWpmEchoes.cend(),
+            [v](const std::shared_ptr<const int>& pending) { return *pending == v; });
+        if (echo != m_pendingWpmEchoes.cend()) {
+            // A newer echo may skip superseded writes that never reached
+            // the terminal. Retain later tickets so an older operator or
+            // transient echo cannot retire the newest queued speed edit.
+            m_pendingWpmEchoes.erase(m_pendingWpmEchoes.cbegin(), std::next(echo));
+        } else if (v != m_speed) {
+            retireSpeedIntent();
+            m_speed = v;
+            emit speedChanged(m_speed);
+            if (!self) { return; }
         }
     }
 }

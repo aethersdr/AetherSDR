@@ -27,7 +27,7 @@ Read this before adding code to anything named `MainWindow*`. The one rule:
 | `MainWindow_SwrSweep.cpp` | 1e | The AetherSweep SWR-sweep engine (lock → step → state machine → pan overlay). |
 | `MainWindow_Spots.cpp` | 2b | `wireSpotSubsystem()` — DX Cluster / RBN / WSJT-X / POTA clients and their UI plumbing. |
 | `MainWindow_Session.cpp` | 2c | `wireDiscovery()` / `wireRadioModel()` / `wirePanLifecycle()` — LAN + SmartLink discovery, heartbeat/disconnect detection, connection-state routing, and pan-stream lifecycle: the wiring that constitutes "a connected radio". Seed of the future `RadioSession` aggregate (#3445). |
-| `MainWindow_DspApplets.cpp` | 2d | `wirePooDooTiles()` + `wireDspApplets()` — PooDoo RX status tiles and the client-DSP applet family (Compressor / Gate / De-esser / Tube / Reverb / AetherDSP / PUDU TX+RX) plus TX signal-chain wiring. |
+| `MainWindow_DspApplets.cpp` | 2d | `wirePooDooTiles()` + `wireDspApplets()` — PooDoo RX status tiles and the client-DSP applet family (Compressor / RX Gate / Tube / Reverb / AetherDSP / PUDU TX+RX) plus TX signal-chain wiring. |
 | `MainWindowHelpers.{h,cpp}` | 0 | Stateless formatters / value transforms with **no** `MainWindow` dependency (tooltip builders, spot-ID math, client-list parsing, small pixmap painters). |
 | `MainWindowShortcutState.h` | 1b | Internal shared shortcut state — **not** a public API; only `MainWindow*.cpp` TUs include it. |
 

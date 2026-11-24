@@ -22,6 +22,8 @@ The **Reports** group at the top of the left sidebar chooses what is shown:
 
 *AetherMap's sidebar: WSPR beacon, report filters, band conditions and map options. The grid square is blacked out.*
 
+If the [WSPR receiver](./wspr-receiver.md) is running on your radio and **SpotHub → WSPR** is reading it, the stations it hears appear here too.
+
 | Control | What it does |
 |---|---|
 | **Call:** | A callsign whose sent and received reports you want to see (normally your own) |

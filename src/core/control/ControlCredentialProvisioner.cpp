@@ -10,7 +10,7 @@ ControlCredentialProvisioner::Result describe(const QList<ControlCredentials::Re
 {
     ControlCredentialProvisioner::Result result;
     result.error = ControlCredentialProvisioner::Error::None;
-    for (const auto& record : records) { result.records.append({record.id, record.role}); }
+    for (const auto& record : records) { result.records.append({record.id, record.role, record.name}); }
     return result;
 }
 } // namespace
@@ -32,6 +32,22 @@ void ControlCredentialProvisioner::finish(Result result)
 
 void ControlCredentialProvisioner::run(Operation operation, const QString& removeId, Callback completed)
 {
+    start(operation, removeId, std::nullopt, std::move(completed));
+}
+
+void ControlCredentialProvisioner::add(const ControlCredentials::Record& record, Callback completed)
+{
+    if (!completed) { return; }
+    if (!ControlCredentials::validRecords({record})) {
+        completed({Error::InvalidInput, {}, {}});
+        return;
+    }
+    start(Operation::AddClient, {}, record, std::move(completed));
+}
+
+void ControlCredentialProvisioner::start(Operation operation, const QString& removeId,
+    std::optional<ControlCredentials::Record> prepared, Callback completed)
+{
     if (!completed) { return; }
     if (QThread::currentThread() != thread() || !m_vault || m_vault->thread() != thread()) {
         completed({Error::Storage, ControlCredentialVault::Error::Unavailable, {}});
@@ -47,7 +63,7 @@ void ControlCredentialProvisioner::run(Operation operation, const QString& remov
     m_busy = true;
     m_completed = std::move(completed);
     const QPointer<ControlCredentialProvisioner> self(this);
-    m_vault->load([self, operation, removeId](ControlCredentialVault::Result loaded) {
+    m_vault->load([self, operation, removeId, prepared = std::move(prepared)](ControlCredentialVault::Result loaded) {
         if (!self) { return; }
         using VaultError = ControlCredentialVault::Error;
         if (operation == Operation::Initialize && loaded.error == VaultError::None) {
@@ -68,8 +84,9 @@ void ControlCredentialProvisioner::run(Operation operation, const QString& remov
                 self->finish({Error::Capacity, {}, {}});
                 return;
             }
-            loaded.records.append(ControlCredentials::generate(operation == Operation::AddClient
-                ? ControlCredentials::Role::Client : ControlCredentials::Role::GrantAdmin));
+            loaded.records.append(prepared ? *prepared
+                : ControlCredentials::generate(operation == Operation::AddClient
+                    ? ControlCredentials::Role::Client : ControlCredentials::Role::GrantAdmin));
         }
         const auto expected = ControlCredentialVault::encode(loaded.records);
         if (!expected) { self->finish({Error::InvalidInput, {}, {}}); return; }

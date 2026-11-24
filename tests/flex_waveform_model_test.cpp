@@ -11,6 +11,16 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include "core/backends/flex/FlexWaveformStatus.h"
+
+// A waveform status line through the production decode, as the status
+// ingress delivers it; a line the decode refuses changes nothing.
+static void feedWaveform(AetherSDR::FlexWaveformModel& model, const QString& object,
+                         const QMap<QString, QString>& kvs)
+{
+    if (const auto status = AetherSDR::flexWaveformStatus(object, kvs)) { model.applyStatus(*status); }
+}
+
 
 using AetherSDR::FlexWaveformModel;
 using AetherSDR::FlexWaveformEntry;
@@ -48,7 +58,7 @@ int main(int argc, char** argv)
         const QString list = QString("FREEDV") + QChar(0x7F) + "v1"
                            + ","
                            + QString("RTTY") + QChar(0x7F) + "v2";
-        m.handleInstalledList(makeKvs({{"installed_list", list}}));
+        feedWaveform(m, QStringLiteral("waveform"), makeKvs({{"installed_list", list}}));
 
         report("installedList: waveformsChanged emitted",   spy.size() == 1);
         report("installedList: two entries",                m.waveforms().size() == 2);
@@ -66,7 +76,7 @@ int main(int argc, char** argv)
         const QString list = QString("FREEDV") + QChar(0x7F) + "v1"
                            + ",,"   // empty middle entry
                            + QString("RTTY") + QChar(0x7F) + "v2";
-        m.handleInstalledList(makeKvs({{"installed_list", list}}));
+        feedWaveform(m, QStringLiteral("waveform"), makeKvs({{"installed_list", list}}));
 
         report("installedList: empty entry skipped", m.waveforms().size() == 2);
     }
@@ -76,7 +86,7 @@ int main(int argc, char** argv)
         FlexWaveformModel m;
 
         const QString list = QString("ThumbDV") + QChar(0x7F) + QChar(0x7F) + "v1.2.0";
-        m.handleInstalledList(makeKvs({{"installed_list", list}}));
+        feedWaveform(m, QStringLiteral("waveform"), makeKvs({{"installed_list", list}}));
 
         report("installedList: double DEL entry retained", m.waveforms().size() == 1);
         report("installedList: double DEL name", m.waveforms()[0].name == "ThumbDV");
@@ -88,7 +98,7 @@ int main(int argc, char** argv)
         FlexWaveformModel m;
         QSignalSpy spy(&m, &FlexWaveformModel::waveformsChanged);
 
-        m.handleContainerStatus(makeKvs({{"name", "MyWaveform"}, {"version", "2.1"}}));
+        feedWaveform(m, QStringLiteral("waveform container"), makeKvs({{"name", "MyWaveform"}, {"version", "2.1"}}));
 
         report("containerAdd: waveformsChanged emitted",    spy.size() == 1);
         report("containerAdd: one entry",                   m.waveforms().size() == 1);
@@ -102,11 +112,11 @@ int main(int argc, char** argv)
         FlexWaveformModel m;
         QSignalSpy spy(&m, &FlexWaveformModel::waveformsChanged);
 
-        m.handleContainerStatus(makeKvs({{"name", "MyWaveform"}, {"version", "2.1"}}));
+        feedWaveform(m, QStringLiteral("waveform container"), makeKvs({{"name", "MyWaveform"}, {"version", "2.1"}}));
         spy.clear();
 
         // "removed" is a bare-word key — value is empty string in the parsed kvs
-        m.handleContainerStatus(makeKvs({{"name", "MyWaveform"}, {"removed", ""}}));
+        feedWaveform(m, QStringLiteral("waveform container"), makeKvs({{"name", "MyWaveform"}, {"removed", ""}}));
 
         report("containerRemove: waveformsChanged emitted", spy.size() == 1);
         report("containerRemove: list is now empty",        m.waveforms().isEmpty());
@@ -117,7 +127,7 @@ int main(int argc, char** argv)
         FlexWaveformModel m;
         QSignalSpy spy(&m, &FlexWaveformModel::wfpStatusChanged);
 
-        m.handleWfpStatus(makeKvs({{"power", "on"}, {"ready", "true"}, {"ipaddr", "192.168.1.10"}}));
+        feedWaveform(m, QStringLiteral("waveform wfp_status"), makeKvs({{"power", "on"}, {"ready", "true"}, {"ipaddr", "192.168.1.10"}}));
 
         report("wfpStatus: wfpStatusChanged emitted",       spy.size() == 1);
         report("wfpStatus: status seen",                    m.wfpStatusSeen());
@@ -126,7 +136,7 @@ int main(int argc, char** argv)
         report("wfpStatus: ipaddr stored",                  m.wfpIpAddress() == "192.168.1.10");
 
         spy.clear();
-        m.handleWfpStatus(makeKvs({{"power", "OFF"}, {"ready", "False"}}));
+        feedWaveform(m, QStringLiteral("waveform wfp_status"), makeKvs({{"power", "OFF"}, {"ready", "False"}}));
         report("wfpStatus: power=OFF (uppercase) → false",  !m.wfpPowered());
         report("wfpStatus: ready=False → false",            !m.wfpReady());
         report("wfpStatus: no change = no signal",          spy.size() == 1); // changed from prior state
@@ -135,9 +145,9 @@ int main(int argc, char** argv)
     // ── clear resets all state ─────────────────────────────────────────────
     {
         FlexWaveformModel m;
-        m.handleInstalledList(makeKvs({{"installed_list", QString("X") + QChar(0x7F) + "1"}}));
-        m.handleWfpStatus(makeKvs({{"power", "on"}, {"ready", "true"}, {"ipaddr", "10.0.0.1"}}));
-        m.handleContainerStatus(makeKvs({{"name", "C"}, {"version", "1"}}));
+        feedWaveform(m, QStringLiteral("waveform"), makeKvs({{"installed_list", QString("X") + QChar(0x7F) + "1"}}));
+        feedWaveform(m, QStringLiteral("waveform wfp_status"), makeKvs({{"power", "on"}, {"ready", "true"}, {"ipaddr", "10.0.0.1"}}));
+        feedWaveform(m, QStringLiteral("waveform container"), makeKvs({{"name", "C"}, {"version", "1"}}));
         m.handleGenericStatus(makeKvs({{"name", "ExampleWaveform"}, {"phase", "complete"}}));
 
         m.clear();
@@ -173,12 +183,13 @@ int main(int argc, char** argv)
     // ── command names are protocol-safe tokens ─────────────────────────────
     {
         FlexWaveformModel m;
-        QSignalSpy spy(&m, &FlexWaveformModel::commandReady);
+        QSignalSpy spy(&m, &FlexWaveformModel::controlRequested);
 
         m.requestRestart(QStringLiteral("ThumbDV"));
         report("command: safe name emits command", spy.size() == 1);
         report("command: restart command text",
-               spy.takeFirst().at(0).toString() == QStringLiteral("waveform restart ThumbDV"));
+               spy.constFirst().at(0).value<AetherSDR::WaveformRequest>().action == AetherSDR::WaveformAction::Restart
+               && spy.takeFirst().at(0).value<AetherSDR::WaveformRequest>().name == QStringLiteral("ThumbDV"));
 
         m.requestRemoveContainer(QStringLiteral("Bad\nName"));
         report("command: newline name rejected", spy.isEmpty());

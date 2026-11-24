@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/backends/FileTransferRequest.h"
+#include <optional>
+
 #include <QObject>
 #include <QPointer>
 #include <QTcpServer>
@@ -36,16 +39,15 @@ public:
     explicit DvkWavTransfer(RadioModel* model, QObject* parent = nullptr);
     ~DvkWavTransfer() override;
 
-    void download(int slotId, const QString& savePath);
-    void upload(int slotId, const QString& filePath);
+    void download(int slotId, const QString& savePath, std::optional<RadioControlSession> session = {});
+    void upload(int slotId, const QString& filePath, std::optional<RadioControlSession> session = {});
     void cancel();
     bool isTransferring() const { return m_transferring; }
     // Transferring, or inside the radio file server's busy window after an
     // upload (fw 4.2.20 answers 50000053 for ~2.2 s after the upload closes).
     bool isBusy() const;
 
-    // Export accepts a connection only from the radio. An unknown radio
-    // address (not connected) accepts any peer.
+    // Export accepts only the captured, known radio peer.
     static bool isRadioPeer(const QHostAddress& peer, const QHostAddress& radio);
 
 signals:
@@ -67,10 +69,10 @@ private:
     quint64 begin(Direction direction, int slotId);
 
     // Download (radio → client)
-    std::function<void(int, const QString&)> makeDownloadPortCallback(quint64 generation,
+    FileTransferCompletion makeDownloadPortCallback(quint64 generation,
                                                                       quint64 requestId);
     void handleDownloadPortReceived(quint64 generation, quint64 requestId,
-                                    int code, const QString& body);
+                                    const FileTransferReply& reply);
     void handleNewConnection(quint64 generation, QTcpServer* server);
     void handleReadyRead(quint64 generation, QTcpSocket* socket);
     void handleDownloadFinished(quint64 generation, QTcpSocket* socket);
@@ -80,19 +82,16 @@ private:
     void finalizeDownload();
 
     // Upload (client → radio)
-    std::function<void(int, const QString&)> makeUploadSlotCallback(quint64 generation,
-                                                                    quint64 requestId);
-    void handleUploadSlotAccepted(quint64 generation, quint64 requestId, int code);
     void openUploadSocket(quint64 generation, int port);
     // One retry on 42607 for a named port that refused or never answered,
     // before any connection was made. False when it does not apply.
     bool retryUploadOnDefaultPort(quint64 generation);
     // A refusal on any transfer leg also reaches the DVK license latch.
     void reportRefusal(int code);
-    std::function<void(int, const QString&)> makeUploadPortCallback(quint64 generation,
+    FileTransferCompletion makeUploadPortCallback(quint64 generation,
                                                                     quint64 requestId);
     void handleUploadPortReceived(quint64 generation, quint64 requestId,
-                                  int code, const QString& body);
+                                  const FileTransferReply& reply);
     std::function<void()> makeUploadConnectCallback(quint64 generation, QTcpSocket* socket,
                                                     std::function<void()> connectAction);
     void handleUploadConnected(quint64 generation, QTcpSocket* socket);
@@ -109,17 +108,12 @@ private:
     // Re-entrant calls (e.g. a second socket signal during teardown) are no-ops.
     void finish(bool success, const QString& message, bool discardDownload);
 
-    using ReplyCallback = std::function<void(int, const QString&)>;
     bool canSendCommands() const;
-    // Every DVK transfer verb leaves through this one call.
-    void sendCommand(const QString& command, ReplyCallback callback);
-
+    void requestTransfer(const FileTransferRequest& request, FileTransferCompletion completion);
     QPointer<RadioModel> m_model;
-    // Set only by tests, to observe the command sequence without a radio.
-    std::function<void(const QString&, ReplyCallback)> m_commandSender;
-    // The `file upload … dvk_recording` leg goes through RadioModel's
-    // requestFileUploadPort(); tests replace it here.
-    std::function<void(qint64, ReplyCallback)> m_uploadPortRequester;
+    FileTransferHandle m_transfer;
+    // Socket-free tests inject typed negotiation; production always uses RadioModel.
+    std::function<void(const FileTransferRequest&, FileTransferCompletion)> m_transferRequester;
     // Admission and the license latch live on the DVK model.
     QPointer<DvkModel> m_dvk;
     QTcpServer*  m_server{nullptr};    // download: we listen

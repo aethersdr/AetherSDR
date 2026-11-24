@@ -14,7 +14,7 @@ const std::vector<Ctr2HidPort::KnownCtr2>& Ctr2HidPort::knownCtr2Devices()
         // Lynovation's CTR2-MIDI firmware with USB support has the CTR2-Max's HID
         // reports; an earlier version never answers the link, as above.
         {0x2886, 0x0056, "XIAO_ESP32S3", "CTR2-MIDI", true},
-        // Elecrow CrowPanel 2.1" rotary display running AetherKnob firmware;
+        // Waveshare ESP32-S3-Knob-Touch-LCD-1.8 running AetherKnob firmware;
         // it speaks the same link and radio protocol as a CTR2.
         {0x303A, 0x1001, "AETHER_KNOB", "AetherKnob", true},
         // Other controller firmware that speaks the same link: it names

@@ -89,18 +89,19 @@ Your settings live in `%LOCALAPPDATA%\AetherSDR\` whichever package you use. See
 
 ### Verifying downloads
 
-Linux and Windows downloads are GPG-signed, and each release includes `.asc` signatures and a signed `SHA256SUMS.txt`. macOS DMGs are Apple-notarized.
+Linux and Windows downloads are GPG-signed. macOS DMGs are Apple-notarized. Each release page includes `SHA256SUMS.txt` and its signature `SHA256SUMS.txt.asc`, which together cover every Linux and Windows download. Save both next to your download, then run:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/aethersdr/AetherSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
-gpg --verify AetherSDR-vX.Y.Z-x86_64.AppImage.asc AetherSDR-vX.Y.Z-x86_64.AppImage
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c --ignore-missing SHA256SUMS.txt
 ```
 
-The expected result is **"Good signature from AetherSDR Release Signing"**. Full instructions, including the key fingerprint and Windows steps, are in [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
+The expected result is **"Good signature from AetherSDR Release Signing"**, and `OK` on your download's line. From v26.11.4, each file's own `.asc` signature is at `https://updates.aethersdr.com/releases/vX.Y.Z/` instead of the release page (a release from the last few hours may still have them on its page). Full instructions, including the key fingerprint and Windows steps, are in [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
 
 ### Debug symbols
 
-Each release also carries per-platform debug-symbol archives (`…-symbols.tar.xz`). You do not need them to run AetherSDR; they let developers read crash reports. See [Support and Logging](./support-and-logging.md).
+Each release also has per-platform debug-symbol archives (`…-symbols.tar.xz`). From v26.11.4 they are at `https://updates.aethersdr.com/releases/vX.Y.Z/`, not on the release page. You do not need them to run AetherSDR; they let developers read crash reports. See [Support and Logging](./support-and-logging.md).
 
 ## Known issues
 

@@ -5,6 +5,7 @@
 // refused by MAC before anything is written. Injected device lists and an
 // in-memory flash; no serial port, no network.
 
+#include "Ctr2ProxyTestBackend.h"
 #include "TestSettingsProfile.h"
 #include "core/EspFlashTarget.h"
 #include "models/Ctr2ProxyModel.h"
@@ -87,7 +88,7 @@ bool waitFinished(FirmwareInstallModel& model, bool* ok, QString* message, int t
 
 void testWaitLifetime()
 {
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, Ctr2ProxyTestBackend::inertFirmwareSources());
     bool ok = false;
     QString message;
     QTimer::singleShot(0, &model, [&model] {
@@ -118,13 +119,13 @@ void testConfirmedDevice()
     auto log = std::make_shared<Log>();
     QTemporaryDir dir;
 
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, {[loaders] { return *loaders; },
+                                         [] { return QList<Ctr2HidPort::DeviceInfo>(); }});
     model.setJobTargetOpener([onPort, log](const QString&, QString*, bool*) {
         ++log->opens;
         return std::unique_ptr<EspFlashTarget>(new MemFlash(*onPort, log));
     });
-    model.setDeviceSources([loaders] { return *loaders; },
-                           [] { return QList<Ctr2HidPort::DeviceInfo>(); });
+    model.lookAgain();
     model.setReleaseForTesting(EspFirmwareManifest{}, {});
     check(model.device() == FirmwareInstallModel::Device::Bootloader && model.deviceMac() == a,
           "the device in download mode is found");
@@ -178,7 +179,7 @@ void testFollowsRelaySelection()
                      QStringLiteral("111111111111")};
     const Info second{QStringLiteral("hid-2"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
                       QStringLiteral("222222222222")};
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     relay.setUsbBackend([=] { return QList<Info>{first, second}; },
                         [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
     relay.setTransport(Ctr2ProxyModel::Transport::Usb);
@@ -201,7 +202,7 @@ void testCtr2MaxOnly()
                     QStringLiteral("333333333333")};
     const Info max{QStringLiteral("max"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
                    QStringLiteral("444444444444")};
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     relay.setUsbBackend([=] { return QList<Info>{knob, max}; },
                         [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
     relay.setTransport(Ctr2ProxyModel::Transport::Usb);
@@ -243,7 +244,7 @@ void testOtherControllerOnly()
     const auto hidden = [](const QList<Info>& devices, const QString& selected,
                            const QList<Loader>& loaders = {},
                            Ctr2ProxyModel::Transport transport = Ctr2ProxyModel::Transport::Usb) {
-        Ctr2ProxyModel relay;
+        Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
         relay.setUsbBackend([=] { return devices; },
                             [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
         relay.setTransport(transport);
@@ -268,7 +269,7 @@ void testOtherControllerOnly()
     // controller meanwhile.
     auto devices = std::make_shared<QList<Info>>(QList<Info>{midi, max});
     auto loaders = std::make_shared<QList<Loader>>();
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     relay.setUsbBackend([devices] { return *devices; },
                         [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
     relay.setTransport(Ctr2ProxyModel::Transport::Usb);
@@ -289,10 +290,10 @@ void testOtherControllerOnly()
 // could not tell it from another on the same port.
 void testUnknownMac()
 {
-    FirmwareInstallModel model(nullptr);
-    model.setDeviceSources([] {
+    FirmwareInstallModel model(nullptr, {[] {
         return QList<FirmwareInstallModel::Loader>{{QStringLiteral("ttyACM0"), QString()}};
-    }, [] { return QList<Ctr2HidPort::DeviceInfo>(); });
+    }, [] { return QList<Ctr2HidPort::DeviceInfo>(); }});
+    model.lookAgain();
     QTemporaryDir dir;
     QString problem;
     check(!model.backup(model.target(), dir.filePath(QStringLiteral("x.bin")), &problem)
@@ -310,15 +311,15 @@ void testAccessDenied()
     const QString a = QStringLiteral("AA:AA:AA:AA:AA:AA");
     auto denied = std::make_shared<bool>(true);
     QTemporaryDir dir;
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, {[a] { return QList<Loader>{{QStringLiteral("ttyACM0"), a}}; },
+                                         [] { return QList<Ctr2HidPort::DeviceInfo>(); }});
     model.setJobTargetOpener([denied](const QString& port, QString* problem, bool* accessDenied) {
         // Same words either way: only the flag may tell them apart.
         *problem = QStringLiteral("Permission to open %1 was denied.").arg(port);
         *accessDenied = *denied;
         return std::unique_ptr<EspFlashTarget>();
     });
-    model.setDeviceSources([a] { return QList<Loader>{{QStringLiteral("ttyACM0"), a}}; },
-                           [] { return QList<Ctr2HidPort::DeviceInfo>(); });
+    model.lookAgain();
     QString problem;
     bool ok = true;
     QString message;
@@ -339,6 +340,12 @@ int main(int argc, char** argv)
     // The relay model reads its saved setup: never the operator's.
     TestSettingsProfile profile(QStringLiteral("firmware_install_model_test"));
     QCoreApplication app(argc, argv);
+    // A model built without an injected USB backend would reach hidapi and
+    // could open a real CTR2; it gets this counting tripwire instead.
+    Ctr2ProxyTestBackend::installUsbTripwire();
+    // Nor does a firmware model built without its own device lists enumerate
+    // the real serial ports or HID devices: it gets a counting tripwire too.
+    Ctr2ProxyTestBackend::installFirmwareSourceTripwire();
     testWaitLifetime();
     testConfirmedDevice();
     testAccessDenied();
@@ -346,6 +353,10 @@ int main(int argc, char** argv)
     testCtr2MaxOnly();
     testOtherControllerOnly();
     testUnknownMac();
+    check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
+          "every relay model was built with an injected USB backend, never the default (hidapi)");
+    check(Ctr2ProxyTestBackend::firmwareSourceTripwireCalls() == 0,
+          "every firmware model polled only injected device lists, never the system's");
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

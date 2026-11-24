@@ -499,6 +499,14 @@ bool AppSettings::loadFromDatabase()
 
 void AppSettings::extractCredentials(QMap<QString, QString>& settings)
 {
+    for (auto it = settings.begin(); it != settings.end();) {
+        if (SettingsCredentialPolicy::isScopedCredentialKey(it.key())) {
+            if (!it.value().isEmpty()) { m_sessionCredentials.insert(it.key(), it.value()); }
+            it = settings.erase(it);
+        } else {
+            ++it;
+        }
+    }
     for (const auto& entry : SettingsCredentialPolicy::kFlatCredentials) {
         const QString key = QString::fromLatin1(entry.settingsKey);
         const auto it = settings.find(key);

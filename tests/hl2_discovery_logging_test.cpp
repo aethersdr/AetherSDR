@@ -301,6 +301,51 @@ void resetForgetsEverything()
           "reset (Hl2Discovery::stop): all four conditions are logged again");
 }
 
+// Hl2Discovery keeps its sockets across sweeps (#7476). Every refresh reports
+// each kept socket through bindSucceeded() with the interface its address is
+// on now, and a socket that could send nothing is dropped and rebound on the
+// next refresh. These are the two call sequences that produces.
+void keptAndReboundSocketsReport()
+{
+    const QString silence = QStringLiteral("no Hermes-Lite 2 answered");
+
+    // A socket whose sends keep failing is closed and rebound every sweep:
+    // refresh (bindSucceeded), failed sweep, refresh, failed sweep, ...
+    DiscoveryNotices loop;
+    const auto reboundFailedSweep = [&loop] {
+        loop.bindSucceeded(QStringLiteral("en0"), kAddrA);
+        loop.endRefresh(1);
+        loop.sendFailed(kAddrA, QStringLiteral("Can't assign requested address"));
+        loop.sweepClosed(false);
+    };
+    check(logged(reboundFailedSweep).size() == 1,
+          "rebind loop: the first failed sweep logs one send warning");
+    check(logged([&] {
+              for (int i = 0; i < 10; ++i)
+                  reboundFailedSweep();
+          }).isEmpty(),
+          "rebind loop: rebinding the same address does not re-log the send failure");
+
+    // A kept socket's address moves from en7 to en0: the refresh reports the
+    // new name, so the silence line counts interfaces as they are now.
+    DiscoveryNotices moved;
+    logged([&moved] { bindBoth(moved); });
+    logged([&moved] {
+        moved.bindSucceeded(QStringLiteral("en0"), kAddrA);
+        moved.bindSucceeded(QStringLiteral("en0"), kAddrB);
+        moved.endRefresh(2);
+    });
+    check(logged([&moved] {
+              for (int i = 0; i < 3; ++i) {
+                  moved.sendSucceeded(kAddrA);
+                  moved.sendSucceeded(kAddrB);
+                  moved.sweepClosed(false);
+              }
+          }).filter(silence).value(0).endsWith(
+              QStringLiteral("answered 3 sweeps on 1 interface")),
+          "kept socket: an address that moved interface counts under its new name");
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -325,6 +370,7 @@ int main(int argc, char** argv)
     sweepWithNoProbeSentIsNotSilence();
     sendFailureIsLoggedOncePerCondition();
     resetForgetsEverything();
+    keptAndReboundSocketsReport();
 
     qInstallMessageHandler(previous);
     std::fprintf(stderr, "%s: %d failure(s)\n",

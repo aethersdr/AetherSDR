@@ -6,6 +6,7 @@
 #include <QTimer>
 
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/SquelchGate.h"
 #include "core/RadioSettingsScope.h"
 #include <optional>
 
@@ -80,6 +81,10 @@ public:
     QString autoSqlUnavailableReason() const;
     // The SQL button's accessible description; VfoWidget's mirror reads it too.
     QString sqlButtonAccessibleDescription() const;
+    // The gate state the SQL slider shows: the slice's reported gate in a mode
+    // the radio reports it in (RadioCapabilities::squelchGateModes) with SQL
+    // not Off; Unavailable otherwise, and the slider then shows no gate.
+    SquelchGateState shownSquelchGate() const;
     void syncStepFromSlice(int stepHz, const QVector<int>& stepList);
     void cycleStepUp();
     void cycleStepDown();
@@ -93,6 +98,17 @@ public:
     // through applyFilterPreset so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get
     // mode-correct edge geometry.
     void stepFilterWidth(int steps);
+    // Set the passband to the reachable width nearest widthHz: the radio's own
+    // list when it declared one, else widthHz itself, placed for the mode.
+    // False when there is no slice or the mode refuses those edges.
+    bool applyNearestFilterWidth(int widthHz);
+    // The antenna choices the RX/TX antenna menus offer, and a pick from them
+    // through the same path as the menu. False when there is no slice or the
+    // token is not offered.
+    QStringList rxAntennaChoices() const { return rxAntennaOptions(); }
+    QStringList txAntennaChoices() const { return txAntennaOptions(); }
+    bool selectRxAntenna(const QString& token);
+    bool selectTxAntenna(const QString& token);
 
     // Connect to transmit model for QSK (break_in) indicator.
     void setTransmitModel(class TransmitModel* txModel);
@@ -230,6 +246,8 @@ private:
     std::optional<ReceiveFilterControl> m_receiveFilterControl;
     // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
     std::optional<SquelchLevelScale> m_exclusiveSquelch;
+    QStringList m_squelchGateModes;
+    QString m_paintedSquelchGateLine;
     QPushButton* m_filterUnavailable{nullptr};
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QStringList m_antList{"ANT1", "ANT2"};   // populated from ant_list key
@@ -350,6 +368,9 @@ private:
     AetherSDR::DeferredSettingsWrites m_pendingSquelchWrites;
     QMetaObject::Connection m_squelchDisconnectConnection;
     void applySqlModeVisuals();
+    // Paints shownSquelchGate() on the slider: fill colour, and a line added
+    // to its tooltip and accessible description.
+    void applySqlGateVisuals();
     void applySqlButtonDescription();
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);

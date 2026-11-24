@@ -52,6 +52,13 @@ public slots:
     // atomically with the audio it changes.
     void setVfoMhz(double mhz);
     void setLowerSideband(bool lsb);
+    // RTTY mode demodulates as a FLEX-8400 does: lower sideband with the dial
+    // heard at the 2125 Hz mark (#7420).
+    void setRttyMode(bool rtty);
+    // The panadapter center the spectrum rows are drawn around (#7420). The
+    // demo pan does not follow the dial, so RF-anchored signals are drawn
+    // relative to this, not to the VFO.
+    void setPanCenterMhz(double mhz);
 
     // Which pans exist, as backend pan indices in creation order (#4887
     // phase 4 — the demo grew real multi-pan). One spectrum row per live pan
@@ -76,6 +83,8 @@ private:
     quint64 m_session{0};   // stamps spectrum rows; set by startSession()
     void onTick();
     void updateBirdieFromVfo();
+    void updateRttyFromVfo();
+    double audioHzForRf(double rfMhz) const;   // 0 = not audible
     static QByteArray toStereoBytes(const QVector<float>& mono);
 
     static constexpr int kSliceId = 0;
@@ -92,6 +101,9 @@ private:
     double m_sliceFreqMhz{14.100};
     bool   m_lsb{false};
     double m_birdieCarrierMhz{14.100 + 1200.0 / 1.0e6};
+    double m_panCenterMhz{14.100};
+    bool   m_rttyMode{false};
+    double m_rttyUpperMhz{14.100};   // the RTTY station's upper tone; re-anchored on switch-on
 };
 
 }  // namespace AetherSDR

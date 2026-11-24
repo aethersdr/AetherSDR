@@ -116,6 +116,26 @@ void freshnessAndDefinitions()
     check(!f.sample(0).value("known").toBool(), "new connection never imports the former connection's retained sample");
 }
 
+void receiptFreshness()
+{
+    Fixture f;
+    f.define(0);
+    auto session = std::make_shared<ReceiveDataEpoch>();
+    auto definition = std::make_shared<ReceiveDataEpoch>();
+    definition->session = session;
+    ReceiveMeterBatch batch{{{0, -90, definition}}, ReceiveReceipt::now(), session};
+    batch.receipt.monotonicNs -= 300'000'000;
+    batch.receipt.utcMs -= 300;
+    f.radio.meterModel().updateReceivedValues(batch);
+    f.adapter->flush();
+    check(f.sample(0).value("fresh").toBool() && f.sample(0).value("ageMs").toInt() >= 300,
+          "daemon age includes time before model delivery");
+    f.clock = 1800;
+    f.adapter->flush();
+    check(!f.sample(0).value("fresh").toBool(),
+          "daemon expiry does not restart at delivery");
+}
+
 void coalescingBoundsAndRevisions()
 {
     Fixture f;
@@ -135,21 +155,21 @@ void coalescingBoundsAndRevisions()
     const auto baseline = call(service, client, "resource.subscribe", {{"resources", selectors}});
     check(baseline.contains("result") && QJsonDocument(baseline).toJson(QJsonDocument::Compact).size() < ProtocolLimits::kMaxMessageBytes,
           "complete bounded meter/slice/transmit baseline fits wire cap");
-    for (int i = 0; i < 10000; ++i) { f.radio.meterModel().meterUpdated(0, float(i)); }
+    for (int i = 0; i < 10000; ++i) { f.radio.meterModel().updateValueByName("SLC", "LEVEL", -100.0f + float(i % 100), 0); }
     check(client.takePendingFrames().isEmpty(), "high-rate samples do not publish from sample callback");
     f.adapter->flush();
     const auto frames = client.takePendingFrames();
-    check(frames.size() == 1 && f.sample(0).value("value").toDouble() == 9999, "one tick publishes only bounded latest value");
+    check(frames.size() == 1 && f.sample(0).value("value").toDouble() == -1, "one tick publishes only bounded latest value");
     check(f.store.get(slice)->revision == sliceRevision, "telemetry never invalidates independent receive-command revision");
     ControlSession slow(&f.store, 360, SessionAuthorization::Observer);
     call(service, slow, "hello", {{"versions", QJsonArray{1}}});
     call(service, slow, "resource.subscribe", {{"resources", selectors}});
-    f.radio.meterModel().meterUpdated(0, -90); f.adapter->flush();
+    f.radio.meterModel().updateValueByName("SLC", "LEVEL", -90, 0); f.adapter->flush();
     const auto overflow = slow.takePendingFrames();
     check(overflow.size() == 1 && QJsonDocument::fromJson(overflow.first()).object().value("event") == "resource.resyncRequired",
           "slow telemetry consumer uses existing bounded resync policy");
     client.revokeAuthorization();
-    f.radio.meterModel().meterUpdated(0, -80); f.adapter->flush();
+    f.radio.meterModel().updateValueByName("SLC", "LEVEL", -80, 0); f.adapter->flush();
     check(client.takePendingFrames().isEmpty(), "revocation discards pending telemetry and suppresses future delivery");
 }
 
@@ -323,6 +343,7 @@ int main(int argc, char** argv)
     if (!profile.isValid()) { return 1; }
     QCoreApplication app(argc, argv);
     freshnessAndDefinitions();
+    receiptFreshness();
     coalescingBoundsAndRevisions();
     snapshotRefusalIsAtomic();
     transmitIsObservationOnly();

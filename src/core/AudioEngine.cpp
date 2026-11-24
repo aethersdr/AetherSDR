@@ -15,7 +15,6 @@
 #include "ClientEq.h"
 #include "ClientComp.h"
 #include "ClientGate.h"
-#include "ClientDeEss.h"
 #include "ClientTube.h"
 #include "ClientPudu.h"
 #include "ClientPuduMonitor.h"
@@ -83,6 +82,7 @@
 #include <QtGlobal>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 #include <functional>
 #include <optional>
@@ -107,6 +107,7 @@ static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Enh)
               == static_cast<uint8_t>(TxVoiceProcessor::Stage::Enh));
 static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Reverb)
               == static_cast<uint8_t>(TxVoiceProcessor::Stage::Reverb));
+static_assert(AudioEngine::kMaxTxChainStages == TxVoiceProcessor::kMaxStages);
 
 static QString wisdomDir();
 static void logNr2WisdomSummary(const QString& context);
@@ -226,9 +227,12 @@ qsizetype rawEquivalentAudioBytes(qsizetype bytes, int sampleRate,
         bytes * producerRate / sampleRate);
 }
 
+enum class TrimSearch { AroundRequested, AtOrAfterRequested };
+
 qsizetype quietStereoFloatTrimPoint(const QByteArray& buffer,
                                     qsizetype requestedBytes,
-                                    int sampleRate)
+                                    int sampleRate,
+                                    TrimSearch search)
 {
     constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
     constexpr int kTrimSearchMs = 6;
@@ -246,8 +250,8 @@ qsizetype quietStereoFloatTrimPoint(const QByteArray& buffer,
 
     const qsizetype searchFrames =
         std::max<qsizetype>(1, sampleRate * kTrimSearchMs / 1000);
-    const qsizetype begin =
-        std::max<qsizetype>(1, requestedFrame - searchFrames);
+    const qsizetype begin = search == TrimSearch::AtOrAfterRequested
+        ? requestedFrame : std::max<qsizetype>(1, requestedFrame - searchFrames);
     const qsizetype end =
         std::min<qsizetype>(frames - 1, requestedFrame + searchFrames);
     const auto* samples = reinterpret_cast<const float*>(buffer.constData());
@@ -293,10 +297,11 @@ void fadeInStereoFloatFront(QByteArray& buffer, int sampleRate)
     }
 }
 
-void dropAudioBufferFront(QByteArray& buffer, qsizetype bytes, int sampleRate)
+void dropAudioBufferFront(QByteArray& buffer, qsizetype bytes, int sampleRate,
+                          TrimSearch search = TrimSearch::AroundRequested)
 {
     const qsizetype dropBytes =
-        std::min(quietStereoFloatTrimPoint(buffer, bytes, sampleRate),
+        std::min(quietStereoFloatTrimPoint(buffer, bytes, sampleRate, search),
                  alignedStereoFloatBytes(buffer.size()));
     if (dropBytes > 0) {
         buffer.remove(0, dropBytes);
@@ -877,6 +882,17 @@ AudioEngine::receivePresentationAudioQueues() const
     return queues;
 }
 
+void AudioEngine::setReceiveJitterBuffer(int prefillMs, int bufferCapMs)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    const int target = std::clamp(prefillMs, 0, 1000);
+    const int cap = target > 0 ? std::clamp(bufferCapMs, target, 1000) : 0;
+    if (m_rxJitterPrefillMs.exchange(target) != target) {
+        m_rxJitterPrebuffering.store(target > 0);
+    }
+    m_rxJitterCapMs.store(cap);
+}
+
 void AudioEngine::setReceivePresentationDelays(
     int flexDelayMs,
     int kiwiDelayMs,
@@ -913,10 +929,7 @@ void AudioEngine::setReceivePresentationDelays(
                    || !source.outputBuffer.isEmpty();
         };
     if (flexDelay < previousFlex) {
-        trimReceivePresentationBuffers(
-            m_rxBuffer, m_rxPackets, m_rxOutputBuffer, outputRate,
-            audioBytesForMsAtRate(m_rxProducerRate.load(), flexDelay),
-            m_rxProducerRate.load());
+        trimMainRxBuffers(audioBytesForMsAtRate(m_rxProducerRate.load(), flexDelay));
     }
     if (legacyKiwiDelay < previousKiwi) {
         const qsizetype targetBytes =
@@ -1859,9 +1872,7 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_clientEqTx(std::make_unique<ClientEq>())
     , m_clientCompTx(std::make_unique<ClientComp>())
     , m_clientCompRx(std::make_unique<ClientComp>())
-    , m_clientGateTx(std::make_unique<ClientGate>())
     , m_clientGateRx(std::make_unique<ClientGate>())
-    , m_clientDeEssTx(std::make_unique<ClientDeEss>())
     , m_clientTubeTx(std::make_unique<ClientTube>())
     , m_clientTubeRx(std::make_unique<ClientTube>())
     , m_clientPuduTx(std::make_unique<ClientPudu>())
@@ -1947,8 +1958,6 @@ AudioEngine::AudioEngine(QObject* parent)
     TxVoiceProcessor::Processors txProcessors;
     txProcessors.eq = m_clientEqTx.get();
     txProcessors.comp = m_clientCompTx.get();
-    txProcessors.gate = m_clientGateTx.get();
-    txProcessors.deEss = m_clientDeEssTx.get();
     txProcessors.tube = m_clientTubeTx.get();
     txProcessors.pudu = m_clientPuduTx.get();
     txProcessors.reverb = m_clientReverbTx.get();
@@ -1969,12 +1978,10 @@ AudioEngine::AudioEngine(QObject* parent)
             this, &AudioEngine::pumpWsprBeacon);
     loadClientEqSettings();      // restore persisted bands before first audio
     loadClientCompSettings();    // restore persisted comp params + chain order
-    loadClientGateSettings();    // restore persisted gate params
     loadClientGateRxSettings();  // restore persisted RX gate params
     loadClientCompRxSettings();  // restore persisted RX comp params
     loadClientTubeRxSettings();  // restore persisted RX tube params
     loadClientPuduRxSettings();  // restore persisted RX PUDU params
-    loadClientDeEssSettings();   // restore persisted de-esser params
     loadClientTubeSettings();    // restore persisted tube params
     loadClientPuduSettings();    // restore persisted PUDU params
     loadClientReverbSettings();  // restore persisted reverb params
@@ -1982,6 +1989,7 @@ AudioEngine::AudioEngine(QObject* parent)
     loadClientQuindarSettings();       // restore persisted Quindar tone params
     loadClientRxChainOrder();    // restore persisted RX chain order (Phase 0+)
     loadAetherialTubePreampTxSettings(); // restore TX mic pre-amp toggles (#2813)
+    migrateRetiredTxStages();    // a TX gate that was on becomes RN2, once
     dropRetiredSettingsKeys();   // tidy keys no build reads any more
 
     // Restore saved audio device selections
@@ -2053,6 +2061,14 @@ AudioEngine::AudioEngine(QObject* parent)
 // driven with an in-memory QIODevice without opening audio or radio hardware.
 void AudioEngine::drainRxAudio(qsizetype freeBytes)
 {
+    const qsizetype capacity = m_audioSink ? m_audioSink->bufferSize() : 0;
+    const qsizetype queued = std::clamp(capacity - freeBytes,
+        qsizetype{0}, std::max(qsizetype{0}, capacity));
+    drainRxAudio(freeBytes, queued);
+}
+
+void AudioEngine::drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedBytes)
+{
     retireInvalidPcmSources();
     if ((!m_audioDevice || !m_audioDevice->isOpen()) && !m_lineOutCaptureEnabled) {
         return;
@@ -2086,6 +2102,7 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
         std::max(flexPresentationDelayMs, kiwiPresentationBufferMs);
     const int effectiveBufMs =
         std::max({configuredBufMs,
+                  m_rxJitterCapMs.load(),
                   anyKiwiAudio ? kKiwiSdrBufferCapMs : configuredBufMs,
                   presentationBufMs > 0 ? presentationBufMs + 100 : 0});
     const qsizetype sourceMaxBufBytes =
@@ -2094,10 +2111,7 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
     const qsizetype outputMaxBufBytes =
         sampleRate * 2 * static_cast<qsizetype>(sizeof(float))
         * effectiveBufMs / 1000;
-    trimReceivePresentationBuffers(
-        m_rxBuffer, m_rxPackets, m_rxOutputBuffer, sampleRate,
-        audioBytesForMsAtRate(m_rxProducerRate.load(), effectiveBufMs),
-        m_rxProducerRate.load());
+    trimMainRxBuffers(audioBytesForMsAtRate(m_rxProducerRate.load(), effectiveBufMs));
     trimReceivePresentationBuffers(
         m_kiwiSdrRxBuffer, m_kiwiSdrRxPackets, m_kiwiSdrOutputBuffer,
         sampleRate, sourceMaxBufBytes);
@@ -2127,7 +2141,7 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
                     source->prebuffering = true;
                 }
             }
-        } else {
+        } else if (m_rxJitterPrefillMs.load() <= 0) {
             m_rxBufferUnderrunCount.fetch_add(1);
         }
         if (flexPresentationDelayMs > 0) {
@@ -2168,8 +2182,24 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
         m_rxPresentationPrebuffering.store(true,
                                            std::memory_order_relaxed);
     }
+    const int jitterPrefillMs = m_rxJitterPrefillMs.load();
+    if (jitterPrefillMs > 0) {
+        const qsizetype queuedBytes = m_rxBuffer.size() + queuedAudioBytes(m_rxPackets)
+            + rawEquivalentAudioBytes(m_rxOutputBuffer.size()
+                + std::max(qsizetype{0}, playbackQueuedBytes), sampleRate, m_rxProducerRate.load());
+        const qsizetype reservedBytes = audioBytesForMsAtRate(m_rxProducerRate.load(), flexPresentationDelayMs);
+        if (queuedBytes <= reservedBytes && !m_rxJitterPrebuffering.exchange(true)) {
+            m_rxBufferUnderrunCount.fetch_add(1);
+        }
+        if (queuedBytes >= reservedBytes + audioBytesForMsAtRate(m_rxProducerRate.load(), jitterPrefillMs)) {
+            m_rxJitterPrebuffering.store(false);
+        }
+    }
+    // The device queue is part of the jitter cushion. An empty software queue
+    // while the device is playing must not restart prefill and withhold PCM.
     const bool flexPresentationPrebuffering =
-        m_rxPresentationPrebuffering.load(std::memory_order_relaxed);
+        m_rxPresentationPrebuffering.load(std::memory_order_relaxed)
+        || m_rxJitterPrebuffering.load();
 
     // Zombie sink watchdog: if we have data waiting but the sink reports
     // zero bytes free for ~2 seconds, the WASAPI handle is likely stale
@@ -2875,6 +2905,9 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     rx["buffer_peak_bytes"] = static_cast<double>(m_rxBufferPeakBytes.load());
     rx["buffer_peak_ms"] = m_rxBufferPeakMs.load();
     rx["underrun_count"] = static_cast<double>(m_rxBufferUnderrunCount.load());
+    rx["jitter_prefill_ms"] = m_rxJitterPrefillMs.load();
+    rx["jitter_cap_ms"] = m_rxJitterCapMs.load();
+    rx["jitter_prebuffering"] = m_rxJitterPrebuffering.load();
     QJsonObject presentation;
     presentation["flex_delay_ms"] =
         m_flexReceivePresentationDelayMs.load(std::memory_order_relaxed);
@@ -4971,6 +5004,7 @@ void AudioEngine::resetMainPcmState(int producerRate, bool rebuildDsp)
     m_rxBuffer.clear();
     m_rxPackets.clear();
     m_rxOutputBuffer.clear();
+    m_rxJitterPrebuffering.store(m_rxJitterPrefillMs.load() > 0);
     m_nr2Output.clear();
     m_rxResampler.reset();
     m_rxResamplerR.reset();
@@ -5668,14 +5702,15 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
     const int presentationDelay = targetBuffer == RxAudioBuffer::Main
         ? m_flexReceivePresentationDelayMs.load() : m_kiwiReceivePresentationDelayMs.load();
     const qsizetype cap = audioBytesForMsAtRate(producerRate,
-        std::max({m_rxBufferCapMs.load(), presentationDelay + 100,
+        std::max({m_rxBufferCapMs.load(),
+            targetBuffer == RxAudioBuffer::Main ? m_rxJitterCapMs.load() : 0, presentationDelay + 100,
             (targetBuffer == RxAudioBuffer::KiwiSdr || kiwiSdrAudioActive()
              || anyExternalKiwiAudioEnabled()) ? kKiwiSdrBufferCapMs : 0}));
     if (targetBuffer == RxAudioBuffer::Main
         && m_nr2Enabled.load(std::memory_order_relaxed)) {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         m_rxPackets.push_back(alignedPcm);
-        trimAudioPacketQueue(m_rxPackets, cap);
+        trimMainRxBuffers(cap);
         updateRxBufferStats();
         return;
     }
@@ -5684,10 +5719,66 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
         targetBuffer == RxAudioBuffer::KiwiSdr ? m_kiwiSdrRxBuffer
                                                : m_rxBuffer;
     target.append(alignedPcm);
-    if (target.size() > cap) {
+    if (targetBuffer == RxAudioBuffer::Main) {
+        trimMainRxBuffers(cap);
+    } else if (target.size() > cap) {
         dropAudioBufferFront(target, target.size() - cap, producerRate);
     }
     updateRxBufferStats();
+}
+
+void AudioEngine::trimMainRxBuffers(qsizetype targetRawBytes)
+{
+    retireInvalidPcmSources();
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    const int producerRate = m_rxProducerRate.load();
+    const int outputRate = std::max(1, m_rxOutputRate.load());
+    targetRawBytes = alignedStereoFloatBytes(targetRawBytes);
+    constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
+    const auto outputRawBytes = [&]() {
+        const qsizetype outputFrames = m_rxOutputBuffer.size() / kFrameBytes;
+        return (outputFrames * producerRate + outputRate - 1) / outputRate * kFrameBytes;
+    };
+    const auto excessBytes = [&]() {
+        return alignedStereoFloatBytes(m_rxBuffer.size())
+            + queuedAudioBytes(m_rxPackets)
+            + outputRawBytes() - targetRawBytes;
+    };
+    constexpr int kMaxTrimBlockMs = 20;
+    const qsizetype maxBlockBytes = std::max(
+        kFrameBytes, audioBytesForMsAtRate(producerRate, kMaxTrimBlockMs));
+    // Covers the 6 ms quiet-point search and the 2 ms fade past the cut.
+    constexpr int kRetainedTailMs = 10;
+    const qsizetype retainedTailBytes = audioBytesForMsAtRate(producerRate, kRetainedTailMs);
+    for (qsizetype excess = excessBytes(); excess > 0; excess = excessBytes()) {
+        const qsizetype rawBytes = alignedStereoFloatBytes(m_rxBuffer.size());
+        if (rawBytes > 0 && m_rxPackets.empty()
+            && outputRawBytes() < excess + retainedTailBytes) {
+            // Process only the oldest raw the cut needs, plus a tail for the
+            // quiet-point search and fade; the rest stays held for the
+            // presentation delay. Bounded blocks also prevent NR wrappers
+            // from retaining seconds of output behind an input-sized
+            // startup-silence response.
+            const qsizetype bytes = std::min(maxBlockBytes, rawBytes);
+            const QByteArray pcm = m_rxBuffer.left(bytes);
+            m_rxBuffer.remove(0, bytes);
+            processMixedRxAudioData(pcm, RxDspSource::Main);
+        } else if (!m_rxOutputBuffer.isEmpty()) {
+            const qsizetype outputFrames =
+                (excess / kFrameBytes * outputRate + producerRate - 1) / producerRate;
+            // A cut before the required bound would reapply the fade on the next pass.
+            dropAudioBufferFront(m_rxOutputBuffer, outputFrames * kFrameBytes, outputRate,
+                                 TrimSearch::AtOrAfterRequested);
+        } else if (!m_rxPackets.empty()) {
+            // Queue overflow is not missing input. Advance NR/strip/SRC history
+            // with the received samples, then trim only speaker-ready output.
+            QByteArray packet = std::move(m_rxPackets.front());
+            m_rxPackets.pop_front();
+            processMixedRxAudioData(packet, RxDspSource::Main);
+        } else {
+            break;
+        }
+    }
 }
 
 void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
@@ -6243,29 +6334,24 @@ void AudioEngine::applyClientPuduRxFloat32(QByteArray& float32)
 
 namespace {
 
-// Pack a stage list into the uint64_t atomic format used by the audio
-// thread.  Unused slots are TxChainStage::None (0).
+// A list that does not fit is a programming error: it asserts in debug and
+// warns in release, and the audio thread gets the stages that did fit.
 uint64_t packChain(const QVector<AudioEngine::TxChainStage>& stages)
 {
-    uint64_t v = 0;
-    const int n = std::min(static_cast<int>(stages.size()),
-                           AudioEngine::kMaxTxChainStages);
-    for (int i = 0; i < n; ++i) {
-        v |= static_cast<uint64_t>(static_cast<uint8_t>(stages[i])) << (i * 8);
+    uint64_t packed = 0;
+    const bool fits = TxChainLayout::pack(stages, packed);
+    if (!fits) {
+        qCWarning(lcAudio) << "AudioEngine: TX chain of" << stages.size()
+                           << "stages does not fit" << AudioEngine::kMaxTxChainStages
+                           << "packed slots; stages were dropped";
     }
-    return v;
+    Q_ASSERT_X(fits, "packChain", "TX chain does not fit the packed order");
+    return packed;
 }
 
 QVector<AudioEngine::TxChainStage> unpackChain(uint64_t v)
 {
-    QVector<AudioEngine::TxChainStage> out;
-    out.reserve(AudioEngine::kMaxTxChainStages);
-    for (int i = 0; i < AudioEngine::kMaxTxChainStages; ++i) {
-        const auto s = static_cast<AudioEngine::TxChainStage>((v >> (i * 8)) & 0xFF);
-        if (s == AudioEngine::TxChainStage::None) break;
-        out.append(s);
-    }
-    return out;
+    return TxChainLayout::unpack<QVector<AudioEngine::TxChainStage>>(v);
 }
 
 // Map persisted stage names (human-readable in the XML settings) to
@@ -6286,11 +6372,11 @@ QString stageName(AudioEngine::TxChainStage s)
     return "";
 }
 
+// Retired stage names ("Gate", "DeEss") parse as None, as AetherRX's retired
+// name does; withoutRetiredTxStages() is the backstop for enum callers.
 AudioEngine::TxChainStage stageFromName(const QString& name)
 {
-    if (name == "Gate")   return AudioEngine::TxChainStage::Gate;
     if (name == "Eq")     return AudioEngine::TxChainStage::Eq;
-    if (name == "DeEss")  return AudioEngine::TxChainStage::DeEss;
     if (name == "Comp")   return AudioEngine::TxChainStage::Comp;
     if (name == "Tube")   return AudioEngine::TxChainStage::Tube;
     if (name == "Enh")    return AudioEngine::TxChainStage::Enh;
@@ -6299,18 +6385,43 @@ AudioEngine::TxChainStage stageFromName(const QString& name)
 }
 
 // Canonical default order for a fresh install — stages appear in the
-// order they'll typically be wanted in the signal chain.
+// order they'll typically be wanted in the signal chain. Every chain gains
+// the stages of this list it lacks, so a stage added here that does not fit
+// a packed slot fails to compile rather than being dropped at run time.
+// Tube leads: it is the mic preamp, and RN2 (which replaced the gate) runs
+// ahead of the whole chain, so the tube colors denoised audio.
+constexpr AudioEngine::TxChainStage kCanonicalTxChain[] = {
+    AudioEngine::TxChainStage::Tube,
+    AudioEngine::TxChainStage::Eq,
+    AudioEngine::TxChainStage::Comp,
+    AudioEngine::TxChainStage::Enh,
+    AudioEngine::TxChainStage::Reverb,
+};
+static_assert(std::size(kCanonicalTxChain) <= TxChainLayout::kSlots,
+              "the canonical TX chain must fit the packed order");
+static_assert(std::ranges::all_of(kCanonicalTxChain, [](AudioEngine::TxChainStage s) {
+                  const auto v = static_cast<unsigned>(s);
+                  return v >= 1 && v <= TxChainLayout::kMaxStageValue;
+              }),
+              "every canonical TX chain stage must fit one packed slot");
+
+// The stages AetherTX no longer has, dropped from any saved or preset order.
+QVector<AudioEngine::TxChainStage> withoutRetiredTxStages(
+    const QVector<AudioEngine::TxChainStage>& stages)
+{
+    return TxChainLayout::withoutRetired(
+        TxChainLayout::withoutRetired(stages, AudioEngine::TxChainStage::Gate),
+        AudioEngine::TxChainStage::DeEss);
+}
+
 QVector<AudioEngine::TxChainStage> defaultChain()
 {
-    return {
-        AudioEngine::TxChainStage::Gate,
-        AudioEngine::TxChainStage::Eq,
-        AudioEngine::TxChainStage::DeEss,
-        AudioEngine::TxChainStage::Comp,
-        AudioEngine::TxChainStage::Tube,
-        AudioEngine::TxChainStage::Enh,
-        AudioEngine::TxChainStage::Reverb,
-    };
+    return {std::begin(kCanonicalTxChain), std::end(kCanonicalTxChain)};
+}
+
+bool isRetiredTxStageName(const QString& name)
+{
+    return name == QLatin1String("Gate") || name == QLatin1String("DeEss");
 }
 
 // ── RX chain helpers — parallel to the TX functions above ───────────────
@@ -6387,11 +6498,41 @@ QVector<AudioEngine::RxChainStage> defaultRxChain()
 
 } // namespace
 
+QVector<AudioEngine::TxChainStage> AudioEngine::txChainFromNames(const QStringList& names)
+{
+    QVector<TxChainStage> stages;
+    bool namesRetired = false;
+    for (const QString& raw : names) {
+        const QString name = raw.trimmed();
+        namesRetired = namesRetired || isRetiredTxStageName(name);
+        const auto stage = stageFromName(name);
+        if (stage != TxChainStage::None) {
+            stages.append(stage);
+        }
+    }
+    // The default before the gate and de-esser were retired was Gate, Eq,
+    // DeEss, Comp, Tube, Enh, Reverb. Saved with its retired stages, it is an
+    // order nobody chose, so it takes today's default and Tube leads.
+    static const QVector<TxChainStage> kOldDefaultRest{
+        TxChainStage::Eq, TxChainStage::Comp, TxChainStage::Tube,
+        TxChainStage::Enh, TxChainStage::Reverb};
+    if (namesRetired && TxChainLayout::withoutDuplicates(stages) == kOldDefaultRest) {
+        return defaultChain();
+    }
+    return stages;
+}
+
 void AudioEngine::setTxChainStages(const QVector<TxChainStage>& stages)
 {
-    m_txChainPacked.store(packChain(stages), std::memory_order_release);
+    // Every canonical stage stays in the chain, as on load: a preset saved
+    // before a stage existed must not remove it. Persist what was packed, so
+    // the settings file and the audio thread agree about the order.
+    const uint64_t packed = packChain(TxChainLayout::withMissingAppended(
+        withoutRetiredTxStages(TxChainLayout::withoutDuplicates(stages)),
+        defaultChain()));
+    m_txChainPacked.store(packed, std::memory_order_release);
     QStringList names;
-    for (auto s : stages) {
+    for (auto s : unpackChain(packed)) {
         const QString n = stageName(s);
         if (!n.isEmpty()) names.append(n);
     }
@@ -6428,17 +6569,9 @@ void AudioEngine::setTxBypassed(bool on)
                 }
                 break;
             case TxChainStage::Gate:
-                if (m_clientGateTx) {
-                    m_clientGateTx->setEnabled(enabled);
-                    saveClientGateSettings();
-                }
-                break;
+                break;  // retired
             case TxChainStage::DeEss:
-                if (m_clientDeEssTx) {
-                    m_clientDeEssTx->setEnabled(enabled);
-                    saveClientDeEssSettings();
-                }
-                break;
+                break;  // retired
             case TxChainStage::Tube:
                 if (m_clientTubeTx) {
                     m_clientTubeTx->setEnabled(enabled);
@@ -6466,8 +6599,8 @@ void AudioEngine::setTxBypassed(bool on)
         switch (s) {
             case TxChainStage::Eq:     return m_clientEqTx     && m_clientEqTx->isEnabled();
             case TxChainStage::Comp:   return m_clientCompTx   && m_clientCompTx->isEnabled();
-            case TxChainStage::Gate:   return m_clientGateTx   && m_clientGateTx->isEnabled();
-            case TxChainStage::DeEss:  return m_clientDeEssTx  && m_clientDeEssTx->isEnabled();
+            case TxChainStage::Gate:   return false;  // retired
+            case TxChainStage::DeEss:  return false;  // retired
             case TxChainStage::Tube:   return m_clientTubeTx   && m_clientTubeTx->isEnabled();
             case TxChainStage::Enh:    return m_clientPuduTx   && m_clientPuduTx->isEnabled();
             case TxChainStage::Reverb: return m_clientReverbTx && m_clientReverbTx->isEnabled();
@@ -6479,8 +6612,6 @@ void AudioEngine::setTxBypassed(bool on)
     static const QVector<TxChainStage> kAllStages{
         TxChainStage::Eq,
         TxChainStage::Comp,
-        TxChainStage::Gate,
-        TxChainStage::DeEss,
         TxChainStage::Tube,
         TxChainStage::Enh,
         TxChainStage::Reverb,
@@ -6713,6 +6844,16 @@ void AudioEngine::dropRetiredSettingsKeys()
         // ClientGate::kAttackMs and ClientTube::kAttackMs.
         "ClientGateTxAttackMs",     "ClientGateRxAttackMs",
         "ClientTubeTxAttackMs",     "ClientTubeRxAttackMs",
+        // AetherTX's gate and de-esser are retired. The gate's on/off key is
+        // migrateRetiredTxStages()'s: it carries over to RN2.
+        "ClientGateTxMode",         "ClientGateTxThresholdDb",
+        "ClientGateTxReturnDb",     "ClientGateTxRatio",
+        "ClientGateTxHoldMs",       "ClientGateTxReleaseMs",
+        "ClientGateTxFloorDb",      "ClientGateTxLookaheadMs",
+        "ClientDeEssTxEnabled",     "ClientDeEssTxFrequencyHz",
+        "ClientDeEssTxQ",           "ClientDeEssTxThresholdDb",
+        "ClientDeEssTxAmountDb",    "ClientDeEssTxAttackMs",
+        "ClientDeEssTxReleaseMs",   "ClientDeEssTxSlopeStages",
     };
     auto& s = AppSettings::instance();
     bool removedAny = false;
@@ -6871,32 +7012,27 @@ void AudioEngine::loadClientCompSettings()
     QVector<TxChainStage> stages;
     const QString stored = s.value("ClientCompTxChainStages", "").toString();
     if (!stored.isEmpty()) {
-        for (const QString& name : stored.split(',', Qt::SkipEmptyParts)) {
-            const auto stage = stageFromName(name.trimmed());
-            if (stage != TxChainStage::None) stages.append(stage);
-        }
+        stages = txChainFromNames(stored.split(',', Qt::SkipEmptyParts));
     } else if (s.contains("ClientCompTxChainOrder")) {
         const int legacy = s.value("ClientCompTxChainOrder", "0").toInt();
         // Preserve the user's Comp-vs-Eq preference from the old two-
         // option setting — bracket it with the default canonical
         // layout for the not-yet-implemented stages.
         stages = (legacy == 1)
-            ? QVector<TxChainStage>{TxChainStage::Gate, TxChainStage::Eq,
-                                     TxChainStage::DeEss, TxChainStage::Comp,
-                                     TxChainStage::Tube, TxChainStage::Enh}
-            : QVector<TxChainStage>{TxChainStage::Gate, TxChainStage::Comp,
-                                     TxChainStage::Eq, TxChainStage::DeEss,
-                                     TxChainStage::Tube, TxChainStage::Enh};
+            ? QVector<TxChainStage>{TxChainStage::Tube, TxChainStage::Eq,
+                                     TxChainStage::Comp, TxChainStage::Enh}
+            : QVector<TxChainStage>{TxChainStage::Tube, TxChainStage::Comp,
+                                     TxChainStage::Eq, TxChainStage::Enh};
     }
     if (stages.isEmpty()) stages = defaultChain();
 
-    // Append any canonical stages that are missing from the loaded
-    // list — guarantees all 6 processor boxes are always visible in
-    // the chain widget so users can reorder them ahead of time and
-    // future phases slot in automatically without a second migration.
-    for (auto canon : defaultChain()) {
-        if (!stages.contains(canon)) stages.append(canon);
-    }
+    // Every canonical stage is always present, so a stage added by an
+    // upgrade appears in the chain widget without a second migration.
+    // A saved order may still name the retired gate or de-esser; they are
+    // dropped and the rest keep their order.
+    stages = TxChainLayout::withMissingAppended(
+        withoutRetiredTxStages(TxChainLayout::withoutDuplicates(stages)),
+        defaultChain());
 
     m_txChainPacked.store(packChain(stages), std::memory_order_release);
 }
@@ -6972,58 +7108,30 @@ void AudioEngine::saveClientCompRxSettings() const
                QString::number(m_clientCompRx->limiterCeilingDb()));
 }
 
-void AudioEngine::loadClientGateSettings()
+// AetherTX's gate is gone (2026-11-15) and RN2 replaces it: an operator who
+// had it on gets RN2 instead. Its on/off key is removed only once that
+// hand-off has happened (or the gate was off), so a host where RN2 cannot
+// start tries again next launch rather than losing the setting. The gate's
+// other keys and the de-esser's go with dropRetiredSettingsKeys().
+void AudioEngine::migrateRetiredTxStages()
 {
-    if (!m_clientGateTx) return;
     auto& s = AppSettings::instance();
-    m_clientGateTx->setEnabled(
-        s.value("ClientGateTxEnabled", "False").toString() == "True");
-    // Mode first — it snaps ratio + floor to presets, so apply before
-    // those two so a persisted mode doesn't overwrite a custom ratio.
-    const int modeInt = s.value("ClientGateTxMode", "0").toInt();
-    m_clientGateTx->setMode(modeInt == 1
-        ? ClientGate::Mode::Gate
-        : ClientGate::Mode::Expander);
-    m_clientGateTx->setThresholdDb(
-        s.value("ClientGateTxThresholdDb", "-40.0").toFloat());
-    m_clientGateTx->setReturnDb(
-        s.value("ClientGateTxReturnDb", "2.0").toFloat());
-    m_clientGateTx->setRatio(
-        s.value("ClientGateTxRatio", "2.0").toFloat());
-    // Fixed, not persisted — see ClientGate::kAttackMs.
-    m_clientGateTx->setAttackMs(ClientGate::kAttackMs);
-    m_clientGateTx->setHoldMs(
-        s.value("ClientGateTxHoldMs", "20.0").toFloat());
-    m_clientGateTx->setReleaseMs(
-        s.value("ClientGateTxReleaseMs", "100.0").toFloat());
-    m_clientGateTx->setFloorDb(
-        s.value("ClientGateTxFloorDb", "-15.0").toFloat());
-    m_clientGateTx->setLookaheadMs(
-        s.value("ClientGateTxLookaheadMs", "0.0").toFloat());
-}
-
-void AudioEngine::saveClientGateSettings() const
-{
-    if (!m_clientGateTx) return;
-    auto& s = AppSettings::instance();
-    auto toBool = [](bool on) { return on ? QString("True") : QString("False"); };
-    s.setValue("ClientGateTxEnabled", toBool(m_clientGateTx->isEnabled()));
-    s.setValue("ClientGateTxMode",
-        QString::number(static_cast<int>(m_clientGateTx->mode())));
-    s.setValue("ClientGateTxThresholdDb",
-        QString::number(m_clientGateTx->thresholdDb()));
-    s.setValue("ClientGateTxReturnDb",
-        QString::number(m_clientGateTx->returnDb()));
-    s.setValue("ClientGateTxRatio",
-        QString::number(m_clientGateTx->ratio()));
-    s.setValue("ClientGateTxHoldMs",
-        QString::number(m_clientGateTx->holdMs()));
-    s.setValue("ClientGateTxReleaseMs",
-        QString::number(m_clientGateTx->releaseMs()));
-    s.setValue("ClientGateTxFloorDb",
-        QString::number(m_clientGateTx->floorDb()));
-    s.setValue("ClientGateTxLookaheadMs",
-        QString::number(m_clientGateTx->lookaheadMs()));
+    const QString key = QStringLiteral("ClientGateTxEnabled");
+    if (!s.contains(key)) {
+        return;
+    }
+    const bool gateWasOn = s.value(key, "False").toString() == "True";
+    if (gateWasOn && !m_rn2TxEnabled.load()) {
+        setRn2TxEnabled(true);  // persists through AetherialTubePreampTx
+        if (!m_rn2TxEnabled.load()) {
+            qCWarning(lcAudio) << "AudioEngine: the TX gate is retired and RN2 could not "
+                                  "start; keeping the gate's setting to try again";
+            return;
+        }
+        qCInfo(lcAudio) << "AudioEngine: the TX gate is retired; it was on, so RN2 is on";
+    }
+    s.remove(key);
+    s.save();
 }
 
 void AudioEngine::loadClientGateRxSettings()
@@ -7076,51 +7184,6 @@ void AudioEngine::saveClientGateRxSettings() const
         QString::number(m_clientGateRx->floorDb()));
     s.setValue("ClientGateRxLookaheadMs",
         QString::number(m_clientGateRx->lookaheadMs()));
-}
-
-void AudioEngine::loadClientDeEssSettings()
-{
-    if (!m_clientDeEssTx) return;
-    auto& s = AppSettings::instance();
-    m_clientDeEssTx->setEnabled(
-        s.value("ClientDeEssTxEnabled", "False").toString() == "True");
-    m_clientDeEssTx->setFrequencyHz(
-        s.value("ClientDeEssTxFrequencyHz", "6000.0").toFloat());
-    m_clientDeEssTx->setQ(
-        s.value("ClientDeEssTxQ", "2.0").toFloat());
-    m_clientDeEssTx->setThresholdDb(
-        s.value("ClientDeEssTxThresholdDb", "-30.0").toFloat());
-    m_clientDeEssTx->setAmountDb(
-        s.value("ClientDeEssTxAmountDb", "-6.0").toFloat());
-    m_clientDeEssTx->setAttackMs(
-        s.value("ClientDeEssTxAttackMs", "1.0").toFloat());
-    m_clientDeEssTx->setReleaseMs(
-        s.value("ClientDeEssTxReleaseMs", "100.0").toFloat());
-    m_clientDeEssTx->setSlopeStages(
-        s.value("ClientDeEssTxSlopeStages", "2").toInt());
-}
-
-void AudioEngine::saveClientDeEssSettings() const
-{
-    if (!m_clientDeEssTx) return;
-    auto& s = AppSettings::instance();
-    auto toBool = [](bool on) { return on ? QString("True") : QString("False"); };
-    s.setValue("ClientDeEssTxEnabled",
-        toBool(m_clientDeEssTx->isEnabled()));
-    s.setValue("ClientDeEssTxFrequencyHz",
-        QString::number(m_clientDeEssTx->frequencyHz()));
-    s.setValue("ClientDeEssTxQ",
-        QString::number(m_clientDeEssTx->q()));
-    s.setValue("ClientDeEssTxThresholdDb",
-        QString::number(m_clientDeEssTx->thresholdDb()));
-    s.setValue("ClientDeEssTxAmountDb",
-        QString::number(m_clientDeEssTx->amountDb()));
-    s.setValue("ClientDeEssTxAttackMs",
-        QString::number(m_clientDeEssTx->attackMs()));
-    s.setValue("ClientDeEssTxReleaseMs",
-        QString::number(m_clientDeEssTx->releaseMs()));
-    s.setValue("ClientDeEssTxSlopeStages",
-        QString::number(m_clientDeEssTx->slopeStages()));
 }
 
 void AudioEngine::loadClientTubeSettings()
@@ -7370,40 +7433,100 @@ void AudioEngine::saveClientReverbSettings()
     emit clientReverbStateChanged();
 }
 
+namespace {
+// The final limiter's configuration, one object under one root key
+// (Principle V). The four flat keys it replaces are migrated once.
+constexpr auto kFinalLimiterKey = "ClientFinalLimiterTx";
+constexpr const char* kLegacyFinalLimiterKeys[] = {
+    "ClientFinalLimiterTxEnabled", "ClientFinalLimiterTxCeilingDb",
+    "ClientFinalLimiterTxOutputTrimDb", "ClientFinalLimiterTxDcBlock",
+};
+} // namespace
+
 void AudioEngine::loadClientFinalLimiterSettings()
 {
     if (!m_clientFinalLimiterTx) return;
     auto& s = AppSettings::instance();
-    // Default OFF: SmartSDR has no client-side brickwall limiter, so a fresh
-    // install with the limiter on at a -1 dBFS ceiling produces noticeably
-    // less forward power than SmartSDR for the same mic level (radio's SW ALC
-    // sees ~1 dB less peak to set its working point off of).  The limiter is
-    // still available for users who want headroom protection when running
-    // hot Comp/Tube/PUDU/Reverb settings — they can flip LIM on in the
-    // Aetherial Final Output Stage panel.  Existing users whose setting was
-    // already persisted keep their previous behavior.
-    m_clientFinalLimiterTx->setEnabled(
-        s.value("ClientFinalLimiterTxEnabled", "False").toString() == "True");
-    m_clientFinalLimiterTx->setCeilingDb(
-        s.value("ClientFinalLimiterTxCeilingDb", "-1.0").toFloat());
-    m_clientFinalLimiterTx->setOutputTrimDb(
-        s.value("ClientFinalLimiterTxOutputTrimDb", "0.0").toFloat());
-    m_clientFinalLimiterTx->setDcBlockEnabled(
-        s.value("ClientFinalLimiterTxDcBlock", "True").toString() == "True");
+
+    // One-time migration from the legacy flat keys: an installation keeps
+    // the on/off, ceiling, trim and DC block it saved, and gets the
+    // look-ahead default, which had no flat key. Once the object exists it
+    // wins, and a flat key that comes back (an older settings import) goes.
+    if (s.contains(kFinalLimiterKey)) {
+        bool stale = false;
+        for (const char* key : kLegacyFinalLimiterKeys) {
+            if (s.contains(key)) {
+                s.remove(key);
+                stale = true;
+            }
+        }
+        if (stale) {
+            s.save();
+        }
+    } else {
+        bool anyLegacy = false;
+        for (const char* key : kLegacyFinalLimiterKeys) {
+            anyLegacy = anyLegacy || s.contains(key);
+        }
+        if (anyLegacy) {
+            QJsonObject migrated;
+            if (s.contains("ClientFinalLimiterTxEnabled")) {
+                migrated["enabled"] =
+                    s.value("ClientFinalLimiterTxEnabled").toString() == "True";
+            }
+            if (s.contains("ClientFinalLimiterTxCeilingDb")) {
+                migrated["ceilingDb"] =
+                    s.value("ClientFinalLimiterTxCeilingDb").toDouble();
+            }
+            if (s.contains("ClientFinalLimiterTxOutputTrimDb")) {
+                migrated["outputTrimDb"] =
+                    s.value("ClientFinalLimiterTxOutputTrimDb").toDouble();
+            }
+            if (s.contains("ClientFinalLimiterTxDcBlock")) {
+                migrated["dcBlock"] =
+                    s.value("ClientFinalLimiterTxDcBlock").toString() == "True";
+            }
+            s.setValue(kFinalLimiterKey, QString::fromUtf8(
+                QJsonDocument(migrated).toJson(QJsonDocument::Compact)));
+            for (const char* key : kLegacyFinalLimiterKeys) {
+                s.remove(key);
+            }
+            s.save();
+        }
+    }
+
+    QJsonObject o;
+    const auto doc = QJsonDocument::fromJson(
+        s.value(kFinalLimiterKey, "{}").toString().toUtf8());
+    if (doc.isObject()) {
+        o = doc.object();
+    }
+    // Default ON at a -0.5 dBFS ceiling with 1.5 ms look-ahead (maintainer
+    // ruling 2026-11-15, superseding #3004's default-off). The look-ahead
+    // makes it a true brickwall on the 48 kHz samples, and the ceiling sits
+    // half a dB under full scale so it costs little drive against SmartSDR.
+    // A field the operator saved is read back unchanged.
+    m_clientFinalLimiterTx->setEnabled(o.value("enabled").toBool(true));
+    m_clientFinalLimiterTx->setCeilingDb(static_cast<float>(
+        o.value("ceilingDb").toDouble(ClientFinalLimiter::kDefaultCeilingDb)));
+    m_clientFinalLimiterTx->setLookaheadMs(static_cast<float>(
+        o.value("lookaheadMs").toDouble(ClientFinalLimiter::kDefaultLookaheadMs)));
+    m_clientFinalLimiterTx->setOutputTrimDb(static_cast<float>(
+        o.value("outputTrimDb").toDouble(0.0)));
+    m_clientFinalLimiterTx->setDcBlockEnabled(o.value("dcBlock").toBool(true));
 }
 
 void AudioEngine::saveClientFinalLimiterSettings() const
 {
     if (!m_clientFinalLimiterTx) return;
-    auto& s = AppSettings::instance();
-    s.setValue("ClientFinalLimiterTxEnabled",
-        m_clientFinalLimiterTx->isEnabled() ? QString("True") : QString("False"));
-    s.setValue("ClientFinalLimiterTxCeilingDb",
-        QString::number(m_clientFinalLimiterTx->ceilingDb()));
-    s.setValue("ClientFinalLimiterTxOutputTrimDb",
-        QString::number(m_clientFinalLimiterTx->outputTrimDb()));
-    s.setValue("ClientFinalLimiterTxDcBlock",
-        m_clientFinalLimiterTx->dcBlockEnabled() ? QString("True") : QString("False"));
+    QJsonObject o;
+    o["enabled"]      = m_clientFinalLimiterTx->isEnabled();
+    o["ceilingDb"]    = m_clientFinalLimiterTx->ceilingDb();
+    o["lookaheadMs"]  = m_clientFinalLimiterTx->lookaheadMs();
+    o["outputTrimDb"] = m_clientFinalLimiterTx->outputTrimDb();
+    o["dcBlock"]      = m_clientFinalLimiterTx->dcBlockEnabled();
+    AppSettings::instance().setValue(kFinalLimiterKey, QString::fromUtf8(
+        QJsonDocument(o).toJson(QJsonDocument::Compact)));
 }
 
 // Aetherial Tube Pre-Amp TX — nested-JSON persistence (Principle V).
@@ -8967,7 +9090,11 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
         }
     }
 
-    if (dev.isNull()) {
+    const bool inputDeviceMissing = dev.isNull();
+    if (m_txInputDeviceMissing.exchange(inputDeviceMissing) != inputDeviceMissing) {
+        emit txInputDeviceMissingChanged(inputDeviceMissing);
+    }
+    if (inputDeviceMissing) {
         qCWarning(lcAudio) << "AudioEngine: no audio input device available";
         return false;
     }
@@ -9774,6 +9901,10 @@ void AudioEngine::onTxAudioReady()
         return;
     }
 
+    if (m_txMicHeld.load(std::memory_order_acquire)) {
+        data.fill('\0');
+    }
+
     // ── Fixed-rate TX voice processor ───────────────────────────────────
     // Canonical mic input enters this seam at the negotiated device rate,
     // becomes float once, and stays float through RN2, the user-orderable
@@ -9861,7 +9992,7 @@ void AudioEngine::onTxAudioReady()
     // The fence is absolute: no stamp, no transport delivery. At most one block can
     // arrive unstamped: setHostMicrophoneContext and onTxAudioReady are both events
     // on this thread, delivered FIFO, so only a block already queued ahead of the
-    // install misses it (one dspBlockSize, ~21 ms at 24 kHz, within HL2 keying
+    // install misses it (one dspBlockSize, ~11 ms at 24 kHz, within HL2 keying
     // latency). (#5659)
     if (!selectTxContext(context)) {
         return;
@@ -9948,9 +10079,27 @@ void AudioEngine::onTxAudioReady()
             floatBuf[i] = pcm[i] / 32768.0f;
 
         QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(packet, context);
+        emitDaxTxPacket(packet, context);
 
         m_txAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
+    }
+}
+
+void AudioEngine::setDaxTxAudioRoute(quint32 streamId, const DaxTxAudioPermit& permit)
+{
+    const quint32 admittedId = permit.permitsStream(streamId) ? streamId : 0;
+    if (!m_daxTxAudioPermit.sameGrant(permit) || m_txStreamId.load() != admittedId) {
+        m_txAccumulator.clear();
+        m_txFloatAccumulator.clear();
+    }
+    m_daxTxAudioPermit = permit;
+    m_txStreamId.store(admittedId);
+}
+
+void AudioEngine::emitDaxTxPacket(const QByteArray& packet, const TxCoordinator::Context& context)
+{
+    if (m_daxTxAudioPermit.permitsStream(m_txStreamId.load())) {
+        emit txPacketReady(packet, context, m_daxTxAudioPermit);
     }
 }
 
@@ -9983,7 +10132,7 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
     words[0] = qToBigEndian(hdr);
 
     // ── Word 1: Stream ID (dax_tx stream for DAX TX audio) ──────────────
-    words[1] = qToBigEndian(m_txStreamId);
+    words[1] = qToBigEndian(m_txStreamId.load());
 
     // ── Word 2: Class ID OUI (24-bit, right-justified in 32-bit word) ────
     words[2] = qToBigEndian(FLEX_OUI);
@@ -10161,7 +10310,7 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordin
         return;
     }
 
-    if (m_txStreamId == 0) return;
+    if (!m_daxTxAudioPermit.permitsStream(m_txStreamId.load())) { return; }
     if (!selectTxContext(context)) {
         return;
     }
@@ -10184,7 +10333,7 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordin
     while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
         auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
         QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(pkt, context);
+        emitDaxTxPacket(pkt, context);
         m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
     }
 }
@@ -10295,6 +10444,9 @@ void AudioEngine::setTransmitting(bool tx)
     if (m_transmitting == tx) return;
     m_transmitting = tx;
 
+    // A new over always starts with a live mic, whatever ended the last one.
+    if (tx) m_txMicHeld.store(false, std::memory_order_release);
+
     // On unkey: drop any partial packet residue so next burst starts cleanly.
     if (!tx) clearTxAccumulators();
 }
@@ -10392,7 +10544,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
     // its modulator runs here, fed from the final-monitor tap below. Gating this
     // path on the stream id dropped every TCI/DAX frame on such a radio, so
     // WSJT-X keyed the rig and transmitted silence. See setHostModulation().
-    if (!m_hostModulation && m_txStreamId == 0) return;
+    if (!m_hostModulation && !m_daxTxAudioPermit.permitsStream(m_txStreamId.load())) { return; }
 
     // Mark TCI as the active TX-audio source. While this timer is fresh,
     // onTxAudioReady() suppresses the local mic capture path so the two
@@ -10489,7 +10641,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
             auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
             QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-            emit txPacketReady(pkt, context);
+            emitDaxTxPacket(pkt, context);
             m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
         }
         return;
@@ -10547,7 +10699,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         hdr |= ((m_txPacketCount & 0xF) << 16);
         hdr |= (packetWords & 0xFFFF);
         words[0] = qToBigEndian(hdr);
-        words[1] = qToBigEndian(m_txStreamId);
+        words[1] = qToBigEndian(m_txStreamId.load());
         words[2] = qToBigEndian(FLEX_OUI);
         words[3] = qToBigEndian(
             (static_cast<quint32>(FLEX_INFO_CLASS) << 16) | PCC_DAX_REDUCED);
@@ -10560,7 +10712,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                     m_txFloatAccumulator.constData(), payloadBytes);
 
         m_txPacketCount = (m_txPacketCount + 1) & 0xF;
-        emit txPacketReady(pkt, context);
+        emitDaxTxPacket(pkt, context);
         m_txFloatAccumulator.remove(0, MONO_BYTES_PER_PKT);
     }
 }
@@ -10704,6 +10856,13 @@ void AudioEngine::applyBackendAudioCapabilities(
     const bool wasSeamAudio = m_hostModulation;
     const bool seamAudio = connected && caps.takesTxAudioOverSeam && caps.canTransmit;
     setHostModulation(seamAudio);
+    // Only startTxStream() refreshes the missing-input flag. Without a radio,
+    // or once the seam route is withdrawn, it describes no capture: clear it so
+    // a reconnect does not report NoInputDevice before capture is retried.
+    if ((!connected || (wasSeamAudio && !seamAudio))
+        && m_txInputDeviceMissing.exchange(false)) {
+        emit txInputDeviceMissingChanged(false);
+    }
     if (seamAudio && pcAudioEnabled) {
         if (!isTxStreaming()) {
             startTxStream(address, 4991);

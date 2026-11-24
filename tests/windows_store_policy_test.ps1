@@ -7,6 +7,7 @@ Set-StrictMode -Version Latest
 $planScript = Join-Path $RepositoryRoot 'packaging/windows/get-store-build-plan.ps1'
 $publishScript = Join-Path $RepositoryRoot 'packaging/windows/publish-store.ps1'
 $packageScript = Join-Path $RepositoryRoot 'packaging/windows/create-msix.ps1'
+$invokeScript = Join-Path $RepositoryRoot 'packaging/windows/invoke-store-production.ps1'
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('aether-store-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $scratch | Out-Null
 $script:assertions = 0
@@ -27,6 +28,7 @@ function global:msstore {
     $global:LASTEXITCODE = $global:aetherStoreExitCode
 }
 $savedFlight = $env:AETHERSDR_STORE_FLIGHT_ID
+$savedAutoPublish = $env:AETHERSDR_STORE_AUTO_PUBLISH
 try {
     $project = Join-Path $scratch 'CMakeLists.txt'
     Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.1 LANGUAGES CXX)'
@@ -85,7 +87,7 @@ try {
         $plan = & $planScript @inputs
         Assert-True ($plan.msixVersion -eq '26.9.2.0') 'Production version must ignore run number and flight ID'
         Assert-True ($plan.storeEligible -and $plan.storeSkipReason -eq '') 'Supported production release is Store eligible'
-        Assert-True ($plan.productionDraft -and -not $plan.publishFlight) 'Production remains draft-only'
+        Assert-True ($plan.productionDraft -and -not $plan.publishFlight) 'Production plan selects the production job, not a flight'
     }
     $inputs.RunNumber = 205
     # Tag and source are compared by version value, not spelling.
@@ -169,12 +171,49 @@ try {
     Assert-Throws { & $publishScript @publishInputs } 'Expected exactly one'
     Assert-True ($global:aetherStoreCalls.Count -eq 5) 'Ambiguous upload must not call CLI'
 
+    # A missing package: a draft upload warns and succeeds; a commit fails.
+    $emptyDir = Join-Path $scratch 'empty'
+    New-Item -ItemType Directory -Path $emptyDir | Out-Null
+    & $publishScript -ProductId 'PRODUCT' -SearchDir $emptyDir 3>$null
+    Assert-Throws { & $publishScript -ProductId 'PRODUCT' -SearchDir $emptyDir -Commit -CommitProduction } 'no package to submit'
+    Assert-Throws { & $publishScript -ProductId 'PRODUCT' -SearchDir $emptyDir -FlightId 'FLIGHT' -Commit } 'no package to submit'
+    Assert-True ($global:aetherStoreCalls.Count -eq 5) 'Missing package must not call CLI'
+
+    # The workflow's arming wrapper reads AETHERSDR_STORE_AUTO_PUBLISH and
+    # commits production only on exactly 'true'; every other value stays draft.
+    $wrapperDir = Join-Path $scratch 'wrapper'
+    New-Item -ItemType Directory -Path $wrapperDir | Out-Null
+    New-Item -ItemType File -Path (Join-Path $wrapperDir 'AetherSDR-test.msixupload') | Out-Null
+    foreach ($value in @($null, '', 'false', 'TRUE', 'True', '1', 'yes', ' true', 'true ')) {
+        $env:AETHERSDR_STORE_AUTO_PUBLISH = $value
+        $before = $global:aetherStoreCalls.Count
+        & $invokeScript -ProductId 'PRODUCT' -SearchDir $wrapperDir
+        Assert-True ($global:aetherStoreCalls.Count -eq $before + 1) "Wrapper makes one CLI call for AutoPublish='$value'"
+        $call = $global:aetherStoreCalls[$before]
+        Assert-True ($call -contains '--noCommit') "Production stays draft for AutoPublish='$value'"
+        Assert-True ($call -notcontains '--flightId') "Wrapper never targets a flight for AutoPublish='$value'"
+    }
+    $env:AETHERSDR_STORE_AUTO_PUBLISH = 'true'
+    $before = $global:aetherStoreCalls.Count
+    & $invokeScript -ProductId 'PRODUCT' -SearchDir $wrapperDir
+    $call = $global:aetherStoreCalls[$before]
+    Assert-True ($call -notcontains '--noCommit') 'AutoPublish=true commits production'
+    Assert-True ($call -notcontains '--flightId') 'Armed production commit never targets a flight'
+    Assert-True ($call -contains 'PRODUCT') 'Armed commit targets the configured product'
+    Assert-True ($call[$call.IndexOf('--uploadTimeout') + 1] -eq '300') 'Armed commit keeps the explicit upload timeout'
+    Assert-Throws { & $invokeScript -ProductId 'PRODUCT' -SearchDir $emptyDir } 'no package to submit'
+    $env:AETHERSDR_STORE_AUTO_PUBLISH = $null
+    $before = $global:aetherStoreCalls.Count
+    & $invokeScript -ProductId 'PRODUCT' -SearchDir $emptyDir 3>$null
+    Assert-True ($global:aetherStoreCalls.Count -eq $before) 'Unarmed missing package stays a warning'
+
     # Fail on Store-invalid versions before touching deploy files or SDK tools.
     Assert-Throws { & $packageScript -Version '26.9.1.203' -CreateUpload -DeployDir (Join-Path $scratch 'absent') } 'fourth version component'
     Write-Host "PASS: $script:assertions Store policy assertions; no network calls."
 }
 finally {
     $env:AETHERSDR_STORE_FLIGHT_ID = $savedFlight
+    $env:AETHERSDR_STORE_AUTO_PUBLISH = $savedAutoPublish
     Remove-Item Function:\msstore
     Remove-Variable aetherStoreCalls, aetherStoreExitCode -Scope Global
     Remove-Item -LiteralPath $scratch -Recurse -Force

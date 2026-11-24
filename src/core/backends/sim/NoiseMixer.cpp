@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -36,6 +37,8 @@ NoiseMixer::NoiseMixer()
     m_ch[Channel::Birdie]     = {false, -28.0, 1000.0, 0.0, 60.0, 0.0};
     m_ch[Channel::Hash]       = {false, -24.0, 0.0,   0.0, 60.0, 120.0};
     m_ch[Channel::Woodpecker] = {false, -22.0, 0.0,   0.0, 60.0, 10.0};
+    m_ch[Channel::Rtty]         = {false, -16.0, 0.0, 0.0, 60.0, 0.0};
+    m_ch[Channel::RttyReversed] = {false, -16.0, 0.0, 0.0, 60.0, 0.0};
     m_pinkRows.fill(0.0);
 }
 
@@ -406,6 +409,63 @@ void NoiseMixer::genBirdie(const ChannelState& c, float* out)
     if (m_birdiePhaseRad > kTwoPi) m_birdiePhaseRad = std::fmod(m_birdiePhaseRad, kTwoPi);
 }
 
+void NoiseMixer::setRttyTones(double upperAudioHz, double lowerAudioHz,
+                              double upperRfOffsetHz, double lowerRfOffsetHz)
+{
+    m_rttyUpperAudioHz = upperAudioHz;
+    m_rttyLowerAudioHz = lowerAudioHz;
+    m_rttyUpperRfHz = upperRfOffsetHz;
+    m_rttyLowerRfHz = lowerRfOffsetHz;
+}
+
+void NoiseMixer::genRtty(const ChannelState&, float* out) { keyRtty(m_rtty, false, out); }
+void NoiseMixer::genRttyReversed(const ChannelState&, float* out) { keyRtty(m_rttyReversed, true, out); }
+
+void NoiseMixer::keyRtty(RttyKeyer& keyer, bool markIsLower, float* out)
+{
+    // A made-up RTTY station ("DEMO" is not a callsign): ITA2 at 45.45 baud,
+    // one start bit (space), five data bits LSB first, 1.5 stop bits (mark) --
+    // the framing RttyDecoder expects -- after 1 s of idle mark, looped.
+    // Continuous phase across tone changes, as FSK keying produces.
+    struct Segment { double end; int bit; };
+    struct Schedule { std::vector<Segment> segments; double total = 0.0; };
+    static const Schedule schedule = [] {
+        static const char kLetters[] = "\0E\nA SIU\rDRJNFCKTZLWHYPQOBG\x1BMXV";   // index = ITA2 code
+        static const char* kMessage = "RYRYRY CQ CQ DE DEMO DEMO K\r\n";
+        constexpr double bit = 1.0 / 45.45;
+        Schedule s;
+        double t = 0.0;
+        auto add = [&](double duration, int value) { t += duration; s.segments.push_back({t, value}); };
+        auto character = [&](int code) {
+            add(bit, 0);
+            for (int i = 0; i < 5; ++i) add(bit, (code >> i) & 1);
+            add(1.5 * bit, 1);
+        };
+        add(1.0, 1);                    // idle mark
+        character(31);                  // LTRS
+        for (const char* p = kMessage; *p; ++p) {
+            for (int code = 1; code < 31; ++code) {
+                if (kLetters[code] == *p) { character(code); break; }
+            }
+        }
+        s.total = t;
+        return s;
+    }();
+    const int count = static_cast<int>(schedule.segments.size());
+    for (int i = 0; i < kFrameLen; ++i) {
+        const double pos = std::fmod(static_cast<double>(keyer.sample + i) / kSampleRate, schedule.total);
+        if (pos < keyer.pos) keyer.segment = 0;   // new message cycle
+        keyer.pos = pos;
+        while (keyer.segment < count - 1 && pos >= schedule.segments[keyer.segment].end) ++keyer.segment;
+        const bool mark = schedule.segments[keyer.segment].bit == 1;
+        const double hz = (mark != markIsLower) ? m_rttyUpperAudioHz : m_rttyLowerAudioHz;
+        out[i] = hz > 0.0 ? static_cast<float>(std::sin(keyer.phaseRad) * kNoiseRef * 1.2) : 0.0f;
+        keyer.phaseRad += kTwoPi * std::max(0.0, hz) / kSampleRate;
+    }
+    keyer.sample += kFrameLen;
+    if (keyer.phaseRad > kTwoPi) keyer.phaseRad = std::fmod(keyer.phaseRad, kTwoPi);
+}
+
 void NoiseMixer::genHash(const ChannelState& c, float* out)
 {
     const double prf = c.prf > 0 ? c.prf : 120.0;
@@ -450,6 +510,8 @@ QVector<float> NoiseMixer::mixFrame()
     add(Channel::Birdie,     &NoiseMixer::genBirdie);
     add(Channel::Hash,       &NoiseMixer::genHash);
     add(Channel::Woodpecker, &NoiseMixer::genWoodpecker);
+    add(Channel::Rtty,         &NoiseMixer::genRtty);
+    add(Channel::RttyReversed, &NoiseMixer::genRttyReversed);
 
     // TNF/ANF notches: remove each notched audio frequency (biquad).
     for (double fHz : m_notchHz) acc = applyNotch(acc, fHz, 8.0);
@@ -485,7 +547,12 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
 {
     QVector<float> out(n, static_cast<float>(floorDbm));
     const double hzPerBin = n ? spanHz / n : 1.0;
-    auto binOf = [&](double hz) { return static_cast<int>(center + hz / hzPerBin); };
+    auto binOf = [&](double hz) {
+        // Far off the row (an RF offset can be any size) maps to just beyond
+        // its ends, so the cast cannot overflow and b ± 1 stays off the row.
+        const double b = center + hz / hzPerBin;
+        return b <= -2.0 ? -2 : (b >= n + 1.0 ? n + 1 : static_cast<int>(b));
+    };
     auto bump  = [&](int b, double dbm) {
         if (b >= 0 && b < n) out[b] = static_cast<float>(addDb(out[b], dbm));
     };
@@ -538,12 +605,36 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
             break;
         case Channel::Birdie: {
             if (s.hz <= 0.0) break;   // inaudible: draw nothing (see genBirdie)
-            const int b = binOf(s.hz);
+            // A notch on its pitch removes it from the audio, so from the
+            // waterfall too, wherever it is drawn.
+            bool notched = false;
+            for (double fHz : m_notchHz) {
+                const double w = m_notchWidthHz.count(std::lround(fHz))
+                                     ? m_notchWidthHz.at(std::lround(fHz)) : 100.0;
+                notched |= std::abs(fHz - s.hz) <= w / 2;
+            }
+            if (notched) break;
+            // Where it is in RF, relative to the pan center (#7420). Without an
+            // owner's geometry (the mixer on its own), USB with the dial at the
+            // center: its pitch.
+            const int b = binOf(std::isnan(m_birdieRfOffsetHz) ? s.hz : m_birdieRfOffsetHz);
             bump(b, floorDbm + 90.0 + lvl + 10.0);
             bump(b - 1, floorDbm + 90.0 + lvl - 6.0);
             bump(b + 1, floorDbm + 90.0 + lvl - 6.0);
             break;
         }
+        case Channel::Rtty:
+        case Channel::RttyReversed:
+            // Both tones where they are in RF; FSK alternates between them.
+            for (const auto& [audio, rf] : {std::pair{m_rttyUpperAudioHz, m_rttyUpperRfHz},
+                                            std::pair{m_rttyLowerAudioHz, m_rttyLowerRfHz}}) {
+                if (audio <= 0.0) continue;
+                const int b = binOf(rf);
+                bump(b, floorDbm + 90.0 + lvl + 6.0);
+                bump(b - 1, floorDbm + 90.0 + lvl - 8.0);
+                bump(b + 1, floorDbm + 90.0 + lvl - 8.0);
+            }
+            break;
         case Channel::Powerline: {
             const double f0 = s.freq > 0 ? s.freq : 60.0;
             for (int h = 1; h < 12; h += 2)
@@ -573,8 +664,12 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
     }
 
     // Notch display: carve each notched offset to the floor (line disappears).
+    // The birdie's notch is carved where the birdie is drawn: its RF offset.
+    const ChannelState& birdie = m_ch.at(Channel::Birdie);
     for (double fHz : m_notchHz) {
-        const int nb = binOf(fHz);
+        const bool onBirdie = !std::isnan(m_birdieRfOffsetHz) && birdie.enabled
+                              && std::abs(fHz - birdie.hz) < 0.5;
+        const int nb = binOf(onBirdie ? m_birdieRfOffsetHz : fHz);
         const double w = m_notchWidthHz.count(std::lround(fHz))
                              ? m_notchWidthHz.at(std::lround(fHz)) : 100.0;
         const int half = std::max(1, static_cast<int>(w / (2 * hzPerBin)));
@@ -598,6 +693,8 @@ QString NoiseMixer::name(Channel c)
     case Channel::Birdie: return QStringLiteral("birdie");
     case Channel::Hash: return QStringLiteral("hash");
     case Channel::Woodpecker: return QStringLiteral("woodpecker");
+    case Channel::Rtty: return QStringLiteral("rtty");
+    case Channel::RttyReversed: return QStringLiteral("rtty-rev");
     }
     return QStringLiteral("white");
 }
@@ -614,7 +711,7 @@ QVector<NoiseMixer::Channel> NoiseMixer::allChannels()
 {
     return {Channel::Cw, Channel::Voice, Channel::White, Channel::Pink, Channel::Qrn,
             Channel::Powerline, Channel::Crashes, Channel::Birdie,
-            Channel::Hash, Channel::Woodpecker};
+            Channel::Hash, Channel::Woodpecker, Channel::Rtty, Channel::RttyReversed};
 }
 
 namespace {
