@@ -1351,6 +1351,10 @@ uint64_t WdspChannel::threadAllocationSequenceForTest() noexcept
 
 void WdspChannel::setRxPanelBinauralForTest(int channelId, int binaural) noexcept
 {
+    // WDSP indexes rxa[] with the id unchecked; -1 is wdspChannelId() before a
+    // channel opens.
+    if (channelId < 0 || channelId >= kWdspChannelCount)
+        return;
     SetRXAPanelBinaural(channelId, binaural);
 }
 
