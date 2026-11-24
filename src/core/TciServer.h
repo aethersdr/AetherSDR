@@ -650,20 +650,6 @@ private:
         RadioControlSession session{};
     };
     QHash<int, CreatedVfoBPan> m_createdVfoBPans;
-    // Created VFO-B slices whose teardown could not finish while the radio was
-    // keyed: TX could not move back to the route's RX slice, or the created
-    // pan was the TX pan of a keyed radio. Finished on the unkey edge: TX back
-    // to rxSliceId first (when set), then the reap, then the deferred
-    // confirmation (clearVfoB) if there is one.
-    struct OwedVfoBReap {
-        int rxSliceId{-1};
-        QPointer<SliceModel> rx;
-        std::optional<QString> confirmation;
-    };
-    QHash<int, OwedVfoBReap> m_vfoBPanReapsOwed;
-    void oweVfoBPanReap(int createdSliceId, int rxSliceId, std::optional<QString> confirmation);
-    void retryOwedVfoBPanReaps();
-    bool tciTransmitKeyed() const;
     struct PendingTrxRequest
     {
         QPointer<TciClient> client;
