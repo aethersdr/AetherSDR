@@ -10914,6 +10914,16 @@ add_executable(hl2_auto_gain_replay_d245_test
     src/core/backends/hl2/MetisProtocol.cpp)
 target_include_directories(hl2_auto_gain_replay_d245_test PRIVATE src tests)
 add_test(NAME hl2_auto_gain_replay_d245_test COMMAND hl2_auto_gain_replay_d245_test)
+# Both replay headers still come out of their recorded inputs
+# (tests/fixtures/hl2-autogain-replay/), byte for byte.
+if(PYTHON3_EXECUTABLE)
+    add_test(NAME hl2_auto_gain_replay_d168_header_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_hl2_autogain_replay_d168.py --check)
+    add_test(NAME hl2_auto_gain_replay_d245_header_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_hl2_autogain_replay_d245.py --check)
+endif()
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
