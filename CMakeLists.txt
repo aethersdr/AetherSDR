@@ -1274,6 +1274,10 @@ set(CORE_SOURCES
     src/core/tnc/KissTncServer.cpp
     src/core/tnc/TncTerminal.cpp
     src/core/hfgateway/ModemHostProtocol.cpp
+    src/core/hfgateway/ModemHostSession.cpp
+    src/core/hfgateway/ModemHostClient.cpp
+    src/core/hfgateway/HfGatewayConfig.cpp
+    src/core/hfgateway/HfGatewaySettings.cpp
     src/core/pms/PmsMailbox.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsStationList.cpp
