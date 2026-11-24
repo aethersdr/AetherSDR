@@ -119,9 +119,12 @@ def rows(items, fmt, per):
 
 
 def emit(tag, ticks, changes, clips, blocks):
-    # No empty-array sentinel, on purpose: tests/hl2_auto_gain_replay_test.cpp
-    # does not strip one, so a leg with no changes or clips fails to compile
-    # (an empty constexpr array) instead of replaying a {-1, 0} row.
+    # No empty-array sentinel: tests/hl2_auto_gain_replay_test.cpp does not
+    # strip one. An empty leg is refused here instead, since MSVC rejects a
+    # zero-length array but Clang and GCC accept one and would replay nothing.
+    for what, items in (('changes', changes), ('clips', clips), ('blocks', blocks)):
+        if not items:
+            raise SystemExit(f'{tag}: no {what} in this leg; an empty leg would replay nothing')
     out = [f'inline constexpr int k{tag}Ticks = {ticks};',
            f'inline constexpr Change k{tag}Changes[] = {{']
     out += rows(changes, lambda ms, off: f'{{{ms}, {off}}},', 6)

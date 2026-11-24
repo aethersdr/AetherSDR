@@ -226,9 +226,9 @@ def samples_per_tick(legs):
     medians = [r[4] for r in legs if r[4] is not None]
     assert min(medians) <= spt <= max(medians), (spt, medians)
     counts = {n: pooled.count(n) for n in sorted(set(pooled))}
-    assert spt == EXPECTED_SAMPLES_PER_TICK, (
-        f'pooled median moved to {spt} (counts {counts}); decide 19 or 20 and '
-        f'update EXPECTED_SAMPLES_PER_TICK')
+    if spt != EXPECTED_SAMPLES_PER_TICK:   # not assert: python -O would drop it
+        raise SystemExit(f'pooled median moved to {spt} (counts {counts}); decide 19 or 20 and '
+                         f'update EXPECTED_SAMPLES_PER_TICK')
     print(f'# kSamplesPerTick {spt}: median of {len(pooled)} logged windows, '
           f'per-leg medians {sorted(set(medians))}', file=sys.stderr)
     return spt
