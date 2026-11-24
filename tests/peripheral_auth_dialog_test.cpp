@@ -2248,6 +2248,11 @@ bool checkAgAntennaSelectionMode()
     split->setChecked(true);
     const bool splitEnabled = model.splitRxTxMode() && rxOnlyButton->isEnabled()
         && !txBothButton->parentWidget()->parentWidget()->isHidden();
+    // A disabled button carries its reason to a screen reader, not only in the tooltip.
+    QPushButton* txRxOnlyButton =
+        applet.findChild<QPushButton*>(QStringLiteral("agPort1TxAntenna3"));
+    const bool disabledReasonDescribed = txRxOnlyButton && !txRxOnlyButton->isEnabled()
+        && txRxOnlyButton->accessibleDescription().contains(QStringLiteral("not permitted for TX"));
     rxGrid->getItemPosition(rxGrid->indexOf(rxOnlyButton), &row, &column, &rowSpan, &columnSpan);
     auto* txGrid = qobject_cast<QGridLayout*>(txBothButton->parentWidget()->layout());
     int txRow = -1;
@@ -2302,7 +2307,7 @@ bool checkAgAntennaSelectionMode()
         && pendingClearNotShown && clearsByRx
         && pendingCoupledSelectionNotShown && coupled && splitEnabled
         && splitGridLayout && pendingSplitSelectionNotShown && splitSelection
-        && unknownBandTxBlocked && keyedPickRefused;
+        && unknownBandTxBlocked && keyedPickRefused && disabledReasonDescribed;
 }
 
 bool checkKpa500NetworkSetup()

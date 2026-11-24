@@ -713,6 +713,7 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
                 const QString otherLabel = (portId == 1) ? tr("Port B") : tr("Port A");
                 btns[i]->setToolTip(tr("%1 — in use by %2")
                     .arg(antennas[i].name, otherLabel));
+                btns[i]->setAccessibleDescription(btns[i]->toolTip());
                 continue;
             }
 
@@ -736,6 +737,7 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
                     btns[i]->setToolTip(tr("%1 — not permitted for RX on %2")
                         .arg(antennas[i].name, m_model->bandName(band)));
                 }
+                btns[i]->setAccessibleDescription(btns[i]->toolTip());
             } else if (!transmit
                        && !m_model->canTxOnBand(antId, band)) {
                 btns[i]->setStyleSheet(QString(kButtonBase) + kAmberActive);
