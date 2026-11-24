@@ -5648,7 +5648,20 @@ void Hl2Backend::keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
     // A fresh element supersedes that local hang. The earlier element's own
     // completion is still held by its scheduled release in MetisClient.
     m_cwHangCompletion = {};
-    if (m_metis) {
+    // A break-in key-down inside the hang. A fence of the run that raised MOX
+    // (a CWX clear, a refusal) drops it at the writer while this backend stays
+    // keyed, and the element would be admitted with nothing on EP2 (#7567).
+    // Its admission and the MOX it may raise again are one I/O-thread action:
+    // a frame built between them would pass the down's sample unkeyed.
+    const bool rekeyInHang = down && breakIn && m_keyed && m_cwAutoKeyed;
+    if (m_metis && rekeyInHang) {
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, dsp = m_txDsp, operation, completion, scheduledAt,
+                                            releaseAt] {
+            if (metis->setCwKeyDownRaisingMox(operation, scheduledAt, releaseAt, completion) && dsp) {
+                dsp->reset();   // #7216, as applyKeying() does
+            }
+        }, Qt::QueuedConnection);
+    } else if (m_metis) {
         // A scheduled key-up's completion goes with it: MetisClient releases it
         // once the element's release is written to EP2, not when this returns.
         QMetaObject::invokeMethod(m_metis, [metis = m_metis, down, operation, completion, scheduledAt,
@@ -5665,16 +5678,6 @@ void Hl2Backend::keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
         if (breakIn && !m_keyed) {
             applyKeying(true, operation, {}, true);
             m_cwAutoKeyed = true;
-        } else if (breakIn && m_cwAutoKeyed && m_metis) {
-            // Inside the hang. A fence of the run that raised MOX (a CWX
-            // clear, a refusal) drops it at the writer while this backend
-            // stays keyed, and the element would be admitted with nothing on
-            // EP2 (#7567). Raised again under this element's operation.
-            QMetaObject::invokeMethod(m_metis, [metis = m_metis, dsp = m_txDsp, operation] {
-                if (metis->reraiseCwMox(operation) && dsp) {
-                    dsp->reset();   // #7216, as applyKeying() does
-                }
-            }, Qt::QueuedConnection);
         }
         return;
     }

@@ -1474,8 +1474,14 @@ bool MetisClient::setCwMox(bool keyed, const TxCoordinator::Operation& operation
     return setMoxImpl(keyed, operation, true);
 }
 
-bool MetisClient::reraiseCwMox(const TxCoordinator::Operation& operation)
+bool MetisClient::setCwKeyDownRaisingMox(const TxCoordinator::Operation& operation,
+                                         std::chrono::steady_clock::time_point scheduledAt,
+                                         std::chrono::steady_clock::time_point releaseAt,
+                                         const TxCoordinator::Completion& completion)
 {
+    if (!setCwKeyDown(true, operation, scheduledAt, releaseAt, completion)) {
+        return false;   // a refused down raises nothing
+    }
     if (m_mox && m_moxOperation.permitsDispatch(TxCoordinator::monotonicMs())) {
         return false;
     }
@@ -1639,30 +1645,30 @@ void MetisClient::setTxRoute(int route, int level)
     setTxDriveLevel(level);
 }
 
-void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
+bool MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
                                std::chrono::steady_clock::time_point scheduledAt,
                                std::chrono::steady_clock::time_point releaseAt,
                                const TxCoordinator::Completion& completion)
 {
     if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
-        return;
+        return false;
     }
     // Refuse the carrier at the same final wire authority that refuses MOX.
     // Do not even latch a pending down edge: opening the gate later must never
     // turn an earlier refused request into RF.
     if (down && !m_txAllowed) {
-        return;
+        return false;
     }
     const bool scheduled = scheduledAt != std::chrono::steady_clock::time_point{} && m_running;
     if (!scheduled) {
         flushCwSchedule();
     }
     if (!down && !m_cwMode && m_cwScheduleCount == 0) {
-        return;
+        return false;
     }
     if (down && scheduled && m_cwOverRefused) {
         ++m_cwRefusedDowns;   // this over already went past the bound
-        return;
+        return false;
     }
     if (down) {
         // CW owns the IQ stream until PTT drops, also before a scheduled
@@ -1679,7 +1685,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
         // The engine suppresses a global up while another CW contributor holds
         // down. Retain that compatible set after checking this original command.
         m_cwOperation = down ? operation.heldCwKeying() : operation;
-        return;
+        return down;
     }
     std::int64_t target = cwSampleAt(scheduledAt) + m_cwEdgeLeadSamples + m_cwShiftSamples;
     if (!down) {
@@ -1690,11 +1696,11 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
                 --at;
             }
             if (at == 0) {
-                return;   // the element's own release is already on the wire
+                return false;   // the element's own release is already on the wire
             }
             if (target >= m_cwSchedule[at - 1].sample) {
                 m_cwSchedule[at - 1].completion = completion;   // held until it is written
-                return;
+                return false;
             }
             // An earlier key-up (a keyer stopped mid-element) replaces it.
             for (std::size_t i = at; i < m_cwScheduleCount; ++i) {
@@ -1703,7 +1709,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
             m_cwSchedule[--m_cwScheduleCount] = {};
         }
         scheduleCwKeyUp(target, operation, false, completion);
-        return;
+        return false;
     }
     if (target < m_cwFrameSample) {
         // Too late for its sample. Never truncated, never dropped: the element
@@ -1717,7 +1723,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
             flushCwSchedule();
             logCwFailSafe("scheduled key-down later than the shift bound refused; no carrier until the over ends");
             emit cwOverRefused();
-            return;
+            return false;
         }
         m_cwShiftSamples = shift;
         target = m_cwFrameSample;
@@ -1729,13 +1735,14 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
         flushCwSchedule();
         ++m_cwScheduleOverflows;
         logCwFailSafe("scheduled CW edges overflowed; keyed up");
-        return;
+        return false;
     }
     (void)insertCwEdge(CwScheduledEdge{target, true, operation, false});
     m_cwReleaseOwed = withRelease;
     if (withRelease) {
         scheduleCwKeyUp(cwSampleAt(releaseAt) + m_cwEdgeLeadSamples + m_cwShiftSamples, operation, true, {});
     }
+    return true;
 }
 
 void MetisClient::scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Operation& operation,
