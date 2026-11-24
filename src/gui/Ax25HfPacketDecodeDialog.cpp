@@ -34,6 +34,7 @@
 #include "core/pms/PmsMailbox.h"
 #include "gui/DStarModemPage.h"
 #include "gui/Data2gMonitorPage.h"
+#include "gui/HfGatewayPage.h"
 #include "gui/DStarAvailabilityGate.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -953,6 +954,8 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         m_data2gTab = tabButton(QStringLiteral("HF Data"), false, tabsFrame);
         m_data2gTab->setEnabled(true);
     }
+    m_gatewayTab = tabButton(QStringLiteral("HF Gateway"), false, tabsFrame);
+    m_gatewayTab->setEnabled(true);
     auto* tabGroup = new QButtonGroup(this);
     tabGroup->setExclusive(true);
     tabGroup->addButton(m_ax25Tab, 0);
@@ -969,6 +972,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     tabs->addWidget(m_mailboxTab, 1);
     tabs->addWidget(m_dstarTab, 1);
     if (m_data2gTab) { tabs->addWidget(m_data2gTab, 1); }
+    tabs->addWidget(m_gatewayTab, 1);
     root->addWidget(tabsFrame);
 
     m_tabStack = new QStackedWidget(bodyWidget());
@@ -1087,6 +1091,10 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         m_data2gPage = new Data2gMonitorPage(m_data2g.get(), m_tabStack);
         m_tabStack->addWidget(m_data2gPage);
     }
+
+    // HF Gateway follows the optional HF Data page.
+    m_gatewayPage = new HfGatewayPage(m_tabStack);
+    tabGroup->addButton(m_gatewayTab, m_tabStack->addWidget(m_gatewayPage));
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     m_logFrame = logFrame;
@@ -4245,7 +4253,8 @@ void Ax25HfPacketDecodeDialog::updateTabChrome(int index)
     QWidget* page = m_tabStack ? m_tabStack->widget(index) : nullptr;
     const bool terminal = page == m_terminalPage;
     // HF Data brings its own log and status strip, as D-STAR does.
-    const bool dstar = page == m_dstarPage || (m_data2gPage && page == m_data2gPage);
+    const bool dstar = page == m_dstarPage || (m_data2gPage && page == m_data2gPage)
+        || (m_gatewayPage && page == m_gatewayPage);
     const bool aprs = page == m_aprsPage;
     const bool digi = page == m_digiPage;
     const bool logVisible = !terminal && !dstar && !digi

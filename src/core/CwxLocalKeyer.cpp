@@ -181,9 +181,15 @@ void CwxLocalKeyer::scheduleNext()
             m_playingChars = havePending ? static_cast<int>(p.text.size()) : 0;
         }
         if (!havePending) {
+            // A drain wakes at the last element's grid deadline: that is its
+            // key-up's instant, as for every other scheduled edge (#7245).
+            const auto lastEdge = m_epochValid ? m_epoch + std::chrono::milliseconds(m_nextEdgeMs)
+                                               : std::chrono::steady_clock::now();
             m_running = false;
             resetEpoch();
-            keyUpIfDown();
+            m_currentlyDown = false;
+            m_drainedUpAt = lastEdge;
+            emitKeyDown(false, lastEdge);
             if (m_onDrained) {
                 m_onDrained();
             }
@@ -201,6 +207,14 @@ void CwxLocalKeyer::scheduleNext()
         if (m_currentlyDown || m_owesCharGap)
             m_elements.enqueue(Element::CharGap);
         encode(p.text, p.wpm);
+        if (!m_epochValid && m_drainedUpAt != std::chrono::steady_clock::time_point{}) {
+            // Played into after a drain: as far from its key-up as a new run (#7245).
+            const auto drainedUpAt = std::exchange(m_drainedUpAt, {});
+            if (m_spacingAfterDrainUnits > 0) {
+                m_notBefore = std::max(m_notBefore,
+                                       drainedUpAt + std::chrono::milliseconds(m_spacingAfterDrainUnits * m_unitMs));
+            }
+        }
         if (m_elements.isEmpty()) {
             scheduleNext();
             return;
@@ -281,6 +295,7 @@ void CwxLocalKeyer::resetEpoch()
     m_epochValid = false;
     m_nextEdgeMs = 0;
     m_owesCharGap = false;
+    m_drainedUpAt = {};   // a stop is not a drain; the drain sets it after this
 }
 
 void CwxLocalKeyer::startEpoch()
@@ -300,7 +315,7 @@ void CwxLocalKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point
 void CwxLocalKeyer::keyUpIfDown()
 {
     m_currentlyDown = false;
-    // Stop / abort / drain — not a scheduled edge.  The operator's "stop
+    // Stop / abort — not a scheduled edge.  The operator's "stop
     // sending" silences at the instant it is processed, not at a grid
     // deadline that may still lie in the future. (#4977)
     emitKeyDown(false, std::chrono::steady_clock::now());

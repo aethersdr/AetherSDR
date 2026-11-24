@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Socket-free production bridge/model/backend/audio paths. Inject decoded
 // statuses and command replies; no firmware peer, device, listener or RF.
 #include "FlexSliceStatusTestSupport.h"
@@ -33,6 +34,7 @@ public:
     static void identity(RadioConnection& connection, bool connected)
     {
         connection.m_handle.store(0x12345678);
+        connection.m_commandSinkForTest = [](quint32, const QString&) {};
         connection.m_state.store(connected ? ConnectionState::Connected : ConnectionState::Disconnected);
     }
 };
@@ -42,11 +44,9 @@ public:
     { if (model.m_daxTxOwnershipIntent) { model.expireDaxTxOwnership(model.m_daxTxOwnershipIntent->ticket); } }
     static void disconnect(RadioModel& model)
     { model.m_intentionalDisconnect = true; model.onDisconnected(); }
-    static RadioModel::ResponseCallback takeCreateReply(RadioModel& model)
+    static FlexCommandTestAccess::Reply takeCreateReply(RadioModel& model)
     {
-        if (model.m_pendingCallbacks.isEmpty()) { return {}; }
-        const quint32 seq = model.m_pendingCallbacks.cbegin().key();
-        return model.m_pendingCallbacks.take(seq);
+        return FlexCommandTestAccess::takeFirstReply(model);
     }
     static void holdProfile(RadioModel& model, int milliseconds = 1000)
     {
@@ -94,7 +94,8 @@ struct Fixture {
         QMetaObject::invokeMethod(connection, [connection] {
             TxOperationIntegrationTestAccess::identity(*connection, true);
         }, Qt::BlockingQueuedConnection);
-        backend->setDaxTxCommandSink([this](const QString& command, FlexBackend::CommandReply reply,
+        FlexCommandTestAccess::bind(model, *backend);
+        backend->setDaxTxCommandSinkForTest([this](const QString& command, FlexBackend::CommandReply reply,
                                            const DaxTxRequestGuard& guard) {
             writes.push_back({command, std::move(reply), guard});
             return true;
@@ -322,7 +323,7 @@ void exactInputAndKeyFences()
     const TxCoordinator::Request child = root.derive();
     f.model.noteDaxTxInput(root);
     std::vector<TxCoordinator::Command> keys;
-    f.backend->setTxCommandSink([&](const QString&, const TxCoordinator::Command& command) {
+    f.backend->setTxCommandSinkForTest([&](const QString&, const TxCoordinator::Command& command) {
         keys.push_back(command);
         return true;
     });
@@ -339,7 +340,7 @@ void exactInputAndKeyFences()
               "same-ID ownership reacquisition never renews a queued key or original program");
         check(!f.model.isRadioTransmitting(), "exact DAX cleanup ends its local optimistic transmission");
     }
-    f.backend->setTxCommandSink({});
+    f.backend->setTxCommandSinkForTest({});
     keys.clear();
 
     Fixture direct;
@@ -348,7 +349,7 @@ void exactInputAndKeyFences()
     const TxCoordinator::Request directInput = directProducer.request();
     direct.model.noteDaxTxInput(directInput);
     std::vector<TxCoordinator::Command> directKeys;
-    direct.backend->setTxCommandSink([&](const QString&, const TxCoordinator::Command& command) {
+    direct.backend->setTxCommandSinkForTest([&](const QString&, const TxCoordinator::Command& command) {
         directKeys.push_back(command);
         return true;
     });
@@ -358,7 +359,7 @@ void exactInputAndKeyFences()
     check(!directInput.valid() && !directKeys.empty()
           && !directKeys.front().permitsDispatch(TxCoordinator::monotonicMs()),
           "ownership loss denies a directly admitted queued key without changing generic close semantics");
-    direct.backend->setTxCommandSink({});
+    direct.backend->setTxCommandSinkForTest({});
     directKeys.clear();
 }
 

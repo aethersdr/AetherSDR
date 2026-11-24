@@ -30,6 +30,7 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -407,6 +408,14 @@ private:
     // slice showing a mode the transmitter is not sending. Tells the operator
     // (transmitChangeRefused) and returns true when it refuses.
     bool refuseTransmitChangeWhileKeyed(int sliceId, const QString& message);
+    // setCwKeying()'s body. A scheduled edge's instant, and a key-down's own
+    // release instant, ride to MetisClient, which places them on the EP2
+    // sample clock (#5065).
+    void keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
+                   const TxCoordinator::Operation& operation,
+                   const TxCoordinator::Completion& completion,
+                   std::chrono::steady_clock::time_point scheduledAt,
+                   std::chrono::steady_clock::time_point releaseAt);
     void invalidateTxDspConfiguration();
     // dspChains() is a read of m_dspChains, which the I/O thread fills by queued
     // hop. request*() coalesces to one gather per event-loop turn, posted behind
@@ -1234,6 +1243,7 @@ private:
     TxCoordinator::Operation m_cwHangOperation;
     TxCoordinator::Operation m_lastTxOperation;
     TxCoordinator::Completion m_cwHangCompletion;
+    int m_cwHangDelayMs = 0;   // the configured hang, without the scheduled-edge lead
     bool m_txMonitor = false;
     // The receive-audio hold flag, read by mixReceiverAudio() and mirrored to every
     // Hl2RxDsp by applyRxAudioMute(). Not (m_keyed && !m_txMonitor): on key-up it

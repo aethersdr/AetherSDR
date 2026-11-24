@@ -97,7 +97,7 @@ void wireAndParser()
     QStringList commands;
     flex.setFirmwareVersionProvider([&] { return firmware; });
     flex.setAutoAgcThresholdLicenseProvider([&] { return licensed; });
-    flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
+    flex.setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
     for (const QString& version : {QString(), QStringLiteral("4.2.20"), QStringLiteral("4.3.15"),
                                   QStringLiteral("4.3.16beta"), QStringLiteral("4.3.16.42034junk")}) {
         firmware = version;
@@ -221,10 +221,13 @@ void staleManualCurve()
     check(calibrator.curve().isEmpty() && manualNoAudio.size() == 1 && noAudio.isEmpty(),
           "a manual settle with no audio since the move records no point and reports "
           "manualNoAudio, not the sweep's noAudio");
+    QSignalSpy points(&calibrator, &AgcTCalibrator::pointAdded);
     for (const int value : {20, 50, 80}) {
+        const qsizetype expectedPoints = points.size() + 1;
         calibrator.onValueChanged(value);
         calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);
-        QTest::qWait(140);
+        check(QTest::qWaitFor([&] { return points.size() == expectedPoints; }, 1000),
+              "manual calibration records each settled value before the next input");
     }
     check(calibrator.hasRecommendation() && calibrator.curve().size() == 3,
           "manual calibration establishes a real curve and recommendation");
@@ -298,8 +301,7 @@ void calibrationAuthorityTransitions()
     calibrator.setSlice(s);
     calibrator.onValueChanged(40);
     calibrator.onAudioLevel(0.2f);
-    QTest::qWait(140);
-    check(calibrator.curve().size() == 1,
+    check(QTest::qWaitFor([&] { return calibrator.curve().size() == 1; }, 1000),
           "explicit rebind of a reclaimed slice permits fresh manual recording");
 }
 

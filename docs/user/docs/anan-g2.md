@@ -39,6 +39,14 @@ Configure the receive front end under **Settings → Radio Setup... → Radio �
 | **Send receive audio to the radio** | Off | Also plays receive audio through the G2's own speaker and headphone jack. Takes effect on the next connect. |
 | **Mute the radio's speaker amplifier** | Off | Switches off the amplifier inside the G2. Sending the radio silence leaves the amplifier running and hissing; this stops it. Applies at once. A clean disconnect hands the radio back unmuted. |
 
+### Use the G2 front panel with the desktop app
+
+On the G2 kiosk, the front panel can tune the radio and adjust receive controls
+while AetherSDR holds the radio. The kiosk starts the app with
+`--control-socket aetherd-v1` so the panel can use the same local endpoint it
+uses with the radio engine. The app's connection controls still own the radio
+connection, and the panel uses this endpoint for receive only.
+
 ### Connect through a remote engine
 
 When AetherSDR's radio engine already controls the G2, use its remote engine entry to tune from another computer. The remote engine connection mirrors tuning and receive controls. Spectrum, waterfall, receive audio and transmit are unavailable through this connection.

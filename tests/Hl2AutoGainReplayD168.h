@@ -3,7 +3,9 @@
 // HL2 auto RF gain inputs recorded on-air, receive only, 2026-10-01 22:32-22:50
 // CEST: bandscope law armed at LNA +20 dB for 305 s on 80 m and on 30 m.
 // Changes and clip counts are the app log's attack/release lines; blocks are
-// the bandscope peaks from the 4 Hz health poll. Generated; do not hand-edit.
+// the bandscope peaks from the 4 Hz health poll. Generated from
+// tests/fixtures/hl2-autogain-replay/d168/ by
+// tools/gen_hl2_autogain_replay_d168.py (--check compares); do not hand-edit.
 
 namespace d168 {
 
