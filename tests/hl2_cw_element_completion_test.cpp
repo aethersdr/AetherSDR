@@ -12,8 +12,9 @@
 // a straight key's suppressed up after the last release ends its hold;
 // a revoked producer's element is not keyed, or stops, at the EP2 writer;
 // a host-text element's fall is whole when the next down is already queued;
-// HostCwTextEngine's natural end leaves its last element whole on EP2 (the
-// one wall-clock case: its real keyer times the text, frames follow 5 ms behind).
+// HostCwTextEngine's natural end leaves its last element whole on EP2, and
+// the same sender's next text a word space after it (the wall-clock cases:
+// its real keyer times the text, frames follow 5 ms behind).
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -455,25 +456,28 @@ static void testHostTextEngineLastElementIsWhole(int wpm, bool breakIn)
     const TxCoordinator::Producer client = rig.model.registerTxProducer();
     bool ended = false;
     bool refused = false;
-    std::size_t builtAtEnd = 0;
-    HostCwTextEngine engine(&rig.model, [&](const TxCoordinator::Request&, bool wasRefused) {
+    bool playingAtEnd = true;
+    std::size_t builtAtFence = 0;
+    std::unique_ptr<HostCwTextEngine> engine;
+    engine = std::make_unique<HostCwTextEngine>(&rig.model, [&](const TxCoordinator::Request&, bool wasRefused) {
         ended = true;
         refused = wasRefused;
-        builtAtEnd = rig.iTrace.size();
+        playingAtEnd = engine->playing();
     });
-    check(engine.play(client.request(), QStringLiteral("EE"), wpm, {}), name + "the engine plays");
+    check(engine->play(client.request(), QStringLiteral("EE"), wpm, {}), name + "the engine plays");
     QElapsedTimer wall;
     wall.start();
-    std::int64_t endedMs = -1;
-    while (wall.elapsed() < 3000) {
+    std::int64_t fencedMs = -1;
+    while (wall.elapsed() < 4000) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
         const std::int64_t ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - rig.t0).count() - 5;
         rig.buildTo(ms);
-        if (ended && endedMs < 0) {
-            endedMs = ms;
+        if (ended && !engine->retiring() && fencedMs < 0) {
+            fencedMs = ms;
+            builtAtFence = rig.iTrace.size();
         }
-        if (endedMs >= 0 && ms > endedMs + 200) {
+        if (fencedMs >= 0 && ms > fencedMs + 200) {
             break;
         }
     }
@@ -484,9 +488,77 @@ static void testHostTextEngineLastElementIsWhole(int wpm, bool breakIn)
           name + "both dits are whole on EP2 (" + runsText(runs) + "; "
               + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
     const std::int64_t lastEnd = runs.empty() ? 0 : runs.back().start + runs.back().length;
-    check(ended && !refused && static_cast<std::int64_t>(builtAtEnd) >= lastEnd,
-          name + "the run ends, unrefused, after its last element is on EP2 (ended at sample "
-              + std::to_string(builtAtEnd) + ", last carrier ends at " + std::to_string(lastEnd) + ")");
+    check(ended && !refused && !playingAtEnd,
+          name + "the run ends, unrefused, and is no longer playing when it does");
+    check(fencedMs >= 0 && static_cast<std::int64_t>(builtAtFence) >= lastEnd,
+          name + "its producer is fenced after its last element is on EP2 (fenced at sample "
+              + std::to_string(builtAtFence) + ", last carrier ends at " + std::to_string(lastEnd) + ")");
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(false);
+        Rig::settle();
+    }
+}
+
+// Review 5, blocker 1: the same sender's next text, played while the first
+// run's last element is still on its way to EP2 (or, `intoDrainedKeyer`, while
+// the drain's notice has not reached the model, so the run still plays), is
+// keyed a word space (7 units) after the first run's last key-up.
+static void testHostTextSameSenderNextTextIsSpaced(std::int64_t secondAtMs, bool breakIn, bool intoDrainedKeyer)
+{
+    const std::string name = "host text, second \"E\" " + std::to_string(secondAtMs) + " ms after the first, "
+        + (breakIn ? "break-in" : "manual MOX") + (intoDrainedKeyer ? ", into the drained keyer" : "") + ": ";
+    Rig rig(breakIn, intoDrainedKeyer ? Hl2Settings::kCwEdgeLeadMaxMs : Hl2Settings::kCwEdgeLeadDefaultMs);
+    SliceDelta slice;
+    slice.frequency = 7.020;
+    slice.mode = QStringLiteral("CW");
+    slice.panId = QStringLiteral("0x40000000");
+    slice.txSlice = true;
+    rig.model.emitBackendSliceChangedForTest(0, slice);
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(true);
+        Rig::settle();
+    }
+    const TxCoordinator::Producer client = rig.model.registerTxProducer();
+    const TxCoordinator::Request sender = client.request();
+    int endedRuns = 0;
+    HostCwTextEngine engine(&rig.model, [&](const TxCoordinator::Request&, bool) { ++endedRuns; });
+    constexpr int kWpm = 20;
+    constexpr std::int64_t kUnit = 1200 / kWpm;
+    const auto wallMs = [&rig] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - rig.t0).count();
+    };
+    const std::int64_t startMs = wallMs();
+    check(engine.play(sender, QStringLiteral("E"), kWpm, {}), name + "the first message plays");
+    bool second = false;
+    bool playingAtSecond = false;
+    QElapsedTimer wall;
+    wall.start();
+    while (wall.elapsed() < 4000 && !(second && endedRuns >= 2 && !engine.retiring())) {
+        if (!second && wallMs() - startMs >= secondAtMs) {
+            playingAtSecond = engine.playing();
+            check(engine.play(sender, QStringLiteral("E"), kWpm, {}), name + "the second message plays");
+            second = true;
+        }
+        if (intoDrainedKeyer && !second && wallMs() - startMs >= 40) {
+            // Hold the model thread across the drain (60 ms): its notice waits,
+            // so the second message finds the run playing and its keyer drained.
+            while (wallMs() - startMs < secondAtMs) {
+            }
+            continue;
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+        rig.buildTo(wallMs() - 5);
+    }
+    rig.buildTo(wallMs() - 5 + 200);
+    if (intoDrainedKeyer) {
+        check(playingAtSecond, name + "the run still plays when the second message arrives");
+    }
+    const auto runs = carriers(rig.iTrace);
+    const std::int64_t gap = runs.size() == 2 ? runs[1].start - (runs[0].start + runs[0].length) : -1;
+    check(runs.size() == 2 && within(runs[0].length, samplesOfMs(kUnit), 2) && within(runs[1].length, samplesOfMs(kUnit), 2)
+              && gap >= samplesOfMs(7 * kUnit - 2) && gap <= samplesOfMs(7 * kUnit + 20),
+          name + "both dits whole, a word space (420 ms) apart on EP2 (" + runsText(runs) + ", gap "
+              + std::to_string(gap * 1000 / kRate) + " ms)");
     if (!breakIn) {
         rig.model.transmitModel().setMox(false);
         Rig::settle();
@@ -511,6 +583,11 @@ int main(int argc, char** argv)
     testHostTextEngineLastElementIsWhole(20, true);
     testHostTextEngineLastElementIsWhole(40, true);
     testHostTextEngineLastElementIsWhole(20, false);
+    testHostTextSameSenderNextTextIsSpaced(80, true, false);
+    testHostTextSameSenderNextTextIsSpaced(80, false, false);
+    testHostTextSameSenderNextTextIsSpaced(200, true, false);
+    testHostTextSameSenderNextTextIsSpaced(400, true, false);
+    testHostTextSameSenderNextTextIsSpaced(150, true, true);
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

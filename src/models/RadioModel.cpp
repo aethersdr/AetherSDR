@@ -6084,9 +6084,10 @@ void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
         return;
     }
     // A remote key-up with no accepted remote key-down before it (a stray or
-    // unparseable TCI keyer state) would cut host text's element: the text owns
-    // the key and keys its own key-up, so the edge is ignored.
-    if (!down && !m_remoteCwKeyDown && m_hostCwText && m_hostCwText->playing()) {
+    // unparseable TCI keyer state) would cut host text's element, also a
+    // finished run's last one on its way to the wire: the text owns the key
+    // and keys its own key-up, so the edge is ignored.
+    if (!down && !m_remoteCwKeyDown && m_hostCwText && (m_hostCwText->playing() || m_hostCwText->retiring())) {
         qCWarning(lcCw).noquote() << "CW key-up ignored: host CW text owns the key source=" << debugSource;
         return;
     }

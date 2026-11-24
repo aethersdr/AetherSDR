@@ -188,6 +188,7 @@ void CwxLocalKeyer::scheduleNext()
             m_running = false;
             resetEpoch();
             m_currentlyDown = false;
+            m_drainedUpAt = lastEdge;
             emitKeyDown(false, lastEdge);
             if (m_onDrained) {
                 m_onDrained();
@@ -206,6 +207,14 @@ void CwxLocalKeyer::scheduleNext()
         if (m_currentlyDown || m_owesCharGap)
             m_elements.enqueue(Element::CharGap);
         encode(p.text, p.wpm);
+        if (!m_epochValid && m_drainedUpAt != std::chrono::steady_clock::time_point{}) {
+            // Played into after a drain: as far from its key-up as a new run (#7245).
+            const auto drainedUpAt = std::exchange(m_drainedUpAt, {});
+            if (m_spacingAfterDrainUnits > 0) {
+                m_notBefore = std::max(m_notBefore,
+                                       drainedUpAt + std::chrono::milliseconds(m_spacingAfterDrainUnits * m_unitMs));
+            }
+        }
         if (m_elements.isEmpty()) {
             scheduleNext();
             return;
@@ -286,6 +295,7 @@ void CwxLocalKeyer::resetEpoch()
     m_epochValid = false;
     m_nextEdgeMs = 0;
     m_owesCharGap = false;
+    m_drainedUpAt = {};   // a stop is not a drain; the drain sets it after this
 }
 
 void CwxLocalKeyer::startEpoch()
