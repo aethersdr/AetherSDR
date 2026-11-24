@@ -110,6 +110,10 @@ struct Ft8Status {
     // alone (#7139).
     int sliceIndex{-1};
     bool audio{false};
+    // Cycles the receiver never captured because an earlier cycle's decode
+    // was still running when their first second passed. -1 from a receiver
+    // older than 0.1.8, which doesn't count them.
+    qint64 skippedCycles{-1};
     QList<Ft8Cycle> cycles;
     QList<Ft8Spot> spots;
 };
@@ -130,14 +134,14 @@ struct Ft8Package {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.6";
+    static constexpr const char* kVersion = "0.1.8";
     // FLEX-6000: a legacy waveform, whose settings persist on /user.
     static constexpr Pin kLegacy{":/waveforms/AetherFT8.ssdr_waveform", "AetherFT8.ssdr_waveform",
-                                 "d7e7f9d4e164a4d1e3e7e7f6963956810546a25ca0832593835cab685f3cf3fc", 117456};
+                                 "1f3e225a970c134f01bd08e6a9a01c3e1038bb11e1d70a97fe48a2000f0d0280", 117909};
     // FLEX-8000 and Aurora: a container, because a legacy waveform has only
     // RAM there and the container's writable layer survives a reboot.
     static constexpr Pin kContainer{":/waveforms/AetherFT8.tar.gz", "AetherFT8.tar.gz",
-                                    "ebc6abc295cec75711e43979de668b7832afb2f61695fad47ff4d4ab9ecd3305", 137176};
+                                    "a753fea49693c34ac196423964af55333162c2d21625238cbbf4cac4cefa9557", 137739};
 };
 
 // GET and POST /v1/config. A strict subset of WsprConfig: no hopping, no
@@ -185,6 +189,15 @@ bool reachableAddress(const QHostAddress& address);
 // The same for the connected radio. Over SmartLink its address is left from
 // the last LAN session, and may be another radio's.
 bool reachableRadio(bool overWan, const QHostAddress& address);
+
+// The Configure window's ANTENNA entries after "Radio default": the radio's
+// list, then the selected antenna when the radio doesn't list it, so a
+// receiver on such an antenna isn't moved to the radio's default by a
+// rebuild of the list.
+QStringList antennaChoices(const QStringList& radioAntennas, const QString& selected);
+// Its DAX CHANNEL entries: 1 to 4, then the receiver's saved channel when
+// that is one of the 5 to 8 it also accepts, so Apply doesn't rewrite it.
+QList<int> daxChoices(int savedChannel);
 
 // Write the bundled package to `dir` and return its path, or empty with
 // `error` set when the shipped bytes do not match the pin. Mirrors

@@ -24,6 +24,8 @@
 
 #include <cstdio>
 
+#include <zlib.h>
+
 using namespace AetherSDR;
 
 namespace {
@@ -214,6 +216,48 @@ void testReachable()
           "over SmartLink a LAN address left from an earlier session is not tried");
 }
 
+// The container is a gzipped tar of an OCI layout whose image config, a JSON
+// blob stored as it is, carries the labels the radio lists it by.
+QByteArray gunzip(const QByteArray& in)
+{
+    z_stream z{};
+    if (inflateInit2(&z, 15 + 16) != Z_OK) {
+        return {};
+    }
+    QByteArray out(4 * 1024 * 1024, Qt::Uninitialized);
+    z.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.constData()));
+    z.avail_in = static_cast<uInt>(in.size());
+    z.next_out = reinterpret_cast<Bytef*>(out.data());
+    z.avail_out = static_cast<uInt>(out.size());
+    const int rc = inflate(&z, Z_FINISH);
+    out.truncate(rc == Z_STREAM_END ? static_cast<qsizetype>(z.total_out) : 0);
+    inflateEnd(&z);
+    return out;
+}
+
+QJsonObject containerLabels(const QByteArray& tarGz)
+{
+    const QByteArray tar = gunzip(tarGz);
+    for (qsizetype at = 0; at + 512 <= tar.size();) {
+        const QByteArray name = tar.mid(at, 100);
+        if (name.at(0) == '\0') {
+            break;
+        }
+        bool ok = false;
+        const qsizetype size = tar.mid(at + 124, 12).trimmed().replace('\0', "").toLongLong(&ok, 8);
+        if (!ok || at + 512 + size > tar.size()) {
+            break;
+        }
+        const QJsonObject config = QJsonDocument::fromJson(tar.mid(at + 512, size)).object()
+                                       .value(QLatin1String("config")).toObject();
+        if (config.contains(QLatin1String("Labels"))) {
+            return config.value(QLatin1String("Labels")).toObject();
+        }
+        at += 512 + (size + 511) / 512 * 512;
+    }
+    return {};
+}
+
 void testBundledPackages()
 {
     check(isFt8Waveform(QStringLiteral("AetherFT8")) && !isFt8Waveform(QStringLiteral("AetherWSPR")),
@@ -238,8 +282,13 @@ void testBundledPackages()
     {
         QTemporaryDir container;
         QFile f(ft8::writeBundledPackage(Ft8Package::kContainer, container.path(), &error));
-        const QByteArray head = f.open(QIODevice::ReadOnly) ? f.read(2) : QByteArray();
-        check(head == QByteArray::fromHex("1f8b"), "the container one is a gzip archive");
+        const QByteArray bytes = f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+        check(bytes.left(2) == QByteArray::fromHex("1f8b"), "the container one is a gzip archive");
+        const QJsonObject labels = containerLabels(bytes);
+        check(labels.value(QLatin1String("com.flexradio.waveform.name")).toString() == QLatin1String(kFt8WaveformName)
+                  && labels.value(QLatin1String("com.flexradio.waveform.version")).toString()
+                         == QLatin1String(Ft8Package::kVersion),
+              "its image labels name AetherFT8 at the pinned version");
     }
     QTemporaryDir other;
     QString why;
@@ -249,6 +298,33 @@ void testBundledPackages()
     check(none.isEmpty() && !why.isEmpty()
               && !QFile::exists(QDir(other.path()).filePath(QString::fromLatin1(wrong.fileName))),
           "a resource that doesn't match the pin is refused and nothing is written");
+}
+
+void testConfigureLists()
+{
+    const QStringList radio{QStringLiteral("ANT1"), QStringLiteral("ANT2"), QStringLiteral("XVTR")};
+    check(ft8::antennaChoices(radio, QString()) == radio, "Radio default selected: the radio's antennas");
+    check(ft8::antennaChoices(radio, QStringLiteral("ANT2")) == radio, "a listed antenna adds nothing");
+    check(ft8::antennaChoices(radio, QStringLiteral("RX_A")) == radio + QStringList{QStringLiteral("RX_A")},
+          "an antenna the radio doesn't list is kept after the radio's own");
+    check(ft8::antennaChoices({}, QStringLiteral("ANT2")) == QStringList{QStringLiteral("ANT2")},
+          "it is kept while the radio's list is still empty");
+    check(ft8::daxChoices(3) == QList<int>({1, 2, 3, 4}), "a saved channel 1 to 4 is already offered");
+    check(ft8::daxChoices(6) == QList<int>({1, 2, 3, 4, 6}), "a saved channel 5 to 8 is added");
+    check(ft8::daxChoices(0) == QList<int>({1, 2, 3, 4}) && ft8::daxChoices(9) == QList<int>({1, 2, 3, 4}),
+          "a channel the receiver refuses is not");
+}
+
+void testSkippedCycles()
+{
+    const auto with = ft8::parseStatus(R"({"agent":"AetherFT8","version":"0.1.8","skipped_cycles":12})");
+    const auto without = ft8::parseStatus(R"({"agent":"AetherFT8","version":"0.1.6"})");
+    const auto bad = ft8::parseStatus(R"({"agent":"AetherFT8","skipped_cycles":"many"})");
+    const auto negative = ft8::parseStatus(R"({"agent":"AetherFT8","skipped_cycles":-3})");
+    check(with && with->skippedCycles == 12, "the count of skipped cycles is read");
+    check(without && without->skippedCycles == -1, "a receiver that doesn't count them reads as unknown");
+    check(bad && bad->skippedCycles == -1 && negative && negative->skippedCycles == -1,
+          "a count that isn't a non-negative number reads as unknown");
 }
 
 void testBands()
@@ -347,6 +423,8 @@ int main(int argc, char** argv)
     testAdminToken();
     testReachable();
     testBundledPackages();
+    testConfigureLists();
+    testSkippedCycles();
     testBands();
     testPanadapterSpot();
     testSpotHubStyle();

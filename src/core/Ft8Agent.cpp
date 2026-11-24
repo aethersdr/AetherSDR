@@ -109,6 +109,9 @@ std::optional<Ft8Status> parseStatus(const QByteArray& json)
     s.sliceIndex = s.slice && inRange(root->value(QLatin1String("slice_index")), 0, 63)
         ? root->value(QLatin1String("slice_index")).toInt(-1) : -1;
     s.audio = root->value(QLatin1String("audio")).toBool();
+    const QJsonValue skipped = root->value(QLatin1String("skipped_cycles"));
+    s.skippedCycles = skipped.isDouble() && skipped.toDouble() >= 0
+        ? static_cast<qint64>(skipped.toDouble()) : -1;
 
     const QJsonArray cycles = root->value(QLatin1String("cycles")).toArray();
     for (const QJsonValue& v : cycles) {
@@ -215,6 +218,24 @@ DxSpot styled(DxSpot spot, const WsprSpotHubSettings& settings)
     spot.color = settings.color;
     spot.lifetimeSec = settings.lifetimeMinutes * 60;
     return spot;
+}
+
+QStringList antennaChoices(const QStringList& radioAntennas, const QString& selected)
+{
+    QStringList out = radioAntennas;
+    if (!selected.isEmpty() && !out.contains(selected)) {
+        out.append(selected);
+    }
+    return out;
+}
+
+QList<int> daxChoices(int savedChannel)
+{
+    QList<int> out{1, 2, 3, 4};
+    if (savedChannel >= 5 && savedChannel <= 8) {
+        out.append(savedChannel);
+    }
+    return out;
 }
 
 bool feedStartsWithRadio(const WsprSpotHubSettings& settings, bool radioRunsWaveforms,

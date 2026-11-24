@@ -165,7 +165,7 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
 
     // An FT8 cycle leaves about two seconds to decode in, and on a 1-core
     // radio that is tight enough to be worth showing: an operator who sees
-    // decodes running over the budget knows why spots are being missed.
+    // decodes running over the budget knows why cycles are being missed.
     m_decodeLabel = roleLabel(QString(), "hint", body);
     m_decodeLabel->setAlignment(Qt::AlignCenter);
     m_decodeLabel->setAccessibleName(tr("Decode time against the cycle budget"));
@@ -225,30 +225,29 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
     }
     m_antennaCombo = new QComboBox(body);
     m_antennaCombo->setAccessibleName(tr("Receive antenna"));
-    // RadioModel fills its antenna list from a PANADAPTER's status
-    // (panAntennaListChanged), so a window opened before any pan has reported
-    // sees an EMPTY list and offers only "Radio default" -- on a radio that
-    // has ANT1, ANT2 and XVTR. Measured on a FLEX-6300: the radio's pan
-    // status carries `ant_list=ANT1,ANT2,XVTR`, but the window had already
-    // built its combo. Fill it now AND on every change, keeping whatever is
-    // selected so a late arrival cannot move the operator's choice.
-    //
-    // ⚠ WsprConfigureWindow has the same one-shot read and therefore the same
-    // latent bug; it is left alone here rather than changed from an FT8 branch.
+    // RadioModel fills its antenna list from a panadapter's status, which can
+    // arrive after this window is built, so the list is filled now and on
+    // every change. A rebuild keeps the selection, including an antenna the
+    // radio doesn't list (ft8::antennaChoices).
     auto fillAntennas = [this] {
         if (!m_model) {
             return;
         }
-        const QStringList ants = m_model->antennaList();
-        if (m_antennaCombo->count() == ants.size() + 1) {
+        const QString keep = m_antennaCombo->currentData().toString();
+        const QStringList radio = m_model->antennaList();
+        const QStringList want = ft8::antennaChoices(radio, keep);
+        QStringList shown;
+        for (int i = 1; i < m_antennaCombo->count(); ++i) {
+            shown.append(m_antennaCombo->itemData(i).toString());
+        }
+        if (shown == want) {
             return;   // nothing new; do not disturb a selection mid-edit
         }
-        const QString keep = m_antennaCombo->currentData().toString();
         const QSignalBlocker block(m_antennaCombo);
         m_antennaCombo->clear();
         m_antennaCombo->addItem(tr("Radio default"), QString());
-        for (const QString& ant : ants) {
-            m_antennaCombo->addItem(m_model->antennaDisplayName(ant), ant);
+        for (const QString& ant : want) {
+            m_antennaCombo->addItem(radio.contains(ant) ? m_model->antennaDisplayName(ant) : ant, ant);
         }
         const int idx = m_antennaCombo->findData(keep);
         m_antennaCombo->setCurrentIndex(idx >= 0 ? idx : 0);
@@ -262,7 +261,7 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
     m_daxCombo->setAccessibleName(tr("DAX channel"));
     m_daxCombo->setAccessibleDescription(tr("The DAX audio channel the receiver uses for its own slice. "
                                             "It must differ from any other receiver's: the WSPR receiver starts on 4, this one on 3."));
-    for (int ch = 1; ch <= 4; ++ch) {
+    for (const int ch : ft8::daxChoices(0)) {
         m_daxCombo->addItem(QString::number(ch), ch);
     }
     addKey(rgrid, 0, 0, tr("BAND"), m_bandCombo);
@@ -271,15 +270,14 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
     receive->addLayout(rgrid);
     receive->addWidget(roleLabel(tr("The receiver makes a slice of its own, which never transmits."),
                                  "hint", body));
-    // Ruling 3 on #7114: the remaining gap to WSJT-X is stated here. The
-    // figure is the default depth's score in tools/ft8-agent/osd/PROVENANCE.md.
+    // The figure is the default depth's score in tools/ft8-agent/osd/PROVENANCE.md.
     auto* gapLabel = roleLabel(tr("It decodes 77.3% of the reference recordings and does not subtract "
                                   "decoded signals, so on a crowded band it finds fewer stations than "
                                   "WSJT-X."),
                                "hint", body);
     gapLabel->setWordWrap(true);
     receive->addWidget(gapLabel);
-    // Maintainer ruling on #7327: the cost is stated here and on the docs page.
+    // The docs page's Known issues say the same.
     auto* bothLabel = roleLabel(tr("On a FLEX-6300, running it beside the WSPR receiver slows both, "
                                    "and each misses some cycles."),
                                 "hint", body);
@@ -288,6 +286,7 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
 
     // ── Message and Apply ────────────────────────────────────────────────
     m_messageLabel = roleLabel(QString(), "message", body);
+    m_messageLabel->setTextFormat(Qt::PlainText);   // it shows the receiver's own error text
     m_messageLabel->setWordWrap(true);
     layout->addWidget(m_messageLabel);
 
@@ -394,7 +393,13 @@ void Ft8ConfigureWindow::showConfig(const Ft8Config& config, bool claimed)
         ant = m_antennaCombo->count() - 1;
     }
     m_antennaCombo->setCurrentIndex(ant < 0 ? 0 : ant);
-    const int dax = m_daxCombo->findData(config.daxChannel);
+    int dax = m_daxCombo->findData(config.daxChannel);
+    if (dax < 0 && ft8::daxChoices(config.daxChannel).contains(config.daxChannel)) {
+        // A channel the receiver accepts and this list doesn't offer; keep it
+        // so Apply doesn't move the receiver to another channel.
+        m_daxCombo->addItem(QString::number(config.daxChannel), config.daxChannel);
+        dax = m_daxCombo->count() - 1;
+    }
     if (dax >= 0) {
         m_daxCombo->setCurrentIndex(dax);
     }
@@ -421,17 +426,22 @@ void Ft8ConfigureWindow::showStatus(const Ft8Status& st)
     m_gridEdit->setPlaceholderText(st.grid.isEmpty() ? tr("The radio's GPS grid")
                                                      : tr("From the radio: %1").arg(st.grid));
 
-    // The newest cycle's decode time against the budget. Over it means the
-    // decode did not finish before the next cycle began.
+    // The newest cycle's decode time against the budget, and what running
+    // over has cost: the cycles the receiver counts as never captured.
     if (st.cycles.isEmpty()) {
         m_decodeLabel->setText(QString());
         return;
     }
     const Ft8Cycle& c = st.cycles.last();
-    m_decodeLabel->setText(c.decodeMs > kDecodeBudgetMs
-        ? tr("Last decode %1 ms — over the %2 ms this cycle allows, so decodes are being missed.")
-              .arg(c.decodeMs).arg(kDecodeBudgetMs)
-        : tr("Last decode %1 ms of the %2 ms this cycle allows.").arg(c.decodeMs).arg(kDecodeBudgetMs));
+    QString decode = c.decodeMs > kDecodeBudgetMs
+        ? tr("Last decode %1 ms, over the %2 ms a cycle allows.").arg(c.decodeMs).arg(kDecodeBudgetMs)
+        : tr("Last decode %1 ms of the %2 ms a cycle allows.").arg(c.decodeMs).arg(kDecodeBudgetMs);
+    if (st.skippedCycles > 0) {
+        decode += QLatin1Char(' ')
+            + tr("%n cycle(s) missed since the receiver started.", nullptr,
+                 static_cast<int>(qMin<qint64>(st.skippedCycles, 1000000)));
+    }
+    m_decodeLabel->setText(decode);
 }
 
 Ft8Config Ft8ConfigureWindow::collect() const

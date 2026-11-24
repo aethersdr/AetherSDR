@@ -70,7 +70,7 @@
 #include "ft8_lib/common/monitor.h"
 #include "ft8_lib/common/wave.h"
 
-#define AGENT_VERSION "0.1.6"
+#define AGENT_VERSION "0.1.8"
 #define STATUS_PORT 48997   /* 48994 radio health, 48995 WSPR, 48997 here */
 #define AUDIO_RATE 24000
 /* ft8_lib works at 12 kHz, which is the WSJT-X convention and what its own
@@ -364,8 +364,8 @@ static int valid_token(const char *s, const char *extra)
 /* ⛔ "RR73", "RRR" and "73" are sign-offs, never a grid to report -- and the
  * field type alone cannot tell them apart from a locator.
  *
- * MEASURED on the air 2026-11-09, and this is the part my earlier fix missed:
- * there are TWO encodings that both render as the text "RR73".
+ * MEASURED on the air 2026-11-09: there are TWO encodings that both render as
+ * the text "RR73".
  *
  *   igrid4 = 32403 (MAXGRID4+3)  the sign-off token  -> FTX_FIELD_TOKEN
  *   igrid4 = 32373               the grid square RR73 -> FTX_FIELD_GRID
@@ -397,7 +397,6 @@ static int valid_token(const char *s, const char *extra)
  *
  * So ask whether the station COULD be up there instead of blacklisting the
  * string, which would silently discard a genuine polar spot.
- *                                        -- the discriminator is Nigel's
  */
 static int polar_grid(const char *g)   /* checked by the selftest */
 {
@@ -589,6 +588,7 @@ static struct {
     int slice_ok, stream_ok;
     int dax_bound;              /* DAX channel actually bound, 0 until it is */
     long long vita_packets;     /* VITA packets seen: proves samples ARRIVE */
+    long long skipped_cycles;   /* cycles not captured because a decode ran into them */
     int slice_index;      /* the radio's index for our slice; read only while slice_ok */
     spot_t spots[MAX_SPOTS];
     int nspots, spot_head;
@@ -1118,6 +1118,10 @@ static void status_json(buf_t *b, long long since)
      * and that difference is exactly the trap: on a FLEX-6300 the default
      * channel 4 yields silence while audio still reads true. */
     bprintf(b, ",\"dax_channel_bound\":%d,\"vita_packets\":%lld", G.dax_bound, G.vita_packets);
+    /* Cycles that were never captured because the decode of an earlier one
+     * was still running when their first second passed. decode_ms over the
+     * budget says a decode was slow; this says what it cost. */
+    bprintf(b, ",\"skipped_cycles\":%lld", G.skipped_cycles);
 #ifdef AETHER_WITH_OSD
     /* How often OSD ran and how often it recovered a frame. The ratio is
      * what decides whether it earns its cost: belief propagation also
@@ -1300,8 +1304,8 @@ static void serve(int fd)
         /* Re-exec this program in place.
          *
          * Some settings are read once at startup and never again -- the DAX
-         * channel is the one that bites, because the agent's default (4)
-         * does not work on a FLEX-6300, which needs 1. Changing it through
+         * channel is the one that bites, because a FLEX-6300 has only
+         * channels 1 and 2 and the agent's default is 3. Changing it through
          * POST /v1/config stored it but changed nothing: the capture was
          * already bound to the old channel, and the only way to re-bind was
          * reinstalling the waveform, which is also the one thing that makes
@@ -1504,10 +1508,10 @@ static int dax_in_use_elsewhere(const api_t *a, int channel)
  * ⛔ This answer is the one that matters. A FLEX-6300 REFUSES
  * "slice set <n> dax=4" with 50000016 -- and then ACCEPTS
  * "stream create type=dax_rx dax_channel=4", handing back a stream that
- * carries nothing because no slice feeds it. The agent used to send both at
- * once and read only the second reply, so on a 6300 it sat bound to channel 4
- * with "audio": true and vita_packets 0 for days. The refusal it needed was
- * in the reply it threw away. */
+ * carries nothing because no slice feeds it. Sending both at once and
+ * reading only the second reply leaves the agent bound to channel 4 with
+ * "audio": true and vita_packets 0: the refusal it needs is in the first
+ * reply. */
 static void dax_ask(api_t *a, int channel)
 {
     a->dax_try = channel;
@@ -1538,7 +1542,7 @@ static void dax_refused(api_t *a, const char *what, unsigned long code, const ch
 /* ------------------------------------------------- our slice across restarts
  *
  * The radio keeps a slice after the client that made it is gone, so every
- * restart of ours (container stop, update, reinstall, crash) used to leave one
+ * restart of ours (container stop, update, reinstall, crash) would leave one
  * behind (#7139). On SIGTERM we remove our slice and stream ourselves. After a
  * crash there is no SIGTERM, so the index we were given is saved, and at the
  * next start that index is removed only if it still looks exactly like what
@@ -1923,10 +1927,13 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             keeper_tell(a->slice);
             api_send(a, "slice set %d tx=0", a->slice);
             mute_slice(a);
-            /* A new slice always starts from the CONFIGURED channel. It used
-             * to reuse whatever dax_try was left from the last slice, so a
-             * channel saved from the Configure window was ignored: the slice
-             * was remade and asked for the old channel again. */
+            /* The antenna is set here as well as asked for in the create.
+             * A FLEX-6300 made the slice on ANT1 when the create said
+             * rxant=ANT2 (measured twice, 4.3.16), and nothing later sets
+             * it while the slice sits on its dial. */
+            if (cfg->rxant[0]) api_send(a, "slice set %d rxant=%s", a->slice, cfg->rxant);
+            /* A new slice always starts from the CONFIGURED channel, not
+             * whatever dax_try was left from the last slice. */
             dax_ask(a, cfg->dax_channel);
             if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
             pthread_mutex_lock(&G.mu); G.slice_ok = 1; G.slice_index = a->slice; pthread_mutex_unlock(&G.mu);
@@ -2461,8 +2468,38 @@ static int selftest_busy_cycle(void)
 /* A decode that overruns its budget is recorded as such rather than hidden.
  * The budget is the whole point of RFC #7114, so the agent must not be able
  * to report a 3 s decode on a 2 s budget as if it were fine. */
+/* How many cycles a decode cost: those that began after the captured one and
+ * whose first second (when a capture may start) had passed by the time the
+ * decode ended. `captured` is the start of the captured cycle and `ended` the
+ * wall clock when its decode returned. */
+static long long cycles_missed(long long captured, double ended)
+{
+    long long last = (long long)floor((ended - 1.0) / CYCLE_SECONDS) * CYCLE_SECONDS;
+    return last > captured ? (last - captured) / CYCLE_SECONDS : 0;
+}
+
 static int selftest_budget_flagged(void)
 {
+    /* The capture ends 13 s into its cycle, so a decode has until 1 s into
+     * the next one before that cycle can no longer be captured. */
+    {
+        static const struct { double ended; long long want; } c[] = {
+            {1000 * 15 + 14.9, 0},     /* inside its own cycle */
+            {1001 * 15 + 0.9, 0},      /* into the next cycle, in time */
+            {1001 * 15 + 1.0, 1},      /* the next cycle's first second has gone */
+            {1001 * 15 + 14.0, 1},
+            {1002 * 15 + 0.5, 1},      /* the one after can still start */
+            {1002 * 15 + 1.5, 2},
+        };
+        for (size_t i = 0; i < sizeof c / sizeof c[0]; i++) {
+            long long got = cycles_missed(1000 * 15, c[i].ended);
+            if (got != c[i].want) {
+                printf("selftest FAIL: a decode ending at %.1f missed %lld cycles, expected %lld\n",
+                       c[i].ended, got, c[i].want);
+                return 1;
+            }
+        }
+    }
     if (DECODE_BUDGET_MS != (CYCLE_SECONDS - CAPTURE_SECONDS) * 1000) {
         printf("selftest FAIL: budget constant is %d ms\n", DECODE_BUDGET_MS);
         return 1;
@@ -2560,9 +2597,8 @@ static int selftest_radio_lines(void)
     fcntl(p[0], F_SETFL, O_NONBLOCK);
 #define DRAIN() do { while (read(p[0], sent, sizeof sent) > 0) {} sent[0] = 0; } while (0)
 #define SENT() do { ssize_t k_ = read(p[0], sent, sizeof sent - 1); sent[k_ > 0 ? k_ : 0] = 0; } while (0)
-    /* A new slice asks for the CONFIGURED channel -- not the one left over
-     * from the last slice, which is how a saved channel used to be ignored --
-     * and does not create the stream yet. */
+    /* A new slice asks for the CONFIGURED channel, not the one left over
+     * from the last slice, and does not create the stream yet. */
     a.want_info = 0;           /* request numbers below must not match the
                                 * replies this test faked above (R7, R8...) */
     a.seq = 1000;
@@ -2580,6 +2616,34 @@ static int selftest_radio_lines(void)
         printf("selftest FAIL: a new slice did not ask for the saved DAX channel first: %s\n", sent);
         fail = 1;
     }
+    /* With no antenna saved, a new slice is left on the radio's own. */
+    if (strstr(sent, "rxant=")) {
+        printf("selftest FAIL: a new slice was given an antenna nobody chose: %s\n", sent);
+        fail = 1;
+    }
+    /* With one saved, a new slice is put on it once the radio has made it. */
+    strcpy(c.rxant, "ANT2");
+    a.slice = -1;
+    a.stream = 0;
+    a.want_dax = 0;
+    a.want_slice = 30;
+    DRAIN();
+    strcpy(l, "R30|0|0");
+    api_line(&a, l, &c);
+    SENT();
+    if (!strstr(sent, "slice set 0 rxant=ANT2\n")) {
+        printf("selftest FAIL: a new slice was not put on the saved antenna: %s\n", sent);
+        fail = 1;
+    }
+    c.rxant[0] = 0;
+    a.slice = -1;
+    a.stream = 0;
+    a.want_dax = 0;
+    a.want_slice = 31;
+    DRAIN();
+    strcpy(l, "R31|0|0");
+    api_line(&a, l, &c);
+    DRAIN();
     /* A 6300 with the default 4: refused at the slice twice, then 2 is
      * accepted, and only then is a stream asked for -- on 2. */
     c.dax_channel = 4;
@@ -3328,6 +3392,7 @@ static const char *BAD_GRIDS[] = {"ZZ99", "AA00zz", "D18P", "DN1", "DN18p", "123
 
 static int selftest(void)
 {
+    int recording_skipped = 0;
     if (selftest_hash_wrap()) return 1;
     if (selftest_dax_fallback() || selftest_rr73_both_encodings()) return 1;
     if (selftest_persistence() || selftest_spots() || selftest_budget_flagged()
@@ -3417,6 +3482,7 @@ static int selftest(void)
         int rate = 0;
         if (load_wav(audio, &nsamples, &rate, wav) < 0) {
             printf("selftest SKIP: cannot read %s (run from tools/ft8-agent)\n", wav);
+            recording_skipped = 1;
         } else if (rate != FT8_RATE) {
             printf("selftest FAIL: %s is %d Hz, expected %d\n", wav, rate, FT8_RATE);
             return 1;
@@ -3530,6 +3596,10 @@ static int selftest(void)
         }
     }
 
+    if (recording_skipped) {
+        printf("selftest INCOMPLETE: the recording checks did not run\n");
+        return 2;
+    }
     printf("selftest PASS\n");
     return 0;
 }
@@ -3938,8 +4008,8 @@ int main(int argc, char *argv[])
             dax_ask(&a, cfg.dax_channel);   /* the whole walk again, from the config */
         }
 
-        /* Start a capture at the top of an even minute, if the slice is
-         * tuned for it and audio is flowing. A slice that isn't where the
+        /* Start a capture in the first second of a 15-second cycle, if the
+         * slice is tuned for it and audio is flowing. A slice that isn't where the
          * cycle says, because the radio refused the band or another client
          * moved it, would publish its decodes under the wrong frequency. */
         if (!capture_t && synced && a.stream && tuned_for == cyc && now - cyc < 1.0 && skipped != cyc) {
@@ -4006,6 +4076,13 @@ int main(int argc, char *argv[])
                 dc.mem_avail_kb = mem_available_kb();
                 record_cycle(&dc);
                 dc.busy = 0;
+                long long missed = cycles_missed(capture_t, now_s());
+                if (missed > 0) {
+                    logf_("cycle %lld: its decode ran into the next cycle; %lld not captured", capture_t, missed);
+                    pthread_mutex_lock(&G.mu);
+                    G.skipped_cycles += missed;
+                    pthread_mutex_unlock(&G.mu);
+                }
             }
             capture_t = 0;
         }

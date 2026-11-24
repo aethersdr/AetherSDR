@@ -21,7 +21,9 @@ It finds fewer stations than WSJT-X on a crowded band. It decodes 77.3% of the m
 
 ## Requirements
 
-- A FLEX-6000 series radio, where it runs as a legacy waveform. A FLEX-8000 series or Aurora radio installs it as a container and so needs the radio's Waveform Processor ready, but this hasn't been tested on one.
+- A FLEX-6000 series, FLEX-8000 series or Aurora radio.
+  - On a FLEX-6000 it runs as a legacy waveform.
+  - On a FLEX-8000 or Aurora it runs as a container and so needs the radio's Waveform Processor ready. This hasn't been tested on one.
 - AetherSDR connected to the radio over its **local network**. SmartLink can't reach the receiver.
 - One free slice. The receiver takes one of the radio's slices for as long as it runs. On a two-slice radio such as the FLEX-6300, that leaves one.
 - One free DAX channel.
@@ -44,7 +46,7 @@ Click **Configure...** on the **AetherFT8** row in the Waveforms window, or in *
 
 The first computer to click **Apply** claims the receiver: AetherSDR keeps the receiver's admin token in your system keychain, and only that computer can change the settings afterward. On another computer, reinstall the receiver to start over.
 
-The top of the window shows what the receiver is doing, such as **Listening on 20 m** or **Waiting for the radio's clock**, and how long its last decode took.
+The top of the window shows what the receiver is doing, such as **Listening on 20 m** or **Waiting for the radio's clock**, how long its last decode took, and how many cycles it has missed since it started.
 
 ## Seeing what it hears
 

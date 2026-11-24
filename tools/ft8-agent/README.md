@@ -70,24 +70,19 @@ The selftest decodes one of ft8_lib's own off-air reference recordings, so it ex
 PATH=$HOME/zig-x86_64-linux-0.17.0:$PATH python3 -I build.py --output ./out --host
 ```
 
-Needs **zig 0.17** (it bundles the linker and musl for both targets); `build.py` checks
-the version and refuses otherwise. `--armv7-only` skips the arm64 container, which needs
+Needs **zig 0.17.0** exactly (it bundles the linker and musl for both targets, and 0.17.1
+builds different bytes); `build.py` checks the version and refuses any other. `--armv7-only` skips the arm64 container, which needs
 `../flex-tailnet-shim/mkimage.py`.
 
 Produces `AetherFT8.ssdr_waveform` for a FLEX-6000 and `AetherFT8.tar.gz`, an arm64
-container image, for a FLEX-8000 or Aurora. The container has not run on a radio.
-Measured on a FLEX-6300, 2026-11-08:
-
-| | |
-|---|---|
-| package | **93,947 bytes** (bound 512 KB; AetherWSPR is ~142 KB) |
-| ARM binary | 346,952 bytes, ELF 32-bit ARM EABI5, statically linked, stripped |
-| `agent.c` flags | `-Wall -Wextra -Werror` — clean |
+container image, for a FLEX-8000 or Aurora. Both are bounded at 512 KB by `build.py`, and
+both are static, stripped binaries; `agent.c` builds clean with `-Wall -Wextra -Werror`.
+The legacy waveform runs on a FLEX-6300. The container has not run on a radio.
 
 ⚠ Build on **Linux**. `tools/wspr-agent/build.py` is known to produce a package the radio
 silently refuses when run on Windows, and this script inherits its packaging.
 
-### ARM verified under emulation, not on a radio
+### The ARM build under emulation
 
 ```
 qemu-arm-static ./aether-ft8-armv7 selftest
@@ -100,21 +95,19 @@ behaviourally correct and not merely syntactically valid.
 
 ⛔ **The 445 ms is NOT the radio's speed.** It is qemu-arm emulation on an i5-6402P, where
 the same source runs natively in 27-42 ms. A Cortex-A8 at 700 MHz-1 GHz is far slower than
-either number represents. The only figure that settles the budget question is one measured
-on the radio, and the closest available anchor is an earlier timing harness on the same
-FLEX-6300, which took **~1.75 s** for one FT8 decode -- about **73% of the 2.4 s budget**,
-with a **5.2 s outlier while the radio was busy**. Treat the budget as open until this
-agent is timed on real hardware.
+either number represents. The figure that counts is the one measured on the radio: on a
+FLEX-6300, 40 m in the evening, decodes took a median of **2.6 s** and at most **2.9 s**
+against the **2 s** a cycle leaves after its 13-second capture. A decode that ends more
+than 1 s into the next cycle costs that cycle; `skipped_cycles` in `/v1/status` counts them.
 
 ## Known gaps
 
-- **Band hopping is unconverted.** The config still carries WSPR's gray-line hop schedule,
-  which has no FT8 meaning (WSPR's scheme is WSJT-X's two-minute slot rotation). v1 should
-  run a fixed band; #7114 lists this as an open question rather than inventing a scheme.
+- **Band hopping is not offered.** The agent carries AetherWSPR's hop schedule
+  (`band_for_cycle`) and accepts it in `/v1/config`, but AetherSDR's Configure window sets
+  one band and sends no hop list. #7114 leaves an FT8 hopping scheme as an open question.
 - **`"score"`, not `"snr"`.** ft8_lib reports a candidate correlation score, which is not a
   dB signal-to-noise ratio. The status JSON names it `score` so a consumer cannot plot it
   beside a WSPR spot's real dB figure by mistake.
-- **Never run on a radio.** Built for ARMv7 and verified under qemu (identical decodes), but no
-  run on real hardware, no live capture, and therefore **no trustworthy decode-time figure**.
-- Sensitivity is ~73% of WSJT-X with no OSD and no signal subtraction — a property of the
-  dependency, documented in `ft8_lib/PROVENANCE.md`.
+- **The arm64 container has not run on a radio.** The ARMv7 build has, on a FLEX-6300.
+- It decodes 77.3% of the reference recordings at the default depth, with ordered-statistics
+  decoding and no signal subtraction (`osd/PROVENANCE.md`; 73.4% with OSD off).
