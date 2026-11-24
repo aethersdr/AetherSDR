@@ -129,7 +129,8 @@ fed from `MainWindow::refreshTunerPortFrequency()`, the same effective-TX
 frequency (TX-flagged slice, FM offset, XIT) the KAT500 and KPA500 follow.
 Fast tuning is coalesced to one `^FR` per 300 ms; nothing is sent while the
 radio transmits, including another client's transmission. An unconfirmed `^FR`
-is dropped (not resent) when TX starts, then sent again after unkey, because
+is dropped (not resent) when TX starts, then sent again `kControlRetryMs`
+after unkey (the TX flag drops at `UNKEY_REQUESTED`, before RF is down), because
 a band change under RF would hot-switch the amp's relays. `^FR` is sent only
 once `^ON1` has been read back on the current link (the link-up queries
 include `^ON`), so an amp whose power state is unknown or asleep is not tracked.

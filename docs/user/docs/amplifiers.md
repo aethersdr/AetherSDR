@@ -373,8 +373,7 @@ The amplifier serves the same commands over TCP and UDP on that one port:
   retried until it takes; if the amplifier never reports the requested state,
   the applet shows, for example, `Operate not confirmed by the amplifier`.
   Retries pause while the radio transmits, so an antenna or ATU change is
-  never repeated under RF; they resume one retry interval (0.6 s) after
-  transmit ends.
+  never repeated under RF; they resume at least 0.6 s after transmit ends.
   **TUNE** is sent once and never repeated. The amplifier accepts any number
   of UDP clients, so AetherSDR can run alongside Elecraft's KPA1500 Remote.
 

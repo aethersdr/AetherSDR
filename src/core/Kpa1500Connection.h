@@ -79,7 +79,9 @@ public:
     // ^FR per kTrackIntervalMs, and nothing is sent while local or observed
     // radio transmit is active (including a transmission owned by another client):
     // a band change under RF would switch the amp's relays hot. A held
-    // frequency goes out as soon as transmit ends. `khz` empty means there
+    // frequency goes out kControlRetryMs after transmit ends, because the
+    // TX flag drops at UNKEY_REQUESTED while RF may still be up. Nothing is
+    // sent to an amp not known to be awake. `khz` empty means there
     // is no TX slice; the last frequency sent stays on the amp.
     void setFollowTx(bool on);
     bool followTx() const { return m_followTx; }
@@ -159,6 +161,7 @@ private:
     void retryPendingControls();
     void scheduleTrack();
     void sendTrack();
+    qint64 trackWaitMs() const;   // ms until the rate limit and the unkey settle both allow ^FR
 
     QTcpSocket m_socket;
     QUdpSocket m_udp;
@@ -175,6 +178,7 @@ private:
     std::optional<int> m_trackWantKhz;
     std::optional<int> m_trackSentKhz;
     QElapsedTimer m_trackLastSent;
+    QElapsedTimer m_txEndedAt;   // the last local-or-observed TX end; ^FR waits kControlRetryMs past it
     QTimer m_trackTimer;
     static constexpr int kTrackIntervalMs = 300;
     Kpa1500::MessageParser m_parser;

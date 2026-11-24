@@ -25,9 +25,11 @@ struct Kpa1500TrackingTestAccess {
         Kpa1500Connection::PendingControl frequency;
         frequency.group = QStringLiteral("FR");
         frequency.frame = QByteArrayLiteral("^FR14074;");
+        frequency.satisfied = [](const Kpa1500::Message&, const Kpa1500::Status&) { return false; };
         connection.m_pending.push_back(std::move(frequency));
         Kpa1500Connection::PendingControl operate;
         operate.group = QStringLiteral("OS");
+        operate.satisfied = [](const Kpa1500::Message&, const Kpa1500::Status&) { return false; };
         connection.m_pending.push_back(std::move(operate));
     }
 
@@ -121,6 +123,32 @@ struct Kpa1500TrackingTestAccess {
         const std::optional<int> sent = connection.m_trackSentKhz;
         connection.m_connected = false;
         return sent;
+    }
+
+    // An awake, linked amp with TRACK on; TX ends while a new frequency is held.
+    static bool frequencyHeldPastUnkey(Kpa1500Connection& connection)
+    {
+        connection.m_followTx = true;
+        connection.m_connected = true;
+        connection.m_status.powerOn = true;
+        connection.m_trackSentKhz = 14074;
+        connection.m_trackWantKhz = 14074;
+        connection.setTxFrequency(7100, false, true);   // QSY while transmitting
+        connection.setTxFrequency(7100, false, false);  // unkey
+        const bool held = connection.m_trackSentKhz == 14074 && connection.m_trackTimer.isActive()
+            && connection.m_trackTimer.remainingTime() > Kpa1500Connection::kTrackIntervalMs;
+        connection.m_connected = false;
+        return held;
+    }
+
+    static bool sleepDropsPendingFrequency(Kpa1500Connection& connection)
+    {
+        seed(connection);
+        connection.m_connected = true;
+        connection.m_status.powerOn = true;
+        connection.onMessage(*Kpa1500::parseMessage("^ON0;"));
+        connection.m_connected = false;
+        return frequencyCancelled(connection) && operatePreserved(connection);
     }
 
     static bool timerDeliveryHeld(Kpa1500Connection& connection)
@@ -240,12 +268,21 @@ int main(int argc, char** argv)
         check(!Kpa1500TrackingTestAccess::tracksWithPower(connection, false),
               "TRACK sends no FR to a sleeping amp");
         check(Kpa1500TrackingTestAccess::tracksWithPower(connection, true),
-              "TRACK sends FR to an amp known to be awake");
+              "TRACK issues FR to an amp known to be awake (the decision; no socket)");
         check(Kpa1500TrackingTestAccess::socketsUnopened(connection),
               "power-state test opens no transport");
         Kpa1500Connection fresh;  // no earlier ^FR, so the rate limit is not in play
         check(Kpa1500TrackingTestAccess::firstReadingTracks(fresh) == 14074,
-              "the first ON1 reading on a link sends the pending frequency");
+              "the first ON1 reading on a link issues the pending frequency");
+        Kpa1500Connection unkeyed;
+        check(Kpa1500TrackingTestAccess::frequencyHeldPastUnkey(unkeyed),
+              "a frequency held under TX waits a full retry interval after unkey");
+        Kpa1500Connection sleeping;
+        check(Kpa1500TrackingTestAccess::sleepDropsPendingFrequency(sleeping),
+              "ON0 drops a pending FR and keeps other controls");
+        check(Kpa1500TrackingTestAccess::socketsUnopened(unkeyed)
+                  && Kpa1500TrackingTestAccess::socketsUnopened(sleeping),
+              "unkey and sleep tracking tests open no transport");
     }
     {
         PeripheralSettings::setDeviceString(QStringLiteral("Kpa1500"), QStringLiteral("Transport"),

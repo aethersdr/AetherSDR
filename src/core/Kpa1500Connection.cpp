@@ -369,6 +369,17 @@ void Kpa1500Connection::onMessage(const Kpa1500::Message& message)
         return;
     }
 
+    if (message.cmd == QLatin1String("ON") && m_status.powerOn == false && wasPowerOn != false) {
+        // Asleep: an unconfirmed ^FR would only be retried into a sleeping
+        // amp and expire as "not confirmed". The wake below sends it again.
+        m_trackTimer.stop();
+        m_pending.erase(std::remove_if(m_pending.begin(), m_pending.end(),
+                                       [](const PendingControl& p) {
+                                           return p.group == QLatin1String("FR");
+                                       }),
+                        m_pending.end());
+        m_trackSentKhz.reset();
+    }
     if (message.cmd == QLatin1String("ON") && m_status.powerOn == true && wasPowerOn != true) {
         // The amp just woke, or reported awake for the first time on this
         // link: give it the frequency (again).
@@ -668,10 +679,14 @@ void Kpa1500Connection::setTxFrequency(std::optional<int> khz, bool localTransmi
     m_transmitting = transmitting;
     if (txEnded) {
         // Give the radio's unkey sequencing a full retry interval before a
-        // held control repeats: m_transmitting drops at UNKEY_REQUESTED (and
-        // at an optimistic local MOX release), while RF may still be up.
+        // held control repeats, or a held ^FR goes out (scheduleTrack):
+        // m_transmitting drops at UNKEY_REQUESTED (and at an optimistic local
+        // MOX release), while RF may still be up.
+        m_txEndedAt.start();
         for (auto& p : m_pending) {
-            p.lastSent.start();
+            if (p.resend) {
+                p.lastSent.start();
+            }
         }
     }
     if (txStarted) {
@@ -717,13 +732,26 @@ void Kpa1500Connection::scheduleTrack()
         || m_trackWantKhz == m_trackSentKhz || m_status.powerOn != true) {
         return;
     }
-    if (!m_trackLastSent.isValid() || m_trackLastSent.elapsed() >= kTrackIntervalMs) {
+    const qint64 wait = trackWaitMs();
+    if (wait <= 0) {
         sendTrack();
         return;
     }
     if (!m_trackTimer.isActive()) {
-        m_trackTimer.start(static_cast<int>(kTrackIntervalMs - m_trackLastSent.elapsed()));
+        m_trackTimer.start(static_cast<int>(wait));
     }
+}
+
+qint64 Kpa1500Connection::trackWaitMs() const
+{
+    qint64 wait = 0;
+    if (m_trackLastSent.isValid()) {
+        wait = std::max(wait, kTrackIntervalMs - m_trackLastSent.elapsed());
+    }
+    if (m_txEndedAt.isValid()) {
+        wait = std::max(wait, kControlRetryMs - m_txEndedAt.elapsed());
+    }
+    return wait;
 }
 
 void Kpa1500Connection::sendTrack()
@@ -732,6 +760,10 @@ void Kpa1500Connection::sendTrack()
     // to sleep, since the timer was armed.
     if (!m_followTx || !m_connected || m_transmitting || !m_trackWantKhz
         || m_trackWantKhz == m_trackSentKhz || m_status.powerOn != true) {
+        return;
+    }
+    if (trackWaitMs() > 0) {
+        scheduleTrack();   // e.g. a timer armed before the unkey settle began
         return;
     }
     const int khz = *m_trackWantKhz;
