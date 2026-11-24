@@ -269,7 +269,8 @@ struct AutoGainConfig {
 // interval returns to base. One licensed block is not proof: on a busy band the
 // next clip came 0.1-35 s after a release, 8 of 10 within 30 s
 // (tests/Hl2AutoGainReplayD168.h). The release interval stays 3 s, so a quiet
-// band still gets 24 dB back in ~12 s.
+// band gets 24 dB back ~9 s after the first release, 39 s after a trip at the
+// base probe interval.
 inline constexpr std::int64_t kBandscopeProbeConfirmMs = 30000;
 
 // probingReleaseConfig() with each release licensed by measured headroom

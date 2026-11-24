@@ -1184,6 +1184,34 @@ int main()
               && kBandscope.releaseDwellMs == 30000,
               "27.5 bandscope law: release believed after 30 s clean; release "
               "interval 3 s and base probe interval 30 s");
+
+        // The "probe" law takes the same rule: it has a confirm (3 s), and no
+        // measurement licenses its releases. Tripped at 12 dB, it releases one
+        // step to 6 dB and clips there inside the confirm.
+        const AutoGainConfig kProbeLaw = probingReleaseConfig();
+        AutoGainState pst;
+        pst.offsetDb = 12;
+        pst.tripOffsetDb = 12;
+        pst.cleanMs = 600000;
+        pst.sinceReleaseMs = 600000;
+        pst.sinceAttackMs = 600000;
+        AutoGainObservation po;
+        po.samples = 19;
+        po.elapsedMs = 100;
+        const AutoGainAction probeReleased = autoGainStep(pst, po, kProbeLaw);
+        po.overloadSamples = 19;
+        const AutoGainAction probeFailed =
+            autoGainStep(probeReleased.next, po, kProbeLaw);
+        check(probeReleased.reason == AutoGainReason::Release
+                  && probeReleased.next.offsetDb == 6
+                  && probeReleased.next.releasedSinceTrip,
+              "27.7 the probe-law fixture releases 12 -> 6 dB with the probe "
+              "in flight");
+        check(probeFailed.next.dwellRequiredMs == 2 * kProbeLaw.releaseDwellMs
+                  && probeFailed.next.tripOffsetDb == 12
+                  && !probeFailed.next.releasedSinceTrip,
+              "27.8 probe law: a clip below the trip offset with the probe "
+              "unconfirmed doubles the probe interval and keeps the trip offset");
     }
 
     // WHAT NO TEST HERE SUPPLIES: the plant. Property 7 tests the controller
