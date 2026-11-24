@@ -104,6 +104,8 @@ struct Kpa1500TrackingTestAccess {
         connection.m_status.powerOn = power;
         connection.m_trackWantKhz = 14074;
         connection.m_trackSentKhz.reset();
+        connection.m_trackLastSent.invalidate();
+        connection.m_trackTimer.stop();
         connection.sendTrack();
         const bool issued = connection.m_trackLastSent.isValid();
         connection.m_connected = false;
@@ -130,6 +132,31 @@ struct Kpa1500TrackingTestAccess {
     }
 
     // An awake, linked amp; the FR write fails because no socket is open.
+    // Every write fails here: after kMaxControlAttempts the retry stops and
+    // the control is reported unconfirmed.
+    static bool failedWriteGivesUp(Kpa1500Connection& connection)
+    {
+        int unconfirmed = 0;
+        const auto link = QObject::connect(&connection, &Kpa1500Connection::controlUnconfirmed,
+                                           [&unconfirmed](const QString&) { ++unconfirmed; });
+        connection.m_followTx = true;
+        connection.m_connected = true;
+        connection.m_transmitting = false;
+        connection.m_status.powerOn = true;
+        connection.m_trackWantKhz = 7100;
+        connection.m_trackSentKhz = 14074;
+        for (int i = 0; i < Kpa1500Connection::kMaxControlAttempts; ++i) {
+            connection.m_trackLastSent.invalidate();
+            connection.m_trackTimer.stop();
+            connection.sendTrack();
+        }
+        const bool gaveUp = unconfirmed == 1 && !connection.m_trackTimer.isActive()
+            && connection.m_trackSentKhz == 14074;
+        QObject::disconnect(link);
+        connection.m_connected = false;
+        return gaveUp;
+    }
+
     static bool failedWriteRetried(Kpa1500Connection& connection)
     {
         connection.m_followTx = true;
@@ -145,6 +172,24 @@ struct Kpa1500TrackingTestAccess {
         return retried;
     }
 
+    // TX has just ended (RF may still be up): one click in the tail, then
+    // one after it.
+    static QStringList unkeyTailRefusals(Kpa1500Connection& c)
+    {
+        c.m_connected = true;
+        c.setTxFrequency(std::nullopt, false, true);
+        c.setTxFrequency(std::nullopt, false, false);
+        QStringList tail;
+        const auto link = QObject::connect(&c, &Kpa1500Connection::controlRefused,
+                                           [&tail](const QString& m) { tail.append(m); });
+        c.selectAntenna(2);
+        c.m_txEndedAt.invalidate();
+        c.selectAntenna(2);   // the tail is over: not refused
+        QObject::disconnect(link);
+        c.m_connected = false;
+        return tail;
+    }
+
     // Connected, so only the TX refusal (not "not connected") can stop it.
     static QStringList refusalsFor(Kpa1500Connection& connection, bool transmitting,
                                    const std::function<void(Kpa1500Connection&)>& action)
@@ -156,6 +201,7 @@ struct Kpa1500TrackingTestAccess {
         connection.setTxFrequency(std::nullopt, false, transmitting);
         action(connection);
         connection.setTxFrequency(std::nullopt, false, false);
+        connection.m_txEndedAt.invalidate();   // each call starts clear of an unkey tail
         connection.m_connected = false;
         QObject::disconnect(link);
         return refusals;
@@ -324,6 +370,9 @@ int main(int argc, char** argv)
         Kpa1500Connection connection;
         check(Kpa1500TrackingTestAccess::failedWriteRetried(connection),
               "a failed FR write is not marked sent and is retried");
+        Kpa1500Connection failing;
+        check(Kpa1500TrackingTestAccess::failedWriteGivesUp(failing),
+              "an FR that cannot be written is given up after the attempt limit, with a notice");
     }
     {
         using A = Kpa1500TrackingTestAccess;
@@ -347,6 +396,9 @@ int main(int argc, char** argv)
         const QStringList sleep = A::refusalsFor(c, true, [](Kpa1500Connection& k) { k.setPower(false); });
         check(sleep == QStringList{QStringLiteral("Sleep refused while transmitting")},
               "a refused sleep shows \"Sleep refused while transmitting\"");
+        const QStringList tail = A::unkeyTailRefusals(c);
+        check(tail == QStringList{QStringLiteral("Antenna 2 refused while transmitting")},
+              "an antenna change in the unkey tail is refused; after the tail it is not");
         check(A::socketsUnopened(c), "refusal tests open no transport");
     }
     {

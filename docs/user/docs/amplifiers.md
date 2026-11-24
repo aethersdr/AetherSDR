@@ -398,12 +398,12 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   `TUNING` while a tune runs; press it again to cancel. A full-search tune
   needs RF, so key the radio's own TUNE: nothing in this applet keys the
   radio. **ATU IN / ATU BYP** switches a relay, so it is refused while the
-  radio transmits, and the applet shows, for example, `ATU bypass refused
+  radio transmits and for 0.6 s after, and the applet shows, for example, `ATU bypass refused
   while transmitting`. **TUNE** is not refused.
 - **ANT** **1** / **2**, the amplifier's two antenna connectors. An `ANT n`
   label appears when an external antenna switch reports an antenna number
-  from 3 to 32. An antenna change is refused while the radio transmits, and
-  the applet shows, for example, `Antenna 2 refused while transmitting`.
+  from 3 to 32. An antenna change is refused while the radio transmits and
+  for 0.6 s after, and the applet shows, for example, `Antenna 2 refused while transmitting`.
 - **POWER**, which puts the amplifier to sleep; it reads `ASLEEP` while the
   amplifier sleeps, and pressing it then wakes the amplifier. Putting it to
   sleep asks for confirmation first, because waking it over the network is

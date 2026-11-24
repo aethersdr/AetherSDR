@@ -464,9 +464,12 @@ bool Kpa1500Connection::sendRaw(const QByteArray& frame)
 
 bool Kpa1500Connection::sendControl(PendingControl control)
 {
-    // The antenna and ATU in-line/bypass relays must never switch under RF.
-    // This refuses the first send; retryPendingControls() holds a retry.
-    if (m_transmitting
+    // The antenna and ATU in-line/bypass relays must never switch under RF,
+    // including the unkey tail (the TX flag drops at UNKEY_REQUESTED). A
+    // refused click is dropped, not queued: the operator clicks again.
+    // (A control already pending when TX began is held by
+    // retryPendingControls() instead.)
+    if (m_connected && (m_transmitting || inUnkeySettle())
         && (control.group == QLatin1String("AN") || control.group == QLatin1String("AI"))) {
         qCWarning(lcTuner) << "Kpa1500Connection: refusing" << control.label << "while transmitting";
         emit controlRefused(tr("%1 refused while transmitting").arg(control.label));
@@ -486,7 +489,8 @@ bool Kpa1500Connection::sendControl(PendingControl control)
     writeFrame(Kpa1500::buildQuery(control.readback));
     control.attempts = 1;
     control.lastSent.start();
-    m_pending.push_back(std::move(control));    return true;
+    m_pending.push_back(std::move(control));
+    return true;
 }
 
 void Kpa1500Connection::checkPendingControls(const Kpa1500::Message& message)
@@ -751,6 +755,11 @@ void Kpa1500Connection::scheduleTrack()
     }
 }
 
+bool Kpa1500Connection::inUnkeySettle() const
+{
+    return m_txEndedAt.isValid() && m_txEndedAt.elapsed() < kControlRetryMs;
+}
+
 qint64 Kpa1500Connection::trackWaitMs() const
 {
     qint64 wait = 0;
@@ -785,12 +794,22 @@ void Kpa1500Connection::sendTrack()
         return m.cmd == QLatin1String("FR") && s.frequencyKhz == khz;
     };
     m_trackLastSent.start();
+    const QString label = c.label;
     if (!sendControl(std::move(c))) {
         // Not on the wire, so not sent: try again after the rate limit
-        // rather than leaving the amp on its old band until the next QSY.
-        m_trackTimer.start(kTrackIntervalMs);
+        // rather than leaving the amp on its old band until the next QSY,
+        // but give up (and say so) after as many tries as a control gets.
+        if (++m_trackWriteFailures < kMaxControlAttempts) {
+            m_trackTimer.start(kTrackIntervalMs);
+        } else {
+            qCWarning(lcTuner) << "Kpa1500Connection:" << label << "could not be written after"
+                               << m_trackWriteFailures << "attempts";
+            m_trackWriteFailures = 0;
+            emit controlUnconfirmed(label);
+        }
         return;
     }
+    m_trackWriteFailures = 0;
     m_trackSentKhz = khz;
 }
 

@@ -165,7 +165,8 @@ private:
     void retryPendingControls();
     void scheduleTrack();
     void sendTrack();
-    qint64 trackWaitMs() const;   // ms until the rate limit and the unkey settle both allow ^FR
+    qint64 trackWaitMs() const;
+    bool inUnkeySettle() const;   // within kControlRetryMs after a TX end   // ms until the rate limit and the unkey settle both allow ^FR
 
     QTcpSocket m_socket;
     QUdpSocket m_udp;
@@ -184,6 +185,7 @@ private:
     QElapsedTimer m_trackLastSent;
     QElapsedTimer m_txEndedAt;   // the last local-or-observed TX end; ^FR waits kControlRetryMs past it
     QTimer m_trackTimer;
+    int m_trackWriteFailures{0};   // consecutive ^FR writes that failed
     static constexpr int kTrackIntervalMs = 300;
     Kpa1500::MessageParser m_parser;
     Kpa1500::Status m_status;

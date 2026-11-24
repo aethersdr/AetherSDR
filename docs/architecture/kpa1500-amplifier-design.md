@@ -153,9 +153,12 @@ A bind failure emits `failed(error)`, not `finished(0)`, so the dialog does not
 report it as "no amplifier answered".
 
 **Relay controls under TX.** `sendControl()` refuses `AN` (antenna) and `AI`
-(ATU in-line/bypass) while local or observed TX holds, and `setPower(false)`
+(ATU in-line/bypass) while local or observed TX holds and for `kControlRetryMs`
+after it ends (the unkey tail), and drops the click rather than queuing it; `setPower(false)`
 refuses sleep; each emits `controlRefused` with the notice the applet shows.
-ATU tune and wake are not refused.
+ATU tune and wake are not refused. A `^FR` whose write fails is retried at
+the track interval and, after `kMaxControlAttempts` failures, reported through
+`controlUnconfirmed`.
 
 Still open for hardware validation: whether the amp ever packs several
 replies into one datagram (handled either way), whether it answers to the
