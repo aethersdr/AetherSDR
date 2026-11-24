@@ -5645,6 +5645,13 @@ add_executable(pan_recenter_policy_test
 target_include_directories(pan_recenter_policy_test PRIVATE src)
 add_test(NAME pan_recenter_policy_test COMMAND pan_recenter_policy_test)
 
+# An operator pan close forgets the pan's Center Lock and its saved intent only
+# once the model accepts the close (#7584). Pure helper header; no radio.
+add_executable(pan_close_center_lock_test tests/pan_close_center_lock_test.cpp)
+target_include_directories(pan_close_center_lock_test PRIVATE src)
+target_link_libraries(pan_close_center_lock_test PRIVATE Qt6::Core)
+add_test(NAME pan_close_center_lock_test COMMAND pan_close_center_lock_test)
+
 add_executable(waterfall_time_marker_settings_test tests/waterfall_time_marker_settings_test.cpp)
 target_include_directories(waterfall_time_marker_settings_test PRIVATE src)
 target_link_libraries(waterfall_time_marker_settings_test PRIVATE aethercore Qt6::Core)
