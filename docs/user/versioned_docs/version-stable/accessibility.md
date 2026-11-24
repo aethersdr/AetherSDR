@@ -23,6 +23,7 @@ What you can expect:
 - **Every interactive control has a name** (and, where useful, a description), so a screen reader announces "Master volume" or "Dock applet panel left" rather than just "button".
 - **Live values are announced.** The S-meter and the VFO frequency announce their values as they change. Announcements wait for a value to settle, so tuning across a band doesn't flood you with interim readings.
 - **Custom-drawn meters report their values.** Meters and indicators that AetherSDR paints itself expose their current reading to the screen reader.
+- **Aetherial Audio knobs report their names, values and ranges.** Every Aetherial Audio knob, including the compact **Tube** tile's Drive, Tone, Bias, Output and Mix, reads as a slider and supports screen-reader increase/decrease actions. Knobs that share a label within one stage say which group they belong to, such as the Exciter's "Body mix" and "Clarity mix". A focused knob announces its value after adjustments pause for 250 ms; unchanged background polling stays silent.
 - **Status is given in words, not color alone.** For example, each radio tab in the title bar states its connection state ("Link lost" and so on) as text as well as with the colored dot.
 - **Unavailable controls say why.** A control your radio or build can't use is dimmed rather than hidden, and the reason is announced along with it (for example, a headphone control on a radio with no headphone output).
 - **Available controls keep their descriptions.** When an unavailable control becomes available, its own tooltip and description return. An inactive control may also announce "Available, not currently active".
@@ -31,6 +32,7 @@ What you can expect:
 ## Using the keyboard
 
 - You can reach controls with Tab and Shift+Tab, including the tabs on the VFO flag (Audio, DSP, mode, X/RIT, DAX).
+- On an Aetherial Audio knob, use the arrow keys to adjust, hold Shift for finer steps, press Page Up/Page Down for large steps (a tenth of the knob's travel), or press Home/End for its minimum/maximum. A focused knob keeps these keys even with keyboard shortcuts on, so the arrows adjust the knob rather than tuning or changing AF gain. A knob with whole-number settings, such as the compressor's **Phase**, moves one stage per arrow key, Page Up/Page Down or wheel notch.
 - The title bar's radio list ("+") is keyboard reachable, including its search box and per-radio actions.
 - The status-bar indicators (band stack, **+PAN**, **TNF**, **CWX**, **ASR**, **DVK**, **FDX**, **TUN**, **AMP** and **TX**) are in the Tab order and read as buttons. Press **Return** or **Enter** to activate one. On/off indicators report their state, and **TUN** and **AMP** start their description with their state (for example OPERATE, BYPASS or STANDBY). With keyboard shortcuts on, **Space** is still push-to-talk on a focused indicator.
 - Operating shortcuts (tuning, MOX, PTT hold, band and mode changes) are off by default. Turn them on with **Settings → Keyboard Shortcuts**; see [Keyboard Shortcuts](./keyboard-shortcuts.md). With them off, keys go to the focused control.

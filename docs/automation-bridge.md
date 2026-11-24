@@ -1115,7 +1115,8 @@ cost a few integer adds per frame.
 | `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
-| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`). One key is not a rebuild: `smartMtrStrip` counts GPU frames that repainted and uploaded only the SmartMTR value-label strip, so leave it out when summing causes against `overlayRebuilds*` |
+| `overlayFrequencyRebuildsPerSec`, `overlayFrequencyRebuildMsPerSec` | GPU frames that repainted and uploaded only the frequency-anchored layer (slice markers, off-screen indicators) for a slice retune, leaving the background and screen-space layers alone; not counted in `overlayRebuilds*` |
+| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `slice`, `other`). Two keys are not full rebuilds, so leave them out when summing causes against `overlayRebuilds*`: `smartMtrStrip` counts GPU frames that repainted and uploaded only the SmartMTR value-label strip, and `sliceFreqLayer` counts slice retunes that marked only the frequency layer (see `overlayFrequencyRebuilds*`) |
 | `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
 | `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
 | `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |

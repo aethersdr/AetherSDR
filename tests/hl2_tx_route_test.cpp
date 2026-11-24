@@ -255,7 +255,8 @@ void testClientRotation(TxTestAuthority& authority)
 
     // A session that never left ANT: main's rotation, NCO / gain / ADC, no 0x09.
     const std::vector<Cc> expected = {ccRxFreq(0, MetisClient::Params{}.rxFrequencyHz),
-                                      ccRxGain(MetisClient::Params{}.lnaGainDb), ccAdcAssign()};
+                                      ccRxGain(MetisClient::Params{}.lnaGainDb),
+                                      ccTxLnaGain(MetisClient::Params{}.lnaGainDb, false)};
     std::vector<Bank> v = banks(c, 12);
     bool same = true;
     for (std::size_t i = 0; i < v.size(); ++i) {

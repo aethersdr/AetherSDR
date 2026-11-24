@@ -543,7 +543,9 @@ After capture channel canonicalization, `onTxAudioReady()` uses this ordering:
    EQ, Comp, PUDU, Reverb (the TX gate and de-esser are retired; RN2 runs
    ahead of the strip).
 7. **PC mic gain**: `setPcMicGain(0..100)` maps to `0.0..1.0` and attenuates the
-   48 kHz float samples. It is not a boost stage.
+   48 kHz float samples. It is not a boost stage. On a host-modulating radio it
+   stays at 100: the MIC slider sets the modulator's gain there instead
+   (`gui/PcMicGain.h`).
 8. **Quindar tone**: `ClientQuindarTone::process()` inserts Quindar tones at
    48 kHz after PC mic gain and before the final limiter.
 9. **Final limiter**: `ClientFinalLimiter::process()` runs at 48 kHz after all

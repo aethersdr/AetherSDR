@@ -100,6 +100,7 @@ class AprsDigipeaterModel;
 struct BandStackEntry;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
+class HostCwTextEngine;
 
 struct LicenseFeatureState {
     bool    seen{false};
@@ -1056,6 +1057,8 @@ public:
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
     // Plain engine protocol objects invalidate this handle in their destructor.
     TxCoordinator::Producer registerTxProducer();
+    // A producer under `input`'s actor, for a sequencer keying on its behalf.
+    TxCoordinator::Producer registerTxProducerFor(const TxCoordinator::Request& input);
     // Trusted local operator control surface. UI buttons and equivalent
     // keyboard/MIDI toggles share this producer; external clients must bring
     // their own lifetime instead of borrowing it.
@@ -1092,9 +1095,9 @@ public:
                            quint64 debugSourceMs = 0);
     bool producerRequestHasWork(const TxCoordinator::Request& request) const;
     // Host CW text: hostTextGates refuses a key-down unless the TX slice is in
-    // a CW mode and, with break-in off, this host holds MOX/PTT; onDownRefused
-    // runs on the model thread when a key-down is not forwarded, so the text
-    // keyer can end the message. Paddles pass neither.
+    // a CW mode, TUNE is off and, with break-in off, this host holds MOX/PTT;
+    // onDownRefused runs on the model thread when a key-down is not forwarded,
+    // so the text keyer can end the message. Paddles pass neither.
     void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                 const QString& source, quint64 traceId, quint64 sourceMs,
                                 std::chrono::steady_clock::time_point scheduledAt,
@@ -1137,6 +1140,15 @@ public:
     int networkMtuSetting() const;
     void sendCwKey(bool down, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
+    // A remote client's key edge (TCI keyer): sendCwKey, but it never takes
+    // over from host CW text, which only a local operator input does (#7347 ruling).
+    // While host text plays its key-down is refused with a notice, and the
+    // matching key-up keys nothing. A remote key-up with no accepted remote
+    // key-down before it is ignored while host text plays (logged, no notice):
+    // the text keys its own key-up. The other order is refused too: host text
+    // sent while a CW key is held, remote or local, is refused with
+    // cw-text-refused:key-held (admitHostCwx).
+    void sendRemoteCwKey(bool down, const QString& debugSource);
     void sendCwPaddle(bool dit, bool dah, const QString& debugSource = {},
                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // iambic paddle via netcw stream
     // Lower-level pieces used by the local iambic keyer: PTT and key
@@ -2295,6 +2307,7 @@ public:
     {
         applyBackendTransmitDelta(delta);
     }
+    bool hasHostCwTextEngineForTest() const { return m_hostCwText != nullptr; }
     void emitBackendSliceChangedForTest(int sliceId, const SliceDelta& delta)
     {
         if (m_backend) {
@@ -2581,6 +2594,17 @@ private:
     bool sendCwxConfigurationCommand(const QString& command, RadioControlFence current);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
+    bool hostCwTextRoute() const;
+    // A CW key or paddle is held: a key element is down, or a paddle is held
+    // between iambic elements (#5422), by any source.
+    bool cwKeyHeld() const;
+    bool admitHostCwx(const TxCoordinator::Request& request, const QString& text,
+                      const std::function<void()>& onAdmitted, int macroIndex, bool live, bool& held);
+    ReceiveDispatch dispatchHostCwxRequest(const CwTextRequest& request);
+    bool dispatchHostCwText(const TxCoordinator::Request& request, const QString& text, int wpm);
+    void startWaitingHostCwx();
+    void hostCwTextEnded(const TxCoordinator::Request& sender, bool refused);
+    void createHostCwTextEngine();
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();
     void applyBackendTransmitDelta(const TransmitDelta& delta);
@@ -2592,6 +2616,12 @@ private:
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
     CwxModel         m_cwxModel;
+    // Created on connect of a backend with hostCwKeyingControl; closed, key up,
+    // in resetTxOperations() while the coordinator can still deliver the key-up.
+    std::unique_ptr<HostCwTextEngine> m_hostCwText;
+    bool m_hostCwTextEdge{false};   // a host-text element is being dispatched, not a paddle
+    bool m_remoteCwKeyRefused{false};  // a remote key-down was refused; its key-up keys nothing
+    bool m_remoteCwKeyDown{false};     // a remote key-down was accepted and is not yet released
     DvkModel         m_dvkModel;
     NavtexModel         m_navtexModel;
     UsbCableModel       m_usbCableModel;

@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.11.3** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.11.4** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -35,7 +35,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave schedule and the KiwiSDR DX Community database, with auto-mode switch and per-feed colouring
 - **Local voice keyer** — twelve PC-microphone recordings up to 30 seconds each, with preview, import/export and F1–F12 playback; radio DVK remains available separately
 - **CW operator suite** — ggmorse plus download-on-demand DeepCW and DeepFist receive decoders where ONNX Runtime is available (ggmorse only on Intel macOS), MIDI/keyboard straight-key and iambic paddles with full QSK, optional Quindar tones
-- **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence colour-coding, optionally from the audio before noise reduction. CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, optional remote OpenAI-compatible endpoint. Not in the Intel macOS build — see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md)
+- **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence color-coding and an optional live preview (English-only streaming, or Apple's recognizer on macOS 26 and later), optionally from the audio before noise reduction. CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, optional remote OpenAI-compatible endpoint. Not in the Intel macOS build — see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md)
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **AetherMap (PSK Reporter) overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
 - **SmartLink remote, remote over CGNAT, and a TCI server** — Auth0/TLS WAN operation; an in-radio Tailscale node, signed in with a QR code, that carries AetherSDR to a FLEX-8000 or Aurora radio behind CGNAT, and to a FLEX-6000 as a legacy waveform (not yet run end to end from AetherSDR); and CAT + audio + IQ + CW + spots + tune and receiver events over a single TCI WebSocket announcing protocol 2.1
@@ -111,8 +111,10 @@ supported on its own (both below); FlexRadio remains the primary target:
   receiver, backend-side FFT averaging, the CL1 external 10 MHz reference, a
   choice of ANT or RF1 (PA off) for transmit, per-radio state restore (AGC
   mode and threshold, TUNE power per band, FFT averaging, FPS and dBm range,
-  receivers B–D with their own setpoints, and manual notches), and the N2ADR
-  IO board's status registers.
+  receivers B–D with their own setpoints, and manual notches), the N2ADR
+  IO board's status registers, PureSignal adaptive predistortion, receive
+  noise reduction and auto notch, PA current in amps, and receiver IQ for TCI
+  clients.
 - **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
   on the IC-705 (receive, scope, transmit, FT8) and completed against a live
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).

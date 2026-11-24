@@ -3318,6 +3318,21 @@ void MainWindow::scheduleClientFftFpsSave(int panIndex, int fps)
         });
 }
 
+// Per-pan spot marker visibility. Always client-owned — no backend ever
+// publishes or controls this preference (#5711).
+void MainWindow::scheduleClientSpotMarkersOnPanSave(int panIndex, bool on)
+{
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    m_pendingDisplayWrites.schedule(
+        ClientDisplaySettings::pendingWriteKey(scope, panIndex, "spotMarkers"),
+        [scope, panIndex, on] {
+            ClientDisplaySettings::saveSpotMarkersOnPan(scope, panIndex, on);
+        });
+}
+
 // May the client store and restore this pan's dBm range? Only where the
 // backend declares it (RadioCapabilities::clientPersistsDbmRange). Read by the
 // adopt-and-save and by the restore, so the two cannot disagree.
@@ -3494,6 +3509,17 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         m_radioModel.requestPanAverage(panId, sw->fftAverage());
         m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());
     }
+
+    // Per-pan spot marker visibility. Outside the shapesDisplayRatesLocally()
+    // block — this preference is backend-agnostic and should restore on any
+    // radio, not only those that shape display rates. value_or(true) makes the
+    // restore total: a pan with no stored row (new install, reclaimed slot)
+    // gets the default "on" rather than inheriting a previous radio's "off".
+    // loadSpotMarkersOnPan() seeds the member directly without emitting
+    // spotMarkersOnPanChanged, so no redundant write is scheduled. (#5711)
+    sw->loadSpotMarkersOnPan(
+        ClientDisplaySettings::spotMarkersOnPan(
+            m_radioModel.settingsScope(), sw->panIndex()).value_or(true));
 
     // Reclaimed pans already hold their latest status and do not necessarily
     // emit a new report after reconnect. Seed the view immediately.
@@ -5369,6 +5395,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         });
     });
 
+    // ── Per-pan spot marker visibility persistence (#5711) ───────────────────
+    connect(sw, &SpectrumWidget::spotMarkersOnPanChanged,
+            this, [this, sw](bool on) {
+        scheduleClientSpotMarkersOnPanSave(sw->panIndex(), on);
+    });
+
     // ── Edge auto-pan step during slice drag (user-reported) ─────────────────
     // Pan the view AND tune the slice in one shot, deliberately bypassing the
     // pan-follow/reveal path: the SpectrumWidget already computed the explicit
@@ -5887,8 +5919,11 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
 
     // Prefer the visible spectrum state when available so reveal/follow stays
     // aligned with recent manual pan/zoom gestures even if the model echo lags.
+    // Its target, not the mid-glide center: fast wheel steps land inside the
+    // follow animation, and each must move the pan by whole steps from where
+    // the last one was headed (#7529).
     auto* sw = spectrumForSlice(slice);
-    result.oldCenterMhz = sw ? sw->centerMhz() : pan->centerMhz();
+    result.oldCenterMhz = sw ? sw->panCenterTargetMhz() : pan->centerMhz();
     result.newCenterMhz = result.oldCenterMhz;
     result.bandwidthMhz = sw ? sw->bandwidthMhz() : pan->bandwidthMhz();
 
@@ -6712,6 +6747,7 @@ void MainWindow::wireMeters()
         m_vkampConn.setAutoReconnect(ar);
         m_kpa1500Conn.setAutoReconnect(ar);
         m_rfkitConn.setAutoReconnect(ar);
+        m_trioModel.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
         m_kpa500Conn.setAutoReconnect(
             ar && PeripheralSettings::autoConnect(QStringLiteral("kpa500")));
@@ -7524,6 +7560,13 @@ void MainWindow::wireMeters()
         if (!ip.isEmpty())
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
+
+    // ── microHAM Trio antenna switch — read-only, switches nothing ────────
+    // The Peripherals page shows its state and labels; nothing here changes
+    // anything on it. Its session is taken at startup only with "Connect
+    // automatically" on, like the KPA500/KAT500 rows.
+    m_trioModel.loadSettings(PeripheralSettings::autoConnect(
+        QLatin1String(MicrohamTrioSettings::kPeripheralId)));
 
     // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and

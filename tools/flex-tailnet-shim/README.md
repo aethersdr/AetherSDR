@@ -118,10 +118,11 @@ are refused.
 
 | Method | Path | Token needed | Does |
 |---|---|---|---|
-| GET | `/v1/status` | no | State (`needs_login` and `needs_approval` while waiting on a person), tailnet IP and DNS name, allowlist, session count, version, key expiry, last error. Never a secret. |
+| GET | `/v1/status` | no | State (`needs_login` and `needs_approval` while waiting on a person), tailnet IP and DNS name, allowlist, session count, version, key expiry, last error, and the announcement setting (`announce`, `announce_to`, `announcement`). Never a secret. Without the token it leaves out what names the tailnet's devices (`announce_to`, the device list, a refused helper's name) and sets `announcement.devices_hidden`. |
 | POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}`. Without `auth_key` it signs in by URL and also returns `auth_url` once the control plane sends it (within 30 s); the join goes on in the background |
 | GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
 | PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
+| PUT | `/v1/announce` | yes | `{announce: "all" \| "only" \| "off", announce_to: [node IDs]}`: which tailnet devices are sent the radio's announcement; returns the status, already showing the change |
 | POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
 
 ### Published ports
@@ -156,8 +157,8 @@ including other 172.30.x hosts, gets 403.
 - The registration is a 10-minute lease (`expires_in_s`), renewed by posting
   again. The app's `name` owns the port: the same name renews it, another
   gets 409. When the lease lapses, the port and its open connections close.
-- Ports 1024-65535 only, never 22, 4991-4995, 42607, 48992 or 48993, and at
-  most 8. `/v1/status` lists them as `exposed_ports`. They survive the
+- Ports 1024-65535 only, never 22, 4991-4995, 42607, 48992, 48993 or 48996,
+  and at most 8. `/v1/status` lists them as `exposed_ports`. They survive the
   tailnet node restarting, but not the shim.
 - Anything running on the radio is trusted to publish: names are
   self-asserted, and any wildcard listener can be published. That matches a
@@ -174,6 +175,22 @@ tailnet login within seconds; it is never stored or logged.
 
 Keys are changed in-process (logout, then a new tsnet server with the same
 state directory). Nothing is known to restart a container whose process exits.
+
+### The announcement and the discovery helper
+
+The shim hears the radio's UDP 4992 discovery broadcast on the LAN and sends
+each device the setting includes a copy, with `ip=` naming the shim's tailnet
+address (`announce.go`). A device whose Tailscale direct path runs over the
+station LAN is at the station and is skipped.
+
+`discovery_helper.py` connects on tailnet TCP 48996, opens with
+`AETHER-DISCOVERY 1`, and rebroadcasts each frame it is sent on its own
+computer. The shim answers `OK` or `REFUSED <reason>`. A helper's device must
+pass the same checks as a device sent a copy (Off, ticked, at the station):
+otherwise it is refused, and a connected helper the setting later leaves out
+is closed, then refused when it reconnects. The helper connects only to a
+tailnet address. `package_helper.py` makes the release asset,
+`discovery-helper-<version>.zip`.
 
 ## FLEX-6000: the native build (experimental)
 

@@ -8,6 +8,7 @@
 #include "TwoToneTuneGate.h"
 #include "TxOutputMetering.h"
 #include "core/TxKeyingMarker.h"
+#include "ShortcutActionMarker.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
@@ -286,6 +287,7 @@ void TxApplet::buildUI()
             "border: 1px solid #2a3040; }";
         m_tuneBtn = new QPushButton("TUNE");
         markTxKeying(m_tuneBtn);   // emits a tune carrier — keys TX (#3646)
+        markShortcutAction(m_tuneBtn, "tune_toggle");
         m_tuneBtn->setStyleSheet(btnStyle);
         m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_tuneBtn->setFixedHeight(22);
@@ -300,6 +302,7 @@ void TxApplet::buildUI()
 
         m_moxBtn = new QPushButton("MOX");
         markTxKeying(m_moxBtn);    // manual transmit (PTT) — keys TX (#3646)
+        markShortcutAction(m_moxBtn, "mox_toggle");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_moxBtn, kMoxIdleStyle);
         m_moxBtn->setCheckable(true);
         m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -310,6 +313,7 @@ void TxApplet::buildUI()
 
         m_atuBtn = new QPushButton("ATU");
         markTxKeying(m_atuBtn);    // starts ATU tune — keys TX (#3646)
+        markShortcutAction(m_atuBtn, "atu_start");
         m_atuBtn->setStyleSheet(btnStyle);
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_atuBtn->setFixedHeight(22);
