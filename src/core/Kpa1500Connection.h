@@ -155,8 +155,8 @@ signals:
     // A control refused before anything was sent, e.g. a relay change while
     // the radio transmits. `message` is the full user-facing notice.
     void controlRefused(const QString& message);
-    // The amp reported a MAC address different from the last one on this
-    // link. The owner persists it for Wake-on-LAN after a restart.
+    // The amp answered ^MA (emitted on every reply). The owner persists the
+    // MAC for Wake-on-LAN after a restart.
     void macAddressReported(const QString& mac);
     void asleepOfflineChanged(bool asleepOffline);
 

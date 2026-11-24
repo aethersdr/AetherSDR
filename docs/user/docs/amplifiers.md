@@ -365,8 +365,9 @@ The amplifier serves the same commands over TCP and UDP on that one port:
 
 - **TCP** (default): a stream connection; meters refresh every 500 ms. The
   connection reads as connected once the amplifier answers, and as lost
-  after 3 seconds without a reply, even if the network never closes it. The amplifier accepts only one TCP client at a
-  time, so Elecraft's KPA1500 Remote and AetherSDR cannot both use TCP.
+  after 3 seconds without a reply, even if the network never closes it. The
+  amplifier accepts only one TCP client at a time, so Elecraft's KPA1500
+  Remote and AetherSDR cannot both use TCP.
 - **UDP**: one command per datagram, so a lost packet never stalls the
   meters, which refresh about every 250 ms. AetherSDR waits for each answer
   (or a short timeout) before asking the next question, so a slow link
@@ -378,10 +379,13 @@ The amplifier serves the same commands over TCP and UDP on that one port:
   amplifier's state back and is retried until it takes; if the amplifier
   never reports the requested state, the applet shows, for example,
   `Operate not confirmed by the amplifier`. While the radio transmits,
-  antenna, ATU in-line/bypass and OPERATE retries pause, so a relay is never
-  switched again under RF; they resume at least 0.6 s after transmit ends.
-  **STANDBY**, cancelling a tune and **CLR FAULT** keep retrying while the
-  radio transmits, and you are told if they are not confirmed. **TUNE** is
+  antenna, ATU in-line/bypass and OPERATE retries pause, so AetherSDR never
+  repeats one of those relay changes under RF; they resume at least 0.6 s
+  after transmit ends. **STANDBY**, cancelling a tune and **CLR FAULT** keep
+  retrying while the radio transmits, because they take the amplifier out of
+  line or stop it, and you are told if they are not confirmed. How the
+  KPA1500 sequences its own bypass relay when STANDBY arrives mid-transmission
+  has not been checked on hardware. **TUNE** is
   sent once and never repeated. The amplifier accepts any number
   of UDP clients, so AetherSDR can run alongside Elecraft's KPA1500 Remote.
 
