@@ -427,6 +427,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 m_routingState.reset();
                 m_createdVfoBSlices.clear();
                 m_createdVfoBPans.clear();
+                dropOwedRoute();
                 m_pendingVfoBCreate.reset();
                 m_pendingTrxRequest.reset();
                 m_pendingRouteCommands.clear();
@@ -543,6 +544,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             }
             const bool removedTxRoute = sliceId == m_routingState.txSliceId();
             m_routingState.removeSlice(sliceId);
+            if (m_owedRouteFinish && (sliceId == m_owedRouteFinish->rxSliceId
+                                      || sliceId == m_owedRouteFinish->createdSliceId)) {
+                giveUpOwedRoute();   // the route is gone; a held confirmation is now true
+            }
             if (removedTxRoute && (m_tciPttRequestedOn || m_tciPttConfirmedOn)) {
                 abortTciPtt();
             }
@@ -2081,19 +2086,30 @@ void TciServer::tuneSliceAndConfirm(
 
 void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation)
 {
+    promoteTxSliceWithReply(sliceId,
+        [continuation = std::move(continuation)](bool selected, const RadioControlReply&) {
+            continuation(selected);
+        });
+}
+
+void TciServer::promoteTxSliceWithReply(int sliceId,
+    std::function<void(bool, const RadioControlReply&)> continuation)
+{
+    const RadioControlReply localRefusal{RadioControlReply::Kind::Refused, -1,
+                                         QStringLiteral("TX-slice selection refused")};
     if (!m_model) {
-        continuation(false);
+        continuation(false, localRefusal);
         return;
     }
     SliceModel* slice = m_model->slice(sliceId);
     if (!slice || !m_model->sliceOwnedByUs(sliceId)
         || modeIsReceiveOnly(m_model->backendCapabilities(), slice->mode())
         || !m_model->panTransmitInhibitReason(slice->panId()).isEmpty()) {
-        continuation(false);
+        continuation(false, localRefusal);
         return;
     }
     if (slice->isTxSlice()) {
-        continuation(true);
+        continuation(true, {RadioControlReply::Kind::Accepted, 0, {}});
         return;
     }
 
@@ -2109,13 +2125,13 @@ void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)>
             if (result.kind != RadioControlReply::Kind::Accepted) {
                 qCWarning(lcCat) << "TCI: TX-slice selection rejected"
                                  << result.message;
-                continuation(false);
+                continuation(false, result);
                 return;
             }
             continuation(self->m_model && original
                 && self->m_model->controlSessionCurrent(session)
                 && self->m_model->slice(original->sliceId()) == original
-                && TciProtocol::transmitPermitted(self->m_model, original));
+                && TciProtocol::transmitPermitted(self->m_model, original), result);
         }, session);
 }
 
@@ -2345,6 +2361,123 @@ void TciServer::reapCreatedVfoBSlice(int sliceId)
     }
 }
 
+namespace {
+bool refusedWhileKeyed(const RadioControlReply& reply)
+{
+    return reply.kind == RadioControlReply::Kind::Refused
+        && reply.code == RadioControlReply::kRefusedWhileKeyed;
+}
+constexpr int kOwedRouteRetryMs = 100;
+constexpr int kOwedRouteRetryLimit = 20;
+} // namespace
+
+void TciServer::oweRouteFinish(const OwedRouteFinish& owed)
+{
+    m_owedRouteFinish = owed;
+    // Kept until the finish has run: a trx:true meanwhile keys with a route
+    // that owns VFO B, not on an orphaned slice (#7589 note 2).
+    m_routingState.bindCreatedRoute(owed.rxSliceId, owed.createdSliceId);
+    if (!m_model || m_model->isRadioTransmitting()) {
+        m_owedRouteRetries = 0;   // the unkey edge's drain runs it
+        return;
+    }
+    // Refused as keyed while the model already reads unkeyed: no edge is coming
+    // to run it, so retry on a short timer, bounded (#7589 notes 3 and 4).
+    if (m_owedRouteRetries++ >= kOwedRouteRetryLimit) {
+        giveUpOwedRoute();
+        return;
+    }
+    if (!m_owedRouteRetryTimer) {
+        m_owedRouteRetryTimer = new QTimer(this);
+        m_owedRouteRetryTimer->setSingleShot(true);
+        connect(m_owedRouteRetryTimer, &QTimer::timeout, this, &TciServer::drainDeferredRoutingAndPtt);
+    }
+    m_owedRouteRetryTimer->start(kOwedRouteRetryMs);
+}
+
+void TciServer::startOwedRouteFinish()
+{
+    const OwedRouteFinish owed = *m_owedRouteFinish;
+    if (!m_model || !m_model->controlSessionCurrent(owed.session) || !owed.rx || !owed.created
+        || m_model->slice(owed.rxSliceId) != owed.rx || m_model->slice(owed.createdSliceId) != owed.created
+        || !m_routingState.ownsRoute() || m_routingState.rxSliceId() != owed.rxSliceId
+        || m_routingState.txSliceId() != owed.createdSliceId) {
+        giveUpOwedRoute();
+        return;
+    }
+    const quint64 transitionGeneration = beginRouteTransition();
+    QPointer<TciServer> self(this);
+    promoteTxSliceWithReply(owed.rxSliceId,
+        [self, owed, transitionGeneration](bool selected, const RadioControlReply& reply) {
+            if (!self || transitionGeneration != self->m_routeTransitionGeneration) {
+                return;
+            }
+            if (selected) {
+                self->dropOwedRoute();
+                if (self->m_model && self->m_model->slice(owed.createdSliceId) == owed.created) {
+                    self->reapCreatedVfoBSlice(owed.createdSliceId);
+                }
+                self->m_routingState.clearTciRoute();
+                if (owed.confirmation) {
+                    self->broadcast(*owed.confirmation);
+                }
+            } else if (refusedWhileKeyed(reply)) {
+                self->oweRouteFinish(owed);
+            } else {
+                self->giveUpOwedRoute();
+            }
+            self->finishRouteTransition(transitionGeneration);
+        });
+}
+
+void TciServer::dropOwedRoute()
+{
+    m_owedRouteFinish.reset();
+    m_owedRouteRetries = 0;
+    if (m_owedRouteRetryTimer) {
+        m_owedRouteRetryTimer->stop();
+    }
+}
+
+void TciServer::giveUpOwedRoute()
+{
+    if (!m_owedRouteFinish) {
+        return;
+    }
+    const OwedRouteFinish owed = *m_owedRouteFinish;
+    dropOwedRoute();
+    const bool routeKept = m_routingState.ownsRoute() && m_routingState.txSliceId() == owed.createdSliceId;
+    qCWarning(lcCat) << "TCI: owed VFO-B teardown not finished; its pan is left for the operator";
+    if (!owed.confirmation) {
+        if (routeKept) {
+            m_routingState.reset();   // a teardown ends its route, as a refused one always has
+        }
+        return;
+    }
+    // Never strand a held split:false (#7589 note 5): send it when it is now
+    // true, else the corrected state, TX still being on VFO B.
+    const bool stillSplit = routeKept && m_model && owed.created
+        && m_model->slice(owed.createdSliceId) == owed.created && owed.created->isTxSlice();
+    if (stillSplit) {
+        m_routingState.setSplitRequested(true);
+        broadcast(QStringLiteral("split_enable:%1,true;").arg(owed.trx));
+    } else {
+        broadcast(*owed.confirmation);
+    }
+}
+
+void TciServer::claimOwedRoute(int txSliceId)
+{
+    // A live client used the kept route during the over: it is in use, not
+    // owed. The route stays TciCreated, so its own end still reaps the pan
+    // (#7589 note 7). A held split:false is not claimed: that client asked for
+    // the route to end.
+    if (m_owedRouteFinish && !m_owedRouteFinish->confirmation
+        && m_owedRouteFinish->createdSliceId == txSliceId) {
+        dropOwedRoute();
+    }
+}
+
 void TciServer::reportVfoBRouteFailure(TciClient* client,
     const TciProtocol::VfoRequest& request,
     const QString& reason,
@@ -2432,6 +2565,7 @@ void TciServer::handleVfoRequest(TciClient* client, const TciProtocol::VfoReques
         return;
     }
     if (route.action == TciRoutingState::RouteAction::UseExisting) {
+        claimOwedRoute(route.txSliceId);
         tuneSliceAndConfirm(client, request.trx, 1, route.txSliceId, request.frequencyHz);
         return;
     }
@@ -2499,6 +2633,7 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
         const TciRoutingState::RouteDecision route = m_routingState.resolveVfoB(
             rxSlice->sliceId(), routingEndpoints(client), /*vfoBEqualsRx=*/false);
         if (route.action == TciRoutingState::RouteAction::UseExisting) {
+            claimOwedRoute(route.txSliceId);
             broadcast(confirmation);
             return;
         }
@@ -2550,11 +2685,19 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
         return;
     }
 
+    OwedRouteFinish owed{rxSlice->sliceId(), createdSliceId, rxSlice,
+                         createdSliceId >= 0 ? m_model->slice(createdSliceId) : nullptr,
+                         m_model->controlSession(), request.trx, confirmation};
+    if (owed.created && m_model->keyedTxSliceChangeRefused(owed.rxSliceId)) {
+        oweRouteFinish(owed);   // asked first: no refusal Notice for TCI's own move (#7589)
+        return;
+    }
     QPointer<TciServer> self(this);
     const quint64 transitionGeneration = beginRouteTransition();
-    promoteTxSliceAndContinue(
+    promoteTxSliceWithReply(
         rxSlice->sliceId(),
-        [self, confirmation, createdSliceId, transitionGeneration](bool selected) {
+        [self, confirmation, createdSliceId, owed, transitionGeneration](
+            bool selected, const RadioControlReply& reply) {
             if (!self) {
                 return;
             }
@@ -2565,6 +2708,11 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
                 }
                 self->m_routingState.clearTciRoute();
                 self->broadcast(confirmation);
+            } else if (owed.created && refusedWhileKeyed(reply) && self->m_routingState.ownsRoute()
+                       && self->m_routingState.txSliceId() == createdSliceId) {
+                // Refused because the radio is keyed, whatever the model reads:
+                // finished after unkey, confirmation held until then (#7589).
+                self->oweRouteFinish(owed);
             }
             self->finishRouteTransition(transitionGeneration);
         });
@@ -2593,6 +2741,16 @@ void TciServer::drainDeferredRoutingAndPtt()
     if (m_routeTransitionInFlight || m_tciPttClient || m_tciPttCancelPending
         || radioIsTransmitting()) {
         return;
+    }
+    // An owed teardown finishes before any deferred command is replayed, so a
+    // replayed route is never moved back to VFO A after it (#7589 note 1).
+    if (m_owedRouteFinish) {
+        if (!(m_owedRouteRetryTimer && m_owedRouteRetryTimer->isActive())) {
+            startOwedRouteFinish();
+        }
+        if (m_owedRouteFinish || m_routeTransitionInFlight) {
+            return;
+        }
     }
 
     while (!m_routeTransitionInFlight && !m_tciPttClient && !m_tciPttCancelPending
@@ -2921,6 +3079,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
     const int cachedRx = m_routingState.rxSliceId();
     const char* const cachedOwner = txRouteOwnerName(m_routingState.owner());
     const int txSliceId = m_routingState.resolvePttSlice(rxSlice->sliceId(), endpoints);
+    claimOwedRoute(txSliceId);
 
     // Log the whole PTT routing decision (request, live state, cached route,
     // result) so routing faults can be diagnosed from a log. source= is
@@ -5735,17 +5894,32 @@ void TciServer::teardownTciRoute()
     const bool removeCreated = m_routingState.owner() == TciRoutingState::TxRouteOwner::TciCreated;
     const QPointer<SliceModel> originalTx(m_model->slice(txSliceId));
     const RadioControlSession session = m_model->controlSession();
+    dropOwedRoute();   // this teardown decides afresh
     m_routingState.reset();
 
     if (rxSliceId < 0 || !m_model->slice(rxSliceId)) {
         return;
     }
+    const OwedRouteFinish owed{rxSliceId, txSliceId, m_model->slice(rxSliceId), originalTx, session, 0, {}};
+    if (removeCreated && originalTx && m_model->keyedTxSliceChangeRefused(rxSliceId)) {
+        // Asked first: TX can't move back while keyed, and asking would raise
+        // the operator's refusal Notice for a move TCI made (#7589 note 6).
+        oweRouteFinish(owed);
+        return;
+    }
     QPointer<TciServer> self(this);
-    promoteTxSliceAndContinue(rxSliceId, [self, txSliceId, removeCreated, originalTx, session](bool selected) {
-        if (self && selected && removeCreated && self->m_model && originalTx
-            && self->m_model->controlSessionCurrent(session)
-            && self->m_model->slice(txSliceId) == originalTx) {
+    promoteTxSliceWithReply(rxSliceId,
+        [self, txSliceId, removeCreated, originalTx, session, owed](bool selected, const RadioControlReply& reply) {
+        if (!self || !removeCreated || !self->m_model || !originalTx
+            || !self->m_model->controlSessionCurrent(session)
+            || self->m_model->slice(txSliceId) != originalTx) {
+            return;
+        }
+        if (selected) {
             self->reapCreatedVfoBSlice(txSliceId);
+        } else if (refusedWhileKeyed(reply) && self->m_routingState.owner() == TciRoutingState::TxRouteOwner::None
+                   && self->m_routingState.txSliceId() < 0) {
+            self->oweRouteFinish(owed);   // decided from the refusal itself (#7589 note 4)
         }
     });
 }
