@@ -415,6 +415,11 @@ public:
     // Only the backend's explicit CW break-in path uses CW holds to sustain
     // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
     bool setCwMox(bool keyed, const TxCoordinator::Operation& operation);
+    // A break-in key-down while the backend is still keyed (#7567): raises MOX
+    // again under `operation` if the operation that raised it has lapsed (MOX
+    // already dropped, or drops on the next frame). Otherwise changes nothing.
+    // Returns what setCwMox() returns.
+    bool reraiseCwMox(const TxCoordinator::Operation& operation);
     [[nodiscard]] bool isKeyed() const noexcept { return m_mox; }
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);

@@ -1474,6 +1474,14 @@ bool MetisClient::setCwMox(bool keyed, const TxCoordinator::Operation& operation
     return setMoxImpl(keyed, operation, true);
 }
 
+bool MetisClient::reraiseCwMox(const TxCoordinator::Operation& operation)
+{
+    if (m_mox && m_moxOperation.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return false;
+    }
+    return setCwMox(true, operation);
+}
+
 bool MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn)
 {
     if (!TxCoordinator::Command{operation, keyed}.permitsDispatch(TxCoordinator::monotonicMs())) {

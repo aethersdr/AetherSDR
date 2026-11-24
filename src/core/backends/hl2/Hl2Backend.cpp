@@ -5665,6 +5665,16 @@ void Hl2Backend::keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
         if (breakIn && !m_keyed) {
             applyKeying(true, operation, {}, true);
             m_cwAutoKeyed = true;
+        } else if (breakIn && m_cwAutoKeyed && m_metis) {
+            // Inside the hang. A fence of the run that raised MOX (a CWX
+            // clear, a refusal) drops it at the writer while this backend
+            // stays keyed, and the element would be admitted with nothing on
+            // EP2 (#7567). Raised again under this element's operation.
+            QMetaObject::invokeMethod(m_metis, [metis = m_metis, dsp = m_txDsp, operation] {
+                if (metis->reraiseCwMox(operation) && dsp) {
+                    dsp->reset();   // #7216, as applyKeying() does
+                }
+            }, Qt::QueuedConnection);
         }
         return;
     }
