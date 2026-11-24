@@ -11,6 +11,7 @@
 // connection records writes in memory and delivers replies through its ordinary
 // commandResponse signal. No radio peer is connected.
 
+#include "FlexCommandTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/backends/IRadioBackend.h"
@@ -49,6 +50,7 @@ public:
     {
         radio.m_connection->m_handle = 0x12345678u;
         radio.m_connection->m_state.store(ConnectionState::Connected);
+        FlexCommandTestAccess::session(radio);
         radio.m_guiClientRegistrationState.begin();
     }
     static void acceptGuiRegistration(RadioModel& radio)
