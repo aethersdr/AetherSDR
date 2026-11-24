@@ -178,6 +178,7 @@ signals:
     void wanDisconnectClientsRequested(const WanRadioInfo& radio);
     void disconnectRequested();
     void routedRadioFound(const RadioInfo& radio);
+    void remoteEngineRestored(const RadioInfo& radio);
     void retryDiscoveryRequested();
     void radioNicknameChanged();
     void radioRenameRequested(const RadioInfo& radio, const QString& currentNickname);
@@ -407,6 +408,7 @@ private:
                                   const QString& editStyle, const QString& comboStyle);
     void onRemoteEngineAdvert(const AetherSDR::aetherd::RemoteEngineDiscovery::Advert& advert);
     void startRemoteEnginePairing();
+    void offerStartupRemoteEngine();
     void publishRemoteEngine(const AetherSDR::aetherd::RemoteEngineRecord& record);
     void forgetRemoteEngine(const QString& engineId);
     void removeRemoteEngineEntry(const QString& serial);

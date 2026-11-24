@@ -6,7 +6,6 @@
 #include <QMetaObject>
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
-#include <QRegularExpression>
 #include <QSet>
 #include <QUdpSocket>
 #include <QUrl>
@@ -83,9 +82,8 @@ std::optional<RemoteEngineDiscovery::Advert> RemoteEngineDiscovery::parseReply(
     if (datagram.isEmpty() || datagram.size() > kMaxReplyBytes) { return std::nullopt; }
     const QJsonObject reply = QJsonDocument::fromJson(datagram).object();
     if (reply.value(QStringLiteral("aetherd")).toInt() != 1) { return std::nullopt; }
-    static const QRegularExpression hex(QStringLiteral("^[a-f0-9]{64}$"));
     const QString fingerprint = reply.value(QStringLiteral("certificateSha256")).toString();
-    if (!hex.match(fingerprint).hasMatch()) { return std::nullopt; }
+    if (!RemoteEngineCredentials::validEngineId(fingerprint)) { return std::nullopt; }
     const QString urlText = reply.value(QStringLiteral("wss")).toString();
     if (!RemoteEngineStore::validLanUrl(urlText)) { return std::nullopt; }
     const QUrl url(urlText, QUrl::StrictMode);

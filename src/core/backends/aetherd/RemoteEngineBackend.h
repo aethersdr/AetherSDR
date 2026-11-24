@@ -78,13 +78,10 @@ public:
                          quint64 requestId, const QVariant& arg = {}) override;
 
     // The record the connect path resolves from the session cache: the
-    // request's serial is the engine id, or the engine id plus kTailnetSuffix
+    // request's serial is the engine id, or the engine id plus /tailnet
     // for its tailnet path. Nullopt when this machine never paired with it
     // this session.
     [[nodiscard]] static std::optional<RemoteEngineRecord> recordFor(const RadioConnectRequest& request);
-    static constexpr const char* kTailnetSuffix = "/tailnet";
-    [[nodiscard]] static QString engineIdOf(const QString& serial);
-    [[nodiscard]] static bool tailnetSerial(const QString& serial);
     // Credentials travel only to a peer address inside the selected tunnel.
     [[nodiscard]] static bool tailnetPathAdmitted(const QHostAddress& localAddress,
         const QHostAddress& peerAddress, InterfaceNaming naming, const QList<InterfaceAddress>& interfaces);

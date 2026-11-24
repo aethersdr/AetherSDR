@@ -2270,7 +2270,7 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
         QAction* tailnet = menu.addAction(tr("Set Tailnet Address…"));
         QAction* forget = menu.addAction(tr("Forget This Engine"));
         QAction* chosen = menu.exec(m_radioList->mapToGlobal(pos));
-        const QString engineId = radio.serial.section(QLatin1Char('/'), 0, 0);
+        const QString engineId = aetherd::RemoteEngineCredentials::engineIdOf(radio.serial);
         if (chosen == tailnet) { editRemoteEngineTailnet(engineId); }
         else if (chosen == forget) { forgetRemoteEngine(engineId); }
         return;
@@ -6017,12 +6017,38 @@ void ConnectionPanel::buildRemoteEngineSection(QWidget* parent, QVBoxLayout* lay
                 publishRemoteEngine(*session);
             }
         }
+        offerStartupRemoteEngine();
     });
 #else
+    QTimer::singleShot(0, this, &ConnectionPanel::offerStartupRemoteEngine);
     Q_UNUSED(parent);
     Q_UNUSED(layout);
     Q_UNUSED(editStyle);
     Q_UNUSED(comboStyle);
+#endif
+}
+
+void ConnectionPanel::offerStartupRemoteEngine()
+{
+    auto& settings = AppSettings::instance();
+    if (settings.value("AutoConnectToLastRadio", "True").toString() != QLatin1String("True")) { return; }
+    const QString serial = settings.value("LastConnectedRadioSerial").toString();
+    if (!aetherd::RemoteEngineCredentials::validEngineId(aetherd::RemoteEngineCredentials::engineIdOf(serial))) {
+        return;
+    }
+#ifdef HAVE_WEBSOCKETS
+    if (m_remoteEngineRows.contains(serial)) {
+        for (const RadioInfo& radio : std::as_const(m_radios)) {
+            if (radio.serial == serial) {
+                const RadioInfo restored = radio;
+                emit remoteEngineRestored(restored);
+                return;
+            }
+        }
+    }
+    emit startupConnectUnavailable(tr("The last remote engine needs pairing on this machine."));
+#else
+    emit startupConnectUnavailable(tr("This build has no Qt WebSockets, so it cannot reach a remote engine."));
 #endif
 }
 
@@ -6105,7 +6131,7 @@ void ConnectionPanel::publishRemoteEngine(const aetherd::RemoteEngineRecord& rec
     m_remoteEngineRows.insert(record.engineId);
     onRadioDiscovered(remoteEngineRadioInfo(record));
     // The tailnet path is its own entry, so the operator picks the route.
-    const QString tailnetSerial = record.engineId + QLatin1String("/tailnet");
+    const QString tailnetSerial = record.engineId + aetherd::RemoteEngineCredentials::kTailnetSuffix;
     if (!record.tailnetUrl.isEmpty()) {
         RadioInfo tailnet = remoteEngineRadioInfo(record);
         const QUrl url(record.tailnetUrl);
@@ -6130,7 +6156,7 @@ void ConnectionPanel::forgetRemoteEngine(const QString& engineId)
     ++m_remotePairingGeneration;
     aetherd::RemoteEngineStore::forget(engineId);
     removeRemoteEngineEntry(engineId);
-    removeRemoteEngineEntry(engineId + QLatin1String("/tailnet"));
+    removeRemoteEngineEntry(engineId + aetherd::RemoteEngineCredentials::kTailnetSuffix);
     if (m_remoteEngineStatus) {
         applyStyle(m_remoteEngineStatus, QString::fromLatin1(kHintLabelStyle));
         m_remoteEngineStatus->setText(tr(

@@ -25,6 +25,10 @@ struct RemoteEngineRecord {
 // panel primes it at pairing or after its keychain read. Main thread only.
 class RemoteEngineCredentials {
 public:
+    static constexpr QLatin1StringView kTailnetSuffix{"/tailnet"};
+    [[nodiscard]] static bool validEngineId(const QString& engineId);
+    [[nodiscard]] static QString engineIdOf(const QString& serial);
+    [[nodiscard]] static bool tailnetSerial(const QString& serial);
     static void setSession(const RemoteEngineRecord& record);
     [[nodiscard]] static std::optional<RemoteEngineRecord> session(const QString& engineId);
     [[nodiscard]] static QList<RemoteEngineRecord> sessions();

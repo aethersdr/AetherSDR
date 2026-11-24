@@ -88,9 +88,9 @@ void storeRules()
               && RemoteEngineCredentials::session(kFingerprint)->tailnetUrl == "ws://100.119.109.89:8443",
           "a tailnet address joins an engine already paired");
     RadioConnectRequest request;
-    request.serial = kFingerprint + QLatin1String(RemoteEngineBackend::kTailnetSuffix);
-    check(RemoteEngineBackend::recordFor(request).has_value() && RemoteEngineBackend::tailnetSerial(request.serial)
-              && RemoteEngineBackend::engineIdOf(request.serial) == kFingerprint,
+    request.serial = kFingerprint + RemoteEngineCredentials::kTailnetSuffix;
+    check(RemoteEngineBackend::recordFor(request).has_value() && RemoteEngineCredentials::tailnetSerial(request.serial)
+              && RemoteEngineCredentials::engineIdOf(request.serial) == kFingerprint,
           "the tailnet entry resolves to the same engine");
     record.lanUrl = QStringLiteral("wss://192.168.50.217:8443");
     record.token = QString(64, u'8');

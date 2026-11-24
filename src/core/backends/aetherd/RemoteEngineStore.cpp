@@ -9,7 +9,6 @@
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QPointer>
-#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
@@ -31,12 +30,6 @@ Q_LOGGING_CATEGORY(lcRemoteEngineStore, "aether.backend.aetherd.store")
 
 const QString kRootKey = QStringLiteral("RemoteEngines");
 constexpr const char* kKeychainService = "AetherSDR";
-
-bool validEngineId(const QString& id)
-{
-    static const QRegularExpression hex(QStringLiteral("^[a-f0-9]{64}$"));
-    return hex.match(id).hasMatch();
-}
 
 bool validUrl(const QString& text, const char* scheme)
 {
@@ -97,7 +90,7 @@ QList<RemoteEngineRecord> RemoteEngineStore::records()
     QList<RemoteEngineRecord> out;
     for (const QJsonValue& value : readRoot().value(QStringLiteral("engines")).toArray()) {
         RemoteEngineRecord record = fromJson(value.toObject());
-        if (!validEngineId(record.engineId) || !validLanUrl(record.lanUrl)) { continue; }
+        if (!RemoteEngineCredentials::validEngineId(record.engineId) || !validLanUrl(record.lanUrl)) { continue; }
         if (!record.tailnetUrl.isEmpty() && !validTailnetUrl(record.tailnetUrl)) { record.tailnetUrl.clear(); }
         out.append(record);
     }
@@ -124,7 +117,7 @@ bool RemoteEngineStore::persistentStoreAvailable()
 void RemoteEngineStore::save(const RemoteEngineRecord& record, QObject* context,
                              std::function<void(bool)> done)
 {
-    if (!validEngineId(record.engineId) || !validLanUrl(record.lanUrl) || record.token.isEmpty()) {
+    if (!RemoteEngineCredentials::validEngineId(record.engineId) || !validLanUrl(record.lanUrl) || record.token.isEmpty()) {
         if (context && done) { done(false); }
         return;
     }
