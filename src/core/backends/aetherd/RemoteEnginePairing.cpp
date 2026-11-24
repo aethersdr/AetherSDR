@@ -1,8 +1,11 @@
 #include "RemoteEnginePairing.h"
 #include "RemoteEngineStore.h"
 
+#include "core/control/ControlCredentials.h"
 #include "core/control/ControlPairing.h"
+#include "core/control/ControlProtocolCodec.h"
 
+#include <QByteArrayView>
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -12,6 +15,8 @@
 #include <QTimer>
 #include <QUrl>
 #include <QWebSocket>
+
+#include <algorithm>
 
 namespace AetherSDR::aetherd {
 
@@ -58,6 +63,18 @@ bool RemoteEnginePairing::codeMatchesCertificate(const QString& code, const QStr
     return control::ControlPairing::checkDigits(digits->left(6), certificateSha256) == digits->right(4);
 }
 
+QString RemoteEnginePairing::boundedClientName(const QString& clientName)
+{
+    const QByteArray utf8 = clientName.trimmed().toUtf8();
+    qsizetype end = std::min(utf8.size(), control::ControlCredentials::kMaximumNameBytes);
+    while (end < utf8.size() && (static_cast<unsigned char>(utf8.at(end)) & 0xc0) == 0x80) {
+        --end;
+    }
+    const QString name = QString::fromUtf8(QByteArrayView(utf8.constData(), end)).trimmed();
+    return !name.isEmpty() && control::ControlCredentials::validName(name)
+        ? name : QStringLiteral("AetherSDR");
+}
+
 void RemoteEnginePairing::start(const QString& lanUrl, const QString& code, const QString& clientName,
                                 const QString& engineName)
 {
@@ -71,17 +88,17 @@ void RemoteEnginePairing::start(const QString& lanUrl, const QString& code, cons
         emit failed(tr("The pairing code is ten digits, as shown on the radio's screen."));
         return;
     }
-    const QByteArray name = clientName.trimmed().toUtf8().left(32);
     m_lanUrl = lanUrl;
     m_digits = *digits;
-    m_clientName = QString::fromUtf8(name).trimmed();
-    if (m_clientName.isEmpty()) { m_clientName = QStringLiteral("AetherSDR"); }
+    m_clientName = boundedClientName(clientName);
     m_engineName = engineName;
     m_fingerprint.clear();
     m_sent = false;
     const quint64 generation = ++m_generation;
     m_socket = std::make_unique<QWebSocket>(QStringLiteral("aethersdr"));
     QWebSocket* socket = m_socket.get();
+    socket->setMaxAllowedIncomingFrameSize(control::ProtocolLimits::kMaxMessageBytes);
+    socket->setMaxAllowedIncomingMessageSize(control::ProtocolLimits::kMaxMessageBytes);
     connect(socket, &QWebSocket::sslErrors, this, [this, generation, socket](const QList<QSslError>& errors) {
         if (generation != m_generation) { return; }
         m_fingerprint = fingerprintOf(*socket);

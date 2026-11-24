@@ -1,7 +1,9 @@
 #include "RemoteEngineDiscovery.h"
+#include "RemoteEngineStore.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaObject>
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
 #include <QRegularExpression>
@@ -14,6 +16,7 @@ namespace AetherSDR::aetherd {
 namespace {
 constexpr quint16 kDiscoveryPort = 4996;   // DiscoveryResponder::kPort, fixed by ruling
 constexpr qsizetype kMaxReplyBytes = 1024;
+constexpr int kDatagramsPerTurn = 64;
 const QByteArray kProbe = QByteArrayLiteral("AETHERD-DISCOVER 1");
 } // namespace
 
@@ -83,12 +86,10 @@ std::optional<RemoteEngineDiscovery::Advert> RemoteEngineDiscovery::parseReply(
     static const QRegularExpression hex(QStringLiteral("^[a-f0-9]{64}$"));
     const QString fingerprint = reply.value(QStringLiteral("certificateSha256")).toString();
     if (!hex.match(fingerprint).hasMatch()) { return std::nullopt; }
-    const QUrl url(reply.value(QStringLiteral("wss")).toString(), QUrl::StrictMode);
-    QHostAddress host;
-    if (!url.isValid() || url.scheme() != QLatin1String("wss") || !host.setAddress(url.host())
-        || url.port() <= 0 || !url.path().isEmpty()) {
-        return std::nullopt;
-    }
+    const QString urlText = reply.value(QStringLiteral("wss")).toString();
+    if (!RemoteEngineStore::validLanUrl(urlText)) { return std::nullopt; }
+    const QUrl url(urlText, QUrl::StrictMode);
+    const QHostAddress host(url.host());
     // The advertised listener must be the machine that answered: a reply
     // never redirects the desktop to a third address.
     bool mapped = false;
@@ -110,11 +111,19 @@ std::optional<RemoteEngineDiscovery::Advert> RemoteEngineDiscovery::parseReply(
 
 void RemoteEngineDiscovery::readReplies()
 {
-    while (m_socket && m_socket->hasPendingDatagrams()) {
+    if (m_readScheduled) { return; }
+    for (int i = 0; i < kDatagramsPerTurn && m_socket && m_socket->hasPendingDatagrams(); ++i) {
         const QNetworkDatagram datagram = m_socket->receiveDatagram(kMaxReplyBytes + 1);
         if (const auto advert = parseReply(datagram.data(), datagram.senderAddress())) {
             emit engineFound(*advert);
         }
+    }
+    if (m_socket && m_socket->hasPendingDatagrams()) {
+        m_readScheduled = true;
+        QMetaObject::invokeMethod(this, [this] {
+            m_readScheduled = false;
+            readReplies();
+        }, Qt::QueuedConnection);
     }
 }
 

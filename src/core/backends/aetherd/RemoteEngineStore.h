@@ -25,7 +25,8 @@ public:
 
     // Remembers the engine and its token, and primes the session cache at once
     // so a connect straight after pairing does not wait on the keychain.
-    static void save(const RemoteEngineRecord& record);
+    static void save(const RemoteEngineRecord& record, QObject* context = nullptr,
+                     std::function<void(bool persisted)> done = {});
     // Changes the optional tailnet address of an engine already paired.
     // Must be "ws://<address>:<port>" or empty; false otherwise.
     [[nodiscard]] static bool setTailnetUrl(const QString& engineId, const QString& tailnetUrl);

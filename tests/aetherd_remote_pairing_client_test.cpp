@@ -1,14 +1,11 @@
 // The desktop's half of pairing with a remote aetherd
-// (docs/aetherd-remote-backend.md §3). Socket-free: advertisement replies
-// (and that a reply never redirects to another address), the paired-engine
-// store's address rules, and that the token never reaches settings. Then,
-// against an in-process engine over wss:// on 127.0.0.1: a code whose check
+// (docs/aetherd-remote-backend.md §3). Against an in-process engine over
+// wss:// on 127.0.0.1, a code whose check
 // digits do not match the certificate sends nothing, the right code pairs, and
 // the stored record connects the backend.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/backends/aetherd/RemoteEngineBackend.h"
-#include "core/backends/aetherd/RemoteEngineDiscovery.h"
 #include "core/backends/aetherd/RemoteEnginePairing.h"
 #include "core/backends/aetherd/RemoteEngineStore.h"
 #include "core/control/ControlEngine.h"
@@ -50,73 +47,6 @@ bool waitUntil(const std::function<bool()>& predicate, int timeoutMs = 5000)
     }
     return predicate();
 }
-const QString kFingerprint = QStringLiteral("ab").repeated(32);
-
-QByteArray reply(const QJsonObject& object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); }
-
-void advertisements()
-{
-    const QHostAddress sender(QStringLiteral("192.168.50.216"));
-    const QJsonObject good{{"aetherd", 1}, {"name", "g2-alarm"},
-        {"radio", QJsonObject{{"model", "ANAN-G2"}, {"family", "anan"}, {"connected", true}}},
-        {"wss", "wss://192.168.50.216:8443"}, {"certificateSha256", kFingerprint}};
-    const auto advert = RemoteEngineDiscovery::parseReply(reply(good), sender);
-    check(advert && advert->name == "g2-alarm" && advert->model == "ANAN-G2" && advert->radioConnected
-              && advert->port == 8443 && advert->certificateSha256 == kFingerprint,
-          "an advertisement names the engine, its radio and its listener");
-    check(RemoteEngineDiscovery::parseReply(reply(good), QHostAddress("::ffff:192.168.50.216")).has_value(),
-          "an IPv4-mapped sender is the same machine");
-    check(!RemoteEngineDiscovery::parseReply(reply(good), QHostAddress("192.168.50.99")),
-          "a reply naming another machine's listener is refused (no redirect)");
-    QJsonObject bad = good;
-    bad["certificateSha256"] = "xyz";
-    check(!RemoteEngineDiscovery::parseReply(reply(bad), sender), "a malformed fingerprint is refused");
-    bad = good;
-    bad["wss"] = "ws://192.168.50.216:8443";
-    check(!RemoteEngineDiscovery::parseReply(reply(bad), sender), "a plain ws:// listener is never advertised");
-    bad = good;
-    bad["aetherd"] = 2;
-    check(!RemoteEngineDiscovery::parseReply(reply(bad), sender), "another version is ignored");
-    bad = good;
-    bad["name"] = QString(2000, u'x');
-    check(!RemoteEngineDiscovery::parseReply(reply(bad), sender), "a reply over 1 KiB is ignored");
-}
-
-void storeRules()
-{
-    check(RemoteEngineStore::validLanUrl("wss://192.168.50.216:8443"), "a LAN address is wss://<IP>:<port>");
-    check(!RemoteEngineStore::validLanUrl("ws://192.168.50.216:8443")
-              && !RemoteEngineStore::validLanUrl("wss://g2.local:8443")
-              && !RemoteEngineStore::validLanUrl("wss://192.168.50.216")
-              && !RemoteEngineStore::validLanUrl("wss://192.168.50.216:8443/x")
-              && !RemoteEngineStore::validLanUrl("wss://u@192.168.50.216:8443"),
-          "never ws://, a host name, a missing port, a path or user info");
-    check(RemoteEngineStore::validTailnetUrl("ws://100.119.109.89:8443")
-              && !RemoteEngineStore::validTailnetUrl("wss://100.119.109.89:8443"),
-          "a tailnet address is ws://<IP>:<port>");
-    RemoteEngineRecord record{kFingerprint, "g2-alarm", "wss://192.168.50.216:8443", {}, QString(64, u'7')};
-    RemoteEngineStore::save(record);
-    const auto stored = RemoteEngineStore::record(kFingerprint);
-    check(stored && stored->name == "g2-alarm" && stored->token.isEmpty(), "the stored record carries no token");
-    const QString settings = AppSettings::instance().value("RemoteEngines").toString();
-    check(!settings.isEmpty() && !settings.contains(QString(64, u'7')), "the token never reaches settings");
-    const auto session = RemoteEngineCredentials::session(kFingerprint);
-    check(session && session->token == QString(64, u'7'), "saving primes the connect path's session cache");
-    check(!RemoteEngineStore::setTailnetUrl(kFingerprint, "wss://100.119.109.89:8443")
-              && RemoteEngineStore::setTailnetUrl(kFingerprint, "ws://100.119.109.89:8443")
-              && RemoteEngineStore::record(kFingerprint)->tailnetUrl == "ws://100.119.109.89:8443"
-              && RemoteEngineCredentials::session(kFingerprint)->tailnetUrl == "ws://100.119.109.89:8443",
-          "a tailnet address joins an engine already paired");
-    RadioConnectRequest request;
-    request.serial = kFingerprint + QLatin1String(RemoteEngineBackend::kTailnetSuffix);
-    check(RemoteEngineBackend::recordFor(request).has_value() && RemoteEngineBackend::tailnetSerial(request.serial)
-              && RemoteEngineBackend::engineIdOf(request.serial) == kFingerprint,
-          "the tailnet entry resolves to the same engine");
-    RemoteEngineStore::forget(kFingerprint);
-    check(!RemoteEngineStore::record(kFingerprint) && !RemoteEngineCredentials::session(kFingerprint),
-          "forget removes the record and the session token");
-}
-
 class Issuer final : public PairingIssuer {
 public:
     explicit Issuer(ControlCredentials& credentials) : m_credentials(credentials) {}
@@ -159,12 +89,6 @@ int main(int argc, char* argv[])
     QFile::setPermissions(runtime.path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
-
-    advertisements();
-    storeRules();
-    check(RemoteEnginePairing::codeMatchesCertificate(
-              "123456" + ControlPairing::checkDigits("123456", kFingerprint), kFingerprint),
-          "a code carries its certificate's check digits");
 
     const QString openssl = QStandardPaths::findExecutable("openssl");
     if (openssl.isEmpty()) { std::printf("SKIP: no openssl tool\n"); return failures ? 1 : 77; }

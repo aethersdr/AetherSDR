@@ -5720,7 +5720,7 @@ void MainWindow::buildUI()
     auto* splitter = m_splitter;
 
     // Connection panel — a modeless CanonWindow dialog, always frameless.
-    m_connPanel = new ConnectionPanel(this);
+    m_connPanel = new ConnectionPanel(this, ConnectionPanel::RemoteDiscovery::Enabled);
     // Sizing belongs to the panel now. It sets these same two values in its own
     // constructor and then adjusts them per screen in fitToScreen(), which
     // every show path here runs first — a hardcoded pair at this level went

@@ -53,6 +53,7 @@ private:
     void readReplies();
 
     std::unique_ptr<QUdpSocket> m_socket;
+    bool m_readScheduled{false};
     std::optional<std::pair<QHostAddress, quint16>> m_testTarget;
 };
 

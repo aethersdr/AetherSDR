@@ -10,9 +10,11 @@
 #include <QLoggingCategory>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <memory>
 
 #ifdef HAVE_KEYCHAIN
@@ -41,7 +43,7 @@ bool validUrl(const QString& text, const char* scheme)
     const QUrl url(text, QUrl::StrictMode);
     QHostAddress host;
     return url.isValid() && url.scheme() == QLatin1String(scheme) && host.setAddress(url.host())
-        && url.port() > 0 && url.path().isEmpty() && url.userInfo().isEmpty() && !url.hasQuery();
+        && url.port() > 0 && url.path().isEmpty() && url.userInfo().isEmpty() && !url.hasQuery() && !url.hasFragment();
 }
 
 QJsonObject readRoot()
@@ -113,40 +115,53 @@ std::optional<RemoteEngineRecord> RemoteEngineStore::record(const QString& engin
 bool RemoteEngineStore::persistentStoreAvailable()
 {
 #ifdef HAVE_KEYCHAIN
-    return true;
+    return !QStandardPaths::isTestModeEnabled();
 #else
     return false;
 #endif
 }
 
-void RemoteEngineStore::save(const RemoteEngineRecord& record)
+void RemoteEngineStore::save(const RemoteEngineRecord& record, QObject* context,
+                             std::function<void(bool)> done)
 {
-    if (!validEngineId(record.engineId) || !validLanUrl(record.lanUrl) || record.token.isEmpty()) { return; }
-    RemoteEngineCredentials::setSession(record);
-    QList<RemoteEngineRecord> all = records();
-    all.erase(std::remove_if(all.begin(), all.end(),
-                             [&](const RemoteEngineRecord& r) { return r.engineId == record.engineId; }),
-              all.end());
+    if (!validEngineId(record.engineId) || !validLanUrl(record.lanUrl) || record.token.isEmpty()) {
+        if (context && done) { done(false); }
+        return;
+    }
     RemoteEngineRecord stored = record;
+    QList<RemoteEngineRecord> all = records();
+    const auto previous = std::ranges::find(all, record.engineId, &RemoteEngineRecord::engineId);
+    if (previous != all.end()) {
+        if (stored.tailnetUrl.isEmpty()) { stored.tailnetUrl = previous->tailnetUrl; }
+        all.erase(previous);
+    }
+    RemoteEngineCredentials::setSession(stored);
     stored.token.clear();
     all.append(stored);
     writeRecords(all);
     const QString key = SettingsCredentialPolicy::aetherdCredentialKey(record.engineId);
 #ifdef HAVE_KEYCHAIN
-    auto* job = new QKeychain::WritePasswordJob(QLatin1String(kKeychainService));
-    job->setAutoDelete(true);
-    job->setKey(key);
-    job->setInsecureFallback(false);
-    job->setTextData(record.token);
-    QObject::connect(job, &QKeychain::Job::finished, job, [](QKeychain::Job* finished) {
-        if (finished->error() != QKeychain::NoError) {
-            qCWarning(lcRemoteEngineStore) << "remote engine token write failed:" << finished->errorString();
-        }
-    });
-    job->start();
-#else
-    AppSettings::instance().setSessionCredential(key, record.token);
+    if (persistentStoreAvailable()) {
+        auto* job = new QKeychain::WritePasswordJob(QLatin1String(kKeychainService));
+        job->setAutoDelete(true);
+        job->setKey(key);
+        job->setInsecureFallback(false);
+        job->setTextData(record.token);
+        const QPointer<QObject> guard(context);
+        QObject::connect(job, &QKeychain::Job::finished, job,
+                         [guard, done = std::move(done)](QKeychain::Job* finished) {
+            const bool persisted = finished->error() == QKeychain::NoError;
+            if (!persisted) {
+                qCWarning(lcRemoteEngineStore) << "remote engine token write failed:" << finished->errorString();
+            }
+            if (guard && done) { done(persisted); }
+        });
+        job->start();
+        return;
+    }
 #endif
+    AppSettings::instance().setSessionCredential(key, record.token);
+    if (context && done) { done(false); }
 }
 
 bool RemoteEngineStore::setTailnetUrl(const QString& engineId, const QString& tailnetUrl)
@@ -179,14 +194,15 @@ void RemoteEngineStore::forget(const QString& engineId)
     RemoteEngineCredentials::clearSession(engineId);
     const QString key = SettingsCredentialPolicy::aetherdCredentialKey(engineId);
 #ifdef HAVE_KEYCHAIN
-    auto* job = new QKeychain::DeletePasswordJob(QLatin1String(kKeychainService));
-    job->setAutoDelete(true);
-    job->setKey(key);
-    job->setInsecureFallback(false);
-    job->start();
-#else
-    (void)AppSettings::instance().takeSessionCredential(key);
+    if (persistentStoreAvailable()) {
+        auto* job = new QKeychain::DeletePasswordJob(QLatin1String(kKeychainService));
+        job->setAutoDelete(true);
+        job->setKey(key);
+        job->setInsecureFallback(false);
+        job->start();
+    }
 #endif
+    (void)AppSettings::instance().takeSessionCredential(key);
 }
 
 void RemoteEngineStore::primeSessions(QObject* context, std::function<void(int)> done)
@@ -210,6 +226,10 @@ void RemoteEngineStore::primeSessions(QObject* context, std::function<void(int)>
             continue;
         }
 #ifdef HAVE_KEYCHAIN
+        if (!persistentStoreAvailable()) {
+            QTimer::singleShot(0, context, finishOne);
+            continue;
+        }
         auto* job = new QKeychain::ReadPasswordJob(QLatin1String(kKeychainService));
         job->setAutoDelete(true);
         job->setKey(SettingsCredentialPolicy::aetherdCredentialKey(record.engineId));
@@ -217,10 +237,12 @@ void RemoteEngineStore::primeSessions(QObject* context, std::function<void(int)>
         QObject::connect(job, &QKeychain::Job::finished, context, [record, primed, finishOne](QKeychain::Job* finished) {
             const QString token = finished->error() == QKeychain::NoError
                 ? static_cast<QKeychain::ReadPasswordJob*>(finished)->textData() : QString();
-            if (!token.isEmpty()) {
-                RemoteEngineRecord withToken = record;
-                withToken.token = token;
-                RemoteEngineCredentials::setSession(withToken);
+            const auto cached = RemoteEngineCredentials::session(record.engineId);
+            if (cached && cached->usable()) {
+                ++*primed;
+            } else if (auto current = RemoteEngineStore::record(record.engineId); current && !token.isEmpty()) {
+                current->token = token;
+                RemoteEngineCredentials::setSession(*current);
                 ++*primed;
             }
             finishOne();

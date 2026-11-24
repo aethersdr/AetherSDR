@@ -26,6 +26,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QHash>
+#include <QSet>
 #include <QAbstractSocket>
 #include <functional>
 #include <optional>
@@ -49,7 +50,9 @@ class ConnectionPanel : public CanonWindow, public IConnectionAutomation {
     Q_OBJECT
 
 public:
-    explicit ConnectionPanel(QWidget* parent = nullptr);
+    enum class RemoteDiscovery { Disabled, Enabled };
+    explicit ConnectionPanel(QWidget* parent = nullptr,
+                             RemoteDiscovery remoteDiscovery = RemoteDiscovery::Disabled);
     ~ConnectionPanel() override;
 
     static constexpr int kSafeMinimumWidth = 640;
@@ -130,6 +133,8 @@ public:
 
 protected:
     bool event(QEvent* e) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 public slots:
     void onRadioDiscovered(const RadioInfo& radio);
@@ -407,7 +412,6 @@ private:
     void removeRemoteEngineEntry(const QString& serial);
     void editRemoteEngineTailnet(const QString& engineId);
     [[nodiscard]] RadioInfo remoteEngineRadioInfo(const AetherSDR::aetherd::RemoteEngineRecord& record) const;
-    QWidget* m_remoteEngineGroup{nullptr};
     QComboBox* m_remoteEngineAddress{nullptr};
     QLineEdit* m_remoteEngineCode{nullptr};
     QPushButton* m_remoteEnginePairBtn{nullptr};
@@ -415,6 +419,9 @@ private:
     AetherSDR::aetherd::RemoteEngineDiscovery* m_remoteEngineDiscovery{nullptr};
     QObject* m_remoteEnginePairing{nullptr};   // RemoteEnginePairing; QObject so no-WebSockets builds link
     QTimer* m_remoteEngineProbeTimer{nullptr};
+    RemoteDiscovery m_remoteDiscovery;
+    QSet<QString> m_remoteEngineRows;
+    quint64 m_remotePairingGeneration{0};
     QHash<QString, AetherSDR::aetherd::RemoteEngineDiscovery::Advert> m_remoteEngineAdverts;  // by fingerprint
     bool m_connected{false};
 

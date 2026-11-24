@@ -35,6 +35,7 @@ public:
 
     // Whether the code's check digits match this certificate fingerprint.
     [[nodiscard]] static bool codeMatchesCertificate(const QString& code, const QString& certificateSha256);
+    [[nodiscard]] static QString boundedClientName(const QString& clientName);
 
 signals:
     // The token is in record.token; nothing is stored yet.
