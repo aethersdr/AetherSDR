@@ -92,6 +92,7 @@ public:
     static int freeDax(const RadioModel& radio) { return TciServer::freeDaxChannelForTci(radio); }
     static qsizetype createdPanCount(const TciServer& server) { return server.m_createdVfoBPans.size(); }
     static void reap(TciServer& server, int sliceId) { server.reapCreatedVfoBSlice(sliceId); }
+    static int owedReaps(const TciServer& server) { return static_cast<int>(server.m_vfoBPanReapsOwed.size()); }
 };
 #endif
 }
@@ -918,56 +919,86 @@ void tciVfoBOnPairedReceivers()
 
 // #7553: TCI reaps the pan it opened for VFO B. When that pan hosts the TX
 // slice, the radio is keyed and the backend declares the keyed TX-pan close
-// Refused, the close is refused and TCI keeps the entry to reap later.
-// Unkeyed, the same reap closes the pan and drops the entry.
-void tciKeyedTxPanReap()
+// Refused, the close is refused; TCI keeps the entry and reaps it again when
+// transmit drops. Any other refusal drops the entry with no retry, and a slice
+// removed before the unkey leaves no retry behind.
+enum class ReapCase { KeyedThenUnkey, OtherRefusal, SliceRemovedFirst, Unkeyed };
+void tciKeyedTxPanReap(ReapCase reapCase, const char* what)
 {
 #ifdef HAVE_WEBSOCKETS
-    for (const bool keyed : {true, false}) {
-        Fixture f;
-        f.backend->caps.canCreateSlices = false;
-        f.backend->caps.maxSlices = 2;
-        f.backend->caps.maxPanadapters = 2;
-        f.backend->caps.panLifecycleControl = PanLifecycleControl{
-            PanLifecycleControl::Creation::Native,
-            {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
-        f.backend->caps.panLifecycleControl->txPanCloseWhileKeyed =
-            PanLifecycleControl::TxPanCloseWhileKeyed::Refused;
-        f.backend->closesPans = true;
-        TciServer server(&f.radio);
-        TciClient client;
-        TciSliceLifecycleTestAccess::create(server, client, f.radio.slice(0));
+    const bool keyed = reapCase != ReapCase::OtherRefusal && reapCase != ReapCase::Unkeyed;
+    Fixture f;
+    f.backend->caps.canCreateSlices = false;
+    f.backend->caps.maxSlices = 2;
+    f.backend->caps.maxPanadapters = 2;
+    f.backend->caps.panLifecycleControl = PanLifecycleControl{
+        PanLifecycleControl::Creation::Native,
+        {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    f.backend->caps.panLifecycleControl->txPanCloseWhileKeyed =
+        PanLifecycleControl::TxPanCloseWhileKeyed::Refused;
+    f.backend->closesPans = reapCase != ReapCase::OtherRefusal;   // otherwise the backend refuses
+    TciServer server(&f.radio);
+    TciClient client;
+    TciSliceLifecycleTestAccess::create(server, client, f.radio.slice(0));
+    settle();
+    f.publish(0, false);
+    SliceDelta tx;
+    tx.panId = QStringLiteral("capture/two");
+    tx.txSlice = true;
+    emit f.backend->sliceChanged(1, tx);
+    const SliceModel* vfoB = f.radio.slice(1);
+    const QString txPan = vfoB ? vfoB->panId() : QString();
+    const bool setUp = vfoB && vfoB->isTxSlice() && !txPan.isEmpty()
+        && TciSliceLifecycleTestAccess::createdPanCount(server) == 1;
+    const auto transmit = [&f](bool on) {
+        TransmitDelta delta;
+        delta.mox = on;
+        f.radio.applyBackendTransmitDeltaForTest(delta);
+    };
+    transmit(keyed);
+    int aboutToRemove = 0;
+    QObject::connect(&f.radio, &RadioModel::panAboutToRemove, &f.radio, [&](const QString&) { ++aboutToRemove; });
+    TciSliceLifecycleTestAccess::reap(server, 1);
+    const qsizetype afterReap = TciSliceLifecycleTestAccess::createdPanCount(server);
+    const int removesAfterReap = f.backend->panRemoves;
+    const int owedAfterReap = TciSliceLifecycleTestAccess::owedReaps(server);
+    bool ok = setUp;
+    switch (reapCase) {
+    case ReapCase::KeyedThenUnkey:
+        ok = ok && afterReap == 1 && removesAfterReap == 0 && aboutToRemove == 0 && owedAfterReap == 1;
+        transmit(false);
+        ok = ok && f.backend->panRemoves == 1 && aboutToRemove == 1
+            && TciSliceLifecycleTestAccess::createdPanCount(server) == 0
+            && TciSliceLifecycleTestAccess::owedReaps(server) == 0;
+        break;
+    case ReapCase::OtherRefusal:
+        ok = ok && afterReap == 0 && removesAfterReap == 1 && owedAfterReap == 0;
+        transmit(true);
+        transmit(false);
+        ok = ok && f.backend->panRemoves == 1 && TciSliceLifecycleTestAccess::createdPanCount(server) == 0;
+        break;
+    case ReapCase::SliceRemovedFirst:
+        ok = ok && afterReap == 1 && owedAfterReap == 1;
+        emit f.backend->sliceRemoved(1);
         settle();
-        f.publish(0, false);
-        SliceDelta tx;
-        tx.panId = QStringLiteral("capture/two");
-        tx.txSlice = true;
-        emit f.backend->sliceChanged(1, tx);
-        const SliceModel* vfoB = f.radio.slice(1);
-        const QString txPan = vfoB ? vfoB->panId() : QString();
-        const bool setUp = vfoB && vfoB->isTxSlice() && !txPan.isEmpty()
-            && TciSliceLifecycleTestAccess::createdPanCount(server) == 1;
-        TransmitDelta transmit;
-        transmit.mox = keyed;
-        f.radio.applyBackendTransmitDeltaForTest(transmit);
-        int aboutToRemove = 0;
-        QObject::connect(&f.radio, &RadioModel::panAboutToRemove, &f.radio, [&](const QString&) { ++aboutToRemove; });
-        TciSliceLifecycleTestAccess::reap(server, 1);
-        if (keyed) {
-            check(setUp && f.radio.panadapter(txPan) && aboutToRemove == 0 && f.backend->panRemoves == 0
-                      && TciSliceLifecycleTestAccess::createdPanCount(server) == 1,
-                  "a keyed reap of TCI's VFO-B TX pan is refused: the pan and TCI's entry stay");
-        } else {
-            check(setUp && aboutToRemove == 1 && f.backend->panRemoves == 1
-                      && TciSliceLifecycleTestAccess::createdPanCount(server) == 0,
-                  "an unkeyed reap of TCI's VFO-B TX pan closes it and drops the entry");
-        }
-        if (!setUp) {
-            std::printf("  setup: vfoB=%d tx=%d pan=%s created=%lld\n", vfoB != nullptr,
-                        vfoB && vfoB->isTxSlice(), qPrintable(txPan),
-                        static_cast<long long>(TciSliceLifecycleTestAccess::createdPanCount(server)));
-        }
+        ok = ok && TciSliceLifecycleTestAccess::owedReaps(server) == 0
+            && TciSliceLifecycleTestAccess::createdPanCount(server) == 0;
+        transmit(false);
+        ok = ok && f.backend->panRemoves == 0 && aboutToRemove == 0;
+        break;
+    case ReapCase::Unkeyed:
+        ok = ok && afterReap == 0 && removesAfterReap == 1 && aboutToRemove == 1 && owedAfterReap == 0;
+        break;
     }
+    if (!ok) {
+        std::printf("  setUp=%d created=%lld removes=%d about=%d owed=%d\n", setUp,
+                    static_cast<long long>(TciSliceLifecycleTestAccess::createdPanCount(server)),
+                    f.backend->panRemoves, aboutToRemove, TciSliceLifecycleTestAccess::owedReaps(server));
+    }
+    check(ok, what);
+#else
+    (void)reapCase;
+    (void)what;
 #endif
 }
 
@@ -991,6 +1022,13 @@ int main(int argc, char** argv)
     rigctlCorrelation();
     tciCancellation();
     tciVfoBOnPairedReceivers();
-    tciKeyedTxPanReap();
+    tciKeyedTxPanReap(ReapCase::KeyedThenUnkey,
+                      "a keyed refused reap of TCI's VFO-B TX pan is kept, then closed and dropped on unkey");
+    tciKeyedTxPanReap(ReapCase::OtherRefusal,
+                      "a reap refused for another reason drops TCI's entry, with no retry on the next unkey");
+    tciKeyedTxPanReap(ReapCase::SliceRemovedFirst,
+                      "a VFO-B slice removed before the unkey leaves no stale retry");
+    tciKeyedTxPanReap(ReapCase::Unkeyed,
+                      "an unkeyed reap of TCI's VFO-B TX pan closes it and drops the entry");
     return failures == 0 ? 0 : 1;
 }

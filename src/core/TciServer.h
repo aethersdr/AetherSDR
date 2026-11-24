@@ -650,6 +650,10 @@ private:
         RadioControlSession session{};
     };
     QHash<int, CreatedVfoBPan> m_createdVfoBPans;
+    // Created VFO-B pans whose reap was refused because they were the TX pan
+    // of a keyed radio; reaped again on the unkey edge.
+    QSet<int> m_vfoBPanReapsOwed;
+    void retryOwedVfoBPanReaps();
     struct PendingTrxRequest
     {
         QPointer<TciClient> client;

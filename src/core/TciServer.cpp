@@ -427,6 +427,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 m_routingState.reset();
                 m_createdVfoBSlices.clear();
                 m_createdVfoBPans.clear();
+                m_vfoBPanReapsOwed.clear();
                 m_pendingVfoBCreate.reset();
                 m_pendingTrxRequest.reset();
                 m_pendingRouteCommands.clear();
@@ -537,6 +538,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 this, [this](int sliceId) {
             m_createdVfoBSlices.remove(sliceId);
             m_createdVfoBPans.remove(sliceId);
+            m_vfoBPanReapsOwed.remove(sliceId);
             retireSliceRx(sliceId);
             if (!m_hostIqSlices.isEmpty()) {
                 reconcileHostIqTaps();
@@ -2335,11 +2337,27 @@ void TciServer::reapCreatedVfoBSlice(int sliceId)
     if (created.slice && created.pan && m_model->controlSessionCurrent(created.session)
         && m_model->slice(sliceId) == created.slice
         && m_model->panadapter(created.pan->panId()) == created.pan
-        && m_model->sliceOwnedByUs(sliceId)
-        && !m_model->removePanadapter(created.pan->panId())) {
-        return;   // not closed (a keyed TX pan is refused): keep it to reap later
+        && m_model->sliceOwnedByUs(sliceId)) {
+        const QString panId = created.pan->panId();
+        const bool keyedRefusal = m_model->keyedTxPanCloseRefused(panId);
+        if (!m_model->removePanadapter(panId) && keyedRefusal) {
+            // Refused only because it is the TX pan of a keyed radio: kept,
+            // and reaped again when transmit drops (retryOwedVfoBPanReaps).
+            m_vfoBPanReapsOwed.insert(sliceId);
+            return;
+        }
     }
     m_createdVfoBPans.remove(sliceId);
+    m_vfoBPanReapsOwed.remove(sliceId);
+}
+
+void TciServer::retryOwedVfoBPanReaps()
+{
+    const QList<int> owed = m_vfoBPanReapsOwed.values();
+    m_vfoBPanReapsOwed.clear();
+    for (const int sliceId : owed) {
+        reapCreatedVfoBSlice(sliceId);
+    }
 }
 
 void TciServer::reportVfoBRouteFailure(TciClient* client,
@@ -5576,6 +5594,9 @@ void TciServer::broadcastTuneState()
 
 void TciServer::onRadioTransmittingChanged(bool transmitting)
 {
+    if (!transmitting && !m_vfoBPanReapsOwed.isEmpty()) {
+        retryOwedVfoBPanReaps();
+    }
     const bool changed = transmitting != m_lastRadioTx;
     m_lastRadioTx = transmitting;
 
