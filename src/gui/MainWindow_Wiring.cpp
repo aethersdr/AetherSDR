@@ -7479,7 +7479,19 @@ void MainWindow::wireMeters()
     });
     connect(&m_kpa1500Conn, &Kpa1500Connection::disconnected, this, [this]() {
         m_appletPanel->kpa1500Applet()->setConnected(false);
-        m_appletPanel->setKpa1500Visible(false);
+        // A confirmed-asleep amp keeps its applet so POWER can wake it.
+        if (!m_kpa1500Conn.isAsleepOffline()) {
+            m_appletPanel->setKpa1500Visible(false);
+        }
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::asleepOfflineChanged, this, [this](bool asleep) {
+        m_appletPanel->kpa1500Applet()->setAsleepOffline(
+            asleep, m_kpa1500Conn.canWakeFromSleep(), m_kpa1500Conn.sleepNetWake());
+        if (asleep) {
+            m_appletPanel->setKpa1500Visible(true);
+        } else if (!m_kpa1500Conn.isConnected()) {
+            m_appletPanel->setKpa1500Visible(false);
+        }
     });
     connect(&m_kpa1500Conn, &Kpa1500Connection::statusUpdated, this,
             [this](const AetherSDR::Kpa1500::Status& status) {

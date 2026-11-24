@@ -3,6 +3,7 @@
 #include "core/Kpa1500Protocol.h"
 
 #include <QComboBox>
+#include <optional>
 #include <QPushButton>
 #include <QTimer>
 #include <QWidget>
@@ -39,6 +40,9 @@ public:
     void showControlUnconfirmed(const QString& control);
     // Any short control notice (e.g. a refusal), in the same transient label.
     void showControlNotice(const QString& text);
+    // The link dropped while the amp was confirmed asleep: the applet stays
+    // up showing ASLEEP, and POWER (enabled only with a saved MAC) wakes it.
+    void setAsleepOffline(bool asleepOffline, bool canWake, std::optional<bool> netWake);
 
     // TX frequency tracking is an operator preference kept by the applet
     // (not amp state), so it is latched here and persisted.
@@ -101,6 +105,9 @@ private:
 
     Kpa1500::Status m_status;
     bool m_connected{false};
+    bool m_asleepOffline{false};
+    bool m_offlineCanWake{false};
+    std::optional<bool> m_offlineNetWake;
 
     // setStatus() arrives at the connection's poll rate — funneled through
     // the m_labelTimer tick, the same throttle convention AcomApplet/

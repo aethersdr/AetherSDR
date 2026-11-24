@@ -115,10 +115,11 @@ Kpa1500Connection::Kpa1500Connection(QObject* parent)
     // device that may legitimately be power-cycling.
     m_reconnectTimer.setSingleShot(true);
     m_reconnectTimer.setInterval(kReconnectIntervalMs);
-    connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (m_connected || m_lastHost.isEmpty()) { return; }
-        connectNetwork(m_lastHost, m_lastPort);
-    });
+    connect(&m_reconnectTimer, &QTimer::timeout, this, &Kpa1500Connection::reconnect);
+
+    m_wakeSender = [this](const QByteArray& packet, const QHostAddress& target, quint16 port) {
+        return m_wakeSocket.writeDatagram(packet, target, port);
+    };
 
     m_pollTimer.setInterval(kPollIntervalMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &Kpa1500Connection::poll);
@@ -169,8 +170,17 @@ bool Kpa1500Connection::linkOpen() const
     return m_socket.state() == QAbstractSocket::ConnectedState;
 }
 
+void Kpa1500Connection::reconnect()
+{
+    if (m_connected || m_lastHost.isEmpty()) { return; }
+    connectNetwork(m_lastHost, m_lastPort);
+}
+
 void Kpa1500Connection::connectNetwork(const QString& host, quint16 port)
 {
+    if (m_asleepOffline && (host != m_lastHost || port != m_lastPort)) {
+        setAsleepOffline(false);   // another amplifier: the sleeping one is not ours to wake
+    }
     m_lastHost = host;
     m_lastPort = port;
     m_activeTransport = m_transport;
@@ -267,16 +277,52 @@ void Kpa1500Connection::disconnect()
     m_parser.reset();
     m_status = {};
     m_lastFaultCode = 0;
+    m_wakeSentAt.invalidate();
     if (wasConnected) {
         qCDebug(lcTuner) << "Kpa1500Connection: disconnected";
         emit disconnected();
     }
+    setAsleepOffline(false);
     m_deliberateDisconnect = false;
+}
+
+void Kpa1500Connection::setAsleepOffline(bool on)
+{
+    if (m_asleepOffline == on) {
+        return;
+    }
+    m_asleepOffline = on;
+    if (!on) {
+        m_sleepNetWake.reset();
+        m_wakeSentAt.invalidate();
+    }
+    emit asleepOfflineChanged(on);
+}
+
+bool Kpa1500Connection::canWakeFromSleep() const
+{
+    return Kpa1500::parseMacAddress(m_wakeMac).has_value();
+}
+
+void Kpa1500Connection::wakeFromSleep()
+{
+    if (!canWakeFromSleep()) {
+        qCWarning(lcTuner) << "Kpa1500Connection: wake refused — no saved MAC address for Wake-on-LAN";
+        return;
+    }
+    sendWakeOnLan();
+    m_wakeSentAt.start();
+    // UDP never stopped probing. TCP dials again, and keeps dialing for
+    // kWakeReconnectWindowMs, while the amp boots.
+    if (m_activeTransport == Kpa1500::Transport::Tcp && !m_connected && !m_reconnectTimer.isActive()) {
+        reconnect();
+    }
 }
 
 void Kpa1500Connection::onTransportUp()
 {
     m_connected = true;
+    setAsleepOffline(false);
     m_maAsks = 0;
     m_wlAsks = 0;
     ++m_connectEpoch;  // the connect timeout must not abort a later probe of this link
@@ -310,6 +356,9 @@ void Kpa1500Connection::dropSilentUdpLink()
 void Kpa1500Connection::onTransportDown(bool keepProbing)
 {
     const bool wasConnected = m_connected;
+    // Confirmed asleep when the link went: the amp's network may sleep too.
+    const bool asleep = wasConnected && m_status.powerOn == false;
+    const std::optional<bool> netWake = m_status.netWake;
     m_connected = false;
     if (keepProbing) {
         // The next reply is a fresh link: nothing read on this one carries over.
@@ -335,21 +384,34 @@ void Kpa1500Connection::onTransportDown(bool keepProbing)
     m_pending.clear();
     m_trackTimer.stop();
     m_parser.reset();
+    if (asleep && !m_deliberateDisconnect) {
+        m_sleepNetWake = netWake;
+        m_asleepOffline = true;   // set before disconnected() so the owner keeps the applet up
+    }
     if (wasConnected) {
         qCDebug(lcTuner) << "Kpa1500Connection: disconnected";
         emit disconnected();
     }
-    if (!keepProbing && !m_deliberateDisconnect && m_autoReconnect) {
+    if (m_asleepOffline && asleep) {
+        qCInfo(lcTuner) << "Kpa1500Connection: link dropped while the amp sleeps — POWER can wake it";
+        emit asleepOfflineChanged(true);
+    }
+    if (!keepProbing && !m_deliberateDisconnect && (m_autoReconnect || wakeReconnecting())) {
         armReconnect();
     }
     m_deliberateDisconnect = false;
+}
+
+bool Kpa1500Connection::wakeReconnecting() const
+{
+    return m_asleepOffline && m_wakeSentAt.isValid() && m_wakeSentAt.elapsed() < kWakeReconnectWindowMs;
 }
 
 void Kpa1500Connection::onTransportError(const QString& errorString)
 {
     qCWarning(lcTuner) << "Kpa1500Connection: transport error" << errorString;
     emit connectionFailed(errorString);
-    if (!m_deliberateDisconnect && m_autoReconnect && !m_connected) {
+    if (!m_deliberateDisconnect && (m_autoReconnect || wakeReconnecting()) && !m_connected) {
         armReconnect();
     }
 }
@@ -805,13 +867,17 @@ void Kpa1500Connection::setFanMinimum(int level)
 
 void Kpa1500Connection::setPower(bool on)
 {
+    if (on && m_asleepOffline) {
+        wakeFromSleep();
+        return;
+    }
     if (!on && m_transmitting) {
         qCWarning(lcTuner) << "Kpa1500Connection: refusing sleep while transmitting";
         emit controlRefused(tr("Sleep refused while transmitting"));
         return;
     }
-    if (on) {
-        sendWakeOnLan();
+    if (on && m_connected) {
+        sendWakeOnLan();   // offline, only the asleep-offline state above wakes
     }
     PendingControl c;
     c.group = QStringLiteral("ON");
@@ -1025,7 +1091,7 @@ void Kpa1500Connection::sendWakeOnLan()
     const QByteArray packet = Kpa1500::buildWakeOnLanPacket(*mac);
     QStringList sent;
     for (const QHostAddress& target : targets) {
-        if (m_wakeSocket.writeDatagram(packet, target, Kpa1500::kWakeOnLanPort) == packet.size()) {
+        if (m_wakeSender(packet, target, Kpa1500::kWakeOnLanPort) == packet.size()) {
             sent << target.toString();
         } else {
             qCWarning(lcTuner) << "Kpa1500Connection: Wake-on-LAN to" << target.toString()

@@ -2631,7 +2631,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             m_kpa1500->connectNetwork(h, p);
         };
         ui->description = [this]() { return m_kpa1500->description(); };
-        ui->afterRemoval = [this]() { m_kpa1500->disconnect(); };
+        ui->afterRemoval = [this]() {
+            m_kpa1500->disconnect();
+            m_kpa1500->setWakeMacAddress(QString());
+        };
         buildKpa1500Device(*ui, detailStack, refresh);
     }
     if (m_rfkit) {

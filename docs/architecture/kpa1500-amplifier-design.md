@@ -176,6 +176,16 @@ The MAC is persisted as `PeripheralSettings` device `"Kpa1500"` field
 clear it. The sleep dialog and the asleep tooltip say whether NET WAKE is on;
 off or unknown reads "may not wake over the network".
 
+**Asleep and offline.** If the link drops while `^ON0` is the last power
+reading (`Kpa1500Connection::isAsleepOffline()`), the applet stays up showing
+ASLEEP, with every control but POWER disabled. POWER then sends the magic
+packet to the saved MAC (`wakeFromSleep()`) and is disabled, with a reason,
+when no MAC is saved. UDP never stopped probing; TCP dials again and keeps
+dialing for 60 s after the wake, whatever the Auto-reconnect setting. The
+state ends when the link comes back, on `disconnect()` (operator disconnect
+or Remove), or on `connectNetwork()` to another address. A drop while the amp
+was awake hides the applet as before.
+
 **Discovery.** The amp has no discovery protocol; `Kpa1500Discovery` sends
 `^SN;` over UDP to each local IPv4 subnet's broadcast address and every host
 (whole subnet up to /22, otherwise the /24 around the computer; 4096 cap),
@@ -195,8 +205,8 @@ the track interval and, after `kMaxControlAttempts` failures, reported through
 Still open for hardware validation: whether the amp ever packs several
 replies into one datagram (handled either way), whether it answers to the
 sender's source port (assumed), whether its network servers stay reachable
-while asleep (if not, the link drops and the applet, with its POWER button,
-goes with it), whether the magic packet wakes it, and whether it answers the
+while asleep (if not, the asleep-offline state above takes over), whether the
+magic packet wakes it, and whether it answers the
 subnet broadcast (the per-host sweep covers it if not).
 
 ### 3.3 Command set used

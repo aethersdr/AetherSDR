@@ -184,6 +184,80 @@ struct Kpa1500TrackingTestAccess {
         return asks;
     }
 
+    struct SleepDrop {
+        QStringList events;          // "down", "asleep:1", "asleep:0", "up"
+        bool asleepOffline{false};
+        bool canWake{false};
+        int wakePackets{0};
+        bool packetIsMagic{false};
+        bool ampTargeted{false};
+        bool afterRelink{true};
+    };
+
+    // UDP: the link drops (silence) while the amp is `asleep`, then POWER is
+    // pressed, then the amp answers. The wake sender is replaced: nothing
+    // leaves the process.
+    static SleepDrop sleepThenDrop(Kpa1500Connection& c, bool asleep, const QString& mac)
+    {
+        SleepDrop out;
+        const auto l1 = QObject::connect(&c, &Kpa1500Connection::disconnected,
+                                         [&out]() { out.events << QStringLiteral("down"); });
+        const auto l2 = QObject::connect(&c, &Kpa1500Connection::connected,
+                                         [&out]() { out.events << QStringLiteral("up"); });
+        const auto l3 = QObject::connect(&c, &Kpa1500Connection::asleepOfflineChanged, [&out](bool on) {
+            out.events << (on ? QStringLiteral("asleep:1") : QStringLiteral("asleep:0"));
+        });
+        const QByteArray magic = Kpa1500::buildWakeOnLanPacket(
+            Kpa1500::parseMacAddress(mac).value_or(QByteArray()));
+        c.m_wakeSender = [&out, magic](const QByteArray& packet, const QHostAddress& target, quint16 port) {
+            ++out.wakePackets;
+            out.packetIsMagic = !magic.isEmpty() && packet == magic && port == 9;
+            out.ampTargeted = out.ampTargeted || target == QHostAddress(QStringLiteral("192.0.2.15"));
+            return static_cast<qint64>(packet.size());
+        };
+        c.m_lastHost = QStringLiteral("192.0.2.15");
+        c.m_activeTransport = Kpa1500::Transport::Udp;
+        c.m_udpOpen = true;
+        c.m_connected = true;
+        c.m_status.powerOn = !asleep;
+        c.setWakeMacAddress(mac);
+        c.dropSilentUdpLink();
+        out.asleepOffline = c.isAsleepOffline();
+        out.canWake = c.canWakeFromSleep();
+        c.setPower(true);
+        c.onMessage(*Kpa1500::parseMessage("^ON0;"));   // the amp answers again
+        out.afterRelink = c.isAsleepOffline();
+        QObject::disconnect(l1);
+        QObject::disconnect(l2);
+        QObject::disconnect(l3);
+        c.m_pollTimer.stop();
+        c.m_paceTimer.stop();
+        c.m_pacer.clear();
+        c.m_udpOpen = false;
+        c.m_connected = false;
+        c.m_lastHost.clear();
+        c.m_activeTransport = Kpa1500::Transport::Tcp;
+        return out;
+    }
+
+    // TCP: a dropped, confirmed-asleep link. A failed reconnect attempt is
+    // retried only within the window after a wake (auto-reconnect off).
+    static std::pair<bool, bool> tcpWakeRetries(Kpa1500Connection& c)
+    {
+        c.m_connected = true;
+        c.m_status.powerOn = false;
+        c.onTransportDown();
+        const bool asleep = c.isAsleepOffline();
+        c.onTransportError(QStringLiteral("refused"));
+        const bool retriedBeforeWake = c.m_reconnectTimer.isActive();
+        c.m_wakeSentAt.start();   // what wakeFromSleep() records (it would also dial)
+        c.onTransportError(QStringLiteral("refused"));
+        const bool retriedAfterWake = c.m_reconnectTimer.isActive();
+        c.m_reconnectTimer.stop();
+        c.disconnect();
+        return {asleep && !retriedBeforeWake, retriedAfterWake && !c.isAsleepOffline()};
+    }
+
     struct Probe {
         int disconnects{0};
         int connects{0};
@@ -591,6 +665,35 @@ int main(int argc, char** argv)
         const auto [ma, wl] = Kpa1500TrackingTestAccess::wakeQueryAsksAfterRotations(c, 6);
         check(ma == 3 && wl == 3, "unanswered ^MA and ^WL stop being asked after three slow rotations");
         check(Kpa1500TrackingTestAccess::socketsUnopened(c), "wake-query test opens no transport");
+    }
+    {
+        // Q1 = (a): a confirmed-asleep amp keeps its applet and POWER wakes it.
+        using A = Kpa1500TrackingTestAccess;
+        const QString mac = QStringLiteral("54:10:EC:14:75:22");
+        Kpa1500Connection asleep;
+        const auto r = A::sleepThenDrop(asleep, true, mac);
+        check(r.asleepOffline && r.events.mid(0, 2) == QStringList({QStringLiteral("down"), QStringLiteral("asleep:1")}),
+              "a drop after a confirmed sleep enters the asleep-offline state (applet stays up)");
+        check(r.canWake, "with a saved MAC, POWER can wake the amp from that state");
+        check(r.wakePackets >= 1 && r.packetIsMagic && r.ampTargeted,
+              "POWER from that state sends the Wake-on-LAN packet to the saved MAC, at the amp");
+        check(!r.afterRelink && r.events.contains(QStringLiteral("asleep:0")) && r.events.contains(QStringLiteral("up")),
+              "the amp answering again ends the asleep-offline state");
+        Kpa1500Connection awake;
+        const auto w = A::sleepThenDrop(awake, false, mac);
+        check(!w.asleepOffline && !w.events.contains(QStringLiteral("asleep:1")) && w.wakePackets == 0,
+              "a drop while the amp was awake hides the applet as before (no asleep state, no wake)");
+        Kpa1500Connection noMac;
+        const auto n = A::sleepThenDrop(noMac, true, QString());
+        check(n.asleepOffline && !n.canWake && n.wakePackets == 0,
+              "without a saved MAC, POWER cannot wake the amp and sends nothing");
+        Kpa1500Connection tcp;
+        const auto [heldBeforeWake, retriedAndCleared] = A::tcpWakeRetries(tcp);
+        check(heldBeforeWake, "TCP: a confirmed-asleep drop does not redial before POWER (auto-reconnect off)");
+        check(retriedAndCleared, "TCP: after a wake, a failed redial is retried; disconnect() ends the state");
+        check(A::socketsUnopened(asleep) && A::socketsUnopened(awake) && A::socketsUnopened(noMac)
+                  && A::socketsUnopened(tcp),
+              "asleep-offline tests open no transport");
     }
     for (const bool autoReconnect : {false, true}) {
         // Finding 3: UDP keeps probing after the silence drop.

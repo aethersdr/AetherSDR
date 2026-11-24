@@ -54,6 +54,15 @@ public:
     ~Kpa1500Connection() override;
 
     bool isConnected() const { return m_connected; }
+
+    // The link dropped while the amp was confirmed asleep (^ON0 read back).
+    // The applet stays up so POWER can wake it: setPower(true) then sends
+    // Wake-on-LAN to the saved MAC and keeps probing (UDP) or reconnecting
+    // (TCP, for kWakeReconnectWindowMs). Ends when the link returns, on
+    // disconnect(), or on connectNetwork() to another address.
+    bool isAsleepOffline() const { return m_asleepOffline; }
+    bool canWakeFromSleep() const;   // a saved MAC is known
+    std::optional<bool> sleepNetWake() const { return m_sleepNetWake; }   // ^WL before the drop
     QString description() const;  // "192.168.1.60:1500 (UDP)", for status display
 
     // Takes effect on the next connectNetwork(), including auto-reconnects.
@@ -149,6 +158,7 @@ signals:
     // The amp reported a MAC address different from the last one on this
     // link. The owner persists it for Wake-on-LAN after a restart.
     void macAddressReported(const QString& mac);
+    void asleepOfflineChanged(bool asleepOffline);
 
 private slots:
     void onReadyRead();
@@ -166,6 +176,10 @@ private:
     void queueQuery(const QString& cmd, bool urgent = false);
     void pumpQueries();
     void sendWakeOnLan();
+    void wakeFromSleep();
+    void setAsleepOffline(bool on);
+    void reconnect();   // the reconnect timer's attempt: same address, state kept
+    bool wakeReconnecting() const;   // TCP: within kWakeReconnectWindowMs of a wake
     void onTransportError(const QString& errorString);
     void onMessage(const Kpa1500::Message& message);
     void applyReply(const Kpa1500::Message& message);
@@ -213,6 +227,12 @@ private:
     QElapsedTimer m_clock;     // monotonic ms for m_pacer
     QTimer m_paceTimer;        // fires when the outstanding query times out
     bool m_pollDeferred{false};   // a tick found the last poll cycle still in flight
+    bool m_asleepOffline{false};
+    std::optional<bool> m_sleepNetWake;
+    QElapsedTimer m_wakeSentAt;   // TCP keeps reconnecting for a while after a wake
+    static constexpr int kWakeReconnectWindowMs = 60000;
+    // Tests replace this so no datagram leaves the process.
+    std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_wakeSender;
     int m_maAsks{0};   // slow-rotation ^MA / ^WL asks on this link while unknown
     int m_wlAsks{0};
     static constexpr int kMaxWakeQueryAsks = 3;

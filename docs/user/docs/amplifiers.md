@@ -422,7 +422,12 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   the network. Sleep is refused while the radio transmits: the applet then
   shows `Sleep refused while transmitting`. Waking is never refused. While
   asleep, every other control is dimmed, and hovering over one says whether
-  POWER can wake the amplifier.
+  POWER can wake the amplifier. If the connection drops while the amplifier is asleep
+  (its network may sleep with it), the applet stays open and shows `ASLEEP`:
+  **POWER** then sends the Wake-on-LAN packet and AetherSDR keeps trying to
+  reach the amplifier until it answers. **POWER** is dimmed in that state if
+  AetherSDR has never read the amplifier's MAC address. Disconnecting or
+  removing the amplifier, or changing its address, closes the applet.
 - **FAN MIN**, the lowest speed the fans run at, 0 (off) to 5 (full). The
   amplifier raises the speed further as it heats up; **FAN** shows the speed
   it is actually running.

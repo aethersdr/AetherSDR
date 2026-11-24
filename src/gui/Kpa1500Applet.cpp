@@ -370,7 +370,7 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
                          QStringLiteral("{{color.text.primary}}")),
     }));
     connect(m_powerBtn, &QPushButton::clicked, this, [this]() {
-        const bool on = !m_status.powerOn.value_or(true);
+        const bool on = m_asleepOffline || !m_status.powerOn.value_or(true);
         if (!on) {
             // A stray click must not strand a remote amp asleep: say whether
             // POWER can wake it again. Same pattern as RfkitApplet's reset confirm.
@@ -487,7 +487,7 @@ void Kpa1500Applet::refreshControls()
 {
     // A lit [kpaState] variant outranks :disabled (see the operate note
     // below), so every lit state is gated on the amp being reachable AND awake.
-    const bool asleep = m_status.powerOn == false;
+    const bool asleep = m_status.powerOn == false || m_asleepOffline;
     const bool live = m_connected && !asleep;
     const bool operate = m_status.operate.value_or(false);
     m_operateBtn->setText(operate ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
@@ -536,7 +536,7 @@ void Kpa1500Applet::refreshControls()
     const QString sleeping = canWakeOverNetwork()
         ? tr("The amplifier is asleep; POWER sends a Wake-on-LAN packet to wake it")
         : tr("The amplifier is asleep and may not wake over the network");
-    const QString reason = !m_connected ? offline : sleeping;
+    const QString reason = m_asleepOffline || m_connected ? sleeping : offline;
     for (QWidget* w : std::initializer_list<QWidget*>{m_operateBtn, m_tuneBtn, m_atuInlineBtn,
                                                       m_ant1Btn, m_ant2Btn}) {
         setAvailable(w, live, reason);
@@ -549,9 +549,15 @@ void Kpa1500Applet::refreshControls()
             m_status.fanMinimum ? m_fanCombo->findData(*m_status.fanMinimum) : -1);
     }
 
-    setAvailable(m_powerBtn, m_connected && m_status.powerOn.has_value(),
-                 m_connected ? tr("Waiting for the amplifier to report its power state")
-                             : offline);
+    if (m_asleepOffline) {
+        setAvailable(m_powerBtn, m_offlineCanWake,
+                     tr("The amplifier's MAC address is not known, so POWER cannot wake it over "
+                        "the network"));
+    } else {
+        setAvailable(m_powerBtn, m_connected && m_status.powerOn.has_value(),
+                     m_connected ? tr("Waiting for the amplifier to report its power state")
+                                 : offline);
+    }
     const bool on = m_status.powerOn.value_or(false);
     m_powerBtn->setText(asleep ? QStringLiteral("ASLEEP") : QStringLiteral("POWER"));
     m_powerBtn->setAccessibleName(asleep ? tr("Amplifier asleep, wake it")
@@ -563,7 +569,18 @@ void Kpa1500Applet::refreshControls()
 
 bool Kpa1500Applet::canWakeOverNetwork() const
 {
+    if (m_asleepOffline) {
+        return m_offlineCanWake && m_offlineNetWake == true;
+    }
     return m_status.netWake == true && m_status.macAddress.has_value();
+}
+
+void Kpa1500Applet::setAsleepOffline(bool asleepOffline, bool canWake, std::optional<bool> netWake)
+{
+    m_asleepOffline = asleepOffline;
+    m_offlineCanWake = asleepOffline && canWake;
+    m_offlineNetWake = asleepOffline ? netWake : std::nullopt;
+    refreshControls();
 }
 
 void Kpa1500Applet::setConnected(bool connected)
