@@ -2634,6 +2634,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // declared as an observation of the radio's own inputs only.
     c.hasRadioPttReadback = false;
     c.radioPttObservation = RadioCapabilities::RadioPttObservation{};
+    // requestTxSlice() refuses a TX move while keyed (#7553).
+    c.txSliceChangeRefusedWhileKeyed = true;
     // The pre-DDC clip bit (address 0, bit 24) feeds publishFrontEndOverload().
     c.frontEndOverloadObservation = RadioCapabilities::FrontEndOverloadObservation{};
     // The nominal rating, not a calibration: forward-power metering stays
@@ -4448,7 +4450,7 @@ ReceiveDispatch Hl2Backend::requestTxSlice(int sliceId, bool enabled,
         if (current && !current()) { return ReceiveDispatch::Unsupported; }
         setTxSlice(sliceId);   // refuses, tells the operator and republishes
         if (completion) {
-            completion({RadioControlReply::Kind::Refused, -1,
+            completion({RadioControlReply::Kind::Refused, RadioControlReply::kRefusedWhileKeyed,
                         QStringLiteral("TX slice can't change while transmitting.")});
         }
         return ReceiveDispatch::LocalOnly;
