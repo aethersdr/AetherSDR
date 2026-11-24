@@ -23,6 +23,7 @@
 #include "core/backends/AmpDelta.h"
 #include "PeripheralAuthStoreFake.h"
 
+#include <QAccessible>
 #include <QApplication>
 #include <QCheckBox>
 #include <QPointer>
@@ -30,6 +31,7 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QLabel>
+#include <QGridLayout>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QLineEdit>
@@ -65,6 +67,44 @@ struct AntennaGeniusModelTestAccess {
     static void setAuthWriter(AntennaGeniusModel& model)
     {
         model.m_authCommandWriter = [](const QByteArray&) {};
+    }
+    static void setPortAntennaStatus(AntennaGeniusModel& model, int rxAntenna, int txAntenna)
+    {
+        const quint16 bandMask = quint16(1U << 5);
+        model.m_antennas = {
+            {1, QStringLiteral("Beam"), bandMask, bandMask, 0},
+            {2, QStringLiteral("Vertical"), bandMask, bandMask, 0},
+        };
+        model.m_bands = {{5, QStringLiteral("40m"), 7.0, 7.3}};
+        model.m_portA = {1, true, QStringLiteral("MANUAL"), 5,
+                         rxAntenna, txAntenna, false, false};
+        emit model.portStatusChanged(1);
+    }
+    static void prepareSelectionMode(AntennaGeniusModel& model, QStringList& commands)
+    {
+        const quint16 bandMask = quint16(1U << 5);
+        model.m_commandWriter = [&commands](const QByteArray& bytes) {
+            commands.append(QString::fromUtf8(bytes));
+        };
+        model.m_connected = true;
+        model.m_device.name = QStringLiteral("Antenna Genius");
+        model.m_device.radioPorts = 2;
+        model.m_antennas = {
+            {1, QStringLiteral("Current"), bandMask, bandMask, 0},
+            {2, QStringLiteral("Both"), bandMask, bandMask, 0},
+            {3, QStringLiteral("Receive-only"), 0, bandMask, 0},
+        };
+        model.m_bands = {{5, QStringLiteral("40m"), 7.0, 7.3}};
+        model.m_portA = {1, true, QStringLiteral("MANUAL"), 5, 1, 1, false, false};
+        model.m_portB = {2, true, QStringLiteral("MANUAL"), 5, 0, 0, false, false};
+    }
+    static void processStatus(AntennaGeniusModel& model, const QString& status)
+    {
+        model.processStatus(status);
+    }
+    static void setDeviceName(AntennaGeniusModel& model, const QString& name)
+    {
+        model.m_device.name = name;
     }
 };
 }
@@ -2035,6 +2075,7 @@ bool checkStatusPresentation()
         || dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"))) {
         return false;
     }
+
     // The detail status is always visible and carries the accessible state.
     if (!status->isVisible() || status->text() != QStringLiteral("Not connected")
         || status->accessibleName().isEmpty()
@@ -2118,6 +2159,234 @@ bool checkStatusPresentation()
     }
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
     return sawDisabled;
+}
+
+bool checkAgAntennaStatusLabel()
+{
+    AntennaGeniusModel model;
+    AntennaGeniusApplet applet;
+    applet.setModel(&model);
+    QLabel* label = applet.findChild<QLabel*>(QStringLiteral("agPortAAntennaStatus"));
+    if (!label) {
+        return false;
+    }
+
+    AntennaGeniusModelTestAccess::setPortAntennaStatus(model, 1, 1);
+    if (label->text() != QStringLiteral("Beam")) {
+        return false;
+    }
+
+    AntennaGeniusModelTestAccess::setPortAntennaStatus(model, 1, 2);
+    return label->text() == QStringLiteral("RX:Beam  TX:Vertical");
+}
+
+bool checkAgAntennaSelectionMode()
+{
+    AppSettings::instance().remove(QStringLiteral("AntennaGenius"));
+    AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
+    const auto cleanup = qScopeGuard([] {
+        AppSettings::instance().remove(QStringLiteral("AntennaGenius"));
+        AppSettings::instance().remove(QStringLiteral("AG_SplitRxTxMode"));
+    });
+    AntennaGeniusModel model;
+    QStringList commands;
+    AntennaGeniusModelTestAccess::prepareSelectionMode(model, commands);
+    model.setSplitRxTxMode(true);
+    AntennaGeniusApplet applet;
+    applet.setModel(&model);
+    emit model.antennasChanged();
+
+    QCheckBox* split = applet.findChild<QCheckBox*>(QStringLiteral("agSplitRxTxMode"));
+    const bool initializedFromModel = split && split->isChecked();
+    if (split)
+        split->setChecked(false);
+    QPushButton* bothButton = applet.findChild<QPushButton*>(QStringLiteral("agPort1RxAntenna2"));
+    QPushButton* rxOnlyButton = applet.findChild<QPushButton*>(QStringLiteral("agPort1RxAntenna3"));
+    QPushButton* txBothButton = applet.findChild<QPushButton*>(QStringLiteral("agPort1TxAntenna2"));
+    QPushButton* port2Button = applet.findChild<QPushButton*>(QStringLiteral("agPort2RxAntenna2"));
+    QPushButton* port2TxButton = applet.findChild<QPushButton*>(QStringLiteral("agPort2TxAntenna1"));
+    auto* rxGrid = rxOnlyButton
+        ? qobject_cast<QGridLayout*>(rxOnlyButton->parentWidget()->layout()) : nullptr;
+    if (!split || split->isChecked() || !bothButton || !rxOnlyButton || !txBothButton
+        || !port2Button || !port2TxButton
+        || !rxOnlyButton->isEnabled() || !rxGrid
+        || rxOnlyButton->accessibleName() != QStringLiteral("Port 1 receive antenna Receive-only")
+        || txBothButton->accessibleName() != QStringLiteral("Port 1 transmit antenna Both")
+        || port2Button->accessibleName() != QStringLiteral("Port 2 receive antenna Both")
+        || !txBothButton->parentWidget()->parentWidget()->isHidden()) {
+        return false;
+    }
+
+    int row = -1;
+    int column = -1;
+    int rowSpan = 0;
+    int columnSpan = 0;
+    rxGrid->getItemPosition(rxGrid->indexOf(rxOnlyButton), &row, &column, &rowSpan, &columnSpan);
+    if (column != 2 || !bothButton->isEnabled()) {
+        return false;
+    }
+
+    rxOnlyButton->click();
+    const bool pendingSelectionNotShown = !rxOnlyButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=3 txant=1 tx=0 inhibit=0"));
+    const bool rxOnlyDefaultSelection = commands.size() == 1
+        && commands.constLast().contains(QStringLiteral("port set 1 rxant=3 txant=1"))
+        && model.portA().rxAntenna == 3 && model.portA().txAntenna == 1
+        && rxOnlyButton->isChecked();
+    rxOnlyButton->click();
+    const bool pendingClearNotShown = rxOnlyButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=0 txant=0 tx=0 inhibit=0"));
+    const bool clearsByRx = commands.size() == 2
+        && model.portA().rxAntenna == 0 && !rxOnlyButton->isChecked();
+
+    bothButton->click();
+    const bool pendingCoupledSelectionNotShown = !bothButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=2 txant=2 tx=0 inhibit=0"));
+    const bool coupled = commands.size() == 3
+        && commands.constLast().contains(QStringLiteral("port set 1 rxant=2 txant=2"))
+        && model.portA().rxAntenna == 2 && model.portA().txAntenna == 2
+        && bothButton->isChecked();
+    split->setChecked(true);
+    const bool splitEnabled = model.splitRxTxMode() && rxOnlyButton->isEnabled()
+        && !txBothButton->parentWidget()->parentWidget()->isHidden();
+    // A disabled button carries its reason to a screen reader, not only in the tooltip.
+    QPushButton* txRxOnlyButton =
+        applet.findChild<QPushButton*>(QStringLiteral("agPort1TxAntenna3"));
+    const bool disabledReasonDescribed = txRxOnlyButton && !txRxOnlyButton->isEnabled()
+        && txRxOnlyButton->accessibleDescription().contains(QStringLiteral("not permitted for TX"));
+    rxGrid->getItemPosition(rxGrid->indexOf(rxOnlyButton), &row, &column, &rowSpan, &columnSpan);
+    auto* txGrid = qobject_cast<QGridLayout*>(txBothButton->parentWidget()->layout());
+    int txRow = -1;
+    int txColumn = -1;
+    if (txGrid)
+        txGrid->getItemPosition(txGrid->indexOf(txBothButton), &txRow, &txColumn,
+                                &rowSpan, &columnSpan);
+    const bool splitGridLayout = column == 0 && row == 1 && txGrid
+        && txRow == 0 && txColumn == 1;
+    rxOnlyButton->click();
+    const bool pendingSplitSelectionNotShown = !rxOnlyButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=3 txant=2 tx=0 inhibit=0"));
+    const bool splitSelection = commands.size() == 4
+        && commands.constLast().contains(QStringLiteral("port set 1 rxant=3 txant=2"))
+        && model.portA().rxAntenna == 3 && model.portA().txAntenna == 2
+        && rxOnlyButton->isChecked() && txBothButton->isChecked();
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 2 auto=1 source=MANUAL band=0 rxant=0 txant=0 tx=0 inhibit=0"));
+    const bool unknownBandTxBlocked = !port2TxButton->isEnabled()
+        && port2TxButton->accessibleDescription().contains(QStringLiteral("known band"));
+    QLabel* connectionStatus = applet.findChild<QLabel*>(QStringLiteral("agConnectionStatus"));
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 1 auto=1 source=MANUAL band=5 rxant=3 txant=2 tx=1 inhibit=0"));
+    const int commandsBeforeKeyedPick = commands.size();
+    // The refusal is also announced politely, from the status label.
+    static QObject* announcementSource = nullptr;
+    static QStringList politeAnnouncements;
+    announcementSource = connectionStatus;
+    politeAnnouncements.clear();
+    const bool accessibilityWasActive = QAccessible::isActive();
+    const QAccessible::UpdateHandler previousUpdateHandler =
+        QAccessible::installUpdateHandler([](QAccessibleEvent* event) {
+            if (event->type() != QAccessible::Announcement
+                || event->object() != announcementSource)
+                return;
+            const auto* announcement = static_cast<QAccessibleAnnouncementEvent*>(event);
+            if (announcement->politeness() == QAccessible::AnnouncementPoliteness::Polite)
+                politeAnnouncements.append(announcement->message());
+        });
+    QAccessible::setActive(true);
+    model.selectRxAntenna(1, 2);
+    QAccessible::installUpdateHandler(previousUpdateHandler);
+    QAccessible::setActive(accessibilityWasActive);
+    const bool keyedPickRefused = connectionStatus
+        && connectionStatus->text() == QStringLiteral("Antenna can't change while transmitting.")
+        && commands.size() == commandsBeforeKeyedPick
+        && politeAnnouncements
+            == QStringList{QStringLiteral("Antenna can't change while transmitting.")};
+
+    return initializedFromModel && pendingSelectionNotShown && rxOnlyDefaultSelection
+        && pendingClearNotShown && clearsByRx
+        && pendingCoupledSelectionNotShown && coupled && splitEnabled
+        && splitGridLayout && pendingSplitSelectionNotShown && splitSelection
+        && unknownBandTxBlocked && keyedPickRefused && disabledReasonDescribed;
+}
+
+// A ShackSwitch shows and announces a refused pick on its own status line, and
+// its dummy-load reroute waits for tx=0 instead of being dropped.
+bool checkShackSwitchRefusal()
+{
+    AppSettings::instance().remove(QStringLiteral("AntennaGenius"));
+    AppSettings::instance().setValue(QStringLiteral("SS_DummyLoadAnt"), 3);
+    const auto cleanup = qScopeGuard([] {
+        AppSettings::instance().remove(QStringLiteral("AntennaGenius"));
+        AppSettings::instance().remove(QStringLiteral("SS_DummyLoadAnt"));
+    });
+    const QString sentence = QStringLiteral("Antenna can't change while transmitting.");
+    AntennaGeniusModel model;
+    QStringList commands;
+    AntennaGeniusModelTestAccess::prepareSelectionMode(model, commands);
+    AntennaGeniusModelTestAccess::setDeviceName(model, QStringLiteral("ShackSwitch"));
+    AntennaGeniusApplet agApplet;
+    agApplet.setModel(&model);
+    ShackSwitchApplet applet;
+    applet.setModel(&model);
+    emit model.antennasChanged();
+    QLabel* status = applet.findChild<QLabel*>(QStringLiteral("ssConnectionStatus"));
+    QLabel* agStatus = agApplet.findChild<QLabel*>(QStringLiteral("agConnectionStatus"));
+    if (!status || !agStatus) {
+        std::fprintf(stderr, "ShackSwitch or AG status label missing\n");
+        return false;
+    }
+
+    // Both ports on antenna 1 while B is keyed: the reroute waits.
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 2 auto=1 source=MANUAL band=5 rxant=1 txant=0 tx=1 inhibit=0"));
+    const bool rerouteWaitsWhileKeyed = commands.isEmpty();
+
+    static QObject* announcementSource = nullptr;
+    static QStringList politeAnnouncements;
+    announcementSource = status;
+    politeAnnouncements.clear();
+    const bool accessibilityWasActive = QAccessible::isActive();
+    const QAccessible::UpdateHandler previousUpdateHandler =
+        QAccessible::installUpdateHandler([](QAccessibleEvent* event) {
+            if (event->type() != QAccessible::Announcement)
+                return;
+            const auto* announcement = static_cast<QAccessibleAnnouncementEvent*>(event);
+            if (announcement->politeness() == QAccessible::AnnouncementPoliteness::Polite)
+                politeAnnouncements.append(
+                    (event->object() == announcementSource ? QStringLiteral("ss:")
+                                                           : QStringLiteral("other:"))
+                    + announcement->message());
+        });
+    QAccessible::setActive(true);
+    model.selectAntenna(2, 2); // A manual pick while keyed.
+    QAccessible::installUpdateHandler(previousUpdateHandler);
+    QAccessible::setActive(accessibilityWasActive);
+    const bool manualPickRefused = commands.isEmpty() && status->text() == sentence
+        && agStatus->text() != sentence
+        && politeAnnouncements == QStringList{QStringLiteral("ss:") + sentence};
+
+    // tx=0 with the conflict still there: the reroute is sent now.
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 2 auto=1 source=MANUAL band=5 rxant=1 txant=0 tx=0 inhibit=0"));
+    const bool reroutedAfterTx = commands.size() == 1
+        && commands.constLast().contains(QStringLiteral("port set 2 rxant=3"));
+    // Sent once per conflict, not on every status before the switch confirms.
+    AntennaGeniusModelTestAccess::processStatus(
+        model, QStringLiteral("port 2 auto=1 source=MANUAL band=5 rxant=1 txant=0 tx=0 inhibit=0"));
+    const bool sentOnce = commands.size() == 1;
+
+    if (!rerouteWaitsWhileKeyed || !manualPickRefused || !reroutedAfterTx || !sentOnce) {
+        std::fprintf(stderr, "ShackSwitch refusal: waits=%d refused=%d (\"%s\", %lld) rerouted=%d once=%d\n",
+                     rerouteWaitsWhileKeyed, manualPickRefused, qPrintable(status->text()),
+                     static_cast<long long>(politeAnnouncements.size()), reroutedAfterTx, sentOnce);
+        return false;
+    }
+    return true;
 }
 
 bool checkKpa500NetworkSetup()
@@ -2741,7 +3010,8 @@ void printUsage(const char* program)
 {
     std::fprintf(stderr,
         "usage: %s [--case=automatic|removal|auth-read|manual-recovery|external-ag|"
-        "discovery|availability|discovered-recovery|interaction]\n", program);
+        "discovery|availability|discovered-recovery|interaction|ag-antenna-status|"
+        "ag-antenna-selection-mode|ss-antenna-refusal]\n", program);
 }
 
 const char* parseCase(int argc, char** argv, bool& valid)
@@ -2758,7 +3028,9 @@ const char* parseCase(int argc, char** argv, bool& valid)
     for (const Case candidate : {Case{"automatic"}, Case{"removal"}, Case{"auth-read"},
                                  Case{"manual-recovery"}, Case{"external-ag"},
                                  Case{"discovery"}, Case{"availability"},
-                                 Case{"discovered-recovery"}, Case{"interaction"}}) {
+                                 Case{"discovered-recovery"}, Case{"interaction"},
+                                 Case{"ag-antenna-status"}, Case{"ag-antenna-selection-mode"},
+                                 Case{"ss-antenna-refusal"}}) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate.name;
         }
@@ -2890,6 +3162,33 @@ int main(int argc, char** argv)
         return 1;
     }
     if (selected("interaction") && runStage("interaction", [&app] { return checkInteraction(app); }) != 0) {
+        return 1;
+    }
+    if (selected("ag-antenna-status") && runStage("ag-antenna-status", [] {
+            if (!checkAgAntennaStatusLabel()) {
+                std::fprintf(stderr, "Antenna Genius RX/TX status label regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("ss-antenna-refusal") && runStage("ss-antenna-refusal", [] {
+            if (!checkShackSwitchRefusal()) {
+                std::fprintf(stderr, "ShackSwitch keyed refusal regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("ag-antenna-selection-mode") && runStage("ag-antenna-selection-mode", [] {
+            if (!checkAgAntennaSelectionMode()) {
+                std::fprintf(stderr, "Antenna Genius selection mode regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
         return 1;
     }
     return 0;

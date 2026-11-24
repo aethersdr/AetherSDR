@@ -439,6 +439,11 @@ jobs:
       # raising it, check the "sccache stats" hit rate, and re-do that budget.
       # Do not move the caps together on symmetry grounds.
       SCCACHE_CACHE_SIZE: 1G
+      # Pinned and part of the cache key: an sccache release can change its key
+      # scheme (0.20.0 started hashing the input file name), and an unpinned
+      # upgrade makes main's whole entry miss until a cold main build saves one
+      # (#7551). Bump it deliberately; that PR's Windows build runs cold.
+      SCCACHE_VERSION: v0.20.0
       # QT_VERSION / AQTINSTALL_VERSION are workflow-level env (top of file).
       # 6.12.0 is the binary pin (#5487). QT_ARCH is spelled exactly as
       # windows-installer.yml spells it: Qt 6.8 LTS dropped the MSVC 2019 builds.
@@ -644,13 +649,16 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: D:\sccache
-          key: sccache-windows-${{ env.VCToolsVersion }}-
+          key: sccache-windows-${{ env.VCToolsVersion }}-${{ env.SCCACHE_VERSION }}-
           restore-keys: |
+            sccache-windows-${{ env.VCToolsVersion }}-${{ env.SCCACHE_VERSION }}-
             sccache-windows-${{ env.VCToolsVersion }}-
             sccache-windows-
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: ${{ env.SCCACHE_VERSION }}
 
       - name: Setup hidapi (HID encoder support)
         # Needed for the Ulanzi Dial Windows backend (#3239) and the
@@ -906,7 +914,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: D:\sccache
-          key: sccache-windows-${{ env.VCToolsVersion }}-${{ github.run_id }}
+          key: sccache-windows-${{ env.VCToolsVersion }}-${{ env.SCCACHE_VERSION }}-${{ github.run_id }}
 
   # macOS build check — runs on every PR (no path gating), same rationale
   # as check-windows above.  Catches Q_OS_MACOS / CoreAudio / Cocoa-bridge

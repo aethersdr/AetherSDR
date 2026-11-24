@@ -2757,6 +2757,15 @@ MainWindow::~MainWindow()
         m_ax25HfPacketDecodeDialog = nullptr;
     }
 
+    // ~AgcCalibrationDialog stops a running sweep, and onFinished() rewires
+    // the audio source through raw TciServer and AudioEngine pointers. Both
+    // are freed below, before deleteChildren() would reach the dialog.
+    if (m_agcCalibrationDialog) {
+        ShutdownTrace trace("agc_calibration.dialog.destroy");
+        delete m_agcCalibrationDialog.data();
+        m_agcCalibrationDialog = nullptr;
+    }
+
 #ifdef HAVE_WEBSOCKETS
     // Stop TCI producers while both the model and audio consumer are alive.
     // The controller joins its I/O worker before AudioEngine teardown.
@@ -3648,7 +3657,8 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                                     &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                                     m_kiwiSdrManager, &m_acomConn, &m_speConn,
                                     &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
+                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn,
+                                    &m_trioModel);
     });
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
@@ -4338,6 +4348,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // any request still in flight while the event loop is live, rather than
     // leaving that to member destruction.
     m_rfkitConn.disconnect();
+    // The Trio serves one session; close it with a close frame while the
+    // event loop is live, so its own web page can take it at once.
+    m_trioModel.disconnect();
     // The LP-100A is likewise independent of the radio lifecycle and may be
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.
@@ -4854,7 +4867,11 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
     // A canon dialog, so not showOrRaisePersistent(): that applies View →
     // Frameless Window, which a CanonWindow does not follow.
     if (!m_agcCalibrationDialog) {
-        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, floorFn, this);
+#ifdef HAVE_WEBSOCKETS
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, tciServer(), floorFn, this);
+#else
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, nullptr, floorFn, this);
+#endif
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_agcCalibrationDialog = dlg;
     }
@@ -5703,7 +5720,7 @@ void MainWindow::buildUI()
     auto* splitter = m_splitter;
 
     // Connection panel — a modeless CanonWindow dialog, always frameless.
-    m_connPanel = new ConnectionPanel(this);
+    m_connPanel = new ConnectionPanel(this, ConnectionPanel::RemoteDiscovery::Enabled);
     // Sizing belongs to the panel now. It sets these same two values in its own
     // constructor and then adjusts them per screen in fitToScreen(), which
     // every show path here runs first — a hardcoded pair at this level went

@@ -284,9 +284,10 @@ public:
         TciHardware  = 1,   // TCI radio-direct PTT (e.g. Stream Deck plugin)
         Footswitch   = 2,   // future: serial-PTT or other hardware path
         Tune         = 3,   // local TUNE/two-tone carrier
-        Dax          = 4,   // external digital-audio PTT path
+        Dax          = 4,   // producer feeding this client's DAX TX stream
         Atu          = 5,   // internal automatic-tuner carrier
         Wspr         = 6,   // local generated WSPR audio
+        Cat          = 7,   // CAT PTT (rigctld, SmartSDR-CAT); carries no audio
     };
 
     // Source of the most recently *initiated* key-up. Set by the keying entry

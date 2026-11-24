@@ -1,8 +1,11 @@
+#include "FlexCommandTestSupport.h"
 // Socket-free production bridge/model/backend/audio paths. Inject decoded
 // statuses and command replies; no firmware peer, device, listener or RF.
 #include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
+#include "core/RigctlProtocol.h"
+#include "core/SmartCatProtocol.h"
 #include "core/AudioEngine.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
@@ -21,6 +24,8 @@
 #include <cstdio>
 #include <vector>
 #include <limits>
+#include <functional>
+#include <memory>
 
 namespace AetherSDR {
 class AutomationServerTestAccess {
@@ -33,6 +38,7 @@ public:
     static void identity(RadioConnection& connection, bool connected)
     {
         connection.m_handle.store(0x12345678);
+        connection.m_commandSinkForTest = [](quint32, const QString&) {};
         connection.m_state.store(connected ? ConnectionState::Connected : ConnectionState::Disconnected);
     }
 };
@@ -42,11 +48,9 @@ public:
     { if (model.m_daxTxOwnershipIntent) { model.expireDaxTxOwnership(model.m_daxTxOwnershipIntent->ticket); } }
     static void disconnect(RadioModel& model)
     { model.m_intentionalDisconnect = true; model.onDisconnected(); }
-    static RadioModel::ResponseCallback takeCreateReply(RadioModel& model)
+    static FlexCommandTestAccess::Reply takeCreateReply(RadioModel& model)
     {
-        if (model.m_pendingCallbacks.isEmpty()) { return {}; }
-        const quint32 seq = model.m_pendingCallbacks.cbegin().key();
-        return model.m_pendingCallbacks.take(seq);
+        return FlexCommandTestAccess::takeFirstReply(model);
     }
     static void holdProfile(RadioModel& model, int milliseconds = 1000)
     {
@@ -94,7 +98,8 @@ struct Fixture {
         QMetaObject::invokeMethod(connection, [connection] {
             TxOperationIntegrationTestAccess::identity(*connection, true);
         }, Qt::BlockingQueuedConnection);
-        backend->setDaxTxCommandSink([this](const QString& command, FlexBackend::CommandReply reply,
+        FlexCommandTestAccess::bind(model, *backend);
+        backend->setDaxTxCommandSinkForTest([this](const QString& command, FlexBackend::CommandReply reply,
                                            const DaxTxRequestGuard& guard) {
             writes.push_back({command, std::move(reply), guard});
             return true;
@@ -322,7 +327,7 @@ void exactInputAndKeyFences()
     const TxCoordinator::Request child = root.derive();
     f.model.noteDaxTxInput(root);
     std::vector<TxCoordinator::Command> keys;
-    f.backend->setTxCommandSink([&](const QString&, const TxCoordinator::Command& command) {
+    f.backend->setTxCommandSinkForTest([&](const QString&, const TxCoordinator::Command& command) {
         keys.push_back(command);
         return true;
     });
@@ -339,7 +344,7 @@ void exactInputAndKeyFences()
               "same-ID ownership reacquisition never renews a queued key or original program");
         check(!f.model.isRadioTransmitting(), "exact DAX cleanup ends its local optimistic transmission");
     }
-    f.backend->setTxCommandSink({});
+    f.backend->setTxCommandSinkForTest({});
     keys.clear();
 
     Fixture direct;
@@ -348,7 +353,7 @@ void exactInputAndKeyFences()
     const TxCoordinator::Request directInput = directProducer.request();
     direct.model.noteDaxTxInput(directInput);
     std::vector<TxCoordinator::Command> directKeys;
-    direct.backend->setTxCommandSink([&](const QString&, const TxCoordinator::Command& command) {
+    direct.backend->setTxCommandSinkForTest([&](const QString&, const TxCoordinator::Command& command) {
         directKeys.push_back(command);
         return true;
     });
@@ -358,7 +363,7 @@ void exactInputAndKeyFences()
     check(!directInput.valid() && !directKeys.empty()
           && !directKeys.front().permitsDispatch(TxCoordinator::monotonicMs()),
           "ownership loss denies a directly admitted queued key without changing generic close semantics");
-    direct.backend->setTxCommandSink({});
+    direct.backend->setTxCommandSinkForTest({});
     directKeys.clear();
 }
 
@@ -508,6 +513,104 @@ void interruptBeforeDispatch()
     DaxTxOwnershipTestAccess::timeout(f.model);
 }
 
+// #7407: SmartSDR DAX owns the radio's selected dax_tx stream and this client
+// has none. CAT PTT carries no audio, so it keys; a DAX-audio producer, which
+// would feed this client's absent stream, is still refused.
+void catKeysWithForeignDaxStream()
+{
+    const auto run = [](const char* dialect, const std::function<void(RadioModel&)>& keyUp,
+                        const std::function<void()>& keyDown,
+                        const std::function<void()>& cleanup) {
+        Fixture f;
+        f.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
+        std::vector<QString> keys;
+        f.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) {
+            keys.push_back(command);
+            return true;
+        });
+        check(!f.model.daxTxStreamReady(), "a foreign client's selected dax_tx stream is not ours");
+        keyUp(f.model);
+        QCoreApplication::processEvents();
+        const bool keyed = !keys.empty() && keys.front().startsWith(QLatin1String("xmit 1"));
+        std::printf("    %s key commands: %zu%s%s\n", dialect, keys.size(),
+                    keys.empty() ? "" : " first=", keys.empty() ? "" : qPrintable(keys.front()));
+        check(keyed, dialect);
+        const auto keyCount = keys.size();
+        keyDown();
+        QCoreApplication::processEvents();
+        check(keyed && keys.size() > keyCount && keys.back().startsWith(QLatin1String("xmit 0")),
+              "the CAT unkey reaches the backend as xmit 0");
+        cleanup();
+        f.backend->setTxCommandSinkForTest({});
+    };
+    std::unique_ptr<RigctlProtocol> rigctl;
+    run("rigctld T 1 keys while SmartSDR DAX owns the TX stream",
+        [&](RadioModel& m) { rigctl = std::make_unique<RigctlProtocol>(&m);
+                             check(rigctl->handleLine(QStringLiteral("T 1")).trimmed() == QLatin1String("RPRT 0"),
+                                   "rigctld acknowledges T 1"); },
+        [&] { (void)rigctl->handleLine(QStringLiteral("T 0")); },
+        [&] { rigctl.reset(); });
+    std::unique_ptr<SmartCatProtocol> cat;
+    run("SmartSDR-CAT ZZTX1 keys while SmartSDR DAX owns the TX stream",
+        [&](RadioModel& m) { cat = std::make_unique<SmartCatProtocol>(&m);
+                             (void)cat->processCommand(QStringLiteral("ZZTX1")); },
+        [&] { (void)cat->processCommand(QStringLiteral("ZZRX")); },
+        [&] { cat.reset(); });
+    run("rigctld client drop while keyed unkeys",
+        [&](RadioModel& m) { rigctl = std::make_unique<RigctlProtocol>(&m);
+                             (void)rigctl->handleLine(QStringLiteral("T 1")); },
+        [&] { rigctl.reset(); }, [] {});
+    run("SmartSDR-CAT client drop while keyed unkeys",
+        [&](RadioModel& m) { cat = std::make_unique<SmartCatProtocol>(&m);
+                             (void)cat->processCommand(QStringLiteral("ZZTX1")); },
+        [&] { cat.reset(); }, [] {});
+
+    Fixture dax;
+    dax.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
+    std::vector<QString> keys;
+    dax.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) {
+        keys.push_back(command);
+        return true;
+    });
+    const TxCoordinator::Producer producer = dax.model.registerTxProducer(&dax.audio);
+    const TxCoordinator::Request input = producer.request();
+    check(!dax.model.setProducerTransmit(input, true, TransmitModel::PttSource::Dax) && keys.empty(),
+          "a DAX-audio producer is still refused without this client's own stream");
+    dax.backend->setTxCommandSinkForTest({});
+}
+
+// Flex MOX in DIGU/DIGL keys regardless of the radio's DAX audio route (#7407).
+void moxKeysFlexDigitalMode()
+{
+    for (const char* mode : {"DIGU", "DIGL"}) {
+        Fixture f;
+        f.stream(true, QStringLiteral("0x0badcafe"), 0x4a000002);
+        applyFlexSliceStatus(f.model, 0, {{QStringLiteral("mode"), QString::fromLatin1(mode)}});
+        std::vector<QString> keys;
+        f.backend->setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command&) {
+            keys.push_back(command);
+            return true;
+        });
+        QString notice;
+        QObject::connect(&f.model, &RadioModel::interlockNotificationRequested, &f.model,
+                         [&](const QString& message, const QString&, const QString&) { notice = message; });
+        f.model.transmitModel().requestPttOn(TransmitModel::PttSource::Mox);
+        QCoreApplication::processEvents();
+        std::printf("    MOX in %s: %zu key commands%s%s; notice \"%s\"\n", mode, keys.size(),
+                    keys.empty() ? "" : " first=", keys.empty() ? "" : qPrintable(keys.front()),
+                    qPrintable(notice));
+        const bool keyed = !keys.empty() && keys.front().startsWith(QLatin1String("xmit 1"));
+        const auto keyCount = keys.size();
+        check(keyed, "MOX keys a Flex DIGU/DIGL slice");
+        check(!notice.contains(QLatin1String("voice")), "MOX in DIGU/DIGL raises no voice refusal");
+        f.model.transmitModel().requestPttOff(TransmitModel::PttSource::Mox);
+        QCoreApplication::processEvents();
+        check(keyed && keys.size() > keyCount && keys.back().startsWith(QLatin1String("xmit 0")),
+              "MOX release unkeys");
+        f.backend->setTxCommandSinkForTest({});
+    }
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("dax-tx-ownership-test"));
@@ -517,6 +620,6 @@ int main(int argc, char** argv)
     ordering(false); ordering(true);
     failuresAndClients(); mediaAndSourceFlags(); lifecycle(); creationAndBusy();
     exactInputAndKeyFences(); cancellationAndMalformedStatus(); createOrderingAndGuardRefresh();
-    interruptBeforeDispatch();
+    interruptBeforeDispatch(); catKeysWithForeignDaxStream(); moxKeysFlexDigitalMode();
     return failures ? 1 : 0;
 }

@@ -943,7 +943,6 @@ void RxApplet::buildUI()
         m_panSlider = new CenterMarkSlider(50, Qt::Horizontal);
         m_panSlider->setRange(0, 100);
         m_panSlider->setValue(50);
-        static_cast<GuardedSlider*>(m_panSlider)->setDragValueFormatter(panText);
         applyPrimarySliderStyle(m_panSlider);
         row->addWidget(m_panSlider, 1);
 

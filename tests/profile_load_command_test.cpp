@@ -1,4 +1,5 @@
-#include "models/ProfileLoadCommand.h"
+#include "core/backends/flex/FlexProfileWritePolicy.h"
+#include "models/ProfileLoadPolicy.h"
 #include "models/ProfileLoadPanWriteQueue.h"
 
 #include <cstdio>
@@ -19,51 +20,14 @@ void check(bool condition, const char* name)
     }
 }
 
-void checkProfileLoad(const QString& command,
-                      const QString& expectedType,
-                      const QString& expectedName,
-                      const char* name)
-{
-    const ProfileLoadCommand profileLoad = parseProfileLoadCommand(command);
-    check(profileLoad.valid, name);
-    check(profileLoad.type == expectedType, "profile load type capture");
-    check(profileLoad.name == expectedName, "profile load name capture");
-}
-
 } // namespace
 
 int main()
 {
-    checkProfileLoad(QStringLiteral("profile global load \"SO2R\""),
-                     QStringLiteral("global"),
-                     QStringLiteral("SO2R"),
-                     "global profile load command parses");
-    check(profileLoadMayRebuildRadioTopology(QStringLiteral("global")),
-          "global profile load is topology-changing");
-
-    checkProfileLoad(QStringLiteral(" profile TX load \"Low Power\" "),
-                     QStringLiteral("tx"),
-                     QStringLiteral("Low Power"),
-                     "TX profile load command parses case-insensitively");
-    check(!profileLoadMayRebuildRadioTopology(QStringLiteral("tx")),
-          "TX profile load is not topology-changing");
-
-    checkProfileLoad(QStringLiteral("profile mic load \"Studio Mic\""),
-                     QStringLiteral("mic"),
-                     QStringLiteral("Studio Mic"),
-                     "mic profile load command parses");
-    check(!profileLoadMayRebuildRadioTopology(QStringLiteral("mic")),
-          "mic profile load is not topology-changing");
-
-    checkProfileLoad(QStringLiteral("profile cw load \"Default Contest\""),
-                     QStringLiteral("cw"),
-                     QStringLiteral("Default Contest"),
-                     "CW profile load command parses");
-    check(!profileLoadMayRebuildRadioTopology(QStringLiteral("cw")),
-          "CW profile load is not topology-changing");
-
-    check(!parseProfileLoadCommand(QStringLiteral("profile global save \"SO2R\"")).valid,
-          "non-load profile command is ignored");
+    for (const QString& type : {QStringLiteral("global"), QStringLiteral("tx"), QStringLiteral("mic"), QStringLiteral("cw")}) {
+        check(profileLoadMayRebuildRadioTopology(type) == (type == QStringLiteral("global")),
+              "only a global profile load rebuilds radio topology");
+    }
     check(kProfileLoadDeferredPanFlushDelayMs > kProfileLoadStateWriteHoldMs,
           "deferred pan flush runs after profile-load write hold");
     check(kProfileLoadPostHoldRecoveryDelayMs > kProfileLoadDeferredPanFlushDelayMs,
@@ -71,11 +35,11 @@ int main()
 
     // ── isProfileOwnedRadioStateWrite() — the classification contract (#4142) ──
     //
-    // sendCmd() DROPS every command this returns true for while the profile-load
+    // the Flex dispatcher DROPS every command this returns true for while the profile-load
     // hold is armed: it returns before a sequence number is allocated, so the
     // command never reaches the wire. These cases pin down exactly which writes
     // are lost, and therefore which ones MUST be deferred by
-    // RadioModel::requestPanCenter() rather than handed to sendCmd() and hoped for.
+    // RadioModel::requestPanCenter() rather than handed to the Flex dispatcher and hoped for.
 
     // A pan center is profile-owned — this is the write that #4142 lost. Direct
     // frequency entry emits an atomic pair; the `slice tune` half survives and the
@@ -131,7 +95,7 @@ int main()
 
     // ── ProfileLoadPanWriteQueue — deferred-write store semantics (#4142) ──
     //
-    // The queue holds the writes sendCmd() would otherwise silently destroy
+    // The queue holds the writes the Flex dispatcher would otherwise silently destroy
     // during the profile-load hold. Coalescing is FIELD-WISE per pan: a later
     // center write must never erase a queued bandwidth (whole-struct
     // last-write-wins loses a user's zoom — the exact class of bug #4142 set

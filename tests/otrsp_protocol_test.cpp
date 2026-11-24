@@ -49,9 +49,9 @@ struct Fixture {
     {
         auto owned = std::make_unique<ConnectedBackend>();
         backend = owned.get();
-        backend->setCommandSink([this](const QString& command) { commands.append(command); });
-        backend->setSliceCommandSink([this](const QString& command) { commands.append(command); });
-        backend->setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& reply) {
+        backend->setCommandSinkForTest([this](const QString& command) { commands.append(command); });
+        backend->setSliceCommandSinkForTest([this](const QString& command) { commands.append(command); });
+        backend->setSetupCommandSinkForTest([this](const QString& command, const RadioSetupCompletion& reply) {
             commands.append(command);
             txReply = reply;
             return true;
@@ -236,7 +236,7 @@ void orderedTransmitQueries()
           "failed dispatch releases queries using observed state without waiting for timeout");
 
     Fixture unsupported;
-    unsupported.backend->setSetupCommandSink(
+    unsupported.backend->setSetupCommandSinkForTest(
         [](const QString&, const RadioSetupCompletion&) { return false; });
     OtrspProtocol refused(&unsupported.radio, 2, 5);
     check(refused.processData("TX2\r?TX\r?NAME\r") == "TX1\rNAMEAetherSDR\r",

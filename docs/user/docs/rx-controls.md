@@ -134,7 +134,7 @@ On RTL-SDR FM/FM-N, **AUTO** uses each receiver's own detector noise estimate, i
 
 ### AGC
 
-<img src="/img/screens/rx-agc-calibration.png" width="460" alt="AGC-T Calibration window. The heading reads AGC: MED, finding the knee (agc_threshold) just above the noise floor, with a warning that a signal is in the passband and you should tune to a clear spot. An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the centre, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
+<img src="/img/screens/rx-agc-calibration.png" width="391" alt="AGC-T Calibration window for Slice B. The heading reads Calibrating radio AGC-T (agc_threshold) via TCI audio (DIGU), finding the knee just above the noise floor. Below it, Audio source: TCI (DIGU/DIGL), and a check mark with Quiet spot (signal 5.7 dB over floor). An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the center, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
 
 *The AGC-T Calibration window.*
 
@@ -159,8 +159,19 @@ or manual selection on reconnect.
 **AGC-T calibration:** right-click the AGC-T slider, or use
 **Tools → Calibrate AGC-T...**, to calibrate the threshold against the
 measured noise floor on the active slice. It does not transmit.
-It listens to this computer's audio, so turn **PC Audio** on first: with it
-off, Auto Sweep stops at its first step, puts the setting back and says so.
+**Audio source:** the dialog shows which source it is using; the source is fixed
+when Auto Sweep starts. In **DIGU** or **DIGL** with a DAX channel assigned, it
+measures the TCI audio for that channel — a TCI client (for example WSJT-X over
+TCI) must be receiving on the slice; no PC Audio required. In every other mode,
+in DIGU/DIGL with no DAX channel assigned, and while no TCI client streams
+receive audio, it measures this computer's audio,
+so turn **PC Audio** on first. If no audio arrives, Auto Sweep stops at its first
+step, puts the setting back and reports which source was silent. A slider move
+with no audio records no point and says which source is silent, unless a
+recommendation is on show; that stays. When the TCI source is in use, only
+radio-side NR blocks a sweep; client-side NR (NR2/NR4/DFNR etc.) does not
+affect TCI audio. With AGC **Off** (TargetLevel strategy), the target-level solve
+always uses PC Audio regardless of mode.
 Close the window with the corner ✕, Esc or Ctrl+W; closing it during
 an Auto Sweep stops the sweep and puts back the AGC-T it started from.
 Select manual AGC-T before calibrating. If radio Auto AGC-T or an external

@@ -811,7 +811,7 @@ void wanOverUndialedFlexConnection()
     if (!backend) {
         return;
     }
-    backend->setSliceCommandSink([&commands](const QString& command) { commands.append(command); });
+    backend->setSliceCommandSinkForTest([&commands](const QString& command) { commands.append(command); });
     check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "WAN fixture creates slice zero");
     SliceModel* slice = radio.slice(0);
     check(slice != nullptr, "WAN fixture has an active slice");

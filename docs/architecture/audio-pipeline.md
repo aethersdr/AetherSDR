@@ -543,7 +543,9 @@ After capture channel canonicalization, `onTxAudioReady()` uses this ordering:
    EQ, Comp, PUDU, Reverb (the TX gate and de-esser are retired; RN2 runs
    ahead of the strip).
 7. **PC mic gain**: `setPcMicGain(0..100)` maps to `0.0..1.0` and attenuates the
-   48 kHz float samples. It is not a boost stage.
+   48 kHz float samples. It is not a boost stage. On a host-modulating radio it
+   stays at 100: the MIC slider sets the modulator's gain there instead
+   (`gui/PcMicGain.h`).
 8. **Quindar tone**: `ClientQuindarTone::process()` inserts Quindar tones at
    48 kHz after PC mic gain and before the final limiter.
 9. **Final limiter**: `ClientFinalLimiter::process()` runs at 48 kHz after all
@@ -882,7 +884,7 @@ The interlock code distinguishes **PTT source** from **audio route**:
 
 | PTT/audio case | Local preflight behavior | Notes |
 | --- | --- | --- |
-| Local MOX/PTT, PC mic voice path | Blocks `DIGU`/`DIGL` with `You cannot transmit voice in DIGU/DIGL mode.` and checks TX filter overlap before `xmit 1` | This is treated as local voice intent. |
+| Local MOX/PTT | Applies the `DIGU`/`DIGL` voice preflight and checks TX filter overlap before `xmit 1`. On Flex, `TransmitInhibitPolicy::moxKeysRadioDax` exempts MOX from the digital-mode voice preflight. | On Flex, `transmit dax=1` routes the selected DAX TX stream and `transmit dax=0` routes the configured mic input. |
 | Local TUNE/two-tone | Bypasses the `DIGU`/`DIGL` voice warning and local TX-filter-overlap check | The radio can still report frequency or tuner interlocks after tune is requested. |
 | rigctl CAT PTT and TCI `trx` PTT | Bypasses all local PTT preflight | These callers are ACKed before the queued model path runs, so the radio must be authoritative for any resulting interlock. |
 | DAX/TCI audio in `feedDaxTxAudio()` | Bypasses client voice DSP | The audio path alone does not change a local MOX request into a CAT/DAX PTT source. |

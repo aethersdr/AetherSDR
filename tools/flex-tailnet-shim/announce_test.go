@@ -1,0 +1,945 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// A radio's announcement payload: a real field set, with lookalike keys
+// (inuse_ip, gui_client_ips) that must keep the LAN addresses they name.
+const announcePayload = "discovery_protocol_version=3.0.0.2 model=FLEX-6500 serial=1234-5678-6500-0001 " +
+	"version=4.2.20.41343 nickname=K5PTB callsign=K5PTB ip=192.168.0.20 port=4992 status=Available " +
+	"inuse_ip=192.168.0.50 inuse_host=shack-pc max_licensed_version=v3 gui_client_ips=192.168.0.50 " +
+	"gui_client_hosts=shack-pc gui_client_programs=SmartSDR-Win"
+
+// vitaAnnouncement wraps payload as FlexRadio sends it: extension data with
+// a stream ID, class ID (Flex OUI, discovery class), integer and fractional
+// timestamps, the payload padded with NULs to a word, and an optional
+// trailer.
+func vitaAnnouncement(payload string, trailer bool) []byte {
+	b := make([]byte, 28)
+	b[0] = 0x38 // type 3, class ID present
+	if trailer {
+		b[0] |= 0x04
+	}
+	b[1] = 0x50 // TSI 1, TSF 1, packet count 0
+	binary.BigEndian.PutUint32(b[4:], 0x00000800)
+	binary.BigEndian.PutUint32(b[8:], flexOUI)
+	binary.BigEndian.PutUint32(b[12:], 0x534CFFFF)
+	binary.BigEndian.PutUint32(b[16:], 0x6543210F)
+	binary.BigEndian.PutUint64(b[20:], 0x0102030405060708)
+	b = append(b, payload...)
+	b = append(b, 0) // the radio's NUL terminator
+	for len(b)%4 != 0 {
+		b = append(b, 0)
+	}
+	if trailer {
+		b = append(b, 0xDE, 0xAD, 0xBE, 0xEF)
+	}
+	binary.BigEndian.PutUint16(b[2:], uint16(len(b)/4))
+	return b
+}
+
+func TestRewriteAnnouncementVITA(t *testing.T) {
+	want := strings.Replace(announcePayload, " ip=192.168.0.20 ", " ip=100.64.0.1 ", 1)
+	for _, trailer := range []bool{false, true} {
+		in := vitaAnnouncement(announcePayload, trailer)
+		orig := append([]byte(nil), in...)
+		out, named, ok := rewriteAnnouncement(in, netip.MustParseAddr("100.64.0.1"))
+		if !ok {
+			t.Fatalf("trailer=%v: refused", trailer)
+		}
+		if !bytes.Equal(in, orig) {
+			t.Fatalf("trailer=%v: the radio's packet was modified", trailer)
+		}
+		if named != netip.MustParseAddr("192.168.0.20") {
+			t.Errorf("trailer=%v: named %v", trailer, named)
+		}
+		if len(out)%4 != 0 || int(binary.BigEndian.Uint16(out[2:]))*4 != len(out) {
+			t.Fatalf("trailer=%v: size field %d words for %d bytes", trailer, binary.BigEndian.Uint16(out[2:]), len(out))
+		}
+		if !bytes.Equal(out[:2], in[:2]) || !bytes.Equal(out[4:28], in[4:28]) {
+			t.Errorf("trailer=%v: header changed beyond the size", trailer)
+		}
+		end := len(out)
+		if trailer {
+			end -= 4
+			if !bytes.Equal(out[end:], []byte{0xDE, 0xAD, 0xBE, 0xEF}) {
+				t.Errorf("trailer lost: % x", out[end:])
+			}
+		}
+		if got := string(bytes.TrimRight(out[28:end], "\x00")); got != want {
+			t.Errorf("trailer=%v: payload\n got %q\nwant %q", trailer, got, want)
+		}
+	}
+}
+
+func TestRewriteAnnouncementText(t *testing.T) {
+	in := "name=flex-sim model=FLEX-6600 serial=EMULATE01 ip=10.0.0.5 port=4992 status=Available"
+	out, named, ok := rewriteAnnouncement([]byte(in), netip.MustParseAddr("100.101.102.103"))
+	want := "name=flex-sim model=FLEX-6600 serial=EMULATE01 ip=100.101.102.103 port=4992 status=Available"
+	if !ok || string(out) != want || named != netip.MustParseAddr("10.0.0.5") {
+		t.Fatalf("got %q %v %v", out, named, ok)
+	}
+	// ip= first in the packet is still the radio's address.
+	out, _, ok = rewriteAnnouncement([]byte("ip=10.0.0.5 serial=X"), netip.MustParseAddr("100.64.0.9"))
+	if !ok || string(out) != "ip=100.64.0.9 serial=X" {
+		t.Fatalf("leading ip=: got %q %v", out, ok)
+	}
+}
+
+func TestRewriteAnnouncementRefuses(t *testing.T) {
+	self := netip.MustParseAddr("100.64.0.1")
+	for _, in := range [][]byte{
+		[]byte("model=FLEX-6500 ip=192.168.0.20 port=4992"),           // no serial
+		[]byte("model=FLEX-6500 serial=1234 port=4992"),               // no ip
+		[]byte("serial= ip=192.168.0.20"),                             // empty serial
+		[]byte("model=X serial=1 inuse_ip=192.168.0.50"),              // only a lookalike key
+		vitaAnnouncement("model=FLEX-6500 serial=1 port=4992", false), // VITA, no ip
+		{},
+	} {
+		if out, _, ok := rewriteAnnouncement(in, self); ok {
+			t.Errorf("%q: accepted as %q", in, out)
+		}
+	}
+}
+
+func TestSelectTargets(t *testing.T) {
+	station := []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")}
+	peers := func() []tailPeer {
+		return []tailPeer{
+			{ID: "nRemote", Name: "laptop", Online: true, IP: netip.MustParseAddr("100.64.0.2"), Direct: netip.MustParseAddr("203.0.113.9")},
+			{ID: "nRelayed", Name: "desktop", Online: true, IP: netip.MustParseAddr("100.64.0.3")},
+			{ID: "nAway", Name: "tablet", Online: false, IP: netip.MustParseAddr("100.64.0.4")},
+			{ID: "nShack", Name: "shack-pc", Online: true, IP: netip.MustParseAddr("100.64.0.5"), Direct: netip.MustParseAddr("192.168.0.50")},
+			{ID: "nV6", Name: "v6only", Online: true},
+		}
+	}
+	reasons := func(r []AnnouncePeer) string {
+		var s []string
+		for _, p := range r {
+			s = append(s, fmt.Sprintf("%s:%v/%s", p.Name, p.Announced, p.Skipped))
+		}
+		return strings.Join(s, " ")
+	}
+	addrs := func(a []netip.Addr) string { return fmt.Sprint(a) }
+
+	targets, report := selectTargets(peers(), announceAll, nil, station, nil)
+	if got := addrs(targets); got != "[100.64.0.3 100.64.0.2]" {
+		t.Errorf("all: targets %s", got)
+	}
+	if got := reasons(report); got != "desktop:true/ laptop:true/ shack-pc:false/at the station tablet:false/offline v6only:false/no IPv4" {
+		t.Errorf("all: report %s", got)
+	}
+	targets, report = selectTargets(peers(), announceOnly, []string{"nRemote", "nAway", "nShack"}, station, nil)
+	if got := addrs(targets); got != "[100.64.0.2]" {
+		t.Errorf("only: targets %s", got)
+	}
+	if got := reasons(report); got != "desktop:false/not chosen laptop:true/ shack-pc:false/at the station tablet:false/offline v6only:false/not chosen" {
+		t.Errorf("only: report %s", got)
+	}
+	if targets, _ = selectTargets(peers(), announceOff, nil, station, nil); len(targets) != 0 {
+		t.Errorf("off: targets %v", targets)
+	}
+	// Before the station network is known, nobody is taken to be at it.
+	if targets, _ = selectTargets(peers(), announceAll, nil, nil, nil); len(targets) != 3 {
+		t.Errorf("no station: targets %v", targets)
+	}
+	var many []tailPeer
+	for i := range maxAnnounceTargets + 3 {
+		many = append(many, tailPeer{ID: fmt.Sprintf("n%02d", i), Name: fmt.Sprintf("d%02d", i), Online: true,
+			IP: netip.AddrFrom4([4]byte{100, 64, 1, byte(i)})})
+	}
+	targets, report = selectTargets(many, announceAll, nil, station, nil)
+	if len(targets) != maxAnnounceTargets || report[len(report)-1].Skipped != "over the limit" {
+		t.Errorf("limit: %d targets, last %+v", len(targets), report[len(report)-1])
+	}
+}
+
+// A device with a discovery helper is served by the helper and is not also
+// sent a copy, but only when the setting includes the device: a helper
+// that isn't ticked, is at the station, or runs under "off" is left out
+// (#6984, condition 1).
+func TestSelectTargetsHelper(t *testing.T) {
+	station := []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")}
+	away := []tailPeer{
+		{ID: "nWin", Name: "winpc", Online: true, IP: netip.MustParseAddr("100.64.0.7")},
+		{ID: "nMac", Name: "mac", Online: true, IP: netip.MustParseAddr("100.64.0.8")},
+	}
+	atStation := []tailPeer{
+		{ID: "nWin", Name: "winpc", Online: true, IP: netip.MustParseAddr("100.64.0.7"),
+			Direct: netip.MustParseAddr("192.168.0.60")},
+		away[1],
+	}
+	helpers := map[netip.Addr]bool{netip.MustParseAddr("100.64.0.7"): true}
+	for _, tc := range []struct {
+		name                 string
+		peers                []tailPeer
+		mode                 string
+		only                 []string
+		wantTargets, wantWin string
+	}{
+		{"all", away, announceAll, nil, "[100.64.0.8]", "true/helper/"},
+		{"only, ticked", away, announceOnly, []string{"nWin"}, "[]", "true/helper/"},
+		{"only, not ticked", away, announceOnly, []string{"nMac"}, "[100.64.0.8]", "false//not chosen"},
+		{"off", away, announceOff, nil, "[]", "false//off"},
+		{"at the station", atStation, announceAll, nil, "[100.64.0.8]", "false//at the station"},
+	} {
+		targets, report := selectTargets(append([]tailPeer(nil), tc.peers...), tc.mode, tc.only, station, helpers)
+		var win AnnouncePeer
+		for _, r := range report {
+			if r.ID == "nWin" {
+				win = r
+			}
+		}
+		if got := fmt.Sprint(targets); got != tc.wantTargets {
+			t.Errorf("%s: targets %s, want %s", tc.name, got, tc.wantTargets)
+		}
+		if got := fmt.Sprintf("%v/%s/%s", win.Announced, win.Via, win.Skipped); got != tc.wantWin {
+			t.Errorf("%s: helper device %s, want %s", tc.name, got, tc.wantWin)
+		}
+	}
+}
+
+type sentAnnouncement struct {
+	b  []byte
+	to netip.AddrPort
+}
+
+// TestAnnouncerForwards runs the announcer over a real UDP socket: only the
+// radio's announcements are forwarded, rewritten, to the selected devices,
+// never to one at the station, no faster than announceInterval, and nothing
+// goes out once detached.
+func TestAnnouncerForwards(t *testing.T) {
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	var fromRadio atomic.Bool
+	a := &Announcer{
+		IsRadio:    func(netip.Addr) bool { return fromRadio.Load() },
+		Listen:     func() []net.PacketConn { return []net.PacketConn{pc} },
+		Interfaces: func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")} },
+	}
+	a.Start()
+
+	var mu sync.Mutex
+	var sent []sentAnnouncement
+	selected := make(chan struct{}, 8)
+	self := netip.MustParseAddr("100.70.0.2")
+	a.Attach(self, func(b []byte, to netip.AddrPort) error {
+		mu.Lock()
+		sent = append(sent, sentAnnouncement{append([]byte(nil), b...), to})
+		mu.Unlock()
+		return nil
+	}, func(context.Context) ([]tailPeer, error) {
+		defer func() { selected <- struct{}{} }()
+		return []tailPeer{
+			{ID: "nA", Name: "a", Online: true, IP: netip.MustParseAddr("100.64.0.2")},
+			{ID: "nB", Name: "b", Online: true, IP: netip.MustParseAddr("100.64.0.3")},
+			{ID: "nS", Name: "shack", Online: true, IP: netip.MustParseAddr("100.64.0.4"),
+				Direct: netip.MustParseAddr("192.168.0.50")},
+		}, nil
+	}, func() (string, []string) { return announceAll, nil })
+	<-selected
+	waitFor(t, "device selection", func() bool { return len(a.Status().Devices) == 3 })
+
+	sendTo := func() {
+		c, err := net.Dial("udp4", pc.LocalAddr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		c.Write(vitaAnnouncement(announcePayload, false))
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(sent)
+	}
+
+	sendTo() // not the radio: ignored
+	time.Sleep(100 * time.Millisecond)
+	if n := count(); n != 0 || a.Status().Heard != "" {
+		t.Fatalf("forwarded another sender's announcement: %d sent, heard %q", n, a.Status().Heard)
+	}
+	fromRadio.Store(true)
+	// The first announcement places the station; the selection made before
+	// it is redone, and nothing is sent until it has been, so the shack PC
+	// is never sent one.
+	sendTo()
+	<-selected
+	time.Sleep(50 * time.Millisecond)
+	if n := count(); n != 0 {
+		t.Fatalf("%d sent before the station was known", n)
+	}
+	sendTo()
+	waitFor(t, "two copies sent", func() bool { return count() == 2 })
+	sendTo() // within announceInterval: not forwarded
+	time.Sleep(100 * time.Millisecond)
+	if n := count(); n != 2 {
+		t.Fatalf("%d sent after a second announcement within the interval, want 2", n)
+	}
+	mu.Lock()
+	for i, s := range sent {
+		wantTo := netip.AddrPortFrom(netip.MustParseAddr([]string{"100.64.0.2", "100.64.0.3"}[i]), announcePort)
+		if s.to != wantTo {
+			t.Errorf("sent to %v, want %v", s.to, wantTo)
+		}
+		if !bytes.Contains(s.b, []byte(" ip=100.70.0.2 ")) || bytes.Contains(s.b, []byte(" ip=192.168.0.20")) {
+			t.Errorf("not rewritten: %q", s.b)
+		}
+	}
+	mu.Unlock()
+	if a.Status().Heard == "" {
+		t.Error("status doesn't say the radio was heard")
+	}
+
+	a.Detach()
+	time.Sleep(announceInterval)
+	sendTo()
+	time.Sleep(100 * time.Millisecond)
+	if n := count(); n != 2 {
+		t.Fatalf("%d sent after Detach, want 2", n)
+	}
+	if a.Status().Heard == "" || len(a.Status().Devices) != 0 {
+		t.Errorf("detached status: %+v", a.Status())
+	}
+}
+
+func TestAnnounceSettingAPI(t *testing.T) {
+	const token = "test-admin-token"
+	n := newTestNode(t, token)
+	h := NewAPI(n)
+	const lan = "192.168.1.10:5000"
+	if rec := call(t, h, "PUT", "/v1/announce", lan, "", `{"announce":"off"}`); rec.Code != 401 {
+		t.Fatalf("without token: got %d", rec.Code)
+	}
+	for _, body := range []string{
+		`{"announce":"some"}`,
+		`{"announce":""}`,
+		`{"announce":"only","announce_to":["n1; rm"]}`,
+		`{"announce":"only","extra":1}`,
+	} {
+		if rec := call(t, h, "PUT", "/v1/announce", lan, token, body); rec.Code != 400 {
+			t.Errorf("%s: got %d, want 400", body, rec.Code)
+		}
+	}
+	if st := n.Status(); st.Announce != announceAll || len(st.AnnounceTo) != 0 {
+		t.Fatalf("default: %q %v", st.Announce, st.AnnounceTo)
+	}
+	rec := call(t, h, "PUT", "/v1/announce", lan, token, `{"announce":"only","announce_to":["nAbC123CNTRL"]}`)
+	if rec.Code != 200 {
+		t.Fatalf("with token: got %d %s", rec.Code, rec.Body.String())
+	}
+	var st Status
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Announce != announceOnly || fmt.Sprint(st.AnnounceTo) != "[nAbC123CNTRL]" {
+		t.Fatalf("reply: %q %v", st.Announce, st.AnnounceTo)
+	}
+	// The setting survives a restart.
+	again := &Node{StateDir: n.StateDir}
+	if err := again.load(); err != nil {
+		t.Fatal(err)
+	}
+	if st := again.Status(); st.Announce != announceOnly || fmt.Sprint(st.AnnounceTo) != "[nAbC123CNTRL]" {
+		t.Fatalf("after reload: %q %v", st.Announce, st.AnnounceTo)
+	}
+	// "all" is stored as the default, so an older shim reads it the same.
+	if rec := call(t, h, "PUT", "/v1/announce", lan, token, `{"announce":"all"}`); rec.Code != 200 {
+		t.Fatalf("all: got %d", rec.Code)
+	}
+	b, err := os.ReadFile(filepath.Join(n.StateDir, "provision.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "announce") {
+		t.Errorf("default stored explicitly: %s", b)
+	}
+}
+
+// readFrame reads one helper frame, or fails after d.
+func readFrame(c net.Conn, d time.Duration) ([]byte, error) {
+	c.SetReadDeadline(time.Now().Add(d))
+	var n [2]byte
+	if _, err := io.ReadFull(c, n[:]); err != nil {
+		return nil, err
+	}
+	b := make([]byte, binary.BigEndian.Uint16(n[:]))
+	_, err := io.ReadFull(c, b)
+	return b, err
+}
+
+// readAnswer reads the shim's one-line answer to a helper's hello.
+func readAnswer(t *testing.T, c net.Conn) string {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var line []byte
+	b := make([]byte, 1)
+	for {
+		if _, err := c.Read(b); err != nil {
+			t.Fatalf("reading the answer after %q: %v", line, err)
+		}
+		if b[0] == '\n' {
+			return string(line)
+		}
+		line = append(line, b[0])
+	}
+}
+
+// TestAnnouncerHelperHello: a helper that opens with another feed version,
+// with something that isn't the hello, or with nothing, is answered
+// REFUSED with the reason and closed, and is sent no announcement though a
+// fresh one is waiting; so is one past the helper limit. Status keeps the
+// last refusal.
+func TestAnnouncerHelperHello(t *testing.T) {
+	defer func(d time.Duration) { helperHelloTimeout = d }(helperHelloTimeout)
+	helperHelloTimeout = 200 * time.Millisecond
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	a := &Announcer{}
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
+		func(context.Context) ([]tailPeer, error) {
+			return []tailPeer{{ID: "nWin", Name: "winpc", Online: true, IP: netip.MustParseAddr("127.0.0.1")}}, nil
+		},
+		func() (string, []string) { return announceAll, nil })
+	defer a.Detach()
+	waitFor(t, "the device list", func() bool { return len(a.Status().Devices) == 1 })
+	a.mu.Lock()
+	a.lastOut, a.lastOutT = vitaAnnouncement(announcePayload, false), time.Now().Add(time.Hour)
+	a.mu.Unlock()
+	go a.ServeHelpers(ln, func(net.Addr) (string, bool) { return "winpc", true })
+
+	open := func(hello string) net.Conn {
+		c, err := net.Dial("tcp4", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hello != "" {
+			c.Write([]byte(hello))
+		}
+		return c
+	}
+	for _, tc := range []struct{ hello, reason string }{
+		{"AETHER-DISCOVERY 2\n", `it speaks feed version "2"; this shim speaks version 1`},
+		{"AETHER-DISCOVERY 1 extra\n", `it speaks feed version "1 extra"; this shim speaks version 1`},
+		{"GET / HTTP/1.1\r\n", "it did not open with the AETHER-DISCOVERY hello"},
+		{strings.Repeat("A", 100) + "\n", "the hello is too long"},
+		{"", "no hello within 200ms"},
+	} {
+		c := open(tc.hello)
+		if got, want := readAnswer(t, c), "AETHER-DISCOVERY 1 REFUSED "+tc.reason; got != want {
+			t.Errorf("hello %q: answer %q, want %q", tc.hello, got, want)
+		}
+		c.SetReadDeadline(time.Now().Add(time.Second))
+		if n, err := c.Read(make([]byte, 64)); err != io.EOF {
+			t.Errorf("hello %q: read %d bytes, %v after REFUSED; want closed", tc.hello, n, err)
+		}
+		c.Close()
+		if r := a.Status().HelperRefused; r == nil || r.Reason != tc.reason || r.From != "winpc" {
+			t.Errorf("hello %q: status helper_refused = %+v", tc.hello, r)
+		}
+	}
+
+	// A CRLF hello is accepted, and the answer comes before the waiting
+	// announcement.
+	var kept []net.Conn
+	defer func() {
+		for _, c := range kept {
+			c.Close()
+		}
+	}()
+	for i := 0; i < maxHelpers; i++ {
+		c := open("AETHER-DISCOVERY 1\r\n")
+		kept = append(kept, c)
+		if got := readAnswer(t, c); got != "AETHER-DISCOVERY 1 OK" {
+			t.Fatalf("helper %d: answer %q", i, got)
+		}
+		if _, err := readFrame(c, time.Second); err != nil {
+			t.Fatalf("helper %d: no announcement after OK: %v", i, err)
+		}
+	}
+	extra := open("AETHER-DISCOVERY 1\n")
+	defer extra.Close()
+	if got, want := readAnswer(t, extra), fmt.Sprintf("AETHER-DISCOVERY 1 REFUSED %d discovery helpers are already connected", maxHelpers); got != want {
+		t.Errorf("helper past the limit: answer %q, want %q", got, want)
+	}
+}
+
+// TestAnnounceBindAddrs: UDP 4992 is bound to the limited broadcast address
+// and the broadcast address of each private network on an interface that is
+// up and broadcasts; never the wildcard or an interface's own address, which
+// would match the clients' datagrams to the radio.
+func TestAnnounceBindAddrs(t *testing.T) {
+	ipnet := func(cidr string) *net.IPNet {
+		ip, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.IP = ip
+		return n
+	}
+	ifaces := []announceInterface{
+		{net.FlagUp | net.FlagBroadcast, []net.Addr{ipnet("192.168.0.20/24"), ipnet("fe80::1/64")}},
+		{net.FlagUp | net.FlagLoopback, []net.Addr{ipnet("127.0.0.1/8")}},
+		{net.FlagBroadcast, []net.Addr{ipnet("10.0.0.5/8")}},                            // down
+		{net.FlagUp | net.FlagBroadcast, []net.Addr{ipnet("172.30.0.2/16")}},            // the radio's container network
+		{net.FlagUp | net.FlagPointToPoint, []net.Addr{ipnet("100.70.0.2/32")}},         // tailnet
+		{net.FlagUp | net.FlagBroadcast, []net.Addr{ipnet("0.0.0.0/0"), &net.IPAddr{}}}, // nothing to bind
+	}
+	got := announceBindAddrs(ifaces)
+	if fmt.Sprint(got) != "[255.255.255.255 192.168.0.255]" {
+		t.Errorf("bind addresses %v, want [255.255.255.255 192.168.0.255]", got)
+	}
+	for _, a := range got {
+		if a.IsUnspecified() || a == netip.MustParseAddr("192.168.0.20") {
+			t.Errorf("binds %v", a)
+		}
+	}
+}
+
+// TestReuseAddrControl: the 4992 sockets set SO_REUSEADDR and not
+// SO_REUSEPORT, which would put them in the radio's SO_REUSEPORT group and
+// share its traffic (discovery.go's reuseControl sets both, for 4O3A).
+func TestReuseAddrControl(t *testing.T) {
+	lc := net.ListenConfig{Control: reuseAddrControl}
+	pc, err := lc.ListenPacket(context.Background(), "udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	raw, err := pc.(*net.UDPConn).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addr, port int
+	var aerr, perr error
+	raw.Control(func(fd uintptr) {
+		addr, aerr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR)
+		port, perr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, unix.SO_REUSEPORT)
+	})
+	if aerr != nil || perr != nil {
+		t.Fatal(aerr, perr)
+	}
+	if addr == 0 || port != 0 {
+		t.Errorf("SO_REUSEADDR=%d SO_REUSEPORT=%d, want set and clear", addr, port)
+	}
+}
+
+// TestAnnouncerHelperFeed runs the helper feed over loopback TCP: an
+// admitted helper gets each forwarded announcement, rewritten, and its
+// device is not also sent a copy; a helper connecting later gets the last
+// announcement at once; a refused one gets nothing; "off" sends nothing;
+// and detaching closes the helper.
+func TestAnnouncerHelperFeed(t *testing.T) {
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	a := &Announcer{
+		IsRadio: func(netip.Addr) bool { return true },
+		Listen:  func() []net.PacketConn { return []net.PacketConn{pc} },
+	}
+	a.Start()
+	var mu sync.Mutex
+	var sent []netip.AddrPort
+	mode := announceAll
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func(b []byte, to netip.AddrPort) error {
+		mu.Lock()
+		sent = append(sent, to)
+		mu.Unlock()
+		return nil
+	}, func(context.Context) ([]tailPeer, error) {
+		return []tailPeer{
+			{ID: "nWin", Name: "winpc", Online: true, IP: netip.MustParseAddr("127.0.0.1")},
+			{ID: "nMac", Name: "mac", Online: true, IP: netip.MustParseAddr("100.64.0.8")},
+		}, nil
+	}, func() (string, []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return mode, nil
+	})
+	var admit atomic.Bool
+	go a.ServeHelpers(ln, func(net.Addr) (string, bool) { return "winpc", admit.Load() })
+
+	announce := func() {
+		c, err := net.Dial("udp4", pc.LocalAddr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		c.Write(vitaAnnouncement(announcePayload, false))
+	}
+	dialRaw := func() net.Conn {
+		c, err := net.Dial("tcp4", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Write([]byte("AETHER-DISCOVERY 1\n"))
+		return c
+	}
+	dial := func() net.Conn {
+		c := dialRaw()
+		if got := readAnswer(t, c); got != "AETHER-DISCOVERY 1 OK" {
+			t.Fatalf("answer %q, want OK", got)
+		}
+		return c
+	}
+	viaHelper := func() bool {
+		for _, d := range a.Status().Devices {
+			if d.ID == "nWin" && d.Via == "helper" {
+				return true
+			}
+		}
+		return false
+	}
+
+	admit.Store(true)
+	h := dial()
+	defer h.Close()
+	waitFor(t, "the helper's device to be served by it", viaHelper)
+	announce() // places the station; not sent
+	time.Sleep(100 * time.Millisecond)
+	announce()
+	b, err := readFrame(h, 2*time.Second)
+	if err != nil {
+		t.Fatalf("helper: %v", err)
+	}
+	if !bytes.Contains(b, []byte(" ip=100.70.0.2 ")) || binary.BigEndian.Uint32(b[8:])&0x00FFFFFF != flexOUI {
+		t.Fatalf("helper got %q", b)
+	}
+	mu.Lock()
+	if fmt.Sprint(sent) != "[100.64.0.8:4992]" {
+		t.Errorf("copies sent to %v; the helper's device must not get one", sent)
+	}
+	mu.Unlock()
+
+	late := dial()
+	defer late.Close()
+	if b2, err := readFrame(late, time.Second); err != nil || !bytes.Equal(b2, b) {
+		t.Fatalf("a helper connecting later wasn't sent the last announcement: %v", err)
+	}
+	// A helper the allowlist refuses is closed with nothing sent, not even
+	// an answer, though there is an announcement it would otherwise be sent
+	// at once. Status records the refusal.
+	admit.Store(false)
+	refused := dialRaw()
+	refused.SetReadDeadline(time.Now().Add(time.Second))
+	// Closed unread, its hello still queued: the close may come as a reset.
+	if n, err := refused.Read(make([]byte, 64)); err != io.EOF && !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("refused helper: read %d bytes, %v; want closed with nothing sent", n, err)
+	}
+	refused.Close()
+	if r := a.Status().HelperRefused; r == nil || r.From != "winpc" || r.Reason != "not allowed" {
+		t.Errorf("status helper_refused = %+v", r)
+	}
+
+	mu.Lock()
+	mode = announceOff
+	mu.Unlock()
+	time.Sleep(announceInterval)
+	announce()
+	if _, err := readFrame(h, 300*time.Millisecond); err == nil {
+		t.Fatal("helper fed with announcements off")
+	}
+
+	a.Detach()
+	h.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := h.Read(make([]byte, 64)); err != io.EOF {
+		t.Fatalf("helper not closed on detach: %v", err)
+	}
+}
+
+// settingForTest is the announcement setting a test's node holds.
+type settingForTest struct {
+	mu   sync.Mutex
+	mode string
+	only []string
+}
+
+func (s *settingForTest) set(mode string, only ...string) {
+	s.mu.Lock()
+	s.mode, s.only = mode, only
+	s.mu.Unlock()
+}
+
+func (s *settingForTest) get() (string, []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mode, append([]string(nil), s.only...)
+}
+
+func deviceStates(a *Announcer) string {
+	var parts []string
+	for _, d := range a.Status().Devices {
+		parts = append(parts, fmt.Sprintf("%s:%v/%s", d.ID, d.Announced, d.Skipped))
+	}
+	return strings.Join(parts, " ")
+}
+
+var twoAwayDevices = []tailPeer{
+	{ID: "nA", Name: "a", Online: true, IP: netip.MustParseAddr("100.64.0.2")},
+	{ID: "nB", Name: "b", Online: true, IP: netip.MustParseAddr("100.64.0.3")},
+}
+
+// TestRefreshShowsTheNewSettingAtOnce: the status read straight after a
+// setting changes shows it, though the tailnet's device list is still being
+// fetched (seconds on a radio's CPU), and nothing more is sent to a device
+// the new setting leaves out.
+func TestRefreshShowsTheNewSettingAtOnce(t *testing.T) {
+	setting := &settingForTest{mode: announceAll}
+	var fetches atomic.Int32
+	a := &Announcer{Interfaces: func() []netip.Prefix { return nil }}
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
+		func(ctx context.Context) ([]tailPeer, error) {
+			if fetches.Add(1) == 1 {
+				return append([]tailPeer(nil), twoAwayDevices...), nil
+			}
+			<-ctx.Done() // every later fetch is still running
+			return nil, ctx.Err()
+		}, setting.get)
+	defer a.Detach()
+	waitFor(t, "the first selection", func() bool { return deviceStates(a) == "nA:true/ nB:true/" })
+
+	for _, tc := range []struct {
+		mode string
+		only []string
+		want string
+	}{
+		{announceOff, nil, "nA:false/off nB:false/off"},
+		{announceAll, nil, "nA:true/ nB:true/"},
+		{announceOnly, []string{"nB"}, "nA:false/not chosen nB:true/"},
+	} {
+		setting.set(tc.mode, tc.only...)
+		a.Refresh()
+		if got := deviceStates(a); got != tc.want {
+			t.Errorf("%s %v: status straight after the change %q, want %q", tc.mode, tc.only, got, tc.want)
+		}
+		a.mu.Lock()
+		n := len(a.targets)
+		a.mu.Unlock()
+		if want := strings.Count(tc.want, ":true"); n != want {
+			t.Errorf("%s %v: sending to %d device(s), want %d", tc.mode, tc.only, n, want)
+		}
+	}
+}
+
+// TestSelectionUnderTheOldSettingIsDiscarded: a selection that read the
+// setting just before it changed doesn't replace the one the change made.
+func TestSelectionUnderTheOldSettingIsDiscarded(t *testing.T) {
+	setting := &settingForTest{mode: announceAll}
+	var fetches atomic.Int32
+	var armed atomic.Bool
+	third := make(chan struct{})
+	a := &Announcer{Interfaces: func() []netip.Prefix { return nil }}
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
+		func(ctx context.Context) ([]tailPeer, error) {
+			switch fetches.Add(1) {
+			case 1:
+			case 2:
+				armed.Store(true) // the setting this pass reads is about to change
+			case 3:
+				close(third)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return append([]tailPeer(nil), twoAwayDevices...), nil
+		}, func() (string, []string) {
+			if armed.CompareAndSwap(true, false) {
+				// The operator turns announcing off just after this pass read
+				// "every device": its selection is now out of date.
+				setting.set(announceOff)
+				a.Refresh()
+				return announceAll, nil
+			}
+			return setting.get()
+		})
+	defer a.Detach()
+	waitFor(t, "the first selection", func() bool { return deviceStates(a) == "nA:true/ nB:true/" })
+	a.Refresh() // start the second pass
+	select {
+	case <-third:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the third fetch never started")
+	}
+	if got, want := deviceStates(a), "nA:false/off nB:false/off"; got != want {
+		t.Errorf("status %q after a pass under the old setting, want %q", got, want)
+	}
+}
+
+// TestHelperMustPassTheDeviceChecks: a helper whose device the setting
+// leaves out (off, not ticked, at the station) is refused with the reason
+// and sent nothing, not even the waiting announcement; one the setting
+// includes is served; and a served helper is closed when the setting
+// changes to leave it out (#6984, condition 1).
+func TestHelperMustPassTheDeviceChecks(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	setting := &settingForTest{mode: announceOff}
+	var direct atomic.Value
+	direct.Store(netip.Addr{})
+	a := &Announcer{Interfaces: func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")} }}
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
+		func(context.Context) ([]tailPeer, error) {
+			return []tailPeer{{ID: "nWin", Name: "winpc", Online: true,
+				IP: netip.MustParseAddr("127.0.0.1"), Direct: direct.Load().(netip.Addr)}}, nil
+		}, setting.get)
+	defer a.Detach()
+	a.mu.Lock()
+	a.radioIP = netip.MustParseAddr("192.168.0.20")
+	a.lastOut, a.lastOutT = vitaAnnouncement(announcePayload, false), time.Now().Add(time.Hour)
+	a.mu.Unlock()
+	go a.ServeHelpers(ln, func(net.Addr) (string, bool) { return "winpc", true })
+	waitFor(t, "the device list", func() bool { return deviceStates(a) == "nWin:false/off" })
+
+	dial := func() net.Conn {
+		c, err := net.Dial("tcp4", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Write([]byte("AETHER-DISCOVERY 1\n"))
+		return c
+	}
+	refused := func(why string) {
+		t.Helper()
+		c := dial()
+		defer c.Close()
+		if got, want := readAnswer(t, c), "AETHER-DISCOVERY 1 REFUSED "+why; got != want {
+			t.Errorf("answer %q, want %q", got, want)
+		}
+		c.SetReadDeadline(time.Now().Add(time.Second))
+		if n, err := c.Read(make([]byte, 64)); err != io.EOF {
+			t.Errorf("refused (%s), but read %d bytes, %v; want closed with nothing sent", why, n, err)
+		}
+	}
+
+	refused("the radio's announcement is off")
+
+	setting.set(announceOnly, "nOther")
+	a.Refresh()
+	refused("this device isn't ticked under Only the devices ticked below")
+
+	setting.set(announceAll)
+	direct.Store(netip.MustParseAddr("192.168.0.60"))
+	a.Refresh()
+	waitFor(t, "the station PC", func() bool { return deviceStates(a) == "nWin:false/at the station" })
+	refused("this device is at the station, where it hears the radio's own broadcast")
+
+	direct.Store(netip.Addr{})
+	a.Refresh()
+	waitFor(t, "the PC away", func() bool { return deviceStates(a) == "nWin:true/" })
+	c := dial()
+	defer c.Close()
+	if got := readAnswer(t, c); got != "AETHER-DISCOVERY 1 OK" {
+		t.Fatalf("away and included: answer %q, want OK", got)
+	}
+	if _, err := readFrame(c, time.Second); err != nil {
+		t.Fatalf("served, but no announcement: %v", err)
+	}
+	if got := deviceStates(a); got != "nWin:true/" {
+		t.Errorf("served helper: status %q", got)
+	}
+	a.mu.Lock()
+	via := ""
+	for _, r := range a.report {
+		via = r.Via
+	}
+	a.mu.Unlock()
+	if via != "helper" {
+		t.Errorf("served helper: via %q, want helper", via)
+	}
+
+	setting.set(announceOff)
+	a.Refresh()
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.Copy(io.Discard, c); err != nil {
+		t.Errorf("after Off, the helper wasn't closed: %v", err)
+	}
+}
+
+// TestStatusHidesDevicesWithoutToken: anyone on the station LAN can read
+// GET /v1/status, so without the admin token it leaves out what names the
+// tailnet's devices (the device list, the ticked IDs, a refused helper's
+// name) and says so; the mode stays. With the token it is all there
+// (#6984, condition 3).
+func TestStatusHidesDevicesWithoutToken(t *testing.T) {
+	const token = "test-admin-token"
+	n := newTestNode(t, token)
+	n.Announcer = &Announcer{}
+	h := NewAPI(n)
+	const lan = "192.168.1.10:5000"
+	if rec := call(t, h, "PUT", "/v1/announce", lan, token, `{"announce":"only","announce_to":["nWin"]}`); rec.Code != 200 {
+		t.Fatalf("setting: got %d", rec.Code)
+	}
+	n.Announcer.mu.Lock()
+	n.Announcer.report = []AnnouncePeer{{ID: "nWin", Name: "pauls-pc", OS: "windows", Online: true, Announced: true}}
+	n.Announcer.helperRefused = &HelperRefusal{From: "pauls-mac", Reason: "the radio's announcement is off"}
+	n.Announcer.mu.Unlock()
+
+	read := func(presented string) (Status, string) {
+		t.Helper()
+		rec := call(t, h, "GET", "/v1/status", lan, presented, "")
+		if rec.Code != 200 {
+			t.Fatalf("status: got %d", rec.Code)
+		}
+		var st Status
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		return st, rec.Body.String()
+	}
+	for _, presented := range []string{"", "wrong-token"} {
+		st, body := read(presented)
+		for _, name := range []string{"pauls-pc", "pauls-mac", "nWin"} {
+			if strings.Contains(body, name) {
+				t.Errorf("token %q: status names %q: %s", presented, name, body)
+			}
+		}
+		if !st.Announcement.DevicesHidden || st.Announce != announceOnly {
+			t.Errorf("token %q: devices_hidden %v, announce %q", presented, st.Announcement.DevicesHidden, st.Announce)
+		}
+		if r := st.Announcement.HelperRefused; r == nil || r.Reason != "the radio's announcement is off" {
+			t.Errorf("token %q: the refusal's reason should stay: %+v", presented, r)
+		}
+	}
+	st, _ := read(token)
+	if st.Announcement.DevicesHidden || len(st.Announcement.Devices) != 1 || fmt.Sprint(st.AnnounceTo) != "[nWin]" ||
+		st.Announcement.HelperRefused == nil || st.Announcement.HelperRefused.From != "pauls-mac" {
+		t.Errorf("with the token: %+v, announce_to %v", st.Announcement, st.AnnounceTo)
+	}
+}
