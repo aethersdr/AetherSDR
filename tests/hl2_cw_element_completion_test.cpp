@@ -18,12 +18,11 @@
 // fenced inside the break-in hang leaves the next text keyed on EP2 (#7567);
 // an element after such a fence, due in the next EP2 frame, is whole even
 // when the pacer builds frames right after its key-down reaches the I/O
-// thread (#7572 review: admission and the MOX re-raise are one action); and
-// the same holds for the two other fences of a host-text run inside the hang,
-// a refused key-down and the retire cap (#7572 review, non-blocking); a
-// re-key after such a fence that the EP2 writer refuses (past the shift
-// bound) raises no MOX, and a re-key in a live over leaves its MOX alone
-// (#7572 review, N1 and N2).
+// thread, because admission and the MOX re-raise are one action (#7572); the
+// same holds for the two other fences of a host-text run inside the hang, a
+// refused key-down and the retire cap; a re-key after such a fence that the
+// EP2 writer refuses (past the shift bound) raises no MOX; and a re-key in a
+// live over leaves its MOX alone.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -707,12 +706,12 @@ static void testHostTextFencedInTheHangNextTextIsOnTheWire(bool breakIn)
     }
 }
 
-// #7572 review, P1: after a fence in the break-in hang, the next element's
-// key-down is due in the very next EP2 frame, and the pacer builds frames as
-// soon as that key-down is admitted on the I/O thread. Had the MOX re-raise
-// been a second queued call, those frames went out unkeyed past the down's
-// sample: the down was then applied late and its release kept its sample, so
-// the element came out short (or not at all), with no shift and no refusal.
+// After a fence in the break-in hang, the next element's key-down is due in
+// the very next EP2 frame, and the pacer builds frames as soon as that
+// key-down is admitted on the I/O thread. Any frame built between admitting
+// the down and raising MOX would pass the down's sample unkeyed and cut the
+// element short, with no shift and no refusal, so the element must be whole
+// at its sample (#7572).
 static void testRekeyAfterAFenceIsOneIoAction()
 {
     const std::string name = "re-key after a fence, down due in the next frame, pacer between the calls: ";
@@ -758,7 +757,7 @@ static void testRekeyAfterAFenceIsOneIoAction()
               + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
 }
 
-// #7572 review, N1: the re-key's MOX is raised only for a down the EP2 writer
+// The re-key's MOX is raised only for a down the EP2 writer
 // admitted. Here the down after the fence is later than the shift bound, so
 // setCwKeyDown() refuses it; MOX must stay down at the writer for the rest of
 // the hang, or the radio keys with no carrier until the hang ends.
@@ -790,7 +789,7 @@ static void testRefusedRekeyAfterAFenceRaisesNoMox()
           name + "no MOX and no carrier after it (" + runsText(runs) + ")");
 }
 
-// #7572 review, N2: inside the hang with no fence, the over is live and its
+// Inside the hang with no fence, the over is live and its
 // MOX is left alone. The re-key admits the down and calls nothing else: the
 // writer keeps MOX under the first element's operation, not the new one's.
 static void testRekeyInALiveOverLeavesItsMoxAlone()
@@ -816,7 +815,7 @@ static void testRekeyInALiveOverLeavesItsMoxAlone()
           name + "the second element is whole on EP2 (" + runsText(runs) + ")");
 }
 
-// #7572 review (non-blocking): the two other routes by which a host-text run's
+// The two other routes by which a host-text run's
 // producer is fenced inside the break-in hang, into the same #7567 fix.
 // Refusal: the run's second key-down is refused at the host-text gates (the
 // TX slice leaves CW), and refused() fences the run at once. Retire cap: the
