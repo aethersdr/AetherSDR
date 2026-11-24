@@ -353,22 +353,110 @@ backup and is never overwritten by Restore.
 > physical amplifier ([#4097](https://github.com/aethersdr/AetherSDR/issues/4097)).
 > Reports from owners are welcome.
 
+Add it with **Peripherals → Add → Elecraft KPA1500**, enter the amplifier's IP
+address (or host name) and port (default 1500), choose a **Transport**, and
+press **Connect**. If you don't know the address, press **Find**: AetherSDR
+asks every address on this computer's local networks for a KPA1500 serial
+number on that port, over UDP, and fills in the address of the amplifier that
+answers (a menu lets you pick when there are several). **Find** sends queries
+only and changes nothing on the amplifier.
+
+The amplifier serves the same commands over TCP and UDP on that one port:
+
+- **TCP** (default): a stream connection; meters refresh every 500 ms. The
+  connection reads as connected once the amplifier answers, and as lost
+  after 3 seconds without a reply, even if the network never closes it. The
+  amplifier accepts only one TCP client at a time, so Elecraft's KPA1500
+  Remote and AetherSDR cannot both use TCP.
+- **UDP**: one command per datagram, so a lost packet never stalls the
+  meters, which refresh about every 250 ms. AetherSDR waits for each answer
+  (or a short timeout) before asking the next question, so a slow link
+  refreshes more slowly rather than flooding the amplifier. The link reads as
+  connected once the amplifier answers, and as disconnected after 3 seconds
+  without a reply. While disconnected AetherSDR keeps asking, and the link
+  comes back by itself on the first answer, whether or not **Reconnect
+  automatically** is on. Every control is confirmed by reading the
+  amplifier's state back and is retried until it takes; if the amplifier
+  never reports the requested state, the applet shows, for example,
+  `Operate not confirmed by the amplifier`. While the radio transmits,
+  antenna, ATU in-line/bypass and OPERATE retries pause, so AetherSDR never
+  repeats one of those relay changes under RF; they resume at least 0.6 s
+  after transmit ends. **STANDBY**, cancelling a tune and **CLR FAULT** keep
+  retrying while the radio transmits, because they take the amplifier out of
+  line or stop it, and you are told if they are not confirmed. How the
+  KPA1500 sequences its own bypass relay when STANDBY arrives mid-transmission
+  has not been checked on hardware. **TUNE** is
+  sent once and never repeated. The amplifier accepts any number
+  of UDP clients, so AetherSDR can run alongside Elecraft's KPA1500 Remote.
+
+The transport can be changed only while disconnected.
+
 The **Elecraft KPA1500** applet (button **KPA1500**):
 
-- A status pill, **PWR**, **REF** and **SWR** gauges.
-- An info grid with PA temperature, band and the ATU state.
+- A status pill, **PWR**, **REF** and **SWR** gauges. Hover over the pill for
+  the amplifier's firmware version and serial number.
+- An info grid with PA temperature, band and the ATU state; **DRIVE** (input
+  power from the radio, 0 in standby and while tuning); **PA** supply voltage
+  and current; **FAN** speed; and **FREQ**, the frequency the amplifier is set
+  to.
+- The amplifier's own tuner summary under the grid: antenna, side, inductance,
+  capacitance and stored SWR.
+- An `Attenuator in` warning naming the reason when the amplifier's overdrive
+  attenuator is engaged, for example `PA CURRENT` or `INPUT POWER`.
 - A fault banner showing the code in hex (for example `Fault B0`) and a
   **CLR FAULT** button.
 - **OPERATE / STANDBY**. The label changes only when the amplifier confirms.
 - The internal ATU: **ATU IN / ATU BYP**, and **TUNE**, which reads
   `TUNING` while a tune runs; press it again to cancel. A full-search tune
   needs RF, so key the radio's own TUNE: nothing in this applet keys the
-  radio.
+  radio. **ATU IN / ATU BYP** switches a relay, so it is refused while the
+  radio transmits and for 0.6 s after, and the applet shows, for example, `ATU bypass refused
+  while transmitting`. **TUNE** is not refused.
 - **ANT** **1** / **2**, the amplifier's two antenna connectors. An `ANT n`
   label appears when an external antenna switch reports an antenna number
-  from 3 to 32.
+  from 3 to 32. An antenna change is refused while the radio transmits and
+  for 0.6 s after, and the applet shows, for example, `Antenna 2 refused while transmitting`.
+- **POWER**, which puts the amplifier to sleep; it reads `ASLEEP` while the
+  amplifier sleeps, and pressing it then wakes the amplifier. Waking sends the
+  amplifier's power-on command and a Wake-on-LAN packet, which the amplifier
+  answers only when its **NET WAKE on LAN** menu item is on. AetherSDR reads
+  that setting and the amplifier's MAC address while it is awake, and keeps the
+  MAC address so it can wake the amplifier after AetherSDR restarts. Putting it
+  to sleep asks for confirmation first, and the question says whether NET WAKE
+  is on. If it is off or not reported, the amplifier may not wake again over
+  the network. Sleep is refused while the radio transmits: the applet then
+  shows `Sleep refused while transmitting`. Waking is never refused. While
+  asleep, every other control is dimmed, and hovering over one says whether
+  POWER can wake the amplifier. If the connection drops while the amplifier is asleep, or
+  just after you put it to sleep (its network may sleep with it), the applet
+  stays open and shows `ASLEEP`. The same happens when AetherSDR gets no answer
+  from the amplifier at startup and has its MAC address from an earlier
+  session, since it may have been left asleep. A refused connection (for
+  example while Elecraft's KPA1500 Remote holds the one TCP slot) does not
+  count.
+  **POWER** then sends the Wake-on-LAN packet and AetherSDR keeps trying to
+  reach the amplifier until it answers. **POWER** is dimmed in that state if
+  AetherSDR has never read the amplifier's MAC address, or if the amplifier is
+  entered by host name and AetherSDR has not reached it during this session. Pressing **Disconnect**
+  on the amplifier's Peripherals row, or
+  removing the amplifier or changing its address, closes the applet.
+- **FAN MIN**, the lowest speed the fans run at, 0 (off) to 5 (full). The
+  amplifier raises the speed further as it heats up; **FAN** shows the speed
+  it is actually running.
+- **TRACK**, which sends the transmit slice's frequency to the amplifier so it
+  changes band and recalls its tuner setting without a transmission. It follows
+  whichever slice has the TX flag, including split, XIT and the FM repeater
+  offset, and coalesces fast tuning into a few updates a second. Band changes
+  wait until the radio stops transmitting, including transmissions owned by
+  another client. Losing the transmit slice or disconnecting the radio cancels
+  pending frequency updates. Slices outside 160–6 m are not tracked, and no
+  frequency is sent until the amplifier has reported that it is awake; until
+  then **FREQ** shows `Waiting for the amplifier's power state`. **TRACK**
+  is off by default and is remembered; turn it off if the amplifier already gets
+  frequency from a radio cable.
 
-There is no network PTT and no lost-link TX inhibit.
+The amplifier is keyed by its KEY IN line from the radio (for a Flex, an RCA
+TX output). There is no network PTT and no lost-link TX inhibit.
 
 ## Using the RF-KIT
 
@@ -454,7 +542,7 @@ The **LP-100A Meter** applet is in the **Metering** category and is
 | SPE Expert Amplifier | Serial, or network through ser2net (raw or telnet) | 115200 8N1 (original 1K-FA: 9600 8N1); TCP 7000 |
 | VK3AMP Amplifier | Network only: TCP control, UDP telemetry | TCP 5005; UDP 5010 |
 | Elecraft KPA500 | Serial, or network through a raw TCP ser2net proxy | 4800 8N1; selectable locally, configured on the server for TCP; TCP 2000 |
-| Elecraft KPA1500 | Network only: TCP | TCP 1500 |
+| Elecraft KPA1500 | Network only: TCP or UDP | TCP or UDP 1500 |
 | LP-100A Meter | Serial, network through a ser2net proxy in raw mode, or a FlexRadio's USB port | 115200 8N1; TCP 2000; poll 100 ms |
 
 ## Known issues
@@ -464,6 +552,50 @@ The **LP-100A Meter** applet is in the **Metering** category and is
 - An SPE amplifier set to connect at startup shows connected but no data until you disconnect and reconnect it ([#4893](https://github.com/aethersdr/AetherSDR/issues/4893)).
 
 ## Troubleshooting
+
+### The KPA1500 says "No reply from the amplifier on UDP port 1500"
+
+AetherSDR sent queries but nothing came back within 8 seconds.
+
+1. Check the address and port: the UDP server uses the same port as TCP,
+   which the KPA1500 Utility's **Network** tab shows.
+2. Make sure no firewall between the two blocks UDP on that port in either
+   direction; replies come back to the port AetherSDR sent from.
+3. If UDP still fails, set **Transport** to **TCP**.
+
+### Find does not locate the KPA1500
+
+1. Make sure the computer and the amplifier are on the same network. **Find**
+   searches the computer's own networks only (at most 1,022 addresses each),
+   skipping VPN tunnels and other point-to-point links, so it cannot reach an
+   amplifier behind a router or at the far end of a VPN. Virtual adapters
+   that are not point-to-point, such as container bridges, are searched.
+   If it reports `Find could not open a UDP socket`, the computer refused
+   AetherSDR a UDP socket, and the text after the colon says why.
+2. Check the **Port**: it must match the amplifier's, which the KPA1500
+   Utility's **Network** tab shows.
+3. Allow AetherSDR through the computer's firewall for UDP, or enter the
+   address by hand.
+
+### The KPA1500 does not wake when I press POWER
+
+1. On the amplifier, turn on the **NET WAKE on LAN** menu item. Without it the
+   amplifier ignores the Wake-on-LAN packet.
+2. Connect once while the amplifier is awake, so AetherSDR can read its MAC
+   address. The packet is not sent until the MAC address is known.
+3. The packet goes to the amplifier's address and to the broadcast address of
+   the local network it is on. A router does not forward it, so an amplifier
+   on another network may not wake. Use the front panel **ON** switch instead.
+
+### KPA1500 controls show "not confirmed by the amplifier" over UDP
+
+The amplifier did not report the requested state after five tries, about
+three seconds.
+
+1. Look at the amplifier's front panel: some changes are refused in certain
+   states, such as during a fault or a tune.
+2. For **ATU tune**, key the radio's TUNE so the amplifier has RF.
+3. If it happens often on a lossy link, set **Transport** to **TCP**.
 
 ### The SPE amplifier will not power on over the network
 

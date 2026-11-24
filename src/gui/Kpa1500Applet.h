@@ -2,6 +2,8 @@
 
 #include "core/Kpa1500Protocol.h"
 
+#include <QComboBox>
+#include <optional>
 #include <QPushButton>
 #include <QTimer>
 #include <QWidget>
@@ -34,6 +36,17 @@ public:
     // genuinely different states here.
     void setStatus(const Kpa1500::Status& status);
     void setConnected(bool connected);
+    // A control the amp never confirmed (UDP); shown for kNoticeMs.
+    void showControlUnconfirmed(const QString& control);
+    // Any short control notice (e.g. a refusal), in the same transient label.
+    void showControlNotice(const QString& text);
+    // The link dropped while the amp was confirmed asleep: the applet stays
+    // up showing ASLEEP, and POWER (enabled only with a saved MAC) wakes it.
+    void setAsleepOffline(bool asleepOffline, bool canWake, std::optional<bool> netWake);
+
+    // TX frequency tracking is an operator preference kept by the applet
+    // (not amp state), so it is latched here and persisted.
+    bool followTx() const { return m_followTx; }
 
 signals:
     void operateToggled(bool operate);
@@ -42,10 +55,15 @@ signals:
     void atuInlineToggled(bool inLine);
     void antennaSelected(int port);  // 1 or 2
     void faultClearRequested();
+    void powerRequested(bool on);
+    void fanMinimumRequested(int level);  // 0-5
+    void followTxToggled(bool on);
 
 private:
     void updateValueLabels();
     void refreshControls();
+    // NET WAKE on and the MAC known: POWER's Wake-on-LAN packet can wake it.
+    bool canWakeOverNetwork() const;
 
     HGauge* m_pwrGauge{nullptr};
     HGauge* m_refGauge{nullptr};
@@ -60,6 +78,9 @@ private:
     QLabel* m_bandLabel{nullptr};
     QLabel* m_atuLabel{nullptr};
     QLabel* m_faultLabel{nullptr};
+    QLabel* m_noticeLabel{nullptr};
+    QTimer m_noticeTimer;
+    static constexpr int kNoticeMs = 8000;
 
     QPushButton* m_operateBtn{nullptr};
     QPushButton* m_tuneBtn{nullptr};
@@ -69,10 +90,24 @@ private:
     QLabel* m_antNumberLabel{nullptr};  // antenna numbers 3-32, behind an external switch
     QPushButton* m_clearFaultBtn{nullptr};
 
+    QLabel* m_driveLabel{nullptr};
+    QLabel* m_supplyLabel{nullptr};
+    QLabel* m_fanLabel{nullptr};
+    QLabel* m_freqLabel{nullptr};
+    QLabel* m_attenLabel{nullptr};
+    QLabel* m_atuDetailLabel{nullptr};
+    QPushButton* m_powerBtn{nullptr};
+    QPushButton* m_trackBtn{nullptr};
+    QComboBox* m_fanCombo{nullptr};
+    bool m_followTx{false};
+
     QTimer m_labelTimer;
 
     Kpa1500::Status m_status;
     bool m_connected{false};
+    bool m_asleepOffline{false};
+    bool m_offlineCanWake{false};
+    std::optional<bool> m_offlineNetWake;
 
     // setStatus() arrives at the connection's poll rate — funneled through
     // the m_labelTimer tick, the same throttle convention AcomApplet/

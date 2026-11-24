@@ -1815,13 +1815,18 @@ void MainWindow::refreshTunerPortFrequency()
         }
         kpaSource = QStringLiteral("%1 · %2 MHz").arg(kpaTx->letter()).arg(mhz, 0, 'f', 6);
     }
+    const bool transmitting = m_radioModel.transmitModel().isTransmitting();
+    std::optional<int> kpa1500Khz;
     if (kpaTx) {
         const double mhz = kpaTx->frequency()
             + ((kpaTx->mode() == "FM" || kpaTx->mode() == "NFM") ? kpaTx->txOffsetFreq() : 0.0)
             + (kpaTx->xitOn() ? kpaTx->xitFreq() / 1.0e6 : 0.0);
         m_kat500Model.setEffectiveTxFrequencyHz(qRound64(mhz * 1.0e6));
+        kpa1500Khz = static_cast<int>(qRound64(mhz * 1.0e3));
     }
-    const bool transmitting = m_radioModel.transmitModel().isTransmitting();
+    // The KPA1500 follows whichever slice holds the TX flag (split, XIT and
+    // FM offset included); band changes are held while transmitting.
+    m_kpa1500Conn.setTxFrequency(kpa1500Khz, transmitting, m_radioModel.isRadioTransmitting());
     m_kpa500Conn.setTxContext(kpaBand, kpaSource, transmitting);
     if (m_appletPanel && m_appletPanel->kpa500Applet()) {
         m_appletPanel->kpa500Applet()->setRadioTransmitting(transmitting);
@@ -7543,7 +7548,7 @@ void MainWindow::wireMeters()
         m_appletPanel->vkampApplet()->setVariant(static_cast<AetherSDR::Vkamp::Variant>(savedVariant));
     }
 
-    // ── Elecraft KPA1500 — direct TCP, no FlexRadio relay (#4097) ────────
+    // ── Elecraft KPA1500 — direct TCP or UDP, no FlexRadio relay (#4097) ─
     // See docs/architecture/kpa1500-amplifier-design.md. Same structure and
     // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
     // wiring first, the auto-connect trigger LAST, so nothing misses the
@@ -7561,7 +7566,19 @@ void MainWindow::wireMeters()
     });
     connect(&m_kpa1500Conn, &Kpa1500Connection::disconnected, this, [this]() {
         m_appletPanel->kpa1500Applet()->setConnected(false);
-        m_appletPanel->setKpa1500Visible(false);
+        // A confirmed-asleep amp keeps its applet so POWER can wake it.
+        if (!m_kpa1500Conn.isAsleepOffline()) {
+            m_appletPanel->setKpa1500Visible(false);
+        }
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::asleepOfflineChanged, this, [this](bool asleep) {
+        m_appletPanel->kpa1500Applet()->setAsleepOffline(
+            asleep, m_kpa1500Conn.canWakeFromSleep(), m_kpa1500Conn.sleepNetWake());
+        if (asleep) {
+            m_appletPanel->setKpa1500Visible(true);
+        } else if (!m_kpa1500Conn.isConnected()) {
+            m_appletPanel->setKpa1500Visible(false);
+        }
     });
     connect(&m_kpa1500Conn, &Kpa1500Connection::statusUpdated, this,
             [this](const AetherSDR::Kpa1500::Status& status) {
@@ -7591,6 +7608,35 @@ void MainWindow::wireMeters()
     connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::faultClearRequested, this, [this]() {
         m_kpa1500Conn.clearFault();
     });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::fanMinimumRequested, this,
+            [this](int level) {
+        m_kpa1500Conn.setFanMinimum(level);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::powerRequested, this,
+            [this](bool on) {
+        m_kpa1500Conn.setPower(on);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::followTxToggled, this,
+            [this](bool on) {
+        m_kpa1500Conn.setFollowTx(on);
+        refreshTunerPortFrequency();
+    });
+    m_kpa1500Conn.setFollowTx(m_appletPanel->kpa1500Applet()->followTx());
+    connect(&m_kpa1500Conn, &Kpa1500Connection::controlUnconfirmed, this,
+            [this](const QString& control) {
+        m_appletPanel->kpa1500Applet()->showControlUnconfirmed(control);
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::controlRefused, this,
+            [this](const QString& message) {
+        m_appletPanel->kpa1500Applet()->showControlNotice(message);
+    });
+    // The MAC Wake-on-LAN needs, kept with the device's peripheral record so
+    // POWER can wake an amp that was already asleep when this run started.
+    connect(&m_kpa1500Conn, &Kpa1500Connection::macAddressReported, this, [](const QString& mac) {
+        if (PeripheralSettings::deviceString("Kpa1500", "MacAddress") != mac) {
+            PeripheralSettings::setDeviceString("Kpa1500", "MacAddress", mac);
+        }
+    });
 
     // Startup auto-connect from saved Peripherals settings — same reasoning
     // as ACOM/VK3AMP above: the Flex radio has no idea this amplifier
@@ -7599,8 +7645,12 @@ void MainWindow::wireMeters()
         const QString ip = PeripheralSettings::deviceString("Kpa1500", "ManualIp");
         const int port = PeripheralSettings::deviceInt(
             "Kpa1500", "ManualPort", AetherSDR::Kpa1500::kDefaultPort);
-        if (!ip.isEmpty())
+        m_kpa1500Conn.setTransport(AetherSDR::Kpa1500::transportFromSettingValue(
+            PeripheralSettings::deviceString("Kpa1500", "Transport")));
+        m_kpa1500Conn.setWakeMacAddress(PeripheralSettings::deviceString("Kpa1500", "MacAddress"));
+        if (!ip.isEmpty()) {
             m_kpa1500Conn.connectNetwork(ip, static_cast<quint16>(port));
+        }
     }
 
     // ── RF-KIT amplifier — REST/JSON over HTTP, no FlexRadio relay ────────
@@ -7877,6 +7927,8 @@ void MainWindow::wireMeters()
     connect(&m_kpa500Conn, &Kpa500Connection::telemetryReceived, kpa, &Kpa500Applet::recordTelemetry);
     connect(&m_kpa500Conn, &Kpa500Connection::bandTrackingChanged, kpa, &Kpa500Applet::setBandTrackingText);
     connect(&m_radioModel.transmitModel(), &TransmitModel::transmittingChanged,
+            this, [this](bool) { refreshTunerPortFrequency(); });
+    connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool) { refreshTunerPortFrequency(); });
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool) { refreshTunerPortFrequency(); });
