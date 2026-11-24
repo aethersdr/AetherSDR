@@ -14,7 +14,8 @@
 // a host-text element's fall is whole when the next down is already queued;
 // HostCwTextEngine's natural end leaves its last element whole on EP2, and
 // the same sender's next text a word space after it (the wall-clock cases:
-// its real keyer times the text, frames follow 5 ms behind).
+// its real keyer times the text, frames follow 5 ms behind); a host-text run
+// fenced inside the break-in hang leaves the next text keyed on EP2 (#7567).
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -565,6 +566,65 @@ static void testHostTextSameSenderNextTextIsSpaced(std::int64_t secondAtMs, bool
     }
 }
 
+// #7567: a host-text run fenced inside the break-in hang (a CWX clear,
+// stopAll()) drops MOX at the writer while the backend stays keyed. The next
+// text inside the same hang must still put RF on EP2, or be refused; it must
+// never be admitted and keyed silently. Manual MOX is the control: the
+// operator's own MOX survives the fence.
+static void testHostTextFencedInTheHangNextTextIsOnTheWire(bool breakIn)
+{
+    const std::string name = std::string("host text fenced in the hang, ")
+        + (breakIn ? "break-in" : "manual MOX") + ": ";
+    Rig rig(breakIn);
+    SliceDelta slice;
+    slice.frequency = 7.020;
+    slice.mode = QStringLiteral("CW");
+    slice.panId = QStringLiteral("0x40000000");
+    slice.txSlice = true;
+    rig.model.emitBackendSliceChangedForTest(0, slice);
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(true);
+        Rig::settle();
+    }
+    const TxCoordinator::Producer client = rig.model.registerTxProducer();
+    const TxCoordinator::Request sender = client.request();
+    int endedRuns = 0;
+    bool secondRefused = false;
+    HostCwTextEngine engine(&rig.model, [&](const TxCoordinator::Request&, bool refused) {
+        ++endedRuns;
+        secondRefused = secondRefused || (endedRuns >= 2 && refused);
+    });
+    constexpr int kWpm = 20;
+    const auto wallMs = [&rig] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - rig.t0).count();
+    };
+    const auto pump = [&](std::int64_t untilMs) {
+        while (wallMs() < untilMs) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+            rig.buildTo(wallMs() - 5);
+        }
+    };
+    const std::int64_t startMs = wallMs();
+    check(engine.play(sender, QStringLiteral("E"), kWpm, {}), name + "the first message plays");
+    // The dit (60 ms) is on EP2 a lead after it; the 1000 ms hang runs on.
+    pump(startMs + 250);
+    const bool keyedAtFence = Hl2TxGateTestAccess::keyed(*rig.backend);
+    engine.stopAll();   // the CWX clear: fences the run's producer now
+    pump(startMs + 350);
+    const bool keyedAtSecond = Hl2TxGateTestAccess::keyed(*rig.backend);
+    check(keyedAtFence && keyedAtSecond, name + "the fence and the second text both fall inside the hang");
+    check(engine.play(sender, QStringLiteral("E"), kWpm, {}), name + "the second message plays");
+    pump(startMs + 350 + 800);
+    const auto runs = carriers(rig.iTrace);
+    check(secondRefused || (runs.size() == 2 && within(runs[1].length, samplesOfMs(1200 / kWpm), 2)),
+          name + "the second dit is whole on EP2, or refused (" + runsText(runs) + "; "
+              + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
+    if (!breakIn) {
+        rig.model.transmitModel().setMox(false);
+        Rig::settle();
+    }
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-cw-element-completion"));
@@ -588,6 +648,8 @@ int main(int argc, char** argv)
     testHostTextSameSenderNextTextIsSpaced(200, true, false);
     testHostTextSameSenderNextTextIsSpaced(400, true, false);
     testHostTextSameSenderNextTextIsSpaced(150, true, true);
+    testHostTextFencedInTheHangNextTextIsOnTheWire(true);
+    testHostTextFencedInTheHangNextTextIsOnTheWire(false);
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
