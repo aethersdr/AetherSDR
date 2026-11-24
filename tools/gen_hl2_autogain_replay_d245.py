@@ -204,17 +204,31 @@ struct Block  { int arrivalMs; int peakCode; };       // 0 = no reading
 '''
 
 
+# The kSamplesPerTick the committed header was generated with.
+EXPECTED_SAMPLES_PER_TICK = 19
+
+
 def samples_per_tick(legs):
     # The log's "window K / N" alternates between 19 and 20 observations per
     # 123 ms window, so the per-leg medians land on 19 on some legs and 20 on
     # others. The replay steps every leg with one constant, so it takes the
-    # median over every logged window of every leg; the assert keeps that one
-    # value inside the per-leg medians' range.
+    # median over every logged window of every leg; the first assert keeps that
+    # one value inside the per-leg medians' range.
+    #
+    # The pooled counts are close to a tie (19 x 50 against 20 x 47 in these
+    # captures), and a flip to 20 still sits inside that range. The second
+    # assert pins the value the committed header was built with, so a capture
+    # that tips the median stops here with the counts, and choosing 19 or 20
+    # becomes a decision for that change rather than a silent retiming.
     pooled = sorted(n for r in legs for n in r[5])
     assert pooled, 'no attack/release line in any leg'
     spt = pooled[len(pooled) // 2]
     medians = [r[4] for r in legs if r[4] is not None]
     assert min(medians) <= spt <= max(medians), (spt, medians)
+    counts = {n: pooled.count(n) for n in sorted(set(pooled))}
+    assert spt == EXPECTED_SAMPLES_PER_TICK, (
+        f'pooled median moved to {spt} (counts {counts}); decide 19 or 20 and '
+        f'update EXPECTED_SAMPLES_PER_TICK')
     print(f'# kSamplesPerTick {spt}: median of {len(pooled)} logged windows, '
           f'per-leg medians {sorted(set(medians))}', file=sys.stderr)
     return spt
