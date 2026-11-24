@@ -81,7 +81,7 @@ struct Rig {
                 return;
             }
             for (std::size_t i = 0; i + 1 < pcm.size(); i += 2) {
-                left.push_back(pcm[i]);   // interleaved stereo; L == R here
+                left.push_back(pcm[i]);   // interleaved L,R; the mono panel makes L == R
             }
         });
     }
