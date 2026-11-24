@@ -19,21 +19,26 @@ discards delayed waveforms from the previous source.
 | `16 59` | Dualwatch. An explicit on/off request is followed by a state read. |
 | `25 00` and `26 00` | MAIN's selected VFO frequency and complete mode/DATA/filter state. Selector `01` refers to MAIN's other VFO. |
 | `27 12` and `27 00` | Selected scope and tagged waveform. SUB is a preview while the single app slice belongs to MAIN. |
-| `27 13` | Single scope. Dualwatch and scope count are independent. |
+| `27 13` | Single scope. |
 | `1A 05 01 22` | Wi-Fi AF/IF output, read-only. Confirmed AF enables the shared mono station monitor. IF and unknown output keep it silent. |
 
 The default receive limits are 30 kHz–146 MHz and 430–440 MHz. Japan, unspecified markets and other variants use this profile. [Icom Japan receiver specifications](https://www.icom.co.jp/lineup/products/IC-7110/?open=4)
 
 Selecting United States extends the low range through 148 MHz and uses 420–450 MHz for UHF. Selecting Europe keeps the default limits and adds a 4 m band button for 70–70.5 MHz within the continuous low receive range. These software limits combine the Japanese receive baseline, Icom’s advertised regional bands and the applicable amateur allocations. The full general-coverage limits for US and European hardware still need confirmation. [Icom regional announcement](https://www.icomjapan.com/news/4765/) · [US allocations](https://www.arrl.org/frequency-bands) · [IARU Region 1 band plans](https://www.iaru-r1.org/on-the-air/band-plans/)
 
+The selected region limits tuning requests from AetherSDR. The slice follows
+well-formed MAIN frequency reports within the widest known envelope, including
+reports outside the selected region's tuning limits.
+
 Power
 ratings depend on band and regional variant. PTT, TUNE and transmit audio
-are disabled in this profile. The CI-V fixtures come from the operator's
-IC-7110 oracle and [Icom's A7894-4J reference guide](https://www.icom.co.jp/support/manual/9102/).
+are disabled in this profile. Synthetic CI-V fixtures follow
+[Icom's A7894-4J reference guide](https://www.icom.co.jp/support/manual/9102/).
 The IC-7110 has not undergone `radiocert tune`. Hardware qualification still
-needs the unit's firmware and region, paired
-panel and CI-V observations, and a recording that establishes which receiver
-is audible on Wi-Fi. Same-group tuning can mute SUB while Dualwatch remains on.
+needs the unit's firmware and region, paired panel and CI-V observations,
+an attempt to select the SUB scope with Dualwatch off, and a recording that
+establishes which receiver is audible on Wi-Fi. Same-group tuning can mute SUB
+while Dualwatch remains on.
 
 The offline automation bridge captured the [model chooser](assets/icom-dual-receiver/ic-7110-connection.png)
 and the [SUB scope preview](assets/icom-dual-receiver/ic-7110-sub-preview.png).

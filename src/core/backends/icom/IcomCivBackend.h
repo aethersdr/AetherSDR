@@ -357,6 +357,7 @@ private:
     bool validSelectedBandReply(const CivFrame& frame) const;
     std::optional<std::uint8_t> m_selectedBand;
     std::optional<std::uint8_t> m_confirmedScopeSource;
+    bool m_ic7110RegionMismatchWarned = false;
     std::optional<bool> m_scopeEnabled;
     std::optional<bool> m_scopeOutputEnabled;
     bool m_mainModeConfirmed = false;

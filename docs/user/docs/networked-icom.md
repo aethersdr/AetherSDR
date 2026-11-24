@@ -60,7 +60,7 @@ Networked Icoms are not discovered automatically. Open **File → Connect to Rad
 | **Icom user:** | The network user name configured on the radio. |
 | **Icom password:** | The network password configured on the radio. It is stored in the operating system's credential store, never in the settings file, and only after a successful connect. |
 | **Icom ports:** | **Standard (50001–50003)**, or **Custom NAT ports...** with a **First UDP port:**. AetherSDR uses that port and the next two. Different port triplets let you reach several radios behind one NAT router. |
-| **Icom CI-V:** | **Auto-detect (recommended)** asks the radio for its own CI-V address. You can also pick a model from the list, or **Custom...** and type a hex **CI-V address:** (for example `A2`, from the radio's MENU > SET > Connectors > CI-V). A wrong address is not silently corrected: the connection gets no frequency, panadapter or transmit. |
+| **Icom CI-V:** | **Auto-detect (recommended)** asks the radio for its own CI-V address. You can also pick a model from the list, or **Custom...** and type a hex **CI-V address:** (for example `A2`, from the radio's MENU > SET > Connectors > CI-V). A wrong address prevents the app from identifying the radio and enabling frequency readback, the panadapter, receive audio or transmit. |
 
 Click **Connect by IP**. The model is identified over the wire, not from the radio's name. If the handshake fails, the message names the target and the likely cause.
 
@@ -146,7 +146,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-7110
 
-Choose **IC-7110** in the **Icom CI-V:** menu or use **Auto-detect (recommended)**. Its factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile. Select the radio's market in **IC-7110 region** when connecting by IP. The choice is saved for that host and port and also applies on subsequent auto-detected connections.
+In **Connect by IP**, choose Icom and set **IC-7110 region** to the radio's market. The region is available with **Auto-detect (recommended)** and is saved for that host and port. You can also choose **IC-7110** in the **Icom CI-V:** menu. Its factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile.
 
 | Radio region | Receive tuning in AetherSDR |
 | --- | --- |
@@ -154,11 +154,11 @@ Choose **IC-7110** in the **Icom CI-V:** menu or use **Auto-detect (recommended)
 | Europe | 30 kHz–146 MHz and 430–440 MHz, including a **4 m** band button for 70 MHz |
 | Japan / other / unknown (default) | 30 kHz–146 MHz and 430–440 MHz |
 
-The US and Europe profiles use conservative software limits pending regional hardware measurements. [Regional sources and qualification](https://github.com/aethersdr/AetherSDR/issues/7506#issuecomment-7073680636)
+These limits apply to tuning from AetherSDR. The slice follows the frequency the radio reports, and the status bar warns once per connection if it falls outside the selected region's limits. Full US and European receive ranges still need hardware confirmation. [US amateur allocations](https://www.arrl.org/frequency-bands) · [Icom's European 70 MHz variant](https://www.icomjapan.com/news/4765/) · [IARU Region 1 band plans](https://www.iaru-r1.org/on-the-air/band-plans/) · [Icom Japan receiver specifications](https://www.icom.co.jp/lineup/products/IC-7110/?open=4)
 
 AetherSDR opens one slice for MAIN's selected VFO. With the scope on MAIN you can tune it and select its mode and filter preset. The front panel can remain focused on SUB. Choose the scope source on the radio, or use `civ scopesource main` or `civ scopesource sub` on the automation bridge. When you select SUB, the status bar identifies the preview and the panadapter shows SUB's spectrum and waterfall. Return the scope to MAIN to tune in the app.
 
-Dualwatch is independent of the scope source. The bridge commands `civ dualwatch on` and `civ dualwatch off` control it, and `civ profile` reports the state the radio confirmed. The radio can mute SUB when both frequencies use the same RF group. Independent SUB tuning, separate receiver audio and transmission await hardware qualification.
+The bridge commands `civ dualwatch on` and `civ dualwatch off` request Dualwatch changes, and `civ profile` reports the state the radio confirmed. Switching the scope to SUB with Dualwatch off still needs hardware confirmation. The radio can mute SUB when both frequencies use the same RF group. Independent SUB tuning, separate receiver audio and transmission await hardware qualification.
 
 For speaker audio, select **AF** in the radio's **Wi-Fi AF/IF Output** menu. AetherSDR waits for that setting before playing the mono station audio. The IC-7110 profile leaves per-receiver TCI audio unavailable until the Wi-Fi channel mapping is verified.
 
@@ -243,9 +243,9 @@ outside this initial support.
 
 ## Troubleshooting
 
-### Connected, but no frequency, panadapter or transmit
+### Connected, but no frequency, panadapter, audio or transmit
 
-The **Icom CI-V:** address is wrong. AetherSDR does not correct a wrong address silently.
+Check the **Icom CI-V:** address. Receive audio and transmit eligibility wait for the radio's model identification.
 
 1. Disconnect and open **Connect by IP** with **Radio type:** set to **Icom (network)**.
 2. Set **Icom CI-V:** to **Auto-detect (recommended)**.

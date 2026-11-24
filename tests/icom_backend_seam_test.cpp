@@ -1756,6 +1756,33 @@ void testIc7110MainVfoAndSelectedBand()
           "IC-7110 RX bring-up refuses PTT, TUNE and raw keying even with a current TX grant");
 }
 
+void testIc7110RegionalReadbackAndTune()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7110");
+    Access::deliver(backend, frame(0x27, 0x12, {0}));
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(145'990'000)));
+    QSignalSpy slices(&backend, &IRadioBackend::sliceChanged);
+    QSignalSpy warnings(&backend, &IRadioBackend::configurationWarning);
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(147'000'000)));
+    check(Access::frequency(backend) == 147'000'000 && slices.size() == 1
+              && qvariant_cast<SliceDelta>(slices.first().at(1)).frequency == 147.0
+              && warnings.size() == 1 && warnings.first().at(0).toString().contains("IC-7110 region"),
+          "an out-of-region MAIN readback updates the slice and points to the region setting");
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(445'000'000)));
+    auto malformed = encodeFreq(147'000'000);
+    malformed[0] = 0xFA;
+    Access::deliver(backend, frame(0x25, 0, malformed));
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(450'000'001)));
+    check(Access::frequency(backend) == 445'000'000 && slices.size() == 2 && warnings.size() == 1,
+          "another plausible readback publishes without repeating the warning; malformed or implausible replies do not");
+
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 147'000'000);
+    check(!containsRegister(Access::issued(backend), 0x25, 0, encodeFreq(147'000'000)),
+          "the same out-of-region frequency remains unavailable for app tuning");
+}
+
 void testIc7110RapidMainVfoEdits()
 {
     for (const bool expire : {false, true}) {
@@ -1833,6 +1860,14 @@ void testIc7110DualwatchAndScopeSource()
     Access::deliver(backend, main);
     check(spectrum.size() == 1 && backend.profileMap().value("scopeFrameSource") == 0,
           "a MAIN-tagged sweep publishes on the confirmed MAIN scope");
+    Access::forget(backend);
+    QSignalSpy refusal(&backend, &IRadioBackend::configurationWarning);
+    backend.invokeExtension("icom", "scope.source", 3, "sub");
+    Access::pumpNextSlot(backend);
+    Access::deliver(backend, frame(kCivNg, {}, {}));
+    check(refusal.size() == 1 && refusal.first().at(0).toString().contains("scope-source request")
+              && backend.profileMap().value("scopeSource") == 0,
+          "a scope-source refusal is reported and preserves the radio-confirmed source");
     Access::forget(backend);
     backend.invokeExtension("icom", "scope.source", 3, "sub");
     Access::pumpNextSlot(backend);
@@ -1933,6 +1968,31 @@ void testIc7110SourceChangeRetiresGestures()
     Access::deliver(backend, *scopeEdgeSweep(145'000'000, 145'100'000, 0xBA, 3, 1));
     Access::deliver(backend, frame(0x27, 0x12, {1}));
     check(modes.size() == 1, "a repeated scope-source report and matching sweep publish Scroll-F once");
+}
+
+void testIc705IdentityGatesAudioAndTxSlice()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-705");
+    Access::forgetIdentity(backend);
+    QSignalSpy changed(&backend, &IRadioBackend::sliceChanged);
+    QSignalSpy monitor(&backend, &IRadioBackend::audioFrameReady);
+    const std::vector<float> mono(4096, 0.25f);
+
+    Access::sessionConnected(backend);
+    Access::audio(backend, mono);
+    check(std::ranges::any_of(changed, [](const auto& signal) {
+              return qvariant_cast<SliceDelta>(signal.at(1)).txSlice == false;
+          }) && std::ranges::none_of(changed, [](const auto& signal) {
+              return qvariant_cast<SliceDelta>(signal.at(1)).txSlice == true;
+          }) && monitor.isEmpty(),
+          "an unidentified IC-705 has neither receive audio nor an assigned TX slice");
+    Access::deliver(backend, frame(0x19, 0, {0xA4}));
+    Access::audio(backend, mono);
+    check(std::ranges::any_of(changed, [](const auto& signal) {
+              return qvariant_cast<SliceDelta>(signal.at(1)).txSlice == true;
+          }) && !monitor.isEmpty(),
+          "IC-705 identification restores receive audio and assigns its TX slice");
 }
 
 void testIc7110MonitorAudio()
@@ -2291,9 +2351,11 @@ int main(int argc, char** argv)
     testScopeSelectorChangeReadsTheOtherScope();
     testDualScopeFollowsOneScope();
     testIc7110MainVfoAndSelectedBand();
+    testIc7110RegionalReadbackAndTune();
     testIc7110RapidMainVfoEdits();
     testIc7110DualwatchAndScopeSource();
     testIc7110SourceChangeRetiresGestures();
+    testIc705IdentityGatesAudioAndTxSlice();
     testIc7110MonitorAudio();
     testScrollFEdgePanCrossesRangeBoundary();
     testScrollFEdgeWriteThrottle();

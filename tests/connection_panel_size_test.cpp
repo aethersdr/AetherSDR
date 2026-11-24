@@ -176,6 +176,9 @@ void checkIcomCustomNatPorts()
         panel.findChild<QComboBox*>(QStringLiteral("connectionManualIcomPortMode"));
     auto* basePort =
         panel.findChild<QSpinBox*>(QStringLiteral("connectionManualIcomBasePort"));
+    auto* civ = panel.findChild<QComboBox*>(QStringLiteral("connectionManualIcomCivCombo"));
+    auto* market = panel.findChild<QComboBox*>(QStringLiteral("connectionIc7110Market"));
+    auto* ip = panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIp"));
     auto* user = panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomUser"));
     auto* password =
         panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomPassword"));
@@ -216,6 +219,13 @@ void checkIcomCustomNatPorts()
 
     report("custom NAT mode reveals the first UDP port",
            basePort && basePort->isVisibleTo(&panel));
+    report("IC-7110 region is selectable with Icom CI-V Auto-detect",
+           civ && civ->currentData().toString() == QStringLiteral("__auto__")
+               && market && market->isVisibleTo(&panel));
+    if (ip && market) {
+        ip->setText(QStringLiteral("127.0.0.1"));
+        market->setCurrentIndex(market->findData(QStringLiteral("US")));
+    }
 
     bool emitted = false;
     RadioInfo requested;
@@ -235,6 +245,9 @@ void checkIcomCustomNatPorts()
            IcomSettings::serialPort() == 52002);
     report("custom NAT range derives the audio port",
            IcomSettings::audioPort() == 52003);
+    report("Icom Auto-detect saves the IC-7110 region for the requested endpoint",
+           IcomSettings::ic7110Market(QStringLiteral("127.0.0.1"), 52001) == QStringLiteral("US")
+               && IcomSettings::ic7110Market(QStringLiteral("127.0.0.1"), 51001).isEmpty());
 
     // The authenticated endpoint is the one emitted above. Editing the still-
     // visible field while that request is in flight must not change what a
@@ -242,6 +255,8 @@ void checkIcomCustomNatPorts()
     if (basePort) {
         basePort->setValue(51001);
     }
+    report("IC-7110 region follows the selected control port",
+           market && market->currentData().toString().isEmpty());
     panel.setConnected(true);
     const QJsonObject profiles = QJsonDocument::fromJson(
         settings.value(QStringLiteral("RoutedProfilesJson"), QStringLiteral("{}"))

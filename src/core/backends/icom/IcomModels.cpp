@@ -253,7 +253,7 @@ constexpr std::array<FeatureEvidence, 4> kIc7110Evidence{{
     {IcomFeature::VfoMode, EvidenceKind::OfficialGuide,
      "IC-7110 A7894-4J pp.16,29: 25/26 select MAIN-band VFOs, DATA 00/01"},
     {IcomFeature::SelectedBandDualwatch, EvidenceKind::OfficialGuide,
-     "IC-7110 A7894-4J: 16 59 enables SUB independently of operating band and scope source"},
+     "IC-7110 A7894-4J: 16 59 reads or sets Dualwatch"},
 }};
 
 constexpr std::array<FeatureEvidence, 5> kDualReceiverEvidence{{

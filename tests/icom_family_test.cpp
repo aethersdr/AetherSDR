@@ -864,10 +864,12 @@ int main(int argc, char** argv)
                 for (const auto& def : kBands) {
                     if (name != QLatin1String(def.name))
                         continue;
+                    const auto defaultHz = static_cast<std::uint64_t>(def.defaultFreqMhz * 1e6);
+                    check(icom::supportsFrequency(m, defaultHz),
+                          "the band button's default frequency is tunable");
                     const auto decks = icom::bandsFor(m);
                     const auto deck = std::ranges::find(decks, def.name, &icom::IcomBand::name);
                     if (deck != decks.end()) {
-                        const auto defaultHz = static_cast<std::uint64_t>(def.defaultFreqMhz * 1e6);
                         check(deck->lowHz <= defaultHz && defaultHz <= deck->highHz
                                   && m.tuningMinHz <= deck->lowHz && deck->highHz <= m.tuningMaxHz,
                               "the band button tunes inside its model-specific RF deck");

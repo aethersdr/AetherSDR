@@ -1120,6 +1120,7 @@ void IcomCivBackend::disconnectRadio()
     m_dualWatch.reset();
     m_selectedBand.reset();
     m_confirmedScopeSource.reset();
+    m_ic7110RegionMismatchWarned = false;
     m_scopeEnabled.reset();
     m_scopeOutputEnabled.reset();
     m_mainModeConfirmed = false;
@@ -1518,7 +1519,7 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
         publishModeList();
         publishIdentity();
         emit configurationWarning(QStringLiteral(
-            "Conflicting CI-V identification replies. Transmit is disabled; "
+            "Conflicting CI-V identification replies. Receive audio is muted and transmit is disabled. "
             "select the radio's CI-V address and reconnect."));
         return false;
     }
@@ -1590,7 +1591,7 @@ void IcomCivBackend::requestCivIdentity(std::uint64_t sessionGeneration)
         emit configurationWarning(QStringLiteral(
             "The Icom network connection is open, but the radio did not answer "
             "model identification. Check its network CI-V settings and selected "
-            "CI-V address, then reconnect. Transmit remains disabled."));
+            "CI-V address, then reconnect. Receive audio and transmit require identification."));
         return;
     }
     ++m_civDetectAttempts;
@@ -2889,6 +2890,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& incoming,
         && (m_civScheduler.stats().lastCompletedCmd == cmd::kSetFreq
             || (hasSelectedBandDualwatch() && m_civScheduler.stats().lastCompletedCmd == 0x25))
         && m_frequencyHz != 0;
+    const bool refusedScopeSource = hasSelectedBandDualwatch() && frame.isNg()
+        && observation == IcomCivScheduler::Observation::Accepted
+        && m_civScheduler.stats().lastCompletedKey == "scope.source";
     if (refusedTune) {
         if (const std::size_t dropped = m_civScheduler.cancelQueued("scope.edgewin");
             dropped > 0) {
@@ -2947,7 +2951,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& incoming,
         emit configurationWarning(why);
     }
 
-    if (frame.isNg() && observation == IcomCivScheduler::Observation::Accepted
+    if (refusedScopeSource) {
+        emit configurationWarning(tr("The radio refused the IC-7110 scope-source request."));
+    } else if (frame.isNg() && observation == IcomCivScheduler::Observation::Accepted
         && m_civScheduler.stats().lastCompletedCmd == cmd::kScope) {
         handleScopeRefusal(m_civScheduler.stats().lastCompletedKey);
     }
@@ -3085,6 +3091,13 @@ void IcomCivBackend::onCivFrame(const CivFrame& incoming,
             SliceDelta s;
             s.frequency = static_cast<double>(*hz) / 1e6;
             emit sliceChanged(sliceId(), s);
+            if (frame.cmd == 0x25 && !m_ic7110RegionMismatchWarned
+                && !supportsFrequency(*m_model, *hz)) {
+                m_ic7110RegionMismatchWarned = true;
+                emit configurationWarning(tr("The radio reports %1 MHz outside this region's tuning limits. "
+                                             "Check IC-7110 region in Connect by IP.")
+                                              .arg(*s.frequency, 0, 'f', 6));
+            }
             // TxApplet's ATU toggle is deliberately frequency-aware: a second
             // click bypasses only the match made at the current TX frequency.
             // Icom has one VFO here, so publish that same authoritative dial
@@ -4624,6 +4637,9 @@ std::string IcomCivBackend::semanticKey(std::span<const std::uint8_t> frame) con
     if (hasSelectedBandDualwatch() && parsed->cmd == 0x25 && parsed->sub == vfoMode::kSelected) {
         return "frequency";
     }
+    if (hasSelectedBandDualwatch() && parsed->cmd == cmd::kScope && parsed->sub == scope::kMainSub) {
+        return "scope.source";
+    }
     switch (parsed->cmd) {
     case cmd::kRxAntenna:
         return "rx.antenna";
@@ -4831,10 +4847,10 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
 void IcomCivBackend::queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
                                                 const std::string& key)
 {
+    if (hasSelectedBandDualwatch()) { return; }
     IcomCivScheduler::Request request;
     request.frame = frame;
     request.key = key.empty() ? semanticKey(frame) : key;
-    if (hasSelectedBandDualwatch()) { return; }
     request.priority = IcomCivScheduler::Priority::Emergency;
     request.supersedes = true;
     request.coalesce = false;
@@ -8370,7 +8386,7 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         const QString source = arg.toString().trimmed().toLower();
         if (!hasSelectedBandDualwatch() || !m_session || !m_connected || m_keyed
             || (source != QLatin1String("main") && source != QLatin1String("sub"))) {
-            emit extensionError(requestId, QStringLiteral("Scope source requires a connected selectable-scope radio in receive and MAIN or SUB."));
+            emit extensionError(requestId, QStringLiteral("Scope source requires a connected IC-7110 in receive and MAIN or SUB."));
             return;
         }
         const std::array<std::uint8_t, 1> value{static_cast<std::uint8_t>(source == QLatin1String("sub"))};

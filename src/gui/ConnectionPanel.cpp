@@ -2867,7 +2867,7 @@ void ConnectionPanel::syncIcomCivCustomRow()
     const bool custom =
         m_manualIcomCivCombo->currentData().toString() == QLatin1String("__custom__");
     m_manualIcomCivCustomRow->setVisible(icom && custom);
-    m_ic7110MarketRow->setVisible(icom && m_manualIcomCivCombo->currentData().toString() == QLatin1String("BA"));
+    m_ic7110MarketRow->setVisible(icom);
 }
 
 void ConnectionPanel::syncIcomPortCustomRow()
@@ -3413,9 +3413,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             resolved = hostInfo.addresses().first();
         }
         m_pendingIcomResolvedHost = resolved.toString();
-        const QString market = m_manualIcomCivCombo->currentData().toString() == QLatin1String("BA")
-            ? m_ic7110Market->currentData().toString()
-            : IcomSettings::ic7110Market(trimmedIp, basePort);
+        const QString market = m_ic7110Market->currentData().toString();
         IcomSettings::setIc7110Market(trimmedIp, basePort, market);
         IcomSettings::setIc7110Market(m_pendingIcomResolvedHost, basePort, market);
 
@@ -4806,8 +4804,7 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
         bool stale = false;
         const RadioBindSettings bind = currentManualBindSettings(&stale);
         if (stale) { setStatusText(tr("Choose an available source interface before saving.")); return; }
-        if (currentManualFamily() == QLatin1String(kFamilyIcom)
-            && m_manualIcomCivCombo->currentData().toString() == QLatin1String("BA")) {
+        if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
             IcomSettings::setIc7110Market(host, selectedIcomBasePort(), m_ic7110Market->currentData().toString());
         }
         saveManualProfile(host, bind, bind.bindAddress);

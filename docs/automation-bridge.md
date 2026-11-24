@@ -4555,8 +4555,9 @@ single streamed scope with `27 12`. In `civ profile`, `selectedBand` is the
 front-panel control focus, `scopeSource` is the radio-confirmed scope source,
 and `scopeFrameSource` identifies the accepted waveform. These fields use
 `0` for MAIN and `1` for SUB. The single editable slice belongs to MAIN.
-SUB is a scope preview. Scope selection and Dualwatch changes require a
-writable bridge and work with TX automation disabled. `scope.enabled` and
+SUB is a scope preview. The app reports a CI-V refusal in the status bar.
+Scope selection and Dualwatch changes require a writable bridge and work
+with TX automation disabled. `scope.enabled` and
 `scope.outputEnabled` report the scope display and waveform-output switches.
 `lanOutput` reports the Wi-Fi output setting from SET 0122. Its values are
 `-1` while unknown, `0` for AF and `1` for IF. Only AF opens the shared
