@@ -164,7 +164,10 @@ press **Enter** or leave the value field to apply it. The field follows the
 radio's supported range.
 **Pitch** sits directly below **Speed**: use its slider or enter a frequency
 in Hz in the value field. Pitch follows the radio's supported range and step.
-Status refreshes preserve an unfinished speed or pitch entry.
+Status refreshes preserve an unfinished speed entry. They preserve an
+unfinished pitch entry too, except on radios that confirm their receive pitch
+(RTL-SDR today): there the field always shows the radio's confirmed pitch,
+even while you type.
 **Breakin**, **Iambic**, and **Hold Delay** share a separate row.
 **Hold Delay** re-sends your break-in delay after CW speed changes made here;
 it does not cover speed changes made at the radio or by another client.
