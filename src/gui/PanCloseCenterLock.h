@@ -34,16 +34,21 @@ inline bool forgetSaved(SavedIntents& saved, const Slot& slot)
     return true;
 }
 
-// Forgets the live lock (forgetLive) and, unless session-only, the saved
-// intent, then runs close(). Returns close()'s answer; savedChanged tells the
-// caller to persist the store.
+// Runs close(); only once it is accepted, forgets the live lock (forgetLive)
+// and, unless session-only, the saved intent. A refused close keeps both
+// (#7359 ruling). Returns close()'s answer; savedChanged tells the caller to
+// persist the store.
 template <class Close, class ForgetLive>
 bool closeThenForget(const Slot& slot, SavedIntents& saved, Close&& close,
                      ForgetLive&& forgetLive, bool& savedChanged)
 {
+    savedChanged = false;
+    if (!close()) {
+        return false;
+    }
     forgetLive();
     savedChanged = !slot.sessionOnly && forgetSaved(saved, slot);
-    return close();
+    return true;
 }
 
 } // namespace AetherSDR::PanCloseCenterLock
