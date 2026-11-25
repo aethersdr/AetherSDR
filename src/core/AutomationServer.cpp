@@ -11726,6 +11726,26 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     };
 }
 
+namespace {
+// Stable token for a refused `pan close` entry; scripts match on it.
+QString panCloseRefusalReason(RadioModel::PanCloseRefusal refusal)
+{
+    using Refusal = RadioModel::PanCloseRefusal;
+    switch (refusal) {
+    case Refusal::InventoryUncertain: return QStringLiteral("inventory-uncertain");
+    case Refusal::NoSuchPan: return QStringLiteral("no-such-pan");
+    case Refusal::NotConnected: return QStringLiteral("not-connected");
+    case Refusal::StaleSession: return QStringLiteral("stale-session");
+    case Refusal::RemoveNotSupported: return QStringLiteral("remove-not-supported");
+    case Refusal::NotOwned: return QStringLiteral("not-owned");
+    case Refusal::LastPan: return QStringLiteral("last-panadapter");
+    case Refusal::Transmitting: return QStringLiteral("transmitting");
+    case Refusal::None: break;
+    }
+    return QStringLiteral("backend-refused");
+}
+} // namespace
+
 // Panadapter lifecycle (#3646): `pan create|add`; `pan center <mhz>` (the band
 // change lever: `tune` clamps to the pan's range, #292); `pan close|remove
 // <panId|index|active|all>` via RadioModel::removePanadapter, which sends both
@@ -12025,13 +12045,28 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
             // exercises the exact GUI close path. removePanadapter sends the
             // FlexLib-correct pair "display pan remove" + "display panafall
             // remove" for a panafall, so the waterfall is freed too. (#3843)
-            const bool requested = radio->controlSessionCurrent(session) && originals.value(pid)
-                && radio->panadapter(pid) == originals.value(pid)
-                && radio->removePanadapter(pid, all ? PanCloseIntent::ExplicitTeardown : PanCloseIntent::Ordinary);
+            const PanCloseIntent intent = all ? PanCloseIntent::ExplicitTeardown : PanCloseIntent::Ordinary;
+            bool requested = false;
+            QString reason;
+            if (!radio->controlSessionCurrent(session)) {
+                reason = QStringLiteral("stale-session");
+            } else if (!originals.value(pid)) {
+                reason = QStringLiteral("no-such-pan");
+            } else if (radio->panadapter(pid) != originals.value(pid)) {
+                reason = QStringLiteral("pan-replaced");
+            } else {
+                const RadioModel::PanCloseRefusal refusal = radio->panCloseRefusal(pid, intent);
+                requested = radio->removePanadapter(pid, intent);
+                if (!requested) {
+                    reason = panCloseRefusalReason(refusal);
+                }
+            }
             anyRequested = anyRequested || requested;
             QJsonObject o{{QStringLiteral("panId"), pid},
                           {QStringLiteral("resolved"), p != nullptr},
                           {QStringLiteral("requested"), requested}};
+            if (!reason.isEmpty())
+                o[QStringLiteral("reason")] = reason;
             if (!wfId.isEmpty())
                 o[QStringLiteral("waterfallId")] = wfId;
             closed.append(o);

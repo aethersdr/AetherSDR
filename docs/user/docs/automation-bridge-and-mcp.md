@@ -146,6 +146,8 @@ Tick **Observe only** to hand a client visibility without control. The bridge th
 dispatch, not whether a display has appeared or disappeared. Re-poll `get pans`
 to observe the result. Each entry in a close response includes `requested`;
 `closed` is the compatibility name for that request list, not proof of removal.
+A refused entry also names why in `reason`, for example `transmitting` for the
+TX pan while keyed on the Hermes-Lite 2.
 An explicit `pan close all` may request the last pan's removal, but still respects
 backend refusals and display ownership. A normal single-pan close preserves the
 last pan. No pan action enables transmit.

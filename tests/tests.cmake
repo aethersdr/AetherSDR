@@ -10907,6 +10907,19 @@ target_link_libraries(automation_dsp_backend_readback_test PRIVATE
 )
 add_test(NAME automation_dsp_backend_readback_test
          COMMAND automation_dsp_backend_readback_test)
+# Bridge `pan close` names why a close was refused (#7583): the HL2's real
+# capability record, keyed, against an injected backend; the line dispatcher
+# is called directly. No QLocalServer, no radio, and the stub cannot key.
+add_executable(automation_pan_close_reason_test
+    tests/automation_pan_close_reason_test.cpp
+)
+target_include_directories(automation_pan_close_reason_test PRIVATE src tests)
+# aetherdesktop_support is added by the AETHER_AUTOMATION_SERVER_TESTS loop below.
+target_link_libraries(automation_pan_close_reason_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_pan_close_reason_test
+         COMMAND automation_pan_close_reason_test)
 # Ordinary RX lifecycle through production model/backend bindings and an
 # injected command/reply sink. No sockets, firmware peer, DSP or USB access.
 add_executable(backend_slice_lifecycle_test tests/backend_slice_lifecycle_test.cpp)
@@ -12357,6 +12370,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    automation_pan_close_reason_test
     flex_command_session_test
     flex_lan_session_test
     flex_receive_path_test
@@ -12718,6 +12732,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_nnr_probe_test
     connect_state_model_test
     automation_dsp_backend_readback_test
+    automation_pan_close_reason_test
     automation_nb2_capability_test
     backend_slice_lifecycle_test
     tci_automation_test
