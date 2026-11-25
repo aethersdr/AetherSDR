@@ -185,8 +185,8 @@ void flexCommandsAndObservations()
         FlexBackend backend;
         QStringList commands;
         int genericCommands = 0;
-        backend.setSliceCommandSink([&](const QString& command) { commands.append(command); });
-        backend.setCommandSink([&](const QString&) { ++genericCommands; });
+        backend.setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
+        backend.setCommandSinkForTest([&](const QString&) { ++genericCommands; });
         QSignalSpy observations(&backend, &IRadioBackend::sliceObserved);
         test::SeamThreadAffinityProbe affinity(&backend);
         test::attachAllSeamSignals(affinity);
@@ -304,8 +304,8 @@ void intentVariants()
     FlexBackend flex;
     QStringList commands;
     int genericCommands = 0;
-    flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
-    flex.setCommandSink([&](const QString&) { ++genericCommands; });
+    flex.setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
+    flex.setCommandSinkForTest([&](const QString&) { ++genericCommands; });
     flex.requestSliceTune(2, {7'100'000, SliceTuneRequest::PanIntent::AllowRecenter});
     flex.requestSliceFilter(2, {-2700, -100, SliceFilterRequest::Origin::ModeNormalization});
     flex.requestSliceFilter(2, {-2600, -200, SliceFilterRequest::Origin::Adaptive});
@@ -337,8 +337,8 @@ void receiveControlContracts()
     FlexBackend flex;
     QStringList commands;
     int generic = 0;
-    flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
-    flex.setCommandSink([&](const QString&) { ++generic; });
+    flex.setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
+    flex.setCommandSinkForTest([&](const QString&) { ++generic; });
     QSignalSpy observations(&flex, &IRadioBackend::sliceObserved);
     const std::array keys{"nb", "nr", "anf", "", "apf", "lms_nr", "speex_nr",
                           "rnnoise", "nrf", "lms_anf", "anft"};

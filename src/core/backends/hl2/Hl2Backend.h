@@ -30,6 +30,7 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -125,7 +126,12 @@ public:
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
+    // While keyed, a move of transmit to another slice is refused (see
+    // refuseTransmitChangeWhileKeyed), and a caller's completion is refused too.
     void setTxSlice(int sliceId) override;
+    ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                   const RadioControlCompletion& completion,
+                                   const RadioControlFence& current) override;
     void setActiveSlice(int sliceId) override;
     void setPanCenter(const QString& panId, double hz,
                       PanCenterIntent intent) override;
@@ -233,7 +239,8 @@ public:
     //             needs a measured wideband headroom reading; arms the bandscope gate.
     // "ramp"      3-6 dB attack, 1 dB release on a dwell.
     // "probe"     probingReleaseConfig(): 6 dB both ways; failed probes double the
-    //             interval. What "bandscope" degenerates to without the measurement.
+    //             interval. "bandscope" without the measurement, and a release is
+    //             believed after 3 s clean rather than 30 s.
     // "binary"    binaryHighLowConfig(): two-state per-band switch.
     // Same state machine, different numbers; selecting a mode installs its floor.
     // "default" names the law a backend starts with. A chosen law and floor are
@@ -327,6 +334,7 @@ private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2MixHeadroomTestAccess;
     friend struct Hl2RxAntennaTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
@@ -363,6 +371,9 @@ private:
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
     friend struct Hl2TxRouteTestAccess;
+    // Keys the backend's own modulator socket-free, for
+    // hl2_tx_keyed_mode_change_test's refusals while keyed.
+    friend struct Hl2TxKeyedChangeTestAccess;
     friend struct Hl2RxGainDuringTxTestAccess;
     // Arms and ends the transmit tail, for tci_ext_hl2_hw_test's hw.set refusal.
     friend struct Hl2HwSetTailTestAccess;
@@ -389,6 +400,22 @@ private:
     HealthSnapshot healthSnapshot(std::int64_t nowNs) const;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
+    // True while the HL2 is keyed (host key, tune, or the radio's own PTT).
+    bool transmitKeyed() const { return m_keyed || m_tuning || m_radioPtt; }
+    // While keyed, a change to the transmitter's mode, passband or slice is
+    // refused, not held or switched live: TXA swaps a bandpass mask at a block
+    // boundary, so a mid-over swap splatters, and a held one would leave the
+    // slice showing a mode the transmitter is not sending. Tells the operator
+    // (transmitChangeRefused) and returns true when it refuses.
+    bool refuseTransmitChangeWhileKeyed(int sliceId, const QString& message);
+    // setCwKeying()'s body. A scheduled edge's instant, and a key-down's own
+    // release instant, ride to MetisClient, which places them on the EP2
+    // sample clock (#5065).
+    void keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
+                   const TxCoordinator::Operation& operation,
+                   const TxCoordinator::Completion& completion,
+                   std::chrono::steady_clock::time_point scheduledAt,
+                   std::chrono::steady_clock::time_point releaseAt);
     void invalidateTxDspConfiguration();
     // dspChains() is a read of m_dspChains, which the I/O thread fills by queued
     // hop. request*() coalesces to one gather per event-loop turn, posted behind
@@ -997,6 +1024,8 @@ private:
     // buffer (~47 calls/s per receiver).
     std::vector<std::deque<float>> m_mixPending;
     std::vector<float> m_mixAccum;
+    // The mix limiter's attenuation (1 - gain), carried across blocks; 0 when idle.
+    float m_mixLimiterAtten = 0.0f;
     // How far ahead the other receivers may get before a starved one is mixed as
     // silence: 2048 samples of interleaved L,R at 24 kHz = 1024 frames, ~43 ms.
     static constexpr std::size_t kMixStarvationSamples = 2048;
@@ -1214,6 +1243,7 @@ private:
     TxCoordinator::Operation m_cwHangOperation;
     TxCoordinator::Operation m_lastTxOperation;
     TxCoordinator::Completion m_cwHangCompletion;
+    int m_cwHangDelayMs = 0;   // the configured hang, without the scheduled-edge lead
     bool m_txMonitor = false;
     // The receive-audio hold flag, read by mixReceiverAudio() and mirrored to every
     // Hl2RxDsp by applyRxAudioMute(). Not (m_keyed && !m_txMonitor): on key-up it
@@ -1360,6 +1390,9 @@ private:
     // a real defect (#7063). Per-over: reset on key-down by setKeying(), not on
     // key-up, since a diagnostic samples the snapshot after unkeying as well.
     int m_keyedSwrGateClears = 0;
+    quint64 m_swrPublicationEpoch = 0;
+    quint64 m_sessionSwrForwardWindows = 0;
+    quint64 m_sessionSwrGateClears = 0;
 
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.
@@ -1388,8 +1421,8 @@ private:
     double m_alcTargetPeak = 0.85;
 
     // The AGC threshold -> WDSP gain ceiling map is
-    // Hl2DbReference::kAgcCeilingDbPerUnit via m_dbRef.agcCeilingDb(), so the
-    // ceiling is referred to LNA gain like the displayed dBm.
+    // Hl2DbReference::agcCeilingDbAtReference() via m_dbRef.agcCeilingDb(), so
+    // the ceiling is referred to LNA gain like the displayed dBm.
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
@@ -1397,6 +1430,15 @@ private:
     // Ceiling on host-mixed slice audio. N demodulated receivers are summed
     // here, so N loud slices can sum past full scale where one never could.
     static constexpr float kMixCeiling = 1.0f;
+    // Where the mix limiter puts a peak that would have passed kMixCeiling
+    // (-0.1 dBFS, the attack target rather than a held ceiling: while the gain
+    // releases, a frame that lands between it and kMixCeiling is left there),
+    // and how fast its gain returns to unity (first order, per 24 kHz stereo
+    // frame). Below kMixAttenSnap the gain is snapped to exactly 1.
+    static constexpr float kMixLimit = 0.98855f;
+    static constexpr float kMixReleaseSeconds = 0.1f;
+    static constexpr float kMixReleasePerFrame = 1.0f - 1.0f / (kMixReleaseSeconds * 24000.0f);
+    static constexpr float kMixAttenSnap = 1e-5f;
     // Centre of SliceModel's 0..100 balance range.
     static constexpr int kAudioPanCentre = 50;
 

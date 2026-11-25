@@ -2,11 +2,13 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/PanadapterApplet.h"
+#include "gui/RttyDecodeSettings.h"
 #include "models/CwDecodeSettings.h"
 
 #include <QApplication>
 #include <QEventLoop>
 #include <QSlider>
+#include <QTextEdit>
 #include <QTimer>
 
 #include <cmath>
@@ -103,6 +105,45 @@ int main(int argc, char** argv)
     check(incomingSlider->value() == 50, "DeepFist slider shows its saved Sens 50");
     check(hasGgmorseThreshold(incomingPan, 60), "ggmorse keeps its own saved Sens with DeepFist selected");
 #endif
+
+    QSlider* firstSens = outgoingPan.findChild<QSlider*>(QStringLiteral("rttySensSlider"));
+    QSlider* secondSens = incomingPan.findChild<QSlider*>(QStringLiteral("rttySensSlider"));
+    QTextEdit* decoded = incomingPan.findChild<QTextEdit*>(QStringLiteral("rttyDecodeText"));
+    check(firstSens && secondSens && decoded, "RTTY Sens sliders and decoded text are present");
+    if (!firstSens || !secondSens || !decoded) {
+        return 1;
+    }
+
+    outgoingPan.setRttyPanelVisible(true);
+    firstSens->setValue(80);
+    outgoingPan.setRttyPanelVisible(false);
+    incomingPan.setRttyPanelVisible(true);
+    check(secondSens->value() == 80, "A pending RTTY Sens edit follows the decoder");
+    incomingPan.appendRttyText(QStringLiteral("A"), 0.60f);
+    incomingPan.appendRttyText(QStringLiteral("B"), 0.95f);
+    check(decoded->toPlainText() == QStringLiteral("B"), "The destination filters at the new Sens");
+
+    secondSens->setValue(20);
+    incomingPan.setRttyPanelVisible(true);
+    check(secondSens->value() == 20, "Refreshing the same pane preserves the current edit");
+    emit secondSens->sliderReleased();
+    QTimer::singleShot(800, &debounceWindow, &QEventLoop::quit);
+    debounceWindow.exec();
+    check(RttyDecodeSettings::sensitivity() == 20, "The previous pan's timer preserves the newer edit");
+    incomingPan.setRttyPanelVisible(false);
+    outgoingPan.setRttyPanelVisible(true);
+    check(firstSens->value() == 20, "An already saved RTTY Sens edit follows the decoder back");
+
+    // An edit made on a hidden pane (no UI path, but setValue can) is shown
+    // and saved, not replaced by the setting and then written back.
+    outgoingPan.setRttyPanelVisible(false);
+    secondSens->setValue(65);
+    incomingPan.setRttyPanelVisible(true);
+    check(secondSens->value() == 65 && RttyDecodeSettings::sensitivity() == 65,
+          "An edit made while hidden survives the pane being shown");
+    QTimer::singleShot(800, &debounceWindow, &QEventLoop::quit);
+    debounceWindow.exec();
+    check(RttyDecodeSettings::sensitivity() == 65, "The hidden edit's debounce writes the same value");
 
     return failures == 0 ? 0 : 1;
 }

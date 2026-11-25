@@ -44,9 +44,10 @@ struct IcomCivBackendTestAccess {
         b.m_mode = CivMode::Usb;
         b.m_frequencyHz = 14'100'000;
     }
-    static void deliver(IcomCivBackend& b, CivFrame frame, std::uint64_t generation = 1)
+    static void deliver(IcomCivBackend& b, CivFrame frame, std::uint64_t generation = 1,
+                        std::uint8_t destination = kControllerAddress)
     {
-        frame.to = kControllerAddress;
+        frame.to = destination;
         frame.from = b.m_session->civAddress();
         b.onCivFrame(frame, generation);
     }
@@ -176,6 +177,14 @@ struct IcomCivBackendTestAccess {
     {
         b.pumpCiv(std::max<qint64>(b.nowMs(), b.m_civScheduler.stats().lastDispatchMs)
                   + IcomCivScheduler::kSlotMs);
+    }
+    static void pumpConfirmation(IcomCivBackend& b)
+    {
+        b.pumpCiv(std::max<qint64>(b.nowMs(), b.m_civScheduler.stats().lastDispatchMs) + 100);
+    }
+    static void expireMainVfoEdit(IcomCivBackend& b)
+    {
+        if (b.m_pendingMainVfoEdit) { b.m_pendingMainVfoEdit->deadlineMs = b.nowMs(); }
     }
     static std::string inFlightKey(const IcomCivBackend& b)
     {
@@ -400,6 +409,10 @@ void testRangePreampReadPrecedesQueuedMeters()
     Access::pumpNextSlot(backend);
     check(Access::inFlightKey(backend) == "civ.21.2",
           "active meter polling resumes after the range-change confirmation");
+    Access::deliver(backend, frame(cmd::kMeter, meter::kSMeter, {0x01, 0x20}));
+    Access::pumpNextSlot(backend);
+    check(Access::inFlightKey(backend) == "civ.17",
+          "ATT still reconciles on VHF after the visible meter");
 }
 
 void testReconnectSMeterWaitsForFrequency()
@@ -1677,6 +1690,350 @@ void testScrollFEdgePanCrossesRangeBoundary()
           "and the pan drag did not retune");
 }
 
+// Synthetic IC-7110 fixtures from A7894-4J. Assert what actually entered the
+// scheduler, including its selector byte; generic FB carries no such identity.
+bool containsRegister(const std::vector<CivFrame>& frames, std::uint8_t command,
+                      std::uint8_t selector, const std::vector<std::uint8_t>& payload = {})
+{
+    return any(frames, [&](const CivFrame& f) {
+        return f.cmd == command && f.hasSub && f.sub == selector && f.data == payload;
+    });
+}
+
+void testIc7110MainVfoAndSelectedBand()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7110");
+    Access::sendConnectReadBurst(backend);
+    const auto startup = Access::issued(backend);
+    check(containsRegister(startup, 0x25, 0) && containsRegister(startup, 0x26, 0)
+              && containsRegister(startup, 0x07, 0xD2) && containsRegister(startup, 0x16, 0x59)
+              && containsRegister(startup, 0x1A, 0x05, {0x01, 0x22}),
+          "IC-7110 startup reads the selected MAIN VFO, hardware focus, dualwatch and Wi-Fi output");
+    check(!any(startup, [](const CivFrame& f) {
+              return f.cmd == 0x29 || (f.cmd == 0x07 && (f.sub == 0xC2 || f.sub == 0xD0
+                  || f.sub == 0xD1 || f.sub == 0xB0 || !f.data.empty()))
+                  || ((f.cmd == 0x25 || f.cmd == 0x26) && f.sub == 1);
+          }), "IC-7110 startup leaves hardware focus, MAIN/SUB exchange and other VFO alone");
+    Access::scopeStartup(backend);
+    Access::forget(backend);
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    check(writes(Access::issued(backend), 0x26, {}).empty(),
+          "IC-7110 waits for the active VFO filter before writing a mode");
+    Access::deliver(backend, frame(0x07, 0xD2, {1})); // front-panel focus on SUB
+    Access::deliver(backend, frame(0x27, 0x12, {0})); // the only displayed pan is MAIN
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(14'200'000)));
+    Access::deliver(backend, frame(0x26, 0, {0x01, 0, 3}));
+    check(Access::frequency(backend) == 14'200'000
+              && backend.profileMap().value("selectedBand").toInt() == 1,
+          "the selected MAIN VFO is readable while the front panel controls SUB");
+
+    QSignalSpy slice(&backend, &IRadioBackend::sliceChanged);
+    Access::deliver(backend, frame(0x25, 1, encodeFreq(14'300'000)));
+    Access::deliver(backend, frame(0x26, 1, {0x02, 0, 1}));
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(7'200'000)), 1, 0xE1);
+    Access::deliver(backend, frequencyEcho(145'100'000));
+    Access::deliver(backend, frame(0x01, {}, {0x05, 1}));
+    check(Access::frequency(backend) == 14'200'000 && slice.isEmpty(),
+          "other MAIN VFO, foreign-controller and untagged reports cannot relabel a slice");
+
+    Access::forget(backend);
+    backend.setSliceFrequency(1, 145'200'000);
+    backend.setSliceMode(1, QStringLiteral("FM"));
+    check(Access::issued(backend).empty(), "a direct SUB edit cannot write to MAIN");
+    backend.setSliceFrequency(0, 14'250'000);
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    const auto changes = Access::issued(backend);
+    check(containsRegister(changes, 0x25, 0, encodeFreq(14'250'000))
+              && containsRegister(changes, 0x26, 0, {0x00, 0, 3}),
+          "MAIN tuning and mode use selector 00 and preserve the radio-confirmed filter");
+
+    TxTestAuthority authority;
+    backend.setTransmitContext(authority.context);
+    Access::forget(backend);
+    backend.setKeying(true, authority.operation);
+    backend.setTune(true, 10, authority.operation);
+    QSignalSpy errors(&backend, &IRadioBackend::extensionError);
+    backend.invokeExtension("icom", "civ.send", 5, "1c 00 01");
+    check(!any(Access::issued(backend), keysTransmitter) && !Access::tuning(backend)
+              && errors.size() == 1 && errors.first().at(0).toULongLong() == 5,
+          "IC-7110 RX bring-up refuses PTT, TUNE and raw keying even with a current TX grant");
+}
+
+void testIc7110RegionalReadbackAndTune()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7110");
+    Access::deliver(backend, frame(0x27, 0x12, {0}));
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(145'990'000)));
+    QSignalSpy slices(&backend, &IRadioBackend::sliceChanged);
+    QSignalSpy warnings(&backend, &IRadioBackend::configurationWarning);
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(147'000'000)));
+    check(Access::frequency(backend) == 147'000'000 && slices.size() == 1
+              && qvariant_cast<SliceDelta>(slices.first().at(1)).frequency == 147.0
+              && warnings.size() == 1 && warnings.first().at(0).toString().contains("IC-7110 region"),
+          "an out-of-region MAIN readback updates the slice and points to the region setting");
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(445'000'000)));
+    auto malformed = encodeFreq(147'000'000);
+    malformed[0] = 0xFA;
+    Access::deliver(backend, frame(0x25, 0, malformed));
+    Access::deliver(backend, frame(0x25, 0, encodeFreq(450'000'001)));
+    check(Access::frequency(backend) == 445'000'000 && slices.size() == 2 && warnings.size() == 1,
+          "another plausible readback publishes without repeating the warning; malformed or implausible replies do not");
+
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 147'000'000);
+    check(!containsRegister(Access::issued(backend), 0x25, 0, encodeFreq(147'000'000)),
+          "the same out-of-region frequency remains unavailable for app tuning");
+}
+
+void testIc7110RapidMainVfoEdits()
+{
+    for (const bool expire : {false, true}) {
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7110");
+        Access::scopeStartup(backend);
+        Access::deliver(backend, frame(0x27, 0x12, {0}));
+        Access::deliver(backend, frame(0x26, 0, {0x01, 0, 3})); // USB/FIL3
+        Access::forget(backend);
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+        Access::pumpNextSlot(backend);
+        backend.setSliceMode(0, QStringLiteral("FM"));
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setSliceFilterPreset(0, 2);
+        backend.setSliceFilterPreset(0, 1);
+        const auto first = writes(Access::issued(backend), 0x26, 0);
+        check(first.size() == 1 && first.front().data == std::vector<std::uint8_t>{0x00, 0, 3},
+              "rapid mode/filter edits wait for the first compound write to read back");
+        Access::forgetSent(backend);
+        Access::deliver(backend, frame(kCivOk, {}, {}));
+        Access::pumpConfirmation(backend);
+        check(writes(Access::issued(backend), 0x26, 0).empty(),
+              "a generic ACK never releases a compound edit");
+        if (expire) { Access::expireMainVfoEdit(backend); }
+        Access::deliver(backend, frame(0x26, 0, {0x00, 0, 3})); // LSB/FIL3
+        const auto next = writes(Access::issued(backend), 0x26, 0);
+        if (expire) {
+            check(next.empty(), "a late readback discards expired follow-up edits");
+        } else {
+            check(next.size() == 1 && next.front().data == std::vector<std::uint8_t>{0x01, 0, 1},
+                  "confirmed LSB issues exactly one follow-up for the final USB and FIL1 edits");
+            Access::pumpNextSlot(backend);
+            Access::forgetSent(backend);
+            Access::deliver(backend, frame(kCivNg, {}, {}));
+            Access::pumpConfirmation(backend);
+            Access::deliver(backend, frame(0x26, 0, {0x00, 0, 3}));
+            check(writes(Access::issued(backend), 0x26, 0).empty(),
+                  "a refused final edit does not replay on the next radio readback");
+        }
+    }
+}
+
+void testIc7110DualwatchAndScopeSource()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7110");
+    Access::scopeStartup(backend);
+    Access::forget(backend);
+    const auto initial = backend.profileMap();
+    check(initial.contains("dualWatch") && initial.value("dualWatch").isNull()
+              && initial.contains("scopeSource") && initial.value("scopeSource").isNull(),
+          "IC-7110 dualwatch and scope source start unknown");
+    QSignalSpy errors(&backend, &IRadioBackend::extensionError);
+    backend.invokeExtension("icom", "scope.reference", 4, 4.5);
+    check(errors.size() == 1 && Access::issued(backend).empty(),
+          "a scope write requires an observed source");
+    Access::deliver(backend, frame(0x16, 0x59, {0}));
+    backend.invokeExtension("icom", "receiver.dualwatch", 2, "on");
+    Access::pumpNextSlot(backend);
+    Access::deliver(backend, frame(kCivOk, {}, {}));
+    Access::pumpNextSlot(backend);
+    const auto watch = Access::issued(backend);
+    check(containsRegister(watch, 0x16, 0x59, {1}) && containsRegister(watch, 0x16, 0x59)
+              && !backend.profileMap().value("dualWatch").toBool(),
+          "dualwatch writes 16 59 01 and reads it back; FB alone cannot turn it on");
+    Access::deliver(backend, frame(0x16, 0x59, {1}));
+    Access::deliver(backend, frame(0x16, 0x59, {2}));
+    check(backend.profileMap().value("dualWatch").toBool(),
+          "a valid radio confirmation enables dualwatch; an invalid one leaves it intact");
+
+    QSignalSpy spectrum(&backend, &IRadioBackend::spectrumFrameReady);
+    const auto main = *scopeEdgeSweep(14'100'000, 14'200'000, 0xBA, 0x01, 0);
+    const auto sub = *scopeEdgeSweep(145'100'000, 145'200'000, 0xBA, 0x01, 1);
+    Access::deliver(backend, frame(0x27, 0x12, {0}));
+    Access::deliver(backend, main);
+    check(spectrum.size() == 1 && backend.profileMap().value("scopeFrameSource") == 0,
+          "a MAIN-tagged sweep publishes on the confirmed MAIN scope");
+    Access::forget(backend);
+    QSignalSpy refusal(&backend, &IRadioBackend::configurationWarning);
+    backend.invokeExtension("icom", "scope.source", 3, "sub");
+    Access::pumpNextSlot(backend);
+    Access::deliver(backend, frame(kCivNg, {}, {}));
+    check(refusal.size() == 1 && refusal.first().at(0).toString().contains("scope-source request")
+              && backend.profileMap().value("scopeSource") == 0,
+          "a scope-source refusal is reported and preserves the radio-confirmed source");
+    Access::forget(backend);
+    backend.invokeExtension("icom", "scope.source", 3, "sub");
+    Access::pumpNextSlot(backend);
+    Access::deliver(backend, frame(kCivOk, {}, {}));
+    Access::pumpNextSlot(backend);
+    const auto change = Access::issued(backend);
+    check(containsRegister(change, 0x27, 0x12, {1}) && containsRegister(change, 0x27, 0x12)
+              && backend.profileMap().value("scopeSource") == 0,
+          "scope source writes 27 12 01 and awaits a data-bearing source readback");
+    QSignalSpy sliceContext(&backend, &IRadioBackend::sliceChanged);
+    QSignalSpy sourceMessages(&backend, &IRadioBackend::configurationWarning);
+    Access::deliver(backend, frame(0x27, 0x12, {1}));
+    check(sliceContext.size() == 1 && qvariant_cast<SliceDelta>(sliceContext.last().at(1)).inCapture == false
+              && qvariant_cast<SliceDelta>(sliceContext.last().at(1)).txSlice == false
+              && sourceMessages.size() == 1 && sourceMessages.last().at(0).toString().contains("SUB scope preview"),
+          "SUB preview identifies its source and marks the MAIN slice out of capture and RX-only");
+    Access::deliver(backend, frame(0x27, 0x12, {2}));
+    Access::ageScopeSelector(backend, 2000);
+    Access::deliver(backend, main); // late old-source packet after hardware confirmation
+    const auto waiting = backend.profileMap();
+    check(waiting.value("scopeSource") == 1 && waiting.value("scopeFrameSource").isNull()
+              && spectrum.size() == 1,
+          "a late MAIN sweep cannot fill the newly selected SUB scope");
+    auto malformed = sub;
+    malformed.data.back() = 161;
+    Access::deliver(backend, malformed);
+    auto outOfRange = sub;
+    outOfRange.data.resize(15);
+    outOfRange.data[14] = 1;
+    malformed = outOfRange;
+    malformed.data[2] = 0x11;
+    Access::deliver(backend, malformed);
+    malformed = outOfRange;
+    malformed.data.push_back(0);
+    Access::deliver(backend, malformed);
+    check(spectrum.size() == 1 && backend.profileMap().value("scopeFrameSource").isNull(),
+          "out-of-range amplitudes, USB divisions and surplus OOR bytes cannot confirm a Wi-Fi scope");
+    Access::deliver(backend, sub);
+    check(spectrum.size() == 2 && spectrum.last().at(0).toInt() == 0
+              && spectrum.last().at(1).toByteArray().size() == 475 * sizeof(float)
+              && backend.profileMap().value("scopeFrameSource") == 1,
+          "SUB sends 475 native bins to the same pan after its first matching sweep");
+    Access::deliver(backend, outOfRange);
+    check(spectrum.size() == 3 && backend.profileMap().value("scopeFrameSource") == 1,
+          "a header-only out-of-range Wi-Fi sweep still identifies the selected scope");
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 145'180'000);
+    backend.setPanCenter(QStringLiteral("0"), 145'180'000, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    check(writes(Access::issued(backend), 0x25, {}).empty()
+              && writes(Access::issued(backend), cmd::kSetFreq, {}).empty(),
+          "a SUB display gesture cannot tune MAIN");
+    Access::deliver(backend, frame(0x27, 0x12, {0}));
+    check(!sliceContext.isEmpty() && qvariant_cast<SliceDelta>(sliceContext.last().at(1)).inCapture == true
+              && qvariant_cast<SliceDelta>(sliceContext.last().at(1)).txSlice == false
+              && sourceMessages.last().at(0).toString().contains("MAIN scope selected"),
+          "returning to MAIN restores the slice and replaces the preview notice");
+}
+
+void testIc7110SourceChangeRetiresGestures()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7110");
+    Access::scopeStartup(backend);
+    Access::deliver(backend, frame(0x27, 0x12, {0}));
+    Access::deliver(backend, frame(0x26, 0, {0x01, 0, 1}));
+    Access::deliver(backend, *scopeSweep(14'100'000, 50'000));
+    Access::forget(backend);
+
+    // A reported scope change can arrive from the front panel while an
+    // operator gesture awaits FB/FA. Other gestures queue behind it.
+    backend.setPanScopeMode(QStringLiteral("0"), 0);
+    Access::pumpNextSlot(backend);
+    check(Access::inFlightKey(backend) == "scope.mode", "MAIN scope-mode write is in flight");
+    backend.setPanBandwidth(QStringLiteral("0"), 200'000.0);
+    backend.setSliceFrequency(0, 14'225'000);
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    backend.invokeExtension("icom", "scope.reference", 5, -4.5);
+    const auto pending = Access::issued(backend);
+    check(!writes(pending, 0x25, 0).empty() && !writes(pending, 0x26, 0).empty()
+              && !writes(pending, 0x27, 0x15).empty() && !writes(pending, 0x27, 0x19).empty(),
+          "MAIN tune, mode, zoom and REF wait behind the first write");
+
+    Access::forgetSent(backend);
+    Access::deliver(backend, frame(0x27, 0x12, {1}));
+    Access::deliver(backend, frame(kCivNg, {}, {}));
+    Access::settle(backend);
+    const auto remaining = Access::issued(backend);
+    check(Access::scopeModesOffered(backend)
+              && writes(remaining, 0x25, 0).empty() && writes(remaining, 0x26, 0).empty()
+              && !any(remaining, [](const CivFrame& f) {
+                  return f.cmd == 0x27 && f.sub >= 0x14 && f.data.size() > 1;
+              }),
+          "a source change retires queued MAIN writes and an old NG cannot reconfigure SUB");
+
+    QSignalSpy modes(&backend, &IRadioBackend::panScopeModeChanged);
+    Access::deliver(backend, frame(0x27, 0x14, {1, 3}));
+    Access::deliver(backend, *scopeEdgeSweep(145'000'000, 145'100'000, 0xBA, 3, 1));
+    Access::deliver(backend, frame(0x27, 0x12, {1}));
+    check(modes.size() == 1, "a repeated scope-source report and matching sweep publish Scroll-F once");
+}
+
+void testIc705IdentityGatesAudioAndTxSlice()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-705");
+    Access::forgetIdentity(backend);
+    QSignalSpy changed(&backend, &IRadioBackend::sliceChanged);
+    QSignalSpy monitor(&backend, &IRadioBackend::audioFrameReady);
+    const std::vector<float> mono(4096, 0.25f);
+
+    Access::sessionConnected(backend);
+    Access::audio(backend, mono);
+    check(std::ranges::any_of(changed, [](const auto& signal) {
+              return qvariant_cast<SliceDelta>(signal.at(1)).txSlice == false;
+          }) && std::ranges::none_of(changed, [](const auto& signal) {
+              return qvariant_cast<SliceDelta>(signal.at(1)).txSlice == true;
+          }) && monitor.isEmpty(),
+          "an unidentified IC-705 has neither receive audio nor an assigned TX slice");
+    Access::deliver(backend, frame(0x19, 0, {0xA4}));
+    Access::audio(backend, mono);
+    check(std::ranges::any_of(changed, [](const auto& signal) {
+              return qvariant_cast<SliceDelta>(signal.at(1)).txSlice == true;
+          }) && !monitor.isEmpty(),
+          "IC-705 identification restores receive audio and assigns its TX slice");
+}
+
+void testIc7110MonitorAudio()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7110");
+    Access::forgetIdentity(backend);
+    Access::sessionConnected(backend);
+    QSignalSpy monitor(&backend, &IRadioBackend::audioFrameReady);
+    QSignalSpy slices(&backend, &IRadioBackend::sliceAudioFrameReady);
+    const std::vector<float> mono(4096, 0.25f);
+    Access::audio(backend, mono);
+    check(monitor.isEmpty() && slices.isEmpty(), "unidentified Wi-Fi audio waits for CI-V identity");
+    Access::deliver(backend, frame(0x19, 0, {0xBA}));
+    Access::deliver(backend, frame(0x1A, 0x05, {0x01, 0x14, 0})); // IC-705 output item
+    Access::audio(backend, mono);
+    check(monitor.isEmpty() && slices.isEmpty() && backend.profileMap().value("lanOutput") == -1,
+          "an unrelated model's AF setting cannot qualify IC-7110 Wi-Fi audio");
+    Access::deliver(backend, frame(0x1A, 0x05, {0x01, 0x22, 0}));
+    Access::audio(backend, mono);
+    check(!monitor.isEmpty() && slices.isEmpty() && backend.profileMap().value("lanOutput") == 0,
+          "confirmed AF reaches the monitor while receiver attribution remains unknown");
+    const auto previous = monitor.size();
+    Access::deliver(backend, frame(0x1A, 0x05, {0x01, 0x22, 1}));
+    Access::audio(backend, mono);
+    check(monitor.size() == previous && slices.isEmpty() && backend.profileMap().value("lanOutput") == 1,
+          "a front-panel switch to Wi-Fi IF stops monitor audio");
+
+    const auto rows = backend.controlMap();
+    const auto row = std::ranges::find_if(rows, [](const QVariant& v) {
+        return v.toMap().value("id") == QStringLiteral("audio.output");
+    });
+    check(row != rows.end() && row->toMap().value("wiring") == QStringLiteral("decode-only")
+              && row->toMap().value("civ") == QStringLiteral("1a 05"),
+          "the IC-7110 registry exposes Wi-Fi output as a read-only SET item");
+}
+
 // IC-9700 Dual scope interleaves MAIN and SUB sweeps: the pan follows the scope
 // it is on and drops the other's, so its edge state is not reset every sweep.
 void testDualScopeFollowsOneScope()
@@ -1997,6 +2354,13 @@ int main(int argc, char** argv)
     testScrollFFollowsTheDial();
     testScopeSelectorChangeReadsTheOtherScope();
     testDualScopeFollowsOneScope();
+    testIc7110MainVfoAndSelectedBand();
+    testIc7110RegionalReadbackAndTune();
+    testIc7110RapidMainVfoEdits();
+    testIc7110DualwatchAndScopeSource();
+    testIc7110SourceChangeRetiresGestures();
+    testIc705IdentityGatesAudioAndTxSlice();
+    testIc7110MonitorAudio();
     testScrollFEdgePanCrossesRangeBoundary();
     testScrollFEdgeWriteThrottle();
     testScrollFReselectsSlotOnRangeChange();

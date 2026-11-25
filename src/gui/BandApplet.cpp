@@ -324,7 +324,7 @@ void BandApplet::updateActiveBand()
 
     // Declared band ranges from the connected backend/gateway.
     for (const auto& range : m_declaredBandRanges) {
-        if (range.lowHz > 0.0 && range.highHz > 0.0) {
+        if (!range.name.isEmpty() && range.lowHz > 0.0 && range.highHz > 0.0) {
             const double lowMhz = range.lowHz / 1.0e6;
             const double highMhz = range.highHz / 1.0e6;
             if (freq >= lowMhz && freq <= highMhz) {

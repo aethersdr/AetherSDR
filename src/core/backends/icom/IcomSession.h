@@ -46,6 +46,8 @@ public:
         // 0 auto-selects stereo RX from a high-end factory-address hint; 1/2
         // explicitly choose transport shape for a customized CI-V bus address.
         int rxChannels = 0;
+        // Explicit chooser hint for the media request, which precedes CI-V identification.
+        std::uint8_t modelHint = 0;
         // Whether to negotiate a transmit channel at all. False leaves the
         // radio with no TX codec, which is a stronger guarantee than simply
         // not sending audio — a receive-only session cannot key by accident.

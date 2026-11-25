@@ -1,0 +1,4 @@
+{"cat": "aether.hl2", "lvl": "I", "mono_us": 1614731372, "msg": "HL2 auto RF gain: wideband bandscope enabled for the measured release", "seq": 199, "t": "23:26:58.745", "type": "log"}
+{"cat": "aether.hl2", "lvl": "I", "mono_us": 1614731390, "msg": "HL2 auto RF gain: ARMED at baseline 20 dB, floor 24 dB below", "seq": 200, "t": "23:26:58.745", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1850034080, "msg": "HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 1 / 20 , headroom \"15.0\"", "seq": 202, "t": "23:30:54.048", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1880232306, "msg": "HL2 auto RF gain: release -6 dB -> offset 0 dB, window 0 / 19 , headroom \"24.9\"", "seq": 203, "t": "23:31:24.248", "type": "log"}

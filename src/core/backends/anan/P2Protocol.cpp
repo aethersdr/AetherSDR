@@ -142,6 +142,47 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps, int numAdcs,
                             numAdcs, ditherEnabled, randomEnabled);
 }
 
+ActiveDdcSet resolveActiveDdcs(std::span<const DdcConfig> requested)
+{
+    // The same two refusals buildDdcSpecific() makes, so the list, the mask and
+    // the packet all describe the DDCs the radio is actually asked for.
+    ActiveDdcSet set;
+    for (const DdcConfig& ddc : requested) {
+        if (ddc.ddc < 0 || ddc.ddc >= kMaxDdcs || (set.mask & (1u << ddc.ddc)) != 0) {
+            continue;
+        }
+        set.mask |= static_cast<std::uint8_t>(1u << ddc.ddc);
+        set.ddcs.push_back(ddc);
+    }
+    return set;
+}
+
+ActiveDdcSet resolveLiveDdcs(std::span<const DdcConfig> requested,
+                             std::span<const DdcConfig> running)
+{
+    ActiveDdcSet set = resolveActiveDdcs(requested);
+    for (DdcConfig& ddc : set.ddcs) {
+        const auto it = std::find_if(running.begin(), running.end(),
+                                     [&ddc](const DdcConfig& r) { return r.ddc == ddc.ddc; });
+        if (it != running.end()) {
+            ddc.rateKsps = it->rateKsps;
+        }
+    }
+    return set;
+}
+
+bool highPriorityWithDdcChange(std::uint8_t wasMask, std::uint8_t isMask,
+                               const std::array<double, kMaxDdcs>& ddcFreqHz) noexcept
+{
+    const unsigned enabled = static_cast<unsigned>(isMask) & ~static_cast<unsigned>(wasMask);
+    for (int ddc = 0; ddc < kMaxDdcs; ++ddc) {
+        if ((enabled & (1u << ddc)) != 0 && ddcFreqHz[static_cast<std::size_t>(ddc)] == 0.0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::uint16_t alexRxFilterBits(AlexRxFilter filter) noexcept
 {
     // Bits from the spec's SATURN/ANAN-G2 Alex0 and Alex1 tables (p.91). The
@@ -187,6 +228,26 @@ AlexRxFilter alexRxFilterFor(double tunedHz) noexcept
         return AlexRxFilter::Bpf20MHz;    // 12 m, 10 m
     }
     return AlexRxFilter::Preamp6m;        // 6 m
+}
+
+std::array<double, 2> bandFilterFrequenciesHz(std::span<const DdcConfig> ddcs,
+                                              const std::array<double, kMaxDdcs>& ddcFreqHz) noexcept
+{
+    std::array<double, 2> hz{};
+    if (ddcs.empty()) {
+        return hz;
+    }
+    const auto frequencyOf = [&ddcFreqHz](const DdcConfig& ddc) {
+        return ddc.ddc >= 0 && ddc.ddc < kMaxDdcs
+            ? ddcFreqHz[static_cast<std::size_t>(ddc.ddc)] : 0.0;
+    };
+    for (std::size_t adc = 0; adc < hz.size(); ++adc) {
+        const auto owner = std::find_if(ddcs.begin(), ddcs.end(), [adc](const DdcConfig& ddc) {
+            return ddc.adcIndex == static_cast<int>(adc);
+        });
+        hz[adc] = frequencyOf(owner != ddcs.end() ? *owner : ddcs.front());
+    }
+    return hz;
 }
 
 std::array<std::uint8_t, 1444> buildHighPriority(bool run,

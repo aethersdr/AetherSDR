@@ -4,11 +4,13 @@
 #include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "gui/CenterMarkSlider.h"
 #include "gui/VfoWidget.h"
 #include "models/RadioModel.h"
 
 #include <QApplication>
 #include <QComboBox>
+#include <QSlider>
 #include <QtTest>
 
 using namespace AetherSDR;
@@ -41,6 +43,21 @@ private slots:
         QCOMPARE(dax->itemText(2), QStringLiteral("2"));
         applyFlexSliceStatus(radio, 3, {{QStringLiteral("in_use"), QStringLiteral("0")}}, true);
         QCOMPARE(dax->itemText(1), QStringLiteral("1"));
+    }
+
+    // The audio tab's pan has an accessible Value (C, L30, R30); without a
+    // name a screen reader announces that value with nothing to attach it to.
+    void audioPanIsNamed()
+    {
+        VfoWidget vfo;
+        // CenterMarkSlider has no Q_OBJECT, so find it among the sliders.
+        QStringList panNames;
+        const auto sliders = vfo.findChildren<QSlider*>();
+        for (QSlider* slider : sliders) {
+            if (dynamic_cast<CenterMarkSlider*>(slider))
+                panNames << slider->accessibleName();
+        }
+        QCOMPARE(panNames, QStringList{QStringLiteral("Audio pan")});
     }
 };
 

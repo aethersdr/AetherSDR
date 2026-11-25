@@ -12,7 +12,8 @@ or spread across several.
 The number of slices and panadapters comes from the connected radio, not from
 a built-in table, so AetherSDR offers exactly what your radio can do. Other
 radio families have their own limits: the Hermes-Lite 2 has up to four
-receivers (A–D), the RTL-SDR and ANAN-G2 one, and the IC-9700 one panadapter.
+receivers (A–D), the ANAN-G2 two (RX1 and RX2), the RTL-SDR one, and the IC-9700
+one panadapter.
 See [Supported Radios](./supported-radios.md).
 
 ## Using multiple slices

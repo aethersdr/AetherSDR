@@ -819,7 +819,8 @@ void SpectrumOverlayMenu::buildAntPanel()
         "QPushButton { background: {{color.background.1}}; "
         "border: 1px solid {{color.background.2}}; border-radius: 3px; "
         "color: {{color.text.secondary}}; font-size: 11px; padding: 1px 4px; }"
-        "QPushButton:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:enabled:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:disabled { color: {{color.text.disabled}}; }"
         "QPushButton:checked { background: {{color.accent.dim}}; "
         "border-color: {{color.accent.bright}}; color: {{color.text.primary}}; }";
 
@@ -886,11 +887,13 @@ void SpectrumOverlayMenu::buildAntPanel()
     auto* wnbRow = new QHBoxLayout;
     wnbRow->setSpacing(4);
     m_wnbBtn = new QPushButton("WNB");
+    m_wnbBtn->setObjectName(QStringLiteral("panWnbBtn"));
     m_wnbBtn->setCheckable(true);
     m_wnbBtn->setFixedSize(48, 22);
     applyToggleButtonStyle(m_wnbBtn, ToggleTribe::Success);
     wnbRow->addWidget(m_wnbBtn);
     m_wnbSlider = new GuardedSlider(Qt::Horizontal);
+    m_wnbSlider->setObjectName(QStringLiteral("panWnbLevel"));
     m_wnbSlider->setRange(0, 100);
     m_wnbSlider->setValue(50);
     applyPrimarySliderStyle(m_wnbSlider);
@@ -1033,8 +1036,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_loopABtn->setToolTip("Toggle the LoopA receive loop/preselector path for this panadapter.");
     m_loopBBtn->setToolTip("Toggle the LoopB receive loop/preselector path for this panadapter.");
     m_rfGainSlider->setToolTip("Adjusts receiver IF gain. Lower values reduce strong-signal overload.");
-    m_wnbBtn->setToolTip("Wideband noise blanker \u2014 suppresses correlated impulse noise across the full panadapter bandwidth.");
-    m_wnbSlider->setToolTip("Adjusts WNB threshold. Higher values blank more aggressively.");
+    setWnbAvailability(true, true);
     m_swrStartBtn->setToolTip("Run a low-power tune sweep across the current TX band and plot SWR on the panadapter.");
     m_swrClearBtn->setToolTip("Clear the displayed SWR sweep trace.");
     m_swrSaveBtn->setToolTip("Export the most recent SWR sweep (frequency + SWR) to a CSV file.");
@@ -1836,6 +1838,19 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_heatMapBtn->setObjectName("displayHeatMapBtn");
         m_showGridBtn->setObjectName("displayShowGridBtn");
         m_weightedAvgBtn->setObjectName("displayWeightedAvgBtn");
+        // Link Rates: while on, moving FFT FPS or WtrFall Rate on this pan sets
+        // every open pan to the same rate (#6799). One flag per radio, shown in
+        // every pan's panel; turning it on changes no rate by itself.
+        makeToggle(tr("Link Rates"), m_linkRatesBtn);
+        m_linkRatesBtn->setObjectName("displayLinkRatesBtn");
+        m_linkRatesBtn->setToolTip(tr(
+            "Link display rates across pans: while on, moving FFT FPS or WtrFall "
+            "Rate on any panadapter sets every open panadapter to that rate. "
+            "Turning it on changes no rate by itself."));
+        m_linkRatesBtn->setAccessibleName(tr("Link display rates across pans"));
+        m_linkRatesBtn->setAccessibleDescription(tr(
+            "When checked, FFT FPS and waterfall rate changes apply to every open "
+            "panadapter."));
 
         grid->addWidget(toggleRow, row, 0, 1, 4);
         ++row;
@@ -1848,6 +1863,9 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
         connect(m_weightedAvgBtn, &QPushButton::toggled, this, [this](bool on) {
             emit fftWeightedAverageChanged(on);
+        });
+        connect(m_linkRatesBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit linkPanDisplayRatesChanged(on);
         });
     }
 
@@ -2987,6 +3005,15 @@ void SpectrumOverlayMenu::syncWfLineDuration(int rate)
     m_rateLabel->setText(rateSliderLabelText(sliderValue));
 }
 
+void SpectrumOverlayMenu::syncLinkPanDisplayRates(bool on)
+{
+    if (!m_linkRatesBtn) {
+        return;
+    }
+    const QSignalBlocker blocker(m_linkRatesBtn);
+    m_linkRatesBtn->setChecked(on);
+}
+
 void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                                     int bgOpacity,
                                                     int freqGridSpacingKhz,
@@ -3209,13 +3236,16 @@ void SpectrumOverlayMenu::setAutoRfGainEnabled(bool on)
     applyAutoRfGainToSlider(on);
 }
 
-// WNB is a radio-side noise blanker; on a backend without one the row would
-// control nothing, so button and slider are hidden as a unit.
-void SpectrumOverlayMenu::setRadioSideDspAvailable(bool available)
+void SpectrumOverlayMenu::setWnbAvailability(bool hasRadioDsp, bool supported)
 {
-    if (m_wnbRow) {
-        m_wnbRow->setVisible(available);
-    }
+    m_wnbRow->setVisible(hasRadioDsp || supported);
+    m_wnbRow->setEnabled(supported);
+    const QString reason = tr("Wideband noise blanker is unavailable on this radio.");
+    m_wnbBtn->setToolTip(supported
+        ? tr("Suppresses correlated impulse noise across the panadapter bandwidth.") : reason);
+    m_wnbSlider->setToolTip(supported
+        ? tr("Adjusts WNB threshold. Higher values blank more aggressively.") : reason);
+    m_wnbRow->setToolTip(supported ? QString() : reason);
 }
 
 void SpectrumOverlayMenu::setNotchesSupported(bool supported)
@@ -3330,12 +3360,11 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
     if (!m_preampRow || !m_attenuatorRow)
         return;
 
-    // A one-entry list is not a control. A radio that reports only "OFF" has
-    // nothing to switch between, and a button that can never change is worse
-    // than no button at all.
     const auto apply = [](QWidget* row, QPushButton* btn, const QStringList& labels,
-                          int step, const QString& what) {
-        const bool present = labels.size() > 1;
+                          int step, const QString& what, const QString& unavailable = {}) {
+        const bool available = labels.size() > 1;
+        const bool present = available || (labels.size() == 1 && !unavailable.isEmpty());
+        btn->setEnabled(available);
         row->setVisible(present);
         if (!present)
             return;
@@ -3345,14 +3374,14 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
         // convention the backend publishes its label list in.
         QSignalBlocker b(btn);
         btn->setChecked(step > 0);
-        btn->setToolTip(QStringLiteral("Receive %1 — %2.\nClick to step through: %3")
+        btn->setToolTip(!available ? unavailable : QStringLiteral("Receive %1 — %2.\nClick to step through: %3")
                             .arg(what, position, labels.join(" / ")));
     };
 
     apply(m_preampRow, m_preampBtn, m_preampLabels, m_preampStep,
           QStringLiteral("preamp"));
     apply(m_attenuatorRow, m_attenuatorBtn, m_attenuatorLabels, m_attenuatorStep,
-          QStringLiteral("attenuator"));
+          QStringLiteral("attenuator"), tr("Attenuation is unavailable at the current receive frequency."));
 }
 
 // The buttons do not own their state: a click emits the request and they
@@ -3856,7 +3885,7 @@ void SpectrumOverlayMenu::updateActiveBandHighlight()
 
     // Declared band ranges from connected backend/gateway.
     for (const auto& range : m_declaredBandRanges) {
-        if (range.lowHz > 0.0 && range.highHz > 0.0) {
+        if (!range.name.isEmpty() && range.lowHz > 0.0 && range.highHz > 0.0) {
             const double lowMhz = range.lowHz / 1.0e6;
             const double highMhz = range.highHz / 1.0e6;
             if (freq >= lowMhz && freq <= highMhz) {

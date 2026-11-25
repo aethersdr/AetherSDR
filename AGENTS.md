@@ -317,6 +317,8 @@ commits required, CODEOWNERS review required, conversations must be resolved,
 stale approvals are dismissed on push, branches auto-delete after merge. CI
 runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest`; a new
 `find_package(...)` needs its `-dev` package in `.github/docker/Dockerfile`.
+Main Linux validation builds once in Full Suite and retains a test verdict for
+every commit; CI's Linux `build` job is PR-only. Windows/macOS still run in CI.
 Test registration, the frozen per-PR test gate, and gate integrity:
 [`docs/agents/tests-ci.md`](docs/agents/tests-ci.md).
 
@@ -336,8 +338,8 @@ applets), `src/core/backends/` (one directory per radio family).
   + `MainWindow_*.cpp` sibling TUs. New feature code goes in a sibling, NOT
   `MainWindow.cpp` ([`docs/agents/gui.md`](docs/agents/gui.md))
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
-- `IRadioBackend` — the radio seam; six implementors (flex, hl2, icom, sim,
-  anan, rtl) ([`docs/agents/backends.md`](docs/agents/backends.md))
+- `IRadioBackend` — the radio seam; seven implementors (flex, hl2, icom, sim,
+  anan, rtl, aetherd) ([`docs/agents/backends.md`](docs/agents/backends.md))
 
 **Threading:** up to 14 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.

@@ -5,6 +5,7 @@
 #include "models/TransmitModel.h"
 
 #include <QMetaObject>
+#include <QTimer>
 
 #include <algorithm>
 #include <chrono>
@@ -68,8 +69,11 @@ bool HostCwTextEngine::play(const TxCoordinator::Request& sender, const QString&
         m_keyer = std::make_unique<CwxLocalKeyer>();
         // Word spacing between runs: 7 units at this run's speed after the last key-up.
         if (m_lastKeyUp != std::chrono::steady_clock::time_point{}) {
-            m_keyer->setNotBefore(m_lastKeyUp + std::chrono::milliseconds(7 * std::max(1, int(1200.0 / wpm))));
+            m_keyer->setNotBefore(m_lastKeyUp
+                                  + std::chrono::milliseconds(kRunSpacingUnits * std::max(1, int(1200.0 / wpm))));
         }
+        // A segment played in before drained() has run joins a drained keyer.
+        m_keyer->setSpacingAfterDrain(kRunSpacingUnits);
         m_runKeyUp = std::make_shared<std::atomic<std::chrono::steady_clock::rep>>(0);
         const std::weak_ptr<char> run = m_run;
         // Model thread. A live run token means `this` is alive: endRun() drops it before the keyer goes.
@@ -135,6 +139,48 @@ void HostCwTextEngine::dropWaiting(const TxCoordinator::Request& sender)
     m_waiting.removeIf([&sender](const Waiting& message) { return message.sender.sameRequest(sender); });
 }
 
+void HostCwTextEngine::fence(TxCoordinator::Producer& producer)
+{
+    producer.discardInputs();
+    if (m_model) {
+        m_model->abortTxProducerInputs(producer, TransmitModel::PttSource::Mox);
+    }
+    producer.invalidate();
+    producer = {};
+}
+
+void HostCwTextEngine::retire(TxCoordinator::Producer producer)
+{
+    if (!m_model || !m_model->txProducerInputPending(producer)) {
+        fence(producer);
+        return;
+    }
+    const int id = ++m_nextRetiringId;
+    m_retiring.push_back({std::move(producer), id});
+    pollRetiring(id, 0);
+}
+
+void HostCwTextEngine::pollRetiring(int id, int waitedMs)
+{
+    const auto it = std::find_if(m_retiring.begin(), m_retiring.end(),
+                                 [id](const Retiring& r) { return r.id == id; });
+    if (it == m_retiring.end()) {
+        return;
+    }
+    if (m_model && waitedMs < kRetireWaitMs && m_model->txProducerInputPending(it->producer)) {
+        const std::weak_ptr<char> alive = m_alive;
+        QTimer::singleShot(kRetirePollMs, m_model.data(), [this, alive, id, waitedMs] {
+            if (!alive.expired()) {
+                pollRetiring(id, waitedMs + kRetirePollMs);
+            }
+        });
+        return;
+    }
+    TxCoordinator::Producer producer = std::move(it->producer);
+    m_retiring.erase(it);
+    fence(producer);
+}
+
 void HostCwTextEngine::endRun()
 {
     // Belt and braces: invalidate() below fences the same elements; this
@@ -164,8 +210,23 @@ void HostCwTextEngine::drained(const std::weak_ptr<char>& run)
     if (!run.lock() || !m_keyer || m_keyer->pendingChars() > 0) {
         return;
     }
-    const TxCoordinator::Request sender = m_sender;
-    endRun();
+    // The run is over: the next text, the same sender's or another's, starts
+    // a new run a word space after this last key-up. Fencing the producer
+    // now would cut an element still on its way to the wire, so it retires.
+    // stop(), refused() and close() keep the immediate cut.
+    m_run.reset();
+    m_input = {};
+    m_keyer.reset();   // drained: its worker is parked and keys nothing more
+    if (m_runKeyUp) {
+        if (const auto up = m_runKeyUp->load(std::memory_order_relaxed); up != 0) {
+            m_lastKeyUp = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(up));
+        }
+        m_runKeyUp.reset();
+    }
+    const TxCoordinator::Request sender = std::exchange(m_sender, {});
+    std::vector<TxCoordinator::Completion> done = std::exchange(m_done, {});
+    done.clear();   // the sender's Cwx deliveries finish now
+    retire(std::exchange(m_producer, {}));
     if (m_ended) {
         m_ended(sender, false);
     }
@@ -196,6 +257,10 @@ void HostCwTextEngine::stopAll()
     m_waiting.clear();
     if (m_run) {
         endRun();
+    }
+    std::vector<Retiring> retiring = std::exchange(m_retiring, {});
+    for (Retiring& r : retiring) {
+        fence(r.producer);
     }
 }
 

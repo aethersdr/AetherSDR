@@ -3587,7 +3587,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("droopcal", {},
-            "droopcal [status|start|stop|apply|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop)",
+            "droopcal [status|start|stop|apply|discard] — ANAN-G2 DDC droop calibration sweep (radios with a measured DDC edge droop)",
             parseActionValue,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doDroopCal(a.action, a.value);
@@ -3874,7 +3874,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|scopepreset <range> <slot> [lower-Hz upper-Hz]|scopeslot <receiver> <slot>|session|scheduler|incident> — CI-V "
+            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|scopesource main|sub|scopepreset <range> <slot> [lower-Hz upper-Hz]|scopeslot <receiver> <slot>|session|scheduler|incident> — CI-V "
             "inject, frame trace, receiver profile, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
@@ -6409,6 +6409,26 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data[QStringLiteral("model")] = model;
         return data;
     }
+    if (model == QLatin1String("serial")) {
+        // Serial PTT/CW port: observed open state and last open failure
+        // (#6972). Served before the radio guard: the port works with no
+        // radio connected, and a failed open is provable without one.
+        if (!m_serialSnapshotHandler)
+            return err(QStringLiteral("serial snapshot unavailable"));
+        QJsonObject data = m_serialSnapshotHandler();
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for serial"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        data[QStringLiteral("ok")] = true;
+        data[QStringLiteral("model")] = model;
+        return data;
+    }
 
     if (model == QLatin1String("titlebar")) {
         // Unified title bar — geometry, brand, radio tabs, audio cluster,
@@ -6736,9 +6756,8 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
         QPointer<AutomationServer> self(this);
         const QPointer<RadioModel> originalRadio(m_radioModel);
         const RadioControlSession refreshSession = m_radioModel->controlSession();
-        m_radioModel->sendCmdPublic(
-            QStringLiteral("waveform remove %1").arg(name),
-            [self, name, originalRadio, refreshSession](int code, const QString& body) {
+        m_radioModel->requestWaveform({WaveformAction::Unregister, name}, this,
+            [self, name, originalRadio, refreshSession](const RadioControlReply& reply) {
                 if (!self || !originalRadio || self->m_radioModel != originalRadio
                     || !originalRadio->controlSessionCurrent(refreshSession)) {
                     return;
@@ -6747,11 +6766,11 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
                     {QStringLiteral("action"), QStringLiteral("unregister")},
                     {QStringLiteral("name"), name},
                     {QStringLiteral("pending"), false},
-                    {QStringLiteral("code"), code},
-                    {QStringLiteral("body"), body},
+                    {QStringLiteral("code"), reply.code},
+                    {QStringLiteral("body"), reply.message},
                     {QStringLiteral("timestampMs"), QDateTime::currentMSecsSinceEpoch()}
                 };
-                if (code == 0 && self->m_radioModel
+                if (reply.kind == RadioControlReply::Kind::Accepted && self->m_radioModel
                         && self->m_radioModel->isConnected()) {
                     self->m_radioModel->requestSliceInventoryRefresh(refreshSession);
                 }
@@ -9241,6 +9260,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
     }
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
                         && a != QLatin1String("dualwatch")
+                        && a != QLatin1String("scopesource")
                         && a != QLatin1String("scopepreset")
                         && a != QLatin1String("scopeslot")
                         && a != QLatin1String("session")
@@ -9248,7 +9268,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
                         && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
         return err(QStringLiteral(
-            "civ requires an action (send|trace|profile|dualwatch|scopepreset|scopeslot|session|scheduler|incident)"));
+            "civ requires an action (send|trace|profile|dualwatch|scopesource|scopepreset|scopeslot|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -9282,6 +9302,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
                        : a == QLatin1String("dualwatch") ? QStringLiteral("receiver.dualwatch")
+                       : a == QLatin1String("scopesource") ? QStringLiteral("scope.source")
                        : a == QLatin1String("scopepreset") ? QStringLiteral("scope.preset")
                        : a == QLatin1String("scopeslot") ? QStringLiteral("scope.slot")
                        : a == QLatin1String("profile") ? QStringLiteral("profile.show")

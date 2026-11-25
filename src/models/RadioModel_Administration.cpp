@@ -84,8 +84,11 @@ ReceiveDispatch RadioModel::requestAdministrationSetting(const RadioSetupRequest
         }
         if (alive && owner && completion) { completion(result); }
     };
-    const ReceiveDispatch result = current()
-        ? m_backend->requestRadioSetup(request, reply, current) : ReceiveDispatch::Unsupported;
+    const ReceiveDispatch result = dispatchAdministrationRequest(reply, current, {},
+        [this, request](const RadioControlCompletion& response, const RadioControlFence& fence,
+                        const std::function<void()>&) {
+            return m_backend->requestRadioSetup(request, response, fence);
+        });
     if (!alive) { return result; }
     if (result != ReceiveDispatch::Dispatched) {
         reply({RadioControlReply::Kind::Refused, -1, tr("Radio setting was not dispatched.")});
@@ -112,6 +115,36 @@ void RadioModel::setMultiFlexEnabled(bool enabled)
                 emit commandDropped(tr("multiFLEX: %1").arg(reply.message));
             }
         });
+}
+
+ReceiveDispatch RadioModel::dispatchAdministrationRequest(const RadioControlCompletion& completion,
+    const RadioControlFence& current, const std::function<void()>& written,
+    const std::function<ReceiveDispatch(const RadioControlCompletion&, const RadioControlFence&,
+                                       const std::function<void()>&)>& dispatch)
+{
+    if (m_resettingAdministration || !current || !current()
+        || m_administrationWrites.size() >= 64) { return ReceiveDispatch::Unsupported; }
+    const QPointer<RadioModel> alive(this);
+    const auto operation = std::make_shared<PendingAdministrationWrite>();
+    operation->session = controlSession();
+    operation->guard = SessionCommandGuard::create().request();
+    operation->current = current;
+    operation->completion = completion;
+    operation->written = written;
+    const quint64 ticket = ++m_administrationTicket;
+    m_administrationWrites.insert(ticket, operation);
+    const RadioControlCompletion reply = [alive, ticket](const RadioControlReply& result) {
+        if (alive) { alive->finishAdministrationWrite(ticket, result); }
+    };
+    const auto acceptedWrite = [alive, ticket] {
+        if (alive) { alive->administrationWriteResult(ticket, true); }
+    };
+    const ReceiveDispatch result = dispatch(reply, current.withWriteGuard(operation->guard), acceptedWrite);
+    if (alive && result != ReceiveDispatch::Dispatched) {
+        finishAdministrationWrite(ticket, {RadioControlReply::Kind::Refused, -1,
+            tr("Command was not dispatched.")});
+    }
+    return result;
 }
 
 void RadioModel::administrationWriteResult(quint64 ticket, bool written)
@@ -143,11 +176,6 @@ void RadioModel::finishAdministrationWrite(quint64 ticket, const RadioControlRep
     if (!alive || m_administrationWrites.value(ticket) != operation) { return; }
     m_administrationWrites.remove(ticket);
     operation->guard.cancel();
-    if (operation->deadline) {
-        operation->deadline->stop();
-        operation->deadline->deleteLater();
-    }
-    forgetAdministrationReply(*operation);
     if (operation->completion) { operation->completion(reply); }
 }
 
@@ -191,7 +219,11 @@ bool RadioModel::rebootRadio(std::optional<RadioControlSession> expectedSession)
             emit alive->commandDropped(tr("Radio reboot: %1").arg(result.message));
         }
     };
-    const ReceiveDispatch result = m_backend->requestRadioReboot(reply, current, written);
+    const ReceiveDispatch result = dispatchAdministrationRequest(reply, current, written,
+        [this](const RadioControlCompletion& response, const RadioControlFence& fence,
+               const std::function<void()>& acceptedWrite) {
+            return m_backend->requestRadioReboot(response, fence, acceptedWrite);
+        });
     if (alive && result != ReceiveDispatch::Dispatched) {
         reply({RadioControlReply::Kind::Refused, -1, tr("Reboot was not dispatched.")});
     }
@@ -290,8 +322,11 @@ void RadioModel::requestCwAutoTune(SliceModel* source, CwAutoTuneAction action)
         }
         emit alive->cwAutoTuneIntentChanged(id);
     };
-    const ReceiveDispatch result = current()
-        ? m_backend->requestCwAutoTune(id, action, reply, current) : ReceiveDispatch::Unsupported;
+    const ReceiveDispatch result = dispatchAdministrationRequest(reply, current, {},
+        [this, id, action](const RadioControlCompletion& response, const RadioControlFence& fence,
+                           const std::function<void()>&) {
+            return m_backend->requestCwAutoTune(id, action, response, fence);
+        });
     if (!alive) { return; }
     if (result != ReceiveDispatch::Dispatched) {
         reply({RadioControlReply::Kind::Refused, -1, tr("Auto-tune was not dispatched.")});

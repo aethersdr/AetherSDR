@@ -425,6 +425,10 @@ public:
     void setSquelchScale(std::optional<SquelchLevelScale> scale);
     const std::optional<SquelchLevelScale>& squelchScale() const { return m_squelchScale; }
     double centerMhz()    const { return m_centerMhz; }
+    // Where the view is heading: the pan-follow animation's destination while
+    // it runs, otherwise centerMhz(). Follow steps chain from this so a step
+    // landing mid-glide does not restart from the glide's interim position.
+    double panCenterTargetMhz() const;
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
     // the right-edge dBm / waterfall-time strip that is painted on top of it.
@@ -999,6 +1003,16 @@ public:
 
     void setShowSpots(bool on) { m_showSpots = on; m_hoveredSpotKey.clear(); update(); }
     bool showSpots() const { return m_showSpots; }
+    // Per-pan spot marker visibility (#5711). Gates drawSpotMarkers() and all
+    // hit-testing for this pan independently of the global IsSpotsEnabled flag.
+    // Persisted via ClientDisplaySettings; default on.
+    void setSpotMarkersOnPan(bool on);
+    bool spotMarkersOnPan() const { return m_spotMarkersOnPan; }
+    // Called only from wirePanDisplayStatus() to seed the restore target
+    // without scheduling a redundant write of the value just read. Same side
+    // effects as setSpotMarkersOnPan() (overlay dirty, hover/hit clear on
+    // off), but no signal — the value was just read from disk. (#5711)
+    void loadSpotMarkersOnPan(bool on);
     void setShowSHistory(bool on)    { m_showSHistory = on;    update(); }
     bool showSHistory() const         { return m_showSHistory; }
     void setShowSHistoryQrm(bool on) { m_showSHistoryQrm = on; update(); }
@@ -1081,6 +1095,9 @@ signals:
     // (the auto-start path in onConnectionStateChanged only runs at connect
     // time and would miss a mid-session toggle). (#4526)
     void wsjtxListenerNeeded();
+    // Emitted when the per-pan spot marker toggle changes so MainWindow can
+    // schedule the ClientDisplaySettings write. (#5711)
+    void spotMarkersOnPanChanged(bool on);
     // Emitted when the user changes both center and bandwidth as one explicit
     // pan/zoom operation and the radio should apply them coherently. Splitting
     // those into separate commands was a known source of waterfall edge loss
@@ -1173,6 +1190,10 @@ private:
     // floor of 1 ms -- is decided here once.
     void raiseWarningCard(const QString& id, const QString& title,
                           const QString& detail, int durationMs);
+    // Shared body for setSpotMarkersOnPan / loadSpotMarkersOnPan: flips
+    // m_spotMarkersOnPan, clears hover/hit state on false, marks overlay
+    // dirty. Returns true if the value changed. (#5711)
+    bool applySpotMarkersOnPan(bool on);
     void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
                                    bool animateSmallNudges, bool confirmedObservation = false);
     double effectiveGridStepMhz(int widgetWidth) const;
@@ -1291,6 +1312,15 @@ private:
                                              double oldBandwidthMhz,
                                              double newCenterMhz,
                                              double newBandwidthMhz);
+    // The waterfall shader maps each row through its own frequency frame. The
+    // one predicate for both the shader flag and the view-frame decision.
+    bool waterfallRowFramesReady() const;
+    // Brings the waterfall/3D rows to a new view frame by the cheapest correct
+    // route for the active pipeline (see waterfallViewFrameAction()).
+    void applyWaterfallViewFrameChange(double oldCenterMhz,
+                                       double oldBandwidthMhz,
+                                       double newCenterMhz,
+                                       double newBandwidthMhz);
     bool updateFrequencyPreview(double oldCenterMhz, double oldBandwidthMhz,
                                 double newCenterMhz, double newBandwidthMhz);
     void scheduleFrequencyPreviewFrame();
@@ -2319,6 +2349,7 @@ private:
 
     QVector<SpotCluster> m_spotClusters;
     bool m_showSpots{true};
+    bool m_spotMarkersOnPan{true};  // per-pan gate for drawSpotMarkers() (#5711)
     bool m_showSHistory{false};
     bool m_showSHistoryQrm{false};
     bool m_sHistorySnapToStep{false};
@@ -2424,6 +2455,7 @@ private:
     QRect m_smartMtrLabelStripPx;
     bool m_smartMtrLabelsDirty{false};
     bool m_overlayStaticDirty{true};
+    bool m_overlayFrequencyDirty{false};  // frequency layer only; see markFrequencyOverlayDirty()
     bool m_overlayNeedsUpload{true};
     bool m_overlayFrequencyNeedsUpload{true};
     bool m_frequencyScalePreviewNeedsUpload{false};
@@ -2548,6 +2580,8 @@ private:
         quint64 overlayRebuilds{0};       // static+bg QPainter repaints
         quint64 overlayRebuildUs{0};
         quint64 overlayUploadBytes{0};    // static+bg texture bytes uploaded
+        quint64 overlayFrequencyRebuilds{0};  // frequency-layer-only repaints
+        quint64 overlayFrequencyRebuildUs{0};
         quint64 previewOverlayTransforms{0};
         quint64 previewOverlayCommitRefreshes{0};
         quint64 previewScaleRefreshes{0};
@@ -2589,6 +2623,13 @@ private:
     // SmartMTR value change: GPU builds restore and re-upload only the label
     // band; otherwise identical to markOverlayDirty("smartMtr").
     void invalidateSmartMtrLabels();
+    // A slice frequency change: GPU builds repaint and re-upload only the
+    // frequency-anchored layer, since a tune moves nothing in the background
+    // or screen-space chrome. Falls back to markOverlayDirty() whenever the
+    // chrome reads slice positions too (see overlayRepaintForSliceChange()).
+    void markFrequencyOverlayDirty();
+    // The cursor frequency readout is on screen (same condition it paints under).
+    bool cursorReadoutShowing() const;
     // Union of every flag's label band, in widget coordinates.
     QRect smartMtrLabelsCoverageRect() const;
 

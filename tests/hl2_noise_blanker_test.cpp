@@ -269,22 +269,16 @@ int main(int argc, char** argv)
     // The headline claim. An impulse that reaches the demodulator dominates the
     // peak; one that is blanked before the bandpass never gets there.
     //
-    // The ratio depends on the RX bandpass's PHASE as well as on the blanker,
-    // because the peak is read after that filter. USB runs it at minimum phase
-    // (Hl2RxDsp::rxMinimumPhaseFor, #5498), which front-loads the filter's
-    // energy and so peaks an UNBLANKED impulse 2.1 dB lower than linear phase
-    // does -- measured off 0.627 -> 0.490 -- while the blanked residue moves
-    // only 0.271 -> 0.293. The ratio therefore went 0.43 -> 0.60 without the
-    // blanker changing at all. So the original, stronger claim is pinned on
-    // the linear-phase chain CW keeps, where it was calibrated, and the
-    // minimum-phase chain gets the bound its own filter allows; a blanker that
-    // does nothing reads ~1.0 and fails both.
+    // The ratio also depends on the bandpass's phase, since the peak is read
+    // after it: CW's linear-phase chain reads 0.43, USB's minimum-phase chain
+    // (rxMinimumPhaseFor) 0.68 on the mono output, each with the bound its
+    // filter allows. A blanker that does nothing reads ~1.0 and fails both.
     check(cw.peakOff > 0.0 && cw.peakOn > 0.0, "both CWU passes produced audio");
     check(cw.peakOn < cw.peakOff * 0.5,
           "linear phase (CWU): the blanker at least halves the impulse peak in "
           "the demodulated audio");
-    check(peakOn < peakOff * (2.0 / 3.0),
-          "minimum phase (USB): the blanker takes at least a third off the "
+    check(peakOn < peakOff * 0.75,
+          "minimum phase (USB): the blanker takes at least a quarter off the "
           "impulse peak in the demodulated audio");
     // And the claim that makes it useful rather than merely quiet: the wanted
     // signal is still there. A stage that gated the whole passband would pass

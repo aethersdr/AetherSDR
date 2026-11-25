@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RadioStatusObservation.h"
+#include "ConnectionSession.h"
 #include "core/ReceiveData.h"
 #include "SetupStatusObservation.h"
 
@@ -14,6 +15,7 @@
 
 #include <map>
 #include <functional>
+#include <optional>
 #include <variant>
 
 #include <QByteArray>
@@ -77,12 +79,16 @@ struct RadioConnectRequest {
     QString version;        // RadioInfo::version from discovery; empty when not reported
     QVariantMap params;     // family-specific extras (namespaced by the backend)
     RadioSerialIdentity serialIdentity;
-    // Local IPv4 address that reached the radio; null lets the OS choose.
+    // Local address that reached the radio; null lets the OS choose.
     QHostAddress localBindAddress;
     // RadioModel's automatic retry after a lost link, not an operator's connect.
     // A backend whose radio obeys any controller (ANAN Protocol 2) checks the
     // radio is free first, so a retry never fights another client for it.
     bool automaticReconnect = false;
+    // Explicit source selection is mandatory; localBindAddress alone remains
+    // an automatically discovered preference for existing backends.
+    QHostAddress explicitLocalBindAddress;
+    bool requireExplicitLocalBind{false};
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode
@@ -145,6 +151,9 @@ struct MemoryRecallDetails {
 //     before returning or asynchronously — never twice, never from a worker. The
 //     destructor completes the same drain and never waits on a
 //     BlockingQueuedConnection whose target may be waiting on this thread.
+//     An explicit Deferred request may leave bounded transport cleanup on its
+//     worker after retiring all session deliveries. A replacement dial waits
+//     for that cleanup; default disconnect and destruction drain it fully.
 //     Disconnecting signals does not drop calls already queued, so
 //     teardownBackend() bumps a generation counter and every handler bound to a
 //     backend-owned object returns early on mismatch (RadioModel::setupBackend()).
@@ -193,6 +202,7 @@ public:
     // hear the radio's reply leaves it to RadioModel, which reports it as not
     // confirmed rather than assume the radio agreed.
     virtual bool answersTransmitControl() const { return false; }
+    virtual void setRadioStateWriteHold(qint64) {}
     virtual ReceiveDispatch requestSessionControl(const SessionControlRequest&,
         const SessionCommandGuard&, const SessionControlCompletion& = {})
     { return ReceiveDispatch::Unsupported; }
@@ -402,6 +412,11 @@ public:
     // storeOperatingState when handled, otherwise RadioStateMemory::store.
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
+    virtual void disconnectRadio(const RadioDisconnectRequest&) { disconnectRadio(); }
+    virtual std::optional<ConnectionSession> connectionSession() const { return std::nullopt; }
+    // Start after client registration; a port collision may request one rebind.
+    virtual ReceiveTransportResult startReceiveTransport(bool rebind = false)
+    { Q_UNUSED(rebind); return {}; }
     virtual bool isConnected() const = 0;
 
     // A session with the radio is up, WHATEVER TRANSPORT CARRIED IT.
@@ -1129,12 +1144,24 @@ public:
 
     // ---- diagnostics ----
     // Health/status registers this backend can report (converter overload, TX FIFO,
-    // thermal, firmware, link counters). Purely for display — nothing in the app
-    // makes a decision from it, hence a plain map. Synchronous: every value is cached
+    // thermal, firmware, link counters). Mostly for display, hence a plain map;
+    // the named diagnostic keys below and `swrPublication` are the exceptions,
+    // which radio certification reads to reach a verdict. Synchronous: every value is cached
     // from unsolicited telemetry; a backend with worker-side values caches them on
     // this thread (see Hl2Backend). `order` lists keys in display order; a key absent
     // from `values` renders as "not reported", never as zero.
     struct HealthSnapshot {
+        // The backend's SWR publication counters, for radio certification's
+        // run-scoped TX:SWR verdict (unset where the backend has none).
+        // Cumulative evidence across overs. A new session invalidates an
+        // observer's baseline, including when the same transport recovers.
+        struct SwrPublication {
+            quint64 connection = 0;
+            quint64 epoch = 0;
+            quint64 forwardWindows = 0;
+            quint64 gateClears = 0;
+            bool keyed = false;
+        };
         QVariantMap values;
         QStringList order;
         // Section headings, keyed by the value-key they precede.
@@ -1143,6 +1170,7 @@ public:
         // displayed under its own name.
         QMap<QString, QString> labels;
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
+        std::optional<SwrPublication> swrPublication;
 
         // Keys a DIAGNOSTIC reads back, named here rather than spelled twice
         // (#7063). Most rows in a snapshot are for a human to read, so their
@@ -1252,6 +1280,9 @@ signals:
     // at most once per ticket.
     void transmitControlAnswered(quint64 ticket, bool applied);
     // ---- connection state UP ----
+    // Opens observation delivery before the transport may publish any status.
+    void connectionSessionStarting(quint64 epoch);
+    void connectionVersionReceived(const QString& version);
     void connected();
     void disconnected();
     void connectionError(const QString& reason);
@@ -1261,6 +1292,16 @@ signals:
     // on it), so advice sent there becomes a reconnect loop. If it does not stop the
     // radio working, it belongs here.
     void configurationWarning(const QString& message);
+    // A mode, passband or TX-slice change the backend refused because the radio
+    // is transmitting; `message` tells the operator why. The refused control has
+    // already been republished unchanged. `sliceId` is -1 when no slice can be
+    // named (no TX receiver); RadioModel then posts the Notice with no pan, and
+    // the panadapter overlay falls back to the TX or active slice's pan.
+    void transmitChangeRefused(int sliceId, const QString& message);
+    // A transmission the operator keyed did not go out, for a reason the
+    // operator should see (`reason`, one short line). Once per transmission;
+    // RadioModel raises it as a "TX failed" notice. MOX is not changed by it.
+    void transmitFailed(const QString& reason);
 
     void capabilitiesChanged();
 

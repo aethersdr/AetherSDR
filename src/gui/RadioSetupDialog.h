@@ -44,6 +44,7 @@ class Kpa500Connection;
 class Kat500Model;
 class Kxpa100Model;
 class LpMeterConnection;
+class MicrohamTrioModel;
 struct PeripheralDeviceUi;
 
 // Radio Setup: the searchable, category-based configuration window, a canon
@@ -66,7 +67,8 @@ public:
                               QWidget* parent = nullptr,
                               Kat500Model* kat500 = nullptr,
                               Kxpa100Model* kxpa100 = nullptr,
-                              RfkitConnection* rfkit = nullptr);
+                              RfkitConnection* rfkit = nullptr,
+                              MicrohamTrioModel* trio = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
     // Like selectTab("Serial & Controllers"), but also scrolls the page so
@@ -79,6 +81,10 @@ public:
     void revealKxpa100AdvancedSettings();
     void refreshFlexControlButtonActions();
     void setFlexControlConnectionStatus(bool connected, const QString& port = {});
+    // Observed serial PTT/CW port state from SerialPortController (#6972).
+    // error is the last open failure's summary, empty when there is none.
+    void setSerialPortConnectionStatus(bool open, const QString& device,
+                                       const QString& error);
     // Result of the automation-bridge start the Network-tab toggle kicked off
     // (#4181). The start is ASYNCHRONOUS — the token read has to land before
     // the socket can listen — so the toggle handler can't know whether the
@@ -225,6 +231,8 @@ private:
                             const std::function<void()>& refresh);
     void buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                           const std::function<void()>& refresh);
+    void buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                         const std::function<void()>& refresh);
     PeripheralDeviceUi* peripheralDevice(const QString& id) const;
     QWidget* buildUiEnhancementsTab();
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951) — Pinned Certificates list
@@ -269,6 +277,7 @@ private:
     Kpa500Connection* m_kpa500{nullptr};
     Kat500Model* m_kat500{nullptr};
     Kxpa100Model* m_kxpa100{nullptr};
+    MicrohamTrioModel* m_trio{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};
@@ -306,6 +315,13 @@ private:
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;
     QLabel* m_flexControlStatusLabel{nullptr};
+    QLabel* m_serialStatusLabel{nullptr};
+    QPushButton* m_serialOpenButton{nullptr};
+    QPushButton* m_serialCloseButton{nullptr};
+    // Last pushed state; the Serial page is built lazily and applies it then.
+    bool m_serialPortOpen{false};
+    QString m_serialPortDevice;
+    QString m_serialPortError;
     QGroupBox* m_flexControlGroup{nullptr};
     QPushButton* m_flexControlDetectButton{nullptr};
     QPushButton* m_flexControlCloseButton{nullptr};

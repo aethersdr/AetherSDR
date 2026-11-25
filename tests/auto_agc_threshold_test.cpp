@@ -97,7 +97,7 @@ void wireAndParser()
     QStringList commands;
     flex.setFirmwareVersionProvider([&] { return firmware; });
     flex.setAutoAgcThresholdLicenseProvider([&] { return licensed; });
-    flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
+    flex.setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
     for (const QString& version : {QString(), QStringLiteral("4.2.20"), QStringLiteral("4.3.15"),
                                   QStringLiteral("4.3.16beta"), QStringLiteral("4.3.16.42034junk")}) {
         firmware = version;
@@ -213,10 +213,21 @@ void staleManualCurve()
     calibrator.setSlice(s);
     calibrator.setSettleMs(1);
     QObject::connect(s, &SliceModel::agcThresholdChanged, &calibrator, &AgcTCalibrator::onValueChanged);
+    // Pin the guard: a settle with no new audio since the move records nothing.
+    QSignalSpy noAudio(&calibrator, &AgcTCalibrator::noAudio);
+    QSignalSpy manualNoAudio(&calibrator, &AgcTCalibrator::manualNoAudio);
+    calibrator.onValueChanged(10);
+    QTest::qWait(140);
+    check(calibrator.curve().isEmpty() && manualNoAudio.size() == 1 && noAudio.isEmpty(),
+          "a manual settle with no audio since the move records no point and reports "
+          "manualNoAudio, not the sweep's noAudio");
+    QSignalSpy points(&calibrator, &AgcTCalibrator::pointAdded);
     for (const int value : {20, 50, 80}) {
-        calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);
+        const qsizetype expectedPoints = points.size() + 1;
         calibrator.onValueChanged(value);
-        QTest::qWait(140);
+        calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);
+        check(QTest::qWaitFor([&] { return points.size() == expectedPoints; }, 1000),
+              "manual calibration records each settled value before the next input");
     }
     check(calibrator.hasRecommendation() && calibrator.curve().size() == 3,
           "manual calibration establishes a real curve and recommendation");
@@ -235,6 +246,34 @@ void staleManualCurve()
     calibrator.applyRecommendation();
     check(!calibrator.hasRecommendation() && f.backend->agcs.size() == writes,
           "automatic threshold reports cannot resurrect an old recommendation for later Manual apply");
+}
+
+void ownWriteEchoRaisesNoNotice()
+{
+    // Apply writes the recommendation. Its echo comes back through
+    // onValueChanged; with no audio, that settle must not raise the manual
+    // no-audio notice over "Applied AGC-T = N.". The echo is consumed once.
+    Fixture f;
+    license(f.radio, QStringLiteral("1"));
+    SliceModel* s = f.slice();
+    AgcTCalibrator calibrator;
+    calibrator.setSlice(s);
+    calibrator.setSettleMs(1);
+    for (const int value : {20, 50, 80}) {
+        calibrator.onValueChanged(value);
+        calibrator.onAudioLevel(static_cast<float>(value) / 100.0f);
+        QTest::qWait(140);
+    }
+    check(calibrator.hasRecommendation(), "manual points establish a recommendation to apply");
+    const int applied = calibrator.recommendedValue();
+    QSignalSpy manualNoAudio(&calibrator, &AgcTCalibrator::manualNoAudio);
+    calibrator.applyRecommendation();
+    calibrator.onValueChanged(applied); // the apply's echo
+    QTest::qWait(140);
+    check(manualNoAudio.isEmpty(), "the echo of the calibrator's own apply raises no notice");
+    calibrator.onValueChanged(applied); // now the operator's own move
+    QTest::qWait(140);
+    check(manualNoAudio.size() == 1, "a later silent move to the same value still raises the notice");
 }
 
 void calibrationAuthorityTransitions()
@@ -260,10 +299,9 @@ void calibrationAuthorityTransitions()
     emit f.backend->sliceChanged(0, report());
     check(f.slice() == s, "reconnect reclaims the existing slice object");
     calibrator.setSlice(s);
-    calibrator.onAudioLevel(0.2f);
     calibrator.onValueChanged(40);
-    QTest::qWait(140);
-    check(calibrator.curve().size() == 1,
+    calibrator.onAudioLevel(0.2f);
+    check(QTest::qWaitFor([&] { return calibrator.curve().size() == 1; }, 1000),
           "explicit rebind of a reclaimed slice permits fresh manual recording");
 }
 
@@ -321,6 +359,7 @@ int main(int argc, char** argv)
     gatesAndAuthority();
     reentrantPendingNotifications();
     staleManualCurve();
+    ownWriteEchoRaisesNoNotice();
     calibrationAuthorityTransitions();
     calibrationAndSession();
     return failures == 0 ? 0 : 1;

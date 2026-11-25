@@ -1,5 +1,7 @@
 #include "Kpa1500Protocol.h"
 
+#include <QStringList>
+
 #include <algorithm>
 
 namespace AetherSDR {
@@ -124,6 +126,47 @@ std::optional<bool> decodeKeyState(const QString& arg)
         return std::nullopt;
     }
     return *n != 0;
+}
+
+// ^VIvvv iii: supply voltage in tenths, PA current in whole amps.
+bool decodeVoltsAmps(const QString& arg, std::optional<float>& volts, std::optional<int>& amps)
+{
+    const QStringList parts = arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() != 2) {
+        return false;
+    }
+    const auto v = decodeInt(parts.at(0));
+    const auto a = decodeInt(parts.at(1));
+    if (!v || !a || *v < 0 || *a < 0) {
+        return false;
+    }
+    volts = static_cast<float>(*v) / 10.0f;
+    amps = *a;
+    return true;
+}
+
+std::optional<int> decodeRange(const QString& arg, int lo, int hi)
+{
+    const auto n = decodeInt(arg);
+    if (!n || *n < lo || *n > hi) {
+        return std::nullopt;
+    }
+    return n;
+}
+
+// Free-text payloads (^DA, ^RV, ^SN): printable ASCII only, trimmed.
+std::optional<QString> decodeText(const QString& arg)
+{
+    const QString t = arg.trimmed();
+    if (t.isEmpty()) {
+        return std::nullopt;
+    }
+    for (QChar c : t) {
+        if (c.unicode() < 0x20 || c.unicode() > 0x7E) {
+            return std::nullopt;
+        }
+    }
+    return t;
 }
 
 // Assigns and reports whether the value actually moved, so applyMessage()
@@ -294,11 +337,117 @@ bool applyMessage(const Message& message, Status& status)
     if (cmd == QLatin1String("TQ")) {
         return assignIfChanged(status.keyed, decodeKeyState(arg));
     }
+    if (cmd == QLatin1String("ON")) {
+        return assignIfChanged(status.powerOn, decodeBool(arg));
+    }
+    if (cmd == QLatin1String("PWI")) {
+        return assignIfChanged(status.inputWatts, decodeScaled(arg, kPowerDivisor));
+    }
+    if (cmd == QLatin1String("VI")) {
+        std::optional<float> volts;
+        std::optional<int> amps;
+        if (!decodeVoltsAmps(arg, volts, amps)) {
+            return false;
+        }
+        const bool v = assignIfChanged(status.paVolts, volts);
+        const bool a = assignIfChanged(status.paAmps, amps);
+        return v || a;
+    }
+    if (cmd == QLatin1String("FC")) {
+        return assignIfChanged(status.fanMinimum, decodeRange(arg, kMinFan, kMaxFan));
+    }
+    if (cmd == QLatin1String("FS")) {
+        return assignIfChanged(status.fanSpeed, decodeRange(arg, kMinFan, kMaxFan));
+    }
+    if (cmd == QLatin1String("AS")) {
+        return assignIfChanged(status.attenuatorCode, decodeFault(arg));
+    }
+    if (cmd == QLatin1String("FR")) {
+        // ^FR00000; is "no frequency yet", not 0 kHz.
+        const auto khz = decodeInt(arg);
+        if (!khz || *khz <= 0 || *khz > 99999) {
+            return false;
+        }
+        return assignIfChanged(status.frequencyKhz, khz);
+    }
+    if (cmd == QLatin1String("DA")) {
+        return assignIfChanged(status.atuSetting, decodeText(arg));
+    }
+    if (cmd == QLatin1String("RV")) {
+        return assignIfChanged(status.firmware, decodeText(arg));
+    }
+    if (cmd == QLatin1String("SN")) {
+        return assignIfChanged(status.serialNumber, decodeText(arg));
+    }
+    if (cmd == QLatin1String("MA")) {
+        const auto mac = parseMacAddress(arg);
+        return mac && assignIfChanged(status.macAddress, std::optional<QString>(formatMacAddress(*mac)));
+    }
+    if (cmd == QLatin1String("WL")) {
+        return assignIfChanged(status.netWake, decodeBool(arg));
+    }
     // Unrecognized command — deliberately not an error. The amp answers
     // several queries this integration does not send (and future firmware
     // will add more); dropping them keeps the parser forward-compatible
     // instead of desynchronizing on the first unknown token.
     return false;
+}
+
+QString attenuatorReason(int code)
+{
+    switch (code) {
+        case 0x00: return {};
+        case 0x20: return QStringLiteral("PA CURRENT");
+        case 0x60: return QStringLiteral("INPUT POWER");
+        case 0x61: return QStringLiteral("GAIN LOW");
+        case 0x80: return QStringLiteral("50V SUPPLY");
+        case 0x90: return QStringLiteral("REFLECTED POWER");
+        case 0x91: return QStringLiteral("SWR VERY HIGH");
+        case 0xB0: return QStringLiteral("DISSIPATION");
+        case 0xC0: return QStringLiteral("FORWARD POWER");
+        case 0xC1: return QStringLiteral("POWER HIGH FOR ATU SETTING");
+        case 0xF0: return QStringLiteral("GAIN HIGH");
+        default: break;
+    }
+    return QStringLiteral("%1").arg(code, 2, 16, QLatin1Char('0')).toUpper();
+}
+
+QByteArray buildSetPower(bool on)
+{
+    return buildMessage(QStringLiteral("ON"), on ? QStringLiteral("1") : QStringLiteral("0"));
+}
+
+QByteArray buildSetFanMinimum(int level)
+{
+    if (level < kMinFan || level > kMaxFan) {
+        return {};
+    }
+    return buildMessage(QStringLiteral("FC"), QString::number(level));
+}
+
+QByteArray buildSetFrequency(int khz)
+{
+    if (khz < kMinTrackKhz || khz > kMaxTrackKhz) {
+        return {};
+    }
+    return buildMessage(QStringLiteral("FR"), QStringLiteral("%1").arg(khz, 5, 10, QLatin1Char('0')));
+}
+
+QString transportSettingValue(Transport transport)
+{
+    return transport == Transport::Udp ? QStringLiteral("udp") : QStringLiteral("tcp");
+}
+
+Transport transportFromSettingValue(const QString& value)
+{
+    return value.trimmed().compare(QLatin1String("udp"), Qt::CaseInsensitive) == 0
+        ? Transport::Udp
+        : Transport::Tcp;
+}
+
+QString transportLabel(Transport transport)
+{
+    return transport == Transport::Udp ? QStringLiteral("UDP") : QStringLiteral("TCP");
 }
 
 QString bandName(int code)
@@ -378,6 +527,105 @@ QByteArray buildUnkey()
 QByteArray buildKeyStateQuery()
 {
     return buildMessage(QStringLiteral("TQ"));
+}
+
+std::optional<QByteArray> parseMacAddress(const QString& text)
+{
+    const QStringList octets = text.trimmed().split(QLatin1Char(':'));
+    if (octets.size() != kMacBytes) {
+        return std::nullopt;
+    }
+    QByteArray mac;
+    for (const QString& octet : octets) {
+        bool ok = false;
+        const int value = octet.toInt(&ok, 16);
+        if (octet.size() != 2 || !ok) {
+            return std::nullopt;
+        }
+        mac.append(static_cast<char>(value));
+    }
+    return mac;
+}
+
+QString formatMacAddress(const QByteArray& mac)
+{
+    QStringList octets;
+    for (const char byte : mac) {
+        octets << QStringLiteral("%1").arg(static_cast<quint8>(byte), 2, 16, QLatin1Char('0')).toUpper();
+    }
+    return octets.join(QLatin1Char(':'));
+}
+
+QByteArray buildWakeOnLanPacket(const QByteArray& mac)
+{
+    if (mac.size() != kMacBytes) {
+        return {};
+    }
+    QByteArray packet(kMacBytes, static_cast<char>(0xFF));
+    for (int i = 0; i < 16; ++i) {
+        packet.append(mac);
+    }
+    return packet;
+}
+
+void QueryPacer::enqueue(const QString& cmd, bool urgent)
+{
+    if (m_outstanding == cmd) {
+        return;
+    }
+    const auto queued = std::find(m_queue.begin(), m_queue.end(), cmd);
+    if (queued != m_queue.end()) {
+        if (!urgent) {
+            return;
+        }
+        m_queue.erase(queued);   // an urgent readback moves to the head
+    }
+    if (urgent) {
+        m_queue.push_front(cmd);
+    } else {
+        m_queue.push_back(cmd);
+    }
+}
+
+std::optional<QString> QueryPacer::takeNext(qint64 nowMs)
+{
+    if (m_outstanding) {
+        if (nowMs - m_sentAtMs < kReplyTimeoutMs) {
+            return std::nullopt;
+        }
+        ++m_timeouts;
+        m_outstanding.reset();
+    }
+    if (m_queue.empty()) {
+        return std::nullopt;
+    }
+    m_outstanding = m_queue.front();
+    m_queue.pop_front();
+    m_sentAtMs = nowMs;
+    return m_outstanding;
+}
+
+bool QueryPacer::replied(const QString& cmd)
+{
+    if (m_outstanding != cmd) {
+        return false;
+    }
+    m_outstanding.reset();
+    return true;
+}
+
+qint64 QueryPacer::msUntilTimeout(qint64 nowMs) const
+{
+    if (!m_outstanding) {
+        return -1;
+    }
+    return std::max<qint64>(0, kReplyTimeoutMs - (nowMs - m_sentAtMs));
+}
+
+void QueryPacer::clear()
+{
+    m_queue.clear();
+    m_outstanding.reset();
 }
 
 }  // namespace Kpa1500

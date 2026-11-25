@@ -20,7 +20,7 @@ namespace {
 // IC-7610 and IC-7760 geometry is checked against their current CI-V guides.
 // The remaining rows are cross-referenced hardware facts: the transport is
 // shared, but each model's command table and scope geometry need its own guide.
-constexpr std::array<IcomModel, 8> kModels{{
+constexpr std::array<IcomModel, 9> kModels{{
     {
         /*civAddress*/ 0xA4, /*name*/ "IC-705",
         /*receivers*/ 1, /*vfos*/ 2,
@@ -34,6 +34,18 @@ constexpr std::array<IcomModel, 8> kModels{{
         // Amateur allocations inside the 30 kHz – 470 MHz range above; 70 cm is "440"
         // as BandDefs names it. 2200m/630m are non-declarable (#4027) and 4 m is
         // RX-only here, so they get no band button; typing the frequency still works.
+        /*bands*/ "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,2m,440",
+    },
+    {
+        // A7894-4J pp. 16–17, 29–31: one selectable WLAN waveform. TX stays
+        // unavailable until its routing and the regional PA variant are qualified.
+        0xBA, "IC-7110", 2, 2,
+        /*hasNetwork*/ true, /*hasWifi*/ true,
+        /*hasScope*/ true, 475, 160, 11,
+        kFreqBytes,
+        /*hasTransmit*/ false, 0.0,
+        30'000ULL, 440'000'000ULL,
+        /*verified*/ true,
         /*bands*/ "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,2m,440",
     },
     {
@@ -157,6 +169,21 @@ constexpr std::array<IcomBand, 3> kIc9700Bands{{
     {"23cm", 1'240'000'000ULL, 1'300'000'000ULL,  10.0},
 }};
 
+// IC-7110 Japanese specifications, RX operating ranges. The wider CI-V
+// fixed-edge storage ranges do not establish receiver coverage.
+constexpr std::array<IcomBand, 2> kIc7110Bands{{
+    {"",          30'000ULL, 146'000'000ULL, 0.0},
+    {"440",  430'000'000ULL, 440'000'000ULL, 0.0},
+}};
+
+// US amateur-band extensions to the Japanese receive envelope, per RFC #7506.
+// Regional band allocations and Icom's model announcement are linked in
+// docs/icom-dual-receiver-bringup.md. No regional PA rating is implied.
+constexpr std::array<IcomBand, 2> kIc7110UsBands{{
+    {"",         30'000ULL, 148'000'000ULL, 0.0},
+    {"440", 420'000'000ULL, 450'000'000ULL, 0.0},
+}};
+
 constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
     {0x00, "MIC",     ModSourceMic},
     {0x01, "USB",     ModSourceUsb},
@@ -217,6 +244,17 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
     "dtcs_tx", "dtcs_txrx", "ctcss_tx_dtcs_rx", "dtcs_tx_ctcss_rx"};
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
+
+constexpr std::array<FeatureEvidence, 4> kIc7110Evidence{{
+    {IcomFeature::Core, EvidenceKind::OfficialGuide,
+     "IC-7110 A7894-4J, CI-V identity 19 00 and MAIN/SUB operating band 07 D2"},
+    {IcomFeature::Scope, EvidenceKind::OfficialGuide,
+     "IC-7110 A7894-4J pp.16-17,29-31: one selectable 475-point Wi-Fi scope, 0-160"},
+    {IcomFeature::VfoMode, EvidenceKind::OfficialGuide,
+     "IC-7110 A7894-4J pp.16,29: 25/26 select MAIN-band VFOs, DATA 00/01"},
+    {IcomFeature::SelectedBandDualwatch, EvidenceKind::OfficialGuide,
+     "IC-7110 A7894-4J: 16 59 reads or sets Dualwatch"},
+}};
 
 constexpr std::array<FeatureEvidence, 5> kDualReceiverEvidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuide,
@@ -376,12 +414,48 @@ constexpr std::array<FeatureEvidence, 1> kTunerOnlyEvidence{{
 
 }  // namespace
 
-const IcomModel* modelForId(std::uint8_t addr)
+namespace {
+// Regional IC-7110 variants modelForId() resolves, each to its own profile
+// below. regionalTuningEnvelope() walks this list, so a region added here with
+// its own profile widens the readback bound with it.
+constexpr std::array<std::string_view, 2> kIc7110Markets{"US", "EU"};
+}  // namespace
+
+const IcomModel* modelForId(std::uint8_t addr, std::string_view market)
 {
+    if (addr == 0xBA && std::ranges::find(kIc7110Markets, market) != kIc7110Markets.end()) {
+        static const IcomModel us = [] {
+            auto m = *modelForId(0xBA);
+            m.market = "US";
+            m.tuningMaxHz = kIc7110UsBands.back().highHz;
+            return m;
+        }();
+        static const IcomModel eu = [] {
+            auto m = *modelForId(0xBA);
+            m.market = "EU";
+            m.bands = "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,4m,2m,440";
+            return m;
+        }();
+        return market == "US" ? &us : &eu;
+    }
     for (const auto& m : kModels)
         if (m.civAddress == addr)
             return &m;
     return nullptr;
+}
+
+std::optional<IcomTuningEnvelope> regionalTuningEnvelope(std::uint8_t addr)
+{
+    const IcomModel* base = modelForId(addr);
+    if (!base)
+        return std::nullopt;
+    IcomTuningEnvelope envelope{base->tuningMinHz, base->tuningMaxHz};
+    for (const std::string_view market : kIc7110Markets) {
+        const IcomModel* regional = modelForId(addr, market);
+        envelope.minHz = std::min(envelope.minHz, regional->tuningMinHz);
+        envelope.maxHz = std::max(envelope.maxHz, regional->tuningMaxHz);
+    }
+    return envelope;
 }
 
 namespace {
@@ -424,7 +498,7 @@ std::optional<double> bandRatedPowerWatts(const IcomModel& model,
     const auto active = std::ranges::find_if(bands, [hz](const IcomBand& band) {
         return hz >= band.lowHz && hz <= band.highHz;
     });
-    if (active == bands.end()) {
+    if (active == bands.end() || active->maxWatts <= 0.0) {
         return std::nullopt;
     }
     return active->maxWatts;
@@ -576,6 +650,16 @@ std::span<const AttenStep> attenStepsFor(const IcomModel& model)
     return profileFor(model).attenuatorSteps;
 }
 
+std::span<const AttenStep> attenStepsFor(const IcomModel& model, std::uint64_t frequencyHz)
+{
+    const auto steps = attenStepsFor(model);
+    const auto limit = profileFor(model).attenuatorUpperExclusiveHz;
+    if (!steps.empty() && limit && (frequencyHz == 0 || frequencyHz >= limit)) {
+        return steps.first(1); // OFF until a supported receive frequency is confirmed.
+    }
+    return steps;
+}
+
 const FeatureEvidence* IcomModelProfile::evidenceFor(IcomFeature feature) const noexcept
 {
     const auto it = std::ranges::find(features, feature, &FeatureEvidence::feature);
@@ -598,10 +682,8 @@ bool IcomModelProfile::supports(IcomFeature feature) const noexcept
 
 const IcomModelProfile& profileFor(const IcomModel& model) noexcept
 {
-    // These are the three intentional bring-up profiles. Other identity rows
-    // remain discoverable, but receive the conservative empty profile until
-    // their own guide is mapped. This is what prevents a copied IC-705 table
-    // from silently becoming a write contract for another transmitter.
+    // Identity rows without a mapped guide remain discoverable with a
+    // conservative profile. Each model opts into its own command vocabulary.
     static const IcomModelProfile kIc705Profile{
         .supportedBringup = true,
         .hasGpsHardware = true,
@@ -637,8 +719,23 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         // IC-705 receiver range transition: stage 2 ends at 74.800 MHz (#6497).
         .preampTwoStageUpperExclusiveHz = 74'800'000,
         .attenuatorSteps = kHfAttenuatorSteps,
+        // CI-V 11 20 reads back OFF from 74.800000 MHz on the IC-705 (#6685).
+        .attenuatorUpperExclusiveHz = 74'800'000,
         .modes = kIc705Modes,
         .receiveOnlyModes = kIc705ReceiveOnlyModes,
+    };
+    static const IcomModelProfile kIc7110Profile{
+        .supportedBringup = true,
+        .hasCwTune = false,
+        .guideRevision = "IC-7110 CI-V A7894-4J (November 2026), receive bring-up",
+        .features = kIc7110Evidence,
+        .bands = kIc7110Bands,
+        // A7894-4J p.31 specifies the same 17 fixed-edge ranges as the IC-705.
+        .scope = ScopeCommandProfile{true, true, true, true, true, 4, ScopeEdgeTable::Ic705, true},
+        .modes = kIc705Modes,
+        .receiveOnlyModes = kIc705ReceiveOnlyModes,
+        .selectedBandDualwatch = true,
+        .networkAfIfItem = 122,
     };
     static const IcomModelProfile kIc9700Profile{
         .supportedBringup = true,
@@ -763,6 +860,14 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     switch (model.civAddress) {
     case 0xA4:
         return kIc705Profile;
+    case 0xBA: {
+        static const IcomModelProfile us = [] {
+            auto p = kIc7110Profile;
+            p.bands = kIc7110UsBands;
+            return p;
+        }();
+        return model.market == "US" ? us : kIc7110Profile;
+    }
     case 0xA2:
         return kIc9700Profile;
     case 0xB6:
@@ -808,6 +913,7 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::GpsTimeConfiguration: return "gps-time-configuration";
     case IcomFeature::MemoryChannels:      return "memory-channels";
     case IcomFeature::AntennaTuner:        return "antenna-tuner";
+    case IcomFeature::SelectedBandDualwatch: return "selected-band-dualwatch";
     }
     return "unknown";
 }

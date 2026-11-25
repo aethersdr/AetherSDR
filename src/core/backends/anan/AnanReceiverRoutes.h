@@ -23,8 +23,11 @@ struct ReceiverRoute {
     int adc = 0;   // 0 = ADC0 behind the Ant1/2/3 relays, 1 = ADC1 on the RX2 jack
 };
 
-inline constexpr std::array<ReceiverRoute, 1> kReceiverRoutes{{
+// RX2 listens to the RX2 jack, as deskHPSDR defaults a Saturn's second
+// receiver to ADC1 (receiver.c, rx_create_receiver()).
+inline constexpr std::array<ReceiverRoute, 2> kReceiverRoutes{{
     {2, 0},   // RX1
+    {3, 1},   // RX2
 }};
 
 inline constexpr ReceiverRoute kRx1Route = kReceiverRoutes[0];

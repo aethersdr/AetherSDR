@@ -1005,7 +1005,8 @@ struct RadioCapabilities {
     std::optional<CwProfileControl> cwProfileControl;
 
     // Per-slice RX audio and per-pan IQ as separate streams routed to virtual audio
-    // devices for external decoders (Flex DAX). UI visibility only; the crash guard
+    // devices for external decoders (Flex DAX). Gates the DAX UI and, with the
+    // radio modulating, TransmitInhibitPolicy::moxKeysRadioDax(). The crash guard
     // is the separate panStream() null-check in MainWindow::startDax().
     bool hasDaxStreams = false;
     // Discrete DAX IQ request rates in Hz. Empty means unsupported or unknown.
