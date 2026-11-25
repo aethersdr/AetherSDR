@@ -157,6 +157,7 @@ void capabilities()
     check(c.receiveModeControl && c.receiveModeControl->modes == QStringList({"USB", "LSB"}), "modes mirror");
     check(!c.receiveFilterControl && !c.receiveAudioControl && !c.receivePanCenterControl,
           "a record the engine does not send stays absent");
+    check(!c.panViewHold, "no Lock view hold: v1 does not say whether the engine's pan follows a tune");
     check(c.receiveDspControl && c.receiveDspControl->supports(ReceiveDspControl::Feature::Agc, "LSB")
               && c.receiveDspControl->supports(ReceiveDspControl::Feature::Rit, "USB")
               && !c.receiveDspControl->supports(ReceiveDspControl::Feature::Rit, "LSB")

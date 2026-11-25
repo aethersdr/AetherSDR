@@ -167,18 +167,31 @@ int main()
     check(session.contains("syncViewLockAvailability(pan->panId()); restoreViewLockForPan(pan->panId());"),
           "a pan reclaimed on reconnect gets its availability and lock too");
 
-    // ---- closing a pan forgets its lock ----
+    // ---- an accepted close forgets the pan's lock; a refused one keeps it ----
 
-    check(wiring.contains("clearCenterLockForPan(panId, true); "
-                          "setViewLockForPan(panId, false, /*persist=*/true);"),
-          "closing a pan with its X drops its saved lock");
-    check(actions.contains("clearCenterLockForPan(panId, true); "
-                           "setViewLockForPan(panId, false, /*persist=*/true); "
-                           "m_radioModel.removePanadapter(panId);"),
-          "the Close Active Panadapter action drops it too");
-    check(mainWindow.contains("qDebug() << \"applyPanLayout: closing pan\" << panId; "
-                              "setViewLockForPan(panId, false, /*persist=*/true);"),
-          "shrinking the layout drops the closed pans' saved locks");
+    const QByteArray closeHelper = body(
+        wiring, "bool MainWindow::closePanForgettingCenterLock(const QString& panId)",
+        "void MainWindow::clearCenterLockForSlice(");
+    check(ordered(closeHelper, "PanCloseCenterLock::closeThenForget(",
+                  "if (accepted) { forgetViewLockForClosedPan(id, slot.panIndex); }")
+              && !closeHelper.contains("setViewLockForPan("),
+          "the X and Close Active Panadapter forget the lock only once the model accepts");
+    const QByteArray applyLayout = body(
+        mainWindow, "QString MainWindow::applyPanLayout(", "void MainWindow::startCanvasPanLayoutSettle(");
+    check(ordered(applyLayout, "panIndexById.insert(panId, sw->panIndex());",
+                  "PanLayoutShrinkPolicy::closeFromEnd(")
+              && ordered(applyLayout, "PanLayoutShrinkPolicy::closeFromEnd(",
+                         "for (const QString& panId : outcome.closed) { "
+                         "forgetViewLockForClosedPan(panId, panIndexById.value(panId, -1)); }"),
+          "a layout shrink forgets only the pans it closed, by the index read before the close");
+    check(!actions.contains("setViewLockForPan(") && !applyLayout.contains("setViewLockForPan(")
+              && !wiring.contains("setViewLockForPan(panId, false, /*persist=*/true)"),
+          "no close site forgets the lock before the model answers");
+    const QByteArray forget = body(
+        wiring, "void MainWindow::forgetViewLockForClosedPan(const QString& panId, int panIndex)",
+        "double MainWindow::viewLockHoldFraction(");
+    check(forget.contains("storeViewLockIntent(panIndex, false);"),
+          "the forget is keyed by the pan index, not by a widget the close may have destroyed");
 
     std::printf("%s: %d failure(s)\n", "pan_view_lock_wiring_test", g_failures);
     return g_failures == 0 ? 0 : 1;

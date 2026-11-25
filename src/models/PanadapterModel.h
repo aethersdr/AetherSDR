@@ -179,7 +179,8 @@ public:
     // IRadioBackend::panZoomPlacementChanged; Unknown until the backend reports.
     PanZoomPlacement zoomPlacement() const { return m_zoomPlacement; }
     void setZoomPlacement(PanZoomPlacement placement);
-    // IRadioBackend::panViewHoldChanged; true until the backend says otherwise.
+    // IRadioBackend::panViewHoldChanged. True until a backend says otherwise:
+    // Flex, Sim and HL2 never emit it and rely on that; Icom reports each mode.
     bool viewHolds() const { return m_viewHolds; }
     void setViewHolds(bool holds);
     // Normalized setters driven by the backend (aetherd RFC 2.3 — rfgain +

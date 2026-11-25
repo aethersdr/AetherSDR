@@ -11388,6 +11388,13 @@ QString MainWindow::applyPanLayout(const QString& layoutId, const QString& previ
                 removalCandidates.append(applet->panId());
             }
         }
+        // Read before the closes: a native close destroys the widget.
+        QHash<QString, int> panIndexById;
+        for (const QString& panId : removalCandidates) {
+            if (const SpectrumWidget* sw = m_panStack->spectrum(panId)) {
+                panIndexById.insert(panId, sw->panIndex());
+            }
+        }
         // removePanadapter also tears down the waterfall (#3843); the removal
         // itself arrives later through panadapterRemoved.
         const PanLayoutShrinkPolicy::Outcome outcome = PanLayoutShrinkPolicy::closeFromEnd(
@@ -11396,6 +11403,10 @@ QString MainWindow::applyPanLayout(const QString& layoutId, const QString& previ
                 qDebug() << "applyPanLayout: closing pan" << panId;
                 return m_radioModel.removePanadapter(panId);
             });
+        // A pan the layout closed for good forgets its Lock view, like its ✕.
+        for (const QString& panId : outcome.closed) {
+            forgetViewLockForClosedPan(panId, panIndexById.value(panId, -1));
+        }
         const QString reflowId = PanLayoutShrinkPolicy::appliedLayout(layoutId, needed, outcome, previousLayout);
         if (PanLayoutShrinkPolicy::keepsArrangement(outcome)) {
             return reflowId;  // the first close was refused; nothing to reflow

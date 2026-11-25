@@ -172,6 +172,29 @@ void testLockLandsSettlingZoom()
           "locking mid-zoom lands the zoom at once; nothing is requested after the lock");
 }
 
+// A restore or the bridge can lock while a frequency-scale drag is in flight:
+// the drag ends there, so later mouse moves change nothing.
+void testLockEndsSpanDrag()
+{
+    SpectrumWidget widget;
+    prepare(widget);
+    Requests requests(widget);
+    const int scaleY = (widget.spectrumPixelHeight()
+        + widget.height() - widget.waterfallPixelHeight()) / 2;
+    mouse(widget, QEvent::MouseButtonPress, 400, scaleY);
+    mouse(widget, QEvent::MouseMove, 460, scaleY);
+    const double draggedSpan = widget.bandwidthMhz();
+    widget.setViewLocked(true);
+    const int atLock = requests.rangeChanges();
+    mouse(widget, QEvent::MouseMove, 620, scaleY);
+    mouse(widget, QEvent::MouseButtonRelease, 620, scaleY);
+    wait(450);
+    check(!near(draggedSpan, kSpan) && atLock > 0,
+          "unlocked baseline: the scale drag was changing the span");
+    check(near(widget.bandwidthMhz(), draggedSpan) && requests.rangeChanges() == atLock,
+          "locking mid-drag ends the span drag: later moves change and request nothing");
+}
+
 void testSliceDrag()
 {
     {
@@ -291,6 +314,7 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     testRangeGestures();
     testLockLandsSettlingZoom();
+    testLockEndsSpanDrag();
     testSliceDrag();
     testClickNearEdge();
     testButtons();

@@ -691,6 +691,9 @@ bool MainWindow::closePanForgettingCenterLock(const QString& panId)
     if (savedChanged) {
         saveCenterLockSettings();
     }
+    if (accepted) {
+        forgetViewLockForClosedPan(id, slot.panIndex);
+    }
     return accepted;
 }
 
@@ -840,24 +843,29 @@ void MainWindow::setViewLockForPan(const QString& panId, bool locked, bool persi
         m_pendingViewLockByPanIndex.insert(sw->panIndex(), locked);
         return;
     }
+    storeViewLockIntent(sw->panIndex(), locked);
+}
+
+void MainWindow::storeViewLockIntent(int panIndex, bool locked)
+{
     const QString radioKey = centerLockRadioKey();
     if (radioKey.isEmpty()) {
         return;
     }
-    m_pendingViewLockByPanIndex.remove(sw->panIndex());
-    QSet<int>& pans = m_viewLockedPanIndicesByRadio[radioKey];
-    const bool wasLocked = pans.contains(sw->panIndex());
-    if (locked) {
-        pans.insert(sw->panIndex());
-    } else {
-        pans.remove(sw->panIndex());
-    }
-    if (pans.isEmpty()) {
-        m_viewLockedPanIndicesByRadio.remove(radioKey);
-    }
-    if (wasLocked != locked) {
+    m_pendingViewLockByPanIndex.remove(panIndex);
+    if (ViewLockSettings::setLocked(m_viewLockedPanIndicesByRadio, radioKey, panIndex, locked)) {
         saveViewLockSettings();
     }
+}
+
+void MainWindow::forgetViewLockForClosedPan(const QString& panId, int panIndex)
+{
+    // A Flex pan's widget outlives the accepted close until the radio's
+    // status arrives; a native close (HL2, ANAN) has already destroyed it.
+    if (SpectrumWidget* sw = m_panStack ? m_panStack->spectrum(panId) : nullptr) {
+        sw->setViewLocked(false);
+    }
+    storeViewLockIntent(panIndex, false);
 }
 
 double MainWindow::viewLockHoldFraction(const QString& panId) const

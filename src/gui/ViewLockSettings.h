@@ -25,6 +25,28 @@ inline constexpr int kSettingsVersion = 1;
 // radio key -> pan indices whose view is locked
 using LockedPans = QHash<QString, QSet<int>>;
 
+// Sets or clears one pan slot's lock and drops a radio left with none. True
+// when the map changed, so the caller knows to write it back.
+inline bool setLocked(LockedPans& locked, const QString& radioKey, int panIndex, bool on)
+{
+    if (radioKey.isEmpty() || panIndex < 0) {
+        return false;
+    }
+    const auto radioIt = locked.find(radioKey);
+    if ((radioIt != locked.end() && radioIt->contains(panIndex)) == on) {
+        return false;
+    }
+    if (on) {
+        locked[radioKey].insert(panIndex);
+        return true;
+    }
+    radioIt->remove(panIndex);
+    if (radioIt->isEmpty()) {
+        locked.erase(radioIt);
+    }
+    return true;
+}
+
 // Returns an empty map for blank, malformed or unsupported-version input and
 // says why in *error (left empty for blank input).
 inline LockedPans parse(const QString& raw, QString* error = nullptr)

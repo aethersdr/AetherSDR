@@ -1363,6 +1363,7 @@ private:
                                      bool force = false);
     void applyPanDragCenter(double newCenterMhz, bool force);
     void beginPanDrag(int startX);
+    void endBandwidthDrag();
     void schedulePanDragDeferredUpdate();
     void schedulePanDragSettleUpdate();
     void scheduleFrequencyRangeSettleUpdate(double centerMhz, double bandwidthMhz);

@@ -99,6 +99,34 @@ int testRejects()
 
 } // namespace
 
+// One slot's lock set and cleared in place; the return says whether to save.
+int testSetLocked()
+{
+    VLS::LockedPans locked;
+    const QString radio = QStringLiteral("r/s");
+    if (!VLS::setLocked(locked, radio, 1, true) || !locked.value(radio).contains(1)) {
+        return fail("locking a slot records it and reports a change");
+    }
+    if (VLS::setLocked(locked, radio, 1, true) || VLS::setLocked(locked, radio, 0, false)) {
+        return fail("repeating a lock, or unlocking a slot that is not locked, changes nothing");
+    }
+    VLS::setLocked(locked, radio, 0, true);
+    if (!VLS::setLocked(locked, radio, 1, false) || locked.value(radio) != QSet<int>{0}) {
+        return fail("unlocking one slot leaves the radio's other slot locked");
+    }
+    if (!VLS::setLocked(locked, radio, 0, false) || !locked.isEmpty()) {
+        return fail("a radio left with no locked slot is dropped");
+    }
+    if (VLS::setLocked(locked, QString(), 0, true) || VLS::setLocked(locked, radio, -1, true)
+        || !locked.isEmpty()) {
+        return fail("no radio key, or a closed pan with no slot index, records nothing");
+    }
+    if (VLS::setLocked(locked, QStringLiteral("other"), 3, false) || !locked.isEmpty()) {
+        return fail("unlocking under an unknown radio must not create it");
+    }
+    return 0;
+}
+
 int main()
 {
     if (int rc = testRoundTrip()) {
@@ -108,6 +136,9 @@ int main()
         return rc;
     }
     if (int rc = testRejects()) {
+        return rc;
+    }
+    if (int rc = testSetLocked()) {
         return rc;
     }
     std::puts("view_lock_settings_test: ok");

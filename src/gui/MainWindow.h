@@ -2485,7 +2485,8 @@ private:
                              bool persist = true);
     void setSessionCenterLockForSlice(int sliceId, bool on);
     void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
-    // Operator close: forgets the pan's Center Lock only if the model accepts it.
+    // Operator close: forgets the pan's Center Lock and Lock view setting only
+    // if the model accepts it.
     bool closePanForgettingCenterLock(const QString& panId);
     void clearCenterLockForSlice(int sliceId, bool clearPersistedIntent = false);
     // serial + "/" + station: per-client persistence identity so co-located
@@ -2523,6 +2524,11 @@ private:
     void loadViewLockSettings();
     void saveViewLockSettings() const;
     void setViewLockForPan(const QString& panId, bool locked, bool persist = true);
+    // Records panIndex's lock under the connected radio; writes on a change.
+    void storeViewLockIntent(int panIndex, bool locked);
+    // An accepted operator close forgets the pan's lock. panIndex is read
+    // before the close: a native close destroys the widget that carries it.
+    void forgetViewLockForClosedPan(const QString& panId, int panIndex);
     void restoreViewLockForPan(const QString& panId);
     // The span fraction panId can hold: 1.0 when disconnected (permissive),
     // 0.0 when the radio declares no PanViewHold or this pan is not holding.

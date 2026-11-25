@@ -543,8 +543,10 @@ window** — the drawn range narrowed to `RadioCapabilities::panViewHold`
   with `tuneAndRecenter()`; another MultiFlex client's tune without
   `autopan=0` lets the radio move the pan; a TCI client switching Center Lock
   on (`rx_ctun_ex`) releases the live lock for the session, though not the
-  saved one. Only the title-bar close and a
-  layout shrink drop a pan's saved lock (bridge/TCI pan removal do not).
+  saved one. Only an operator close the model accepts drops a pan's saved lock:
+  the title-bar close, the Close Active Panadapter action and a layout shrink
+  (`forgetViewLockForClosedPan()`); a refused close and bridge/TCI pan removal
+  do not.
 
 ### `m_updatingFromModel`
 

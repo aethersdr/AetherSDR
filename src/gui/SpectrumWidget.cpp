@@ -8708,9 +8708,14 @@ void SpectrumWidget::setViewLocked(bool locked)
         return;
     }
     if (locked) {
-        // A zoom still settling lands now: nothing queued may move the view
-        // once it is locked.
-        finishFrequencyRangeSettleUpdate();
+        // A restore or the bridge can lock mid-gesture. A span drag ends here
+        // and a zoom still settling lands now, so nothing moves the view once
+        // it is locked; a pan drag already goes inert under the lock.
+        if (m_draggingBandwidth) {
+            endBandwidthDrag();
+        } else {
+            finishFrequencyRangeSettleUpdate();
+        }
     }
     m_viewLocked = locked;
     if (m_viewLockBtn) {
@@ -11355,6 +11360,16 @@ void SpectrumWidget::finishFrequencyRangeSettleUpdate()
     emit frequencyRangeSettled(m_centerMhz, m_bandwidthMhz);
 }
 
+void SpectrumWidget::endBandwidthDrag()
+{
+    m_draggingBandwidth = false;
+    setSpectrumCursor(Qt::CrossCursor);
+    if (!panGeometryConfirmationRequired()) {
+        scheduleFrequencyRangeSettleUpdate(m_centerMhz, m_bandwidthMhz);
+    }
+    finishFrequencyRangeSettleUpdate();
+}
+
 void SpectrumWidget::beginPanDrag(int startX)
 {
     m_draggingPan = true;
@@ -12081,12 +12096,7 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         return;
     }
     if (m_draggingBandwidth) {
-        m_draggingBandwidth = false;
-        setSpectrumCursor(Qt::CrossCursor);
-        if (!panGeometryConfirmationRequired()) {
-            scheduleFrequencyRangeSettleUpdate(m_centerMhz, m_bandwidthMhz);
-        }
-        finishFrequencyRangeSettleUpdate();
+        endBandwidthDrag();
         ev->accept();
         return;
     }
