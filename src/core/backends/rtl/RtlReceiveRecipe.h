@@ -95,6 +95,10 @@ struct RtlReceiveRecipe {
         dsp.maximumAgcGainDb = 0.6 * receiver.agcThreshold;
         dsp.agcFixedGainDb = 10.0 + 0.6 * (receiver.agcOffLevel - 10);
         dsp.rxPanelGain = 1.0;
+        // SSB/CW: mono (binaural off), as Thetis and piHPSDR, so L == R and a
+        // consumer that averages them keeps L's level. AM/SAM keep copy 0:
+        // AmReceive already outputs the mean of L and R, calibrated for it.
+        dsp.rxPanelMono = !amplitude(receiver.mode);
         dsp.noiseBlanker = toWdsp(receiver.nbKind);
         dsp.noiseBlankerLevel = receiver.nbLevel;
         dsp.noiseBlankerFill = toWdsp(receiver.nbFill);

@@ -2035,6 +2035,13 @@ target_include_directories(hl2_rxdsp_panel_mono_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_panel_mono_test COMMAND hl2_rxdsp_panel_mono_test)
 
+# The ANAN receive panel is mono (L == R) in every mode, including AM/SAM under
+# ANR, and stays so across a mode change and a rebuild (#7563). Offline.
+add_executable(anan_rxdsp_panel_mono_test tests/anan_rxdsp_panel_mono_test.cpp)
+target_include_directories(anan_rxdsp_panel_mono_test PRIVATE src)
+target_link_libraries(anan_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_rxdsp_panel_mono_test COMMAND anan_rxdsp_panel_mono_test)
+
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)
@@ -2241,10 +2248,18 @@ target_include_directories(rtl_ssb_cw_pipeline_test PRIVATE src)
 target_link_libraries(rtl_ssb_cw_pipeline_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_ssb_cw_pipeline_test COMMAND rtl_ssb_cw_pipeline_test)
 set_tests_properties(rtl_ssb_cw_pipeline_test PROPERTIES TIMEOUT 180)
+
+# Every RTL WDSP recipe is mono at the output panel (L == R): SSB, CW and
+# AM/SAM under ANR or ANF, through the production pipeline (#7563). Offline.
+add_executable(rtl_rx_panel_mono_test tests/rtl_rx_panel_mono_test.cpp)
+target_include_directories(rtl_rx_panel_mono_test PRIVATE src)
+target_link_libraries(rtl_rx_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_rx_panel_mono_test COMMAND rtl_rx_panel_mono_test)
+set_tests_properties(rtl_rx_panel_mono_test PROPERTIES TIMEOUT 180)
 if(WIN32)
     # Paced IQ and bounded channel-stop waits use the coarser Windows timer tick.
     set_tests_properties(rtl_am_sam_pipeline_test rtl_ssb_cw_pipeline_test
-        PROPERTIES TIMEOUT 600)
+        rtl_rx_panel_mono_test PROPERTIES TIMEOUT 600)
 endif()
 
 add_executable(cw_mode_gate_test tests/cw_mode_gate_test.cpp)
