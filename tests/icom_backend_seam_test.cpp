@@ -409,6 +409,10 @@ void testRangePreampReadPrecedesQueuedMeters()
     Access::pumpNextSlot(backend);
     check(Access::inFlightKey(backend) == "civ.21.2",
           "active meter polling resumes after the range-change confirmation");
+    Access::deliver(backend, frame(cmd::kMeter, meter::kSMeter, {0x01, 0x20}));
+    Access::pumpNextSlot(backend);
+    check(Access::inFlightKey(backend) == "civ.17",
+          "ATT still reconciles on VHF after the visible meter");
 }
 
 void testReconnectSMeterWaitsForFrequency()

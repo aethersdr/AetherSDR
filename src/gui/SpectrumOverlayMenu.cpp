@@ -819,7 +819,8 @@ void SpectrumOverlayMenu::buildAntPanel()
         "QPushButton { background: {{color.background.1}}; "
         "border: 1px solid {{color.background.2}}; border-radius: 3px; "
         "color: {{color.text.secondary}}; font-size: 11px; padding: 1px 4px; }"
-        "QPushButton:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:enabled:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:disabled { color: {{color.text.disabled}}; }"
         "QPushButton:checked { background: {{color.accent.dim}}; "
         "border-color: {{color.accent.bright}}; color: {{color.text.primary}}; }";
 
@@ -3355,12 +3356,11 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
     if (!m_preampRow || !m_attenuatorRow)
         return;
 
-    // A one-entry list is not a control. A radio that reports only "OFF" has
-    // nothing to switch between, and a button that can never change is worse
-    // than no button at all.
     const auto apply = [](QWidget* row, QPushButton* btn, const QStringList& labels,
-                          int step, const QString& what) {
-        const bool present = labels.size() > 1;
+                          int step, const QString& what, const QString& unavailable = {}) {
+        const bool available = labels.size() > 1;
+        const bool present = available || (labels.size() == 1 && !unavailable.isEmpty());
+        btn->setEnabled(available);
         row->setVisible(present);
         if (!present)
             return;
@@ -3370,14 +3370,14 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
         // convention the backend publishes its label list in.
         QSignalBlocker b(btn);
         btn->setChecked(step > 0);
-        btn->setToolTip(QStringLiteral("Receive %1 — %2.\nClick to step through: %3")
+        btn->setToolTip(!available ? unavailable : QStringLiteral("Receive %1 — %2.\nClick to step through: %3")
                             .arg(what, position, labels.join(" / ")));
     };
 
     apply(m_preampRow, m_preampBtn, m_preampLabels, m_preampStep,
           QStringLiteral("preamp"));
     apply(m_attenuatorRow, m_attenuatorBtn, m_attenuatorLabels, m_attenuatorStep,
-          QStringLiteral("attenuator"));
+          QStringLiteral("attenuator"), tr("Attenuation is unavailable at the current receive frequency."));
 }
 
 // The buttons do not own their state: a click emits the request and they

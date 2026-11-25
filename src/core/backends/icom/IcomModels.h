@@ -268,6 +268,7 @@ struct AttenStep {
     int db;
 };
 [[nodiscard]] std::span<const AttenStep> attenStepsFor(const IcomModel& model);
+[[nodiscard]] std::span<const AttenStep> attenStepsFor(const IcomModel& model, std::uint64_t frequencyHz);
 
 // A control family, not a UI capability. ControlSpec rows name one of these so
 // the automation registry can report the EFFECTIVE model-specific surface
@@ -478,6 +479,7 @@ struct IcomModelProfile {
     // Zero means no frequency restriction on the model ladder.
     std::uint64_t preampTwoStageUpperExclusiveHz = 0;
     std::span<const AttenStep> attenuatorSteps{};
+    std::uint64_t attenuatorUpperExclusiveHz = 0;
     std::span<const std::string_view> modes{};
     std::span<const std::string_view> receiveOnlyModes{};
     // 07 D2 operating-band selection, 16 59 SUB on/off and one selectable
