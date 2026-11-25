@@ -79,7 +79,7 @@ The panadapter is not dBm-calibrated: its levels are relative.
 
 > **Upgrading from an older version:** **AGC-T** covers −20 to 120 dB, so a given slider position gives more gain than before (at 100, 120 dB instead of 60 dB). Band-stack bookmarks saved earlier replay their slider position on this scale, so they come back louder. Lower **AGC-T** on each one and save it again.
 
-> **Receive audio is mono (L = R) in every mode.** Anything that mixes left and right to one channel (TCI mono, the decoders, Linux DAX, RADE) now gets more level than before: about 3 dB in SSB, CW and data, and about 6 dB in DSB and in AM or SAM with **NR** on; if you set an application's input level (for example WSJT-X) against the old level, check it once.
+> **Receive audio is mono (L = R) in every mode.** Anything that mixes left and right to one channel (TCI mono, the decoders, Linux DAX, RADE) now gets more level than before: about 3 dB in SSB, CW, data and FM, and about 6 dB in DSB and in AM or SAM with **NR** on; if you set an application's input level (for example WSJT-X) against the old level, check it once.
 
 ## Droop Correction
 
