@@ -180,6 +180,29 @@ When in doubt, the agent should implement the fix and note in the PR that
 design decisions need maintainer review. The project maintainer (Jeremy/KK7GWY)
 is the sole authority on visual design and UX direction.
 
+### TCI extensions beyond TCI 2.1
+
+A PR that adds a TCI extension outside the shipping TCI 2.1 spec (a new
+command, a new argument or field on an existing command, or a new extension
+set) is not considered until its body provides all of the following:
+
+- **(a) User need**, including the named, **released** client (not one in
+  development) that requests the extension.
+- **(b) No prior art**: evidence that nothing existing already accomplishes
+  what the extension does.
+- **(c) Why base TCI 2.1 does not meet the need.**
+- **(d) A regression commitment**: the author fixes any command regression for
+  two releases after merge. A command that breaks in a release and is not fixed
+  by the next one is reverted.
+- **(e) A compatibility test plan** showing the extension does not break base
+  TCI 2.1 compatibility, with evidence that plain TCI 2.1 clients are
+  unaffected. The evidence includes base runs with WSJT-X showing no
+  compatibility breakage.
+
+Bug fixes and behaviour changes to existing TCI 2.1 commands are not
+extensions; this section does not apply to them. Reviewers block a PR that
+adds an extension without items (a)–(e).
+
 ## User documentation
 
 The user guide is docs-as-code in `docs/user/` (Docusaurus, served at

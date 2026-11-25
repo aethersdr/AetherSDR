@@ -381,6 +381,36 @@ Read the diff against each of these; cite the specific rule when flagging:
   when applicable, cross-platform unless solving a platform-specific problem.
 - **GOVERNANCE.md** — should this change have had an RFC/issue first? Is it
   within the scope a maintainer already ruled on?
+- **AGENTS.md § "TCI extensions beyond TCI 2.1"** — see the next subsection.
+
+### TCI extensions: check items (a)–(e)
+
+First decide whether the PR **adds a TCI extension**: anything a client sees
+that the shipping TCI 2.1 spec does not define — a new command, a new argument
+or field on an existing command, or a new extension set. Look at the
+diff to `src/core/Tci*`, especially `TciProtocol*`, `TciExtensionSet*` and the
+`Tci*Extension` classes, and at `docs/user/docs/generated/tci-commands.md`,
+not only at the title. A bug fix or behaviour change to an existing
+TCI 2.1 command is **not** an extension, and the rule does not apply; say so in
+one line and move on. Do not stretch the rule to cover a fix.
+
+When the PR does add an extension, the review body carries a table with one
+row per item from AGENTS.md (a)–(e): the item, whether the PR body or thread
+supplies it, and where (or what is missing). Each missing item is a
+**blocker**, cited to that AGENTS.md section:
+
+- **(a)** names a client that is **released**. A client still in development,
+  or the author's own unpublished client, does not satisfy it.
+- **(b)** shows a search for prior art, not just an assertion that none exists.
+- **(c)** says what base TCI 2.1 cannot express.
+- **(d)** is an explicit two-release regression commitment from the author.
+- **(e)** includes actual WSJT-X base runs against the PR head, plus evidence
+  that a plain TCI 2.1 client sees no change. A socket-free unit test alone
+  does not meet (e).
+
+The items gate whether the PR is considered at all, so check them before
+spending a build on the code. The maintainer can waive an item; the reviewer
+cannot.
 
 ### `CHANGELOG.md`: never ask for an entry
 
