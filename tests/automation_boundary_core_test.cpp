@@ -3,6 +3,7 @@
 // DEXP omission on the sim backend, and the titlebar/applet deferral contract. Requests go straight to handleLine; no
 // listener, socket, network peer or real radio is involved, and TX permission
 // is only granted on a model with no transport behind it.
+#include "RadioSetupControlFixture.h"
 #include "TestSettingsProfile.h"
 // AutomationServer's QPointer members require these complete types.
 #include "core/AudioEngine.h"
@@ -152,11 +153,16 @@ void agentActivity()
     const QString boundary = QString(63, u'm') + QStringLiteral("\U0001f4fb");
     check(ok(report(first, QStringLiteral("\u202d\u202e\u2066\u0085\t") + boundary + "extra"))
               && changes.last() == boundary, "strip controls before the 64-code-point cap, preserving the final emoji");
+    const QJsonObject spaced = report(first, QStringLiteral("Tuning\tSlice\nA\u200b B"));
+    check(ok(spaced) && changes.last() == QStringLiteral("Tuning Slice A B")
+              && spaced.contains(QStringLiteral("expiresInMs")),
+          "whitespace controls separate words before other controls are stripped");
     check(pumpUntil([&] { return changes.last().isEmpty(); }), "expiry clears the connected owner's activity");
     check(ok(report(second, "Testing tuning")) && errorOf(report(first, "")) == "busy",
           "stale owner cannot clear a replacement claim");
     check(ok(report(second, "")) && ok(report(second, "")) && changes.last().isEmpty() && !timer->isActive(),
           "explicit release clears the claim and is repeatable");
+    check(!report(second, "").contains(QStringLiteral("expiresInMs")), "a release reports no claim lifetime");
     auto* owner = Access::disconnectableClient(server);
     auto* observer = Access::disconnectableClient(server);
     check(ok(report(*owner, "Testing meters")), "disconnect fixture claims");
@@ -182,6 +188,26 @@ void agentActivity()
     check(ok(report(first, "Testing tuning")), "owner can claim before stop");
     server.stop();
     check(changes.last().isEmpty() && !timer->isActive(), "stopping the bridge clears the claim");
+}
+
+void agentStationRename()
+{
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    QStringList shown; // Outlives the server, whose destructor clears the held claim.
+    AutomationServer server;
+    server.setRadioModel(&radio);
+    QLocalSocket owner; // Unconnected; it only supplies the claim identity.
+    QObject::connect(&server, &AutomationServer::agentActivityChanged,
+                     [&](const QString& text, const QString& agent) { shown.append(text + u'|' + agent); });
+    const QJsonObject idle = Access::request(server, {{"cmd", "station"}, {"value", "Idle"}}, &owner);
+    check(ok(idle) && shown.isEmpty(), "a rename without a claim announces nothing", idle);
+    check(ok(Access::request(server, {{"cmd", "agentActivity"}, {"text", "Testing meters"}}, &owner)),
+          "claim before the rename");
+    const QJsonObject renamed = Access::request(server, {{"cmd", "station"}, {"value", "Codex"}}, &owner);
+    check(ok(renamed) && shown.last() == QStringLiteral("Testing meters|Codex")
+              && backend->commands.last().contains(QLatin1String("Codex")),
+          "a rename during a claim reaches the badge", renamed);
 }
 
 void interlockProbe()
@@ -669,6 +695,7 @@ int main(int argc, char** argv)
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     QCoreApplication app(argc, argv);
     agentActivity();
+    agentStationRename();
     interlockProbe();
     jsonIdAndMhzContract();
     memoryActivate();

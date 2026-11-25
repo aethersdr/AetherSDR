@@ -2,8 +2,12 @@
 
 #include "core/ThemeManager.h"
 
+#include <QFont>
 #include <QLabel>
 #include <QPainter>
+#include <QPen>
+#include <QPolygonF>
+#include <QRectF>
 
 namespace AetherSDR {
 

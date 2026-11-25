@@ -2710,6 +2710,12 @@ MainWindow::~MainWindow()
 
     preparePanadapterUiForShutdown();
 
+    // ~AutomationServer clears a held agent claim, and the status-row slot reads
+    // members that are gone by the time m_automation is destroyed.
+    if (m_automation)
+        QObject::disconnect(m_automation.get(), &AutomationServer::agentActivityChanged,
+                            this, &MainWindow::agentActivityChanged);
+
     // KiwiSDR profile clients are QObject children, but their disconnect path emits
     // state changes that are wired back into MainWindow and AudioEngine. Tear
     // them down while MainWindow members are still alive instead of waiting for

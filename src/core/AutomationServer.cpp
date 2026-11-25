@@ -77,6 +77,7 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 
 // Best-effort value extraction for common control types.
@@ -2416,11 +2417,12 @@ QJsonObject AutomationServer::setAgentActivity(QLocalSocket* socket, const QStri
     if (text.isEmpty()) {
         clearAgentActivity();
     } else {
-        // Strip control and format characters (including bidi controls and zero-width marks).
+        // Whitespace controls become spaces first; the remaining control and format
+        // characters (bidi controls, zero-width marks) are then stripped.
         static const QRegularExpression controls(QStringLiteral(
             R"([\p{Cc}\p{Cf}])"));
-        QString cleaned = text;
-        auto points = cleaned.remove(controls).simplified().toStdU32String();
+        QString cleaned = text.simplified();
+        std::u32string points = cleaned.remove(controls).simplified().toStdU32String();
         if (points.empty())
             return err(QStringLiteral("activity must contain display text; send an empty string to release"));
         constexpr std::size_t maxActivityCharacters = 64;
@@ -2434,8 +2436,10 @@ QJsonObject AutomationServer::setAgentActivity(QLocalSocket* socket, const QStri
             emit agentActivityChanged(line, m_agentStation);
         }
     }
-    return {{QStringLiteral("ok"), true}, {QStringLiteral("active"), !text.isEmpty()},
-            {QStringLiteral("expiresInMs"), m_activityTimer->remainingTime()}};
+    QJsonObject reply{{QStringLiteral("ok"), true}, {QStringLiteral("active"), !text.isEmpty()}};
+    if (!text.isEmpty())
+        reply.insert(QStringLiteral("expiresInMs"), m_activityTimer->remainingTime());
+    return reply;
 }
 
 AutomationServer::~AutomationServer()
@@ -9821,6 +9825,8 @@ QJsonObject AutomationServer::doStation(const QString& name)
         return err(QStringLiteral("not connected — connect to a radio before setting the station name"));
     if (!applyAgentStation(n)) { return err(QStringLiteral("station name not dispatched on this radio")); }
     m_agentStation = n;
+    if (!m_activityText.isEmpty())
+        emit agentActivityChanged(m_activityText, m_agentStation);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
 }
 

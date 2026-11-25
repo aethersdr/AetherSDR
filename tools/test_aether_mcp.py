@@ -278,6 +278,17 @@ def test_agent_activity_pin_cleanup():
                   and factory.call_count == 3)
             factory.side_effect = None
             claim()
+            owner.request.return_value = {
+                "ok": False, "error": "activity must contain display text; send an empty string to release"}
+            aether_mcp.handle_tool("set_agent_activity", {"text": "​"})
+            check("an undisplayable report keeps the claim and pin",
+                  aether_mcp.bridge_socket_path() == "/old" and aether_mcp._activity_bridge is owner)
+            owner.request.return_value = {"ok": False, "error": "unauthorized: missing or invalid token"}
+            aether_mcp.handle_tool("set_agent_activity", {"text": "Testing meters"})
+            check("a refused report on the held connection drops the pin",
+                  aether_mcp.bridge_socket_path() == "/next" and aether_mcp._activity_bridge is None)
+            owner.request.return_value = {"ok": True, "active": True, "expiresInMs": 300000}
+            claim()
             owner.request.side_effect = BrokenPipeError()
             result = aether_mcp.handle_tool("app_instance", {"action": "launch"})
             check("dead owner does not block a fresh launch",

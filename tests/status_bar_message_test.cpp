@@ -1,14 +1,20 @@
 #include "gui/StatusBarMessageOverlay.h"
 #include "gui/StatusBarLayout.h"
 
+#include <QAccessibilityHints>
 #include <QApplication>
+#include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QStyleHints>
 #include <QTest>
+#include <QVariantAnimation>
+#include <QtMath>
 
 #include <cstdio>
 

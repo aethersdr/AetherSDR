@@ -217,7 +217,12 @@ def _set_agent_activity(args):
     except Exception:
         _close_activity_bridge()
         raise
-    if not text or (not result.get("ok") and (new_connection or result.get("error") == "busy")):
+    # Only the bridge's "no display text" refusal leaves this connection's claim
+    # in place; busy, unauthorized and observe-only all mean it holds none.
+    keeps_claim = result.get("ok") or (
+        not new_connection
+        and str(result.get("error", "")).startswith("activity must contain display text"))
+    if not text or not keeps_claim:
         _close_activity_bridge()
     if not result.get("ok"):
         return error_result(result.get("error", "activity rejected"))
