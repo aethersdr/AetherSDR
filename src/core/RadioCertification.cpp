@@ -1081,10 +1081,10 @@ void RadioCertification::stageFrontEndInterlock()
             if (otherSettled > certmath::kCoupledSettleBudgetMs) {
                 problems << QStringLiteral(
                     "writing %1 %2 moved the %3 from %4 to %5 on the radio, and the "
-                    "pan showed it after %6 ms — at a periodic poll, not a read "
-                    "after the write")
+                    "pan showed it after %6 ms (budget %7 ms). Inspect the CI-V "
+                    "transaction trace to identify the delayed readback.")
                     .arg(written).arg(t.step).arg(coupledName).arg(otherBefore)
-                    .arg(otherAfter).arg(otherSettled);
+                    .arg(otherAfter).arg(otherSettled).arg(certmath::kCoupledSettleBudgetMs);
             }
         }
     }
