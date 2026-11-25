@@ -381,6 +381,51 @@ Read the diff against each of these; cite the specific rule when flagging:
   when applicable, cross-platform unless solving a platform-specific problem.
 - **GOVERNANCE.md** — should this change have had an RFC/issue first? Is it
   within the scope a maintainer already ruled on?
+- **GOVERNANCE.md § "What requires an RFC" and AGENTS.md § "TCI extensions
+  beyond TCI 2.1"** — see the next subsection.
+
+### TCI extensions: check items (a)–(f)
+
+First decide whether the PR **adds a TCI extension**: anything a client sees
+that the shipping TCI 2.1 spec does not define — a new command, a new
+argument, field or value on an existing command, or a new extension set. Look
+at the diff to `src/core/Tci*`, especially `TciProtocol*`, `TciExtensionSet*`
+and the `Tci*Extension` classes, and at
+`docs/user/docs/generated/tci-commands.md`, not only at the title. The spec is
+`docs/specs/tci/TCI Protocol 2.1.pdf` (cite the command's section), and
+`docs/specs/tci/README.md` lists the names AetherSDR already accepts or sends
+outside 2.1. A bug fix to an existing command (TCI 2.1, the `aethersdr_` set
+or a legacy extension) that adds no command, argument, field, value or
+extension set is **not** an extension, and neither is a behaviour change to a
+TCI 2.1 command; the rule does not apply, so say so in one line and move on.
+Do not stretch the rule to cover a fix. A fix that changes what a TCI 2.1
+command means is still held to #7312's spec-compliance limit.
+
+When the PR does add an extension, the review body carries a table with one
+row per item: the item, whether the PR body supplies it, and where (or what
+is missing). An item given only in the thread counts once the author copies it
+into the body, which becomes the squash commit. Each missing item is a
+**blocker**, cited to GOVERNANCE.md § "What requires an RFC" and the AGENTS.md
+section:
+
+- **(a)** names a client that is **released**. A client still in development,
+  or the author's own unpublished client, does not satisfy it.
+- **(b)** shows a search for prior art (TCI-X, other servers), not just an
+  assertion that none exists, and adopts an existing name under our prefix
+  where one exists.
+- **(c)** says what base TCI 2.1 cannot express.
+- **(d)** is an explicit two-release regression commitment from the author.
+- **(e)** includes actual WSJT-X base runs against the PR head, plus evidence
+  that a plain TCI 2.1 client sees no change. A socket-free unit test alone
+  does not meet (e).
+- **(f)** follows the #7312 policy: the extension is in the `aethersdr_` set,
+  not a bare command or a new meaning for a TCI 2.1 command; an approved RFC
+  is linked; and no frozen legacy extension (`rx_record`, `rx_play`,
+  `tx_gain`, `active_slice`, `rx_ctun_ex`, `dsb`) is extended.
+
+The items gate whether the PR is considered at all, so check them before
+spending a build on the code. The maintainer can waive an item; the reviewer
+cannot.
 
 ### `CHANGELOG.md`: never ask for an entry
 
