@@ -594,10 +594,10 @@ void MainWindow::registerControlActions()
 
     // ── Radio-side receive features ────────────────────────────────────
     // WNB: the panadapter's wideband blanker, offered where the overlay menu
-    // offers it (radio-side DSP).
+    // offers both the toggle and the threshold.
     const auto wnbAvailable = [this] {
         return m_radioModel.isConnected() && m_radioModel.activePanadapter()
-            && m_radioModel.hasRadioSideDsp();
+            && panWnbSupported();
     };
     reg.add(A::toggle("wnb_toggle", "rx.wnbEnable", "WNB", "DSP",
         [this](float v) {
