@@ -20,8 +20,9 @@ name: Cache cleanup
 #
 # One cause is handled here — SUPERSEDED main entries. CI saves the Windows
 # and macOS compiler caches and Full Suite saves the Linux cache. Each save
-# needs a new key because actions/cache entries are immutable. Restores resolve through restore-keys to the MOST RECENT match,
-# so the moment run N+1 saves, run N's entry is unreachable — and being
+# needs a new key because actions/cache entries are immutable. Restores
+# resolve through restore-keys to the MOST RECENT match, so the moment
+# run N+1 saves, run N's entry is unreachable — and being
 # unreachable it is never accessed again, so nothing refreshes its LRU position
 # and nothing deletes it.
 #

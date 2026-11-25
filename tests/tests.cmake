@@ -10296,11 +10296,12 @@ set_tests_properties(startup_autoconnect_lockout_test PROPERTIES
 # the arithmetic and parent-chain matching in isolation, not a replacement
 # for the PR's own real-X11-input proof.
 #
-# Compiled and linked by the Linux build job and executed unfiltered on every
-# push to main (.github/workflows/full-suite.yml) and again weekly under the
-# sanitizers, like every other Linux test; the per-PR gate in ci.yml is frozen
-# and does not take new entries (docs/agents/tests-ci.md, "Gate integrity"). Pure arithmetic and four bare QWindows, no widgets/sockets/
-# wall clock, milliseconds to run.
+# Built and executed unfiltered on every push to main
+# (.github/workflows/full-suite.yml) and again weekly under the sanitizers,
+# like every other Linux test; CI's Linux PR job builds no tests, and the
+# per-PR gate in ci.yml is frozen and does not take new entries
+# (docs/agents/tests-ci.md, "Gate integrity"). Pure arithmetic and four bare
+# QWindows, no widgets/sockets/wall clock, milliseconds to run.
 add_executable(frameless_resizer_test
     tests/frameless_resizer_test.cpp
     $<TARGET_OBJECTS:aether_test_frameless_resizer>
