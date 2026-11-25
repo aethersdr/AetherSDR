@@ -1,14 +1,14 @@
 ---
-title: "Networked Icoms"
+title: "Networked Icom"
 slug: "/networked-icom"
 description: "AetherSDR can operate Icom transceivers that have a built-in network connection, using Icom's CI-V commands over the RS-BA1 network protocol."
 status: "Supported"
-applies_to: ["Networked Icoms (IC-705 and IC-7300MK2)"]
+applies_to: ["Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** Networked Icoms (IC-705 and IC-7300MK2)
+**Status:** Supported · **Applies to:** Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)
 
 :::
 
@@ -32,11 +32,11 @@ The **IC-705** and **IC-7300MK2** are supported and show no EXPERIMENTAL badge. 
 |-------|---------|--------|
 | **IC-705** | Wi-Fi | **Supported** |
 | **IC-7300MK2** | Built-in Ethernet | **Supported** |
-| **IC-7110** | Wi-Fi | Experimental receive-only profile with MAIN tuning and one MAIN/SUB scope. **Not hardware-confirmed.** |
-| **IC-9700** | Ethernet | Early (experimental); works, with read-only memories |
-| **IC-7610, IC-7760** | Ethernet | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
-| **IC-7851** | Ethernet | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
-| IC-905 | Ethernet | Listed in the model chooser, not verified |
+| **IC-7110** | Wi-Fi | **Experimental, receive-only**: MAIN tuning and one MAIN/SUB scope. **Not hardware-confirmed.** |
+| **IC-9700** | Ethernet | **Experimental**: works, with read-only memories |
+| **IC-7610, IC-7760** | Ethernet | **Experimental**: initial MAIN/SUB bring-up, hardware qualification pending |
+| **IC-7851** | Ethernet | **Experimental**: MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
+| **IC-905** | Ethernet | **Experimental**: listed in the model chooser, not verified |
 
 The original IC-7300 has no network port and is not in the model list.
 

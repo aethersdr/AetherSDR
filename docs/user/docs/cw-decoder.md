@@ -3,12 +3,12 @@ title: "CW Decoder"
 slug: "/cw-decoder"
 description: "AetherSDR includes a built-in CW (Morse code) decoder: ggmorse by default, with two optional neural decoders, DeepFist and DeepCW."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icoms (IC-705 and IC-7300MK2 supported)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icoms (IC-705 and IC-7300MK2 supported)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)
 
 :::
 
@@ -16,7 +16,7 @@ AetherSDR includes a built-in CW (Morse code) decoder powered by [ggmorse](https
 
 On Apple Silicon Macs, Linux and Windows you can also choose one of two neural decoders, **DeepFist** or **DeepCW**, which can copy weak or irregular signals that ggmorse misses. See [Choosing a decoder](#choosing-a-decoder).
 
-The decoder works on every radio family that has a CW mode: FlexRadio, the [Hermes-Lite 2](./hermes-lite-2.md), [Networked Icoms](./networked-icom.md), and experimental [RTL-SDR](./rtl-sdr.md) reception.
+The decoder works on every radio family that has a CW mode: FlexRadio, the [Hermes-Lite 2](./hermes-lite-2.md), [Networked Icom](./networked-icom.md), and experimental [RTL-SDR](./rtl-sdr.md) reception.
 
 ## Requirements
 

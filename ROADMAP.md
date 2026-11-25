@@ -69,7 +69,7 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   per-client propagation, transmit for SmartLink and the other families,
   transmit audio transport, and a replacement thin UI client — UI code still
   consumes models directly, and that remains correct until that client exists.
-- **Networked Icoms — IC-705 and IC-7300MK2 supported** — `IcomCIV` speaks CI-V inside the RS-BA1
+- **Icom networked radios — the IC-705 and IC-7300MK2 are supported; other models experimental** — `IcomCIV` speaks CI-V inside the RS-BA1
   UDP transport, brought up in v26.8.2 against a live **IC-705** (RX, scope,
   transmit, and FT8 both decoding and spotting on PSK Reporter) and an
   **IC-7300** (RX, scope and stability; transmit unverified). Only the IC-705
