@@ -22,6 +22,7 @@
 #include <QStringList>
 #include <cstddef>
 #include <cstdio>
+#include <functional>
 #include <initializer_list>
 #include <limits>
 #include <memory>
@@ -92,7 +93,28 @@ public:
     static int freeDax(const RadioModel& radio) { return TciServer::freeDaxChannelForTci(radio); }
     static qsizetype createdPanCount(const TciServer& server) { return server.m_createdVfoBPans.size(); }
     static void reap(TciServer& server, int sliceId) { server.reapCreatedVfoBSlice(sliceId); }
-};
+    // #7589 rows: socket-free entry points to TCI's own route teardown.
+    static void addClient(TciServer& server, TciClient& client)
+    {
+        if (!server.clientStateFor(&client)) {
+            TciServer::ClientState state;
+            state.socket = &client;
+            server.m_clients.append(state);
+        }
+        server.m_trxMap.acquire(0);
+    }
+    static void teardown(TciServer& server) { server.teardownTciRoute(); }
+    static void setSplit(TciServer& server, bool on) { server.m_routingState.setSplitRequested(on); }
+    static bool splitRequested(const TciServer& server) { return server.m_routingState.splitRequested(); }
+    static void split(TciServer& server, TciClient& client, bool on) { server.handleSplitRequest(&client, {0, on}); }
+    static void vfoB(TciServer& server, TciClient& client, long long hz) { server.handleVfoRequest(&client, {0, 1, hz}); }
+    static void refusedKey(TciServer& server, TciClient& client)   // an invalid producer request: refused
+    {
+        server.handleTrxRequest(&client, {0, true, {}}, TxCoordinator::Request{}, false,
+                                DaxTxAudioPermit::blocked());
+    }
+    static int routeRx(const TciServer& server) { return server.m_routingState.rxSliceId(); }
+    static int routeTx(const TciServer& server) { return server.m_routingState.txSliceId(); }};
 #endif
 }
 
@@ -120,14 +142,19 @@ public:
     std::vector<int> removes;
     std::vector<std::pair<int, bool>> selections;
     std::vector<RadioControlCompletion> selectionReplies;
+    std::optional<RadioControlReply> selectionReplyInCall;   // opt-in: answer inside the request, as the HL2 does
     std::vector<bool> duplex;
     std::vector<RadioControlCompletion> duplexReplies;
     int refreshes{0};
     bool closesPans{false};   // opt-in: answer a pan close as done
     int panRemoves{0};
+    bool removesVfoBSlice{false};   // opt-in: a closed capture/two takes slice 1 with it
     bool removePanadapter(const QString& panId) override
     {
         ++panRemoves;
+        if (closesPans && removesVfoBSlice && panId == QLatin1String("capture/two")) {
+            emit sliceRemoved(1);
+        }
         return closesPans || IRadioBackend::removePanadapter(panId);
     }
     LifecycleProbe()
@@ -170,6 +197,7 @@ public:
         if (!accepts || !current()) { return ReceiveDispatch::Unsupported; }
         selections.emplace_back(id, enabled);
         selectionReplies.push_back(completion);
+        if (selectionReplyInCall) { completion(*selectionReplyInCall); }
         return ReceiveDispatch::Dispatched;
     }
     ReceiveDispatch requestFullDuplex(bool enabled, const RadioControlCompletion& completion,
@@ -190,6 +218,7 @@ public:
     // A paired receiver/pan backend's native open: its pan and slice are
     // published before this returns. Reached only with panLifecycleControl set.
     int panCreates{0};
+    int panSliceId{1};   // the receiver id the next native open publishes
     bool createPanadapter() override
     {
         ++panCreates;
@@ -201,7 +230,7 @@ public:
         delta.filterLow = 150;
         delta.filterHigh = 2700;
         delta.inUse = true;
-        emit sliceChanged(1, delta);
+        emit sliceChanged(panSliceId, delta);
         return true;
     }
 };
@@ -974,6 +1003,363 @@ void tciKeyedTxPanReap()
 #endif
 }
 
+// #7589: TCI's own route teardown while the HL2 is keyed. Moving TX back to
+// VFO A is refused while keyed, so the teardown is owed and finished after
+// unkey: TX back to VFO A, then the created VFO-B pan closes. Nothing here
+// keys; the rows drive the model's transmit edge and answer the backend's
+// TX-selection requests by hand.
+enum class KeyedTeardownCase { Owed, OtherRefusal, ReusedDuringOver, DeferredSplitOn,
+                               ModelUnkeyedFirst, LostConfirmation, RetryRefusedKeyed,
+                               SplitClaimsRetry, SplitSupersedesHeldFalse, VfoKeepsHeldFalse,
+                               RefusedKeyKeepsOwed, DeferredWaitsForRetry, RefusedInCall };
+void tciKeyedTeardown(KeyedTeardownCase c)
+{
+#ifdef HAVE_WEBSOCKETS
+    using Access = TciSliceLifecycleTestAccess;
+    Fixture f;
+    f.backend->caps.canCreateSlices = false;
+    f.backend->caps.maxSlices = 2;
+    f.backend->caps.maxPanadapters = 2;
+    f.backend->caps.panLifecycleControl = PanLifecycleControl{
+        PanLifecycleControl::Creation::Native,
+        {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    f.backend->caps.panLifecycleControl->txPanCloseWhileKeyed =
+        PanLifecycleControl::TxPanCloseWhileKeyed::Refused;
+    // The HL2 declares its keyed TX-move refusal, so TCI can ask first.
+    if (c != KeyedTeardownCase::OtherRefusal) {
+        f.backend->caps.txSliceControl = RadioCapabilities::TxSliceControl{
+            RadioCapabilities::TxSliceControl::ChangeWhileKeyed::Refused};
+    }
+    f.backend->closesPans = true;
+    f.backend->removesVfoBSlice = true;
+    TciServer server(&f.radio);
+    TciClient client;
+    Access::addClient(server, client);
+    QStringList sent;
+    QObject::connect(&server, &TciServer::tciMessage, &server,
+                     [&](const QString& dir, const QString& msg) { if (dir == QLatin1String("tx")) sent << msg; });
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested, &f.radio,
+                     [&](const QString&, const QString&, const QString&) { ++notices; });
+    const auto moveTx = [&f](int to) {   // the radio's answer to a TX selection
+        f.publish(0, to == 0);
+        SliceDelta delta;
+        delta.panId = QStringLiteral("capture/two");
+        delta.txSlice = to == 1;
+        emit f.backend->sliceChanged(1, delta);
+    };
+    const auto transmit = [&f](bool on) {
+        TransmitDelta delta;
+        delta.mox = on;
+        f.radio.applyBackendTransmitDeltaForTest(delta);
+    };
+    const auto answer = [&f](const RadioControlReply& reply) {
+        if (!f.backend->selectionReplies.empty()) { f.backend->selectionReplies.back()(reply); }
+        settle();
+    };
+    const RadioControlReply accepted{RadioControlReply::Kind::Accepted, 0, {}};
+    const RadioControlReply keyedRefusal{RadioControlReply::Kind::Refused, RadioControlReply::kRefusedWhileKeyed,
+                                         QStringLiteral("TX slice can't change while transmitting.")};
+    const RadioControlReply otherRefusal{RadioControlReply::Kind::Refused, -1,
+                                         QStringLiteral("TX-slice selection refused")};
+    const auto lastSelection = [&f](int id) {
+        return !f.backend->selections.empty() && f.backend->selections.back() == std::make_pair(id, true);
+    };
+    const auto waitFor = [](const std::function<bool()>& done, int ms) {
+        QElapsedTimer t;
+        t.start();
+        while (!done() && t.elapsed() < ms) { QCoreApplication::processEvents(QEventLoop::AllEvents, 10); }
+        return done();
+    };
+
+    // VFO B routed: the created slice 1 on capture/two holds TX.
+    Access::create(server, client, f.radio.slice(0));
+    settle();
+    bool routed = lastSelection(1);
+    if (routed) { answer(accepted); moveTx(1); settle(); }
+    routed = routed && Access::ownsRoute(server) && f.radio.slice(1) && f.radio.slice(1)->isTxSlice()
+        && Access::createdPanCount(server) == 1;
+    if (!routed) { std::printf("  setup: route to VFO B was not established\n"); }
+    std::size_t before = f.backend->selections.size();
+
+    switch (c) {
+    case KeyedTeardownCase::Owed: {
+        transmit(true);
+        Access::teardown(server);
+        settle();
+        check(routed && f.backend->selections.size() == before && notices == 0,
+              "#7589 N6: a keyed TCI teardown asks the HL2 for no TX move it would refuse (no Notice)");
+        check(routed && f.radio.slice(1) && f.radio.slice(1)->isTxSlice() && f.backend->panRemoves == 0
+                  && Access::createdPanCount(server) == 1,
+              "#7589 R1: a teardown while keyed is owed: TX stays on VFO B, its pan open, TCI keeps the entry");
+        check(routed && Access::ownsRoute(server) && Access::routeRx(server) == 0 && Access::routeTx(server) == 1,
+              "#7589 N2: while the finish is owed the TCI route stays bound to VFO A / VFO B");
+        before = f.backend->selections.size();
+        transmit(false);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        if (asked) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && f.radio.slice(0) && f.radio.slice(0)->isTxSlice() && f.backend->panRemoves == 1
+                  && Access::createdPanCount(server) == 0 && !Access::ownsRoute(server),
+              "#7589 R2: on unkey TX goes back to VFO A, then the created pan closes and the route ends");
+        break;
+    }
+    case KeyedTeardownCase::OtherRefusal: {
+        transmit(true);
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(otherRefusal);
+        before = f.backend->selections.size();
+        transmit(false);
+        settle();
+        settle();
+        check(routed && asked && f.backend->selections.size() == before && f.backend->panRemoves == 0
+                  && !Access::ownsRoute(server),
+              "#7589 R4: a keyed teardown refused for another reason is not owed: no retry on unkey");
+        break;
+    }
+    case KeyedTeardownCase::ReusedDuringOver: {
+        transmit(true);
+        Access::teardown(server);
+        settle();
+        TciClient other;   // a new client uses VFO B during the over
+        Access::addClient(server, other);
+        Access::vfoB(server, other, 14250000);
+        settle();
+        before = f.backend->selections.size();
+        transmit(false);
+        settle();
+        settle();
+        check(routed && f.backend->selections.size() == before && f.backend->panRemoves == 0
+                  && Access::ownsRoute(server) && Access::routeTx(server) == 1,
+              "#7589 R3: a slice a new route uses during the over is not closed, and stays TCI-created");
+        Access::teardown(server);   // that client leaves, unkeyed
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        if (asked) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && f.backend->panRemoves == 1 && Access::createdPanCount(server) == 0,
+              "#7589 N7: when the route that reused the owed slice ends, its pan is still reaped");
+        break;
+    }
+    case KeyedTeardownCase::DeferredSplitOn: {
+        transmit(true);
+        Access::teardown(server);
+        settle();
+        TciClient other;   // split on during the over: deferred by TCI's routing gate
+        Access::addClient(server, other);
+        Access::split(server, other, true);
+        settle();
+        before = f.backend->selections.size();
+        const int pansBefore = f.backend->panCreates;
+        // The radio's close of slice 1 lands after the replay may run, so the
+        // replay needs room for a third slice and pan (3/3) and gets its own
+        // receiver id.
+        f.backend->caps.maxSlices = 3;
+        f.backend->caps.maxPanadapters = 3;
+        f.backend->panSliceId = 2;
+        transmit(false);
+        settle();
+        const bool firstIsBack = f.backend->selections.size() == before + 1 && lastSelection(0)
+            && f.backend->panCreates == pansBefore;
+        check(routed && firstIsBack,
+              "#7589 N1: at unkey the owed finish runs before the deferred split:true is replayed");
+        // The radio moves TX first; its txSliceChanged is what answers the request.
+        if (firstIsBack) { moveTx(0); settle(); }
+        const bool replayed = f.backend->panRemoves == 1 && f.backend->panCreates == pansBefore + 1
+            && f.backend->selections.size() == before + 2 && lastSelection(2);
+        if (replayed) {
+            answer(accepted);
+            f.publish(0, false);
+            SliceDelta delta;
+            delta.panId = QStringLiteral("capture/two");
+            delta.txSlice = true;
+            emit f.backend->sliceChanged(2, delta);
+            settle();
+        }
+        settle();
+        if (!replayed) {
+            std::printf("  replay: removes=%d creates=%d/%d selections=%zu/%zu last=(%d,%d) owns=%d slices=%lld\n",
+                        f.backend->panRemoves, f.backend->panCreates, pansBefore, f.backend->selections.size(),
+                        before, f.backend->selections.empty() ? -1 : f.backend->selections.back().first,
+                        f.backend->selections.empty() ? -1 : int(f.backend->selections.back().second),
+                        Access::ownsRoute(server), static_cast<long long>(f.radio.slices().size()));        }
+        check(routed && replayed && f.backend->selections.size() == before + 2 && Access::ownsRoute(server)
+                  && Access::routeTx(server) == 2 && f.radio.slice(2) && f.radio.slice(2)->isTxSlice(),
+              "#7589 N1: the replayed split:true then owns TX on a new VFO B, and nothing moves it back");
+        break;
+    }
+    case KeyedTeardownCase::ModelUnkeyedFirst: {
+        // The model has already unkeyed (abortTciPtt before the teardown), the
+        // backend has not: its refusal alone says the move is owed.
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(keyedRefusal);
+        check(routed && asked && Access::ownsRoute(server) && f.backend->panRemoves == 0,
+              "#7589 N4: a keyed refusal owes the finish from the reply itself, with the model already unkeyed");
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000)
+            && lastSelection(0);
+        if (retried) { answer(accepted); moveTx(0); settle(); }
+        check(routed && retried && f.backend->panRemoves == 1 && !Access::ownsRoute(server),
+              "#7589 N3: owed with no unkey edge still to come, the finish is retried and completes");
+        break;
+    }
+    case KeyedTeardownCase::LostConfirmation: {
+        Access::setSplit(server, true);
+        Access::split(server, client, false);   // model unkeyed: not deferred
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        sent.clear();
+        answer(keyedRefusal);
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000);
+        answer(otherRefusal);
+        settle();
+        check(routed && asked && retried && sent.contains(QStringLiteral("split_enable:0,true;"))
+                  && Access::splitRequested(server) && Access::ownsRoute(server),
+              "#7589 N5: a held split:false whose retry is refused for another reason sends the corrected state");
+        break;
+    }
+    case KeyedTeardownCase::RetryRefusedKeyed: {
+        // The model has unkeyed, and the backend is still keyed at the first
+        // retry too: that refusal owes the finish again, and the next retry ends it.
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(keyedRefusal);
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000);
+        answer(keyedRefusal);
+        const bool retriedAgain = waitFor([&] { return f.backend->selections.size() == before + 3; }, 3000)
+            && lastSelection(0);
+        if (retriedAgain) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && retried && retriedAgain && f.backend->panRemoves == 1
+                  && !Access::ownsRoute(server),
+              "#7589: a retry refused as keyed again is owed again, and the next retry finishes");
+        break;
+    }
+    case KeyedTeardownCase::SplitClaimsRetry: {
+        // In the model-unkeyed retry window a client re-asserts split:true on the
+        // kept route: VFO B is in use again, so the owed finish is dropped.
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(keyedRefusal);
+        TciClient other;
+        Access::addClient(server, other);
+        Access::split(server, other, true);
+        settle();
+        const bool noRetry = !waitFor([&] { return f.backend->selections.size() > before + 1; }, 1000);
+        check(routed && asked && noRetry && f.backend->panRemoves == 0 && Access::ownsRoute(server)
+                  && Access::routeTx(server) == 1 && f.radio.slice(1) && f.radio.slice(1)->isTxSlice(),
+              "#7589: a split:true on the kept route in the retry window claims it: no retry moves TX back");
+        break;
+    }
+    case KeyedTeardownCase::SplitSupersedesHeldFalse: {
+        // A split:false refused as keyed with the model already unkeyed holds
+        // its confirmation; a newer split:true for the same route in the retry
+        // window supersedes it: the route stays, and the last word sent is true.
+        Access::setSplit(server, true);
+        Access::split(server, client, false);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        sent.clear();
+        answer(keyedRefusal);
+        Access::split(server, client, true);
+        settle();
+        const bool noRetry = !waitFor([&] { return f.backend->selections.size() > before + 1; }, 1000);
+        check(routed && asked && noRetry && f.backend->panRemoves == 0 && Access::ownsRoute(server)
+                  && Access::routeTx(server) == 1 && Access::splitRequested(server)
+                  && sent.contains(QStringLiteral("split_enable:0,true;"))
+                  && !sent.contains(QStringLiteral("split_enable:0,false;")),
+              "#7589: a split:true in the retry window supersedes a held split:false: route kept, true sent");
+        break;
+    }
+    case KeyedTeardownCase::VfoKeepsHeldFalse: {
+        // A vfo on the kept route in the same window is not a new split
+        // request: the held split:false still ends the route and is sent.
+        Access::setSplit(server, true);
+        Access::split(server, client, false);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        sent.clear();
+        answer(keyedRefusal);
+        TciClient other;
+        Access::addClient(server, other);
+        Access::vfoB(server, other, 14250000);
+        settle();
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000)
+            && lastSelection(0);
+        if (retried) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && retried && f.backend->panRemoves == 1 && !Access::ownsRoute(server)
+                  && !Access::splitRequested(server) && sent.contains(QStringLiteral("split_enable:0,false;")),
+              "#7589: a vfo on the kept route does not cancel a held split:false: the route ends, false sent");
+        break;
+    }
+    case KeyedTeardownCase::DeferredWaitsForRetry: {
+        // A split:true deferred during the over waits while the owed finish
+        // waits on its retry timer: unkeyed, the first finish is refused as
+        // keyed, and the drain that follows must not replay the split first.
+        transmit(true);
+        Access::teardown(server);
+        settle();
+        TciClient other;
+        Access::addClient(server, other);
+        Access::split(server, other, true);
+        settle();
+        before = f.backend->selections.size();
+        const int pansBefore = f.backend->panCreates;
+        transmit(false);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(keyedRefusal);
+        const bool held = f.backend->panCreates == pansBefore && f.backend->selections.size() == before + 1
+            && Access::ownsRoute(server) && Access::routeTx(server) == 1;
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000)
+            && lastSelection(0);
+        if (retried) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && held && retried && f.backend->panRemoves == 1,
+              "#7589: a deferred split:true is not replayed while the owed finish waits on its retry");
+        break;
+    }
+    case KeyedTeardownCase::RefusedInCall: {
+        // The HL2 refuses a keyed TX move inside requestTxSlice(), before it
+        // returns. With the model already unkeyed that refusal still owes the
+        // finish, and the retry ends the route.
+        f.backend->selectionReplyInCall = keyedRefusal;
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        const bool owed = Access::ownsRoute(server) && f.backend->panRemoves == 0;
+        f.backend->selectionReplyInCall.reset();
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000)
+            && lastSelection(0);
+        if (retried) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && owed && retried && f.backend->panRemoves == 1 && !Access::ownsRoute(server),
+              "#7589: a keyed refusal answered inside the request is owed, and the retry finishes");
+        break;
+    }
+    case KeyedTeardownCase::RefusedKeyKeepsOwed: {
+        // A trx:true refused in the retry window did not use the kept route:
+        // the finish stays owed, and the retry ends the route.
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(keyedRefusal);
+        Access::refusedKey(server, client);
+        settle();
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000)
+            && lastSelection(0);
+        if (retried) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && retried && f.backend->panRemoves == 1 && !Access::ownsRoute(server),
+              "#7589: a refused trx:true in the retry window does not claim the owed route; the retry ends it");
+        break;
+    }
+    }
+#else
+    (void)c;
+#endif
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("slice-lifecycle-routing"));
@@ -995,5 +1381,18 @@ int main(int argc, char** argv)
     tciCancellation();
     tciVfoBOnPairedReceivers();
     tciKeyedTxPanReap();
+    tciKeyedTeardown(KeyedTeardownCase::Owed);
+    tciKeyedTeardown(KeyedTeardownCase::OtherRefusal);
+    tciKeyedTeardown(KeyedTeardownCase::ReusedDuringOver);
+    tciKeyedTeardown(KeyedTeardownCase::DeferredSplitOn);
+    tciKeyedTeardown(KeyedTeardownCase::ModelUnkeyedFirst);
+    tciKeyedTeardown(KeyedTeardownCase::LostConfirmation);
+    tciKeyedTeardown(KeyedTeardownCase::RetryRefusedKeyed);
+    tciKeyedTeardown(KeyedTeardownCase::SplitClaimsRetry);
+    tciKeyedTeardown(KeyedTeardownCase::SplitSupersedesHeldFalse);
+    tciKeyedTeardown(KeyedTeardownCase::VfoKeepsHeldFalse);
+    tciKeyedTeardown(KeyedTeardownCase::RefusedKeyKeepsOwed);
+    tciKeyedTeardown(KeyedTeardownCase::DeferredWaitsForRetry);
+    tciKeyedTeardown(KeyedTeardownCase::RefusedInCall);
     return failures == 0 ? 0 : 1;
 }

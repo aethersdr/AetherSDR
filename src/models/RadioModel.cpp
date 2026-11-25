@@ -6215,6 +6215,15 @@ bool RadioModel::keyedTxPanCloseRefused(const QString& panId) const
     return txSliceRefusingKeyedPanClose(panId) != nullptr;
 }
 
+bool RadioModel::keyedTxSliceChangeRefused(int sliceId) const
+{
+    const SliceModel* s = slice(sliceId);
+    const auto control = backendCapabilities().txSliceControl;
+    return s && !s->isTxSlice() && m_radioTransmitting && control
+        && control->changeWhileKeyed
+            == RadioCapabilities::TxSliceControl::ChangeWhileKeyed::Refused;
+}
+
 SliceModel* RadioModel::txSliceRefusingKeyedPanClose(const QString& panId) const
 {
     const auto control = backendCapabilities().panLifecycleControl;

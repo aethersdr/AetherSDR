@@ -146,6 +146,7 @@ RadioCapabilities capabilitiesFrom(const QJsonObject& radioSession, const QStrin
     // makes this family able to key.
     c.canTransmit = false;
     c.txPowerMaxWatts = 0.0;
+    c.txSliceControl = std::nullopt;
     c.hasFmRepeaterOffset = false;
     c.hasCwTune = false;
     c.canCreateSlices = false;

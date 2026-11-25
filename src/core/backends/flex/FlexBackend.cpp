@@ -940,6 +940,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // published through this seam — see RadioCapabilities::hasRadioPttReadback.
     caps.hasRadioPttReadback = false;
     caps.radioPttObservation = std::nullopt;   // same reason: interlock, not this seam
+    caps.txSliceControl = std::nullopt;
 
     // EMPTY = continuous or unknown, so the RX applet keeps the operator's own
     // configurable width list. A Flex's filters are continuous.

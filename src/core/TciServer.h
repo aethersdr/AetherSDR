@@ -413,6 +413,10 @@ private:
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
+    // As above, with the backend's reply passed up: a caller that must tell a
+    // keyed refusal (RadioControlReply::kRefusedWhileKeyed) from any other.
+    void promoteTxSliceWithReply(int sliceId,
+                                 std::function<void(bool, const RadioControlReply&)> continuation);
     void reapCreatedVfoBSlice(int sliceId);
     void createTxSliceForVfoB(TciClient* client,
         const TciProtocol::VfoRequest& request,
@@ -650,6 +654,29 @@ private:
         RadioControlSession session{};
     };
     QHash<int, CreatedVfoBPan> m_createdVfoBPans;
+    // #7589: TCI's own teardown of a created VFO-B route (client gone, or
+    // split:false) whose TX move back to VFO A was refused because the radio
+    // was keyed. The route stays bound TciCreated while it is owed; the finish
+    // (TX to VFO A, reap, held confirmation) runs at the head of
+    // drainDeferredRoutingAndPtt(), once isRadioTransmitting() is false and
+    // before any deferred route command.
+    struct OwedRouteFinish {
+        int rxSliceId{-1};
+        int createdSliceId{-1};
+        QPointer<SliceModel> rx;
+        QPointer<SliceModel> created;
+        RadioControlSession session{};
+        int trx{0};
+        std::optional<QString> confirmation;   // a held split:false
+    };
+    std::optional<OwedRouteFinish> m_owedRouteFinish;
+    QTimer* m_owedRouteRetryTimer{nullptr};
+    int m_owedRouteRetries{0};
+    void oweRouteFinish(const OwedRouteFinish& owed);
+    void startOwedRouteFinish();
+    void dropOwedRoute();
+    void giveUpOwedRoute();
+    void claimOwedRoute(int txSliceId, bool reassertsSplit = false);
     struct PendingTrxRequest
     {
         QPointer<TciClient> client;

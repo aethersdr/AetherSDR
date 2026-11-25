@@ -16,6 +16,9 @@ namespace AetherSDR {
 // A command reply is not an observation of radio state or durable storage.
 struct RadioControlReply {
     enum class Kind { Accepted, Refused, Failed, Cancelled };
+    // code of a Refused reply that holds only while the radio is keyed: the
+    // same request may be accepted after unkey (#7589).
+    static constexpr int kRefusedWhileKeyed = -7553;
     Kind kind;
     int code{0};
     QString message;
