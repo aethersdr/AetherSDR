@@ -1002,7 +1002,8 @@ void tciKeyedTxPanReap()
 // keys; the rows drive the model's transmit edge and answer the backend's
 // TX-selection requests by hand.
 enum class KeyedTeardownCase { Owed, OtherRefusal, ReusedDuringOver, DeferredSplitOn,
-                               ModelUnkeyedFirst, LostConfirmation };
+                               ModelUnkeyedFirst, LostConfirmation, RetryRefusedKeyed,
+                               SplitClaimsRetry };
 void tciKeyedTeardown(KeyedTeardownCase c)
 {
 #ifdef HAVE_WEBSOCKETS
@@ -1210,6 +1211,40 @@ void tciKeyedTeardown(KeyedTeardownCase c)
               "#7589 N5: a held split:false whose retry is refused for another reason sends the corrected state");
         break;
     }
+    case KeyedTeardownCase::RetryRefusedKeyed: {
+        // The model has unkeyed, and the backend is still keyed at the first
+        // retry too: that refusal owes the finish again, and the next retry ends it.
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(keyedRefusal);
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000);
+        answer(keyedRefusal);
+        const bool retriedAgain = waitFor([&] { return f.backend->selections.size() == before + 3; }, 3000)
+            && lastSelection(0);
+        if (retriedAgain) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && retried && retriedAgain && f.backend->panRemoves == 1
+                  && !Access::ownsRoute(server),
+              "#7589: a retry refused as keyed again is owed again, and the next retry finishes");
+        break;
+    }
+    case KeyedTeardownCase::SplitClaimsRetry: {
+        // In the model-unkeyed retry window a client re-asserts split:true on the
+        // kept route: VFO B is in use again, so the owed finish is dropped.
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(keyedRefusal);
+        TciClient other;
+        Access::addClient(server, other);
+        Access::split(server, other, true);
+        settle();
+        const bool noRetry = !waitFor([&] { return f.backend->selections.size() > before + 1; }, 1000);
+        check(routed && asked && noRetry && f.backend->panRemoves == 0 && Access::ownsRoute(server)
+                  && Access::routeTx(server) == 1 && f.radio.slice(1) && f.radio.slice(1)->isTxSlice(),
+              "#7589: a split:true on the kept route in the retry window claims it: no retry moves TX back");
+        break;
+    }
     }
 #else
     (void)c;
@@ -1243,5 +1278,7 @@ int main(int argc, char** argv)
     tciKeyedTeardown(KeyedTeardownCase::DeferredSplitOn);
     tciKeyedTeardown(KeyedTeardownCase::ModelUnkeyedFirst);
     tciKeyedTeardown(KeyedTeardownCase::LostConfirmation);
+    tciKeyedTeardown(KeyedTeardownCase::RetryRefusedKeyed);
+    tciKeyedTeardown(KeyedTeardownCase::SplitClaimsRetry);
     return failures == 0 ? 0 : 1;
 }
