@@ -180,9 +180,15 @@ Important construction rules:
 - `label_offset` is measured radially beyond the scale baseline. It must leave
   room for the outward half of the number glyph plus the major tick; when it is
   increased, move the mirrored Forward / Reflected titles outward with it.
-- `range.label` accepts explicit `\n` line breaks. Keep each multiplier on its
-  own short line in the open top-right area instead of extending text back
-  toward the right `(W)` label or upper power graphs.
+- `range.multipliers` is the range switch's ladder (#6433): 1, 2, 5, 10, 20,
+  50, 100, so 20 W to 2 kW forward and 4 W to 400 W reflected. It must be
+  positive and strictly ascending. The meter picks the range from the measured
+  forward power (`CrossNeedleRangeSelector`). Keep the 1-2-5 spacing unless the
+  readability sweep in `cross_needle_meter_test` still passes: the widest step
+  decides how low a settled forward needle can sit.
+- The RANGE legend at `range.label_center` is generated: `RANGE`, then the
+  active forward and reflected full scale, each on its own short line in the
+  open top-right area clear of the right `(W)` label and the upper power graphs.
 - The Range legend's visibility is a client preference in the versioned
   `CrossNeedleMeter` AppSettings object, not face geometry. The right-click
   **Show Range** action defaults on and may hide only this printed legend;
@@ -235,8 +241,11 @@ Important construction rules:
   last attempted position.
 - The lower mask deliberately hides the two movement centers and the shared
   convergence. Its boundary is symmetric about x = 750.
-- Both power scales use the same range multiplier: x1 = 20 W, x10 = 200 W,
-  and x100 = 2 kW.
+- Both power scales use the same range multiplier, which is why the SWR
+  contours read correctly on every range. The scale `labels` are the x1 face;
+  on other ranges the face prints `value x multiplier` at each numbered tick
+  (an empty label stays unnumbered on every range), shrinking and then thinning
+  the numbers so no neighbour pair overlaps more than it does at x1.
 
 After editing, run `cross_needle_meter_test` and use the automation bridge to
 grab `crossNeedleMeter`. The validation block records a mechanical proof:

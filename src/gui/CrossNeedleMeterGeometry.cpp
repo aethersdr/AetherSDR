@@ -563,7 +563,7 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::load(QIODevice &device, QStri
 CrossNeedleMeterGeometry CrossNeedleMeterGeometry::fallback() {
     CrossNeedleMeterGeometry geometry;
     geometry.formatVersion = 6;
-    geometry.designVersion = 19;
+    geometry.designVersion = 20;
     geometry.forwardTitle = {QStringLiteral("FORWARD"), QPointF(180.0, 545.0), -58.0};
     geometry.reflectedTitle = {QStringLiteral("REFLECTED"), QPointF(1320.0, 545.0), 58.0};
     geometry.forwardScale.center = QPointF(1099.0, 1057.0);

@@ -258,7 +258,7 @@ void testResourceAndConstruction() {
 
     report("semantic geometry format is versioned", geometry.formatVersion == 6);
     report("angled-rest concave response design revision is retained",
-           geometry.designVersion == 19);
+           geometry.designVersion == 20);
     report("face material keeps editable deterministic gradient layers",
            geometry.faceGradient.middleStop > 0.0 && geometry.faceGradient.middleStop < 1.0 &&
                geometry.faceGradient.glowRadius > 0.0 &&

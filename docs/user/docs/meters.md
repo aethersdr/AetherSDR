@@ -66,7 +66,7 @@ A classic cross-needle wattmeter: separate **forward** and **reflected** needles
 
 *The Power & SWR cross-needle meter.*
 
-- **Range** is automatic: ×1 (20 W forward / 4 W reflected full scale) up to 20 W, ×10 up to 200 W, and ×100 above 200 W or whenever an amplifier is active. The face shows "RANGE 20 W ×1 / 200 W ×10 / 2 kW ×100".
+- **Range** follows the power you transmit, like the range switch on a hardware meter. The ranges run 20, 40, 100, 200, 400 W, 1 kW and 2 kW forward (one fifth of that reflected), and the scales and the **RANGE** legend in the top-right corner always print the watts for the range in use. The meter moves up a range as soon as forward power nears full scale, and back down after about 1.5 seconds of steady lower power, so the needles cross high enough on the face to read the SWR. The top range is the one that fits your radio's maximum power (200 W for a 100 W radio, 1 kW for a 500 W radio), or 2 kW while an amplifier is active. Before the first transmission the meter shows that top range. Between transmissions it keeps the range it last used.
 - Pop it out from its title bar to get a floating meter window; the window can be shrunk down to a compact size.
 
 Right-click the meter:

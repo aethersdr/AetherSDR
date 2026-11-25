@@ -1,6 +1,6 @@
 {
   "format_version": 6,
-  "design_version": 19,
+  "design_version": 20,
   "canvas": { "width": 1500.0, "height": 1000.0 },
   "frame": {
     "outer_inset": 6.0,
