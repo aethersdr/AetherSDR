@@ -1615,10 +1615,8 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     return true;
 }
 
-// Transmit moved to m_txDdc without setTxSlice() (its receiver closed or its
-// DSP build failed): re-run the new owner's tune, so the TX register (with its
-// XIT) leaves the old receiver, and push its mode and passband, or the new TX
-// slice shows one mode while the modulator sends the old receiver's (#7586).
+// Pays a hand-off owed since a keyed TX receiver failed, once nothing keys the
+// radio: called at the host unkey and at the radio-PTT release.
 void Hl2Backend::settleTxHandover()
 {
     if (!m_txHandoverOwed || transmitKeyed()) {
@@ -1628,6 +1626,10 @@ void Hl2Backend::settleTxHandover()
     handTransmitToOwner();
 }
 
+// Transmit moved to m_txDdc without setTxSlice() (its receiver closed or its
+// DSP build failed): re-run the new owner's tune, so the TX register (with its
+// XIT) leaves the old receiver, and push its mode and passband, or the new TX
+// slice shows one mode while the modulator sends the old receiver's (#7586).
 void Hl2Backend::handTransmitToOwner()
 {
     retuneReceiver(m_txDdc);

@@ -207,6 +207,7 @@ struct Hl2PanCreateTestAccess {
         }, Qt::BlockingQueuedConnection);
     }
     static bool keyed(const Hl2Backend& backend) { return backend.transmitKeyed(); }
+    static void radioPtt(Hl2Backend& backend, bool keyed) { backend.onRadioPttChanged(keyed, true); }
 };
 
 }   // namespace AetherSDR::hl2
@@ -995,6 +996,96 @@ void aKeyedFailedTxBuildEndsTheOverThenHandsOver()
           "keyed: then the modulator runs receiver 0's LSB and passband");
 }
 
+// #7586 with the radio's own PTT holding the over and no host key: the host
+// cannot end it, so the hand-off waits for the PTT release.
+void aRadioPttFailedTxBuildHandsOverAtRelease()
+{
+    using Mode = WdspChannel::Mode;
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend, Mode::Lsb, QStringLiteral("LSB"))) {
+        check(false, "radio PTT: the backend's modulator configures");
+        return;
+    }
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+    QStringList notices;
+    QObject::connect(&backend, &IRadioBackend::transmitFailed, &backend,
+                     [&notices](const QString& reason) { notices << reason; });
+
+    ThreadHold hold(Access::buildContext(backend));
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "radio PTT: the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setTxSlice(ui);
+    backend.setSliceMode(ui, QStringLiteral("DIGU"));
+    Access::radioPtt(backend, true);
+    check(Access::keyed(backend) && Access::txConfig(backend).mode == Mode::Digu,
+          "radio PTT setup: the radio's PTT holds the over, the modulator runs DIGU");
+
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+    check(lifecycleFailures == 1 && Access::txDdc(backend) == 0 && notices.size() == 1,
+          "radio PTT: transmit falls back to receiver 0, with the notice");
+    check(Access::txConfig(backend).mode == Mode::Digu,
+          "radio PTT: while the PTT holds, the modulator keeps DIGU");
+
+    Access::radioPtt(backend, false);
+    const auto lsb = Access::txPassbandFor(backend, QStringLiteral("LSB"));
+    const AetherSDR::hl2::Hl2TxDsp::Config after = Access::txConfig(backend);
+    check(after.mode == Mode::Lsb && after.filterLowHz == lsb.first
+              && after.filterHighHz == lsb.second,
+          "radio PTT: at the release the modulator takes receiver 0's LSB and passband");
+}
+
+// The same, but the host keys while the radio's PTT still holds the over and
+// stays keyed past the release: the hand-off then waits for the host unkey.
+void aHostKeyInsideTheRadioPttOverDefersTheHandOffToItsUnkey()
+{
+    using Mode = WdspChannel::Mode;
+    TxTestAuthority auth;
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend, Mode::Lsb, QStringLiteral("LSB"))) {
+        check(false, "host key: the backend's modulator configures");
+        return;
+    }
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+    ThreadHold hold(Access::buildContext(backend));
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "host key: the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setTxSlice(ui);
+    backend.setSliceMode(ui, QStringLiteral("DIGU"));
+    Access::openTransmit(backend);
+    Access::radioPtt(backend, true);
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+
+    backend.setKeying(true, auth.operation, {});
+    Access::radioPtt(backend, false);
+    check(Access::keyed(backend) && Access::txConfig(backend).mode == Mode::Digu,
+          "host key: keyed past the PTT release, the modulator keeps DIGU");
+    backend.setKeying(false, auth.operation, {});
+    check(Access::txConfig(backend).mode == Mode::Lsb,
+          "host key: at the host unkey the modulator takes receiver 0's LSB");
+}
+
 }   // namespace
 
 // Swallows the retired chain's DeferredDelete so it is still alive when its
@@ -1152,6 +1243,8 @@ int main(int argc, char** argv)
     aFailedBuildWithdrawsItsSMeter();
     aFailedTxBuildHandsTheModulatorTheNewOwnersMode();
     aKeyedFailedTxBuildEndsTheOverThenHandsOver();
+    aRadioPttFailedTxBuildHandsOverAtRelease();
+    aHostKeyInsideTheRadioPttOverDefersTheHandOffToItsUnkey();
     aStaleSpectrumFrameDoesNotPublishOnTheReuser(false);
     aStaleSpectrumFrameDoesNotPublishOnTheReuser(true);
     std::fprintf(stderr, "hl2_pan_create_async_test: %d failure(s)\n", g_failures);
