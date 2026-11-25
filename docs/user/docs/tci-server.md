@@ -398,9 +398,10 @@ On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
 
 #### Asking for a new extension
 
-If your TCI client needs something TCI 2.1 does not offer, the request goes
-through an RFC, and its pull request must give all of the following in its
-description:
+If your TCI client needs something TCI 2.1 does not offer, start by joining
+the AetherSDR Discord's TCI channel and making the case for the extension
+there: <https://discord.gg/XFJkKeHeqB>. The request then goes through an RFC,
+and its pull request must give all of the following in its description:
 
 - **The user need**, naming the **released** client that asks for it.
 - **Prior art**: a search for an existing command that already does this
