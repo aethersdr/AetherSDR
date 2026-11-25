@@ -2812,7 +2812,8 @@ A refused entry also carries `reason`: `transmitting` (the pan hosts the TX
 slice while keyed, on a backend that refuses that close, such as the HL2),
 `not-owned`, `remove-not-supported`, `inventory-uncertain`,
 `not-connected`, `stale-session`, `no-such-pan`, `pan-replaced`, or
-`backend-refused` (the backend declined after the model's own checks).
+`backend-refused` (declined after the model's up-front checks: by the
+backend, or by the model's own re-check once `panAboutToRemove` has run).
 A single-target close of the last pan is refused for the whole request with
 `refused: cannot close the last panadapter`, not as an entry `reason`.
 

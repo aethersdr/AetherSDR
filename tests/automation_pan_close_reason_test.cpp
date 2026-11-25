@@ -8,6 +8,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
 #include "core/backends/IRadioBackend.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -26,6 +27,16 @@ public:
     static QJsonObject handleLine(AutomationServer& server, const QByteArray& line)
     {
         return server.handleLine(line, nullptr);
+    }
+};
+// RadioModel's display-observation friend, reused here only to open an
+// observation session so injected display reports apply.
+class FlexDisplayStatusTestAccess {
+public:
+    static quint64 openDisplays(RadioModel& radio)
+    {
+        radio.openObservationSession(radio.m_observationEpoch);
+        return radio.m_observationEpoch;
     }
 };
 } // namespace AetherSDR
@@ -69,7 +80,7 @@ struct Bench {
     QString txPan;
     bool ready{false};
 
-    Bench(bool keyed, bool refuseClose)
+    Bench(bool keyed, bool refuseClose, bool removeSupported = true)
     {
         RadioModel specimen;
         if (!specimen.rebuildBackendForTest(QStringLiteral("hl2"))) {
@@ -80,6 +91,9 @@ struct Bench {
         backend->caps = specimen.backendCapabilities();
         backend->caps.maxPanadapters = 2;
         backend->refuseClose = refuseClose;
+        if (!removeSupported && backend->caps.panLifecycleControl) {
+            backend->caps.panLifecycleControl->actions.remove(PanLifecycleAction::Remove);
+        }
         radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
         emit backend->panCenterBandwidthChanged(QStringLiteral("native-first"), 14.1, 0.384);
         emit backend->panCenterBandwidthChanged(QStringLiteral("native-tx"), 7.1, 0.384);
@@ -108,14 +122,16 @@ struct Bench {
         }
     }
 
-    QJsonObject closeAll()
+    QJsonObject close(const QString& value)
     {
         const QJsonObject request{{QStringLiteral("cmd"), QStringLiteral("pan")},
                                   {QStringLiteral("action"), QStringLiteral("close")},
-                                  {QStringLiteral("value"), QStringLiteral("all")}};
+                                  {QStringLiteral("value"), value}};
         return AutomationServerTestAccess::handleLine(
             server, QJsonDocument(request).toJson(QJsonDocument::Compact));
     }
+
+    QJsonObject closeAll() { return close(QStringLiteral("all")); }
 };
 
 QJsonObject entryFor(const QJsonObject& reply, const QString& panId)
@@ -160,6 +176,73 @@ int main(int argc, char** argv)
         check(bench.ready && bench.backend->removeCalls == 1 && bench.radio.panadapter(bench.txPan),
               "and the TX pan's close never reaches the backend; the pan stays");
         if (!bench.ready || tx.value(QStringLiteral("reason")).toString() != QStringLiteral("transmitting")) {
+            dump(reply);
+        }
+    }
+    {
+        Bench bench(true, false);
+        const QJsonObject reply = bench.close(bench.txPan);
+        const QJsonObject tx = entryFor(reply, bench.txPan);
+        check(bench.ready && !reply.value(QStringLiteral("ok")).toBool()
+                  && !tx.value(QStringLiteral("requested")).toBool()
+                  && tx.value(QStringLiteral("reason")).toString() == QStringLiteral("transmitting")
+                  && bench.backend->removeCalls == 0 && bench.radio.panadapter(bench.txPan),
+              "HL2 keyed, targeted close of the TX pan (Ordinary): refused with reason \"transmitting\"");
+        if (tx.value(QStringLiteral("reason")).toString() != QStringLiteral("transmitting")) {
+            dump(reply);
+        }
+    }
+    {
+        Bench bench(false, false);
+        if (PanadapterModel* pan = bench.radio.panadapter(bench.txPan)) {
+            pan->setClientHandle(QStringLiteral("7e57c0de"));   // another client's pan
+        }
+        const QJsonObject reply = bench.closeAll();
+        const QJsonObject tx = entryFor(reply, bench.txPan);
+        check(bench.ready && !tx.value(QStringLiteral("requested")).toBool()
+                  && tx.value(QStringLiteral("reason")).toString() == QStringLiteral("not-owned")
+                  && entryFor(reply, bench.firstPan).value(QStringLiteral("requested")).toBool()
+                  && bench.backend->removeCalls == 1 && bench.radio.panadapter(bench.txPan),
+              "another client's pan: refused with reason \"not-owned\", never sent; ours still closes");
+        if (tx.value(QStringLiteral("reason")).toString() != QStringLiteral("not-owned")) {
+            dump(reply);
+        }
+    }
+    {
+        Bench bench(false, false, false);
+        const QJsonObject reply = bench.closeAll();
+        const QJsonObject tx = entryFor(reply, bench.txPan);
+        check(bench.ready && !reply.value(QStringLiteral("ok")).toBool()
+                  && tx.value(QStringLiteral("reason")).toString() == QStringLiteral("remove-not-supported")
+                  && entryFor(reply, bench.firstPan).value(QStringLiteral("reason")).toString()
+                         == QStringLiteral("remove-not-supported")
+                  && bench.backend->removeCalls == 0,
+              "a backend without Remove: every entry reads reason \"remove-not-supported\", nothing sent");
+        if (tx.value(QStringLiteral("reason")).toString() != QStringLiteral("remove-not-supported")) {
+            dump(reply);
+        }
+    }
+    {
+        // Over the display-inventory bound (256 waterfalls) the model holds
+        // every pan control until reconnect.
+        Bench bench(false, false);
+        const quint64 epoch = FlexDisplayStatusTestAccess::openDisplays(bench.radio);
+        for (int i = 0; i <= 256 && bench.backend; ++i) {
+            DisplayObservation observation;
+            observation.kind = DisplayObservation::Kind::Waterfall;
+            observation.id = QStringLiteral("0x%1").arg(0x42100000 + i, 8, 16, QLatin1Char('0'));
+            observation.statusEpoch = epoch;
+            emit bench.backend->displayObserved(observation);
+        }
+        const QJsonObject reply = bench.closeAll();
+        const QJsonObject tx = entryFor(reply, bench.txPan);
+        check(bench.ready && !reply.value(QStringLiteral("ok")).toBool()
+                  && tx.value(QStringLiteral("reason")).toString() == QStringLiteral("inventory-uncertain")
+                  && entryFor(reply, bench.firstPan).value(QStringLiteral("reason")).toString()
+                         == QStringLiteral("inventory-uncertain")
+                  && bench.backend->removeCalls == 0,
+              "display inventory overflowed: every entry reads reason \"inventory-uncertain\", nothing sent");
+        if (tx.value(QStringLiteral("reason")).toString() != QStringLiteral("inventory-uncertain")) {
             dump(reply);
         }
     }
