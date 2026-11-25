@@ -361,6 +361,32 @@ void testSplitOffKeepsTx()
 
 // The registry holds one entry per device; a pick reaches only the device it
 // names; an entry goes with its owner, and one registered again replaces it.
+// The radio changes inside a pick (review nit 9): the goal was planned for the
+// old radio, so it is not carried over to the new one, even when the new one
+// is bound to the Trio too. A refresh of the same radio does not end a pick.
+void testRadioSwapEndsPick()
+{
+    const RadioSettingsScope other(QStringLiteral("icom"), QStringLiteral("trio-link-radio-b"));
+    Rig rig;
+    rig.trio.setRadio(other);
+    rig.trio.bindRadioSlot(QStringLiteral("radio2"));
+    rig.trio.setRadio(kScope);
+    QStringList notices;
+    QObject::connect(&rig.trio, &MicrohamTrioModel::notice,
+                     [&notices](const QString& n) { notices << n; });
+    rig.radio.selectStationAntenna(kTrio, QStringLiteral("TRIO:ant1"), false);
+    report("set up: a split pick, first command out", rig.commands() == 1 && rig.trio.pickUnderWay());
+    rig.trio.setRadio(kScope);
+    report("the same radio again (infoChanged): the pick goes on", rig.trio.pickUnderWay());
+    rig.trio.setRadio(other);
+    rig.replySplit("ant2", "ant2");
+    report("another radio mid-pick: the old goal is not sent for it",
+           rig.commands() == 1 && !rig.trio.pickUnderWay(), rig.lastCommand().toStdString());
+    report("and it says so", !notices.isEmpty() && notices.last().contains(QStringLiteral("radio changed")),
+           notices.isEmpty() ? std::string() : notices.last().toStdString());
+    MicrohamTrioBinding::remove(other);
+}
+
 void testRegistry()
 {
     RadioModel radio;
@@ -644,6 +670,7 @@ int main(int argc, char** argv)
     testPick();
     testImplicitSplit();
     testSplitOffKeepsTx();
+    testRadioSwapEndsPick();
     testRefusedWhileTransmitting();
     testRadioModelRefusesOnItsOwn();
     testRefusedInEveryInterlockStateButIdle();

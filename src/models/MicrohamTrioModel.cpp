@@ -181,6 +181,10 @@ void MicrohamTrioModel::abandonTest()
 
 void MicrohamTrioModel::setRadio(const RadioSettingsScope& scope)
 {
+    // A pick was planned for one radio; another radio does not inherit it.
+    if (scope.family() != m_scope.family() || scope.radioId() != m_scope.radioId()) {
+        stopPick(tr("the radio changed"));
+    }
     m_scope = scope;
     m_binding = MicrohamTrioBinding::load(scope);
     emit changed();
