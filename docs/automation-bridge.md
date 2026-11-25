@@ -1302,7 +1302,12 @@ the engine's reason, publishes no levels, and does not key. A capture that arms
 but returns no audio is reported as a missing receive-audio path, not as a
 quiet band, and `rx-sidebands` then reports `summary.pattern: no-audio`.
 `sideband` reports a refused key as INCONCLUSIVE with `keyConfirmed: false`,
-and does not key its second leg.
+and does not key its second leg. Its probe uses at most 5% drive and respects both
+the starting drive and the bridge ceiling. The DSP check needs a fresh keyed
+TX:MICPEAK sample. Carrier suppression uses fresh forward watts from the silent
+key. Missing readings are reported as `null`. The lifecycle stage records the
+peak sample amplitude across the output channels during transmit, including
+zero for a continuing stream of digital silence.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 
@@ -1317,7 +1322,7 @@ keyed ones. With bridge TX permission off, every key is refused and counted in
 | `squelch-scale` | Parks the dial 1.5 kHz below the `sql=` carrier (default: the RX reference carrier), finds the lowest level that drops the operator's audio by 20 dB, confirms it at ±1 level, and compares the published line there with the carrier's pan peak. If Auto SQL is published, it repeats the search on band noise 10 kHz away. | the line is more than 6 dB from the carrier, or Auto's widest margin is below the noise gate |
 
 `squelch-scale` is `INCONCLUSIVE` for a carrier above S9 (−73 dBm), for one that
-fades during the search, and when there is no audio with squelch open. Both squelch
+fades during the search, for a peak at the pan floor, and when there is no audio with squelch open. Both squelch
 stages decline while the RX applet's SQL button reads AUTO, because Auto SQL rewrites
 the slice on every pan frame; when the button can't be found, the report says the
 state was not observable. `freqMhz` and `sql=` take `tune`'s validation (finite,
