@@ -200,7 +200,7 @@ int main(int argc, char** argv)
         const QByteArray route = "closePanForgettingCenterLock(panId);";
         const QByteArray early = "clearCenterLockForPan(panId, true);";
         check(read && actionsCode.count(route) == 1 && wiringCode.count(route) == 1
-                  && !actionsCode.contains(early)
+                  && !actionsCode.contains(early) && !wiringCode.contains(early)
                   && wiringCode.contains("PanCloseCenterLock::closeThenForget(")
                   && wiringCode.contains("return m_radioModel.removePanadapter(id);"),
               "pan_close and the title-bar X forget the center lock only through the accepted close");
