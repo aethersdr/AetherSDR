@@ -1298,8 +1298,9 @@ signals:
     // named (no TX receiver); RadioModel then posts the Notice with no pan, and
     // the panadapter overlay falls back to the TX or active slice's pan.
     void transmitChangeRefused(int sliceId, const QString& message);
-    // A transmission the operator keyed did not go out, for a reason the
-    // operator should see (`reason`, one short line). Once per transmission;
+    // A transmission the operator keyed did not go out, or was ended by the
+    // backend, for a reason the operator should see (`reason`, one short
+    // line). Once per transmission;
     // RadioModel raises it as a "TX failed" notice. MOX is not changed by it.
     void transmitFailed(const QString& reason);
 

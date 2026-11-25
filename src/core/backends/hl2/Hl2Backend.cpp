@@ -1413,7 +1413,22 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
         }
         publishIoDsps();
         if (txWasHere) {
-            retuneReceiver(m_txDdc);
+            // Keyed, the hand-off is a mode change mid-over, which splatters
+            // (#7553), and the receiver cannot be kept: the over ends here,
+            // through the unkey every other path uses. Its MOX-off, modulator
+            // reset and IQ flush are queued to the I/O thread before the
+            // hand-off's setMode, so they run first. A PTT the radio still
+            // holds defers the hand-off to its release (settleTxHandover()).
+            if (transmitKeyed()) {
+                qCWarning(lcHl2) << "HL2: the TX receiver's DSP failed while keyed"
+                                    " — ending the over";
+                emit transmitFailed(tr("TX receiver failed; transmission stopped."));
+                if (m_keyed || m_tuning) {
+                    setKeying(false, m_lastTxOperation);
+                }
+            }
+            m_txHandoverOwed = true;
+            settleTxHandover();
         }
         emit sliceLifecycleFailed(QStringLiteral("create"), removedUi,
                                   QString::fromStdString(error));
@@ -1591,22 +1606,38 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // Closing one can take the set back onto a single band.
     applyBandFilter("close receiver");
     publishWideState();
-    // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
-    // TX register (with the new owner's XIT) leaves the closed receiver.
-    // Its mode and passband too, or the new TX slice shows one mode while the
-    // modulator sends the closed receiver's.
     if (txMoved) {
-        retuneReceiver(m_txDdc);
-        if (const Receiver* owner = rx(m_txDdc); owner && m_txDsp) {
-            QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
-                Q_ARG(WdspChannel::Mode, modeFromString(owner->mode)));
-            pushTxPassband(owner->mode);
-        }
+        handTransmitToOwner();
     }
     // The TX slice may have moved; republish so the indicator follows.
     emitAllSliceState();
     notifyOperatingStateChanged();
     return true;
+}
+
+// Pays a hand-off owed since a keyed TX receiver failed, once nothing keys the
+// radio: called at the host unkey and at the radio-PTT release.
+void Hl2Backend::settleTxHandover()
+{
+    if (!m_txHandoverOwed || transmitKeyed()) {
+        return;
+    }
+    m_txHandoverOwed = false;
+    handTransmitToOwner();
+}
+
+// Transmit moved to m_txDdc without setTxSlice() (its receiver closed or its
+// DSP build failed): re-run the new owner's tune, so the TX register (with its
+// XIT) leaves the old receiver, and push its mode and passband, or the new TX
+// slice shows one mode while the modulator sends the old receiver's (#7586).
+void Hl2Backend::handTransmitToOwner()
+{
+    retuneReceiver(m_txDdc);
+    if (const Receiver* owner = rx(m_txDdc); owner && m_txDsp) {
+        QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
+            Q_ARG(WdspChannel::Mode, modeFromString(owner->mode)));
+        pushTxPassband(owner->mode);
+    }
 }
 
 void Hl2Backend::publishWideState()
@@ -1716,6 +1747,9 @@ void Hl2Backend::onRadioPttChanged(bool keyed, bool keyRequest)
     // release. Nothing here reaches MetisClient: the radio keyed itself. The
     // edge rides transmitChanged as radioPtt, and RadioModel decides whether
     // the host keys its modulator through the normal gated path (#5998).
+    if (!keyed) {
+        settleTxHandover();
+    }
     if (m_keyed) {
         return;
     }
@@ -5642,6 +5676,9 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 }
             }, Qt::QueuedConnection);
         }
+        // Behind the cleanup above: a hand-off owed since a keyed TX receiver
+        // failed reaches the modulator only after its reset.
+        settleTxHandover();
     }
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, [completion] { completion.finish(); }, Qt::QueuedConnection);
@@ -9596,6 +9633,7 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission. The radio's own
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
+    m_txHandoverOwed = false;   // the new session pushes every receiver's state
     if (m_pureSignal) {
         QMetaObject::invokeMethod(m_pureSignal, "setKeyed", Qt::QueuedConnection,
                                   Q_ARG(bool, false));
