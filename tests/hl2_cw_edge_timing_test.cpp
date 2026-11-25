@@ -65,6 +65,10 @@ struct MetisClientTestAccess {
     static constexpr std::int64_t maxShiftSamples() { return MetisClient::kCwMaxEdgeShiftSamples; }
     static std::size_t pending(const MetisClient& client) { return client.m_cwScheduleCount; }
     static std::int64_t frameSample(const MetisClient& client) { return client.m_cwFrameSample; }
+    static std::int64_t sampleAt(const MetisClient& client, std::chrono::steady_clock::time_point t)
+    {
+        return client.cwSampleAt(t);
+    }
 };
 
 struct Hl2TxGateTestAccess {
@@ -494,11 +498,34 @@ static void testKeyDownStampedBeforeTheAnchor()
     }
     {
         // A second before the anchor is past lead plus bound: still refused.
+        // The release is pre-anchor too, so play() sends it as a separate
+        // scheduled key-up (releaseMs < 0 means "no release"), not withRelease.
         Bench b;
         b.play({{-1000, true, 0, true, -940}, {-940, false, 0}}, 400);
         check(b.client.cwRefusedDowns() == 1 && carriers(b.iTrace).empty(),
               "stamped 1 s before the anchor: past the bound, refused, no carrier");
     }
+}
+
+// cwSampleAt() floors toward the earlier sample on both sides of the anchor:
+// a sub-sample instant before it is sample -1, not 0, so its lateness is never
+// rounded short. Every other case here is a whole number of samples.
+static void testSampleOfAnInstantIsFloored()
+{
+    using std::chrono::nanoseconds;
+    MetisClient client;
+    const Clock::time_point t0 = Clock::now();
+    Access::anchor(client, t0);
+    // One 48 kHz sample is 20833.33 ns.
+    check(Access::sampleAt(client, t0) == 0, "the anchor itself is sample 0");
+    check(Access::sampleAt(client, t0 + nanoseconds(1)) == 0, "1 ns after the anchor is sample 0");
+    check(Access::sampleAt(client, t0 + nanoseconds(20834)) == 1, "just past one sample after is sample 1");
+    check(Access::sampleAt(client, t0 - nanoseconds(1)) == -1, "1 ns before the anchor is sample -1, not 0");
+    check(Access::sampleAt(client, t0 - nanoseconds(20833)) == -1, "just under one sample before is sample -1");
+    check(Access::sampleAt(client, t0 - nanoseconds(20834)) == -2, "just over one sample before is sample -2");
+    check(Access::sampleAt(client, t0 - std::chrono::milliseconds(1)) == -48, "1 ms before is exactly sample -48");
+    check(Access::sampleAt(client, t0 - std::chrono::seconds(1) - nanoseconds(1)) == -kRate - 1,
+          "1 s and 1 ns before is sample -(rate + 1)");
 }
 
 static void testShiftBoundRefusesTheOver()
@@ -1220,6 +1247,7 @@ int main(int argc, char** argv)
     testLateKeyDownShiftsWholeElement();
     testShiftBoundRefusesTheOver();
     testKeyDownStampedBeforeTheAnchor();
+    testSampleOfAnInstantIsFloored();
     testOverEndedByLapse();
     testForcedKeyUpCap();
     testScheduleCapacity();
