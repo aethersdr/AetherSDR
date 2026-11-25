@@ -237,6 +237,35 @@ void CrossNeedleMeterApplet::showContextMenu(const QPoint& position)
             m_meter->setAutomationPowerFixture(100.0f, 4.0f);
         });
 
+        // Range-selection proofs (#6433): each pins the radio's maximum power
+        // and a forward/reflected pair, so a capture shows which range the
+        // meter chose and whether the needle crossing is readable.
+        struct RangeProof {
+            const char* objectName;
+            const char* label;
+            int maxWatts;
+            float forwardWatts;
+            float reflectedWatts;
+        };
+        static constexpr RangeProof kRangeProofs[] = {
+            {"crossNeedleRangeProof150of500", "Test 150 W / 3.3 W (SWR 1.35), 500 W radio",
+             500, 150.0f, 3.33f},
+            {"crossNeedleRangeProof500of500", "Test 500 W / 20 W (SWR 1.5), 500 W radio",
+             500, 500.0f, 20.0f},
+            {"crossNeedleRangeProof20of100", "Test 20 W / 0.8 W (SWR 1.5), 100 W radio",
+             100, 20.0f, 0.8f},
+            {"crossNeedleRangeProof40of100", "Test 40 W / 1.6 W (SWR 1.5), 100 W radio",
+             100, 40.0f, 1.6f},
+        };
+        for (const RangeProof& proof : kRangeProofs) {
+            QAction* action = menu.addAction(QString::fromLatin1(proof.label));
+            action->setObjectName(QString::fromLatin1(proof.objectName));
+            connect(action, &QAction::triggered, this, [this, proof]() {
+                m_meter->setPowerScale(proof.maxWatts, false);
+                m_meter->setAutomationPowerFixture(proof.forwardWatts, proof.reflectedWatts);
+            });
+        }
+
         QAction* idleProof = menu.addAction(QStringLiteral("Clear test"));
         idleProof->setObjectName(QStringLiteral("crossNeedleIdleProofAction"));
         connect(idleProof, &QAction::triggered,
