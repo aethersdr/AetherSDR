@@ -152,16 +152,17 @@ struct IcomCivBackendTestAccess {
                            [&](const auto& request) { return request.request.frame == frame; });
     }
 
-    // How long after it was queued `frame` may go out; -1 when it is not queued.
+    // Longest holdoff for a matching read. A range transition can already have queued an immediate read.
     static std::int64_t queuedHoldOffMs(const IcomCivBackend& backend,
                                         const std::vector<std::uint8_t>& frame)
     {
+        std::int64_t holdoff = -1;
         for (const auto& entry : backend.m_civScheduler.m_queue) {
             if (entry.request.frame == frame) {
-                return entry.request.notBeforeMs - entry.enqueuedAtMs;
+                holdoff = std::max(holdoff, entry.request.notBeforeMs - entry.enqueuedAtMs);
             }
         }
-        return -1;
+        return holdoff;
     }
 
     static bool interlockReadSurvivesEarlierRead(const IcomModel& model,
