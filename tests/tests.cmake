@@ -4550,6 +4550,15 @@ target_link_libraries(firmware_currency_test PRIVATE aethercore Qt6::Core Qt6::N
 set_target_properties(firmware_currency_test PROPERTIES AUTOMOC ON)
 add_test(NAME firmware_currency_test COMMAND firmware_currency_test)
 
+# #7421 — locating FlexRadio's per-release MD5 hash file: software index ->
+# media attachments -> hash file, against saved responses. No network.
+add_executable(firmware_md5_url_test
+    tests/firmware_md5_url_test.cpp
+)
+target_include_directories(firmware_md5_url_test PRIVATE src)
+target_link_libraries(firmware_md5_url_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME firmware_md5_url_test COMMAND firmware_md5_url_test)
+
 # #5572 — socket-free firmware upload lifecycle. The injected writer exercises
 # production queue accounting and terminal handlers without a radio peer.
 add_executable(firmware_uploader_test

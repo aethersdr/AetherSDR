@@ -109,17 +109,11 @@ bool FirmwareStager::versionUsesMsi(const QString& version)
 // Only major.minor.patch is published anywhere on the site; the fourth
 // component of a radio's reported version (the build, "4.2.20.41343") appears
 // only inside a downloaded installer, so nothing here can produce one.
-QStringList FirmwareStager::parseAllReleases(const QByteArray& json)
+namespace {
+// The release one software record names, or a null version when it names none.
+// The single definition of "a release" for every reader of the index.
+QVersionNumber recordRelease(const QJsonObject& record)
 {
-    QJsonParseError parseError{};
-    const QJsonDocument doc = QJsonDocument::fromJson(json, &parseError);
-    // Untrusted input, validated at the boundary (Principle VII). Everything
-    // below asks what a value IS before using it: the top level must be an
-    // array, each record an object, each title or slug a string. A record that
-    // is not what it claims is skipped, never coerced.
-    if (parseError.error != QJsonParseError::NoError || !doc.isArray())
-        return {};
-
     // The release title, e.g. "SmartSDR v4.2.20". ANCHORED, because the index
     // also carries "SmartSDR v4 Changelog", "SmartSDR v2.5.1+ Changelog" and
     // "SmartSDR v4.x API (FlexLib)" -- an unanchored search would read the
@@ -135,38 +129,59 @@ QStringList FirmwareStager::parseAllReleases(const QByteArray& json)
         QStringLiteral(R"(^smartsdr-v(\d+)-(\d+)-(\d+)$)"),
         QRegularExpression::CaseInsensitiveOption);
 
+    QString text;
+    const QRegularExpressionMatch byTitle = titleRe.match(
+        record.value(QLatin1String("title"))
+            .toObject()
+            .value(QLatin1String("rendered"))
+            .toString());
+    if (byTitle.hasMatch()) {
+        text = byTitle.captured(1);
+    } else {
+        const QRegularExpressionMatch bySlug =
+            slugRe.match(record.value(QLatin1String("slug")).toString());
+        if (!bySlug.hasMatch())
+            return {};
+        text = QStringLiteral("%1.%2.%3").arg(bySlug.captured(1),
+                                              bySlug.captured(2),
+                                              bySlug.captured(3));
+    }
+
+    const QVersionNumber v = QVersionNumber::fromString(text);
+    // An int-overflowing component does not parse to nothing: fromString()
+    // stops at it and returns the PREFIX before it, so "99.2147483648.0"
+    // becomes QVersionNumber(99) -- not null, and it outranks 4.2.20. The
+    // patterns guarantee three components, so anything shorter is an
+    // overflow and must be discarded, not merely a null (Principle VII).
+    if (v.isNull() || v.segmentCount() != 3)
+        return {};
+    return v;
+}
+
+// The software index as an array of records, or an empty array when it is not
+// one. Untrusted input, validated at the boundary (Principle VII). Everything
+// downstream asks what a value IS before using it: the top level must be an
+// array, each record an object, each title or slug a string. A record that is
+// not what it claims is skipped, never coerced.
+QJsonArray jsonArray(const QByteArray& json)
+{
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isArray())
+        return {};
+    return doc.array();
+}
+} // namespace
+
+QStringList FirmwareStager::parseAllReleases(const QByteArray& json)
+{
     QList<QVersionNumber> found;
-    const QJsonArray records = doc.array();
+    const QJsonArray records = jsonArray(json);
     for (const QJsonValue& value : records) {
         if (!value.isObject())
             continue;
-        const QJsonObject record = value.toObject();
-
-        QString text;
-        const QRegularExpressionMatch byTitle = titleRe.match(
-            record.value(QLatin1String("title"))
-                .toObject()
-                .value(QLatin1String("rendered"))
-                .toString());
-        if (byTitle.hasMatch()) {
-            text = byTitle.captured(1);
-        } else {
-            const QRegularExpressionMatch bySlug =
-                slugRe.match(record.value(QLatin1String("slug")).toString());
-            if (!bySlug.hasMatch())
-                continue;
-            text = QStringLiteral("%1.%2.%3").arg(bySlug.captured(1),
-                                                  bySlug.captured(2),
-                                                  bySlug.captured(3));
-        }
-
-        const QVersionNumber v = QVersionNumber::fromString(text);
-        // An int-overflowing component does not parse to nothing: fromString()
-        // stops at it and returns the PREFIX before it, so "99.2147483648.0"
-        // becomes QVersionNumber(99) -- not null, and it outranks 4.2.20. The
-        // patterns guarantee three components, so anything shorter is an
-        // overflow and must be discarded, not merely a null (Principle VII).
-        if (v.isNull() || v.segmentCount() != 3)
+        const QVersionNumber v = recordRelease(value.toObject());
+        if (v.isNull())
             continue;
 
         if (!found.contains(v))
@@ -208,6 +223,117 @@ QMap<int, QString> FirmwareStager::parsePublishedReleases(const QByteArray& json
             newestByMajor.insert(major, release);
     }
     return newestByMajor;
+}
+
+// ─── Step 2a-c pure parts: find FlexRadio's MD5 for one release (#7421) ─────
+
+qint64 FirmwareStager::releasePostId(const QByteArray& indexJson, const QString& version)
+{
+    const QVersionNumber wanted = QVersionNumber::fromString(version);
+    if (wanted.isNull() || wanted.segmentCount() != 3
+        || wanted.toString() != version)   // "4.3.19x" parses to 4.3.19; refuse it
+        return 0;
+
+    const QJsonArray records = jsonArray(indexJson);
+    for (const QJsonValue& value : records) {
+        if (!value.isObject())
+            continue;
+        const QJsonObject record = value.toObject();
+        if (recordRelease(record) != wanted)
+            continue;
+        // A WordPress post id: a positive whole number, sent as a JSON number.
+        const QJsonValue id = record.value(QLatin1String("id"));
+        if (!id.isDouble())
+            return 0;
+        const double d = id.toDouble();
+        if (d < 1 || d > 9007199254740991.0 || d != static_cast<double>(static_cast<qint64>(d)))
+            return 0;
+        return static_cast<qint64>(d);
+    }
+    return 0;
+}
+
+QString FirmwareStager::selectMd5HashUrl(const QByteArray& mediaJson, const QString& version,
+                                         const QString& arch)
+{
+    if (version.isEmpty())
+        return {};
+    // Anchored and escaped, so 4.3.1 can match neither 4.3.19's file nor
+    // 4.3.1.0's. Case is ignored because FlexRadio's spelling varies:
+    // 4.2.18's arm64 file is "SmartSDR-v4.2.18-ARM64-Installer-...".
+    const QString archPart = arch.isEmpty()
+        ? QString()
+        : QRegularExpression::escape(arch) + QLatin1Char('-');
+    const QRegularExpression nameRe(
+        QStringLiteral("^SmartSDR-v%1-%2Installer-MD5-Hash-File\\.txt$")
+            .arg(QRegularExpression::escape(version), archPart),
+        QRegularExpression::CaseInsensitiveOption);
+
+    QString chosen;
+    const QJsonArray media = jsonArray(mediaJson);
+    for (const QJsonValue& value : media) {
+        if (!value.isObject())
+            continue;
+        const QJsonValue source = value.toObject().value(QLatin1String("source_url"));
+        if (!source.isString())
+            continue;
+        const QUrl url(source.toString(), QUrl::StrictMode);
+        if (!url.isValid() || url.scheme() != QLatin1String("https")
+            || url.hasQuery() || url.hasFragment() || !url.userInfo().isEmpty())
+            continue;
+        // Only FlexRadio's own hosts may vouch for FlexRadio's installer.
+        const QString host = url.host().toLower();
+        if (host != QLatin1String("flexradio.com")
+            && !host.endsWith(QLatin1String(".flexradio.com")))
+            continue;
+        if (!nameRe.match(url.fileName()).hasMatch())
+            continue;
+        const QString found = url.toString();
+        if (!chosen.isEmpty() && chosen != found)
+            return {};   // two different files claim this release: trust neither
+        chosen = found;
+    }
+    return chosen;
+}
+
+QString FirmwareStager::parseMd5HashFile(const QByteArray& body, const QString& installerFileName)
+{
+    // One entry per file the hash file covers:
+    //   [001/001] SmartSDR_v4.3.19_x64.msi
+    //   	Size:	531,615,744
+    //   	CRC-32:	8531D11F
+    //   	MD-5:	bf6e31f8b4f0b657cbbdfb949427d674
+    // The MD-5 belongs to the nearest entry header before it.
+    static const QRegularExpression entryRe(
+        QStringLiteral(R"(^\[\d+/\d+\][ \t]+([^\r\n]+?)[ \t]*\r?$)"),
+        QRegularExpression::MultilineOption);
+    static const QRegularExpression md5Re(QStringLiteral(R"(MD-5:[ \t]*([0-9a-fA-F]{32})\b)"));
+
+    if (installerFileName.isEmpty())
+        return {};
+    const QString text = QString::fromUtf8(body);
+    QRegularExpressionMatchIterator it = entryRe.globalMatch(text);
+    QList<QRegularExpressionMatch> entries;
+    while (it.hasNext())
+        entries.append(it.next());
+
+    for (qsizetype i = 0; i < entries.size(); ++i) {
+        if (entries[i].captured(1).compare(installerFileName, Qt::CaseInsensitive) != 0)
+            continue;
+        const qsizetype from = entries[i].capturedEnd(0);
+        const qsizetype to = i + 1 < entries.size() ? entries[i + 1].capturedStart(0)
+                                                    : text.size();
+        const QRegularExpressionMatch md5 = md5Re.match(text.mid(from, to - from));
+        return md5.hasMatch() ? md5.captured(1).toLower() : QString();
+    }
+    return {};
+}
+
+QString FirmwareStager::installerFileName(const QString& version)
+{
+    return versionUsesMsi(version)
+        ? QStringLiteral("SmartSDR_v%1_%2.msi").arg(version, QLatin1String(kInstallerArch))
+        : QStringLiteral("SmartSDR_v%1_Installer.exe").arg(version);
 }
 
 void FirmwareStager::requestPublishedReleases(
@@ -300,6 +426,7 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
     m_stagedVersion.clear();
     m_installerPath = installerPath;
     m_expectedMd5.clear();   // user's responsibility — we don't have an authoritative source
+    m_md5Unavailable.clear();
     m_stagedVerified = false;
 
     if (modelFamily != QStringLiteral("6x00") && modelFamily != QStringLiteral("9600")) {
@@ -398,11 +525,13 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
 
 void FirmwareStager::downloadAndStage(const QString& version, const QString& modelFamily)
 {
+    ++m_downloadGeneration;
     m_targetVersion = version;
     m_modelFamily = modelFamily;
     m_cancelled = false;
     m_stagedVerified = false;
     m_expectedMd5.clear();   // never verify one release against another's hash
+    m_md5Unavailable.clear();
     m_stagedPath.clear();
     m_stagedVersion.clear();
 
@@ -411,72 +540,147 @@ void FirmwareStager::downloadAndStage(const QString& version, const QString& mod
         return;
     }
 
-    // First, fetch the MD5 hash file
     emit stageProgress(0, "Fetching integrity hash...");
 
-    const QString md5Url = QString(MD5_URL_FMT).arg(version);
-    auto* md5Reply = m_nam.get(QNetworkRequest(QUrl(md5Url)));
-    connect(md5Reply, &QNetworkReply::finished, this, [this, md5Reply, version]() {
-        md5Reply->deleteLater();
-        if (m_cancelled) return;
-
-        if (md5Reply->error() == QNetworkReply::NoError) {
-            // Parse MD5 from the hash file
-            // Format: "MD-5:	17b7880f646dbaec9e387c2db35a997c"
-            const QString body = QString::fromUtf8(md5Reply->readAll());
-            QRegularExpression re(R"(MD-5:\s*([0-9a-fA-F]{32}))");
-            auto m = re.match(body);
-            if (m.hasMatch()) {
-                m_expectedMd5 = m.captured(1).toLower();
-                qCDebug(lcFirmware) << "FirmwareStager: expected installer MD5:" << m_expectedMd5;
-            } else {
-                qCWarning(lcFirmware) << "FirmwareStager: could not parse MD5 from hash file";
-            }
+    fetchExpectedMd5(version, [this, version](const QString& md5, const QString& error) {
+        if (!md5.isEmpty()) {
+            m_expectedMd5 = md5;
+            qCInfo(lcFirmware) << "FirmwareStager: FlexRadio's MD5 for" << installerFileName(version)
+                               << "is" << m_expectedMd5;
         } else {
-            qCWarning(lcFirmware) << "FirmwareStager: MD5 hash file not available (non-fatal)";
+            // Since #7421 every published release has a hash we can find, so
+            // a miss means something is wrong: say which step, not just "no".
+            m_md5Unavailable = error;
+            qCWarning(lcFirmware).noquote()
+                << "FirmwareStager: no MD5 for SmartSDR v" + version + ":" << error
+                << "-- the installer will NOT be verified";
+        }
+        downloadInstaller(version);
+    });
+}
+
+void FirmwareStager::getBounded(const QUrl& url, qint64 maxBytes,
+                                std::function<void(const QByteArray&, const QString&)> done)
+{
+    const quint64 generation = m_downloadGeneration;
+    auto* reply = m_nam.get(QNetworkRequest(url));
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, generation, maxBytes, done = std::move(done)]() {
+        reply->deleteLater();
+        if (m_cancelled || generation != m_downloadGeneration)
+            return;   // a cancel or a newer download has superseded this one
+        if (reply->error() != QNetworkReply::NoError) {
+            const int status =
+                reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            done({}, status > 0 ? QStringLiteral("HTTP %1").arg(status) : reply->errorString());
+            return;
+        }
+        if (reply->bytesAvailable() > maxBytes) {
+            done({}, QStringLiteral("answer implausibly large"));
+            return;
+        }
+        done(reply->readAll(), {});
+    });
+}
+
+void FirmwareStager::fetchExpectedMd5(const QString& version,
+                                      std::function<void(const QString&, const QString&)> done)
+{
+    // The hash file covers the installer downloadInstaller() fetches: both
+    // names come from installerFileName(), and its arch from kInstallerArch.
+    const QString installerName = installerFileName(version);
+    const QString arch = versionUsesMsi(version) ? QString::fromLatin1(kInstallerArch) : QString();
+
+    // 2a: which software record is this release?
+    getBounded(QUrl(QString::fromLatin1(SOFTWARE_INDEX_URL)), kMaxSoftwareIndexBytes,
+               [this, version, installerName, arch, done](const QByteArray& index,
+                                                          const QString& error) {
+        if (!error.isEmpty()) {
+            done({}, "software index unavailable (" + error + ")");
+            return;
+        }
+        const qint64 postId = releasePostId(index, version);
+        if (postId == 0) {
+            done({}, "FlexRadio's software index has no record for v" + version);
+            return;
         }
 
-        // Now download the installer. v4.2+ ships as a WiX MSI; older
-        // releases used an InnoSetup .exe.
-        const bool useMsi = versionUsesMsi(version);
-        const QString installerUrl = useMsi
-            ? QString(INSTALLER_URL_FMT_MSI).arg(version)
-            : QString(INSTALLER_URL_FMT_EXE).arg(version);
-        m_installerPath = stagingDirectory()
-            + (useMsi ? "/SmartSDR_v" + version + "_x64.msi"
-                      : "/SmartSDR_v" + version + "_Installer.exe");
+        // 2b: which of its attachments is this installer's hash file?
+        const QUrl mediaUrl(QString::fromLatin1(MEDIA_URL_FMT).arg(postId));
+        getBounded(mediaUrl, kMaxSoftwareIndexBytes,
+                   [this, version, installerName, arch, postId, done](const QByteArray& media,
+                                                                      const QString& error) {
+            if (!error.isEmpty()) {
+                done({}, "release attachments unavailable (" + error + ")");
+                return;
+            }
+            const QString hashUrl = selectMd5HashUrl(media, version, arch);
+            if (hashUrl.isEmpty()) {
+                done({}, QStringLiteral("release record %1 carries no %2hash file for v%3")
+                             .arg(postId)
+                             .arg(arch.isEmpty() ? QString() : arch + QLatin1Char(' '), version));
+                return;
+            }
+            qCDebug(lcFirmware) << "FirmwareStager: hash file for" << installerName << "is" << hashUrl;
 
-        // Check if we already have it cached
-        if (QFileInfo::exists(m_installerPath) && !m_expectedMd5.isEmpty()) {
-            emit stageProgress(50, "Verifying cached installer...");
-            QFile f(m_installerPath);
-            if (f.open(QIODevice::ReadOnly)) {
-                QCryptographicHash hash(QCryptographicHash::Md5);
-                hash.addData(&f);
-                const QString md5 = hash.result().toHex().toLower();
-                f.close();
-                if (md5 == m_expectedMd5) {
-                    emit stageProgress(50, "Using cached installer (MD5 verified) ✓");
-                    verifyAndExtract();
+            // 2c: what MD5 does it record for our installer?
+            getBounded(QUrl(hashUrl), kMaxHashFileBytes,
+                       [installerName, done](const QByteArray& body, const QString& error) {
+                if (!error.isEmpty()) {
+                    done({}, "hash file unavailable (" + error + ")");
                     return;
                 }
-                qCDebug(lcFirmware) << "FirmwareStager: cached installer MD5 mismatch, re-downloading";
-            }
-        }
-
-        emit stageProgress(1, "Downloading SmartSDR installer...");
-
-        QNetworkRequest req{QUrl{installerUrl}};
-        m_downloadReply = m_nam.get(req);
-        connect(m_downloadReply, &QNetworkReply::downloadProgress,
-                this, &FirmwareStager::onInstallerDownloadProgress);
-        connect(m_downloadReply, &QNetworkReply::finished,
-                this, &FirmwareStager::onInstallerDownloadFinished);
+                const QString md5 = parseMd5HashFile(body, installerName);
+                if (md5.isEmpty()) {
+                    done({}, "hash file records no MD5 for " + installerName);
+                    return;
+                }
+                done(md5, {});
+            });
+        });
     });
+}
+
+void FirmwareStager::downloadInstaller(const QString& version)
+{
+    if (m_cancelled) return;
+
+    // v4.2+ ships as a WiX MSI; older releases used an InnoSetup .exe.
+    const QString fileName = installerFileName(version);
+    const QString installerUrl = QString::fromLatin1(INSTALLER_URL_BASE) + fileName;
+    m_installerPath = stagingDirectory() + "/" + fileName;
+
+    // Check if we already have it cached
+    if (QFileInfo::exists(m_installerPath) && !m_expectedMd5.isEmpty()) {
+        emit stageProgress(50, "Verifying cached installer...");
+        QFile f(m_installerPath);
+        if (f.open(QIODevice::ReadOnly)) {
+            QCryptographicHash hash(QCryptographicHash::Md5);
+            hash.addData(&f);
+            const QString md5 = hash.result().toHex().toLower();
+            f.close();
+            if (md5 == m_expectedMd5) {
+                emit stageProgress(50, "Using cached installer (MD5 verified) ✓");
+                verifyAndExtract();
+                return;
+            }
+            qCDebug(lcFirmware) << "FirmwareStager: cached installer MD5 mismatch, re-downloading";
+        }
+    }
+
+    emit stageProgress(1, "Downloading SmartSDR installer...");
+
+    QNetworkRequest req{QUrl{installerUrl}};
+    m_downloadReply = m_nam.get(req);
+    connect(m_downloadReply, &QNetworkReply::downloadProgress,
+            this, &FirmwareStager::onInstallerDownloadProgress);
+    connect(m_downloadReply, &QNetworkReply::finished,
+            this, &FirmwareStager::onInstallerDownloadFinished);
 }
 
 void FirmwareStager::cancel()
 {
+    ++m_downloadGeneration;
     m_cancelled = true;
     if (m_downloadReply) {
         m_downloadReply->abort();
@@ -556,7 +760,14 @@ void FirmwareStager::verifyAndExtract()
         emit stageProgress(65, "Installer integrity verified ✓");
     } else {
         m_stagedVerified = false;
-        emit stageProgress(65, "MD5 hash not available — skipping verification.");
+        if (m_md5Unavailable.isEmpty()) {
+            // A file the user picked: there is no published hash to look up.
+            emit stageProgress(65, "MD5 hash not available — skipping verification.");
+        } else {
+            // A download whose hash lookup failed: unexpected, so name the cause.
+            emit stageProgress(65, "Installer NOT verified — FlexRadio's MD5 could not be found: "
+                                       + m_md5Unavailable);
+        }
     }
 
     // Step 4: Extract .ssdr firmware
