@@ -152,7 +152,7 @@ contributors to self-verify UI changes before requesting review.
 2. Launch through `app_instance` (recommended for a fresh proof build), or
    manually with `AETHER_AUTOMATION=1 ./build/AetherSDR`.
 
-**Tools exposed** (25 typed tools): process handoff — `app_instance`;
+**Typed tools.** Activity reporting — `set_agent_activity`; process handoff — `app_instance`;
 introspection — `bridge_status`,
 `dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
 `path` for where the PNG is written, else a temp file),
@@ -174,6 +174,28 @@ primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `txwaterfall` display toggle, and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
+
+**Agent activity.** Before driving AetherSDR through MCP or Computer Use, send
+a short phrase such as “Testing meters”. Include what you are checking when it fits. For example, call
+`set_agent_activity({"text":"Reading the meters to check which signal levels are available."})`.
+When the step changes, call
+`set_agent_activity({"text":"Tuning Slice A to 14.105 MHz and checking the readback."})`.
+Short labels such as “Testing tuning” also work. Finish with
+`set_agent_activity({"text":""})`. Existing radio notices take priority.
+The wrapper pins the app instance and holds a local connection for the claim.
+On success, `expiresInMs` gives the remaining claim lifetime in milliseconds
+while active. The wrapper releases its pin at expiry or on a failed connection
+to that instance. The next call resolves the currently selected app.
+With the raw bridge, send `{"cmd":"agentActivity","text":"Testing meters"}`
+on a connection you keep open. The same connection can replace or clear the
+text. A competing caller receives `busy`. Closing the owner connection,
+stopping the bridge, or five minutes without an explicit owner report clears the
+badge and notice. For a long step, repeat its text before the deadline. Other
+tool calls leave the deadline unchanged. The bridge strips Unicode control and format
+characters, including bidi and zero-width controls, simplifies whitespace, and displays the first 64 Unicode
+code points. Only an explicitly empty string releases the claim. Nonempty input
+that leaves no display text returns an error and preserves the current report.
+Observe-only sessions cannot claim the indicator.
 
 **Prompts and resources.** The server also exposes an MCP **prompt**,
 `validate_ui_change` (the loop below as a guided workflow — pass your
@@ -5320,10 +5342,11 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 83 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 84 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
+| `agentActivity` | — | Report operator-visible activity on a held connection (JSON text, empty to release) |
 | `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |

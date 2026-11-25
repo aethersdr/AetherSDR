@@ -2,6 +2,12 @@
 
 #include <QAccessible>
 #include <QAccessibleEvent>
+#include <QAccessibilityHints>
+#include <QGuiApplication>
+#include <QPainter>
+#include <QStyleHints>
+#include <QVariantAnimation>
+#include <QWindow>
 #include <QAbstractButton>
 #include <QAbstractSlider>
 #include <QComboBox>
@@ -26,16 +32,33 @@ namespace AetherSDR {
 // above it, so showing or clearing text cannot hide controls or change layout.
 class StatusBarMessageOverlay : public QLabel {
     Q_OBJECT
+    Q_PROPERTY(QColor activityDotColor MEMBER m_dotColor)
 public:
     explicit StatusBarMessageOverlay(QStatusBar* bar, QWidget* surface = nullptr)
-        : QLabel(bar->parentWidget()), m_bar(bar), m_surface(surface)
+        : QLabel(bar->parentWidget()), m_bar(bar), m_surface(surface), m_pulse(this)
     {
         setObjectName(QStringLiteral("statusBarMessageOverlay"));
         setTextFormat(Qt::PlainText);
+        // The notice width already includes the explicit margins. A framed
+        // QLabel otherwise indents its text again and clips the final glyph.
+        setIndent(0);
         setContentsMargins(10, 5, 10, 5);
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setFocusPolicy(Qt::NoFocus);
         hide();
+        m_pulse.setDuration(2000);
+        m_pulse.setLoopCount(-1);
+        m_pulse.setStartValue(1.0);
+        m_pulse.setKeyValueAt(0.5, 0.4);
+        m_pulse.setEndValue(1.0);
+        m_pulse.setEasingCurve(QEasingCurve::InOutSine);
+        connect(&m_pulse, &QVariantAnimation::valueChanged, this, [this] {
+            update(dotRect());
+        });
+        connect(QGuiApplication::styleHints()->accessibility(),
+                &QAccessibilityHints::motionPreferenceChanged,
+                this, &StatusBarMessageOverlay::syncPulse);
+        connect(qGuiApp, &QGuiApplication::focusWindowChanged, this, &StatusBarMessageOverlay::syncPulse);
         bar->installEventFilter(this);
         parentWidget()->installEventFilter(this);
         if (m_surface) {
@@ -51,16 +74,13 @@ public:
                 QAccessible::updateAccessibility(&event);
             }
         });
-        connect(bar, &QStatusBar::messageChanged, this, [this](const QString& message) {
-            m_message = message;
-            setAccessibleName(message);
-            updateNotice();
-            if (message.isEmpty()) {
-                m_announcementTimer.stop();
-            } else {
-                m_announcementTimer.start();
-            }
-        });
+        connect(bar, &QStatusBar::messageChanged, this, &StatusBarMessageOverlay::selectMessage);
+    }
+
+    void setAgentActivity(const QString& activity)
+    {
+        m_activity = activity;
+        selectMessage();
     }
 
     // The workspace canvas replaces the pan stack while it is mounted; it is
@@ -75,8 +95,46 @@ public:
     }
 
 protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        QLabel::paintEvent(event);
+        if (!m_showsActivity || !m_dotColor.isValid())
+            return;
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(m_dotColor);
+        if (m_pulse.state() == QAbstractAnimation::Running)
+            p.setOpacity(m_pulse.currentValue().toReal());
+        p.drawEllipse(dotRect());
+    }
+
+    void showEvent(QShowEvent* event) override
+    {
+        QLabel::showEvent(event);
+        if (QWindow* handle = window()->windowHandle(); handle != m_window) {
+            if (m_window)
+                m_window->removeEventFilter(this);
+            m_window = handle;
+            if (m_window)
+                m_window->installEventFilter(this);
+        }
+        syncPulse();
+    }
+
+    void hideEvent(QHideEvent* event) override
+    {
+        m_pulse.stop();
+        QLabel::hideEvent(event);
+    }
+
     bool eventFilter(QObject* watched, QEvent* event) override
     {
+        if (watched == m_window) {
+            if (event->type() == QEvent::Expose || event->type() == QEvent::WindowStateChange)
+                syncPulse();
+            return QLabel::eventFilter(watched, event);
+        }
         switch (event->type()) {
         case QEvent::Resize:
         case QEvent::Move:
@@ -92,6 +150,45 @@ protected:
     }
 
 private:
+    QRect dotRect() const { return QRect(10, (height() - 6) / 2, 6, 6); }
+
+    void syncPulse()
+    {
+        // Some compositors do not report occlusion. Keep background windows quiet too.
+        const bool animate = m_showsActivity && isVisible() && m_window && m_window->isExposed()
+            && m_window->visibility() != QWindow::Minimized && m_window == QGuiApplication::focusWindow()
+            && QGuiApplication::styleHints()->accessibility()->motionPreference()
+                   != Qt::MotionPreference::ReducedMotion;
+        if (animate && m_pulse.state() != QAbstractAnimation::Running)
+            m_pulse.start();
+        else if (!animate)
+            m_pulse.stop();
+        update(dotRect());
+    }
+
+    void selectMessage()
+    {
+        const QString notice = m_bar ? m_bar->currentMessage() : QString();
+        const QString next = notice.isEmpty() ? m_activity : notice;
+        const bool showsActivity = notice.isEmpty() && !m_activity.isEmpty();
+        if (m_showsActivity != showsActivity) {
+            m_showsActivity = showsActivity;
+            setContentsMargins(showsActivity ? 22 : 10, 5, 10, 5);
+            syncPulse();
+        }
+        if (next == m_message) {
+            updateNotice(); // the same words can change source and width policy
+            return;
+        }
+        m_message = next;
+        setAccessibleName(next);
+        updateNotice();
+        if (next.isEmpty())
+            m_announcementTimer.stop();
+        else
+            m_announcementTimer.start();
+    }
+
     void updateNotice()
     {
         if (m_message.isEmpty() || !m_bar || !m_bar->isVisible()) {
@@ -101,7 +198,7 @@ private:
         }
 
         constexpr int kEdgeMargin = 8;
-        constexpr int kMaximumWidth = 640;
+        constexpr int kMaximumAppNoticeWidth = 640;
         ensurePolished();
         const QMargins margins = contentsMargins();
         const QString singleLine = m_message.simplified();
@@ -144,7 +241,9 @@ private:
             hide();
             return;
         }
-        const int noticeWidth = qMin(qMin(kMaximumWidth, space.width()), textWidth + horizontalPadding);
+        const int availableWidth = m_bar->currentMessage().isEmpty()
+            ? space.width() : qMin(kMaximumAppNoticeWidth, space.width());
+        const int noticeWidth = qMin(availableWidth, textWidth + horizontalPadding);
         setText(fontMetrics().elidedText(singleLine, Qt::ElideRight,
                                         qMax(0, noticeWidth - horizontalPadding)));
         setGeometry(space.left(), top, noticeWidth, noticeHeight);
@@ -156,6 +255,11 @@ private:
     QPointer<QWidget> m_surface;
     QPointer<QWidget> m_alternateSurface;
     QTimer m_announcementTimer;
+    QColor m_dotColor;
+    QPointer<QWindow> m_window;
+    QVariantAnimation m_pulse;
+    bool m_showsActivity{};
+    QString m_activity;
     QString m_message;
 };
 
