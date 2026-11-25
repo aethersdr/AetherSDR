@@ -819,7 +819,8 @@ void SpectrumOverlayMenu::buildAntPanel()
         "QPushButton { background: {{color.background.1}}; "
         "border: 1px solid {{color.background.2}}; border-radius: 3px; "
         "color: {{color.text.secondary}}; font-size: 11px; padding: 1px 4px; }"
-        "QPushButton:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:enabled:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:disabled { color: {{color.text.disabled}}; }"
         "QPushButton:checked { background: {{color.accent.dim}}; "
         "border-color: {{color.accent.bright}}; color: {{color.text.primary}}; }";
 
