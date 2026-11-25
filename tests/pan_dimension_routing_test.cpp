@@ -204,6 +204,16 @@ int main(int argc, char** argv)
                   && wiringCode.contains("PanCloseCenterLock::closeThenForget(")
                   && wiringCode.contains("return m_radioModel.removePanadapter(id);"),
               "pan_close and the title-bar X forget the center lock only through the accepted close");
+        // The helper itself: nothing is cleared before the close, the live lock
+        // is forgotten after it, and a changed saved intent is persisted.
+        const qsizetype helperAt = wiringCode.indexOf("bool MainWindow::closePanForgettingCenterLock(");
+        const QByteArray helper = helperAt < 0 ? QByteArray()
+            : wiringCode.mid(helperAt, wiringCode.indexOf("\n}\n", helperAt) - helperAt);
+        const qsizetype closeAt = helper.indexOf("PanCloseCenterLock::closeThenForget(");
+        check(closeAt > 0 && !helper.left(closeAt).contains("clearCenterLockForPan(")
+                  && helper.indexOf("clearCenterLockForPan(id);", closeAt) > closeAt
+                  && helper.contains("if (savedChanged) {\n        saveCenterLockSettings();"),
+              "the close helper clears nothing before the close, forgets the live lock after it, and saves a changed intent");
     }
     QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Wiring.cpp"));
     check(source.open(QIODevice::ReadOnly), "GUI dimension source readable");
