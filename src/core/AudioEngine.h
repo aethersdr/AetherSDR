@@ -1137,6 +1137,14 @@ private:
     // The existing friend fixture injects just the external device-open
     // boundary. An empty callback uses the real QAudioSink opener below.
     std::function<bool(int)> m_rxSinkOpener;
+    // Channels of the open RX device: 1 on a mono-only output such as a
+    // Bluetooth hands-free link, else 2. The mix stays stereo; only the final
+    // write and the device byte budget use this (#7616). Atomic: the bridge's
+    // endpoint snapshot reads it.
+    std::atomic<int> m_rxDeviceChannels{2};
+    // RX was asked for and not deliberately stopped, so a device change
+    // retries an open that failed (#7616).
+    bool m_rxStreamWanted{false};
     bool openRxSink(int producerRate);
     bool openRxSinkDevice(int producerRate);
     void closeRxSink();

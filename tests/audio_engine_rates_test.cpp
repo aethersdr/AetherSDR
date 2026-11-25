@@ -94,6 +94,10 @@ public:
     static int producerRate(const AudioEngine& engine) { return engine.m_rxProducerRate.load(); }
     static int outputRate(const AudioEngine& engine) { return engine.m_rxOutputRate.load(); }
     static void deviceRate(AudioEngine& engine, int rate) { engine.setRxDeviceRate(rate); }
+    static void deviceChannels(AudioEngine& engine, int channels)
+    {
+        engine.m_rxDeviceChannels.store(channels);
+    }
     static bool prepareKiwi(AudioEngine& engine)
     {
         engine.m_dspInitializationTasks.waitForFinished();
@@ -612,6 +616,79 @@ void negotiationOpenFailure()
         fixture.dispatch();
         check(fixture.requestedRates.size() == 2,
               "failed negotiation has no repeated retry on a same-rate source epoch");
+    }
+}
+
+double monoAmplitude(const QByteArray& pcm, int rate, double frequency)
+{
+    const qsizetype frames = pcm.size() / static_cast<qsizetype>(sizeof(float));
+    const qsizetype count = std::min<qsizetype>(rate / 2, frames / 2);
+    if (count < 100) {
+        return 0.0;
+    }
+    const auto* samples = reinterpret_cast<const float*>(pcm.constData());
+    double real = 0.0;
+    double imaginary = 0.0;
+    for (qsizetype index = 0; index < count; ++index) {
+        const double phase = kTau * frequency * static_cast<double>(index) / rate;
+        const float value = samples[frames - count + index];
+        real += value * std::cos(phase);
+        imaginary += value * std::sin(phase);
+    }
+    return 2.0 * std::hypot(real, imaginary) / static_cast<double>(count);
+}
+
+// #7616: a mono-only output (a Bluetooth hands-free link) is written the
+// average of the stereo mix, and its byte budget counts mono frames. A device
+// change retries an RX open that failed, but not after a deliberate stop.
+void monoDeviceAndRetry()
+{
+    {
+        constexpr int kRate = 24000;
+        constexpr qsizetype kMonoFrameBytes = static_cast<qsizetype>(sizeof(float));
+        Fixture fixture(kRate);
+        AudioEngineRatesTestAccess::deviceChannels(fixture.engine, 1);
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {kRate, PcmLayout::Stereo});
+        constexpr int kTicks = 100;
+        for (int tick = 0; tick < kTicks; ++tick) {
+            feed(fixture.engine, producer, tone(kRate, kRate / 100, tick * (kRate / 100)));
+            // The device reports its free space in mono frames: 10 ms of them.
+            AudioEngineRatesTestAccess::drain(fixture.engine, kRate / 100 * kMonoFrameBytes);
+        }
+        const qsizetype steadyFrames = fixture.output.data().size() / kMonoFrameBytes;
+        std::printf("mono device: %lld frames written for %d produced\n",
+                    static_cast<long long>(steadyFrames), kTicks * kRate / 100);
+        check(steadyFrames >= kTicks * kRate / 100 * 9 / 10,
+              "a mono device's byte budget drains a mono frame per producer frame");
+        for (int tick = 0; tick < 8; ++tick) {
+            AudioEngineRatesTestAccess::drain(fixture.engine, kRate * kMonoFrameBytes);
+        }
+        const QByteArray output = fixture.output.data();
+        const auto* samples = reinterpret_cast<const float*>(output.constData());
+        const bool allFinite = std::all_of(samples, samples + output.size() / kMonoFrameBytes,
+                                           [](float value) { return std::isfinite(value); });
+        const double left = monoAmplitude(output, kRate, 1000);
+        const double right = monoAmplitude(output, kRate, 2300);
+        std::printf("mono device: 1000 Hz %.4f (L 0.30), 2300 Hz %.4f (R 0.17)\n", left, right);
+        check(allFinite && output.size() % kMonoFrameBytes == 0
+                  && output.size() / kMonoFrameBytes <= kTicks * kRate / 100,
+              "a mono device is written whole mono frames, never interleaved stereo");
+        check(std::abs(left - 0.15) < 0.015 && std::abs(right - 0.085) < 0.01,
+              "a mono device plays (L+R)/2 of the stereo mix");
+    }
+    {
+        NegotiatingFixture fixture({24000});
+        fixture.failedOpens = 2;
+        check(!fixture.engine.startRxStream() && fixture.requestedRates.size() == 1,
+              "the RX open fails");
+        fixture.engine.setOutputDevice(QAudioDevice{}, AudioDeviceSelection::Fallback);
+        check(fixture.requestedRates.size() == 2,
+              "a device change retries an RX open that failed");
+        fixture.engine.stopRxStream();
+        fixture.engine.setOutputDevice(QAudioDevice{}, AudioDeviceSelection::Fallback);
+        check(fixture.requestedRates.size() == 2,
+              "after a deliberate stop, a device change leaves RX stopped");
     }
 }
 
@@ -1662,7 +1739,7 @@ void printUsage(const char* program)
 {
     std::fprintf(stderr,
         "usage: %s [--case=rateMatrix|bandwidthAndMono|negotiatedSpeakerOutput|"
-        "negotiationOpenFailure|negotiationLifetimeAndCoalescing|auxiliaryAcrossNegotiation|"
+        "negotiationOpenFailure|monoDeviceAndRetry|negotiationLifetimeAndCoalescing|auxiliaryAcrossNegotiation|"
         "transitionsAndRejection|queueBudgetsAndDeviceTransitions|lineOutDrainCatchUp|"
         "concurrentSourcesAndEffects|"
         "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
@@ -1686,6 +1763,7 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"bandwidthAndMono", std::nullopt},
              AudioCase{"negotiatedSpeakerOutput", std::nullopt},
              AudioCase{"negotiationOpenFailure", std::nullopt},
+             AudioCase{"monoDeviceAndRetry", std::nullopt},
              AudioCase{"negotiationLifetimeAndCoalescing", std::nullopt},
              AudioCase{"auxiliaryAcrossNegotiation", std::nullopt},
              AudioCase{"transitionsAndRejection", std::nullopt},
@@ -1754,6 +1832,9 @@ int main(int argc, char** argv)
     }
     if (selected("negotiationOpenFailure")) {
         runStage("negotiationOpenFailure", negotiationOpenFailure);
+    }
+    if (selected("monoDeviceAndRetry")) {
+        runStage("monoDeviceAndRetry", monoDeviceAndRetry);
     }
     if (selected("negotiationLifetimeAndCoalescing")) {
         runStage("negotiationLifetimeAndCoalescing", negotiationLifetimeAndCoalescing);

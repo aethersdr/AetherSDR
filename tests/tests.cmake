@@ -358,7 +358,7 @@ target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
 # Each invocation retains a bounded scenario instead of accumulating every
 # DSP initialization and effect comparison under one sanitizer timeout.
 foreach(_case IN ITEMS rateMatrix bandwidthAndMono negotiatedSpeakerOutput
-        negotiationOpenFailure negotiationLifetimeAndCoalescing auxiliaryAcrossNegotiation
+        negotiationOpenFailure monoDeviceAndRetry negotiationLifetimeAndCoalescing auxiliaryAcrossNegotiation
         transitionsAndRejection queueBudgetsAndDeviceTransitions lineOutDrainCatchUp
         effects-bypass effects-EQ
         effects-NR2 effects-RN2 effects-NR4 effects-DFNR effects-MNR kiwiDeviceRateMatrix
