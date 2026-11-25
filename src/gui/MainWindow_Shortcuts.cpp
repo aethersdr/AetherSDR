@@ -1229,9 +1229,14 @@ void MainWindow::showAddPanadapterDialog()
     }
     m_suppressStartupPanLayoutRearrange = true;
     auto& s = AppSettings::instance();
+    const QString previousLayout = s.value("PanadapterLayout", "1").toString();
     s.setValue("PanadapterLayout", layoutId);
     s.save();
-    applyPanLayout(layoutId);
+    const QString appliedLayout = applyPanLayout(layoutId, previousLayout);
+    if (appliedLayout != layoutId) {
+        s.setValue("PanadapterLayout", appliedLayout);
+        s.save();
+    }
 }
 
 // Voice-keyer twin of toggleCwKeyerPanel(). Extracted for the same reason: the

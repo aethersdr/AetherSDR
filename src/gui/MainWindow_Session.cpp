@@ -50,6 +50,7 @@
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "PanFrameGuard.h"
+#include "PanLayoutShrinkPolicy.h"
 #include "CatControlApplet.h"
 #include "models/ReceiverSlotCount.h"
 #include "ClientChainApplet.h"
@@ -149,20 +150,6 @@ void MainWindow::refreshNetworkQualityIndicators()
 }
 
 namespace {
-QString defaultPanLayoutForCount(int panCount)
-{
-    static const QMap<int, QString> kDefaultLayouts = {
-        {1, QStringLiteral("1")},
-        {2, QStringLiteral("2v")},
-        {3, QStringLiteral("2h1")},
-        {4, QStringLiteral("2x2")},
-        {5, QStringLiteral("3h2")},
-        {6, QStringLiteral("2x3")},
-        {7, QStringLiteral("4h3")},
-        {8, QStringLiteral("2x4")}
-    };
-    return kDefaultLayouts.value(panCount, QStringLiteral("1"));
-}
 constexpr qint64 kXvtrWaterfallDecisionLogIntervalMs = 20000;
 constexpr int kProfileLoadMinRenderableFrameBins = 128;
 
@@ -2858,7 +2845,7 @@ void MainWindow::wirePanLifecycle()
                         .value("PanadapterLayout", "1").toString();
                     const QString layoutId = panCountForLayoutId(saved) == panCount
                         ? saved
-                        : defaultPanLayoutForCount(panCount);
+                        : PanLayoutShrinkPolicy::defaultLayoutForCount(panCount);
                     const QString floatingPanIds = AppSettings::instance()
                         .value(kFloatingPanIdsKey, "").toString();
                     m_panStack->rearrangeLayout(layoutId);
@@ -3018,7 +3005,7 @@ void MainWindow::wirePanLifecycle()
         // to avoid leaving empty nested splitter cells behind.
         int remaining = m_panStack->count();
         if (remaining > 1) {
-            m_panStack->rearrangeLayout(defaultPanLayoutForCount(remaining));
+            m_panStack->rearrangeLayout(PanLayoutShrinkPolicy::defaultLayoutForCount(remaining));
         }
     });
 
