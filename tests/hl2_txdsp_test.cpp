@@ -2792,11 +2792,16 @@ int main(int argc, char** argv)
     }
     // The default ALC target holds a full-scale tone at 0.95, and TXA's own ALC
     // (threshold 0.99742) never reduces behind it, in USB and in AM.
+    // The second stimulus is why the target stops at 0.95: TXA's bandpass runs
+    // after the host ALC, and removing content lifts the peak. 1 kHz minus 3 %
+    // of its 5th harmonic peaks at 0.97 before; the bandpass drops the 5 kHz and
+    // the peak rises x1.031, so 0.95 lands at ~0.98 and 0.98 would cross 0.99742.
     {
         struct TargetRun { double alcPeakDbfs = -400.0; double iqPeak = 0.0;
                            double wdspAlcMaxDb = 0.0; double wdspAlcMinDb = 0.0;
                            unsigned long long faults = 0; };
-        auto targetOnce = [](WdspChannel::Mode mode) -> TargetRun {
+        constexpr double kOutOfBand = 0.03;   // 5 kHz share, above the 2700 Hz edge
+        auto targetOnce = [](WdspChannel::Mode mode, bool outOfBand) -> TargetRun {
             TargetRun out;
             Hl2TxDsp tx;
             TxTestAuthority authority;
@@ -2822,9 +2827,13 @@ int main(int argc, char** argv)
             std::vector<float> chunk(kChunk);
             bool firstRead = true;
             for (int off = 0; off < total; off += static_cast<int>(kChunk)) {
-                for (std::size_t n = 0; n < kChunk; ++n)
+                for (std::size_t n = 0; n < kChunk; ++n) {
+                    const double ph = 2.0 * M_PI * 1000.0 * (off + static_cast<int>(n)) / fs;
                     chunk[n] = static_cast<float>(
-                        std::sin(2.0 * M_PI * 1000.0 * (off + static_cast<int>(n)) / fs));
+                        outOfBand ? (std::cos(ph) - kOutOfBand * std::cos(5.0 * ph))
+                                        / (1.0 - kOutOfBand)
+                                  : std::sin(ph));
+                }
                 feed(tx, chunk, TxAudioSource::Microphone, authority.context);
                 if (off >= fs / 2) {   // after the first blocks have run
                     const double db = tx.pureSignalChannel()->txAlcReductionDbForTest();
@@ -2843,7 +2852,7 @@ int main(int argc, char** argv)
         for (const auto mode : {WdspChannel::Mode::Usb, WdspChannel::Mode::Am}) {
             const bool am = mode == WdspChannel::Mode::Am;
             const TargetRun r = retryIfStarved<TargetRun>(
-                "the ALC target case", [&] { return targetOnce(mode); });
+                "the ALC target case", [&] { return targetOnce(mode, false); });
             std::fprintf(stderr,
                          "ALC target (%s): post-ALC peak %.4f, settled |IQ| peak %.4f, "
                          "TXA ALC %.4f..%.4f dB\n",
@@ -2860,6 +2869,25 @@ int main(int argc, char** argv)
             check(r.wdspAlcMinDb >= -0.005 && r.wdspAlcMaxDb < 0.005,
                   am ? "AM: TXA's own ALC stays at 0 dB behind the 0.95 target"
                      : "USB: TXA's own ALC stays at 0 dB behind the 0.95 target");
+        }
+        for (const auto mode : {WdspChannel::Mode::Usb, WdspChannel::Mode::Am}) {
+            const bool am = mode == WdspChannel::Mode::Am;
+            const TargetRun r = retryIfStarved<TargetRun>(
+                "the ALC overshoot case", [&] { return targetOnce(mode, true); });
+            std::fprintf(stderr,
+                         "ALC overshoot (%s): post-ALC peak %.4f, settled |IQ| peak %.4f, "
+                         "TXA ALC %.4f..%.4f dB\n",
+                         am ? "AM" : "USB", std::pow(10.0, r.alcPeakDbfs / 20.0),
+                         r.iqPeak, r.wdspAlcMinDb, r.wdspAlcMaxDb);
+            // The bandpass lifts the held 0.95 by 1/0.97; AM halves it on the carrier.
+            const double lifted = 0.95 / (1.0 - kOutOfBand);
+            const double expected = am ? 0.5 + 0.5 * lifted : lifted;
+            check(std::fabs(r.iqPeak - expected) < 0.01,
+                  am ? "AM: the bandpass lifts the held peak by 1/0.97, unreduced"
+                     : "USB: the bandpass lifts the held peak to ~0.98, unreduced");
+            check(r.wdspAlcMinDb >= -0.005 && r.wdspAlcMaxDb < 0.005,
+                  am ? "AM: TXA's ALC stays at 0 dB when the bandpass lifts the peak"
+                     : "USB: TXA's ALC stays at 0 dB when the bandpass lifts the peak");
         }
     }
 #endif  // AETHER_HL2_TX_TXA
