@@ -1321,6 +1321,13 @@ double WdspChannel::meter(Meter which) const noexcept
     return GetRXAMeter(m_channelId, static_cast<int>(which));
 }
 
+double WdspChannel::txAlcReductionDbForTest() const noexcept
+{
+    if (m_config.direction != Direction::Transmit)
+        return std::numeric_limits<double>::quiet_NaN();
+    return GetTXAMeter(m_channelId, AETHER_WDSP_TXA_ALC_GAIN);
+}
+
 std::size_t WdspChannel::outputBlockSize() const noexcept
 {
     return m_outputBlockSize;

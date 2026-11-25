@@ -10303,7 +10303,7 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordin
         // modem reaches here on a host-modulating radio (RADE is Flex-only). The AFSK
         // amplitude is fixed (kTxAfskAmplitude = 0.35, -9.12 dBFS) and the packet dialog
         // has no level control, so the mic slider is its only level; EngineGenerated
-        // would bypass it and pin packet 7.71 dB under the 0.85 (-1.41 dBFS) ALC target.
+        // would bypass it and pin packet 8.67 dB under the 0.95 (-0.45 dBFS) ALC target.
         feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
                                /*forceRadioDaxRoute=*/true,
                                TxAudioSource::Microphone, context);

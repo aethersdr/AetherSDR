@@ -55,7 +55,7 @@
 // Hl2Backend.h seeds m_alcTargetPeak with a literal (it can only
 // forward-declare Hl2TxDsp); this keeps the seed equal to the modulator's
 // default so a pre-connect snapshot is honest.
-static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
+static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.95,
               "Hl2Backend.h seeds m_alcTargetPeak with this value — keep them equal");
 
 // lcHl2Tx moved to LogManager.h/.cpp beside every other category: this string
@@ -634,7 +634,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // MeterModel's TX:ALC is a LEVEL in dBFS, not a gain, which is why this is
     // fed from alcPeak() and not from the alcGain() signal sitting next to it.
     // alcGain answers "how hard is the ALC working"; the gauge asks "how close
-    // to full modulation am I", and on a chain whose ALC targets 0.85 those two
+    // to full modulation am I", and on a chain whose ALC targets 0.95 those two
     // move in opposite directions.
     connect(m_txDsp, &Hl2TxDsp::alcPeak, this, [this](float dbfs) {
         m_alcPeakDbfs = dbfs;
@@ -5427,10 +5427,10 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // Margin below alcTargetPeak that counts as quiet. Measured
         // (d81b-speech-pauses-alc, hpsdrsim loopback, not on air): speech
         // crest 18.87 dB (sd 0.80), burst spread <= 0.91 dB, and unity slider
-        // peaks 19.56-19.67 dB below target (-21.08/-20.97 dBFS vs
-        // 20*log10(0.85) = -1.4116 dBFS). So the margin must stay below
-        // 19.56 dB or unity operators are never told. 12.0 is chosen: fires on
-        // unity with 7.6 dB to spare, well clear of the measured noise. Only
+        // peaks 20.52-20.63 dB below target (-21.08/-20.97 dBFS vs
+        // 20*log10(0.95) = -0.4455 dBFS). So the margin must stay below
+        // 20.52 dB or unity operators are never told. 12.0 is chosen: fires on
+        // unity with 8.5 dB to spare, well clear of the measured noise. Only
         // bounded from one side; a leg at slider ~74 would bracket it.
         constexpr double kQuietMarginBelowTargetDb = 12.0;
         const double targetDbfs =
