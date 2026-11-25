@@ -1696,7 +1696,13 @@ bool MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
                 --at;
             }
             if (at == 0) {
-                return false;   // the element's own release is already on the wire
+                // The element's own release is already on the wire. Its fall
+                // holds this completion until it reaches zero, or the intent
+                // ends and the writer drops CW mode mid-fall (#7568).
+                if (m_cwMode && !m_cwKeyDown && m_cwEnvelope > 0.0) {
+                    m_cwFallCompletion = completion;
+                }
+                return false;
             }
             if (target >= m_cwSchedule[at - 1].sample) {
                 m_cwSchedule[at - 1].completion = completion;   // held until it is written
@@ -1752,10 +1758,15 @@ void MetisClient::scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Oper
         // A late key-up is applied at once: the element runs long, never short.
         // It goes on the wire in the frame being built, and replaces any
         // release it cut, so the break-in hang counts from that frame (#7570).
+        // The fall it starts holds its completion until it reaches zero, as a
+        // written key-up's does; a release carries none to hold.
         ++m_cwLateKeyUps;
         m_cwKeyDown = false;
         m_cwForceUpSample = -1;
         m_cwOperation = operation;
+        if (!release && m_cwMode && m_cwEnvelope > 0.0) {
+            m_cwFallCompletion = completion;
+        }
         publishCwUpOnAir(m_cwFrameSample);
         return;
     }

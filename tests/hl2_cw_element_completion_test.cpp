@@ -22,7 +22,9 @@
 // same holds for the two other fences of a host-text run inside the hang, a
 // refused key-down and the retire cap; a re-key after such a fence that the
 // EP2 writer refuses (past the shift bound) raises no MOX; and a re-key in a
-// live over leaves its MOX alone.
+// live over leaves its MOX alone; under manual MOX the last paddle element's
+// fall is whole when the paddles go idle with MOX held (#7568), also when a
+// key-up without a release reaches the writer after its instant (#7570).
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -916,6 +918,124 @@ static void testHostTextOtherFenceInTheHang(HangFence route, bool breakIn)
     }
 }
 
+// #7568: manual MOX, the paddles go idle after one element while the
+// operator still holds MOX. The element's key-up completion ends the last
+// CW intent; the 5 ms fall it started must still reach zero on EP2, not step.
+// Each edge reaches the model at its own instant, and the model runs right
+// after the frame that writes the release, so a completion lands in the fall.
+// `upAfterRelease`: the key-up reaches the I/O thread only once the release
+// is on EP2 (a stalled GUI thread), inside the fall.
+static void testManualMoxLastElementFallIsWhole(bool upAfterRelease)
+{
+    const std::string name = std::string("manual MOX, paddles idle, MOX held")
+        + (upAfterRelease ? ", key-up after its release is written" : "") + ": ";
+    Rig rig(false);
+    rig.model.transmitModel().setMox(true);
+    Rig::settle();
+    const TxCoordinator::Producer paddle = rig.model.registerTxProducer();
+    const TxCoordinator::Request element = paddle.request().derive();
+    rig.model.queueProducerCwKeyEdge(element, true, QStringLiteral("test:paddle"), 0, 0, rig.at(100), false,
+                                     [&rig] { ++rig.refusedDowns; }, rig.at(140));
+    Rig::settle();
+    const std::int64_t up = samplesOfMs(140) + samplesOfMs(Hl2Settings::kCwEdgeLeadDefaultMs);
+    const auto buildThrough = [&rig](std::int64_t sample) {
+        while (static_cast<std::int64_t>(rig.iTrace.size()) <= sample) {
+            appendI(Hl2TxGateTestAccess::packet(*rig.backend), rig.iTrace);
+        }
+    };
+    if (upAfterRelease) {
+        buildThrough(up);
+    } else {
+        rig.buildTo(140);
+    }
+    rig.model.queueProducerCwKeyEdge(element, false, QStringLiteral("test:paddle"), 0, 0, rig.at(140));
+    Rig::settle();
+    buildThrough(up);
+    Rig::settle();
+    for (int i = 0; i < 4; ++i) {   // frame by frame through the fall, the model running between
+        appendI(Hl2TxGateTestAccess::packet(*rig.backend), rig.iTrace);
+        Rig::settle();
+    }
+    rig.buildTo(400);
+    Rig::settle();   // the completion, finished at the fall's end, reaches the model
+    const std::int64_t fall = samplesOfMs(5);
+    bool monotonic = true;
+    int largestStep = 0;
+    for (std::int64_t n = up + 1; n <= up + fall; ++n) {
+        const int step = rig.iTrace[static_cast<std::size_t>(n - 1)] - rig.iTrace[static_cast<std::size_t>(n)];
+        monotonic = monotonic && step >= 0;
+        largestStep = std::max(largestStep, step);
+    }
+    std::string trace;
+    for (std::int64_t n = up; n <= up + fall; n += 20) {
+        trace += " " + std::to_string(rig.iTrace[static_cast<std::size_t>(n)]);
+    }
+    check(rig.refusedDowns == 0 && monotonic && largestStep < 400
+              && rig.iTrace[static_cast<std::size_t>(up + fall - 20)] > 0
+              && rig.iTrace[static_cast<std::size_t>(up + fall)] == 0,
+          name + "the element's 5 ms fall decreases monotonically to 0 (I every 20 samples:" + trace
+              + "; largest step " + std::to_string(largestStep) + ")");
+    check(!rig.model.txProducerInputPending(paddle), name + "the element's intent ends after its fall");
+    check(Hl2TxGateTestAccess::keyed(*rig.backend), name + "the operator's MOX still keys");
+    rig.model.transmitModel().setMox(false);
+    Rig::settle();
+}
+
+// #7570 lead 4: manual MOX, a scheduled key-down without its own release, and
+// a key-up that reaches the writer after its instant (a stalled GUI thread).
+// The late key-up is applied at once, at the frame being built; its
+// completion is the last CW intent, so it must be held through the 5 ms fall
+// it starts, which then reaches zero on EP2 instead of stepping. Lead 0, so
+// the up's sample is its instant: due at 140 ms, delivered at 200 ms.
+static void testManualMoxLateKeyUpHoldsItsFall()
+{
+    const std::string name = "manual MOX, late key-up without a release: ";
+    Rig rig(false, 0);
+    rig.model.transmitModel().setMox(true);
+    Rig::settle();
+    const TxCoordinator::Producer paddle = rig.model.registerTxProducer();
+    const TxCoordinator::Request element = paddle.request().derive();
+    rig.model.queueProducerCwKeyEdge(element, true, QStringLiteral("test:paddle"), 0, 0, rig.at(100), false,
+                                     [&rig] { ++rig.refusedDowns; });
+    Rig::settle();
+    rig.buildTo(200);
+    const auto up = static_cast<std::int64_t>(rig.iTrace.size());   // the frame the late up is applied in
+    rig.model.queueProducerCwKeyEdge(element, false, QStringLiteral("test:paddle"), 0, 0, rig.at(140));
+    Rig::settle();
+    appendI(Hl2TxGateTestAccess::packet(*rig.backend), rig.iTrace);   // the fall's first frame
+    Rig::settle();
+    check(rig.model.txProducerInputPending(paddle),
+          name + "the key-up's completion is held while its fall runs");
+    for (int i = 0; i < 3; ++i) {   // frame by frame through the fall, the model running between
+        appendI(Hl2TxGateTestAccess::packet(*rig.backend), rig.iTrace);
+        Rig::settle();
+    }
+    rig.buildTo(400);
+    Rig::settle();   // the completion, finished at the fall's end, reaches the model
+    const std::int64_t fall = samplesOfMs(5);
+    bool monotonic = true;
+    int largestStep = 0;
+    for (std::int64_t n = up + 1; n <= up + fall; ++n) {
+        const int step = rig.iTrace[static_cast<std::size_t>(n - 1)] - rig.iTrace[static_cast<std::size_t>(n)];
+        monotonic = monotonic && step >= 0;
+        largestStep = std::max(largestStep, step);
+    }
+    std::string trace = " before " + std::to_string(rig.iTrace[static_cast<std::size_t>(up - 1)]) + ";";
+    for (std::int64_t n = up; n <= up + fall; n += 20) {
+        trace += " " + std::to_string(rig.iTrace[static_cast<std::size_t>(n)]);
+    }
+    check(rig.refusedDowns == 0 && rig.iTrace[static_cast<std::size_t>(up - 1)] > 30000 && monotonic
+              && largestStep < 400 && rig.iTrace[static_cast<std::size_t>(up + fall - 20)] > 0
+              && rig.iTrace[static_cast<std::size_t>(up + fall)] == 0,
+          name + "the 5 ms fall from the frame it is applied in decreases monotonically to 0 (I every 20 samples:"
+              + trace + "; largest step " + std::to_string(largestStep) + "; "
+              + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
+    check(!rig.model.txProducerInputPending(paddle), name + "the element's intent ends after its fall");
+    check(Hl2TxGateTestAccess::keyed(*rig.backend), name + "the operator's MOX still keys");
+    rig.model.transmitModel().setMox(false);
+    Rig::settle();
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-cw-element-completion"));
@@ -931,6 +1051,9 @@ int main(int argc, char** argv)
     testSuppressedStraightUpAfterTheLastRelease();
     testRevokedProducerAtTheWriter();
     testHostTextFallSurvivesTheNextDown();
+    testManualMoxLastElementFallIsWhole(false);
+    testManualMoxLastElementFallIsWhole(true);
+    testManualMoxLateKeyUpHoldsItsFall();
     testHostTextEngineLastElementIsWhole(20, true);
     testHostTextEngineLastElementIsWhole(40, true);
     testHostTextEngineLastElementIsWhole(20, false);
