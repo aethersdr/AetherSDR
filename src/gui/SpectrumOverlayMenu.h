@@ -109,9 +109,8 @@ public:
     // Use the active regional plan when mapping the slice frequency to a
     // native band button. The manager is owned by MainWindow.
     void setBandPlanManager(BandPlanManager* manager);
-    // Show/hide the whole WNB row (button + level slider + readout) based on
-    // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
-    void setRadioSideDspAvailable(bool available);
+    // Firmware DSP and panadapter-wide blanking are independent capabilities.
+    void setWnbAvailability(bool hasRadioDsp, bool supported);
     // Whether the connected backend drives its own receive RF gain
     // (IRadioBackend::autoRfGainControl). False HIDES the Auto checkbox beside
     // the RF Gain slider rather than disabling it: on a family with no such
@@ -575,6 +574,8 @@ private:
     QPointer<KiwiSdrManager> m_kiwiSdrManager;
     QPointer<SliceModel> m_slice;
     bool         m_updatingFromModel{false};
+    bool         m_antennaComboRefreshPending{false};  // skipped under an open list or a pick
+    bool         m_rxAntennaPickInProgress{false};     // inside the RX ANT combo's station pick
     int          m_lastEmittedRfGain{INT_MIN};  // dedupe rfgain emits across drag snap ticks (#1498)
 };
 

@@ -48,6 +48,18 @@ your session or keying the radio. It still requires the access token.
 
 You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is grayed out, because the environment variable wins.
 
+### Agent control indicator
+
+When an agent reports its first step, the Orbit badge in the lower-left status
+bar shows its name. Its current step appears beside the Band/Segment Zoom
+controls. A cyan dot beside the sentence gently pulses as the client repaints
+while the step is active and the window is in front. The pulse stops when the
+window is hidden, covered, or minimized. Reduced Motion keeps the dot steady. The activity can use
+up to 64 characters. Hover over Orbit for the full text when the window is narrow.
+Radio notices temporarily take priority. The badge and activity clear when the
+agent finishes, disconnects, or goes five minutes without reporting its step.
+A second agent gets a busy response while the first holds the indicator.
+
 ### Access token
 
 Every verb except `ping` is refused without the matching token. The token is kept in your operating system's secret store (macOS Keychain, Windows Credential Manager, or libsecret/KWallet on Linux), never in the settings database.

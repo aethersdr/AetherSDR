@@ -808,6 +808,11 @@ public:
     virtual void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) = 0;
     virtual IndependentTxControl independentTxControl() const { return {}; }
     virtual bool independentTxReady() const { return false; }
+    // The radio may still radiate: keyed, tuning, or in its own transmit tail
+    // after MOX-off (TX FIFO drain, PTT hang). A switch outside the radio does
+    // not move while this is true. Default: no tail beyond what TransmitModel
+    // reports, which the caller checks itself.
+    virtual bool transmitPathBusy() const { return false; }
     virtual void stopIndependentTx(const TxCoordinator::Operation& operation,
                                    const TxCoordinator::StopRequest& request)
     {
@@ -1298,8 +1303,9 @@ signals:
     // named (no TX receiver); RadioModel then posts the Notice with no pan, and
     // the panadapter overlay falls back to the TX or active slice's pan.
     void transmitChangeRefused(int sliceId, const QString& message);
-    // A transmission the operator keyed did not go out, for a reason the
-    // operator should see (`reason`, one short line). Once per transmission;
+    // A transmission the operator keyed did not go out, or was ended by the
+    // backend, for a reason the operator should see (`reason`, one short
+    // line). Once per transmission;
     // RadioModel raises it as a "TX failed" notice. MOX is not changed by it.
     void transmitFailed(const QString& reason);
 

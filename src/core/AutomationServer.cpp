@@ -77,6 +77,7 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 
 // Best-effort value extraction for common control types.
@@ -2389,8 +2390,56 @@ int AutomationServer::sliceLinkPeerOf(const SliceModel* s) const
 }
 
 AutomationServer::AutomationServer(QObject* parent)
-    : QObject(parent)
+    : QObject(parent), m_activityTimer(new QTimer(this))
 {
+    m_activityTimer->setSingleShot(true);
+    m_activityTimer->setTimerType(Qt::PreciseTimer);
+    m_activityTimer->setInterval(std::chrono::minutes(5));
+    connect(m_activityTimer, &QTimer::timeout, this, &AutomationServer::clearAgentActivity);
+}
+
+void AutomationServer::clearAgentActivity()
+{
+    m_activityTimer->stop();
+    m_activityOwner.clear();
+    if (!m_activityText.isEmpty()) {
+        m_activityText.clear();
+        emit agentActivityChanged({}, {});
+    }
+}
+
+QJsonObject AutomationServer::setAgentActivity(QLocalSocket* socket, const QString& text)
+{
+    if (!socket)
+        return err(QStringLiteral("activity requires a live connection"));
+    if (m_activityOwner && m_activityOwner != socket)
+        return err(QStringLiteral("busy"));
+    if (text.isEmpty()) {
+        clearAgentActivity();
+    } else {
+        // Whitespace controls become spaces first; the remaining control and format
+        // characters (bidi controls, zero-width marks) are then stripped.
+        static const QRegularExpression controls(QStringLiteral(
+            R"([\p{Cc}\p{Cf}])"));
+        QString cleaned = text.simplified();
+        std::u32string points = cleaned.remove(controls).simplified().toStdU32String();
+        if (points.empty())
+            return err(QStringLiteral("activity must contain display text; send an empty string to release"));
+        constexpr std::size_t maxActivityCharacters = 64;
+        if (points.size() > maxActivityCharacters)
+            points.resize(maxActivityCharacters);
+        const QString line = QString::fromStdU32String(points);
+        m_activityOwner = socket;
+        m_activityTimer->start();
+        if (m_activityText != line) {
+            m_activityText = line;
+            emit agentActivityChanged(line, m_agentStation);
+        }
+    }
+    QJsonObject reply{{QStringLiteral("ok"), true}, {QStringLiteral("active"), !text.isEmpty()}};
+    if (!text.isEmpty())
+        reply.insert(QStringLiteral("expiresInMs"), m_activityTimer->remainingTime());
+    return reply;
 }
 
 AutomationServer::~AutomationServer()
@@ -2551,6 +2600,7 @@ bool AutomationServer::start(const QString& serverName)
 
 void AutomationServer::stop()
 {
+    clearAgentActivity();
     ++m_stationScheduleRevision;
     disconnect(m_stationConnection);
     const QPointer<AutomationServer> self(this);
@@ -2643,7 +2693,10 @@ void AutomationServer::setAuthToken(const QString& token)
 {
     if (m_authToken != token) {
         m_authToken = token;
+        const QPointer<AutomationServer> self(this);
         forceUnkey("automation authorization rotated");
+        if (self)
+            clearAgentActivity();
     }
 }
 
@@ -2651,7 +2704,10 @@ void AutomationServer::setReadOnly(bool readOnly)
 {
     if (m_readOnly != readOnly) {
         m_readOnly = readOnly;
+        const QPointer<AutomationServer> self(this);
         forceUnkey("automation observe-only permission changed");
+        if (self)
+            clearAgentActivity();
     }
 }
 
@@ -2777,6 +2833,8 @@ void AutomationServer::onDisconnected()
     auto* sock = qobject_cast<QLocalSocket*>(sender());
     if (!sock)
         return;
+    if (sock == m_activityOwner)
+        clearAgentActivity();
     cancelGesture(sock, QStringLiteral("gesture owner disconnected"));
     m_buffers.remove(sock);
     if (m_logSubscribers.remove(sock) && m_logSubscribers.isEmpty() && m_logDrain)
@@ -3046,6 +3104,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             v.push_back({std::move(name), std::move(aliases), std::move(help),
                          std::move(parse), std::move(dispatch)});
         };
+
+        add("agentActivity", {}, "Report operator-visible activity on a held connection (JSON text, empty to release)",
+            parseNothing,
+            [](AutomationServer& self, A& args, QLocalSocket* sock) {
+                return self.setAgentActivity(sock, args.value);
+            });
 
         add("ping", {}, "liveness check → app + version + build identity + whether a token is required",
             parseNothing,
@@ -4013,6 +4077,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
 {
     QString cmd;
     VerbArgs a;
+    QJsonValue activityText(QJsonValue::Undefined);
 
 
     const QByteArray trimmed = line.trimmed();
@@ -4046,6 +4111,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         else if (v.isDouble()) a.value = QString::number(v.toDouble());
         else if (v.isBool())   a.value = v.toBool() ? QStringLiteral("true")
                                                     : QStringLiteral("false");
+        if (cmd == QLatin1String("agentActivity"))
+            activityText = obj.value(QStringLiteral("text"));
         a.model    = obj.value(QStringLiteral("model")).toString();
         a.selector = obj.value(QStringLiteral("selector")).toString();
         a.property = obj.value(QStringLiteral("property")).toString();
@@ -4183,6 +4250,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                                     "-> Network to allow driving."));
     }
 
+    if (spec->name == QLatin1String("agentActivity")) {
+        if (!a.action.isEmpty() || !activityText.isString())
+            return err(QStringLiteral("agentActivity requires a text string"));
+        a.value = activityText.toString();
+    }
     return spec->dispatch(*this, a, sock);
 }
 
@@ -9753,6 +9825,8 @@ QJsonObject AutomationServer::doStation(const QString& name)
         return err(QStringLiteral("not connected — connect to a radio before setting the station name"));
     if (!applyAgentStation(n)) { return err(QStringLiteral("station name not dispatched on this radio")); }
     m_agentStation = n;
+    if (!m_activityText.isEmpty())
+        emit agentActivityChanged(m_activityText, m_agentStation);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
 }
 

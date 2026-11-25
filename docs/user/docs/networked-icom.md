@@ -78,7 +78,7 @@ AetherSDR treats an Icom differently from a FlexRadio:
 What you can do:
 
 - **Panadapter** from the radio's own scope. A recognized model with scope support has **one panadapter**, and the dual-receiver IC-7610, IC-7760 and IC-7851 have **two**, one for MAIN and one for SUB (see [below](#ic-7610-ic-7760-and-ic-7851)). Until the model is identified, or if it has no supported scope, its capacity is zero: **Tools → Add Panadapter...** is unavailable, and the status-bar **Add Panadapter** shortcut reports the capacity limit without opening the layout chooser.
-- **Receive and transmit:** RX audio, transmit, RF gain, preamp and attenuator (each separate from the display's RF gain), AF gain, TX monitor, VOX, RIT/XIT, manual notch and the ATU on models that have one. TUNE power changes made during a tune are kept.
+- **Receive and transmit:** RX audio, transmit, RF gain, preamp and attenuator (each separate from the display's RF gain), AF gain, TX monitor, VOX, RIT/XIT, manual notch and the ATU on models that have one. TUNE power changes made during a tune are kept. The RX noise blanker works at slice level. The ANT panel dims WNB on Icom radios that lack a panadapter-wide blanker.
 - **Filters:** the radio's real IF width is read back, the filter buttons are ordered narrow to wide for the mode, twin PBT is supported, and TX low/high cut follow what the model supports.
 - **Status bar:** the radio's **Network Radio Name** (the name set in its network settings) is shown, separate from model and callsign.
 - **Radio Health** (**Tools → Radio Health...**) shows the radio's modulation inputs and levels.
@@ -86,6 +86,8 @@ What you can do:
 - **Memory channels** use AetherSDR's shared bank on this computer, and the radio's own memories can be read in on models that support it. The IC-9700's radio memories are read-only.
 
 ### Panadapter scope modes
+
+The IC-705's receive attenuator offers OFF and 20 dB below 74.800000 MHz. The ATT button is dimmed until the radio confirms its frequency and at or above 74.800000 MHz. Returning to a supported band refreshes the button from the radio.
 
 The panadapter is the radio's own scope, and the radio owns the scope mode. On the IC-7300MK2, the IC-705 (firmware 1.20 or later) and the IC-9700 (firmware 1.30 or later) the **Scope** row in the Display panel offers the radio's three modes:
 

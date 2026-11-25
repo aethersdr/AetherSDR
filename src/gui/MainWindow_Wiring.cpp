@@ -67,6 +67,7 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "models/MicrohamTrioRadioLink.h"
 #include "core/SpeConnection.h"
 #include "core/SpeLegacyProtocol.h"
 #include "core/SpeProtocol.h"
@@ -118,10 +119,12 @@ namespace AetherSDR {
 void MainWindow::wireStatusBarMessages()
 {
     auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_panStack);
+    connect(this, &MainWindow::agentActivityChanged,
+            messageOverlay, &StatusBarMessageOverlay::setAgentActivity);
     ThemeManager::instance().applyStyleSheet(
         messageOverlay,
         QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"
-                       " background: {{color.background.1}}; font-size: 12px;"
+                       " qproperty-activityDotColor: {{color.canon.cyan}}; background: {{color.background.1}}; font-size: 12px;"
                        " border: 1px solid {{color.background.2}}; border-radius: 4px; }"));
     connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
             this, [this](ATUStatus, const QString& detail) {
@@ -7698,12 +7701,19 @@ void MainWindow::wireMeters()
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
-    // ── microHAM Trio antenna switch — read-only, switches nothing ────────
-    // The Peripherals page shows its state and labels; nothing here changes
-    // anything on it. Its session is taken at startup only with "Connect
-    // automatically" on, like the KPA500/KAT500 rows.
+    // ── microHAM Trio antenna switch ──────────────────────────────────────
+    // The Peripherals page shows its state and labels; the link below sends
+    // the antenna picks made in RX ANT / TX ANT to it. Its session is taken at
+    // startup only with "Connect automatically" on, like the KPA500/KAT500 rows.
     m_trioModel.loadSettings(PeripheralSettings::autoConnect(
         QLatin1String(MicrohamTrioSettings::kPeripheralId)));
+    // The Trio is told which radio is connected (the Peripherals page reads and
+    // stores that radio's port on it), and its antenna ports are offered in
+    // the RX ANT / TX ANT menus beside the radio's own.
+    m_trioLink = new MicrohamTrioRadioLink(&m_radioModel, &m_trioModel, this);
+    connect(&m_trioModel, &MicrohamTrioModel::notice, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 8000);
+    });
 
     // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and

@@ -2035,6 +2035,13 @@ target_include_directories(hl2_rxdsp_panel_mono_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_panel_mono_test COMMAND hl2_rxdsp_panel_mono_test)
 
+# The ANAN receive panel is mono (L == R) in every mode, including AM/SAM under
+# ANR, and stays so across a mode change and a rebuild (#7563). Offline.
+add_executable(anan_rxdsp_panel_mono_test tests/anan_rxdsp_panel_mono_test.cpp)
+target_include_directories(anan_rxdsp_panel_mono_test PRIVATE src)
+target_link_libraries(anan_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_rxdsp_panel_mono_test COMMAND anan_rxdsp_panel_mono_test)
+
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)
@@ -2241,10 +2248,18 @@ target_include_directories(rtl_ssb_cw_pipeline_test PRIVATE src)
 target_link_libraries(rtl_ssb_cw_pipeline_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_ssb_cw_pipeline_test COMMAND rtl_ssb_cw_pipeline_test)
 set_tests_properties(rtl_ssb_cw_pipeline_test PROPERTIES TIMEOUT 180)
+
+# Every RTL WDSP recipe is mono at the output panel (L == R): SSB, CW and
+# AM/SAM under ANR or ANF, through the production pipeline (#7563). Offline.
+add_executable(rtl_rx_panel_mono_test tests/rtl_rx_panel_mono_test.cpp)
+target_include_directories(rtl_rx_panel_mono_test PRIVATE src)
+target_link_libraries(rtl_rx_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_rx_panel_mono_test COMMAND rtl_rx_panel_mono_test)
+set_tests_properties(rtl_rx_panel_mono_test PROPERTIES TIMEOUT 180)
 if(WIN32)
     # Paced IQ and bounded channel-stop waits use the coarser Windows timer tick.
     set_tests_properties(rtl_am_sam_pipeline_test rtl_ssb_cw_pipeline_test
-        PROPERTIES TIMEOUT 600)
+        rtl_rx_panel_mono_test PROPERTIES TIMEOUT 600)
 endif()
 
 add_executable(cw_mode_gate_test tests/cw_mode_gate_test.cpp)
@@ -7626,6 +7641,61 @@ add_test(NAME microham_trio_peripherals_test COMMAND microham_trio_peripherals_t
 set_tests_properties(microham_trio_peripherals_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# The Trio's ports as a station device of a socket-free radio: RadioModel's
+# registry, the view the antenna menus get, the commands a pick sends, every
+# refusal, above all while keyed or in the backend's transmit tail.
+add_executable(microham_trio_link_test tests/microham_trio_link_test.cpp)
+target_include_directories(microham_trio_link_test PRIVATE src tests)
+target_link_libraries(microham_trio_link_test PRIVATE aethercore Qt6::Core)
+add_test(NAME microham_trio_link_test COMMAND microham_trio_link_test)
+
+# Station antenna switches in the RX ANT / TX ANT menus and fields: one
+# submenu per device (src/gui/StationAntennaMenu.h), the shared refusal
+# sentences. Hand-made views on a real RadioModel.
+add_executable(station_antenna_menu_test tests/station_antenna_menu_test.cpp)
+target_include_directories(station_antenna_menu_test PRIVATE src src/gui tests)
+target_link_libraries(station_antenna_menu_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME station_antenna_menu_test COMMAND station_antenna_menu_test)
+set_tests_properties(station_antenna_menu_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The panadapter's RX ANT combo with a station switch: a refresh skipped under
+# the open list is replayed when it closes, and a station pick does not rebuild
+# the combo inside its own index signal. Widget only, offscreen, no socket.
+add_executable(spectrum_overlay_station_antenna_test
+    tests/spectrum_overlay_station_antenna_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_station_antenna_test PRIVATE src)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_station_antenna_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_station_antenna_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_station_antenna_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_station_antenna_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_station_antenna_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_station_antenna_test
+         COMMAND spectrum_overlay_station_antenna_test)
+set_tests_properties(spectrum_overlay_station_antenna_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # aethersdr/radio/state payload shape + the drive-publish timing contract
 # (#5518). Links the real TransmitModel because the have-status latch and the
 # coalesce debounce are half the contract; MqttRadioState.cpp itself is pure.
@@ -10226,11 +10296,12 @@ set_tests_properties(startup_autoconnect_lockout_test PROPERTIES
 # the arithmetic and parent-chain matching in isolation, not a replacement
 # for the PR's own real-X11-input proof.
 #
-# Compiled and linked by the Linux build job and executed unfiltered on every
-# push to main (.github/workflows/full-suite.yml) and again weekly under the
-# sanitizers, like every other Linux test; the per-PR gate in ci.yml is frozen
-# and does not take new entries (docs/agents/tests-ci.md, "Gate integrity"). Pure arithmetic and four bare QWindows, no widgets/sockets/
-# wall clock, milliseconds to run.
+# Built and executed unfiltered on every push to main
+# (.github/workflows/full-suite.yml) and again weekly under the sanitizers,
+# like every other Linux test; CI's Linux PR job builds no tests, and the
+# per-PR gate in ci.yml is frozen and does not take new entries
+# (docs/agents/tests-ci.md, "Gate integrity"). Pure arithmetic and four bare
+# QWindows, no widgets/sockets/wall clock, milliseconds to run.
 add_executable(frameless_resizer_test
     tests/frameless_resizer_test.cpp
     $<TARGET_OBJECTS:aether_test_frameless_resizer>

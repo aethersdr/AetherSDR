@@ -3,6 +3,7 @@
 #include "core/TxKeyingMarker.h"
 #include "ActivePlanBand.h"
 #include "AntennaChoiceGate.h"
+#include "StationAntennaMenu.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "DisplaySettings.h"
 #include "DspParamPopup.h"
@@ -25,6 +26,8 @@
 #include <QPushButton>
 #include <QComboBox>
 #include <QStandardItemModel>
+#include <QAbstractItemView>
+#include <QToolTip>
 #include <QSlider>
 #include <QLabel>
 #include <QAccessible>
@@ -36,6 +39,7 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <QEvent>
+#include <QScopedValueRollback>
 #include <QFrame>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -53,6 +57,15 @@
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
+
+// A station port in the RX ANT combo: its pick in this role, and as item data
+// a key no radio token takes ("station:<id>:<token>").
+static constexpr int kStationAntennaRole = Qt::UserRole + 1;
+
+static QString stationAntennaComboKey(const QString& id, const QString& token)
+{
+    return QStringLiteral("station:%1:%2").arg(id, token);
+}
 
 static constexpr int BTN_W = 68;
 static constexpr int BTN_H = 22;
@@ -590,7 +603,10 @@ void SpectrumOverlayMenu::buildAntPanel()
     antLabel->setFixedWidth(kLabelW);
     antRow->addWidget(antLabel);
     m_rxAntCmb = new GuardedComboBox;
+    m_rxAntCmb->setObjectName(QStringLiteral("panRxAntennaCombo"));
     AetherSDR::applyComboStyle(m_rxAntCmb);
+    // A refresh skipped while the list is open is replayed when it closes.
+    m_rxAntCmb->view()->installEventFilter(this);
     antRow->addWidget(m_rxAntCmb, 1);
     vbox->addLayout(antRow);
 
@@ -598,6 +614,31 @@ void SpectrumOverlayMenu::buildAntPanel()
             this, [this](int index) {
         if (m_updatingFromModel || index < 0)
             return;
+        if (const auto pick = stationAntennaPickFrom(
+                m_rxAntCmb->itemData(index, kStationAntennaRole))) {
+            if (m_radioModel) {
+                // The pick re-enters refreshAntennaCombo() through
+                // stationAntennasChanged, inside this combo's own index
+                // signal: held off here, it runs queued below.
+                const QString refusal = [this, &pick] {
+                    const QScopedValueRollback<bool> inPick(m_rxAntennaPickInProgress, true);
+                    return m_radioModel->selectStationAntenna(pick->id, pick->token, false);
+                }();
+                // Only a pick that was taken ends the slice's Kiwi receiver.
+                if (refusal.isEmpty()) {
+                    if (SliceModel* target =
+                            antennaTargetSliceForPan(m_radioModel, m_slice, m_panId)) {
+                        emit flexRxAntennaSelected(target->sliceId());
+                    }
+                } else {
+                    showStationAntennaRefusal(m_rxAntCmb, refusal);
+                }
+            }
+            // The switch's echo, not the pick, decides what the combo shows.
+            QMetaObject::invokeMethod(this, [this] { refreshAntennaCombo(); },
+                                      Qt::QueuedConnection);
+            return;
+        }
         QString ant = m_rxAntCmb->itemData(index).toString();
         if (ant.isEmpty())
             ant = m_rxAntCmb->itemText(index);
@@ -626,7 +667,7 @@ void SpectrumOverlayMenu::buildAntPanel()
                 || (m_radioModel && !m_radioModel->antennaList().isEmpty());
             const bool virtualAntennas = m_kiwiSdrManager
                 && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
-            if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+            if (rxAntennaChoiceRefused(connected, published, virtualAntennas, false)) {
                 emit antennaChoiceRefused(false);
                 // Queued: this runs inside the combo's own index signal, and
                 // the refresh clears and refills that combo.
@@ -819,7 +860,8 @@ void SpectrumOverlayMenu::buildAntPanel()
         "QPushButton { background: {{color.background.1}}; "
         "border: 1px solid {{color.background.2}}; border-radius: 3px; "
         "color: {{color.text.secondary}}; font-size: 11px; padding: 1px 4px; }"
-        "QPushButton:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:enabled:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:disabled { color: {{color.text.disabled}}; }"
         "QPushButton:checked { background: {{color.accent.dim}}; "
         "border-color: {{color.accent.bright}}; color: {{color.text.primary}}; }";
 
@@ -886,11 +928,13 @@ void SpectrumOverlayMenu::buildAntPanel()
     auto* wnbRow = new QHBoxLayout;
     wnbRow->setSpacing(4);
     m_wnbBtn = new QPushButton("WNB");
+    m_wnbBtn->setObjectName(QStringLiteral("panWnbBtn"));
     m_wnbBtn->setCheckable(true);
     m_wnbBtn->setFixedSize(48, 22);
     applyToggleButtonStyle(m_wnbBtn, ToggleTribe::Success);
     wnbRow->addWidget(m_wnbBtn);
     m_wnbSlider = new GuardedSlider(Qt::Horizontal);
+    m_wnbSlider->setObjectName(QStringLiteral("panWnbLevel"));
     m_wnbSlider->setRange(0, 100);
     m_wnbSlider->setValue(50);
     applyPrimarySliderStyle(m_wnbSlider);
@@ -1033,8 +1077,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_loopABtn->setToolTip("Toggle the LoopA receive loop/preselector path for this panadapter.");
     m_loopBBtn->setToolTip("Toggle the LoopB receive loop/preselector path for this panadapter.");
     m_rfGainSlider->setToolTip("Adjusts receiver IF gain. Lower values reduce strong-signal overload.");
-    m_wnbBtn->setToolTip("Wideband noise blanker \u2014 suppresses correlated impulse noise across the full panadapter bandwidth.");
-    m_wnbSlider->setToolTip("Adjusts WNB threshold. Higher values blank more aggressively.");
+    setWnbAvailability(true, true);
     m_swrStartBtn->setToolTip("Run a low-power tune sweep across the current TX band and plot SWR on the panadapter.");
     m_swrClearBtn->setToolTip("Clear the displayed SWR sweep trace.");
     m_swrSaveBtn->setToolTip("Export the most recent SWR sweep (frequency + SWR) to a CSV file.");
@@ -1113,6 +1156,8 @@ void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
                    this, &SpectrumOverlayMenu::refreshAntennaCombo);
         disconnect(m_radioModel, &RadioModel::panNoiseFloorRangeAvailabilityChanged,
                    this, &SpectrumOverlayMenu::syncNoiseFloorRange);
+        disconnect(m_radioModel, &RadioModel::stationAntennasChanged,
+                   this, &SpectrumOverlayMenu::refreshAntennaCombo);
     }
     if (m_panRxAntennaConnection) {
         disconnect(m_panRxAntennaConnection);
@@ -1129,6 +1174,8 @@ void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
                 this, &SpectrumOverlayMenu::refreshAntennaCombo);
         connect(m_radioModel, &RadioModel::panNoiseFloorRangeAvailabilityChanged,
                 this, &SpectrumOverlayMenu::syncNoiseFloorRange);
+        connect(m_radioModel, &RadioModel::stationAntennasChanged,
+                this, &SpectrumOverlayMenu::refreshAntennaCombo);
     }
     wirePanadapterRxAntenna();
     refreshAntennaCombo();
@@ -1239,11 +1286,28 @@ QString SpectrumOverlayMenu::currentRxAntennaToken() const
     return m_rxAntCmb ? m_rxAntCmb->currentData().toString() : QString();
 }
 
+// The combo key of the first station device that reports an RX position.
+static QString reportedStationRxKey(const QVector<StationAntennaView>& stations)
+{
+    const auto reported = std::find_if(stations.cbegin(), stations.cend(),
+        [](const StationAntennaView& view) { return !view.rxCurrent.isEmpty(); });
+    return reported == stations.cend() ? QString()
+        : stationAntennaComboKey(reported->id, reported->rxCurrent);
+}
+
 void SpectrumOverlayMenu::refreshAntennaCombo()
 {
     if (!m_rxAntCmb)
         return;
-    const QString cur = currentRxAntennaToken();
+    // Not under an open list (the switch's state changes often), nor inside
+    // the combo's own index signal: remembered, and replayed when the list
+    // closes (eventFilter) or by the pick's queued refresh.
+    if (m_rxAntennaPickInProgress || (m_rxAntCmb->view() && m_rxAntCmb->view()->isVisible())) {
+        m_antennaComboRefreshPending = true;
+        return;
+    }
+    m_antennaComboRefreshPending = false;
+    QString cur = currentRxAntennaToken();
     QStringList options;
     auto append = [&options](const QString& token) {
         if (!token.isEmpty() && !options.contains(token)) {
@@ -1253,28 +1317,50 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
 
     SliceModel* targetSlice =
         antennaTargetSliceForPan(m_radioModel, m_slice, m_panId);
-    if (targetSlice) {
-        for (const QString& token : targetSlice->rxAntennaList()) {
-            append(token);
-        }
-    }
-    const bool publishedReceiveOnly = targetSlice && !targetSlice->rxAntennaList().isEmpty()
-        && m_radioModel && m_radioModel->isConnected()
-        && !m_radioModel->backendCapabilities().canTransmit;
-    if (!publishedReceiveOnly) {
-        for (const QString& token : m_antList) {
-            append(token);
-        }
-        if (m_radioModel) {
-            for (const QString& token : m_radioModel->rxAntennaMenuTokens()) {
+    const QVector<StationAntennaView> stations =
+        m_radioModel ? m_radioModel->stationAntennaViews() : QVector<StationAntennaView>{};
+    const bool published = (targetSlice && !targetSlice->rxAntennaList().isEmpty())
+        || (m_radioModel && !m_radioModel->antennaList().isEmpty());
+    // A station switch with no radio port beside it is the whole list.
+    const bool stationOnly = !stations.isEmpty() && !published;
+    const bool kiwiShown = m_kiwiSdrManager
+        && !m_kiwiSdrManager->profileIdForVirtualAntennaToken(cur).isEmpty();
+    if (!stationOnly) {
+        if (targetSlice) {
+            for (const QString& token : targetSlice->rxAntennaList()) {
                 append(token);
             }
         }
-        append(cur);
-        if (options.isEmpty()) {
-            append(QStringLiteral("ANT1"));
-            append(QStringLiteral("ANT2"));
+        const bool publishedReceiveOnly = targetSlice && !targetSlice->rxAntennaList().isEmpty()
+            && m_radioModel && m_radioModel->isConnected()
+            && !m_radioModel->backendCapabilities().canTransmit;
+        if (!publishedReceiveOnly) {
+            for (const QString& token : m_antList) {
+                append(token);
+            }
+            if (m_radioModel) {
+                for (const QString& token : m_radioModel->rxAntennaMenuTokens()) {
+                    append(token);
+                }
+            }
+            append(cur);
+            if (options.isEmpty()) {
+                append(QStringLiteral("ANT1"));
+                append(QStringLiteral("ANT2"));
+            }
         }
+        // At most one radio RX port (the HL2's "ANT"): that port is always in
+        // use, so the switch's position is the current row, as in the RX ANT
+        // field (stationAntennaField). Nothing reported keeps the radio's.
+        if (!kiwiShown && targetSlice && m_radioModel
+            && radioAntennaCount(*m_radioModel, *targetSlice, false) <= 1) {
+            const QString key = reportedStationRxKey(stations);
+            if (!key.isEmpty()) {
+                cur = key;
+            }
+        }
+    } else if (!kiwiShown) {
+        cur = reportedStationRxKey(stations);
     }
     if (m_kiwiSdrManager) {
         for (const QString& token : m_kiwiSdrManager->virtualAntennaTokens()) {
@@ -1285,6 +1371,39 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
     m_rxAntCmb->clear();
     for (const QString& ant : options) {
         m_rxAntCmb->addItem(antennaComboLabel(ant, options), ant);
+    }
+    // A combo has no submenu: each device is a disabled heading row titled as
+    // a station switch, its ports indented under it. A port that cannot be
+    // picked now is disabled with its reason, and so is every port of a
+    // device that cannot be used at all.
+    auto* items = qobject_cast<QStandardItemModel*>(m_rxAntCmb->model());
+    for (const StationAntennaView& view : stations) {
+        if (view.rx.isEmpty() && view.unavailable.isEmpty()) {
+            continue;
+        }
+        m_rxAntCmb->addItem(stationAntennaMenuTitle(view.heading));
+        int row = m_rxAntCmb->count() - 1;
+        m_rxAntCmb->setItemData(row,
+            stationAntennaToolTip(view.unavailable.isEmpty() ? view.note : view.unavailable),
+            Qt::ToolTipRole);
+        if (items) {
+            items->item(row)->setEnabled(false);
+        }
+        for (const StationAntennaChoice& choice : view.rx) {
+            const bool enabled = choice.enabled && view.unavailable.isEmpty();
+            m_rxAntCmb->addItem(QStringLiteral("  ") + choice.label,
+                                stationAntennaComboKey(view.id, choice.token));
+            row = m_rxAntCmb->count() - 1;
+            m_rxAntCmb->setItemData(row, stationAntennaActionData(view.id, choice.token),
+                                    kStationAntennaRole);
+            m_rxAntCmb->setItemData(row,
+                stationAntennaToolTip(enabled ? choice.hint
+                        : !view.unavailable.isEmpty() ? view.unavailable : choice.reason),
+                Qt::ToolTipRole);
+            if (items && !enabled) {
+                items->item(row)->setEnabled(false);
+            }
+        }
     }
     setRxAntennaComboToken(cur);
     updateLoopButtonVisibility();
@@ -1338,6 +1457,11 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
     connect(m_slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
         if (m_panadapter && !m_panadapter->rxAntenna().isEmpty())
             return;
+        // A station switch may own the current row: let the refresh decide.
+        if (m_radioModel && !m_radioModel->stationAntennaViews().isEmpty()) {
+            refreshAntennaCombo();
+            return;
+        }
         m_updatingFromModel = true;
         setRxAntennaComboToken(ant);
         m_updatingFromModel = false;
@@ -3234,13 +3358,16 @@ void SpectrumOverlayMenu::setAutoRfGainEnabled(bool on)
     applyAutoRfGainToSlider(on);
 }
 
-// WNB is a radio-side noise blanker; on a backend without one the row would
-// control nothing, so button and slider are hidden as a unit.
-void SpectrumOverlayMenu::setRadioSideDspAvailable(bool available)
+void SpectrumOverlayMenu::setWnbAvailability(bool hasRadioDsp, bool supported)
 {
-    if (m_wnbRow) {
-        m_wnbRow->setVisible(available);
-    }
+    m_wnbRow->setVisible(hasRadioDsp || supported);
+    m_wnbRow->setEnabled(supported);
+    const QString reason = tr("Wideband noise blanker is unavailable on this radio.");
+    m_wnbBtn->setToolTip(supported
+        ? tr("Suppresses correlated impulse noise across the panadapter bandwidth.") : reason);
+    m_wnbSlider->setToolTip(supported
+        ? tr("Adjusts WNB threshold. Higher values blank more aggressively.") : reason);
+    m_wnbRow->setToolTip(supported ? QString() : reason);
 }
 
 void SpectrumOverlayMenu::setNotchesSupported(bool supported)
@@ -3355,12 +3482,11 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
     if (!m_preampRow || !m_attenuatorRow)
         return;
 
-    // A one-entry list is not a control. A radio that reports only "OFF" has
-    // nothing to switch between, and a button that can never change is worse
-    // than no button at all.
     const auto apply = [](QWidget* row, QPushButton* btn, const QStringList& labels,
-                          int step, const QString& what) {
-        const bool present = labels.size() > 1;
+                          int step, const QString& what, const QString& unavailable = {}) {
+        const bool available = labels.size() > 1;
+        const bool present = available || (labels.size() == 1 && !unavailable.isEmpty());
+        btn->setEnabled(available);
         row->setVisible(present);
         if (!present)
             return;
@@ -3370,14 +3496,14 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
         // convention the backend publishes its label list in.
         QSignalBlocker b(btn);
         btn->setChecked(step > 0);
-        btn->setToolTip(QStringLiteral("Receive %1 — %2.\nClick to step through: %3")
+        btn->setToolTip(!available ? unavailable : QStringLiteral("Receive %1 — %2.\nClick to step through: %3")
                             .arg(what, position, labels.join(" / ")));
     };
 
     apply(m_preampRow, m_preampBtn, m_preampLabels, m_preampStep,
           QStringLiteral("preamp"));
     apply(m_attenuatorRow, m_attenuatorBtn, m_attenuatorLabels, m_attenuatorStep,
-          QStringLiteral("attenuator"));
+          QStringLiteral("attenuator"), tr("Attenuation is unavailable at the current receive frequency."));
 }
 
 // The buttons do not own their state: a click emits the request and they
@@ -3920,6 +4046,15 @@ void SpectrumOverlayMenu::updateActiveBandHighlight()
 
 bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
 {
+    if (m_rxAntCmb && obj == m_rxAntCmb->view() && event->type() == QEvent::Hide
+        && m_antennaComboRefreshPending) {
+        // Queued: the list may close inside the combo's own index signal.
+        QMetaObject::invokeMethod(this, [this] {
+            if (m_antennaComboRefreshPending) {
+                refreshAntennaCombo();
+            }
+        }, Qt::QueuedConnection);
+    }
     if (obj == parentWidget() && event->type() == QEvent::Resize) {
         if (m_displayPanelVisible) {
             layoutDisplayPanel();
