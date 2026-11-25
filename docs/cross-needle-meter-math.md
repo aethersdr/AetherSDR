@@ -223,13 +223,15 @@ same problem on its 200 W face.
 **The decision.** Do what a hardware cross-needle meter's range switch does,
 from the measured forward power:
 
-- **Ladder 1-2-5**, 20 W to 2 kW forward. No step is wider than 2.5×, so a
-  settled forward needle sits at or above 0.90 / 2.5 = 36 % of full scale,
-  where SWR 1.35 still clears the mask. A 1-3-10 ladder settles as low as
-  27 %, where it does not.
-- **Ceiling**: the smallest range that holds the radio's maximum below 95 % of
-  full scale (100 W radio → 200 W, 500 W → 1 kW), or 2 kW with an active
-  amplifier.
+- **Ladder 1-2-5 plus a 600 W step**, 20 W to 2 kW forward. No step is wider
+  than 2.5×, so a settled forward needle sits at or above 0.90 / 2.5 = 36 % of
+  full scale, where SWR 1.35 still clears the mask. A 1-3-10 ladder settles as
+  low as 27 %, where it does not. The 600 W step gives a 500 W radio a top range
+  it fills to 83 % at full power, where even SWR 1.2 reads; on a 1 kW top range
+  (50 %) it would not.
+- **Ceiling**: the smallest range that holds the meter source's maximum below
+  95 % of full scale (100 W radio → 200 W; 500 W radio or KPA500 → 600 W), or
+  2 kW while a PGXL in OPERATE feeds the meter.
 - **Up-range at once** above 95 % of full scale (a needle on its end stop reads
   nothing); **down-range** after forward has stayed at or below 90 % of a lower
   range for 1.5 s. The gap prevents hunting on a steady carrier; the hold time
@@ -267,7 +269,8 @@ with the SWR 1.5 and 1.35 crossings above the mask.
 ## 8. Changelog
 
 - **design_version 20 — range follows forward power (D4, #6433).**
-  `range.multipliers` became the 1-2-5 ladder the range switch walks, and the
+  `range.multipliers` became the ladder the range switch walks (1-2-5 plus a
+  600 W step), and the
   authored `range.label` was removed: the RANGE legend and both scales' numbers
   are now printed for the active range. No movement, contour or mask geometry
   changed, and `format_version` stays 6 (a format-6 file with the old

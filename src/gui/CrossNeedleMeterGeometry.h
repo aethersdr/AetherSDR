@@ -311,9 +311,9 @@ class CrossNeedleMeterGeometry {
     QPointF rangeLabelCenter{1245.0, 82.0};
     // Range-switch ladder (#6433). Each range scales BOTH printed scales by
     // the same multiplier, so the SWR contours are exact on every range. The
-    // 1-2-5 spacing bounds how low a settled forward needle can sit; see
-    // CrossNeedleRangeSelector.
-    QVector<double> rangeMultipliers{1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0};
+    // ladder's widest step (2.5x) bounds how low a settled forward needle can
+    // sit; see CrossNeedleRangeSelector.
+    QVector<double> rangeMultipliers{1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0};
     ScaleOverlap scaleOverlap;
     SwrStyle swrStyle;
     QVector<SwrGuide> swrGuides;

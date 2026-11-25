@@ -8,11 +8,14 @@ namespace AetherSDR {
 
 namespace {
 
-// 1-2-5 ladder (#6433): no step is wider than 2.5x, so a settled forward
-// needle sits at or above kDownRangeHeadroom / 2.5 = 36% of full scale. There
-// an SWR 1.5 crossing clears the mask comfortably and 1.35 still clears it. A
-// 1-3-10 ladder settles as low as 27%, where 1.35 is hidden.
-QVector<double> defaultLadder() { return {1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0}; }
+// 1-2-5 ladder plus 600 W (#6433): no step is wider than 2.5x, so a settled
+// forward needle sits at or above kDownRangeHeadroom / 2.5 = 36% of full
+// scale. There an SWR 1.5 crossing clears the mask comfortably and 1.35 still
+// clears it. A 1-3-10 ladder settles as low as 27%, where 1.35 is hidden. The
+// 600 W step gives a 500 W radio a top range it fills to 83% instead of 50%.
+QVector<double> defaultLadder() {
+    return {1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0};
+}
 
 QVector<double> sanitizedLadder(QVector<double> ladder) {
     ladder.erase(std::remove_if(ladder.begin(), ladder.end(),

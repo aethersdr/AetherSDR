@@ -18,7 +18,7 @@ namespace AetherSDR {
 // Policy:
 //   * The ceiling is the smallest range that holds the radio's maximum power
 //     below kUpRangeFraction of full scale (100 W radio: 200 W; 500 W radio:
-//     1 kW), or the top range while an amplifier feeds the meter. The range
+//     600 W), or the top range while an amplifier feeds the meter. The range
 //     never exceeds it.
 //   * Up-range immediately, to the smallest range that fits, as soon as the
 //     forward power exceeds kUpRangeFraction of the current full scale. A

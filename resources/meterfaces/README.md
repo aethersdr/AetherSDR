@@ -181,9 +181,10 @@ Important construction rules:
   room for the outward half of the number glyph plus the major tick; when it is
   increased, move the mirrored Forward / Reflected titles outward with it.
 - `range.multipliers` is the range switch's ladder (#6433): 1, 2, 5, 10, 20,
-  50, 100, so 20 W to 2 kW forward and 4 W to 400 W reflected. It must be
+  30, 50, 100, so 20 W to 2 kW forward and 4 W to 400 W reflected. The 30
+  (600 W) step gives a 500 W radio a top range it fills to 83%. It must be
   positive and strictly ascending. The meter picks the range from the measured
-  forward power (`CrossNeedleRangeSelector`). Keep the 1-2-5 spacing unless the
+  forward power (`CrossNeedleRangeSelector`). Keep the widest step at 2.5x or less unless the
   readability sweep in `cross_needle_meter_test` still passes: the widest step
   decides how low a settled forward needle can sit.
 - The RANGE legend at `range.label_center` is generated: `RANGE`, then the

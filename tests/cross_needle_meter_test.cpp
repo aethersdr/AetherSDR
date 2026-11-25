@@ -489,9 +489,9 @@ void testResourceAndConstruction() {
                geometry.rangeLegendText(50.0) == QStringLiteral("RANGE\n1 kW\n200 W") &&
                geometry.rangeLegendText(100.0) == QStringLiteral("RANGE\n2 kW\n400 W") &&
                geometry.rangeLabelCenter.x() >= 1300.0 && geometry.rangeLabelCenter.y() <= 125.0);
-    report("range ladder is 1-2-5 from 20 W to 2 kW forward full scale",
+    report("range ladder is 1-2-5 plus 600 W, from 20 W to 2 kW forward full scale",
            geometry.rangeMultipliers ==
-               QVector<double>({1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0}) &&
+               QVector<double>({1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0}) &&
                near(geometry.forwardFullScaleWatts(1.0), 20.0, 1e-9) &&
                near(geometry.reflectedFullScaleWatts(1.0), 4.0, 1e-9));
     report("face typography retains enlarged readable design sizes",
@@ -1499,8 +1499,8 @@ void testRangeSelector() {
     report("range ceiling: 100 W radio keeps its rated power off the end stop (200 W)",
            ceilings.setCeiling(100, false) && ceilings.multiplier() == 10.0 &&
                ceilings.ceilingMultiplier() == 10.0);
-    report("range ceiling: 500 W radio tops out at 1 kW",
-           ceilings.setCeiling(500, false) && ceilings.multiplier() == 50.0);
+    report("range ceiling: 500 W radio (or KPA500) tops out at 600 W",
+           ceilings.setCeiling(500, false) && ceilings.multiplier() == 30.0);
     report("range ceiling: 20 W radio tops out at 40 W",
            ceilings.setCeiling(20, false) && ceilings.multiplier() == 2.0);
     report("range ceiling: an active amplifier opens the 2 kW range",
@@ -1639,6 +1639,14 @@ void testRangeReadability() {
            clearance(150.0, reflectedFor(150.0, 1.35), 100.0) < 0.0);
     report("#6433 case: 150 W at SWR 1.35 is readable on the 200 W range",
            clearance(150.0, reflectedFor(150.0, 1.35), 10.0) > 50.0);
+    // The 600 W step: a 500 W radio at full power fills 83% of its top range,
+    // where even SWR 1.2 reads; on a 1 kW top range (50%) it would not.
+    report("600 W step: a 500 W radio at full power reads SWR 1.2",
+           clearance(500.0, reflectedFor(500.0, 1.2), 30.0) > 0.0 &&
+               clearance(500.0, reflectedFor(500.0, 1.2), 50.0) < 0.0,
+           "clearance_600W=" + std::to_string(clearance(500.0, reflectedFor(500.0, 1.2), 30.0)) +
+               " clearance_1kW=" +
+               std::to_string(clearance(500.0, reflectedFor(500.0, 1.2), 50.0)));
 }
 
 // #6433: every range prints its own watts, legibly.
@@ -1754,20 +1762,20 @@ void testWidgetAutoRange() {
            meter.rangeMultiplier() == 10.0);
 
     meter.setPowerScale(500, false);
-    report("a 500 W radio shows its 1 kW range before the first transmission",
-           meter.rangeMultiplier() == 50.0 && meter.rangeCeilingMultiplier() == 50.0);
-    const QImage kilowattFace = renderWidget(meter);
+    report("a 500 W radio shows its 600 W range before the first transmission",
+           meter.rangeMultiplier() == 30.0 && meter.rangeCeilingMultiplier() == 30.0);
+    const QImage sixHundredFace = renderWidget(meter);
 
     meter.setTransmitting(true);
     meter.setTxPowers(150.0f, 3.33f);
-    report("150 W on the 1 kW range starts a down-range hold, not an instant switch",
-           meter.rangeMultiplier() == 50.0 && meter.rangeHoldPending());
+    report("150 W on the 600 W range starts a down-range hold, not an instant switch",
+           meter.rangeMultiplier() == 30.0 && meter.rangeHoldPending());
     meter.setPowerScale(500, false);
     report("an unchanged power scale (status poll) leaves the hold running",
            meter.rangeHoldPending());
 
     processEventsFor(static_cast<int>(CrossNeedleRangeSelector::kDownRangeHoldMs) + 300);
-    report("with no further samples the hold timer completes the down-range (1 kW -> 200 W)",
+    report("with no further samples the hold timer completes the down-range (600 W -> 200 W)",
            meter.rangeMultiplier() == 10.0 && !meter.rangeHoldPending());
     report("the accessible value names the active range in watts",
            meter.accessibleValueText().contains(
@@ -1777,22 +1785,28 @@ void testWidgetAutoRange() {
     processEventsFor(400);
     const QImage twoHundredFace = renderWidget(meter);
     const QRect legendRegion(480, 16, 100, 80);
+    // Control: the same range rendered twice changes nothing, so any pixel
+    // the legend region gains comes from the range change.
+    const int legendPixels = differingPixels(sixHundredFace, twoHundredFace, legendRegion);
+    const int controlPixels = differingPixels(twoHundredFace, renderWidget(meter), legendRegion);
     report("the face reprints its legend for the new range",
-           differingPixels(kilowattFace, twoHundredFace, legendRegion) > 100);
+           controlPixels == 0 && legendPixels > 40,
+           "changed_pixels=" + std::to_string(legendPixels) +
+               " control_pixels=" + std::to_string(controlPixels));
 
     report("unkey keeps the range for the next over", meter.rangeMultiplier() == 10.0);
     meter.setTransmitting(true);
     meter.setTxPowers(500.0f, 20.0f);
-    report("500 W up-ranges immediately to 1 kW", meter.rangeMultiplier() == 50.0);
+    report("500 W up-ranges immediately to 600 W", meter.rangeMultiplier() == 30.0);
     meter.setTransmitting(false);
     meter.setTxPowers(10.0f, 0.4f);
     processEventsFor(static_cast<int>(CrossNeedleRangeSelector::kDownRangeHoldMs) + 300);
     report("a meter packet arriving after unkey does not move the range",
-           meter.rangeMultiplier() == 50.0 && !meter.rangeHoldPending());
+           meter.rangeMultiplier() == 30.0 && !meter.rangeHoldPending());
 
     meter.setPowerScale(100, true);
     report("an active amplifier raises the ceiling to 2 kW without jumping the range",
-           meter.rangeCeilingMultiplier() == 100.0 && meter.rangeMultiplier() == 50.0);
+           meter.rangeCeilingMultiplier() == 100.0 && meter.rangeMultiplier() == 30.0);
     meter.setPowerScale(100, false);
     report("dropping the amplifier clamps the range to the radio's 200 W ceiling",
            meter.rangeCeilingMultiplier() == 10.0 && meter.rangeMultiplier() == 10.0);
