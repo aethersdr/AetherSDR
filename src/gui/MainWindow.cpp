@@ -11346,9 +11346,9 @@ void MainWindow::showMnrSettings()
     }
 }
 
-void MainWindow::applyPanLayout(const QString& layoutId)
+QString MainWindow::applyPanLayout(const QString& layoutId, const QString& previousLayout)
 {
-    if (!m_radioModel.isConnected()) return;
+    if (!m_radioModel.isConnected()) return previousLayout;
     ++m_panLayoutRequestGeneration;
 
     const int needed = panCountForLayoutId(layoutId);
@@ -11383,10 +11383,10 @@ void MainWindow::applyPanLayout(const QString& layoutId)
                 qDebug() << "applyPanLayout: closing pan" << panId;
                 return m_radioModel.removePanadapter(panId);
             });
+        const QString reflowId = PanLayoutShrinkPolicy::appliedLayout(layoutId, needed, outcome, previousLayout);
         if (PanLayoutShrinkPolicy::keepsArrangement(outcome)) {
-            return;  // every close refused; the pans and their arrangement are unchanged
+            return reflowId;  // the first close was refused; nothing to reflow
         }
-        const QString reflowId = PanLayoutShrinkPolicy::reflowLayout(layoutId, needed, outcome.survivors);
 
         // Pan removal and slot rekeying arrive asynchronously. Reflow now and
         // after each settling turn so the final survivors, rather than a pan
@@ -11399,7 +11399,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
                 m_panStack->rearrangeLayout(reflowId);
             }
         });
-        return;
+        return reflowId;
     }
     if (needed == existing) {
         // Same count, just rearrange
@@ -11407,7 +11407,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             m_panStack->rearrangeLayout(layoutId);
         }
         startCanvasPanLayoutSettle(layoutId, needed);
-        return;
+        return layoutId;
     }
 
     // Create additional pans to reach the needed count.
@@ -11415,7 +11415,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     const int toCreate = needed - existing;
     if (m_panStack->count() + toCreate > m_radioModel.maxPanadapters()) {
         showPanadapterSliceCapacityMessage();
-        return;
+        return previousLayout;
     }
     auto panIds = std::make_shared<QStringList>();
 
@@ -11430,6 +11430,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
         startCanvasPanLayoutSettle(layoutId, needed);
     }
     createPansSequentially(layoutId, toCreate, panIds, 0);
+    return layoutId;
 }
 
 void MainWindow::startCanvasPanLayoutSettle(const QString& layoutId,

@@ -6,7 +6,8 @@
 // Which pans a smaller layout closes, and which layout the survivors get.
 // The layout keeps the first pans, so candidates are tried from the end. A
 // close the model refuses (keyed TX pan, last pan, a pan another client owns)
-// leaves that pan open, and the next earlier candidate is tried instead.
+// stops the shrink there: no earlier pan is closed in its place, so a pan the
+// operator did not expect to lose stays open.
 namespace AetherSDR::PanLayoutShrinkPolicy {
 
 struct Outcome {
@@ -25,10 +26,11 @@ Outcome closeFromEnd(const QStringList& candidates, int existing, int needed,
         if (panId == notAPan) {
             continue;
         }
-        if (close(panId)) {
-            outcome.closed.append(panId);
-            --toRemove;
+        if (!close(panId)) {
+            break;
         }
+        outcome.closed.append(panId);
+        --toRemove;
     }
     outcome.survivors = existing - static_cast<int>(outcome.closed.size());
     return outcome;
@@ -60,6 +62,15 @@ inline bool keepsArrangement(const Outcome& outcome)
 inline QString reflowLayout(const QString& requested, int needed, int survivors)
 {
     return survivors == needed ? requested : defaultLayoutForCount(survivors);
+}
+
+// The layout in effect once the shrink settles, which is what is saved and
+// reported: the one in place before when nothing closed, else the reflow.
+inline QString appliedLayout(const QString& requested, int needed, const Outcome& outcome,
+                             const QString& previous)
+{
+    return keepsArrangement(outcome) ? previous
+                                     : reflowLayout(requested, needed, outcome.survivors);
 }
 
 } // namespace AetherSDR::PanLayoutShrinkPolicy

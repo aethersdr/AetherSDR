@@ -1205,7 +1205,9 @@ private:
     void publishRadioStateMqtt();
     void refreshRadioStateDriveAuthority();
 #endif
-    void applyPanLayout(const QString& layoutId);
+    // Returns the layout in effect afterwards: previousLayout when nothing
+    // changed, a smaller one when a refused close stopped a shrink.
+    QString applyPanLayout(const QString& layoutId, const QString& previousLayout);
     void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
     void settleCanvasPanLayout(const QString& layoutId, int expectedPanCount,
                                int attemptsRemaining, quint64 generation);

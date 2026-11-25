@@ -5669,12 +5669,14 @@ add_executable(pan_recenter_policy_test
 target_include_directories(pan_recenter_policy_test PRIVATE src)
 add_test(NAME pan_recenter_policy_test COMMAND pan_recenter_policy_test)
 
-# A smaller pan layout counts only the closes the model accepted, tries the
-# next earlier pan after a refusal, and reflows for the pans that exist
-# (#7585). Pure policy header; no radio, no widgets.
+# A smaller pan layout counts only the closes the model accepted, stops at the
+# first refusal, and reflows, saves and reports the layout for the pans that
+# exist (#7585). Pure policy header plus a source pin on MainWindow; no radio.
 add_executable(pan_layout_shrink_policy_test tests/pan_layout_shrink_policy_test.cpp)
 target_include_directories(pan_layout_shrink_policy_test PRIVATE src)
 target_link_libraries(pan_layout_shrink_policy_test PRIVATE Qt6::Core)
+target_compile_definitions(pan_layout_shrink_policy_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME pan_layout_shrink_policy_test COMMAND pan_layout_shrink_policy_test)
 
 # An operator pan close forgets the pan's Center Lock and its saved intent only

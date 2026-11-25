@@ -5239,8 +5239,12 @@ when canvas mode is enabled. Valid IDs are `1`, `2v`, `2h`, `2h1`, `12h`,
 `3v`, `2x2`, `4v`, `3h2`, `2x3`, `4h3`, and `2x4`.
 
 Pan creation and removal settle asynchronously. The initial reply includes
-`targetPanCount`, active-main `panCount`, global `globalPanCount`, and
-`settling`. Poll `workspace status` until the active main surface has the
+`layout`, `targetPanCount`, active-main `panCount`, global `globalPanCount`,
+and `settling`. When a smaller layout's close is refused (a keyed TX pan, a pan
+another client owns), the shrink stops there and no earlier pan closes in its
+place. `layout` and `targetPanCount` then describe the layout actually applied
+to the pans that remain, which is also the `PanadapterLayout` that is saved;
+`layout` is the previous layout when nothing closed. Poll `workspace status` until the active main surface has the
 target pan count before asserting its live rectangles. Floating pans and pans
 on extra surfaces are outside that count and remain untouched. To prove the
 rectangles persisted, disable and re-enable canvas mode (or restart with the
