@@ -3089,11 +3089,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& incoming,
                     pumpCiv(frameAtMs);
                 }
             }
-            if (attenStepsFor(*m_model, previousHz).size() != attenStepsFor(*m_model, *hz).size()) {
+            const auto currentAttenSteps = attenStepsFor(*m_model, *hz);
+            if (attenStepsFor(*m_model, previousHz).size() != currentAttenSteps.size()) {
                 publishAttenuatorControls();
                 if (m_session) {
                     const auto read = cmdReadAttenuator(m_session->civAddress());
-                    queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Operator);
+                    // The disabled control can reconcile behind live meters.
+                    const auto priority = currentAttenSteps.size() > 1
+                        ? IcomCivScheduler::Priority::Operator : IcomCivScheduler::Priority::Control;
+                    queueRead(read, semanticKey(read), priority);
                     pumpCiv(frameAtMs);
                 }
             }
